@@ -1,13 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn() }));
+const { getSessionMock, signOutMock } = vi.hoisted(() => ({ getSessionMock: vi.fn(), signOutMock: vi.fn() }));
 
 vi.mock("next-auth/react", async () => {
   const { createContext } = await import("react");
-  return { getSession: getSessionMock, SessionContext: createContext(undefined) };
+  return { getSession: getSessionMock, signOut: signOutMock, SessionContext: createContext(undefined) };
 });
 
-import { accountKey, readServerAccount, shownAccount, startServerCheck } from "./signed-in-swap";
+import {
+  accountKey,
+  endStaleSession,
+  readServerAccount,
+  showAndEndStale,
+  shownAccount,
+  startServerCheck,
+  startSignedOutSync,
+} from "./signed-in-swap";
 
 const OWNER = { name: "Owner", email: "owner@example.com" };
 
@@ -105,5 +113,93 @@ describe("a cached session with no user", () => {
 
   it("is signed in for a real user", async () => {
     expect(await swap({ status: "authenticated", data: { user: OWNER, expires: "2099-01-01T00:00:00Z" } })).toBe("IN");
+  });
+});
+
+// R19 new-customer L1 (= pages L1): the client follows the server when they
+// disagree. Where the server rendered the signed-out view but the cached
+// session still names someone, the session is read again: nobody -> sign out
+// (clears the stale cookie and context here and in other tabs); someone (the
+// server page saw a blip) -> refresh the page once, no sign-out.
+describe("the signed-out page and a cached session that names someone", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("signs out once, without leaving the page, when the server says nobody", async () => {
+    signOutMock.mockReset().mockResolvedValue({ url: "/" });
+    endStaleSession();
+    expect(signOutMock).toHaveBeenCalledTimes(1);
+    expect(signOutMock).toHaveBeenCalledWith({ redirect: false });
+  });
+
+  it("a failed sign-out leaves the page as it is", async () => {
+    signOutMock.mockReset().mockRejectedValue(new Error("offline"));
+    expect(() => endStaleSession()).not.toThrow();
+    await settle();
+  });
+
+  it("the Landing: the fresh read names nobody -> sign out, no refresh", async () => {
+    const signOut = vi.fn();
+    const refresh = vi.fn();
+    startSignedOutSync(accountKey(OWNER), async () => null, { signOut, refresh }, new Set());
+    await settle();
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("the Landing: the fresh read names the person -> refresh once, no sign-out", async () => {
+    const signOut = vi.fn();
+    const refresh = vi.fn();
+    const refreshed = new Set<string>();
+    startSignedOutSync(accountKey(OWNER), async () => OWNER, { signOut, refresh }, refreshed);
+    await settle();
+    // The refreshed page still shows the Landing and the check runs again: no second refresh.
+    startSignedOutSync(accountKey(OWNER), async () => OWNER, { signOut, refresh }, refreshed);
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it("the Landing for someone signed out: nothing is read and nothing happens", async () => {
+    const read = vi.fn(async () => null);
+    const signOut = vi.fn();
+    const refresh = vi.fn();
+    expect(startSignedOutSync(null, read, { signOut, refresh }, new Set())).toBeUndefined();
+    await settle();
+    expect(read).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("Log in and Register: the answer is shown, and nobody also signs the stale session out", () => {
+    const show = vi.fn();
+    const end = vi.fn();
+    const key = accountKey(OWNER)!;
+    const onAnswer = showAndEndStale(show, end);
+
+    onAnswer({ key, account: OWNER });
+    expect(show).toHaveBeenLastCalledWith({ key, account: OWNER });
+    expect(end).not.toHaveBeenCalled();
+
+    onAnswer({ key, account: null });
+    expect(show).toHaveBeenLastCalledWith({ key, account: null });
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders nothing, so the signed-out page's HTML is unchanged", async () => {
+    vi.doMock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+    const { createElement } = await import("react");
+    const { renderToString } = await import("react-dom/server");
+    const { SessionContext } = await import("next-auth/react");
+    const { ServerSignedOutSync } = await import("./server-signed-out-sync");
+    expect(renderToString(createElement(ServerSignedOutSync))).toBe("");
+    expect(
+      renderToString(
+        createElement(
+          SessionContext.Provider as never,
+          { value: { status: "authenticated", data: { user: OWNER, expires: "2099-01-01T00:00:00Z" } } } as never,
+          createElement(ServerSignedOutSync),
+        ),
+      ),
+    ).toBe("");
   });
 });

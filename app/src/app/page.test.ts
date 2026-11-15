@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/auth", () => ({ getCurrentUser: vi.fn(async () => ({ id: "u1" })) }));
 vi.mock("@/components/dashboard/dashboard-home", () => ({ DashboardHome: () => null }));
 vi.mock("@/components/landing", () => ({ Landing: () => null }));
+vi.mock("@/components/server-signed-out-sync", () => ({ ServerSignedOutSync: () => null }));
+vi.mock("@/lib/trialOffer", () => ({ startingPrice: vi.fn(async () => null) }));
 
 const m = vi.hoisted(() => ({
   context: null as null | { role: "owner" | "member"; workspace: Record<string, unknown> },
@@ -19,6 +21,9 @@ vi.mock("@/lib/db", () => ({ prisma: { workspace: { findUnique: m.findUnique } }
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 import { getCurrentUser } from "@/lib/auth";
+
+import { Landing } from "@/components/landing";
+import { ServerSignedOutSync } from "@/components/server-signed-out-sync";
 
 import HomePage from "./page";
 
@@ -146,5 +151,15 @@ describe("HomePage — the other-workspace notice from /go", () => {
     vi.mocked(getCurrentUser).mockResolvedValue({ id: "u1", email: "owner@example.com" } as never);
     expect(await noticeOf({})).toBeNull();
     expect(await noticeOf({ notice: "something-else" })).toBeNull();
+  });
+});
+
+// R19 new-customer L1: the server rendered the Landing (nobody signed in), so a
+// tab whose cached session still names someone reads it again and follows.
+describe("HomePage — signed out", () => {
+  it("renders the Landing with the client sync beside it", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(null);
+    const page = (await HomePage()) as { props: { children: Array<{ type: unknown }> } };
+    expect(page.props.children.map((child) => child.type)).toEqual([Landing, ServerSignedOutSync]);
   });
 });

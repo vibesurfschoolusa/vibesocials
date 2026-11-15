@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 
+import { useSignedInAccount } from "@/components/signed-in-swap";
 import { ToastProvider } from "@/components/ui/toast";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./top-bar";
@@ -23,6 +24,9 @@ import { isPublicRoute } from "./nav";
 export function AppShell({ children, pricingPublic }: { children: ReactNode; pricingPublic?: boolean }) {
   const pathname = usePathname();
   const { status } = useSession();
+  // R19 new-customer L1: signed in means the session names someone, as for the
+  // header; a session the server ended is "authenticated" with no user.
+  const signedIn = useSignedInAccount() !== null;
 
   // Task 10 — show the chrome optimistically while the session resolves, to
   // avoid a bare-then-shell flash on hard loads of protected routes. Safe
@@ -33,8 +37,7 @@ export function AppShell({ children, pricingPublic }: { children: ReactNode; pri
   // signed-out Landing and the signed-in Dashboard.
   const isPublic = isPublicRoute(pathname, { pricingPublic });
   const isAppRoute = !isPublic && pathname !== "/";
-  const showShell =
-    status === "authenticated" ? !isPublic : isAppRoute && status === "loading";
+  const showShell = signedIn ? !isPublic : isAppRoute && status === "loading";
 
   return (
     <ToastProvider>

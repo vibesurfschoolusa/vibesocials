@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null }), signOut: vi.fn() }));
+vi.mock("next-auth/react", async () => {
+  const { createContext, useContext } = await import("react");
+  const SessionContext = createContext<unknown>(undefined);
+  return { SessionContext, useSession: () => useContext(SessionContext) ?? { data: null }, signOut: vi.fn() };
+});
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
 import { readFileSync } from "node:fs";
@@ -91,5 +95,36 @@ describe("the menu keeps the newest answer", () => {
     const reads = source.match(/\b(?:fetch|fetchImpl)\("\/api\/workspaces"\)/g) ?? [];
     expect(reads.length).toBeGreaterThan(0);
     expect((source.match(/\breads\.next\(\)/g) ?? []).length).toBe(reads.length);
+  });
+});
+
+// R19 new-customer L1: the menu names the signed-in person, so a session the
+// server ended (no user, still "authenticated" to next-auth) shows no menu.
+describe("AccountMenu: who it is for", () => {
+  async function menu(session: unknown): Promise<string> {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { SessionContext } = await import("next-auth/react");
+    const { AccountMenu } = await import("./account-menu");
+    return renderToStaticMarkup(
+      createElement(SessionContext.Provider as never, { value: session } as never, createElement(AccountMenu)),
+    );
+  }
+
+  it("a cached session with no user: no menu", async () => {
+    expect(await menu({ status: "authenticated", data: { expires: "1970-01-01T00:00:00.000Z" } })).toBe("");
+  });
+
+  it("signed in: the menu names the person", async () => {
+    const html = await menu({
+      status: "authenticated",
+      data: { user: { name: "Owner", email: "owner@example.com" }, expires: "2099-01-01T00:00:00Z" },
+    });
+    expect(html).toContain("Account menu for");
+    expect(html).toContain("Owner");
+  });
+
+  it("while the session loads in the app frame: the button shows, as today", async () => {
+    expect(await menu({ status: "loading", data: undefined })).toContain("Account menu for");
   });
 });

@@ -1,5 +1,6 @@
 import { DashboardHome } from "@/components/dashboard/dashboard-home";
 import { Landing } from "@/components/landing";
+import { ServerSignedOutSync } from "@/components/server-signed-out-sync";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { homeNotice } from "@/app/go/notice";
 import { getCurrentUser } from "@/lib/auth";
@@ -37,8 +38,15 @@ export default async function HomePage({
       />
     );
   }
-  // S1: null without a Stripe call while payments are not configured.
-  return <Landing startingPrice={await startingPrice()} />;
+  // S1: null without a Stripe call while payments are not configured. R19: a
+  // tab whose cached session still names someone follows this answer; the sync
+  // renders nothing, so the HTML is the Landing's alone.
+  return (
+    <>
+      <Landing startingPrice={await startingPrice()} />
+      <ServerSignedOutSync />
+    </>
+  );
 }
 
 /**

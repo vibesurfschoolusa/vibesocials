@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { useSignedInAccount } from "@/components/signed-in-swap";
 import { InstallInstructionsDialog, useInstallApp } from "./install-app";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -87,10 +88,12 @@ export function watchWorkspaceList(
  * returned to the trigger.
  */
 export function AccountMenu() {
-  const { data: session } = useSession();
+  const { status } = useSession();
+  // R19 new-customer L1: the person the session names, by the same rule as the app frame.
+  const account = useSignedInAccount();
   const toast = useToast();
-  const email = session?.user?.email ?? "";
-  const name = session?.user?.name?.trim() ?? "";
+  const email = account?.email ?? "";
+  const name = account?.name?.trim() ?? "";
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -247,6 +250,10 @@ export function AccountMenu() {
   const initials = accountInitials(name, email);
   const activeWorkspace = workspaces?.find((workspace) => workspace.isActive) ?? null;
   const workspaceLine = accountWorkspaceLine(workspaces);
+
+  // While the session loads, the optimistic app frame keeps the button; once
+  // read, a session that names nobody gets no menu.
+  if (!account && status !== "loading") return null;
 
   return (
     <div ref={containerRef} className="relative">
