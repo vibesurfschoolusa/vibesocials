@@ -24,6 +24,20 @@ describe("retryAllPlan", () => {
     expect(leftOutSentence(plan.leftOut)).toBe("X left out: reconnect it in Settings.");
   });
 
+  // R10-client-journey L1: only an owner can reconnect.
+  it("a member's sentence names the owner, not Settings", () => {
+    const leftOut = [
+      { platform: "instagram", reason: "unconfirmed" },
+      { platform: "x", reason: "reconnect" },
+    ] as const;
+    expect(leftOutSentence(leftOut, "member")).toBe(
+      "Instagram left out: check whether it posted first. X left out: the workspace owner can reconnect it.",
+    );
+    expect(leftOutSentence(leftOut, "owner")).toBe(
+      "Instagram left out: check whether it posted first. X left out: reconnect it in Settings.",
+    );
+  });
+
   it("only unconfirmed or needs-reconnect platforms: nothing covered, both reasons said", () => {
     const plan = retryAllPlan([failed("instagram", true), failed("x")] as never, (p) => p === "x");
     expect(plan.included).toEqual([]);

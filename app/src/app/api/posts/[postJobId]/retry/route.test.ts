@@ -248,6 +248,29 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R10-client-journey L1: a member can't reconnect, so the answer names the owner.
+  it("a member's retry of a platform that needs reconnecting: the owner's step, not Settings", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+    connectionFindUniqueMock.mockResolvedValue({ needsReconnect: true });
+
+    const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error?: string }).error).toBe(
+      "The workspace owner can reconnect Instagram; then retry.",
+    );
+  });
+
+  it("an owner's: the Settings step", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+    connectionFindUniqueMock.mockResolvedValue({ needsReconnect: true });
+
+    const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+    expect(((await res.json()) as { error?: string }).error).toBe("Reconnect Instagram in Settings before retrying.");
+  });
+
   it("returns 409 RECONNECT_REQUIRED when the connection is gone entirely", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([{ platform: "instagram", status: "failed" }]),
@@ -592,6 +615,32 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     });
     expect(resultUpdateManyMock).toHaveBeenCalledTimes(1);
     expect((inngestSendMock.mock.calls[0][0] as { data: { platforms: string[] } }).data.platforms).toEqual(["tiktok"]);
+  });
+
+  it("retryAllFailed by a member: the notice and the refusal name the owner", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "tiktok", status: "failed" },
+        { platform: "youtube", status: "failed" },
+      ]),
+    );
+    connectionFindUniqueMock.mockImplementation(async ({ where }: { where: { workspaceId_platform: { platform: string } } }) =>
+      where.workspaceId_platform.platform === "youtube" ? { needsReconnect: true } : { needsReconnect: false },
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const accepted = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    expect(((await accepted.json()) as { notice?: string }).notice).toBe(
+      "YouTube left out: the workspace owner can reconnect it.",
+    );
+
+    connectionFindUniqueMock.mockResolvedValue({ needsReconnect: true });
+    const refused = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error?: string }).error).toBe(
+      "TikTok left out: the workspace owner can reconnect it. YouTube left out: the workspace owner can reconnect it.",
+    );
   });
 
   it("retryAllFailed: X, Facebook and LinkedIn failed, Instagram unconfirmed: retries the three", async () => {

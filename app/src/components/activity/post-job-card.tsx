@@ -69,28 +69,18 @@ export function failureSentence(result: Pick<PostJobDTO["results"][number], "err
   return sentenceForRecipient(result.errorMessage, result.platform, role);
 }
 
-/** What a retry refused for reconnecting says: the server's sentence is an owner's. */
+/** What a retry refused for reconnecting says: the server words it for the viewer; this is the fallback. */
 export function reconnectRefusalToast(
   role: ViewerRole,
   dead: readonly Platform[],
   label: string,
   serverError: string | undefined,
 ): string {
+  if (serverError) return serverError;
   const which = dead.length > 0 ? platformList(dead) : label;
-  if (role === "member") return `The workspace owner can reconnect ${which}; then retry.`;
-  return serverError ?? `Reconnect ${which} in Settings before retrying.`;
-}
-
-/** Retry all failed's note about what it left out; the server writes an owner's. */
-export function retryAllNotice(role: ViewerRole, leftOut: readonly LeftOut[], notice: string | undefined): string | undefined {
-  if (role === "owner" || leftOut.length === 0) return notice;
-  return leftOut
-    .map(({ platform, reason }) =>
-      reason === "unconfirmed"
-        ? `${platformLabel(platform)} left out: check whether it posted first.`
-        : `${platformLabel(platform)} left out: the workspace owner can reconnect it.`,
-    )
-    .join(" ");
+  return role === "member"
+    ? `The workspace owner can reconnect ${which}; then retry.`
+    : `Reconnect ${which} in Settings before retrying.`;
 }
 
 /** In place of a failed platform's Retry once the server said it needs reconnecting. */
@@ -427,7 +417,7 @@ export function PostJobCard({
             });
             const dead = leftOut.filter((entry) => entry.reason === "reconnect").map((entry) => entry.platform);
             if (dead.length > 0) setReconnect((prev) => new Set([...prev, ...dead]));
-            toast.success(retryAllToast(body.retrying ?? platforms, retryAllNotice(viewerRole, leftOut, body.notice)));
+            toast.success(retryAllToast(body.retrying ?? platforms, body.notice));
           } else {
             toast.success(`Retrying ${label}…`);
           }

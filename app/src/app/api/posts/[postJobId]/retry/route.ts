@@ -206,7 +206,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
       const reconnect = leftOut.find((entry) => entry.reason === "reconnect");
       return NextResponse.json(
         {
-          error: leftOutSentence(leftOut),
+          error: leftOutSentence(leftOut, workspaceContext.role),
           code: reconnect ? "RECONNECT_REQUIRED" : "NOTHING_TO_RETRY",
           ...(reconnect ? { platform: reconnect.platform } : {}),
           leftOut,
@@ -256,7 +256,11 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   if (dead.length > 0) {
     return NextResponse.json(
       {
-        error: `Reconnect ${platformList(dead)} in Settings before retrying.`,
+        // R10-client-journey L1: only an owner can reconnect.
+        error:
+          workspaceContext.role === "member"
+            ? `The workspace owner can reconnect ${platformList(dead)}; then retry.`
+            : `Reconnect ${platformList(dead)} in Settings before retrying.`,
         code: "RECONNECT_REQUIRED",
         platform: dead[0],
       },
@@ -397,7 +401,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  const notice = leftOutSentence(leftOut);
+  const notice = leftOutSentence(leftOut, workspaceContext.role);
   return NextResponse.json(
     { ok: true, retrying: eligible, ...(notice ? { leftOut, notice } : {}) },
     { status: 202 },

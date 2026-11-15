@@ -18,7 +18,6 @@ import {
   PostJobCard,
   ReconnectStep,
   reconnectRefusalToast,
-  retryAllNotice,
   retryAllToast,
   retryRequestBody,
   SEND_AGAIN_FAILED,
@@ -342,26 +341,13 @@ describe("PostJobCard - what a member reads", () => {
     expect(member).not.toContain("href=");
   });
 
-  it("a retry refused for reconnecting: the server's sentence for an owner, the owner's step for a member", () => {
-    const server = "Reconnect X in Settings before retrying.";
-    expect(reconnectRefusalToast("owner", ["x"], "X", server)).toBe(server);
+  it("a retry refused for reconnecting: the server's sentence (worded for the viewer), else the viewer's own", () => {
+    const server = "The workspace owner can reconnect X; then retry.";
+    expect(reconnectRefusalToast("member", ["x"], "X", server)).toBe(server);
     expect(reconnectRefusalToast("owner", ["x"], "X", undefined)).toBe("Reconnect X in Settings before retrying.");
-    expect(reconnectRefusalToast("member", ["x", "instagram"], "the failed platforms", server)).toBe(
+    expect(reconnectRefusalToast("member", ["x", "instagram"], "the failed platforms", undefined)).toBe(
       "The workspace owner can reconnect X and Instagram; then retry.",
     );
-  });
-
-  it("Retry all failed's note about what it left out: as the server wrote it for an owner, the owner's step for a member", () => {
-    const leftOut = [
-      { platform: "instagram" as const, reason: "unconfirmed" as const },
-      { platform: "x" as const, reason: "reconnect" as const },
-    ];
-    const notice = "Instagram left out: check whether it posted first. X left out: reconnect it in Settings.";
-    expect(retryAllNotice("owner", leftOut, notice)).toBe(notice);
-    expect(retryAllNotice("member", leftOut, notice)).toBe(
-      "Instagram left out: check whether it posted first. X left out: the workspace owner can reconnect it.",
-    );
-    expect(retryAllNotice("member", [], undefined)).toBeUndefined();
   });
 
   it("the card takes the viewer's role", () => {
