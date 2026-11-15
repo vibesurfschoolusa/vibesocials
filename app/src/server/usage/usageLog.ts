@@ -1,9 +1,9 @@
 import type { Prisma } from "@prisma/client";
 
-import { billingEnabled, billingFieldsSelect, PAST_DUE_GRACE_DAYS, planState, type BillingFields } from "@/lib/billing";
+import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { isOperatorUser, parseAdminEmails } from "@/lib/operator";
+import { isOperatorUser } from "@/lib/operator";
 import {
   OWNER_DAILY_POST_LIMIT,
   OWNER_DAILY_POST_LIMIT_CODE,
@@ -42,41 +42,22 @@ export const USAGE_KIND = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Whether the service's daily cap applies to a workspace (review of
- * R5-security M1): it protects the Inngest budget from free use, so a paying
- * workspace (billing on, plan active) is bounded by its plan's limits only,
- * and free accounts filling a day cannot block it. The operator's workspaces
- * are left out by the caller.
+ * Whether the service's daily cap applies to a workspace (reviews of
+ * R5-security M1): the one rule, used both to refuse and to decide what is
+ * counted. The cap protects the Inngest budget from free use, so it leaves
+ * out a workspace an operator owns, a grandfathered one (billingExempt, made
+ * before billing), and, with billing on, one whose plan planState calls
+ * active; those are bounded by their own plan's limits. Free accounts filling
+ * a day cannot block them.
  */
-function serviceCapApplies(workspace: BillingFields, now: Date): boolean {
-  return !billingEnabled() || planState(workspace, now) !== "active";
-}
-
-/**
- * planState's "active", as a query: the workspaces that pay for a plan. Kept
- * in step with src/lib/billing.ts planState (not exempt by flag; a plan that is
- * active or trialing, or past_due within the grace after its period end).
- */
-function payingWorkspaceWhere(now: Date): Prisma.WorkspaceWhereInput {
-  return {
-    billingExempt: false,
-    plan: { not: null },
-    OR: [
-      { planStatus: { in: ["active", "trialing"] } },
-      { planStatus: "past_due", currentPeriodEnd: { gt: new Date(now.getTime() - PAST_DUE_GRACE_DAYS * DAY_MS) } },
-    ],
-  };
-}
-
-/** The workspaces the service's cap counts: no verified operator among the owners, and (billing on) not paying. */
-function serviceCapWorkspaceWhere(now: Date): Prisma.WorkspaceWhereInput {
-  const operators = [...parseAdminEmails(process.env.ADMIN_EMAILS)];
-  return {
-    ...(operators.length > 0
-      ? { members: { none: { role: "owner", user: { email: { in: operators }, emailVerifiedAt: { not: null } } } } }
-      : {}),
-    ...(billingEnabled() ? { NOT: payingWorkspaceWhere(now) } : {}),
-  };
+export function serviceCapApplies(
+  workspace: BillingFields,
+  operatorOwned: boolean,
+  now: Date,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (operatorOwned || workspace.billingExempt) return false;
+  return !billingEnabled(env) || planState(workspace, now) !== "active";
 }
 
 /**
@@ -273,9 +254,10 @@ async function copyPostsBeforeDeletion(
 ): Promise<void> {
   const workspaces = await tx.workspace.findMany({
     where: { id: { in: workspaceIds } },
-    select: { id: true, ...billingFieldsSelect() },
+    select: { id: true, ...BILLING_FIELDS_SELECT },
   });
-  const capped = workspaces.filter((workspace) => serviceCapApplies(workspace, now));
+  // The caller copies nothing for an operator, so none here is operator-owned.
+  const capped = workspaces.filter((workspace) => serviceCapApplies(workspace, false, now));
   if (capped.length === 0) return;
   const personal = new Set(
     capped.filter((workspace) => personalPostLimitApplies(workspace, process.env, now)).map((w) => w.id),
@@ -324,14 +306,40 @@ async function ownerPostsOnDay(
   return live + deleted;
 }
 
-/** The posts on the day the service's cap counts, live and deleted (deletion copies only those). */
-async function servicePostsOnDay(day: Date, exclude: string | readonly string[] | undefined): Promise<number> {
+/**
+ * The posts on the day the service's cap counts, live and deleted (deletion
+ * copies only those). Two bounded reads: the day's posts grouped by
+ * workspace, then those workspaces' plan columns and owners; each is decided
+ * by serviceCapApplies in code, so the rule is never restated as a query.
+ */
+async function servicePostsOnDay(
+  day: Date,
+  exclude: string | readonly string[] | undefined,
+  now: Date,
+): Promise<number> {
   const { start, end } = utcDayRange(day);
-  const [live, deleted] = await Promise.all([
-    prisma.postJob.count({ where: { ...postsOnUtcDayWhere(day, exclude), workspace: serviceCapWorkspaceWhere(new Date()) } }),
+  const [groups, deleted] = await Promise.all([
+    prisma.postJob.groupBy({ by: ["workspaceId"], where: postsOnUtcDayWhere(day, exclude), _count: { _all: true } }),
     prisma.usageEvent.count({ where: { kind: USAGE_KIND.post, at: { gte: start, lt: end } } }),
   ]);
-  return live + deleted;
+  if (groups.length === 0) return deleted;
+
+  const workspaces = await prisma.workspace.findMany({
+    where: { id: { in: groups.map((group) => group.workspaceId) } },
+    select: {
+      id: true,
+      ...BILLING_FIELDS_SELECT,
+      members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
+    },
+  });
+  const capped = new Set(
+    workspaces
+      .filter((workspace) =>
+        serviceCapApplies(workspace, workspace.members.some((owner) => isOperatorUser(owner.user)), now),
+      )
+      .map((workspace) => workspace.id),
+  );
+  return groups.reduce((sum, group) => (capped.has(group.workspaceId) ? sum + group._count._all : sum), deleted);
 }
 
 /**
@@ -366,9 +374,13 @@ export async function crossWorkspacePostRefusal(input: {
     }
   }
 
+  // The posting workspace's own plan columns, the flag included: with billing
+  // off the caller's row has none of them.
+  const now = new Date();
+  const own = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: BILLING_FIELDS_SELECT });
   if (
-    serviceCapApplies(input.workspace, new Date()) &&
-    (await servicePostsOnDay(day, excludePostJobId)) + alsoOnDay >= SERVICE_DAILY_POST_LIMIT
+    serviceCapApplies(own ?? {}, false, now) &&
+    (await servicePostsOnDay(day, excludePostJobId, now)) + alsoOnDay >= SERVICE_DAILY_POST_LIMIT
   ) {
     return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
   }

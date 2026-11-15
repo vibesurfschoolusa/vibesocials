@@ -8,9 +8,11 @@ const db = vi.hoisted(() => ({
   eventDeleteMany: vi.fn(),
   postJobCount: vi.fn(),
   postJobFindMany: vi.fn(),
+  postJobGroupBy: vi.fn(),
   resultFindMany: vi.fn(),
   memberFindMany: vi.fn(),
   workspaceFindMany: vi.fn(),
+  workspaceFindUnique: vi.fn(),
   connectionFindUnique: vi.fn(),
   queryRaw: vi.fn(),
 }));
@@ -24,10 +26,10 @@ vi.mock("@/lib/db", () => ({
       findMany: db.eventFindMany,
       deleteMany: db.eventDeleteMany,
     },
-    postJob: { count: db.postJobCount, findMany: db.postJobFindMany },
+    postJob: { count: db.postJobCount, findMany: db.postJobFindMany, groupBy: db.postJobGroupBy },
     postJobResult: { findMany: db.resultFindMany },
     workspaceMember: { findMany: db.memberFindMany },
-    workspace: { findMany: db.workspaceFindMany },
+    workspace: { findMany: db.workspaceFindMany, findUnique: db.workspaceFindUnique },
     socialConnection: { findUnique: db.connectionFindUnique },
     $queryRaw: db.queryRaw,
   },
@@ -39,6 +41,7 @@ import {
   copyUsageBeforeDeletion,
   crossWorkspacePostRefusal,
   pruneUsageEvents,
+  serviceCapApplies,
   USAGE_EVENT_RETENTION_DAYS,
   recordWorkspaceCreated,
   workspaceCreationRefusal,
@@ -81,6 +84,8 @@ beforeEach(() => {
     ),
   );
   db.workspaceFindMany.mockResolvedValue([]);
+  db.postJobGroupBy.mockResolvedValue([]);
+  db.workspaceFindUnique.mockResolvedValue({ billingExempt: false });
   db.connectionFindUnique.mockResolvedValue({ accountIdentifier: "x-account-7" });
   db.queryRaw.mockResolvedValue([{ count: 0 }]);
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -222,60 +227,99 @@ describe("posts per owner per day, across the workspaces they own", () => {
   });
 });
 
-// Review: the cap protects the Inngest budget from free use only. It counts
-// and refuses only workspaces that neither the operator owns nor pay for a
-// plan, so free accounts filling a day cannot block a paying customer.
-const OPERATOR_FREE = { members: { none: { role: "owner", user: { email: { in: ["ops@example.com"] }, emailVerifiedAt: { not: null } } } } };
-const NOT_PAYING = {
-  NOT: {
-    billingExempt: false,
-    plan: { not: null },
-    OR: [
-      { planStatus: { in: ["active", "trialing"] } },
-      { planStatus: "past_due", currentPeriodEnd: { gt: new Date(NOW.getTime() - 7 * DAY) } },
-    ],
-  },
-};
+// Review: the cap protects the Inngest budget from free use only. One rule,
+// serviceCapApplies (planState and the operator check, in code), decides each
+// workspace both for the refusal and for what is counted.
+const VERIFIED = new Date("2026-10-01T00:00:00Z");
+const OPS_OWNER = { user: { email: "ops@example.com", emailVerifiedAt: VERIFIED } };
+const PLAIN_OWNER = { user: { email: "owner@example.com", emailVerifiedAt: VERIFIED } };
+
+describe("serviceCapApplies: every plan state", () => {
+  const DAYS = (n: number) => new Date(NOW.getTime() + n * DAY);
+  const plan = (overrides: Record<string, unknown>) => ({ billingExempt: false, plan: "starter", ...overrides });
+
+  it.each([
+    ["trial", { billingExempt: false, trialEndsAt: DAYS(5) }, true],
+    ["active plan", plan({ planStatus: "active", currentPeriodEnd: DAYS(20) }), false],
+    ["trialing plan", plan({ planStatus: "trialing", currentPeriodEnd: DAYS(20) }), false],
+    ["past_due within the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3) }), false],
+    ["past_due after the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-8) }), true],
+    ["set to cancel at the period end, still active", plan({ planStatus: "active", currentPeriodEnd: DAYS(10) }), false],
+    ["ended plan", plan({ planStatus: "canceled", currentPeriodEnd: DAYS(-1) }), true],
+    ["ended trial", { billingExempt: false, trialEndsAt: DAYS(-1) }, true],
+    ["exempt by flag (grandfathered)", { billingExempt: true }, false],
+    ["exempt by flag, even with a plan that ended", plan({ billingExempt: true, planStatus: "canceled" }), false],
+    ["plan set with no status", plan({ planStatus: null }), true],
+    ["past_due with no period end", plan({ planStatus: "past_due", currentPeriodEnd: null }), true],
+    ["no plan and no trial (made with billing off)", { billingExempt: false }, true],
+  ])("billing on, %s: applies = %s", (_name, workspace, applies) => {
+    expect(serviceCapApplies(workspace, false, NOW, { BILLING_ENABLED: "true" })).toBe(applies);
+  });
+
+  it("billing off: applies to every workspace but a grandfathered one", () => {
+    expect(serviceCapApplies(plan({ planStatus: "active" }), false, NOW, {})).toBe(true);
+    expect(serviceCapApplies({ billingExempt: false }, false, NOW, {})).toBe(true);
+    expect(serviceCapApplies({ billingExempt: true }, false, NOW, {})).toBe(false);
+  });
+
+  it("never applies to a workspace an operator owns", () => {
+    expect(serviceCapApplies({ billingExempt: false, trialEndsAt: DAYS(5) }, true, NOW, { BILLING_ENABLED: "true" })).toBe(false);
+    expect(serviceCapApplies({ billingExempt: false }, true, NOW, {})).toBe(false);
+  });
+});
 
 describe("the service's daily post cap", () => {
-  it("with billing off, counts the posts of every workspace the operator does not own", async () => {
-    await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" });
-    expect(db.postJobCount).toHaveBeenCalledWith({ where: { ...postsOnDay, workspace: OPERATOR_FREE } });
-  });
-
-  it("with billing on, counts only workspaces that do not pay for a plan", async () => {
-    vi.stubEnv("BILLING_ENABLED", "true");
-    await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: TRIAL, day: NOW, mode: "now" });
-    expect(db.postJobCount).toHaveBeenCalledWith({ where: { ...postsOnDay, workspace: { ...OPERATOR_FREE, ...NOT_PAYING } } });
-  });
-
-  it("a paying workspace is never refused by it, however full the day is", async () => {
-    vi.stubEnv("BILLING_ENABLED", "true");
-    db.postJobCount.mockResolvedValue(500);
-    db.eventCount.mockResolvedValue(500);
-    await expect(
-      crossWorkspacePostRefusal({ workspaceId: "ws-paid", workspace: PAID, day: NOW, mode: "now" }),
-    ).resolves.toBeNull();
-    expect(db.postJobCount).not.toHaveBeenCalled();
-  });
-
-  it("counts every workspace's posts on the day plus the logged posts of deleted workspaces", async () => {
-    db.postJobCount.mockImplementation(({ where }: { where: { workspaceId?: unknown } }) =>
-      Promise.resolve(where.workspaceId ? 0 : 70),
+  /** The day's posts per workspace, and each workspace's plan columns and owners. */
+  function day(rows: Array<{ id: string; posts: number; fields?: Record<string, unknown>; owners?: unknown[] }>) {
+    db.postJobGroupBy.mockResolvedValue(rows.map((row) => ({ workspaceId: row.id, _count: { _all: row.posts } })));
+    db.workspaceFindMany.mockResolvedValue(
+      rows.map((row) => ({ id: row.id, billingExempt: false, ...row.fields, members: row.owners ?? [PLAIN_OWNER] })),
     );
-    db.eventCount.mockImplementation(({ where }: { where: { userId?: string } }) => Promise.resolve(where.userId ? 0 : 9));
+  }
 
+  it("groups the day's posts by workspace, then decides each workspace in code", async () => {
+    day([{ id: "ws-free", posts: 3 }]);
+    await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", excludePostJobId: "job-9" });
+
+    expect(db.postJobGroupBy).toHaveBeenCalledWith({
+      by: ["workspaceId"],
+      where: { ...postsOnDay, id: { not: "job-9" } },
+      _count: { _all: true },
+    });
+    expect(db.workspaceFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ["ws-free"] } },
+      select: {
+        id: true,
+        billingExempt: true,
+        plan: true,
+        planStatus: true,
+        trialEndsAt: true,
+        currentPeriodEnd: true,
+        members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
+      },
+    });
+  });
+
+  it("counts only the workspaces the cap applies to, plus the logged posts of deleted ones", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    db.workspaceFindUnique.mockResolvedValue({ billingExempt: false, trialEndsAt: new Date(NOW.getTime() + 5 * DAY) });
+    db.eventCount.mockImplementation(({ where }: { where: { userId?: string } }) => Promise.resolve(where.userId ? 0 : 9));
+    day([
+      { id: "ws-free", posts: 70, fields: { trialEndsAt: new Date(NOW.getTime() + 5 * DAY) } },
+      { id: "ws-paid", posts: 400, fields: { plan: "pro", planStatus: "active" } },
+      { id: "ws-old", posts: 300, fields: { billingExempt: true } },
+      { id: "ws-ops", posts: 300, owners: [OPS_OWNER] },
+    ]);
+
+    // 70 + 9 logged = 79: one more fits.
     await expect(
-      crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }),
+      crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: TRIAL, day: NOW, mode: "now" }),
     ).resolves.toBeNull();
-    expect(db.postJobCount).toHaveBeenCalledWith({ where: { ...postsOnDay, workspace: OPERATOR_FREE } });
     expect(db.eventCount).toHaveBeenCalledWith({ where: { kind: "post", at: { gte: DAY_START, lt: DAY_END } } });
   });
 
-  it("refuses at 80 with a sentence that says the service's daily limit was reached", async () => {
-    db.postJobCount.mockImplementation(({ where }: { where: { workspaceId?: unknown } }) =>
-      Promise.resolve(where.workspaceId ? 0 : 71),
-    );
+  it("refuses a free workspace at 80, with a sentence that says the service's daily limit was reached", async () => {
+    day([{ id: "ws-free", posts: 71 }]);
     db.eventCount.mockImplementation(({ where }: { where: { userId?: string } }) => Promise.resolve(where.userId ? 0 : 9));
 
     await expect(
@@ -286,17 +330,50 @@ describe("the service's daily post cap", () => {
     });
   });
 
-  it("never refuses a workspace the operator owns, and counts nothing for it", async () => {
-    db.memberFindMany.mockResolvedValue([
-      { userId: "ops-1", user: { email: "Ops@Example.com", emailVerifiedAt: new Date("2026-10-01T00:00:00Z") } },
+  // Review case: two free accounts filling a day cannot block a paying,
+  // grandfathered or operator workspace.
+  it("two free accounts filling the day block neither a paying nor a grandfathered workspace", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    day([
+      { id: "ws-free-a", posts: 40 },
+      { id: "ws-free-b", posts: 40 },
     ]);
-    db.postJobCount.mockResolvedValue(500);
-    db.eventCount.mockResolvedValue(500);
+    db.workspaceFindUnique.mockResolvedValueOnce({ billingExempt: false, plan: "pro", planStatus: "active" });
+    await expect(
+      crossWorkspacePostRefusal({ workspaceId: "ws-paid", workspace: PAID, day: NOW, mode: "now" }),
+    ).resolves.toBeNull();
+    db.workspaceFindUnique.mockResolvedValueOnce({ billingExempt: true });
+    await expect(
+      crossWorkspacePostRefusal({ workspaceId: "ws-old", workspace: {}, day: NOW, mode: "now" }),
+    ).resolves.toBeNull();
+    // The cap's own workspaces are refused.
+    db.workspaceFindUnique.mockResolvedValueOnce({ billingExempt: false, trialEndsAt: new Date(NOW.getTime() + 5 * DAY) });
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-free-c", workspace: TRIAL, day: NOW, mode: "now" }))?.code,
+    ).toBe("SERVICE_DAILY_POST_LIMIT");
+  });
+
+  it("reads the posting workspace's own flag even with billing off, where the plan columns are not loaded", async () => {
+    db.workspaceFindUnique.mockResolvedValue({ billingExempt: true });
+    day([{ id: "ws-free", posts: 500 }]);
+    await expect(
+      crossWorkspacePostRefusal({ workspaceId: "ws-old", workspace: {}, day: NOW, mode: "now" }),
+    ).resolves.toBeNull();
+    expect(db.workspaceFindUnique).toHaveBeenCalledWith({
+      where: { id: "ws-old" },
+      select: { billingExempt: true, plan: true, planStatus: true, trialEndsAt: true, currentPeriodEnd: true },
+    });
+    expect(db.postJobGroupBy).not.toHaveBeenCalled();
+  });
+
+  it("never refuses a workspace the operator owns, and counts nothing for it", async () => {
+    db.memberFindMany.mockResolvedValue([{ userId: "ops-1", user: { email: "Ops@Example.com", emailVerifiedAt: VERIFIED } }]);
+    day([{ id: "ws-free", posts: 500 }]);
 
     await expect(
       crossWorkspacePostRefusal({ workspaceId: "ws-ops", workspace: {}, day: NOW, mode: "now" }),
     ).resolves.toBeNull();
-    expect(db.postJobCount).not.toHaveBeenCalled();
+    expect(db.postJobGroupBy).not.toHaveBeenCalled();
   });
 
   it("an unverified address on the operator list is not the operator", async () => {
@@ -305,9 +382,17 @@ describe("the service's daily post cap", () => {
         where.workspaceId ? [{ userId: "x-1", user: { email: "ops@example.com", emailVerifiedAt: null } }] : [],
       ),
     );
-    db.postJobCount.mockResolvedValue(80);
+    day([{ id: "ws-free", posts: 80 }]);
     const refusal = await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" });
     expect(refusal?.code).toBe("SERVICE_DAILY_POST_LIMIT");
+  });
+
+  it("with no post on the day, reads no workspace", async () => {
+    day([]);
+    await expect(
+      crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }),
+    ).resolves.toBeNull();
+    expect(db.workspaceFindMany).not.toHaveBeenCalled();
   });
 });
 
@@ -448,6 +533,23 @@ describe("before a workspace is deleted", () => {
     expect(tx.usageEvent.createMany.mock.calls[0][0].data).toEqual([
       { kind: "post", userId: "owner-1", workspaceId: "ws-trial", sourceId: "job-2", at: new Date("2026-11-14T10:00:00Z") },
     ]);
+  });
+
+  // Review decision: grandfathered workspaces are outside the cap, so their posts are not copied.
+  it("a grandfathered workspace's posts are not copied, with billing off too", async () => {
+    const tx = {
+      usageEvent: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      postJob: { findMany: vi.fn().mockResolvedValue([]) },
+      postJobResult: { findMany: vi.fn().mockResolvedValue([]) },
+      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-old", billingExempt: true }]) },
+    };
+    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-old"], userId: "owner-1", operator: false, now: NOW });
+    expect(tx.workspace.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ["ws-old"] } },
+      select: { id: true, billingExempt: true, plan: true, planStatus: true, trialEndsAt: true, currentPeriodEnd: true },
+    });
+    expect(tx.postJob.findMany).not.toHaveBeenCalled();
+    expect(tx.usageEvent.createMany).not.toHaveBeenCalled();
   });
 
   it("an operator's deleted workspaces copy no posts (they count toward no limit), only X posts", async () => {
