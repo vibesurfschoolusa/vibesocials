@@ -11,7 +11,11 @@ const {
   accountTokenDeleteManyMock,
   requestDeleteManyMock,
   deliverAccountEmailMock,
+  getCurrentUserMock,
+  followMock,
 } = vi.hoisted(() => ({
+  getCurrentUserMock: vi.fn(),
+  followMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueMock: vi.fn(),
   claimMock: vi.fn(),
@@ -21,6 +25,8 @@ const {
   deliverAccountEmailMock: vi.fn(),
 }));
 
+vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
+vi.mock("@/server/billing/customerEmail", () => ({ followEmailChangeInStripe: followMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@/lib/db", () => {
   const tx = {
@@ -76,9 +82,13 @@ beforeEach(() => {
     accountTokenDeleteManyMock,
     requestDeleteManyMock,
     deliverAccountEmailMock,
+    getCurrentUserMock,
+    followMock,
   ]) {
     mock.mockReset();
   }
+  getCurrentUserMock.mockResolvedValue(null);
+  followMock.mockResolvedValue(undefined);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   findUniqueMock.mockResolvedValue(record());
   claimMock.mockResolvedValue({ count: 1 });
@@ -118,11 +128,18 @@ describe("POST /api/auth/change-email/confirm", () => {
     const response = await POST(request({ token: "raw-token" }));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, email: "new@example.com" });
+    await expect(response.json()).resolves.toEqual({ ok: true, viewer: "signed_out", email: "new@example.com" });
     expect(findUniqueMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { tokenHash: hashAccountToken("raw-token") } }),
     );
     expect(claimMock.mock.calls[0][0].where).toMatchObject({ tokenHash: hashAccountToken("raw-token"), usedAt: null });
+    // Review: the claim also stores what an undo needs.
+    const claimed = claimMock.mock.calls[0][0].data;
+    expect(claimed.usedAt).toBeInstanceOf(Date);
+    expect(claimed.previousEmail).toBe("old@example.com");
+    expect(claimed.undoTokenHash).toMatch(/^[0-9a-f]{64}$/);
+    const undoTtl = claimed.undoExpiresAt.getTime() - claimed.usedAt.getTime();
+    expect(undoTtl).toBe(7 * 24 * 60 * 60 * 1000);
     const update = userUpdateMock.mock.calls[0][0];
     expect(update.where).toEqual({ id: "user-1" });
     expect(update.data).toMatchObject({
@@ -135,11 +152,43 @@ describe("POST /api/auth/change-email/confirm", () => {
     expect(requestDeleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1", usedAt: null } });
   });
 
-  it("tells the old address about the change", async () => {
+  it("tells the old address about the change, with an undo link whose token matches the stored hash", async () => {
     await POST(request({ token: "raw-token" }));
     const [to, email] = deliverAccountEmailMock.mock.calls[0];
     expect(to).toBe("old@example.com");
     expect(email.text).toContain("new@example.com");
+    const raw = /\/verify-email\/undo#([A-Za-z0-9_-]+)/.exec(email.text)?.[1];
+    expect(raw).toBeTruthy();
+    expect(hashAccountToken(raw!)).toBe(claimMock.mock.calls[0][0].data.undoTokenHash);
+  });
+
+  // Review item 5: Stripe follows, best effort.
+  it("passes the change on to the Stripe customers", async () => {
+    await POST(request({ token: "raw-token" }));
+    expect(followMock).toHaveBeenCalledWith({ userId: "user-1", from: "old@example.com", to: "new@example.com" });
+  });
+
+  it("still answers success when the Stripe update fails", async () => {
+    followMock.mockRejectedValue(new Error("Stripe down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await POST(request({ token: "raw-token" }))).status).toBe(200);
+  });
+
+  // Review item 2: the page signs out only the account that changed.
+  it("says whether the browser is signed in to the account that changed", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-1" });
+    await expect((await POST(request({ token: "raw-token" }))).json()).resolves.toEqual({
+      ok: true,
+      viewer: "this_account",
+      email: "new@example.com",
+    });
+
+    findUniqueMock.mockResolvedValue(record());
+    getCurrentUserMock.mockResolvedValue({ id: "someone-else" });
+    await expect((await POST(request({ token: "raw-token" }))).json()).resolves.toEqual({
+      ok: true,
+      viewer: "other_account",
+    });
   });
 
   it("changes nothing when the link was used in the meantime", async () => {

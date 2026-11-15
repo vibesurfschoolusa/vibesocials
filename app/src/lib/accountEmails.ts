@@ -136,19 +136,35 @@ const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "
 
 /**
  * R5 new-customer L4: sent to the OLD address once the change is made, so the
- * owner of that mailbox learns of it. The new address is the person's own
- * input, so the HTML escapes it.
+ * owner of that mailbox learns of it and can take the account back with the
+ * one-use undo link (api/auth/change-email/undo; its raw token appears once,
+ * in a URL fragment, like the other account links). The new address is the
+ * person's own input, so the HTML escapes it.
  */
-export function buildEmailChangedNoticeEmail(opts: { newEmail: string }): AccountEmail {
+export function buildEmailChangedNoticeEmail(opts: {
+  newEmail: string;
+  rawUndoToken: string;
+  baseUrl: string;
+}): AccountEmail {
   const subject = "Your Vibe Socials sign-in email was changed";
   const heading = "Your sign-in email was changed";
-  const paragraphs = (address: string) => [
-    `Your Vibe Socials account now signs in with ${address}, and every device was signed out. If you did this, there is nothing else to do.`,
-    `If it was not you, write to ${SUPPORT_EMAIL} right away so we can give the account back.`,
-  ];
+  const link = `${opts.baseUrl.replace(/\/+$/, "")}/verify-email/undo#${opts.rawUndoToken}`;
+  const intro = (address: string) =>
+    `Your Vibe Socials account now signs in with ${address}, and every device was signed out. If you did this, there is nothing else to do.`;
+  const ifNotYou =
+    "If it was not you, use the link below to put this address back. It works once, for 7 days, and signs out every device; then reset your password.";
+  const help = `If the link no longer works, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
   const escaped = opts.newEmail.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
-  const html = ["<div>", `<h1>${heading}</h1>`, ...paragraphs(escaped).map((p) => `<p>${p}</p>`), "</div>"].join("");
-  const text = [heading, "", ...paragraphs(opts.newEmail).flatMap((p) => [p, ""]), "— Vibe Socials"].join("\n");
+  const html = [
+    "<div>",
+    `<h1>${heading}</h1>`,
+    `<p>${intro(escaped)}</p>`,
+    `<p>${ifNotYou}</p>`,
+    `<p><a href="${link}">This wasn&#39;t me: undo the change</a></p>`,
+    `<p>${help}</p>`,
+    "</div>",
+  ].join("");
+  const text = [heading, "", intro(opts.newEmail), "", ifNotYou, "", link, "", help, "", "— Vibe Socials"].join("\n");
   return { subject, html, text };
 }
 

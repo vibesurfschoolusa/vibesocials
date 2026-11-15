@@ -1,11 +1,18 @@
 /**
- * What /verify-email/new-address says after it posts the link's token
- * (R5 new-customer L4). The route's refusals are already plain sentences
- * (api/auth/change-email/confirm), so they are shown as they are.
+ * What /verify-email/new-address says after the person presses its button
+ * and the token is posted (R5 new-customer L4). The route's refusals are
+ * already plain sentences (api/auth/change-email/confirm), so they are shown
+ * as they are.
  */
 
 export type NewAddressView = {
   changed: boolean;
+  /**
+   * Clear this browser's session: only when it is signed in to the account
+   * that changed (the server already signed that account out everywhere).
+   * Someone signed in to another account stays signed in.
+   */
+  signOutHere: boolean;
   title: string;
   message: string;
   next: { href: string; label: string };
@@ -14,9 +21,12 @@ export type NewAddressView = {
 };
 
 const SETTINGS = { href: "/settings", label: "Go to Settings" };
+const LOG_IN = { href: "/login", label: "Log in" };
+
+type ConfirmAnswer = { viewer?: string; email?: string; error?: string };
 
 export async function confirmNewAddress(fetchImpl: typeof fetch, token: string): Promise<NewAddressView> {
-  const notChanged = { changed: false, next: SETTINGS, offerRetry: false };
+  const notChanged = { changed: false, signOutHere: false, next: SETTINGS, offerRetry: false };
   if (!token) {
     return {
       ...notChanged,
@@ -41,13 +51,26 @@ export async function confirmNewAddress(fetchImpl: typeof fetch, token: string):
         "Your email is unchanged, and this link still works. Check your internet connection, then press Try again.",
     };
   }
-  const data = (await response.json().catch(() => null)) as { email?: string; error?: string } | null;
+  const data = (await response.json().catch(() => null)) as ConfirmAnswer | null;
   if (response.ok) {
+    const title = "Your sign-in email was changed";
+    if (data?.viewer === "other_account") {
+      return {
+        changed: true,
+        signOutHere: false,
+        offerRetry: false,
+        next: { href: "/", label: "Continue to Vibe Socials" },
+        title,
+        message:
+          "The sign-in email of that account was changed. Whoever uses it logs in again with the new address. You are still signed in here.",
+      };
+    }
     return {
       changed: true,
+      signOutHere: data?.viewer === "this_account",
       offerRetry: false,
-      next: { href: "/login", label: "Log in" },
-      title: "Your sign-in email was changed",
+      next: LOG_IN,
+      title,
       message: `You now sign in with ${data?.email ?? "your new address"}. Every device was signed out, so log in again with the new address.`,
     };
   }

@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 
 import { buildEmailChangedNoticeEmail, deliverAccountEmail } from "@/lib/accountEmails";
-import { hashAccountToken } from "@/lib/accountToken";
+import { generateAccountToken, hashAccountToken } from "@/lib/accountToken";
+import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
+
+/** How long the old mailbox's "This wasn't me: undo" link works. */
+const UNDO_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const RATE_LIMIT = { route: "auth/change-email-confirm", limit: 10, windowMs: 15 * 60 * 1000 } as const;
 
@@ -30,7 +35,13 @@ const deadLinkResponse = () =>
  * mailbox, stop working. Following the link proves the new mailbox, so the
  * email counts as verified. A Google link was made by the old address, so it
  * is cleared. The old address is told, so its owner learns of a change they
- * did not make.
+ * did not make, with a one-use undo link (./undo) that works for 7 days.
+ *
+ * The page posts here only when the person presses its button, never on
+ * load, so a mail scanner opening the link changes nothing. `viewer` says
+ * whether this browser is signed in to the account that changed (the page
+ * then signs it out), to another account (left signed in, and told only that
+ * the change was made), or to none.
  */
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
@@ -56,7 +67,9 @@ export async function POST(request: Request) {
 
   const tokenHash = hashAccountToken(token);
   const now = new Date();
+  const undo = generateAccountToken();
   try {
+    const caller = await getCurrentUser();
     const record = await prisma.emailChangeRequest.findUnique({
       where: { tokenHash },
       include: { user: { select: { email: true } } },
@@ -68,7 +81,12 @@ export async function POST(request: Request) {
     const changed = await prisma.$transaction(async (tx) => {
       const { count } = await tx.emailChangeRequest.updateMany({
         where: { tokenHash, usedAt: null, expiresAt: { gt: now } },
-        data: { usedAt: now },
+        data: {
+          usedAt: now,
+          previousEmail: record.user.email,
+          undoTokenHash: undo.hash,
+          undoExpiresAt: new Date(now.getTime() + UNDO_TTL_MS),
+        },
       });
       if (count === 0) return false;
       await tx.user.update({
@@ -89,9 +107,27 @@ export async function POST(request: Request) {
     }
 
     // Best-effort: deliverAccountEmail logs and returns false on any failure.
-    await deliverAccountEmail(record.user.email, buildEmailChangedNoticeEmail({ newEmail: record.newEmail }));
+    await deliverAccountEmail(
+      record.user.email,
+      buildEmailChangedNoticeEmail({
+        newEmail: record.newEmail,
+        rawUndoToken: undo.raw,
+        baseUrl: process.env.NEXTAUTH_URL ?? "",
+      }),
+    );
+    // Best effort too; it logs and never throws, but a surprise must not
+    // turn a made change into an error answer.
+    await followEmailChangeInStripe({ userId: record.userId, from: record.user.email, to: record.newEmail }).catch(
+      (error: unknown) => logger.error("[POST /api/auth/change-email/confirm] Stripe follow-up failed", { error }),
+    );
 
-    return NextResponse.json({ ok: true, email: record.newEmail }, { status: 200 });
+    if (caller && caller.id !== record.userId) {
+      return NextResponse.json({ ok: true, viewer: "other_account" }, { status: 200 });
+    }
+    return NextResponse.json(
+      { ok: true, viewer: caller ? "this_account" : "signed_out", email: record.newEmail },
+      { status: 200 },
+    );
   } catch (error) {
     // User.email is unique: another account registered the address after the
     // link was sent. The transaction rolled back, so the link still works.

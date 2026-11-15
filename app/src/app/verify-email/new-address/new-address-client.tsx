@@ -1,52 +1,50 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 
 import { confirmNewAddress, type NewAddressView } from "./confirmNewAddress";
 
 /**
- * Reads the token from the URL fragment (never sent to a server on
- * navigation, like the verify link) and posts it once on mount; Try again
- * repeats it only when the link was not used up.
+ * Posts the link's token (read from the URL fragment, never sent to a server
+ * on navigation) only when the person presses the button: a mail scanner
+ * that opens the link must not make the change. Try again repeats it only
+ * when the link was not used up.
  */
 export function NewAddressClient() {
   const [view, setView] = useState<NewAddressView | null>(null);
-  const started = useRef(false);
+  const [busy, setBusy] = useState(false);
 
-  const confirm = useCallback(async () => {
-    setView(null);
+  async function confirm() {
+    setBusy(true);
     const result = await confirmNewAddress(fetch, window.location.hash.slice(1));
-    // Every session was signed out on the server; clear this browser's
-    // cookie too, so Log in shows the form.
-    if (result.changed) await signOut({ redirect: false }).catch(() => undefined);
+    // Only this account's session: another signed-in account stays signed in.
+    if (result.signOutHere) await signOut({ redirect: false }).catch(() => undefined);
     setView(result);
-  }, []);
-
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-    void confirm();
-  }, [confirm]);
+    setBusy(false);
+  }
 
   if (!view) {
     return (
       <Card>
         <CardHeader>
           <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">
-            Confirming your new email
+            Confirm your new email
           </h1>
         </CardHeader>
         <CardContent>
-          <div className="flex justify-center py-4">
-            <Spinner label="Confirming your new email" />
-          </div>
+          <p className="text-sm text-muted-foreground">
+            Press the button to sign in with this address from now on. Every device signed in to the account is
+            signed out.
+          </p>
+          <Button className="mt-4" loading={busy} onClick={() => void confirm()}>
+            Use this email address
+          </Button>
         </CardContent>
       </Card>
     );

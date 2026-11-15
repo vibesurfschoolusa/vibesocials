@@ -8,23 +8,44 @@ function respond(status: number, body: unknown) {
 
 // R5 new-customer L4: the page the link sent to the new address opens.
 describe("confirmNewAddress", () => {
-  it("posts the token and, on success, names the new address and says to log in again", async () => {
-    const ok = respond(200, { ok: true, email: "new@example.com" });
-    const view = await confirmNewAddress(ok, "tok");
+  it("posts the token", async () => {
+    const ok = respond(200, { ok: true, viewer: "signed_out", email: "new@example.com" });
+    await confirmNewAddress(ok, "tok");
     expect(ok).toHaveBeenCalledWith(
       "/api/auth/change-email/confirm",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ token: "tok" }) }),
     );
-    expect(view).toMatchObject({ changed: true, title: "Your sign-in email was changed", offerRetry: false });
+  });
+
+  // Review item 2: only the account that changed is signed out here.
+  it("signed in to the account that changed: names the new address, signs this browser out, says to log in", async () => {
+    const view = await confirmNewAddress(respond(200, { ok: true, viewer: "this_account", email: "new@example.com" }), "tok");
+    expect(view).toMatchObject({ changed: true, signOutHere: true, title: "Your sign-in email was changed", offerRetry: false });
     expect(view.message).toContain("new@example.com");
     expect(view.message).toContain("log in again");
     expect(view.next).toEqual({ href: "/login", label: "Log in" });
   });
 
+  it("signed out: names the new address and points to log in, with nothing to sign out", async () => {
+    const view = await confirmNewAddress(respond(200, { ok: true, viewer: "signed_out", email: "new@example.com" }), "tok");
+    expect(view).toMatchObject({ changed: true, signOutHere: false });
+    expect(view.message).toContain("new@example.com");
+    expect(view.next).toEqual({ href: "/login", label: "Log in" });
+  });
+
+  it("signed in to another account: stays signed in and reads a neutral sentence", async () => {
+    const view = await confirmNewAddress(respond(200, { ok: true, viewer: "other_account" }), "tok");
+    expect(view).toMatchObject({ changed: true, signOutHere: false });
+    expect(view.message).toBe(
+      "The sign-in email of that account was changed. Whoever uses it logs in again with the new address. You are still signed in here.",
+    );
+    expect(view.next).toEqual({ href: "/", label: "Continue to Vibe Socials" });
+  });
+
   it("shows the route's own sentence for a dead link or a taken address, without a retry", async () => {
     for (const status of [400, 409, 429]) {
       const view = await confirmNewAddress(respond(status, { error: `Sentence ${status}.` }), "tok");
-      expect(view).toMatchObject({ changed: false, message: `Sentence ${status}.`, offerRetry: false });
+      expect(view).toMatchObject({ changed: false, signOutHere: false, message: `Sentence ${status}.`, offerRetry: false });
     }
   });
 

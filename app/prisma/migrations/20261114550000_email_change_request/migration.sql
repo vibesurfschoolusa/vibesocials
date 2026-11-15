@@ -1,6 +1,8 @@
 -- R5 new-customer L4 (2026-11-14): a requested change of sign-in email,
--- confirmed by a link sent to the new address. Additive: one new table; no
--- existing row or column changes. The foreign key briefly locks "User".
+-- confirmed by a link sent to the new address; once made, it holds the
+-- address it replaced and the one-use undo link sent there. Additive: one
+-- new table; no existing row or column changes. The foreign key briefly
+-- locks "User".
 SET lock_timeout = '5s';
 
 CREATE TABLE "EmailChangeRequest" (
@@ -11,11 +13,17 @@ CREATE TABLE "EmailChangeRequest" (
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "usedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "previousEmail" TEXT,
+    "undoTokenHash" TEXT,
+    "undoExpiresAt" TIMESTAMP(3),
+    "undoneAt" TIMESTAMP(3),
 
     CONSTRAINT "EmailChangeRequest_pkey" PRIMARY KEY ("id")
 );
 
 CREATE UNIQUE INDEX "EmailChangeRequest_tokenHash_key" ON "EmailChangeRequest"("tokenHash");
+
+CREATE UNIQUE INDEX "EmailChangeRequest_undoTokenHash_key" ON "EmailChangeRequest"("undoTokenHash");
 
 CREATE INDEX "EmailChangeRequest_userId_idx" ON "EmailChangeRequest"("userId");
 

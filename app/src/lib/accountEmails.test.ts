@@ -132,8 +132,11 @@ describe("buildEmailChangeEmail", () => {
 });
 
 describe("buildEmailChangedNoticeEmail", () => {
+  const notice = (newEmail = "new@example.com") =>
+    buildEmailChangedNoticeEmail({ newEmail, rawUndoToken: RAW_TOKEN, baseUrl: `${BASE_URL}/` });
+
   it("tells the old address where the account went and what to do if it was not them", () => {
-    const { subject, html, text } = buildEmailChangedNoticeEmail({ newEmail: "new@example.com" });
+    const { subject, html, text } = notice();
 
     expect(subject).toBe("Your Vibe Socials sign-in email was changed");
     for (const body of [html, text]) {
@@ -143,8 +146,19 @@ describe("buildEmailChangedNoticeEmail", () => {
     }
   });
 
+  // Review: the old mailbox can take the account back with one press.
+  it("carries a one-use undo link, its token only in a fragment, valid 7 days", () => {
+    const { html, text } = notice();
+    const link = `${BASE_URL}/verify-email/undo#${RAW_TOKEN}`;
+    expect(html).toContain(`<a href="${link}">This wasn&#39;t me: undo the change</a>`);
+    expect(text).toContain(link);
+    expect(countOccurrences(html, RAW_TOKEN)).toBe(1);
+    expect(countOccurrences(text, RAW_TOKEN)).toBe(1);
+    expect(text).toContain("works once, for 7 days");
+  });
+
   it("escapes the address it names", () => {
-    const { html } = buildEmailChangedNoticeEmail({ newEmail: "a<b>@example.com" });
+    const { html } = notice("a<b>@example.com");
     expect(html).not.toContain("<b>");
   });
 });

@@ -338,7 +338,8 @@ model AccountToken {
 // R5 new-customer L4: a signed-in person's request to change their sign-in
 // email, confirmed by a link sent to the new address. Stored like
 // AccountToken (only the sha256 of the raw token), with the address it would
-// set. Its own table so AccountToken and its type list stay as they are.
+// set, and once made, the link that undoes it from the old mailbox. Its own
+// table so AccountToken and its type list stay as they are.
 model EmailChangeRequest {
   id        String    @id @default(cuid())
   userId    String
@@ -348,6 +349,12 @@ model EmailChangeRequest {
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())
+  // Set when the change is made: the address it replaced, and the one-use
+  // "This wasn't me: undo" link sent to that address (sha256 of its token).
+  previousEmail String?
+  undoTokenHash String?   @unique
+  undoExpiresAt DateTime?
+  undoneAt      DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
