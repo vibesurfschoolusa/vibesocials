@@ -91,17 +91,18 @@ describe("Settings connection row", () => {
   });
 
   // R8-pages L5: just reconnected, and LinkedIn kept the end date: said, without asking for another Reconnect.
-  it("endsAtText: the date and time in the viewer's zone, with the zone's name", () => {
-    expect(endsAtText("2026-11-21T01:00:00.000Z", "America/New_York")).toBe("November 20, 2026, 8:00 PM EST");
-    expect(endsAtText("2026-11-21T01:00:00.000Z", "UTC")).toBe("November 21, 2026, 1:00 AM UTC");
-    expect(endsAtText("not a date", "UTC")).toBe("");
+  // R11 review: the same words as /c, in UTC and labelled, so server and browser render the same text.
+  it("endsAtText: the date and a 24-hour time in UTC, labelled", () => {
+    expect(endsAtText("2026-11-21T01:00:00.000Z")).toBe("November 21, 2026, 01:00 UTC");
+    expect(endsAtText("2026-11-20T23:05:59.000Z")).toBe("November 20, 2026, 23:05 UTC");
+    expect(endsAtText("not a date")).toBe("");
   });
 
   it("same end date after a reconnect: Ends <date>. LinkedIn kept this end date.", () => {
     const html = row({ reconnectSoon: true, sameEndAt: "2026-11-16T12:00:00.000Z" });
     // R11 follow-up: date and time with the viewer's zone name, so it can't read as another day than /c's UTC line.
     expect(html).toMatch(
-      /<span class="[^"]*basis-full[^"]*">Ends November 1[56], 2026, \d{1,2}:\d\d [AP]M [^<.]+\. LinkedIn kept this end date.<\/span>/,
+      /<span class="[^"]*basis-full[^"]*">Ends November 16, 2026, 12:00 UTC\. LinkedIn kept this end date\.<\/span>/,
     );
     expect(html).not.toContain("Ends soon");
     expect(html).not.toContain("Reconnect to keep posting");

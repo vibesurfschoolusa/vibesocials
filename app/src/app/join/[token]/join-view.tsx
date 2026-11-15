@@ -22,6 +22,7 @@ interface InvitePreview {
 export type InviteLoad =
   | { kind: "ok"; preview: InvitePreview }
   | { kind: "invalid"; message?: string }
+  | { kind: "signedOut" }
   | { kind: "unreachable" };
 
 /** The dead-link state, with the 404 body's sentence when it has one (R10-pages L3). */
@@ -47,12 +48,14 @@ export function invalidInviteDescription(message: string | undefined): string {
  * shape for invalid, expired or revoked: no oracle beyond validity). No
  * network, a server failure or too many tries is "unreachable": the link may
  * be fine, so the page offers Try again instead of calling it invalid
- * (R5 pages L7).
+ * (R5 pages L7). A 401 is signed out (R11 review).
  */
 export async function loadInvite(fetchImpl: typeof fetch, token: string): Promise<InviteLoad> {
   try {
     const response = await fetchImpl(`/api/invites/${token}`);
     if (response.status === 404) return await invalidFrom(response);
+    // R11 review: signed out in another tab; the same state as Join's 401.
+    if (response.status === 401) return { kind: "signedOut" };
     if (!response.ok) return { kind: "unreachable" };
     return { kind: "ok", preview: (await response.json()) as InvitePreview };
   } catch {
@@ -210,7 +213,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
     );
   }
 
-  if (signedOut) {
+  if (signedOut || load.kind === "signedOut") {
     return <JoinSignedOut token={token} />;
   }
 

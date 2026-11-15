@@ -23,16 +23,16 @@ import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
 
 /**
- * R11 follow-up: "November 20, 2026, 8:00 PM EST", the end LinkedIn kept, in
- * the viewer's zone (or `timeZone`) with its name, so it can't be read as a
- * different day from the client's page, which gives it in UTC.
+ * R11 review: "November 21, 2026, 01:00 UTC", the end LinkedIn kept, in the
+ * same words as the client's page (/c), so the two can't name different days.
+ * UTC, not the viewer's zone: the server and the browser render the same text.
  */
-export function endsAtText(value: string, timeZone?: string): string {
+export function endsAtText(value: string): string {
   const at = new Date(value);
   if (Number.isNaN(at.getTime())) return "";
-  const date = at.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone });
-  const time = at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone });
-  return `${date}, ${time}`;
+  const date = at.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date}, ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`;
 }
 
 interface Props {
@@ -343,8 +343,7 @@ export function ConnectionActions({
               </span>
             ) : sameEndAt ? (
               // R8-pages L5: Settings' warning says what to do; no call to reconnect here.
-              // The server renders it in its own zone, the browser in the viewer's.
-              <span className="basis-full text-sm text-muted-foreground" suppressHydrationWarning>
+              <span className="basis-full text-sm text-muted-foreground">
                 Ends {endsAtText(sameEndAt)}. LinkedIn kept this end date.
               </span>
             ) : (

@@ -69,6 +69,11 @@ describe("loadInvite", () => {
     await expect(loadInvite(respond(500), "tok")).resolves.toEqual({ kind: "unreachable" });
     await expect(loadInvite(respond(429), "tok")).resolves.toEqual({ kind: "unreachable" });
   });
+
+  // R11 review: signed out in another tab before the preview loaded; the same state as Join's 401.
+  it("a 401 is signed out, not a network failure", async () => {
+    await expect(loadInvite(respond(401, { error: "Unauthorized" }), "tok")).resolves.toEqual({ kind: "signedOut" });
+  });
 });
 
 // R10-pages L3: Join's 404 shows the same state, with the server's sentence.
