@@ -1014,6 +1014,16 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status: 503 });
       expect(ugcPostCalls(fetchMock)).toHaveLength(0);
     });
+
+    // R18-publishing addendum L3: the status stays in error.status, never in the text.
+    it("a refused video part keeps its status out of the text and says what to try", async () => {
+      stubLinkedIn({ upload: () => new Response("no", { status: 400 }) });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("video/mp4")));
+
+      expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status: 400 });
+      expect(error?.message).toMatch(/^LinkedIn didn't take part 1 of \d+ of the video, so nothing was posted\. Try again\.$/);
+    });
   });
 });
 
@@ -2966,7 +2976,11 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("LINKEDIN_VIDEO_PROCESSING_FAILED");
-      expect(error?.message).toBe("LinkedIn couldn't process the video. Nothing was posted.");
+      // LinkedIn Videos API (checked 2026-11-15): "Length: Three seconds to 30 minutes."
+      // "File size: Between 75kb and 500MB." "File format: MP4."
+      expect(error?.message).toBe(
+        "LinkedIn couldn't process the video. Nothing was posted. Try an MP4 from 3 seconds to 30 minutes long and between 75 KB and 500 MB, then retry.",
+      );
       expect(li.posts()).toHaveLength(0);
       expect(everythingLogged()).toContain("Video is too short");
       expectNoCapabilityValues(describeError(error), everythingLogged());
@@ -3669,7 +3683,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
 
       expect(li.registers()).toHaveLength(3);
       expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status: 403 });
-      expect(error?.message).toMatch(/part 1 of 3/);
+      expect(error?.message).toBe("LinkedIn didn't take part 1 of 3 of the video, so nothing was posted. Try again.");
       expect(li.posts()).toHaveLength(0);
       expectNoCapabilityValues(describeError(error), everythingLogged());
     });
@@ -3686,15 +3700,15 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(saved()?.data.urlsExpireAt).toBe(NOW + HOUR);
     });
 
-    it.each([400, 413])("fails LINKEDIN_VIDEO_UPLOAD_FAILED on a %i, naming the part and the status but no URL", async (status) => {
+    // R18-publishing addendum L3: the status is kept in error.status, not in the text.
+    it.each([400, 413])("fails LINKEDIN_VIDEO_UPLOAD_FAILED on a %i, naming the part but no status or URL", async (status) => {
       const { store, saved } = fakeStore(uploadState(1));
       stubLinkedIn({ part: [reply(status, "denied")] });
 
       const error = await failure(bigCtx(store));
 
       expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status });
-      expect(error?.message).toContain(`status ${status}`);
-      expect(error?.message).toMatch(/part 2 of 3/);
+      expect(error?.message).toBe("LinkedIn didn't take part 2 of 3 of the video, so nothing was posted. Try again.");
       expect(saved()?.data.nextPart).toBe(1);
       expectNoCapabilityValues(describeError(error), everythingLogged());
     });
@@ -4135,8 +4149,35 @@ describe("linkedinClient — several photos in one post", () => {
 
     expect(error?.code).toBe("LINKEDIN_IMAGE_UPLOAD_FAILED");
     expect(error?.status).toBe(400);
-    expect(error?.message).toBe("Photo 2 of 3: LinkedIn image upload failed (status 400). Nothing was posted.");
+    expect(error?.message).toBe(
+      "LinkedIn couldn't upload photo 2 of 3. Nothing was posted. Try again; if it fails again, replace photo 2.",
+    );
     expect(li.urls()).toEqual([...photoCalls(1), ...photoCalls(2)]);
+  });
+
+  it("the second photo's registration is refused: the same photo text, the code kept, no status in it", async () => {
+    stub({ init: (n) => (n === 2 ? new Response("{}", { status: 400 }) : undefined) });
+
+    const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
+
+    expect(error?.code).toBe("LINKEDIN_IMAGE_REGISTRATION_FAILED");
+    expect(error?.message).toBe(
+      "LinkedIn couldn't upload photo 2 of 3. Nothing was posted. Try again; if it fails again, replace photo 2.",
+    );
+  });
+
+  it("the second photo cannot be read from storage: says so and to upload it again, status kept", async () => {
+    const li = stub();
+    const answer = li.fetchMock.getMockImplementation()!;
+    li.fetchMock.mockImplementation(async (input: string | URL) =>
+      String(input).endsWith("photo-2.jpg") ? new Response(null, { status: 404 }) : answer(input),
+    );
+
+    const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
+
+    expect(error?.code).toBe("LINKEDIN_IMAGE_DOWNLOAD_FAILED");
+    expect(error?.status).toBe(404);
+    expect(error?.message).toBe("Photo 2 of 3 couldn't be read from storage. Nothing was posted. Upload it again, then retry.");
   });
 
   it("a rate limit or a rejected token on a later photo keeps its own error, and nothing is posted", async () => {

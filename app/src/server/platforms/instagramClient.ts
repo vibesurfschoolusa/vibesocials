@@ -883,7 +883,7 @@ const CAROUSEL_ERRORS: Record<string, { code: string; message: string }> = {
   },
   INSTAGRAM_VIDEO_PROCESSING_ERROR: {
     code: "INSTAGRAM_CAROUSEL_PROCESSING_ERROR",
-    message: "Instagram could not process the photos, so nothing was posted.",
+    message: "Instagram could not process the photos, so nothing was posted. Try again; if it fails again, use other photos.",
   },
   INSTAGRAM_CONTAINER_EXPIRED: {
     code: "INSTAGRAM_CONTAINER_EXPIRED",
@@ -899,7 +899,7 @@ const PHOTO_ERRORS: Record<string, { code: string; message: string }> = {
   },
   INSTAGRAM_VIDEO_PROCESSING_ERROR: {
     code: "INSTAGRAM_PHOTO_PROCESSING_ERROR",
-    message: "Instagram could not process the photo, so nothing was posted.",
+    message: "Instagram could not process the photo, so nothing was posted. Try again; if it fails again, use another photo.",
   },
   INSTAGRAM_CONTAINER_EXPIRED: {
     code: "INSTAGRAM_CONTAINER_EXPIRED",

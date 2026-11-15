@@ -478,15 +478,25 @@ function xProcessingTimeoutError(): Error & { code: string } {
   return error;
 }
 
+/** X's processing error names are identifiers (InvalidMedia); anything else is not echoed. */
+function sanitizeProcessingErrorName(name: unknown): string | null {
+  return typeof name === "string" && /^[A-Za-z0-9_]{1,64}$/.test(name) ? name : null;
+}
+
 /**
- * X reported the media processing as failed; no tweet was created. X's media
- * best practices (checked 2026-11-15): H.264 video, AAC-LC audio, YUV 4:2:0,
- * progressive scan, which is what a phone or editor's MP4 export gives.
+ * X reported the media processing as failed; no tweet was created. A phone's
+ * H.264/AAC MP4 can still fail on length, frame rate or shape, so the text names
+ * all of X's limits. X media best practices (docs.x.com, checked 2026-11-15):
+ * Post video from 0.5 seconds up to 20 minutes for a standard account (longer
+ * with X Premium), at most 60 FPS, aspect ratio between 1:3 and 3:1, H.264 video
+ * with AAC-LC audio. X's error name is added when it is a short identifier;
+ * its message is upstream free text and only logged (COR-3).
  */
-function xProcessingFailedError(): Error & { code: string } {
-  const error = new Error(
-    "X could not process this video, so nothing was posted. Export it again as an MP4 with H.264 video and AAC audio, then retry.",
-  ) as Error & { code: string };
+function xProcessingFailedError(processingError?: { name?: unknown }): Error & { code: string } {
+  const text =
+    "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry.";
+  const name = sanitizeProcessingErrorName(processingError?.name);
+  const error = new Error(name ? `${text} X's reason: ${name}.` : text) as Error & { code: string };
   error.code = "X_VIDEO_PROCESSING_FAILED";
   return error;
 }
@@ -511,7 +521,7 @@ async function waitForVideoProcessing(
     state: string;
     check_after_secs?: number;
     progress_percent?: number;
-    error?: { message: string; code: number };
+    error?: { message: string; code: number; name?: string };
   } = initialProcessingInfo;
   // Polling must end early enough to leave the tweet its reserve.
   const stopBy = Math.min(
@@ -575,7 +585,7 @@ async function waitForVideoProcessing(
         state: string;
         check_after_secs?: number;
         progress_percent?: number;
-        error?: { message: string; code: number };
+        error?: { message: string; code: number; name?: string };
       };
     };
 
@@ -594,7 +604,7 @@ async function waitForVideoProcessing(
         state: processingInfo.state,
         processingError: processingInfo.error,
       });
-      throw xProcessingFailedError();
+      throw xProcessingFailedError(processingInfo.error);
     }
 
     if (processingInfo.state === "succeeded") {
@@ -929,7 +939,7 @@ interface XProcessingInfo {
   state?: string;
   check_after_secs?: number;
   progress_percent?: number;
-  error?: { message?: string; code?: number };
+  error?: { message?: string; code?: number; name?: string };
 }
 
 type ProcessingVerdict = { kind: "ready" } | { kind: "waiting"; checkAfterSecs: number | undefined };
@@ -1120,7 +1130,7 @@ function judgeProcessing(info: XProcessingInfo | null | undefined): ProcessingVe
       state: info.state,
       processingError: info.error,
     });
-    throw xProcessingFailedError();
+    throw xProcessingFailedError(info.error);
   }
   if (info.state === "succeeded") return { kind: "ready" };
   return {
@@ -1531,10 +1541,14 @@ async function publishPhotos(args: {
       );
     } catch (error) {
       // An upload refusal names the photo; its code and status stay, so retry classification is
-      // unchanged. A rate limit or a spent budget passes through as it is.
+      // unchanged, and the status stays out of the text (R18 addendum L3: publishErrorMessage
+      // strips it only at the end). A rate limit or a spent budget passes through as it is.
       const code = (error as { code?: unknown } | null)?.code;
-      if (error instanceof Error && (code === "X_IMAGE_UPLOAD_FAILED" || code === "X_MEDIA_DOWNLOAD_FAILED")) {
-        error.message = `Photo ${index + 1} of ${sent.length} could not be uploaded to X (${error.message}). No post was created.`;
+      const photo = index + 1;
+      if (error instanceof Error && code === "X_IMAGE_UPLOAD_FAILED") {
+        error.message = `X could not upload photo ${photo} of ${sent.length}, so no post was created. Try again; if it fails again, replace photo ${photo}.`;
+      } else if (error instanceof Error && code === "X_MEDIA_DOWNLOAD_FAILED") {
+        error.message = `Photo ${photo} of ${sent.length} couldn't be read from storage, so no post was created. Upload it again, then retry.`;
       }
       throw error;
     }

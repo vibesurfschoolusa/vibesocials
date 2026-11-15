@@ -2561,8 +2561,7 @@ function CreatePostFormInner({
             className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
           />
           <p className="text-xs text-muted-foreground">
-            Type to search for locations. Will be added to Instagram, TikTok, and X posts. (YouTube
-            requires manual location setting via Studio)
+            Type to search for locations. The place is added to YouTube videos only.
           </p>
         </div>
         ) : null}

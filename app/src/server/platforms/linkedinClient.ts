@@ -716,10 +716,7 @@ async function uploadVideo(
     // The part's own answer is not logged or quoted: it comes from the capability URL.
     void uploadResponse.body?.cancel().catch(() => {});
     if (!uploadResponse.ok) {
-      throw uploadFailed(
-        `LinkedIn video upload failed (part ${index + 1} of ${partCount}, status ${uploadResponse.status})`,
-        uploadResponse.status,
-      );
+      throw partRefused(index + 1, partCount, uploadResponse.status);
     }
     const partId = partIdFromEtag(uploadResponse.headers.get("ETag"));
     if (!partId) {
@@ -981,11 +978,21 @@ function uploadFailed(message: string, status?: number): CodedError {
   return linkedinCodedError("LINKEDIN_VIDEO_UPLOAD_FAILED", message, status);
 }
 
+/**
+ * LinkedIn Videos API (checked 2026-11-15): "Length: Three seconds to 30 minutes."
+ * "File size: Between 75kb and 500MB." "File format: MP4." MOV stays allowed
+ * (platformLimits.ts), so a file outside these is the likely cause.
+ */
 function processingFailed(): CodedError {
   return linkedinCodedError(
     "LINKEDIN_VIDEO_PROCESSING_FAILED",
-    "LinkedIn couldn't process the video. Nothing was posted.",
+    "LinkedIn couldn't process the video. Nothing was posted. Try an MP4 from 3 seconds to 30 minutes long and between 75 KB and 500 MB, then retry.",
   );
+}
+
+/** A refused part: the status stays in error.status, out of the text (R18 addendum L3). */
+function partRefused(part: number, partCount: number, status: number): CodedError {
+  return uploadFailed(`LinkedIn didn't take part ${part} of ${partCount} of the video, so nothing was posted. Try again.`, status);
 }
 
 /** One part of the video: LinkedIn's capability URL and the bytes it takes. */
@@ -1651,10 +1658,7 @@ async function publishMultipart(args: {
           return await pause(null);
         }
         if (!response.ok) {
-          throw uploadFailed(
-            `LinkedIn video upload failed (part ${index + 1} of ${partCount}, status ${response.status})`,
-            response.status,
-          );
+          throw partRefused(index + 1, partCount, response.status);
         }
         const etag = partIdFromEtag(response.headers.get("ETag"));
         if (!etag) {
@@ -1818,14 +1822,19 @@ const PHOTO_FAILURE_CODES: ReadonlySet<string> = new Set([
   "LINKEDIN_IMAGE_UPLOAD_FAILED",
 ]);
 
-/** A photo's upload failed: the same code and status, with a message that says which photo and that nothing was posted. */
+/**
+ * A photo's upload failed: the same code and status, with a message that says which photo,
+ * that nothing was posted and what to try. The status stays out of the text (R18 addendum L3).
+ */
 function photoFailed(error: unknown, index: number, count: number): unknown {
   const code = (error as { code?: unknown } | null)?.code;
   if (!(error instanceof Error) || typeof code !== "string" || !PHOTO_FAILURE_CODES.has(code)) return error;
-  const detail = error.message.endsWith("Nothing was posted.") ? error.message : `${error.message}. Nothing was posted.`;
+  const photo = index + 1;
   const failed = linkedinCodedError(
     code,
-    `Photo ${index + 1} of ${count}: ${detail}`,
+    code === "LINKEDIN_IMAGE_DOWNLOAD_FAILED"
+      ? `Photo ${photo} of ${count} couldn't be read from storage. Nothing was posted. Upload it again, then retry.`
+      : `LinkedIn couldn't upload photo ${photo} of ${count}. Nothing was posted. Try again; if it fails again, replace photo ${photo}.`,
     (error as { status?: unknown }).status as number | undefined,
   );
   failed.cause = error;

@@ -81,8 +81,9 @@ async function throwRejected(
   status?: number,
 ): Promise<never> {
   // COR-3 discipline (matches instagramClient.ts): raw upstream bodies go
-  // to server logs only — PostJobResult.errorMessage renders in the UI, so
-  // the thrown message carries just a prefix + status.
+  // to server logs only — PostJobResult.errorMessage renders in the UI. The
+  // status goes in error.status; in the text only as a closing "(status N)",
+  // which publishErrorMessage replaces with its own sentence (R18 addendum L3).
   const errorBody = await response
     .text()
     .catch(() => "Unable to read error body");
@@ -254,7 +255,7 @@ async function publishSeveralPhotos(
         response,
         socialConnection,
         `Upload of ${which} failed`,
-        `Facebook Page could not upload ${which} (status ${response.status}). No post was made.`,
+        `Facebook Page could not upload ${which}. No post was made. Try again; if it fails again, replace photo ${index + 1}.`,
         response.status,
       );
     }
@@ -376,7 +377,7 @@ async function publishStory(
         start,
         socialConnection,
         "Video Story start failed",
-        `Facebook Page could not start the video Story (status ${start.status}). No Story was made.`,
+        "Facebook Page could not start the video Story. No Story was made. Try again; if it fails again, use another video.",
         start.status,
       );
     }
@@ -408,7 +409,7 @@ async function publishStory(
         transfer,
         socialConnection,
         "Video Story transfer failed",
-        `Facebook Page could not fetch the video for the Story (status ${transfer.status}). No Story was made.`,
+        "Facebook Page could not fetch the video for the Story. No Story was made. Try again; if it fails again, upload the video again.",
         transfer.status,
       );
     }
@@ -437,7 +438,7 @@ async function publishStory(
         upload,
         socialConnection,
         "Story photo upload failed",
-        `Facebook Page could not upload the photo for the Story (status ${upload.status}). No Story was made.`,
+        "Facebook Page could not upload the photo for the Story. No Story was made. Try again; if it fails again, use another photo.",
         upload.status,
       );
     }

@@ -568,7 +568,10 @@ describe("facebookPageClient.publishVideo — several photos (photos published=f
     const error = await failure(multiContext(photos(3)));
 
     expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
-    expect(error?.message).toBe("Facebook Page could not upload photo 2 of 3 (status 400). No post was made.");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe(
+      "Facebook Page could not upload photo 2 of 3. No post was made. Try again; if it fails again, replace photo 2.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/feed"))).toBe(false);
     expect(updateMock).not.toHaveBeenCalled();
@@ -873,7 +876,10 @@ describe("facebookPageClient.publishVideo — Story", () => {
     const error = await failure(photoStory());
 
     expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
-    expect(error?.message).toContain("No Story was made");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe(
+      "Facebook Page could not upload the photo for the Story. No Story was made. Try again; if it fails again, use another photo.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -960,13 +966,21 @@ describe("facebookPageClient.publishVideo — Story", () => {
 
   it("a failed start or transfer publishes nothing (no finish)", async () => {
     fetchMock.mockImplementationOnce(async () => response(400, { error: { code: 100 } }));
-    expect((await failure(videoStory()))?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    const started = await failure(videoStory());
+    expect(started).toMatchObject({ code: "FACEBOOK_PAGE_PUBLISH_FAILED", status: 400 });
+    expect(started?.message).toBe(
+      "Facebook Page could not start the video Story. No Story was made. Try again; if it fails again, use another video.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     fetchMock.mockReset();
     fetchMock.mockImplementationOnce(async () => response(200, { video_id: "video-5", upload_url: UPLOAD_URL }));
     fetchMock.mockImplementationOnce(async () => response(400, { error: { code: 100 } }));
-    expect((await failure(videoStory()))?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    const transferred = await failure(videoStory());
+    expect(transferred).toMatchObject({ code: "FACEBOOK_PAGE_PUBLISH_FAILED", status: 400 });
+    expect(transferred?.message).toBe(
+      "Facebook Page could not fetch the video for the Story. No Story was made. Try again; if it fails again, upload the video again.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

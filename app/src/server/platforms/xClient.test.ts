@@ -29,6 +29,10 @@ import {
   xClient,
 } from "./xClient";
 
+// X media best practices (docs.x.com, checked 2026-11-15).
+const X_PROCESSING_FAILED_TEXT =
+  "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry.";
+
 // Roadmap Phase 7 (spec §7.1) — this locks computeTweetText (extracted from
 // publishVideo when it was refactored to read its limit/ellipsis from
 // lib/platformLimits.ts instead of inline `280` / `"..."` literals) to the
@@ -289,8 +293,24 @@ describe("xClient.publishVideo — media-processing poll + step budget", () => {
 
     const { error } = await run(ctx());
 
-    const text =
-      "X could not process this video, so nothing was posted. Export it again as an MP4 with H.264 video and AAC audio, then retry.";
+    expect(error?.message).toBe(X_PROCESSING_FAILED_TEXT);
+    expect(publishErrorMessage("x", error!)).toBe(X_PROCESSING_FAILED_TEXT);
+  });
+
+  // R18-publishing L1: X's own short error name is added like TikTok's reason;
+  // free text, spaces, punctuation or an over-long name never are.
+  it.each([
+    [{ code: 1, name: "InvalidMedia", message: "UPSTREAM-DETAIL" }, `${X_PROCESSING_FAILED_TEXT} X's reason: InvalidMedia.`],
+    [{ code: 1, name: "Unsupported video, see https://x.test", message: "UPSTREAM-DETAIL" }, X_PROCESSING_FAILED_TEXT],
+    [{ code: 1, name: "A".repeat(65) }, X_PROCESSING_FAILED_TEXT],
+    [{ code: 1, name: "A".repeat(64) }, `${X_PROCESSING_FAILED_TEXT} X's reason: ${"A".repeat(64)}.`],
+    [{ code: 1, message: "InvalidMedia" }, X_PROCESSING_FAILED_TEXT],
+  ])("processing error %j: the message names only a safe X error name", async (processingError, text) => {
+    stubX({ status: now(() => json({ processing_info: { state: "failed", error: processingError } })) });
+
+    const { error } = await run(ctx());
+
+    expect(error?.code).toBe("X_VIDEO_PROCESSING_FAILED");
     expect(error?.message).toBe(text);
     expect(publishErrorMessage("x", error!)).toBe(text);
   });
@@ -1596,6 +1616,18 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
       expect(error?.message).not.toContain("UPSTREAM-DETAIL");
       expect(x.tweets()).toHaveLength(0);
     });
+
+    it("a large video's processing error with a short name carries X's reason", async () => {
+      const { store } = fakeStore(processingState());
+      stubX({
+        status: [() => json({ processing_info: { state: "failed", error: { code: 1, name: "InvalidMedia", message: "UPSTREAM-DETAIL" } } })],
+      });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("X_VIDEO_PROCESSING_FAILED");
+      expect(error?.message).toBe(`${X_PROCESSING_FAILED_TEXT} X's reason: InvalidMedia.`);
+    });
   });
 
   describe("processing that takes too long", () => {
@@ -2505,7 +2537,7 @@ describe("xClient.publishVideo — several photos in one post (07b)", () => {
     expect(error?.code).toBe("X_IMAGE_UPLOAD_FAILED");
     expect(error?.status).toBe(400);
     expect(error?.message).toBe(
-      "Photo 2 of 3 could not be uploaded to X (X media upload failed (status 400)). No post was created.",
+      "X could not upload photo 2 of 3, so no post was created. Try again; if it fails again, replace photo 2.",
     );
     expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE"]);
     expect(x.tweets()).toHaveLength(0);
@@ -2517,8 +2549,9 @@ describe("xClient.publishVideo — several photos in one post (07b)", () => {
     const error = await failure(photosCtx(photos(2)));
 
     expect(error?.code).toBe("X_MEDIA_DOWNLOAD_FAILED");
+    expect(error?.status).toBe(404);
     expect(error?.message).toBe(
-      "Photo 2 of 2 could not be uploaded to X (Failed to fetch media from storage (status 404)). No post was created.",
+      "Photo 2 of 2 couldn't be read from storage, so no post was created. Upload it again, then retry.",
     );
     expect(x.tweets()).toHaveLength(0);
   });

@@ -2255,7 +2255,9 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
 
     expect(error?.code).toBe("INSTAGRAM_CAROUSEL_PROCESSING_ERROR");
-    expect(error?.message).toBe("Instagram could not process the photos, so nothing was posted.");
+    expect(error?.message).toBe(
+      "Instagram could not process the photos, so nothing was posted. Try again; if it fails again, use other photos.",
+    );
     expect(graph.publishRequests()).toHaveLength(0);
   });
 
@@ -2784,6 +2786,9 @@ describe("instagramClient.publishVideo — a single photo checks its container f
 
     expect(error?.code).toBe("INSTAGRAM_PHOTO_PROCESSING_ERROR");
     expect(error?.message).not.toMatch(/video/i);
+    expect(error?.message).toBe(
+      "Instagram could not process the photo, so nothing was posted. Try again; if it fails again, use another photo.",
+    );
   });
 });
 

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { deriveComposerPlatforms } from "@/lib/postTargets";
@@ -223,6 +225,21 @@ describe("showLocationField", () => {
   it("hides Location on a text post, which nothing reads it for, and keeps it with a file", () => {
     expect(showLocationField({ noFile: true })).toBe(false);
     expect(showLocationField({ noFile: false })).toBe(true);
+  });
+});
+
+// R18-publishing addendum L4: only YouTube sends the place (youtubeClient recordingDetails);
+// Instagram never sets location_id and TikTok and X never read it.
+describe("the Location help", () => {
+  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("says the place is added to YouTube videos only", () => {
+    expect(source).toContain("Type to search for locations. The place is added to YouTube videos only.");
+  });
+
+  it("no longer names Instagram, TikTok or X", () => {
+    expect(source).not.toContain("Will be added to Instagram, TikTok, and X posts.");
+    expect(source).not.toContain("requires manual location setting via Studio");
   });
 });
 
