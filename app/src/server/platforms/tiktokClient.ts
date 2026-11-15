@@ -692,25 +692,30 @@ function sanitizeFailReason(reason: unknown): string | null {
   return typeof reason === "string" && /^[a-z0-9_]{1,64}$/i.test(reason) ? reason : null;
 }
 
-const TIKTOK_FILE_FAILED_TEXT =
-  "TikTok could not process this video, so nothing was posted. Export it again as an MP4 (or shorten it), then retry.";
 const TIKTOK_PULL_FAILED_TEXT = "TikTok could not download the video, so nothing was posted. Try again.";
 
 /**
  * R17-publishing addendum L1: what a FAILED publish says, by TikTok's documented
  * `fail_reason` (content-posting-api-reference-get-video-status, checked
- * 2026-11-15). File advice only for the file checks; an unknown reason gets
- * the general sentence with TikTok's reason after it.
+ * 2026-11-15). File advice only for the file checks, each for its own check
+ * (TikTok's media transfer guide, same date: 23 to 60 FPS, 360 to 4096 px a
+ * side, up to 10 minutes sent through the API); an unknown reason gets the
+ * general sentence with TikTok's reason after it.
  */
 const TIKTOK_FAIL_REASON_TEXT: Record<string, string> = {
-  file_format_check_failed: TIKTOK_FILE_FAILED_TEXT,
-  duration_check_failed: TIKTOK_FILE_FAILED_TEXT,
-  frame_rate_check_failed: TIKTOK_FILE_FAILED_TEXT,
-  picture_size_check_failed: TIKTOK_FILE_FAILED_TEXT,
+  file_format_check_failed:
+    "TikTok could not read this video's format, so nothing was posted. Export it again as an MP4 (H.264), then retry.",
+  duration_check_failed:
+    "This video is too long or too short for TikTok, so nothing was posted. TikTok takes videos up to your account's limit, at most 10 minutes from here. Shorten it, then retry.",
+  frame_rate_check_failed:
+    "TikTok could not take this video's frame rate, so nothing was posted. Export it again at 23 to 60 frames per second, then retry.",
+  picture_size_check_failed:
+    "TikTok could not take this video's picture size, so nothing was posted. Export it again at 360 to 4096 pixels on each side, then retry.",
   internal: "TikTok had a problem on its side, so nothing was posted. Try again in a few minutes.",
   video_pull_failed: TIKTOK_PULL_FAILED_TEXT,
   photo_pull_failed: TIKTOK_PULL_FAILED_TEXT,
-  publish_cancelled: "The publish was cancelled on TikTok, so nothing was posted.",
+  publish_cancelled:
+    "The publish was cancelled on TikTok, so nothing was posted. Retry if you still want it on TikTok.",
   spam_risk_too_many_posts: `${TIKTOK_CANNOT_POST_MESSAGES.spam_risk_too_many_posts} Nothing was posted; you can post it in the TikTok app.`,
   spam_risk_user_banned_from_posting: `${TIKTOK_CANNOT_POST_MESSAGES.spam_risk_user_banned_from_posting} Nothing was posted.`,
   spam_risk_text: "TikTok flagged the caption, so nothing was posted. Change the caption before trying again.",

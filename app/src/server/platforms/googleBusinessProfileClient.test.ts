@@ -212,8 +212,10 @@ describe("googleBusinessProfileClient.publishVideo — what is posted", () => {
 
   // R17 CC2: Google's photo and video guidelines (support.google.com/business/answer/6103862,
   // checked 2026-11-15). A 400 on the create call says what Google accepts.
+  // Google's 400 doesn't say which part it refused, and an event or offer post
+  // can be refused for its details, so the text names those too.
   const PHOTO_REFUSED =
-    "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption and button link.";
+    "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption, the button link and any event or offer details.";
   const VIDEO_REFUSED =
     "Google could not add this video to your Business Profile, so nothing was posted. Google takes videos up to 30 seconds long and 75 MB, at 720p or higher.";
 

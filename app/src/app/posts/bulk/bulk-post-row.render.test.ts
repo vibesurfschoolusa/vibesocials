@@ -1,4 +1,5 @@
 import { createElement } from "react";
+import type { Platform } from "@prisma/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -44,14 +45,20 @@ function row(overrides: Partial<BulkRow> = {}): BulkRow {
 
 function render(
   r: BulkRow,
-  extra: { storyRefusal?: string | null; coverOpen?: boolean; locked?: boolean; aiCaptions?: boolean } = {},
+  extra: {
+    storyRefusal?: string | null;
+    coverOpen?: boolean;
+    locked?: boolean;
+    aiCaptions?: boolean;
+    skipped?: Platform[];
+  } = {},
 ) {
   return renderToStaticMarkup(
     createElement(BulkPostRow, {
       row: r,
       index: 0,
       count: 1,
-      skipped: [],
+      skipped: extra.skipped ?? [],
       locked: extra.locked ?? false,
       minWhen: "2026-11-14T10:00",
       storyRefusal: extra.storyRefusal ?? null,
@@ -197,5 +204,24 @@ describe("Add many row: Media photo description with AI off", () => {
 
   it("shows it when the switch is on", () => {
     expect(render(row({ mediaItemId: "m1" }))).toContain(">Write it for me<");
+  });
+});
+
+// R17 CC2 review: the skip line named no reason ("they do not take this kind
+// of file"), though Instagram does take video; it now says what each takes.
+describe("Add many row: platforms skipped for this file", () => {
+  it("names the formats a platform takes when it refuses this one", () => {
+    const html = render(row({ fileName: "a.webm", mimeType: "video/webm" }), { skipped: ["instagram"] });
+    expect(html).toContain("Skips Instagram (MP4 or MOV only) for this file.");
+    expect(html).not.toContain("do not take this kind of file");
+  });
+
+  it("names the kind a platform takes when it takes no such file", () => {
+    const html = render(row(), { skipped: ["youtube", "tiktok"] });
+    expect(html).toContain("Skips YouTube (video only), TikTok (video only) for this file.");
+  });
+
+  it("says nothing when no platform is skipped", () => {
+    expect(render(row())).not.toContain("Skips ");
   });
 });

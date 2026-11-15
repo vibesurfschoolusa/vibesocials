@@ -49,11 +49,8 @@ function acceptedMediaWords(platform: Platform): string {
   return kinds[0] === "video" ? "video only" : "images only";
 }
 
-/** 400 message naming every platform that can't publish this media. */
-export function incompatibleMediaMessage(
-  incompatible: readonly Platform[],
-  mimeType: string | null | undefined,
-): string {
+/** "Instagram (MP4 or MOV only), YouTube (video only)" for platforms that can't take this media. */
+function namedWithMediaWords(platforms: readonly Platform[], mimeType: string | null | undefined): string {
   const kind = mimeType == null ? null : mediaKindOf(mimeType);
   // A platform that takes this kind but refuses the format (a WebM for
   // Instagram) names the formats it takes, as the composer does.
@@ -61,7 +58,27 @@ export function incompatibleMediaMessage(
     kind !== null && PLATFORM_ACCEPTED_MEDIA[platform].includes(kind)
       ? (unsupportedMediaReason(platform, mimeType) ?? acceptedMediaWords(platform))
       : acceptedMediaWords(platform);
-  const named = incompatible.map((platform) => `${platformLabel(platform)} (${words(platform)})`).join(", ");
+  return platforms.map((platform) => `${platformLabel(platform)} (${words(platform)})`).join(", ");
+}
+
+/**
+ * Add many's line for the chosen platforms a row's file skips, in the same
+ * words as the 400 message (R17 CC2 review), or null when none is skipped.
+ */
+export function skippedForMediaLine(
+  skipped: readonly Platform[],
+  mimeType: string | null | undefined,
+): string | null {
+  if (skipped.length === 0) return null;
+  return `Skips ${namedWithMediaWords(skipped, mimeType)} for this file.`;
+}
+
+/** 400 message naming every platform that can't publish this media. */
+export function incompatibleMediaMessage(
+  incompatible: readonly Platform[],
+  mimeType: string | null | undefined,
+): string {
+  const named = namedWithMediaWords(incompatible, mimeType);
   const subject =
     mimeType && mimeType.startsWith("video/")
       ? "a video"

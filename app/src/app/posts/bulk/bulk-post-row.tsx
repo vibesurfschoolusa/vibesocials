@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VideoCoverPicker } from "@/components/video-cover-picker";
 import { ALT_TEXT_MAX } from "@/lib/altText";
 import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
-import { platformLabel } from "@/lib/platforms";
+import { skippedForMediaLine } from "@/lib/postTargets";
 import { formatCoverTime, type CoverChoice } from "@/lib/videoCover";
 import type { BulkRow } from "./bulk-posts-form";
 
@@ -293,9 +293,7 @@ export function BulkPostRow({
         </div>
 
         {skipped.length > 0 && !created ? (
-          <p className="text-sm text-muted-foreground">
-            Skips {skipped.map(platformLabel).join(", ")}: they do not take this kind of file.
-          </p>
+          <p className="text-sm text-muted-foreground">{skippedForMediaLine(skipped, row.mimeType)}</p>
         ) : null}
 
         {storyRefusal && !created ? (

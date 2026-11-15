@@ -38,10 +38,11 @@ import type {
 // Google's photo and video guidelines (support.google.com/business/answer/6103862,
 // checked 2026-11-15): photos "Format: JPG or PNG", "Size: Between 10 KB and
 // 5 MB", 250 px minimum; videos "Up to 30 seconds long", "Up to 75 MB", "720p
-// or higher". A photo post's 400 may also be its caption or button, so that
-// text names them last.
+// or higher". Google's 400 doesn't say which part it refused: a photo post's
+// may also be its caption, button or event/offer details, so the text names
+// them last.
 const GBP_PHOTO_REFUSED_TEXT =
-  "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption and button link.";
+  "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption, the button link and any event or offer details.";
 const GBP_VIDEO_REFUSED_TEXT =
   "Google could not add this video to your Business Profile, so nothing was posted. Google takes videos up to 30 seconds long and 75 MB, at 720p or higher.";
 

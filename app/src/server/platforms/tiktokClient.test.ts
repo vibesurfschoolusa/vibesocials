@@ -371,20 +371,35 @@ describe("pollTikTokPublishStatus", () => {
 
   // R17 CC2 follow-up: the text follows TikTok's documented fail_reason
   // (content-posting-api-reference-get-video-status, checked by the lead
-  // 2026-11-15). File advice only for the file checks.
-  const FILE_TEXT =
-    "TikTok could not process this video, so nothing was posted. Export it again as an MP4 (or shorten it), then retry.";
+  // 2026-11-15). File advice only for the file checks, each for its own check
+  // (TikTok's media transfer guide, same date: 23 to 60 FPS, 360 to 4096 px a
+  // side, up to 10 minutes sent through the API).
   const GENERIC_TEXT =
     "TikTok didn't publish this video, so nothing was posted. Try again; if it fails again, post it in the TikTok app.";
   it.each([
-    ["file_format_check_failed", FILE_TEXT],
-    ["duration_check_failed", FILE_TEXT],
-    ["frame_rate_check_failed", FILE_TEXT],
-    ["picture_size_check_failed", FILE_TEXT],
+    [
+      "file_format_check_failed",
+      "TikTok could not read this video's format, so nothing was posted. Export it again as an MP4 (H.264), then retry.",
+    ],
+    [
+      "duration_check_failed",
+      "This video is too long or too short for TikTok, so nothing was posted. TikTok takes videos up to your account's limit, at most 10 minutes from here. Shorten it, then retry.",
+    ],
+    [
+      "frame_rate_check_failed",
+      "TikTok could not take this video's frame rate, so nothing was posted. Export it again at 23 to 60 frames per second, then retry.",
+    ],
+    [
+      "picture_size_check_failed",
+      "TikTok could not take this video's picture size, so nothing was posted. Export it again at 360 to 4096 pixels on each side, then retry.",
+    ],
     ["internal", "TikTok had a problem on its side, so nothing was posted. Try again in a few minutes."],
     ["video_pull_failed", "TikTok could not download the video, so nothing was posted. Try again."],
     ["photo_pull_failed", "TikTok could not download the video, so nothing was posted. Try again."],
-    ["publish_cancelled", "The publish was cancelled on TikTok, so nothing was posted."],
+    [
+      "publish_cancelled",
+      "The publish was cancelled on TikTok, so nothing was posted. Retry if you still want it on TikTok.",
+    ],
     [
       "spam_risk_too_many_posts",
       "TikTok says this account has reached its posting limit for now. Try again later. Nothing was posted; you can post it in the TikTok app.",

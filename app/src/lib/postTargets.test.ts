@@ -10,6 +10,7 @@ import {
   narrowConnectionsForTextPost,
   deriveComposerPlatforms,
   incompatibleMediaMessage,
+  skippedForMediaLine,
   isTikTokPrivacyMissing,
   narrowConnectionsForPost,
   splitPlatformsByMedia,
@@ -385,5 +386,19 @@ describe("posts without a photo", () => {
     } catch (error) {
       expect((error as PostTargetingError).code).toBe("NO_COMPATIBLE_PLATFORMS");
     }
+  });
+});
+
+// R17 CC2 review: Add many's line for platforms a row's file skips uses the
+// same words as the 400 message.
+describe("skippedForMediaLine", () => {
+  it("names the refused format's alternatives and the kind for a kind mismatch", () => {
+    expect(skippedForMediaLine(["google_business_profile", "youtube"], "image/webp")).toBe(
+      "Skips Google Business Profile (JPG or PNG only), YouTube (video only) for this file.",
+    );
+  });
+
+  it("is null when nothing is skipped", () => {
+    expect(skippedForMediaLine([], "image/jpeg")).toBeNull();
   });
 });
