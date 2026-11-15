@@ -606,6 +606,23 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
     errorMessage: "Reconnect Instagram in Settings, then retry.",
   };
 
+  const PAIR_HALF_SELECT = {
+    id: true,
+    status: true,
+    publishMetadata: true,
+    mediaItem: { select: { mimeType: true } },
+    _count: { select: { results: true } },
+  };
+  /** The other half as pairHalf reads it: due with this one, an image going to every connection. */
+  const half = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    status: "in_progress",
+    publishMetadata: null,
+    mediaItem: { mimeType: "image/jpeg" },
+    _count: { results: 0 },
+    ...overrides,
+  });
+
   /** The job, and the other half of its pair when there is one (looked up by id). */
   function jobs(rows: Record<string, Record<string, unknown>>) {
     postJobFindUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) =>
@@ -653,13 +670,13 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
 
     it("checks both halves as one unit and reserves both sends when they fit", async () => {
       jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
-      postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "in_progress", _count: { results: 0 } });
+      postJobFindFirstMock.mockResolvedValue(half("story-1"));
 
       const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
       expect(postJobFindFirstMock).toHaveBeenCalledWith({
         where: { storyOfPostJobId: "job-1" },
-        select: { id: true, status: true, _count: { select: { results: true } } },
+        select: PAIR_HALF_SELECT,
       });
       expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], now: NOW });
       expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], at: NOW });
@@ -668,7 +685,7 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
 
     it("when they do not fit, fails both halves with the at-send sentence and asks for one notice, the feed's", async () => {
       jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
-      postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "in_progress", _count: { results: 0 } });
+      postJobFindFirstMock.mockResolvedValue(half("story-1"));
       serviceCapMock.mockResolvedValue(FULL);
 
       const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
@@ -689,7 +706,7 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
       postJobFindUniqueMock.mockImplementation(async ({ where, select }: { where: { id: string }; select?: unknown }) =>
         select
-          ? { id: "job-1", status: "in_progress", _count: { results: 0 } }
+          ? half("job-1")
           : makeJob({ id: where.id, ...(where.id === "story-1" ? { storyOfPostJobId: "job-1" } : {}) }),
       );
       serviceCapMock.mockResolvedValue(FULL);
@@ -778,7 +795,13 @@ describe("prepareDeferredPostJobDispatch - who is told, and the sends it wrote",
     errorMessage:
       "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
   };
-  const PARTNER_SELECT = { id: true, status: true, _count: { select: { results: true } } };
+  const PARTNER_SELECT = {
+    id: true,
+    status: true,
+    publishMetadata: true,
+    mediaItem: { select: { mimeType: true } },
+    _count: { select: { results: true } },
+  };
   const REFUSED = [{ status: "failed", errorCode: "SERVICE_DAILY_POST_LIMIT" }];
 
   /** The pair feed `job-1` and Story `story-1`; `other` is what the lookup of the other half answers. */
@@ -882,5 +905,118 @@ describe("prepareDeferredPostJobDispatch - who is told, and the sends it wrote",
     connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: true }]);
     await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
     expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+});
+
+// R7-publishing L1: a paused or plan-ended workspace's due post is failed in
+// prepare with its own sentence, before any cap check: no run is recorded.
+describe("prepareDeferredPostJobDispatch for a blocked workspace", () => {
+  const NOW = new Date("2026-11-14T15:00:00Z");
+  const connections = [
+    { id: "c-x", platform: "x", needsReconnect: false },
+    { id: "c-ig", platform: "instagram", needsReconnect: true },
+  ];
+  const target = { publishMetadata: { targetPlatforms: ["x", "instagram"] } };
+
+  it("paused: every platform that would publish gets the paused sentence; no cap check, no run", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ ...target, workspace: { pausedAt: NOW, pausedReason: null } }));
+    connectionFindManyMock.mockResolvedValue(connections);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(result).toEqual({ ok: false, reason: "BLOCKED" });
+    const rows = resultCreateManyMock.mock.calls[0][0].data;
+    expect(rows[0]).toMatchObject({
+      platform: "x",
+      status: "failed",
+      errorCode: "WORKSPACE_PAUSED",
+      errorMessage: "Not published: this workspace was paused.",
+    });
+    // A platform already failed for its own reason keeps it.
+    expect(rows[1]).toMatchObject({ platform: "instagram", errorCode: "RECONNECT_REQUIRED" });
+    expect(recomputeMock).toHaveBeenCalledWith("job-1");
+    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(recordSendMock).not.toHaveBeenCalled();
+  });
+
+  it("plan ended (billing on): the no-active-plan sentence", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ ...target, workspace: { billingExempt: false, trialEndsAt: new Date("2026-11-01T00:00:00Z") } }),
+    );
+    connectionFindManyMock.mockResolvedValue(connections);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(result).toEqual({ ok: false, reason: "BLOCKED" });
+    expect(resultCreateManyMock.mock.calls[0][0].data[0]).toMatchObject({
+      errorCode: "PLAN_ENDED",
+      errorMessage: "Not published: this workspace has no active plan.",
+    });
+    expect(serviceCapMock).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("a re-run that finds the blocked results refuses again and writes nothing", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ ...target, workspace: { pausedAt: NOW } }));
+    connectionFindManyMock.mockResolvedValue(connections);
+    resultCountMock.mockResolvedValue(2);
+    resultFindManyMock.mockResolvedValue([
+      { status: "failed", errorCode: "WORKSPACE_PAUSED" },
+      { status: "failed", errorCode: "RECONNECT_REQUIRED" },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(result).toEqual({ ok: false, reason: "BLOCKED" });
+    expect(resultCreateManyMock).not.toHaveBeenCalled();
+    expect(recordSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a workspace that is not blocked sends as before", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ ...target, workspace: { pausedAt: null } }));
+    connectionFindManyMock.mockResolvedValue(connections);
+
+    await expect(prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW })).resolves.toMatchObject({ ok: true });
+    expect(serviceCapMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// R7-publishing L2: the other half of a pair joins the unit only when its
+// connections give it something to send.
+describe("a pair whose other half has nothing to send", () => {
+  const NOW = new Date("2026-11-14T15:00:00Z");
+
+  it("the half that can go is checked alone (one place, not two)", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ id: "story-1", storyOfPostJobId: "job-1", publishMetadata: { targetPlatforms: ["instagram"] } }));
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-ig", platform: "instagram", needsReconnect: false },
+      { id: "c-fb", platform: "facebook_page", needsReconnect: true },
+    ]);
+    // The feed's only platform needs reconnecting.
+    postJobFindUniqueMock.mockImplementation(async ({ where, select }: { where: { id: string }; select?: unknown }) =>
+      select
+        ? { id: "job-1", status: "in_progress", publishMetadata: { targetPlatforms: ["facebook_page"] }, mediaItem: { mimeType: "image/jpeg" }, _count: { results: 0 } }
+        : makeJob({ id: where.id, storyOfPostJobId: "job-1", publishMetadata: { targetPlatforms: ["instagram"] } }),
+    );
+
+    const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
+
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW });
+    expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], at: NOW });
+    expect(result.ok).toBe(true);
+  });
+
+  it("an other half with a platform to send still joins the unit", async () => {
+    postJobFindUniqueMock.mockImplementation(async ({ where, select }: { where: { id: string }; select?: unknown }) =>
+      select
+        ? { id: "job-1", status: "in_progress", publishMetadata: { targetPlatforms: ["instagram"] }, mediaItem: { mimeType: "image/jpeg" }, _count: { results: 0 } }
+        : makeJob({ id: where.id, storyOfPostJobId: "job-1", publishMetadata: { targetPlatforms: ["instagram"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: false }]);
+
+    await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
+
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW });
   });
 });

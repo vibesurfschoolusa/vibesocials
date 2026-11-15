@@ -252,6 +252,11 @@ export async function materializeClaimedJobs(
             // The scanner is not "Post now": `immediate: false` keeps the run at
             // priority 0 behind user-triggered publishes.
             batch.publishEvents.push(buildPublishEvent(prep.event, { immediate: false }));
+          } else if (prep.reason === "BLOCKED") {
+            // R7-publishing L1: paused, or its plan ended. Its results say so;
+            // nothing was recorded, and like the publish run's own paused
+            // path no notice goes out, so a paused week does not flood the owner.
+            return;
           } else if (prep.reason === "NO_CONNECTIONS" || prep.reason === "LIMIT_REACHED") {
             // Nothing to send: a send this call reserved for it (its feed's) goes.
             await takeBack(postJobId);

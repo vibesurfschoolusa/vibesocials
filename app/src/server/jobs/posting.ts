@@ -15,6 +15,8 @@ import { connectionGoneMessage, reconnectRequiredMessage } from "@/lib/publishFa
 import { finishPostJob, recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import { SERVICE_DAILY_POST_LIMIT_CODE } from "@/lib/usageLimits";
+import { BILLING_FIELDS_SELECT } from "@/lib/billing";
+import { blockedResultFailure, PLAN_ENDED_CODE, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
 import { recordSend, serviceCapRefusalAtSend, type WrittenSends } from "@/server/usage/usageLog";
 import {
   assertPostTargetsValid,
@@ -1105,28 +1107,88 @@ export type DeferredDispatchResult =
   // hand-over then fails to take back. Absent when it wrote none.
   | { ok: true; event: PublishRequestedEventData; sendsWritten?: WrittenSends }
   | { ok: false; reason: "NOT_FOUND" | "NO_CONNECTIONS" }
+  // R7-publishing L1: the workspace is paused or its plan ended; its results
+  // say so, and nothing was checked against the caps or recorded.
+  | { ok: false; reason: "BLOCKED" }
   // `noticeFor`: the post whose owner is told: the feed of a pair refused
   // together (one notice for both), else the refused post itself.
   | { ok: false; reason: "LIMIT_REACHED"; noticeFor: string };
 
 type SendRefusal = { errorCode: string; errorMessage: string };
 
-/** The other half of this post's Feed and Story pair, or null. */
+/** The other half of this post's Feed and Story pair, or null, with what its fan-out needs. */
 function pairHalf(job: { id: string; storyOfPostJobId: string | null }) {
-  const select = { id: true, status: true, _count: { select: { results: true } } } as const;
+  const select = {
+    id: true,
+    status: true,
+    publishMetadata: true,
+    mediaItem: { select: { mimeType: true } },
+    _count: { select: { results: true } },
+  } as const;
   return job.storyOfPostJobId
     ? prisma.postJob.findUnique({ where: { id: job.storyOfPostJobId }, select })
     : prisma.postJob.findFirst({ where: { storyOfPostJobId: job.id }, select });
 }
 
+type FanOutSource = {
+  workspaceId: string;
+  publishMetadata: Prisma.JsonValue | null;
+  mediaItem: { mimeType: string } | null;
+};
+
+/**
+ * The result rows a deferred post gets from the connections that exist now:
+ * the chosen platforms when its snapshot recorded them, else every connection
+ * that can take its media (or text alone).
+ */
+function deferredFanOutRows(job: FanOutSource, connections: readonly SocialConnection[]): FanOutResultRow[] {
+  // Replay the per-post privacy AND platform targeting the user chose at
+  // compose time (review B1 / Task 7).
+  const target = (job.publishMetadata as PublishMetadataSnapshot | null)?.targetPlatforms;
+  // `eligible` narrows `connections` to the chosen subset when the snapshot
+  // recorded one; `undefined`/empty means "all connections" (legacy
+  // behavior). This also correctly subsumes the old "no connections at all"
+  // case below: an empty `connections` filters to an empty `eligible` either way.
+  //
+  // 2026-11-01 audit (Task 9): with NO chosen list, "all connections" skips the
+  // ones whose client can't publish this media (a YouTube result for an image
+  // could only ever fail). An explicit list was validated against the media at
+  // create time and is left exactly as chosen.
+  // A post without a file goes only to the platforms that take text alone.
+  const media = job.mediaItem ?? null;
+  const eligible = target?.length
+    ? connections.filter((c) => target.includes(c.platform))
+    : media === null
+      ? connections.filter((c) => platformAcceptsTextOnly(c.platform))
+      : connections.filter((c) => platformAcceptsMedia(c.platform, media.mimeType));
+
+  // Healthy connections keep exactly the rows they always had; the others say why.
+  return buildFanOutResultRows({ workspaceId: job.workspaceId, eligible, connections, targetPlatforms: target });
+}
+
 /**
  * The other half of a Feed and Story pair when it is due with this one:
- * claimed by the same scan and not given its results yet. One already sent,
- * cancelled or failed is not, and this half is then checked alone.
+ * claimed by the same scan, not given its results yet, and (R7-publishing L2)
+ * with a platform its connections let it send to. One already sent,
+ * cancelled or failed, or with nothing to send, is not, and this half is
+ * then checked alone.
  */
-async function unsentPairHalf(job: { id: string; storyOfPostJobId: string | null }): Promise<string | null> {
+async function unsentPairHalf(
+  job: { id: string; storyOfPostJobId: string | null; workspaceId: string },
+  connections: readonly SocialConnection[],
+): Promise<string | null> {
   const other = await pairHalf(job);
-  return other && other.status === "in_progress" && other._count.results === 0 ? other.id : null;
+  if (!other || other.status !== "in_progress" || other._count.results !== 0) return null;
+  const rows = deferredFanOutRows({ ...other, workspaceId: job.workspaceId }, connections);
+  return rows.some((row) => (row.status ?? "pending") === "pending") ? other.id : null;
+}
+
+/** Results failed because the workspace is paused or its plan ended, and nothing pending or published. */
+function refusedAsBlocked(results: readonly StoredResult[]): boolean {
+  return (
+    results.some((result) => result.errorCode === WORKSPACE_PAUSED_CODE || result.errorCode === PLAN_ENDED_CODE) &&
+    !results.some((result) => result.status === "pending" || result.status === "success")
+  );
 }
 
 type StoredResult = { status: string; errorCode: string | null };
@@ -1218,6 +1280,8 @@ export async function prepareDeferredPostJobDispatch(
     where: { id: postJobId },
     include: {
       mediaItem: { select: { baseCaption: true, perPlatformOverrides: true, mimeType: true } },
+      // R7-publishing L1: the pause and plan columns, for the block check below.
+      workspace: { select: { pausedAt: true, pausedReason: true, ...BILLING_FIELDS_SELECT } },
     },
   });
 
@@ -1230,35 +1294,12 @@ export async function prepareDeferredPostJobDispatch(
     where: { workspaceId: job.workspaceId },
   });
 
-  // Replay the per-post privacy AND platform targeting the user chose at
-  // compose time (review B1 / Task 7).
   const publishMetadata =
     (job.publishMetadata as PublishMetadataSnapshot | null) ?? null;
-  const target = publishMetadata?.targetPlatforms;
-  // `eligible` narrows `connections` to the chosen subset when the snapshot
-  // recorded one; `undefined`/empty means "all connections" (legacy
-  // behavior). This also correctly subsumes the old "no connections at all"
-  // case below: an empty `connections` filters to an empty `eligible` either way.
-  //
-  // 2026-11-01 audit (Task 9): with NO chosen list, "all connections" skips the
-  // ones whose client can't publish this media (a YouTube result for an image
-  // could only ever fail). An explicit list was validated against the media at
-  // create time and is left exactly as chosen.
-  // A post without a file goes only to the platforms that take text alone.
-  const media = job.mediaItem;
-  const eligible = target?.length
-    ? connections.filter((c) => target.includes(c.platform))
-    : media === null
-      ? connections.filter((c) => platformAcceptsTextOnly(c.platform))
-      : connections.filter((c) => platformAcceptsMedia(c.platform, media.mimeType));
-
-  // Healthy connections keep exactly the rows they always had; the others say why.
-  const rows: Prisma.PostJobResultCreateManyInput[] = buildFanOutResultRows({
-    workspaceId: job.workspaceId,
-    eligible,
-    connections,
-    targetPlatforms: target,
-  }).map((row) => ({ postJobId, ...row }));
+  const rows: Prisma.PostJobResultCreateManyInput[] = deferredFanOutRows(job, connections).map((row) => ({
+    postJobId,
+    ...row,
+  }));
 
   // Idempotent: only create the fan-out if it hasn't been created yet, so a
   // retried caller step never duplicates result rows.
@@ -1276,8 +1317,25 @@ export async function prepareDeferredPostJobDispatch(
     return { ok: false, reason: "NO_CONNECTIONS" };
   }
 
+  // R7-publishing L1: a paused workspace, or one whose plan ended, sends
+  // nothing, so its due post is failed here with that sentence, before any
+  // cap check: no run is recorded, no cap notice goes out, no publish run.
+  const block = job.workspace ? workspaceBlock(job.workspace, sendDay) : null;
+  if (block && existingResults === 0) {
+    const failure = blockedResultFailure(block.code);
+    await prisma.postJobResult.createMany({
+      data: rows.map((row) => (row.status === "pending" ? { ...row, status: "failed" as const, ...failure } : row)),
+    });
+    await recomputeAndStorePostJobStatus(postJobId);
+    return { ok: false, reason: "BLOCKED" };
+  }
+
   if (existingResults > 0) {
     const stored = await prisma.postJobResult.findMany({ where: { postJobId }, select: { status: true, errorCode: true } });
+    if (refusedAsBlocked(stored)) {
+      await recomputeAndStorePostJobStatus(postJobId);
+      return { ok: false, reason: "BLOCKED" };
+    }
     if (refusedAtSend(stored)) {
       await recomputeAndStorePostJobStatus(postJobId);
       const together = await refusedWithPartner(job);
@@ -1289,7 +1347,7 @@ export async function prepareDeferredPostJobDispatch(
   let sending = [postJobId];
   // A re-run that finds its results made has been past this check already.
   if ((options.serviceCapAt || options.unitRefusal) && existingResults === 0 && rows.some((row) => row.status === "pending")) {
-    const partner = options.unitRefusal ? null : await unsentPairHalf(job);
+    const partner = options.unitRefusal ? null : await unsentPairHalf(job, connections);
     if (partner) sending = [postJobId, partner];
     const refusal =
       options.unitRefusal ??

@@ -739,6 +739,25 @@ describe("materializeClaimedJobs", () => {
     expect(out.notFound).toEqual([]);
   });
 
+  // R7-publishing L1: a paused or plan-ended workspace's due post is failed in
+  // prepare with the blocked sentence: no publish run and no notice.
+  it("a post of a blocked workspace gets no publish event, no notice and no take-back", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "paused" ? { ok: false, reason: "BLOCKED" } : okFor(id),
+    );
+
+    const out = await materializeClaimedJobs(["a", "paused"], sleep);
+
+    expect(out).toEqual({
+      publishEvents: [expect.objectContaining({ id: "publish-a" })],
+      noConnections: [],
+      notFound: [],
+      errorIds: [],
+    });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
   // Review of K2, point 3: a pair refused together gets one notice, the feed's.
   it("a pair refused at send: both halves are refused and one notice goes out, for the feed", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "feed" });
