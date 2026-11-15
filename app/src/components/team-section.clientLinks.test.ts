@@ -23,7 +23,9 @@ vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null }), signOut:
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
 import {
+  CLIENT_LINKS_REPLACED_EVENT,
   clientLinksButtonShown,
+  requestClientLinksReplace,
   ClientLinksPanel,
   clientLinksReplacedMessage,
   demotedMessage,
@@ -39,13 +41,11 @@ function team(role: "owner" | "member"): string {
   return renderToStaticMarkup(createElement(TeamSection, { workspaceId: "ws-1", role, workspaceName: "Surf Co" }));
 }
 
-const ON = { included: true, on: { upload: true, review: false, connect: false } };
+const ON = { included: true, on: { upload: true, review: false, connect: false }, connectStopped: false };
 
-function panel(state: Parameters<typeof ClientLinksPanel>[0]["state"], freshConnectUrl: string | null = null): string {
+function panel(state: Parameters<typeof ClientLinksPanel>[0]["state"]): string {
   confirmProps.length = 0;
-  return renderToStaticMarkup(
-    createElement(ClientLinksPanel, { state, freshConnectUrl, onReplace: async () => {}, onCopyConnect: () => {} }),
-  );
+  return renderToStaticMarkup(createElement(ClientLinksPanel, { state, onReplace: async () => {} }));
 }
 
 describe("Make new client links", () => {
@@ -60,8 +60,8 @@ describe("Make new client links", () => {
   // R6 L2: not shown with nothing to replace, or on a plan without client links.
   it("is not shown with no client link on, on a plan without them, or before the state is read", () => {
     expect(clientLinksButtonShown(ON)).toBe(true);
-    expect(clientLinksButtonShown({ included: true, on: { upload: false, review: false, connect: true } })).toBe(true);
-    expect(clientLinksButtonShown({ included: true, on: { upload: false, review: false, connect: false } })).toBe(false);
+    expect(clientLinksButtonShown({ ...ON, on: { upload: false, review: false, connect: true } })).toBe(true);
+    expect(clientLinksButtonShown({ ...ON, on: { upload: false, review: false, connect: false } })).toBe(false);
     expect(clientLinksButtonShown({ ...ON, included: false })).toBe(false);
     expect(clientLinksButtonShown(null)).toBe(false);
     expect(panel({ ...ON, included: false })).toBe("");
@@ -81,11 +81,30 @@ describe("Make new client links", () => {
     });
   });
 
-  it("shows a new connect link to copy, because the one under Connections is the old one until the page reloads", () => {
-    const html = panel({ ...ON, on: { ...ON.on, connect: true } }, "https://app.example.com/c/NEW");
-    expect(html).toContain('value="https://app.example.com/c/NEW"');
-    expect(html).toContain('aria-label="New client connect link"');
-    expect(html).toContain("Copy");
+  // Check 3: the Connections card shows the new connect link without a reload.
+  it("after a replace, tells the page so the connect link card reads its new link; a refusal tells nothing", async () => {
+    const announce = vi.fn();
+    const answer = { uploadLink: null, reviewLink: null, connectLink: { url: "https://app.example.com/c/NEW" } };
+    const ok = vi.fn(async () => new Response(JSON.stringify(answer), { status: 200 }));
+    await expect(requestClientLinksReplace(ok as unknown as typeof fetch, "ws-1", announce)).resolves.toEqual(answer);
+    expect(ok).toHaveBeenCalledWith("/api/workspaces/client-links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId: "ws-1" }),
+    });
+    expect(announce).toHaveBeenCalledTimes(1);
+
+    announce.mockClear();
+    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Too many." }), { status: 429 }));
+    await expect(requestClientLinksReplace(refused as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow("Too many.");
+    const offline = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(requestClientLinksReplace(offline as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow(
+      "Couldn't reach the server. The old client links still work. Check your connection and try again.",
+    );
+    expect(announce).not.toHaveBeenCalled();
+    expect(CLIENT_LINKS_REPLACED_EVENT).toBe("vibe:client-links-replaced");
   });
 
   it("the owners' Team card holds no button before the state is read, and a member's never", () => {
@@ -113,10 +132,10 @@ describe("Make new client links", () => {
   it("names the connect link when it was made again, or turned off", () => {
     const connect = { url: "c" };
     expect(clientLinksReplacedMessage({ uploadLink: { url: "u" }, reviewLink: { url: "v" }, connectLink: connect })).toBe(
-      "New client links are on and the old ones no longer work. Copy the upload link on the Media page, the review link on the Queue page and the connect link below, and send them to your client.",
+      "New client links are on and the old ones no longer work. Copy the upload link on the Media page, the review link on the Queue page and the connect link under Connections, and send them to your client.",
     );
     expect(clientLinksReplacedMessage({ uploadLink: null, reviewLink: null, connectLink: connect })).toBe(
-      "A new client connect link is on and the old one no longer works. Copy it below and send it to your client.",
+      "A new client connect link is on and the old one no longer works. Copy it under Connections and send it to your client.",
     );
     expect(clientLinksReplacedMessage({ uploadLink: { url: "u" }, reviewLink: null, connectLinkTurnedOff: true })).toBe(
       "A new client upload link is on and the old one no longer works. Copy it on the Media page and send it to your client. The client connect link is off: none of its platforms can be connected here any more. Make a new one under Connections if you need it.",
@@ -126,16 +145,31 @@ describe("Make new client links", () => {
     );
   });
 
-  it("after a demotion, points to the button when client links are on", () => {
-    expect(demotedMessage({ ok: true, role: "member", clientLinksToReplace: true })).toBe(
-      "Role updated. They could copy the client links, which still work: press Make new client links below to replace them.",
+  // Check 4: from the links' state read after the demotion, naming only the links that still work.
+  it("after a demotion, names the links that still work and points to the button", () => {
+    expect(demotedMessage({ ...ON, on: { upload: true, review: false, connect: true } })).toBe(
+      "Role updated. They could copy the client upload and connect links, which still work. Press Make new client links below to replace them.",
     );
-    expect(demotedMessage({ ok: true, role: "member", clientLinksToReplace: false })).toBe("Role updated.");
+    expect(demotedMessage({ ...ON, on: { upload: false, review: true, connect: false } })).toBe(
+      "Role updated. They could copy the client review link, which still works. Press Make new client links below to replace it.",
+    );
+    expect(demotedMessage({ ...ON, on: { upload: false, review: false, connect: false } })).toBe("Role updated.");
     expect(demotedMessage(null)).toBe("Role updated.");
+    // A plan without client links: none of them works, and there is no button.
+    expect(demotedMessage({ ...ON, included: false })).toBe("Role updated.");
+  });
+
+  it("a stopped connect link is not called working; the button gives the client a new one", () => {
+    expect(demotedMessage({ ...ON, on: { upload: false, review: false, connect: true }, connectStopped: true })).toBe(
+      "Role updated. The client connect link has stopped working, because the owner who made it is no longer an owner. Press Make new client links below to give your client a new one.",
+    );
+    expect(demotedMessage({ ...ON, on: { upload: true, review: false, connect: true }, connectStopped: true })).toBe(
+      "Role updated. They could copy the client upload link, which still works. The client connect link has stopped working, because the owner who made it is no longer an owner. Press Make new client links below to replace them.",
+    );
   });
 
   // R6-client-journey L3: someone who made themself a member no longer has the button.
   it("after demoting yourself, says only that the role changed", () => {
-    expect(demotedMessage({ ok: true, role: "member", clientLinksToReplace: true }, true)).toBe("Role updated.");
+    expect(demotedMessage({ ...ON, on: { upload: true, review: true, connect: true } }, true)).toBe("Role updated.");
   });
 });

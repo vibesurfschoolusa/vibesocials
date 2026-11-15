@@ -9,6 +9,7 @@ import { PostingSlotsForm } from "@/components/posting-slots-form";
 import { readPostingSlots } from "@/lib/postingSlots";
 import { ConnectionsSection } from "@/components/connections-section";
 import { ConnectLinkSection } from "@/components/connect-link-section";
+import { RemountOnClientLinksReplaced } from "@/components/client-links-refresh";
 import { TeamSection, type WorkspaceDeletionInfo } from "@/components/team-section";
 import { AccountSection } from "@/components/account-section";
 import { accountDeletionPreview } from "@/server/account/accountDeletion";
@@ -96,15 +97,13 @@ export default async function SettingsPage({
   const rows = await prisma.socialConnection.findMany({
     where: { workspaceId: context.workspace.id },
     select: {
-      platform: true,
       accountIdentifier: true,
       metadata: true,
-      // Roadmap Phase 4: the connection-health flag itself — still never
+      // platform and the connection-health flag (Roadmap Phase 4), plus
+      // R6-pages M1's expiry columns for the warning-window rule. Still never
       // accessToken/scopes/raw metadata beyond the display fields
-      // toConnectionSummary reads.
-      // R6-pages M1: the expiry columns the warning-window rule reads. The
-      // refresh token is only tested for presence here, on the server; only
-      // the resulting platform list is passed on.
+      // toConnectionSummary reads; the refresh token is only tested for
+      // presence here, on the server, and only the platform list goes on.
       ...CONNECTION_EXPIRY_SELECT,
     },
   });
@@ -273,11 +272,14 @@ export default async function SettingsPage({
             />
             {/* Owners only; key: one link per workspace, so remount on a switch. */}
             <div id="connect-link" className="mt-4 scroll-mt-32 lg:scroll-mt-20">
-              <ConnectLinkSection
-                key={`connect-link-${context.workspace.id}`}
-                workspaceId={context.workspace.id}
-                isOwner={context.role === "owner"}
-              />
+              {/* Remounted after "Make new client links" (Team), so it shows the new link. */}
+              <RemountOnClientLinksReplaced>
+                <ConnectLinkSection
+                  key={`connect-link-${context.workspace.id}`}
+                  workspaceId={context.workspace.id}
+                  isOwner={context.role === "owner"}
+                />
+              </RemountOnClientLinksReplaced>
             </div>
           </section>
 

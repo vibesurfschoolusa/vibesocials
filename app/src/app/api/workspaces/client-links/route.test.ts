@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   executeRaw: vi.fn(),
   transaction: vi.fn(),
   requireOwnerContext: vi.fn(),
+  isWorkspaceOwner: vi.fn(),
   checkRateLimit: vi.fn(),
   generateInviteToken: vi.fn(),
   calls: [] as string[],
@@ -28,7 +29,7 @@ vi.mock("@/lib/db", () => ({
     workspaceConnectLink: { findFirst: m.connectFindFirst },
   },
 }));
-vi.mock("@/lib/workspace", () => ({ requireOwnerContext: m.requireOwnerContext }));
+vi.mock("@/lib/workspace", () => ({ requireOwnerContext: m.requireOwnerContext, isWorkspaceOwner: m.isWorkspaceOwner }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: m.checkRateLimit }));
 vi.mock("@/lib/inviteToken", async () => {
   const actual = await vi.importActual<typeof import("@/lib/inviteToken")>("@/lib/inviteToken");
@@ -260,16 +261,29 @@ describe("GET /api/workspaces/client-links", () => {
 
   it("says which client links are on and whether the plan includes them", async () => {
     m.reviewFindFirst.mockResolvedValue(null);
-    m.connectFindFirst.mockResolvedValue({ id: "con-1", platforms: ["tiktok"] });
+    m.connectFindFirst.mockResolvedValue({ createdById: "owner-2" });
+    m.isWorkspaceOwner.mockResolvedValue(true);
 
     const response = await get();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ included: true, on: { upload: true, review: false, connect: true } });
+    await expect(response.json()).resolves.toEqual({
+      included: true,
+      on: { upload: true, review: false, connect: true },
+      connectStopped: false,
+    });
     expect(m.connectFindFirst).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", revokedAt: null, expiresAt: { gt: expect.any(Date) } },
-      select: { id: true, platforms: true },
+      select: { createdById: true },
     });
+    expect(m.isWorkspaceOwner).toHaveBeenCalledWith("owner-2", "ws-1");
+  });
+
+  // Check 4: a connect link made by someone no longer an owner works for nobody.
+  it("says when the connect link has stopped working because its maker is no longer an owner", async () => {
+    m.connectFindFirst.mockResolvedValue({ createdById: "former-1" });
+    m.isWorkspaceOwner.mockResolvedValue(false);
+    await expect((await get()).json()).resolves.toMatchObject({ on: { connect: true }, connectStopped: true });
   });
 
   it("with billing on, a plan without client links answers included: false", async () => {

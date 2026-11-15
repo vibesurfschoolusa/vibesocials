@@ -11,7 +11,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { reviewLinkUrl } from "@/lib/reviewLink";
 import { sealSecret } from "@/lib/tokenCrypto";
 import { uploadLinkUrl } from "@/lib/uploadLink";
-import { requireOwnerContext } from "@/lib/workspace";
+import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 /**
@@ -33,7 +33,9 @@ import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
  * "on" here, so the press gives the client a working link again, made by the
  * owner who pressed.
  *
- * GET ?workspaceId= → `{ included, on: { upload, review, connect } }`: the Team
+ * GET ?workspaceId= → `{ included, on: { upload, review, connect }, connectStopped }`
+ * (`connectStopped`: the connect link is on but its maker is no longer an
+ * owner, so it works for nobody): the Team
  * card shows the button only while a link is on and the plan includes them.
  */
 
@@ -54,11 +56,13 @@ export async function GET(request: Request) {
   const [upload, review, connect] = await Promise.all([
     prisma.workspaceUploadLink.findFirst({ where: active, select: { id: true } }),
     prisma.workspaceReviewLink.findFirst({ where: active, select: { id: true } }),
-    prisma.workspaceConnectLink.findFirst({ where: workingConnectLinkWhere(workspace.id), select: { id: true, platforms: true } }),
+    prisma.workspaceConnectLink.findFirst({ where: workingConnectLinkWhere(workspace.id), select: { createdById: true } }),
   ]);
+  const connectStopped = connect !== null && !(await isWorkspaceOwner(connect.createdById, workspace.id));
   return NextResponse.json({
     included: planIncludes(workspace, "clientLinks"),
     on: { upload: upload !== null, review: review !== null, connect: connect !== null },
+    connectStopped,
   });
 }
 

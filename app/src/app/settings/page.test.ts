@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock, findConnectionsMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
-  findConnectionsMock: vi.fn(async (_args?: unknown): Promise<unknown[]> => []),
+  findConnectionsMock: vi.fn<(args?: unknown) => Promise<unknown[]>>(async () => []),
   isPayerMock: vi.fn(async () => false),
   // What the Plan section offers (planSectionActions); null: no plan action.
   planActionsMock: vi.fn<(role: string) => { choose: string[]; manage: boolean } | null>(() => null),
