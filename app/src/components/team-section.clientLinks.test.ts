@@ -287,6 +287,49 @@ describe("Turn off client links", () => {
 });
 
 // R9-client-journey L1: a demotion that turned off the invite link the card shows.
+// R22 client-journey L1 / security L1: while the workspace is blocked every
+// client link answers "not active", and new ones can't be made.
+describe("while the workspace is blocked", () => {
+  const BLOCKED_SENTENCE = "Client links don't work right now. This workspace is paused. Contact help@example.com.";
+  const BLOCKED = { ...ON, workspaceBlocked: BLOCKED_SENTENCE };
+
+  it("offers Turn off client links only, with the panel's sentence", () => {
+    expect(clientLinksButtonShown(BLOCKED)).toBe(false);
+    expect(clientLinksTurnOffShown(BLOCKED)).toBe(true);
+    expect(clientLinksTurnOffShown({ ...BLOCKED, on: { upload: false, review: false, connect: false } })).toBe(false);
+    const html = panel(BLOCKED);
+    expect(html).toContain("Turn off client links");
+    expect(html).not.toContain("Make new client links");
+    expect(html).toContain(
+      "Client links don&#x27;t work right now. This workspace is paused. Contact help@example.com. When they work again, so would the copies kept by someone who stopped being an owner. Turning them off stops that.",
+    );
+    expect(confirmProps[0]).toMatchObject({
+      title: "Turn off client links?",
+      description:
+        "The client upload, review and connect links stop working for good, including any copies a former owner kept. You can make new ones once client links work again.",
+    });
+  });
+
+  it("the demotion toast says the links work again once the block ends, and points to Turn off", () => {
+    expect(demotedMessage({ ...BLOCKED, on: { upload: true, review: true, connect: false } })).toBe(
+      `Role updated. They could copy the client upload and review links. ${BLOCKED_SENTENCE} When they work again, so would the copies they kept. Press Turn off client links below to stop that.`,
+    );
+    expect(demotedMessage({ ...BLOCKED, on: { upload: false, review: true, connect: false } })).toBe(
+      `Role updated. They could copy the client review link. ${BLOCKED_SENTENCE} When it works again, so would the copy they kept. Press Turn off client links below to stop that.`,
+    );
+    // A stopped connect link alone: nothing to turn off, nothing to make while blocked.
+    expect(demotedMessage({ ...BLOCKED, on: { upload: false, review: false, connect: true }, connectStopped: true })).toBe(
+      "Role updated.",
+    );
+    expect(demotedMessage({ ...BLOCKED, on: { upload: true, review: true, connect: true } }, true)).toBe("Role updated.");
+  });
+
+  it("active, and a plan without client links: as before", () => {
+    expect(demotedMessage({ ...ON, on: { upload: false, review: true, connect: false } })).toContain("Press Make new client links");
+    expect(demotedMessage({ ...ON, included: false })).toBe("Role updated.");
+  });
+});
+
 describe("demotionOutcome", () => {
   it("clears the invite link and says so when the demotion turned links off", () => {
     expect(demotionOutcome({ ok: true, role: "member", joinLinksRevoked: 1 })).toEqual({

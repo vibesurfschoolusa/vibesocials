@@ -12,6 +12,7 @@ import { sealSecret } from "@/lib/tokenCrypto";
 import { uploadLinkUrl } from "@/lib/uploadLink";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
 
 /**
  * POST /api/workspaces/client-links { workspaceId }
@@ -36,6 +37,10 @@ import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
  * (`connectStopped`: the connect link is on but its maker is no longer an
  * owner, so it works for nobody): the Team
  * card shows the button only while a link is on and the plan includes them.
+ * R22 client-journey L1: while the workspace is blocked (a pause, or with
+ * billing on an ended trial or plan) every client link answers "not active",
+ * so the GET adds the panels' `workspaceBlocked` sentence, the Team card
+ * offers only Turn off, and the POST refuses with that sentence.
  *
  * DELETE { workspaceId } (R7-pages L3 / client-journey L2): "Turn off client
  * links". On a plan without client links they are paused, not off, and a
@@ -65,10 +70,12 @@ export async function GET(request: Request) {
     prisma.workspaceConnectLink.findFirst({ where: workingConnectLinkWhere(workspace.id), select: { createdById: true } }),
   ]);
   const connectStopped = connect !== null && !(await isWorkspaceOwner(connect.createdById, workspace.id));
+  const workspaceBlocked = clientLinkCreateRefusal(workspace);
   return NextResponse.json({
     included: planIncludes(workspace, "clientLinks"),
     on: { upload: upload !== null, review: review !== null, connect: connect !== null },
     connectStopped,
+    ...(workspaceBlocked ? { workspaceBlocked } : {}),
   });
 }
 
@@ -85,6 +92,8 @@ export async function POST(request: Request) {
   const workspaceId = context.workspace.id;
   const mismatch = renderedWorkspaceRefusal(((await readJsonObject(request)) ?? {}).workspaceId, workspaceId);
   if (mismatch) return mismatch;
+  const blocked = clientLinkCreateRefusal(context.workspace);
+  if (blocked) return NextResponse.json({ error: blocked, code: "WORKSPACE_BLOCKED" }, { status: 403 });
   if (!planIncludes(context.workspace, "clientLinks")) {
     return NextResponse.json({ error: CLIENT_LINKS_NOT_INCLUDED_MESSAGE, code: PLAN_FEATURE_CODE }, { status: 403 });
   }

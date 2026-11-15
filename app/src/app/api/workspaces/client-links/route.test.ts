@@ -39,6 +39,7 @@ vi.mock("@/lib/inviteToken", async () => {
 import { NextResponse } from "next/server";
 
 import { hashInviteToken } from "@/lib/inviteToken";
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { openSecret } from "@/lib/tokenCrypto";
 
 import { DELETE, GET, POST } from "./route";
@@ -251,6 +252,36 @@ describe("POST /api/workspaces/client-links", () => {
     expect(m.transaction).not.toHaveBeenCalled();
   });
 
+  // R22 client-journey L1 / security L1: a link made while blocked answers "not active".
+  it("refuses while the workspace is paused, with the panel's sentence, and touches no link", async () => {
+    m.requireOwnerContext.mockResolvedValue({
+      ...OWNER_CONTEXT,
+      workspace: { ...OWNER_CONTEXT.workspace, pausedAt: new Date("2026-11-10T00:00:00Z"), pausedReason: null },
+    });
+    const response = await POST(request());
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: `Client links don't work right now. This workspace is paused. Contact ${SUPPORT_EMAIL}.`,
+      code: "WORKSPACE_BLOCKED",
+    });
+    expect(m.transaction).not.toHaveBeenCalled();
+    expect(m.uploadUpdateMany).not.toHaveBeenCalled();
+    expect(m.uploadCreate).not.toHaveBeenCalled();
+    expect(m.checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("with billing on and the trial ended, refuses the same way", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.requireOwnerContext.mockResolvedValue({
+      ...OWNER_CONTEXT,
+      workspace: { ...OWNER_CONTEXT.workspace, billingExempt: false, plan: null, trialEndsAt: new Date(Date.now() - 86_400_000) },
+    });
+    const response = await POST(request());
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_BLOCKED" });
+    expect(m.transaction).not.toHaveBeenCalled();
+  });
+
   it("answers 500 with a plain sentence when the transaction fails", async () => {
     m.transaction.mockRejectedValue(new Error("db down"));
     const response = await POST(request());
@@ -289,6 +320,20 @@ describe("GET /api/workspaces/client-links", () => {
     m.connectFindFirst.mockResolvedValue({ createdById: "former-1" });
     m.isWorkspaceOwner.mockResolvedValue(false);
     await expect((await get()).json()).resolves.toMatchObject({ on: { connect: true }, connectStopped: true });
+  });
+
+  it("reports a paused workspace with the panel's sentence; an active one has no such key", async () => {
+    m.requireOwnerContext.mockResolvedValue({
+      ...OWNER_CONTEXT,
+      workspace: { ...OWNER_CONTEXT.workspace, pausedAt: new Date("2026-11-10T00:00:00Z"), pausedReason: null },
+    });
+    await expect((await get()).json()).resolves.toMatchObject({
+      included: true,
+      on: { upload: true, review: true, connect: false },
+      workspaceBlocked: `Client links don't work right now. This workspace is paused. Contact ${SUPPORT_EMAIL}.`,
+    });
+    m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
+    expect(await (await get()).json()).not.toHaveProperty("workspaceBlocked");
   });
 
   it("with billing on, a plan without client links answers included: false", async () => {

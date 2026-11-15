@@ -154,6 +154,11 @@ export interface ClientLinksState {
   on: { upload: boolean; review: boolean; connect: boolean };
   /** The connect link is on, but its maker is no longer an owner: it works for nobody. */
   connectStopped: boolean;
+  /**
+   * R22 client-journey L1: the workspace is blocked (paused, or an ended trial
+   * or plan), so no client link works and none can be made; the panel's sentence.
+   */
+  workspaceBlocked?: string;
 }
 
 /**
@@ -176,7 +181,9 @@ export function demotionOutcome(body: unknown): MemberRemovalOutcome {
 }
 
 export function demotedMessage(links: ClientLinksState | null, self = false): string {
-  if (self || !links || !links.included) return "Role updated.";
+  if (self || !links) return "Role updated.";
+  if (links.workspaceBlocked) return blockedDemotedMessage(links, links.workspaceBlocked);
+  if (!links.included) return "Role updated.";
   const working = [
     links.on.upload ? "upload" : null,
     links.on.review ? "review" : null,
@@ -207,9 +214,32 @@ export function demotedMessage(links: ClientLinksState | null, self = false): st
   return sentences.join(" ");
 }
 
+/**
+ * R22 client-journey L1: while blocked, none of the links works, but the copies
+ * the former owner kept work again when the block ends; new ones can't be made,
+ * so the toast points to Turn off. A stopped connect link alone leaves nothing
+ * to turn off (as on a plan without client links).
+ */
+function blockedDemotedMessage(links: ClientLinksState, blocked: string): string {
+  const held = [
+    links.on.upload ? "upload" : null,
+    links.on.review ? "review" : null,
+    links.on.connect && !links.connectStopped ? "connect" : null,
+  ].filter((name): name is string => name !== null);
+  if (held.length === 0) return "Role updated.";
+  const one = held.length === 1;
+  return [
+    "Role updated.",
+    one ? `They could copy the client ${held[0]} link.` : `They could copy the client ${listOf(held)} links.`,
+    blocked,
+    one ? "When it works again, so would the copy they kept." : "When they work again, so would the copies they kept.",
+    "Press Turn off client links below to stop that.",
+  ].join(" ");
+}
+
 /** R6 L2: the button is offered only with something to replace, on a plan that includes client links. */
 export function clientLinksButtonShown(state: ClientLinksState | null): boolean {
-  return !!state && state.included && (state.on.upload || state.on.review || state.on.connect);
+  return !!state && !state.workspaceBlocked && state.included && (state.on.upload || state.on.review || state.on.connect);
 }
 
 /**
@@ -218,7 +248,7 @@ export function clientLinksButtonShown(state: ClientLinksState | null): boolean 
  * is on, so a former owner's copies can't come back with the plan.
  */
 export function clientLinksTurnOffShown(state: ClientLinksState | null): boolean {
-  return !!state && !state.included && (state.on.upload || state.on.review || state.on.connect);
+  return !!state && (!!state.workspaceBlocked || !state.included) && (state.on.upload || state.on.review || state.on.connect);
 }
 
 /** The links' state, or null when it can't be read (no button then). */
@@ -327,14 +357,22 @@ export function ClientLinksPanel({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   if (clientLinksTurnOffShown(state)) {
+    const blocked = state?.workspaceBlocked;
     return (
       <div className="flex flex-col gap-2 border-t border-border pt-6">
         <h3 className="text-sm font-medium text-foreground">Client links</h3>
-        <p className="text-sm text-muted-foreground">
-          Client links are paused, because this workspace&apos;s plan doesn&apos;t include them. Copies kept by
-          someone who stopped being an owner would work again if the plan changes to one with client links. Turning
-          them off stops that.
-        </p>
+        {blocked ? (
+          <p className="text-sm text-muted-foreground">
+            {blocked} When they work again, so would the copies kept by someone who stopped being an owner. Turning
+            them off stops that.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Client links are paused, because this workspace&apos;s plan doesn&apos;t include them. Copies kept by
+            someone who stopped being an owner would work again if the plan changes to one with client links. Turning
+            them off stops that.
+          </p>
+        )}
         <div>
           <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>
             Turn off client links
@@ -345,7 +383,7 @@ export function ClientLinksPanel({
           onOpenChange={setConfirmOpen}
           destructive
           title="Turn off client links?"
-          description="The client upload, review and connect links stop working for good, including any copies a former owner kept. You can make new ones on a plan with client links."
+          description={`The client upload, review and connect links stop working for good, including any copies a former owner kept. You can make new ones ${blocked ? "once client links work again" : "on a plan with client links"}.`}
           confirmText="Turn off"
           onConfirm={onTurnOff}
         />

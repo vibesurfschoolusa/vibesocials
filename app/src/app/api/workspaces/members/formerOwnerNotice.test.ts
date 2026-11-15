@@ -359,3 +359,55 @@ describe("buildFormerOwnerEmail: on a plan without client links", () => {
     vi.unstubAllEnvs();
   });
 });
+
+// R22 client-journey L1: while the workspace is blocked no client link works
+// and none can be made; the copies work again once the block ends.
+describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
+  const base = { workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerName: "Sam", appBaseUrl: "https://app.example.com" };
+  const BLOCKED = "Client links don't work right now. This workspace is paused. Contact help@example.com.";
+
+  it("says the links don't work now, work again once the block ends, and offers Turn off", () => {
+    const email = buildFormerOwnerEmail({ ...base, uploadLink: true, reviewLink: true, clientLinksIncluded: true, workspaceBlocked: BLOCKED });
+    expect(email.subject).toBe("Turn off client links for Surf Co");
+    expect(email.text).toContain(
+      `Sam is no longer an owner of Surf Co. As an owner, Sam had access to its client upload link and client review link. ${BLOCKED}`,
+    );
+    expect(email.text).toContain(
+      'When they work again, so would the copies Sam kept. To stop that, open Settings, Team and press "Turn off client links".',
+    );
+    expect(email.text).not.toContain("Make new client links");
+    expect(email.text).not.toContain("still work");
+    expect(email.text).not.toContain("send the new");
+  });
+
+  it("one link: singular wording", () => {
+    const email = buildFormerOwnerEmail({ ...base, uploadLink: false, reviewLink: true, workspaceBlocked: BLOCKED });
+    expect(email.text).toContain(`Sam had access to its client review link. ${BLOCKED}`);
+    expect(email.text).toContain("When it works again, so would the copy Sam kept.");
+  });
+
+  it("the notice reads the pause and sends that email; with only a stopped connect link it sends none", async () => {
+    m.workspaceFindUnique.mockResolvedValue({ id: "ws-1", pausedAt: new Date("2026-11-10T00:00:00Z"), pausedReason: null });
+    await noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() });
+    expect(m.workspaceFindUnique.mock.calls[0][0].select).toMatchObject({ pausedAt: true, pausedReason: true });
+    const sent = m.sendEmail.mock.calls[0][0];
+    expect(sent.subject).toBe("Turn off client links for Surf Co");
+    expect(sent.text).toContain("This workspace is paused.");
+    expect(sent.text).toContain("When they work again, so would the copies Sam kept.");
+
+    m.sendEmail.mockClear();
+    m.uploadFindFirst.mockResolvedValue(null);
+    m.reviewFindFirst.mockResolvedValue(null);
+    m.connectFindFirst.mockResolvedValue({ createdById: "user-2" });
+    await expect(
+      noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() }),
+    ).resolves.toEqual({ clientLinksToReplace: false });
+    expect(m.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("active: the notice sends today's email", async () => {
+    m.workspaceFindUnique.mockResolvedValue({ id: "ws-1", pausedAt: null, pausedReason: null });
+    await noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() });
+    expect(m.sendEmail.mock.calls[0][0].subject).toBe("Make new client links for Surf Co");
+  });
+});

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planIncludes } from "@/lib/planFeatures";
 import { personLabel } from "@/lib/usageLimits";
+import { clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -32,6 +33,12 @@ import { workspaceLink } from "@/server/notifications/links";
  * (../../leave); the email says how many. R8-client-journey L1: so does a
  * demotion ([userId]/route.ts), and the email says when. R11-client-journey
  * L4: so does deleting the account (api/auth/account).
+ *
+ * R22 client-journey L1: while the workspace is blocked (a pause, or with
+ * billing on an ended trial or plan) no client link works and "Make new client
+ * links" is refused, but the copies work again when the block ends. So the
+ * email gives the panels' sentence and offers "Turn off client links", as on
+ * a plan without them.
  */
 
 /** The client connect link at the moment someone stopped being an owner. */
@@ -63,6 +70,8 @@ export function buildFormerOwnerEmail(input: {
   connectLink?: FormerOwnerConnectLink;
   /** False when the workspace's plan doesn't include client links (they are paused). */
   clientLinksIncluded?: boolean;
+  /** The link panels' sentence while the workspace is blocked; it wins over the plan. */
+  workspaceBlocked?: string | null;
   /** How many invite links the person made were turned off as they left or were demoted. */
   joinLinksRevoked?: number;
   /** The person was made a member rather than leaving. */
@@ -74,6 +83,9 @@ export function buildFormerOwnerEmail(input: {
   const { workspaceName, formerOwnerName } = input;
   const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
   const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0, stepDown(input));
+  if (input.workspaceBlocked) {
+    return pausedLinksEmail({ ...input, href, invites, blocked: input.workspaceBlocked });
+  }
   if (input.clientLinksIncluded === false) {
     return pausedLinksEmail({ ...input, href, invites });
   }
@@ -132,7 +144,11 @@ function inviteLinksLine(formerOwnerName: string, workspaceName: string, count: 
     : `The ${count} invite links ${formerOwnerName} made were turned off ${when}, so they can't be used to join ${workspaceName} again.`;
 }
 
-/** The plan doesn't include client links: the working ones are paused, and can be turned off. */
+/**
+ * The plan doesn't include client links, or the workspace is blocked
+ * (`blocked`, the panels' sentence): the links don't work now but would again,
+ * and can be turned off.
+ */
 function pausedLinksEmail(input: {
   workspaceName: string;
   formerOwnerName: string;
@@ -141,6 +157,7 @@ function pausedLinksEmail(input: {
   connectLink?: FormerOwnerConnectLink;
   href: string;
   invites: string | null;
+  blocked?: string;
 }): { subject: string; html: string; text: string } {
   const { workspaceName, formerOwnerName } = input;
   const paused = [
@@ -149,10 +166,17 @@ function pausedLinksEmail(input: {
     input.connectLink === "works" ? "client connect link" : null,
   ].filter((name): name is string => name !== null);
   const one = paused.length === 1;
-  const lines = [
-    `${formerOwnerName} is no longer an owner of ${workspaceName}. As an owner, ${formerOwnerName} had access to its ${listOf(paused)}. ${one ? "It is" : "They are"} paused, because this workspace's plan doesn't include client links.`,
-    `If the plan changes to one with client links (Growth or Pro), the copies ${formerOwnerName} kept would work again. To stop that, open Settings, Team and press "Turn off client links".`,
-  ];
+  const had = `${formerOwnerName} is no longer an owner of ${workspaceName}. As an owner, ${formerOwnerName} had access to its ${listOf(paused)}.`;
+  const turnOff = 'To stop that, open Settings, Team and press "Turn off client links".';
+  const lines = input.blocked
+    ? [
+        `${had} ${input.blocked}`,
+        `${one ? "When it works again, so would the copy" : "When they work again, so would the copies"} ${formerOwnerName} kept. ${turnOff}`,
+      ]
+    : [
+        `${had} ${one ? "It is" : "They are"} paused, because this workspace's plan doesn't include client links.`,
+        `If the plan changes to one with client links (Growth or Pro), the copies ${formerOwnerName} kept would work again. ${turnOff}`,
+      ];
   if (input.invites) lines.push(input.invites);
   return {
     subject: `Turn off client links for ${workspaceName}`,
@@ -184,6 +208,7 @@ export async function noticeOwnersOfFormerOwner(input: {
   const { workspaceId, formerOwnerId } = input;
   let links: { uploadLink: boolean; reviewLink: boolean; connectLink: FormerOwnerConnectLink };
   let clientLinksIncluded: boolean;
+  let workspaceBlocked: string | null;
   try {
     const [upload, review, connect, workspace] = await Promise.all([
       prisma.workspaceUploadLink.findFirst({ where: { workspaceId, revokedAt: null }, select: { id: true } }),
@@ -192,9 +217,13 @@ export async function noticeOwnersOfFormerOwner(input: {
         where: { workspaceId, revokedAt: null, expiresAt: { gt: new Date() } },
         select: { createdById: true },
       }),
-      prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, ...billingFieldsSelect() } }),
+      prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { id: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() },
+      }),
     ]);
     clientLinksIncluded = planIncludes(workspace ?? {}, "clientLinks");
+    workspaceBlocked = clientLinkCreateRefusal(workspace ?? {});
     let connectLink: FormerOwnerConnectLink = null;
     if (connect?.createdById === formerOwnerId) {
       connectLink = "stopped";
@@ -213,8 +242,8 @@ export async function noticeOwnersOfFormerOwner(input: {
     return { clientLinksToReplace: false };
   }
   if (!links.uploadLink && !links.reviewLink && !links.connectLink) return { clientLinksToReplace: false };
-  // Paused by the plan: a stopped connect link alone leaves nothing to turn off.
-  if (!clientLinksIncluded && !links.uploadLink && !links.reviewLink && links.connectLink !== "works") {
+  // Paused by the plan, or blocked: a stopped connect link alone leaves nothing to turn off.
+  if ((!clientLinksIncluded || workspaceBlocked) && !links.uploadLink && !links.reviewLink && links.connectLink !== "works") {
     return { clientLinksToReplace: false };
   }
 
@@ -235,6 +264,7 @@ export async function noticeOwnersOfFormerOwner(input: {
       formerOwnerName: former ? personLabel(former, true) || "A former owner" : "A former owner",
       ...links,
       clientLinksIncluded,
+      workspaceBlocked,
       joinLinksRevoked: input.joinLinksRevoked ?? 0,
       demoted: input.demoted ?? false,
       deletedAccount: input.deletedAccount ?? false,
