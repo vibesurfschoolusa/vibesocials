@@ -3,6 +3,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
+import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import {
   googleRefusedBody,
   listGbpLocations,
@@ -47,6 +48,12 @@ export async function POST(request: Request) {
         { error: "Reply comment is required" },
         { status: 400 }
       );
+    }
+
+    // R17 L1: Google refuses a reply over 4096 bytes (a 400 that would never
+    // pass on retry), so nothing over the limit is sent.
+    if (replyTooLong(comment)) {
+      return NextResponse.json({ error: REPLY_TOO_LONG_MESSAGE }, { status: 400 });
     }
 
     if (!reviewName || typeof reviewName !== "string") {

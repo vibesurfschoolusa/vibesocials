@@ -57,3 +57,15 @@ describe("ReviewsView and a member", () => {
     expect(source).not.toContain("SETTINGS_CONNECTIONS_HREF");
   });
 });
+
+// R17-client-journey addendum L1: one length rule, shared with the route.
+describe("ReviewsView and Google's length limit", () => {
+  it("refuses an over-long reply before the confirm dialog and before posting", () => {
+    expect(source).toContain('from "@/lib/reviewReplyLength"');
+    const request = source.slice(at("const requestReply"), at("const performReply"));
+    expect(request).toContain("replyTooLong(comment)");
+    expect(request).toContain("toast.error(REPLY_TOO_LONG_MESSAGE)");
+    const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
+    expect(perform).toContain("replyTooLong(comment)");
+  });
+});

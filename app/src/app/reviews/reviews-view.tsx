@@ -13,6 +13,7 @@ import { readApiError, shownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
+import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
@@ -194,6 +195,11 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       toast.error("Please enter a reply message");
       return;
     }
+    // R17 L1: the reply box disables Post too; this is the same rule.
+    if (replyTooLong(comment)) {
+      toast.error(REPLY_TOO_LONG_MESSAGE);
+      return;
+    }
 
     setConfirmTarget(review);
   };
@@ -204,7 +210,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   // lets the dialog close.
   const performReply = async (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
-    if (!comment) {
+    if (!comment || replyTooLong(comment)) {
       return;
     }
 

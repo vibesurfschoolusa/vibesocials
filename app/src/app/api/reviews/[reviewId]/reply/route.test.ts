@@ -162,3 +162,61 @@ describe("POST /api/reviews/[reviewId]/reply for a member", () => {
     await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
   });
 });
+
+// R17-client-journey addendum L1: Google's ReviewReply.comment "The maximum
+// length is 4096 bytes." (lead checked Google's docs, 2026-11-15).
+describe("POST /api/reviews/[reviewId]/reply and Google's length limit", () => {
+  const reviewName = "accounts/1/locations/2/reviews/r1";
+  const TOO_LONG =
+    "Your reply is too long for Google. Google allows 4,096 bytes, about 4,000 characters (emoji and accented letters count more). Shorten it and try again.";
+
+  it("sends a reply of exactly 4096 bytes", async () => {
+    const comment = "a".repeat(4096);
+    const response = await post({ comment, reviewName });
+
+    expect(response.status).toBe(200);
+    expect(replyToReviewMock).toHaveBeenCalledWith("tok", reviewName, comment);
+  });
+
+  it("refuses 4097 bytes with a plain 400 and sends nothing to Google", async () => {
+    const response = await post({ comment: "a".repeat(4097), reviewName });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: TOO_LONG });
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+    expect(listGbpLocationsMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a reply under 4096 characters but over 4096 bytes", async () => {
+    const comment = `${"é".repeat(2000)} ${"😀".repeat(30)}`;
+    expect(Array.from(comment).length).toBeLessThan(4096);
+
+    const response = await post({ comment, reviewName });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: TOO_LONG });
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  it("counts the trimmed reply, as sent", async () => {
+    const response = await post({ comment: `  ${"a".repeat(4096)}  `, reviewName });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("still refuses an empty reply as before", async () => {
+    const response = await post({ comment: "   ", reviewName });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Reply comment is required" });
+  });
+
+  it("keeps today's message when Google answers 400 for another reason", async () => {
+    replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 400)"), { status: 400 }));
+
+    const response = await post({ comment: "Thanks", reviewName });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: "Couldn't post your reply. Try again in a minute." });
+  });
+});
