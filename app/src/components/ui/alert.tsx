@@ -71,7 +71,8 @@ export const Alert = forwardRef<HTMLDivElement, AlertProps>(function Alert(
           {icon ?? <DefaultIcon aria-hidden />}
         </span>
       ) : null}
-      <div className="flex flex-col gap-1">
+      {/* R20 pages L2: min-w-0 lets the text shrink below its longest word (a long email address). */}
+      <div className="flex min-w-0 flex-col gap-1">
         {title ? <p className="text-sm font-semibold leading-none">{title}</p> : null}
         {children ? <div className="text-sm text-muted-foreground">{children}</div> : null}
       </div>

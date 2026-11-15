@@ -58,7 +58,8 @@ export function VerifyEmailNotice({
     <div className="px-4 pt-4 md:px-6">
       <Alert variant="warning" className="items-center p-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="text-foreground">
+          {/* R20 pages L2: the address is one long word; let it break at phone width. */}
+          <span className="min-w-0 break-words text-foreground">
             {email ? `Verify your email: we sent a link to ${email}.` : "Verify your email: we sent you a link."}
           </span>
           <Button size="sm" variant="outline" loading={sending} onClick={onResend}>

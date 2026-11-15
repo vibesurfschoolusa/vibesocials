@@ -60,3 +60,14 @@ describe("VerifyEmailNotice", () => {
     expect(html).toContain("Change it in Settings, Account");
   });
 });
+
+// R20 pages L2: a long address is one unbreakable word; at 375 px it ran out
+// of the banner. The sentence may shrink and break inside the word.
+describe("VerifyEmailNotice at phone width", () => {
+  it("lets the sentence with the address wrap", () => {
+    const html = renderToStaticMarkup(
+      createElement(VerifyEmailNotice, { email: "marketing.department@coastalrealtygroup.com", sending: false, onResend: () => {} }),
+    );
+    expect(html).toMatch(/<span class="min-w-0 break-words text-foreground">Verify your email: we sent a link to marketing\.department@coastalrealtygroup\.com\.<\/span>/);
+  });
+});

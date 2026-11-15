@@ -197,7 +197,8 @@ export function WorkspaceStatusAlert({
       <div className="px-4 pt-4 md:px-6">
         <Alert variant="warning" className="items-center p-3">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="text-foreground">{message}</span>
+            {/* R20 pages L2: the sentence names the address; let it break at phone width. */}
+            <span className="min-w-0 break-words text-foreground">{message}</span>
             <Button size="sm" variant="outline" loading={sending} onClick={onResend}>
               Send the link again
             </Button>

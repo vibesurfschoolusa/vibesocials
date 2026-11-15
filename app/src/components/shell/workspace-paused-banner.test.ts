@@ -43,6 +43,13 @@ describe("WorkspaceStatusAlert", () => {
     expect(html).toMatch(/<button[^>]*>.*Send the link again.*<\/button>/);
   });
 
+  // R20 pages L2: the sentence names the address, one unbreakable word that
+  // ran out of the banner at 375 px; it may shrink and break inside the word.
+  it("lets the sentence with the address wrap", () => {
+    const html = render({ blockedMessage: SENTENCE, emailUnconfirmed: true });
+    expect(html).toContain(`<span class="min-w-0 break-words text-foreground">${SENTENCE}</span>`);
+  });
+
   // R6-new-customer L4: a mistyped address can only be fixed in Settings.
   it("says where to fix a wrong address, with a link to Settings, Account", () => {
     const html = render({ blockedMessage: SENTENCE, emailUnconfirmed: true });
