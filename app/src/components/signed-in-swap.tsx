@@ -15,8 +15,18 @@ export type SignedInAccount = { name: string | null; email: string | null };
 export function useSignedInAccount(): SignedInAccount | null {
   const session = useContext(SessionContext);
   if (session?.status !== "authenticated") return null;
-  const user = session.data?.user;
-  return { name: user?.name ?? null, email: user?.email ?? null };
+  return accountOf(session.data?.user);
+}
+
+/**
+ * The account a session names, or null. A session the server ended answers
+ * {"expires":"1970-..."} with no user, which next-auth 4.24 still calls
+ * "authenticated" (auth.ts: an invalid sessionVersion expires the session);
+ * that is nobody, so the header's Dashboard can't loop back to the landing.
+ */
+function accountOf(user: { name?: string | null; email?: string | null } | null | undefined): SignedInAccount | null {
+  if (!user?.email && !user?.name) return null;
+  return { name: user.name ?? null, email: user.email ?? null };
 }
 
 /** Which cached account a server answer was about. */
@@ -35,8 +45,7 @@ export async function readServerAccount(
   read: () => Promise<Session | null> = () => getSession({ broadcast: false }),
 ): Promise<SignedInAccount | null> {
   try {
-    const user = (await read())?.user;
-    return user ? { name: user.name ?? null, email: user.email ?? null } : null;
+    return accountOf((await read())?.user);
   } catch {
     return null;
   }

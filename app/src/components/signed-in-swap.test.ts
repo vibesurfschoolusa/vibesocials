@@ -75,3 +75,35 @@ describe("the server's answer behind the signed-in notice", () => {
     expect(shownAccount(accountKey({ name: null, email: "other@example.com" }), { key: key!, account: OWNER })).toBeNull();
   });
 });
+
+// DD1 review: a session the server ended answers {"expires":"1970-..."} with
+// no user, and next-auth still calls that "authenticated". The header's
+// Dashboard and About's button must read it as signed out, or Dashboard ->
+// landing -> Dashboard loops.
+describe("a cached session with no user", () => {
+  async function swap(value: unknown): Promise<string> {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { SessionContext } = await import("next-auth/react");
+    const { SignedInSwap } = await import("./signed-in-swap");
+    return renderToStaticMarkup(
+      createElement(
+        SessionContext.Provider as never,
+        { value } as never,
+        createElement(SignedInSwap, { signedIn: "IN", signedOut: "OUT" }),
+      ),
+    );
+  }
+
+  it("is signed out when the server's answer has no user", async () => {
+    expect(await swap({ status: "authenticated", data: { expires: "1970-01-01T00:00:00.000Z" } })).toBe("OUT");
+  });
+
+  it("is signed out when the user has neither an email nor a name", async () => {
+    expect(await swap({ status: "authenticated", data: { user: {}, expires: "2099-01-01T00:00:00Z" } })).toBe("OUT");
+  });
+
+  it("is signed in for a real user", async () => {
+    expect(await swap({ status: "authenticated", data: { user: OWNER, expires: "2099-01-01T00:00:00Z" } })).toBe("IN");
+  });
+});
