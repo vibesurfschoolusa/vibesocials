@@ -2562,16 +2562,19 @@ describe("xClient.publishVideo — several photos in one post (07b)", () => {
     expect(x.tweets()).toHaveLength(0);
   });
 
-  it("the second photo cannot be read from storage: no tweet, one clear message", async () => {
-    const x = stubX({ blob: { 2: () => new Response(null, { status: 404 }) } });
+  it.each([404, 503])("the second photo cannot be read from storage (%i): no tweet, one clear message, owner and member", async (status) => {
+    const x = stubX({ blob: { 2: () => new Response(null, { status }) } });
 
     const error = await failure(photosCtx(photos(2)));
 
     expect(error?.code).toBe("X_MEDIA_DOWNLOAD_FAILED");
-    expect(error?.status).toBe(404);
-    expect(error?.message).toBe(
-      "Photo 2 of 2 couldn't be read from storage, so no post was created. Try again; if it fails again, create the post again with that photo.",
-    );
+    expect(error?.status).toBe(status);
+    const sentence =
+      "Photo 2 of 2 couldn't be read from storage, so no post was created. Try again; if it fails again, create the post again with that photo.";
+    expect(error?.message).toBe(sentence);
+    // R19 follow-up: a 5xx from our storage is not X having a problem.
+    expect(publishErrorMessage("x", error!)).toBe(sentence);
+    expect(sentenceForRecipient(publishErrorMessage("x", error!), "x", "member")).toBe(sentence);
     expect(x.tweets()).toHaveLength(0);
   });
 

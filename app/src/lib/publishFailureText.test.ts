@@ -19,6 +19,8 @@ import {
   publishErrorMessage,
   reconnectRequiredMessage,
   sentenceForRecipient,
+  STORAGE_READ_CODES,
+  storageReadFailedMessage,
 } from "./publishFailureText";
 
 describe("dispatch sentences (F1 H1)", () => {
@@ -193,6 +195,50 @@ describe("publishErrorMessage (F1 L7)", () => {
       status: 400,
     });
     expect(publishErrorMessage("pinterest", refused)).toBe(platformRefusedMessage("pinterest"));
+  });
+
+  // R19 publishing L2 follow-up: our storage failing to give the file back is
+  // never the platform's fault, whatever status storage answered.
+  describe("a file our storage couldn't give back", () => {
+    const FILE_SENTENCE =
+      "The file couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the file.";
+    const withStatus = (message: string, code: string, status: number) => Object.assign(coded(message, code), { status });
+
+    it.each([401, 403, 404, 429, 500, 503])("status %i: the client's storage sentence, owner and member", (status) => {
+      const sentence = storageReadFailedMessage("video");
+      const read = publishErrorMessage("youtube", withStatus(sentence, "YOUTUBE_FETCH_MEDIA_FAILED", status));
+      expect(read).toBe(sentence);
+      expect(sentenceForRecipient(read, "youtube", "member")).toBe(sentence);
+    });
+
+    it("a storage text with a status line or internals reads the plain file sentence", () => {
+      expect(
+        publishErrorMessage(
+          "pinterest",
+          withStatus("Failed to download video from storage (status 503)", "PINTEREST_VIDEO_DOWNLOAD_FAILED", 503),
+        ),
+      ).toBe(FILE_SENTENCE);
+      expect(publishErrorMessage("x", withStatus("fetch failed ECONNRESET", "X_MEDIA_DOWNLOAD_FAILED", 502))).toBe(FILE_SENTENCE);
+    });
+
+    it("a chunked upload's blob read keeps its own storage text on a 5xx", () => {
+      const text = "The stored video couldn't be read. Nothing was posted. Try again; if it fails again, create the post again with the video.";
+      expect(publishErrorMessage("linkedin", withStatus(text, "BLOB_READ_FAILED", 503))).toBe(text);
+    });
+
+    it("covers every storage-download code the platform clients throw", () => {
+      const root = join(process.cwd(), "src/server/platforms");
+      const codes = new Set(
+        (readdirSync(root, { recursive: true }) as string[])
+          .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+          .flatMap((name) => [
+            ...readFileSync(join(root, name), "utf8").matchAll(/"([A-Z_]*(?:DOWNLOAD_FAILED|FETCH_(?:VIDEO|MEDIA)_FAILED|BLOB_READ_FAILED))"/g),
+          ])
+          .map((m) => m[1]),
+      );
+      expect(codes.size).toBeGreaterThanOrEqual(7);
+      for (const code of codes) expect(STORAGE_READ_CODES.has(code), code).toBe(true);
+    });
   });
 });
 

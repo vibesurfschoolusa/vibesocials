@@ -2363,9 +2363,9 @@ describe("youtubeClient.publishVideo — a video storage can't give back", () =>
     vi.restoreAllMocks();
   });
 
-  it("says so, code and status kept, and sends nothing to YouTube", async () => {
+  it.each([404, 503])("storage answers %i: says so, code and status kept, and sends nothing to YouTube", async (status) => {
     const fetchMock = vi.fn<typeof fetch>((input) => {
-      if (String(input).includes("blob.example.com")) return Promise.resolve(new Response(null, { status: 404 }));
+      if (String(input).includes("blob.example.com")) return Promise.resolve(new Response(null, { status }));
       throw new Error(`Unexpected fetch in test: ${String(input)}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -2376,7 +2376,8 @@ describe("youtubeClient.publishVideo — a video storage can't give back", () =>
     ))!;
 
     expect(error.code).toBe("YOUTUBE_FETCH_MEDIA_FAILED");
-    expect(error.status).toBe(404);
+    // The status stays for retry classification (a 503 is retried as before).
+    expect(error.status).toBe(status);
     const sentence =
       "The video couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the video.";
     expect(error.message).toBe(sentence);

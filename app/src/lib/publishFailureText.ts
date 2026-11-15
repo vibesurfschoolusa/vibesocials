@@ -204,7 +204,7 @@ export function platformRefusedMessage(platform: Platform): string {
  * nothing reached the platform, so its rules are not the cause. The words of
  * the several-photos sentence ("Photo 2 of 3 couldn't be read from storage").
  */
-export function storageReadFailedMessage(kind: "photo" | "video"): string {
+export function storageReadFailedMessage(kind: "photo" | "video" | "file"): string {
   return `The ${kind} couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the ${kind}.`;
 }
 
@@ -216,6 +216,22 @@ export function asStorageReadFailure(error: unknown, kind: "photo" | "video"): u
   if (error instanceof Error) error.message = storageReadFailedMessage(kind);
   return error;
 }
+
+/**
+ * The codes the clients and largeUpload.ts give a failure to read the post's
+ * own stored file. Storage, not the platform, answered, so the text never
+ * depends on its status (R19 publishing L2 follow-up). Literals: this module
+ * imports nothing from the server; its test checks the clients against it.
+ */
+export const STORAGE_READ_CODES: ReadonlySet<string> = new Set([
+  "X_MEDIA_DOWNLOAD_FAILED",
+  "TIKTOK_FETCH_VIDEO_FAILED",
+  "LINKEDIN_IMAGE_DOWNLOAD_FAILED",
+  "LINKEDIN_VIDEO_DOWNLOAD_FAILED",
+  "YOUTUBE_FETCH_MEDIA_FAILED",
+  "PINTEREST_VIDEO_DOWNLOAD_FAILED",
+  "BLOB_READ_FAILED",
+]);
 
 /** The platform answered 5xx, still after the in-step retries (review round 2, item 3). */
 export function platformDownMessage(platform: Platform): string {
@@ -264,7 +280,8 @@ export function hasInternalDetail(text: string): boolean {
 
 /**
  * The errorMessage stored for a platform error (L7; review round 2, item 3). In
- * order: a token refresh failure reads the reconnect sentence only when it was
+ * order: a failure to read our own stored file reads its storage sentence,
+ * whatever its status ({@link STORAGE_READ_CODES}); a token refresh failure reads the reconnect sentence only when it was
  * refused for good, that is when the refresher flagged the connection
  * (`connectionNeedsReconnect`; it never flags a 429, a 5xx or our own
  * invalid_client), or, when the caller cannot tell, on a 400/401; otherwise
@@ -285,6 +302,12 @@ export function publishErrorMessage(
   const statusLine = HTTP_STATUS_LINE.exec(message);
   const status =
     typeof error.status === "number" ? error.status : statusLine ? Number(statusLine[1]) : null;
+
+  // Our storage, not the platform, failed: its own sentence whatever the
+  // status (a 401 or a 5xx from storage says nothing about the platform).
+  if (STORAGE_READ_CODES.has(code)) {
+    return message !== "" && statusLine === null && !INTERNALS.test(message) ? message : storageReadFailedMessage("file");
+  }
 
   if (REFRESH_FAILED_CODE.test(code)) {
     const refusedForGood = error.connectionNeedsReconnect ?? (status === 400 || status === 401);
