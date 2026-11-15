@@ -329,8 +329,12 @@ describe("proactiveRefreshWhere: which workspaces' connections", () => {
   });
 
   it("keeps the connection part as it was", () => {
-    const { workspace: _workspace, ...rest } = proactiveRefreshWhere(NOW, ON);
-    expect(rest).toEqual({ needsReconnect: false, refreshToken: { not: null }, OR: proactiveRefreshWhere(NOW, OFF).OR });
+    expect(proactiveRefreshWhere(NOW, ON)).toEqual({
+      workspace: expect.anything(),
+      needsReconnect: false,
+      refreshToken: { not: null },
+      OR: proactiveRefreshWhere(NOW, OFF).OR,
+    });
   });
 });
 
