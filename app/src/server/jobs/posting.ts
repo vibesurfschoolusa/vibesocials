@@ -21,10 +21,12 @@ import { BILLING_FIELDS_SELECT } from "@/lib/billing";
 import { blockedResultFailure, PLAN_ENDED_CODE, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
 import {
   FreeRunRefusedError,
+  LimitCheckFailedError,
   recordSend,
   reserveFreeRuns,
   reserveFreeRunsIn,
   sendRecorded,
+  type FreeRunReservation,
   type WrittenSends,
 } from "@/server/usage/usageLog";
 import {
@@ -483,7 +485,11 @@ export async function immediateStoryCanSend(args: {
  * transaction, under the service-wide lock for a free workspace. Past a
  * limit it throws FreeRunRefusedError, so the post and its results are
  * rolled back and the route answers with the sentence. The route takes back
- * the written runs if the hand-over then fails.
+ * the written runs if the hand-over then fails. R9-new-customer L2: when the
+ * limits can't be checked it throws LimitCheckFailedError (rolled back the
+ * same way; the route answers 503). The wait for the service-wide lock is
+ * bounded (lock_timeout, for the rest of this transaction only), so a long
+ * queue ends in that error well inside the transaction's own timeout.
  */
 async function reserveImmediateRuns(
   tx: Prisma.TransactionClient,
@@ -498,13 +504,19 @@ async function reserveImmediateRuns(
   const sending = args.jobs.filter(([id, rows]) => id && hasPending(rows)).map(([id]) => id as string);
   if (sending.length === 0) return undefined;
   const day = new Date();
-  const reservation = await reserveFreeRunsIn(tx, {
-    workspaceId: args.workspaceId,
-    postJobIds: sending,
-    at: day,
-    check: "now",
-    viewerUserId: args.viewerUserId,
-  });
+  let reservation: FreeRunReservation;
+  try {
+    await tx.$executeRaw`SET LOCAL lock_timeout = '8s'`;
+    reservation = await reserveFreeRunsIn(tx, {
+      workspaceId: args.workspaceId,
+      postJobIds: sending,
+      at: day,
+      check: "now",
+      viewerUserId: args.viewerUserId,
+    });
+  } catch (error) {
+    throw new LimitCheckFailedError(error);
+  }
   if (!reservation.ok) throw new FreeRunRefusedError(reservation.refusal, reservation.ceiling ? day : null);
   return reservation.written.length > 0 ? { postJobIds: reservation.written, day } : undefined;
 }

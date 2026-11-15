@@ -971,6 +971,21 @@ export class FreeRunRefusedError extends Error {
   }
 }
 
+/**
+ * R9-new-customer L2: thrown inside a create transaction (Post now) when
+ * today's limits could not be checked (the service-wide lock waited too
+ * long, or a database error), so nothing is created. The route answers 503
+ * with `refusal`, the sentence publish, approve and retry give.
+ */
+export class LimitCheckFailedError extends Error {
+  readonly refusal: LimitRefusal = { error: LIMIT_CHECK_FAILED_MESSAGE, code: LIMIT_CHECK_FAILED_CODE };
+
+  constructor(cause: unknown) {
+    super(LIMIT_CHECK_FAILED_MESSAGE, { cause });
+    this.name = "LimitCheckFailedError";
+  }
+}
+
 type RetryCountClient = { usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "count" | "findMany"> };
 
 /** Older per-platform retry rows (before R7-security L1) of a post today, once per request. */

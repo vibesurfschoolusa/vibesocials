@@ -36,6 +36,7 @@ const {
 // transaction; usageLog.caps.test.ts covers the counting and the lock.
 vi.mock("@/server/usage/usageLog", async (importOriginal) => ({
   FreeRunRefusedError: (await importOriginal<typeof import("@/server/usage/usageLog")>()).FreeRunRefusedError,
+  LimitCheckFailedError: (await importOriginal<typeof import("@/server/usage/usageLog")>()).LimitCheckFailedError,
   recordSend: recordSendMock,
   reserveFreeRunsIn: reserveInMock,
   reserveFreeRuns: vi.fn(),
@@ -85,7 +86,8 @@ import {
   resolvePostCaptionSource,
 } from "./posting";
 import { PostTargetingError } from "@/lib/postTargets";
-import { FreeRunRefusedError } from "@/server/usage/usageLog";
+import { LIMIT_CHECK_FAILED_CODE, LIMIT_CHECK_FAILED_MESSAGE } from "@/lib/usageLimits";
+import { FreeRunRefusedError, LimitCheckFailedError } from "@/server/usage/usageLog";
 
 
 function makeMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
@@ -277,6 +279,29 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     const attempt = createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
     await expect(attempt).rejects.toBeInstanceOf(FreeRunRefusedError);
     await expect(attempt).rejects.toMatchObject({ refusal });
+  });
+
+  // R9-new-customer L2: today's limits could not be checked, so nothing is created and the route answers 503.
+  it("a reservation that fails (the lock waited too long, a database error) throws LimitCheckFailedError", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube" })]);
+    executeRawMock.mockReset();
+    const order: string[] = [];
+    executeRawMock.mockImplementation(async (strings: TemplateStringsArray) => {
+      order.push(strings.join("?"));
+      return 0;
+    });
+    reserveInMock.mockImplementationOnce(async () => {
+      order.push("reserve");
+      throw Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+    });
+    const attempt = createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
+    await expect(attempt).rejects.toBeInstanceOf(LimitCheckFailedError);
+    await expect(attempt).rejects.toMatchObject({
+      refusal: { error: LIMIT_CHECK_FAILED_MESSAGE, code: LIMIT_CHECK_FAILED_CODE },
+    });
+    // The wait for the service-wide lock is bounded inside the create transaction, before the reservation.
+    expect(order).toEqual(["SET LOCAL lock_timeout = '8s'", "reserve"]);
+    executeRawMock.mockReset();
   });
 
   // R8-publishing M1: a Post now with nothing it can send needs no publish run.
