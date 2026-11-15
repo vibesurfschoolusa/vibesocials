@@ -20,7 +20,7 @@ export const metadata = {
 
 export default function DataDeletionPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
       <div className="w-full max-w-3xl rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card p-8 text-card-foreground shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-foreground">Delete your data</h1>
@@ -149,6 +149,6 @@ export default function DataDeletionPage() {
           </section>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
