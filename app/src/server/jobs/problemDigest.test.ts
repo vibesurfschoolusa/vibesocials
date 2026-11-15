@@ -128,12 +128,12 @@ describe("collectProblemDigests", () => {
     ]);
   });
 
-  it("matches a post waiting for approval the way deriveApprovalState does, for drafts", async () => {
+  it("matches a post waiting for approval exactly as Needs you: a held draft or scheduled post", async () => {
     await collectProblemDigests(NOW);
 
     const call = db.postJobFindMany.mock.calls.find(([args]) => !("results" in args.where));
     expect(call?.[0]).toEqual({
-      where: { status: "draft", submittedForApprovalAt: { not: null }, approvedAt: null },
+      where: { status: { in: ["draft", "scheduled"] }, submittedForApprovalAt: { not: null }, approvedAt: null },
       select: { id: true, workspaceId: true, storyOfPostJobId: true },
     });
   });

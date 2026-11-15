@@ -1,5 +1,6 @@
 import type { Platform, Prisma, WorkspaceRole } from "@prisma/client";
 
+import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
 import { countPostsOnce, withoutPairedStories, type PairableJob } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import { utcMonthRange } from "@/lib/usageLimits";
@@ -24,7 +25,7 @@ export interface WorkspaceOverviewEntry {
   /** Posts with at least one successful result finished in the current UTC month. */
   postsThisMonth: number;
   scheduled: number;
-  /** Drafts submitted for approval and not yet decided. */
+  /** Draft or scheduled posts submitted for approval and not yet decided (as Needs you). */
   waitingForApproval: number;
   /** Draft or scheduled posts a client asked to change. */
   clientChangesRequested: number;
@@ -43,11 +44,11 @@ export interface WorkspaceOverviewEntry {
 const FAILURE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SCHEDULED: Prisma.PostJobWhereInput = { status: "scheduled" };
-// isHeldForApproval (lib/approval.ts): a draft whose deriveApprovalState is
-// "pending" — submitted, not approved; a draft is never the cancelled status
-// that reads as "rejected".
+// The dashboard summary's AWAITING_APPROVAL, so every surface shows one
+// number: a draft or scheduled row submitted and never approved (the status
+// list keeps out the cancelled rows that read as "rejected").
 const WAITING_FOR_APPROVAL: Prisma.PostJobWhereInput = {
-  status: "draft",
+  status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
   submittedForApprovalAt: { not: null },
   approvedAt: null,
 };
@@ -177,7 +178,10 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
   const pairedScheduled = pairedStories(pairRows, (row) => row.status === "scheduled");
   const pairedWaiting = pairedStories(
     pairRows,
-    (row) => row.status === "draft" && row.submittedForApprovalAt != null && row.approvedAt == null,
+    (row) =>
+      (APPROVAL_DECIDABLE_STATUSES as readonly string[]).includes(row.status) &&
+      row.submittedForApprovalAt != null &&
+      row.approvedAt == null,
   );
   const pairedClientChanges = pairedStories(
     pairRows,

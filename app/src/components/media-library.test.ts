@@ -62,6 +62,22 @@ describe("MediaCard at phone width", () => {
   });
 });
 
+// Review of M3: two cards side by side at 320-430 px cut "Use in new post".
+// The page is px-4 below md, so one column gives a card 288 px wide at 320 px,
+// 343 px at 375 px and 398 px at 430 px (264, 319 and 374 px inside its p-3):
+// the full-width label (about 150 px with its icon and padding) and Delete fit.
+describe("the media grid", () => {
+  const source = readFileSync(fileURLToPath(new URL("./media-library.tsx", import.meta.url)), "utf8");
+
+  it("is one column below sm, for the list and for its loading placeholders", () => {
+    const grids = source.match(/className="grid grid-cols-[^"]*"/g) ?? [];
+    expect(grids).toHaveLength(2);
+    for (const grid of grids) {
+      expect(grid).toBe('className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"');
+    }
+  });
+});
+
 // R5-pages L8: what happened and what to do next, never "Unexpected error".
 describe("the media library's error sentences", () => {
   const source = readFileSync(fileURLToPath(new URL("./media-library.tsx", import.meta.url)), "utf8");

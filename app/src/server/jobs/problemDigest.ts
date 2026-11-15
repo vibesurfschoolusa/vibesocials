@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 import { RetryAfterError } from "inngest";
 
+import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
 import { countPostsOnce, type PairableJob } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -74,7 +75,7 @@ function emptyProblems(workspaceId: string): Omit<ProblemDigestWorkspace, "name"
  * One digest per owner who wants the email and owns at least one workspace with
  * a problem: a result that failed in the 24 hours before `now` (and is still
  * failed, so a retry that succeeded does not count), a connection that needs
- * reconnecting, or a post waiting for approval. Ordered by user id, so a re-run
+ * reconnecting, or a post waiting for approval (draft or scheduled, as Needs you). Ordered by user id, so a re-run
  * that hits the cap picks the same owners.
  */
 export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]> {
@@ -101,12 +102,12 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
       where: { needsReconnect: true },
       select: { workspaceId: true, platform: true },
     }),
-    // Held for approval: a draft submitted and not yet decided. The status
-    // filter is what keeps a rejected (cancelled) post out, as in
-    // deriveApprovalState / isHeldForApproval (lib/approval.ts). Rows, not a
+    // Held for approval, exactly as Needs you counts it: a draft or scheduled
+    // post submitted and not yet decided. The status list keeps a rejected
+    // (cancelled) post out (lib/approval.ts). Rows, not a
     // grouped count, so a Feed and Story pair counts once; few posts wait.
     prisma.postJob.findMany({
-      where: { status: "draft", submittedForApprovalAt: { not: null }, approvedAt: null },
+      where: { status: { in: [...APPROVAL_DECIDABLE_STATUSES] }, submittedForApprovalAt: { not: null }, approvedAt: null },
       select: { id: true, workspaceId: true, storyOfPostJobId: true },
     }),
   ]);

@@ -249,15 +249,31 @@ describe("getWorkspacesOverview", () => {
     });
   });
 
-  it("counts waiting for approval as an undecided draft, as deriveApprovalState does", async () => {
+  it("counts waiting for approval exactly as Needs you: a held draft or scheduled post", async () => {
     await getWorkspacesOverview("user-1", NOW);
 
     expect(postJobCall("approval").where).toEqual({
       workspaceId: { in: ["ws-calm", "ws-busy"] },
-      status: "draft",
+      status: { in: ["draft", "scheduled"] },
       submittedForApprovalAt: { not: null },
       approvedAt: null,
     });
+  });
+
+  it("counts an old scheduled, submitted, unapproved Feed and Story pair as one post waiting", async () => {
+    servePostJobGroups({ approval: [count("ws-busy", 2)], scheduled: [count("ws-busy", 2)] });
+    const held = { status: "scheduled", submittedForApprovalAt: new Date("2026-09-01T00:00:00Z"), approvedAt: null };
+    serveJobs({
+      jobs: [
+        { id: "feed-9", workspaceId: "ws-busy", storyOfPostJobId: null, ...held },
+        { id: "story-9", workspaceId: "ws-busy", storyOfPostJobId: "feed-9", ...held },
+      ],
+    });
+
+    const busy = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-busy");
+
+    expect(busy?.waitingForApproval).toBe(1);
+    expect(busy?.needsAttention).toBe(true);
   });
 
   it("counts posts this month from successful results inside the current UTC month", async () => {

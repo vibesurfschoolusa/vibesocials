@@ -33,29 +33,45 @@ function FileRow({ item, onRemove }: { item: PickedFile; onRemove?: () => void }
   return <UploadFileRow item={item} previewUrl={previewUrl} onRemove={onRemove} />;
 }
 
+const NETWORK_MESSAGE = "Couldn't reach Vibe Socials. Check your connection and try again.";
+
+/**
+ * What a failed file says, and whether the connection is to blame. The fetch
+ * TypeError ("Failed to fetch") becomes a plain sentence. send-file.ts already
+ * phrases its own network failures with "Check your connection"; a server's
+ * answer (link off, storage full, today's limit, file refused) never does.
+ */
+export function failureSentence(error: unknown): { network: boolean; message: string } {
+  if (error instanceof TypeError || !(error instanceof Error) || !error.message) {
+    return { network: true, message: NETWORK_MESSAGE };
+  }
+  return { network: /check your connection/i.test(error.message), message: error.message };
+}
+
+function nothingSentText(errors: string[]): string {
+  const one = errors.length === 1;
+  const network = errors.every((message) => failureSentence(new Error(message)).network);
+  if (network) {
+    return `${one ? "The file didn't arrive. The reason is under it." : `None of the ${errors.length} files arrived. The reason is under each file.`} Check your connection, then try again with the button below.`;
+  }
+  // A server's reason is not the connection's fault: say it when it is the only one.
+  if (new Set(errors).size === 1) {
+    return `${one ? "The file wasn't sent." : `None of the ${errors.length} files were sent.`} ${errors[0]}`;
+  }
+  return "None of the files were sent. See the reason under each file.";
+}
+
 /**
  * What arrived, once every file was tried. R5-pages L9: when none arrived it is
  * an alert, so a screen reader hears it, where before the page said nothing.
+ * `errors` are the failed files' messages.
  */
-export function UploadSummary({
-  sentCount,
-  failedCount,
-  total,
-}: {
-  sentCount: number;
-  failedCount: number;
-  total: number;
-}) {
-  if (sentCount === 0 && failedCount > 0) {
+export function UploadSummary({ sentCount, errors, total }: { sentCount: number; errors: string[]; total: number }) {
+  if (sentCount === 0 && errors.length > 0) {
     return (
       <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
         <p className="text-lg font-semibold">Nothing was sent</p>
-        <p className="mt-1 text-sm">
-          {failedCount === 1
-            ? "The file didn't arrive. The reason is under it."
-            : `None of the ${failedCount} files arrived. The reason is under each file.`}{" "}
-          Check your connection, then try again with the button below.
-        </p>
+        <p className="mt-1 text-sm">{nothingSentText(errors)}</p>
       </div>
     );
   }
@@ -101,10 +117,7 @@ export function UploadLinkForm({ token }: { token: string }) {
         });
         update(item.key, { status: "sent", progress: 100 });
       } catch (error) {
-        update(item.key, {
-          status: "failed",
-          error: error instanceof Error ? error.message : "Couldn't send this file. Try again.",
-        });
+        update(item.key, { status: "failed", error: failureSentence(error).message });
       }
     }
     setPhase("done");
@@ -130,7 +143,11 @@ export function UploadLinkForm({ token }: { token: string }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       {phase === "done" ? (
-        <UploadSummary sentCount={sentCount} failedCount={failedCount} total={files.length} />
+        <UploadSummary
+          sentCount={sentCount}
+          errors={files.flatMap((item) => (item.status === "failed" ? [item.error ?? NETWORK_MESSAGE] : []))}
+          total={files.length}
+        />
       ) : null}
 
       {phase !== "done" ? (
