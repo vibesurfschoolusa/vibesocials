@@ -923,6 +923,8 @@ describe("splitEventsBySize", () => {
   });
 });
 
+const SEND_DAY = new Date("2026-11-14T15:00:00Z");
+
 describe("materializeAndDispatchChunk", () => {
   const sleep = vi.fn<(ms: number) => Promise<void>>();
   const send = vi.fn<(events: unknown[]) => Promise<unknown>>();
@@ -956,17 +958,17 @@ describe("materializeAndDispatchChunk", () => {
 
   // Second review of K2, point 2: a send exists only for a post handed to publishing.
   it("a rejected send takes back the sends this attempt wrote for its events", async () => {
-    prepareDeferredMock.mockImplementation(async (id: string) => ({ ...okFor(id), sendsWritten: [id] }));
+    prepareDeferredMock.mockImplementation(async (id: string) => ({ ...okFor(id), sendsWritten: { postJobIds: [id], day: SEND_DAY } }));
     send.mockRejectedValue(new Error("inngest down"));
 
     const out = await materializeAndDispatchChunk(ids(2), { send, sleep });
 
     expect(out.dispatchErrors).toBe(2);
-    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-0", "job-1"], day: expect.any(Date) });
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-0", "job-1"], day: SEND_DAY });
   });
 
   it("a rejected re-send keeps a send an earlier attempt that day wrote", async () => {
-    prepareDeferredMock.mockImplementation(async (id: string) => ({ ...okFor(id), sendsWritten: [] }));
+    prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
     send.mockRejectedValue(new Error("inngest down"));
 
     await materializeAndDispatchChunk(ids(2), { send, sleep });
@@ -978,14 +980,36 @@ describe("materializeAndDispatchChunk", () => {
     prepareDeferredMock.mockImplementation(async (id: string) => {
       if (id === "story") throw new Error("pool timeout");
       if (id === "other") throw new Error("pool timeout");
-      return { ...okFor(id), sendsWritten: ["feed", "story"] };
+      return { ...okFor(id), sendsWritten: { postJobIds: ["feed", "story"], day: SEND_DAY } };
     });
 
     const out = await materializeAndDispatchChunk(["feed", "story", "other"], { send, sleep });
 
     expect(out.errorIds).toEqual(["story", "other"]);
     expect(withdrawSendMock).toHaveBeenCalledTimes(1);
-    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story"], day: expect.any(Date) });
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story"], day: SEND_DAY });
+  });
+
+  // Third review: a half its feed reserved that has nothing to send loses that send; the feed keeps its own.
+  it("a pair half reserved by its feed with nothing to send: its send is taken back, the feed's stays", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "story"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ...okFor(id), sendsWritten: { postJobIds: ["feed", "story"], day: SEND_DAY } },
+    );
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    await materializeAndDispatchChunk(["feed", "story"], { send, sleep });
+
+    expect(withdrawSendMock).toHaveBeenCalledTimes(1);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story"], day: SEND_DAY });
+  });
+
+  it("a post with nothing to send whose send this attempt did not write takes nothing back", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    await materializeAndDispatchChunk(["lonely"], { send, sleep });
+    expect(withdrawSendMock).not.toHaveBeenCalled();
   });
 
   it("sends nothing for a chunk without an ok job", async () => {

@@ -15,7 +15,6 @@ const store = vi.hoisted(() => ({
   down: false,
   events: [] as Record<string, unknown>[],
   posts: [] as Record<string, unknown>[],
-  results: [] as Record<string, unknown>[],
   workspaces: [] as Array<Record<string, unknown> & { id: string; owners: Array<{ userId: string; user: unknown }> }>,
 }));
 
@@ -102,15 +101,7 @@ vi.mock("@/lib/db", () => {
       postJob: {
         findMany: async ({ where }: { where: Row }) => store.posts.filter((post) => matches(post, where)),
       },
-      postJobResult: {
-        findMany: async () => [],
-        findFirst: async ({ where }: { where: Row }) => {
-          if (store.down) throw new Error("db down");
-          return store.results
-            .filter((result) => matches(result, where))
-            .sort((a, b) => (a.createdAt as Date).getTime() - (b.createdAt as Date).getTime())[0] ?? null;
-        },
-      },
+      postJobResult: { findMany: async () => [] },
       workspaceMember: {
         findMany: async ({ where }: { where: { workspaceId?: string; userId?: string } }) =>
           where.workspaceId
@@ -140,7 +131,6 @@ import {
   recordSend,
   retryRefusal,
   serviceCapRefusalAtSend,
-  withdrawDispatchFailedSend,
   withdrawSend,
 } from "./usageLog";
 
@@ -184,7 +174,6 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   store.events = [];
   store.posts = [];
-  store.results = [];
   store.workspaces = [];
   store.down = false;
   vi.stubEnv("BILLING_ENABLED", "");
@@ -562,15 +551,6 @@ describe("withdrawing a send that was not handed to publishing", () => {
     expect(sendsOf("a")).toHaveLength(1);
   });
 
-  it("only a send written since the attempt began is removed; an earlier real send that day stays", async () => {
-    workspace("ws-1");
-    vi.setSystemTime(new Date("2026-11-14T09:00:00Z"));
-    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: new Date() });
-    vi.setSystemTime(NOW);
-    await withdrawSend({ postJobIds: ["a"], day: NOW, writtenSince: new Date("2026-11-14T14:59:00Z") });
-    expect(sendsOf("a")).toHaveLength(1);
-  });
-
   it("removes only that post's send for that day", async () => {
     workspace("ws-1");
     await recordSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], at: NOW });
@@ -578,30 +558,5 @@ describe("withdrawing a send that was not handed to publishing", () => {
     await withdrawSend({ postJobIds: ["story"], day: NOW });
     expect(sendsOf("feed")).toHaveLength(1);
     expect(sendsOf("story").map((event) => event.sourceId)).toEqual(["send:story:2026-11-13"]);
-  });
-});
-
-describe("withdrawDispatchFailedSend: after inngest.send threw", () => {
-  it("takes back the send written by the attempt that made the post's results", async () => {
-    workspace("ws-1");
-    store.results.push({ postJobId: "a", createdAt: new Date(NOW.getTime() - 1_000) });
-    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW });
-    await withdrawDispatchFailedSend("a", NOW);
-    expect(sendsOf("a")).toHaveLength(0);
-  });
-
-  it("keeps a send from before those results: a second attempt the same day after a real send", async () => {
-    workspace("ws-1");
-    vi.setSystemTime(new Date("2026-11-14T09:00:00Z"));
-    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: new Date() });
-    vi.setSystemTime(NOW);
-    store.results.push({ postJobId: "a", createdAt: new Date(NOW.getTime() - 1_000) });
-    await withdrawDispatchFailedSend("a", NOW);
-    expect(sendsOf("a")).toHaveLength(1);
-  });
-
-  it("never throws", async () => {
-    store.down = true;
-    await expect(withdrawDispatchFailedSend("a", NOW)).resolves.toBeUndefined();
   });
 });

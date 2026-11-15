@@ -232,20 +232,29 @@ export async function materializeClaimedJobs(
     errorIds: [],
   };
 
+  /** Takes back a send this call wrote for `postJobId`, and only such a send. */
+  const takeBack = async (postJobId: string) => {
+    const day = sendsWritten.get(postJobId);
+    if (!day) return;
+    sendsWritten.delete(postJobId);
+    await withdrawSend({ postJobIds: [postJobId], day });
+  };
+
   for (const postJobId of postJobIds) {
     try {
       await withMaterializeRetries(
         async () => {
           // R6-security M2: a scheduled post meets the service's daily cap as
           // it falls due, so posts scheduled far ahead cannot fill a day.
-          const at = new Date();
-          const prep = await prepareDeferredPostJobDispatch(postJobId, { serviceCapAt: at });
+          const prep = await prepareDeferredPostJobDispatch(postJobId, { serviceCapAt: new Date() });
           if (prep.ok) {
-            for (const id of prep.sendsWritten ?? []) sendsWritten.set(id, at);
+            for (const id of prep.sendsWritten?.postJobIds ?? []) sendsWritten.set(id, prep.sendsWritten!.day);
             // The scanner is not "Post now": `immediate: false` keeps the run at
             // priority 0 behind user-triggered publishes.
             batch.publishEvents.push(buildPublishEvent(prep.event, { immediate: false }));
           } else if (prep.reason === "NO_CONNECTIONS" || prep.reason === "LIMIT_REACHED") {
+            // Nothing to send: a send this call reserved for it (its feed's) goes.
+            await takeBack(postJobId);
             // The job is already marked failed, its results saying why; look up whom to tell.
             // A pair refused at send is told about once, as its feed (the
             // notice id is the post's, so a re-run sends it once too).
@@ -271,11 +280,7 @@ export async function materializeClaimedJobs(
       logger.error("[Inngest] Scheduled materialize failed", { postJobId, error });
       batch.errorIds.push(postJobId);
       // Not handed to publishing: a send reserved for it in this call goes.
-      const day = sendsWritten.get(postJobId);
-      if (day) {
-        await withdrawSend({ postJobIds: [postJobId], day });
-        sendsWritten.delete(postJobId);
-      }
+      await takeBack(postJobId);
     }
   }
 

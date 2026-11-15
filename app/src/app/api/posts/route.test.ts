@@ -21,6 +21,7 @@ const {
   failPendingMock,
   checkDailyPostLimitMock,
   headMock,
+  withdrawSendMock,
 } = vi.hoisted(() => ({
   headMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
@@ -34,7 +35,11 @@ const {
   notifyOwnersMock: vi.fn(),
   failPendingMock: vi.fn(),
   checkDailyPostLimitMock: vi.fn(),
+  withdrawSendMock: vi.fn(),
 }));
+
+// Third review of K2: a send the create helper wrote is taken back when the hand-over fails.
+vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
 
 // Team Workspaces (Task 4) — route.ts now resolves the caller via
 // `getWorkspaceContext` instead of `getCurrentUser` (design doc §3/§4).
@@ -202,6 +207,8 @@ beforeEach(() => {
   failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
   checkDailyPostLimitMock.mockReset();
   checkDailyPostLimitMock.mockResolvedValue(null);
+  withdrawSendMock.mockReset();
+  withdrawSendMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -715,6 +722,36 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
         errorMessage: "Couldn't start publishing. Please try again.",
       });
       consoleSpy.mockRestore();
+    });
+
+    // Third review of K2: a send exists only for a post handed to publishing.
+    it("takes back the send the create helper reported writing when the hand-over fails", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const sendsWritten = { postJobIds: ["job-1"], day: new Date("2026-11-14T15:00:00Z") };
+      createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"], sendsWritten });
+      inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+
+      const response = await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(response.status).toBe(503);
+      expect(withdrawSendMock).toHaveBeenCalledWith(sendsWritten);
+    });
+
+    it("takes back nothing when the helper wrote no send, or when the hand-over succeeds", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+      inngestSendMock.mockRejectedValueOnce(new Error("inngest unreachable"));
+      await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
+      createPostJobOnlyMock.mockResolvedValue({
+        postJobId: "job-1",
+        mediaItemId: "media-1",
+        resultIds: ["r1"],
+        sendsWritten: { postJobIds: ["job-1"], day: new Date() },
+      });
+      await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
+      expect(withdrawSendMock).not.toHaveBeenCalled();
     });
 
     it("does not touch results when the dispatch succeeds", async () => {

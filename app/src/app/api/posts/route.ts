@@ -37,6 +37,7 @@ import {
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
+import { withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
@@ -1273,6 +1274,8 @@ export async function POST(request: Request) {
     let storyPostJobId: string | undefined;
     // Null for a post without a photo.
     let mediaItemId: string | null;
+    // Third review of K2: the sends the helper wrote, taken back if the hand-over fails.
+    let sendsWritten: WrittenSends | undefined;
 
     if (textOnly) {
       // No MediaItem is written: the text lives on the job (baseCaption).
@@ -1293,6 +1296,7 @@ export async function POST(request: Request) {
         ...(series ? { series } : {}),
       });
       postJobId = created.postJobId;
+      sendsWritten = created.sendsWritten;
       mediaItemId = null;
     } else if (usingExistingMedia) {
       // assertMediaItemReusable (posting.ts) is workspace-scoped (Task 5): any
@@ -1321,6 +1325,7 @@ export async function POST(request: Request) {
         ...storyArgs,
       });
       postJobId = created.postJobId;
+      sendsWritten = created.sendsWritten;
       storyPostJobId = created.storyPostJobId;
       mediaItemId = created.mediaItemId;
     } else {
@@ -1365,6 +1370,7 @@ export async function POST(request: Request) {
         ...storyArgs,
       });
       postJobId = created.postJobId;
+      sendsWritten = created.sendsWritten;
       storyPostJobId = created.storyPostJobId;
       mediaItemId = created.mediaItemId;
     }
@@ -1490,6 +1496,8 @@ export async function POST(request: Request) {
         });
         await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
         if (storyPostJobId) await failPendingPostJobResults(storyPostJobId, DISPATCH_FAILURE);
+        // Not handed to publishing: the post counts toward no day until it is.
+        if (sendsWritten) await withdrawSend(sendsWritten);
         return NextResponse.json(
           {
             code: DISPATCH_FAILURE.errorCode,

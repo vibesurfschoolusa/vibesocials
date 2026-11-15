@@ -151,49 +151,27 @@ export async function recordSend(input: {
   }
 }
 
+/** The sends one attempt's recordSend wrote, carried to wherever that attempt is undone. */
+export type WrittenSends = { postJobIds: string[]; day: Date };
+
 /**
- * Second review of K2: a send exists only for a post handed to publishing.
- * Takes back these posts' sends for the UTC day of `day`: those a failed
- * hand-over wrote, or a pair half's reserved by its partner that turned out
- * to have nothing to send. `writtenSince` keeps a send written before it (a
- * real one, earlier that day). Never throws.
+ * Second and third reviews of K2: a send exists only for a post handed to
+ * publishing. Takes back sends an attempt's own recordSend reported writing,
+ * when that attempt's hand-over failed or its post had nothing to send; a
+ * send already there for the day (a real one, earlier) was never reported,
+ * so it is never taken. Never throws.
  */
-export async function withdrawSend(input: {
-  postJobIds: readonly string[];
-  day: Date;
-  writtenSince?: Date;
-}): Promise<void> {
+export async function withdrawSend(input: { postJobIds: readonly string[]; day: Date }): Promise<void> {
   if (input.postJobIds.length === 0) return;
   try {
     await prisma.usageEvent.deleteMany({
       where: {
         kind: USAGE_KIND.send,
         sourceId: { in: input.postJobIds.map((postJobId) => sendSourceId(postJobId, input.day)) },
-        ...(input.writtenSince ? { createdAt: { gte: input.writtenSince } } : {}),
       },
     });
   } catch (error) {
     logger.error("[usage] Couldn't take back a send (ignored)", { error });
-  }
-}
-
-/**
- * After inngest.send threw for a post (DISPATCH_FAILURE): takes back the send
- * written by the attempt that made its results. That attempt wrote its
- * results first and its send after them, so a send older than the post's
- * first result is not this attempt's and stays. Never throws.
- */
-export async function withdrawDispatchFailedSend(postJobId: string, now: Date): Promise<void> {
-  try {
-    const first = await prisma.postJobResult.findFirst({
-      where: { postJobId },
-      orderBy: { createdAt: "asc" },
-      select: { createdAt: true },
-    });
-    if (!first) return;
-    await withdrawSend({ postJobIds: [postJobId], day: now, writtenSince: first.createdAt });
-  } catch (error) {
-    logger.error("[usage] Couldn't take back the send of a post not handed over (ignored)", { error, postJobId });
   }
 }
 

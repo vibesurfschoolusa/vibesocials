@@ -837,6 +837,8 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
     expect(recordRetryMock.mock.calls[0][0].platforms).toEqual(["x", "facebook_page", "linkedin"]);
   });
 
+  // Third review: a post sent this morning and retried this afternoon whose
+  // hand-over fails keeps its morning send: the retry wrote none and takes none back.
   it("records nothing when the retry could not be started", async () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
     resultUpdateManyMock.mockResolvedValue({ count: 1 });
