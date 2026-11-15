@@ -13,7 +13,7 @@ import { TimeZoneSync } from "./time-zone-sync";
 import { VerifyEmailBanner } from "./verify-email-banner";
 import { WorkspacePausedBanner } from "./workspace-paused-banner";
 import { isPublicRoute } from "./nav";
-import { SignedOutAlert } from "./signed-out-alert";
+import { SignedOutAlert, useServerSaysSignedOut } from "./signed-out-alert";
 
 /**
  * App-wide chrome. `ToastProvider` wraps everything so toasts work on every
@@ -39,11 +39,13 @@ export function AppShell({ children, pricingPublic }: { children: ReactNode; pri
   //
   // R20 new-customer L1: an app route keeps the frame whatever the session says
   // later. Swapping the tree remounted the page and lost unsent work (a caption,
-  // a file); a session that now names nobody gets one signed-out line instead.
+  // a file); once the server confirms nobody, one signed-out line shows instead.
   const isPublic = isPublicRoute(pathname, { pricingPublic });
   const isAppRoute = !isPublic && pathname !== "/";
   const showShell = isAppRoute || (signedIn && !isPublic);
-  const signedOut = isAppRoute && status !== "loading" && !signedIn;
+  // FF1 review: the line waits for the server's own "signed out"; a failed
+  // session fetch also reads as nobody here.
+  const signedOut = useServerSaysSignedOut(isAppRoute && status !== "loading" && !signedIn);
 
   return (
     <ToastProvider>

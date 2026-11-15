@@ -1,9 +1,41 @@
 "use client";
 
+import { useContext, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SessionContext } from "next-auth/react";
 
+import { readServerSession, type ServerSession } from "@/components/signed-in-swap";
 import { Alert } from "@/components/ui/alert";
+
+/**
+ * FF1 review: true only once the server itself says this tab is signed out.
+ * next-auth 4.24.15 also reports "unauthenticated" after a failed session
+ * fetch (offline, a 5xx), for someone still signed in, so `nobody` (what the
+ * client session says) is only the cue to ask. The server is read once each
+ * time the client session changes while it names nobody (a later focus or
+ * another tab's broadcast gives a new session, so it is read again); an
+ * answer for an earlier session is ignored. "signedIn" and "unknown" answers
+ * leave the page as it is.
+ */
+export function useServerSaysSignedOut(
+  nobody: boolean,
+  read: () => Promise<ServerSession> = readServerSession,
+): boolean {
+  const session = useContext(SessionContext);
+  const [answer, setAnswer] = useState<{ about: unknown; signedOut: boolean } | null>(null);
+  useEffect(() => {
+    if (!nobody) return;
+    let live = true;
+    void read().then((server) => {
+      if (live) setAnswer({ about: session, signedOut: server.kind === "signedOut" });
+    });
+    return () => {
+      live = false;
+    };
+  }, [nobody, session, read]);
+  return nobody && answer !== null && answer.about === session && answer.signedOut;
+}
 
 /**
  * R20 new-customer L1 (= pages L1): an open app page whose session now names
@@ -11,8 +43,8 @@ import { Alert } from "@/components/ui/alert";
  * page stays as it is, so unsent work can still be copied; this line says what
  * happened and links back here after signing in.
  *
- * Only rendered once the client session has been read, never in the server's
- * HTML, so reading window.location for the query is safe. The pathname from
+ * Only rendered once the server has said so (useServerSaysSignedOut), never
+ * in the server's HTML, so reading window.location for the query is safe. The pathname from
  * usePathname makes it render again after a client-side navigation.
  */
 export function SignedOutAlert() {

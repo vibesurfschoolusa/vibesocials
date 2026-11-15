@@ -49,8 +49,9 @@ describe("AppShell: who gets the app frame", () => {
   });
 
   // R20 new-customer L1: an app route never loses its frame (that remounted
-  // the page and lost unsent work); it says the person was signed out instead.
-  it("a session naming nobody on an app route keeps the frame and says signed out", () => {
+  // the page and lost unsent work). The signed-out line waits for the server's
+  // own answer (app-shell.live.test.ts), so a first render has none.
+  it("a session naming nobody on an app route keeps the frame, with no line before the server answers", () => {
     for (const session of [
       ENDED,
       { status: "authenticated", data: { user: {}, expires: "2099-01-01T00:00:00Z" } },
@@ -59,9 +60,7 @@ describe("AppShell: who gets the app frame", () => {
       const html = render("/queue", session);
       expect(html).toContain("SIDEBAR");
       expect(html).toContain('<main id="main-content"');
-      expect(html.replace(/<[^>]+>/g, "")).toContain("You were signed out. Sign in again to keep working.");
-      expect(html).toMatch(/role="alert"/);
-      expect(html).toContain('href="/login?callbackUrl=%2Fqueue"');
+      expect(html).not.toContain("You were signed out");
     }
   });
 

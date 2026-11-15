@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react";
 import { Link2, PenSquare } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
+import { useServerSaysSignedOut } from "@/components/shell/signed-out-alert";
 import { useSignedInAccount } from "@/components/signed-in-swap";
 import { Alert } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
@@ -52,15 +53,16 @@ export function DashboardHome({ availablePlatforms, setup, notice }: DashboardPr
   const signedIn = useSignedInAccount() !== null;
   const router = useRouter();
   // R20 new-customer L1: the server rendered this for someone, and the tab's
-  // session now names nobody (signed out elsewhere). Ask the server once; it
-  // renders the Landing. Never sign out from here: the server decides.
-  const nobody = status !== "loading" && !signedIn;
+  // session now names nobody (signed out elsewhere). Once the server confirms
+  // it (a failed next-auth fetch also reads as nobody; FF1 review), refresh
+  // once; the server renders the Landing. Never sign out from here.
+  const confirmedSignedOut = useServerSaysSignedOut(status !== "loading" && !signedIn);
   const refreshed = useRef(false);
   useEffect(() => {
-    if (!nobody || refreshed.current) return;
+    if (!confirmedSignedOut || refreshed.current) return;
     refreshed.current = true;
     router.refresh();
-  }, [nobody, router]);
+  }, [confirmedSignedOut, router]);
 
   if (!signedIn) {
     // R15-pages L2: the server HTML for a signed-in "/" is this branch, so the

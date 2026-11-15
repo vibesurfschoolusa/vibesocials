@@ -51,6 +51,16 @@ const UNAUTHENTICATED = { status: "unauthenticated", data: null };
 let root: Root;
 let container: FakeNode;
 
+// GET /api/auth/session: the refresh waits for the server to say nobody (FF1
+// review: a failed next-auth fetch also reads "unauthenticated").
+type ServerReply = { status: number; body: unknown } | "offline";
+let serverReply: ServerReply;
+const sessionFetch = vi.fn(async () => {
+  if (serverReply === "offline") throw new TypeError("Failed to fetch");
+  const { status, body } = serverReply;
+  return { status, json: async () => body } as unknown as Response;
+});
+
 async function show(session: unknown) {
   await act(async () => {
     root.render(
@@ -61,6 +71,10 @@ async function show(session: unknown) {
       ),
     );
   });
+  // Let the server read finish.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 beforeEach(() => {
@@ -68,6 +82,9 @@ beforeEach(() => {
   const made = makeDocument();
   container = made.container;
   vi.stubGlobal("window", made.doc.defaultView);
+  serverReply = { status: 200, body: { expires: "1970-01-01T00:00:00.000Z" } };
+  sessionFetch.mockClear();
+  vi.stubGlobal("fetch", sessionFetch);
   root = createRoot(container as unknown as HTMLElement);
   refresh.mockReset();
   signOut.mockReset();
@@ -99,6 +116,21 @@ describe("Dashboard on / when the session turns to nobody", () => {
     });
   }
 
+  for (const [label, reply] of [
+    ["offline", "offline"],
+    ["a 500", { status: 500, body: {} }],
+    ["a 200 naming the person", { status: 200, body: { user: { name: "Jane Doe", email: "jane@example.com" } } }],
+  ] as const) {
+    it(`the server read answers ${label}: no refresh, nobody signed out`, async () => {
+      serverReply = reply as ServerReply;
+      await show(SIGNED_IN);
+      await show(UNAUTHENTICATED);
+      expect(sessionFetch).toHaveBeenCalled();
+      expect(refresh).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+    });
+  }
+
   it("a signed-in session never refreshes", async () => {
     await show(SIGNED_IN);
     await show(SIGNED_IN);
@@ -108,5 +140,6 @@ describe("Dashboard on / when the session turns to nobody", () => {
   it("while the session loads, no refresh", async () => {
     await show({ status: "loading", data: undefined });
     expect(refresh).not.toHaveBeenCalled();
+    expect(sessionFetch).not.toHaveBeenCalled();
   });
 });
