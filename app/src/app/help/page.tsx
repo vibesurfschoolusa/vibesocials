@@ -1,5 +1,6 @@
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_GUIDES } from "@/lib/platformGuides";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
@@ -91,6 +92,18 @@ export default function HelpPage() {
                 The connection was started from a different account.
               </span>{" "}
               Sign in to the {PRODUCT_NAME} account you want to connect, then try again.
+            </li>
+            {/* R8-pages L7: Settings' different-account banner links here. */}
+            <li>
+              <span className="text-foreground">Reconnect came back with a different account.</span>{" "}
+              Nothing changed: the connection still posts where it did. Sign in to the account that is
+              connected (for a LinkedIn or Facebook page, with an account that manages that page), then
+              press Reconnect again. LinkedIn reuses the account signed in to LinkedIn in this browser, so
+              sign out of LinkedIn first (
+              <a href={LINKEDIN_SIGN_OUT_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                open LinkedIn sign-out
+              </a>
+              ; Reconnect shows the steps). To use the other account instead, use Switch account.
             </li>
             <li>
               <span className="text-foreground">You are not the workspace owner.</span> Only the

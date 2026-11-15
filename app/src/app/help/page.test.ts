@@ -31,3 +31,21 @@ describe("Help: connecting your accounts", () => {
     );
   });
 });
+
+// R8-pages L7: Settings' different-account banner links here, so the list covers it.
+describe("Help: when something goes wrong", () => {
+  const html = () => renderToStaticMarkup(HelpPage());
+
+  it("covers a reconnect that came back with a different account, with LinkedIn's sign-out step", () => {
+    const section = html().slice(html().indexOf('id="troubleshooting"'));
+    expect(section).toContain("Reconnect came back with a different account.");
+    expect(section).toContain(
+      "Nothing changed: the connection still posts where it did. Sign in to the account that is connected (for a LinkedIn or Facebook page, with an account that manages that page), then press Reconnect again.",
+    );
+    expect(section).toContain(
+      "LinkedIn reuses the account signed in to LinkedIn in this browser, so sign out of LinkedIn first",
+    );
+    expect(section).toContain('href="https://www.linkedin.com/m/logout/"');
+    expect(section).toContain("To use the other account instead, use Switch account.");
+  });
+});
