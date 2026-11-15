@@ -16,6 +16,14 @@ const { getCurrentUserMock, checkRateLimitMock, findUniqueInviteMock, findFirstM
     countOwnerMock: vi.fn(),
   }));
 
+// R10: the one rule (inviteMaker.ts), spied so the test sees the preview call it.
+const inviteLinkWorksSpy = vi.hoisted(() => ({ fn: vi.fn() }));
+vi.mock("./inviteMaker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./inviteMaker")>();
+  inviteLinkWorksSpy.fn.mockImplementation(actual.inviteLinkWorks);
+  return { ...actual, inviteLinkWorks: inviteLinkWorksSpy.fn };
+});
+
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: getCurrentUserMock,
 }));
@@ -192,5 +200,18 @@ describe("GET /api/invites/[token]", () => {
     expect(countOwnerMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-9", userId: "former-owner", role: "owner" },
     });
+  });
+
+  // R10 (lead): the preview applies the one rule, inviteLinkWorks.
+  it("checks the link with inviteLinkWorks", async () => {
+    inviteLinkWorksSpy.fn.mockClear();
+    const row = makeInviteRow();
+    findUniqueInviteMock.mockResolvedValue(row);
+    findFirstMembershipMock.mockResolvedValue(null);
+
+    await GET(new Request("http://localhost"), ctx(RAW_TOKEN));
+
+    expect(inviteLinkWorksSpy.fn).toHaveBeenCalledTimes(1);
+    expect(inviteLinkWorksSpy.fn.mock.calls[0][1]).toBe(row);
   });
 });

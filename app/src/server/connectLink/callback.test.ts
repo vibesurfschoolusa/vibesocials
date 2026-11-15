@@ -295,7 +295,17 @@ describe("withConnectLink: running the callback with the link", () => {
     );
 
     expect(h.notifyConnect).toHaveBeenCalledTimes(1);
-    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: WORKSPACE, platform: "tiktok" });
+    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: WORKSPACE, platform: "tiktok", sameEnd: false });
+  });
+
+  // R10-client-journey L2: the owners' email says the sign-in kept the end date.
+  // Only LinkedIn's callback adds the flag; the wrapper passes on whatever it gets.
+  it("success with the same end date: the owners' email is told so", async () => {
+    await withConnectLink("tiktok", handlerAnswering("/settings?success=tiktok_connected&same_end=1"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+
+    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: WORKSPACE, platform: "tiktok", sameEnd: true });
   });
 
   it("an error, a refusal or a choice still open: nobody is told (F4)", async () => {

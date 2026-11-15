@@ -7,7 +7,7 @@ import { alreadyConnectedCode, cancelledCode, connectFailedCode, type ConnectLin
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { looksLikeConnectLinkState, readConnectLinkState } from "@/lib/oauthState";
-import { differentAccountCode } from "@/lib/differentAccount";
+import { differentAccountCode, SAME_END_PARAM } from "@/lib/differentAccount";
 import { notifyOwnersOfClientConnect } from "@/server/notifications/clientConnectEmail";
 import { notifyOwnersOfRefusedConnect } from "@/server/notifications/refusedConnectEmail";
 
@@ -217,7 +217,12 @@ async function toVisitorPage(
         logger.error("[connect-link] Couldn't record when the link was used (ignored)", { connectLinkId: flow.id, error });
       });
     // F4: the owner did not make this connect, so they are told (never throws).
-    await notifyOwnersOfClientConnect({ workspaceId: flow.workspaceId, platform });
+    // R10-client-journey L2: with whether the sign-in kept its end date.
+    await notifyOwnersOfClientConnect({
+      workspaceId: flow.workspaceId,
+      platform,
+      sameEnd: page.searchParams.has(SAME_END_PARAM),
+    });
   } else if (page.searchParams.get("error") === differentAccountCode(platform)) {
     // R7-client-journey L4: the save refused another account than the one
     // connected, and the client is told to ask the owner, so the owners hear

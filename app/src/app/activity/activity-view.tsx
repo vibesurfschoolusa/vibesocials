@@ -48,6 +48,7 @@ function ActivityViewInner() {
     error,
     reload,
     workspaceMemberCount,
+    workspaceRole,
     loadMore,
     loadingMore,
     hasMore,
@@ -153,6 +154,7 @@ function ActivityViewInner() {
                   key={job.id}
                   job={job}
                   showAttribution={showAttribution}
+                  viewerRole={workspaceRole ?? "owner"}
                   onRetryAccepted={watchRetry}
                 />
               ))}

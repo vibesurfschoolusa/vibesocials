@@ -17,7 +17,28 @@ interface InvitePreview {
   alreadyMember: boolean;
 }
 
-export type InviteLoad = { kind: "ok"; preview: InvitePreview } | { kind: "invalid" } | { kind: "unreachable" };
+export type InviteLoad =
+  | { kind: "ok"; preview: InvitePreview }
+  | { kind: "invalid"; message?: string }
+  | { kind: "unreachable" };
+
+/** The dead-link state, with the 404 body's sentence when it has one (R10-pages L3). */
+async function invalidFrom(response: Response): Promise<{ kind: "invalid"; message?: string }> {
+  const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  const message = typeof body?.error === "string" && body.error.trim() !== "" ? body.error : undefined;
+  return message ? { kind: "invalid", message } : { kind: "invalid" };
+}
+
+/** What the dead-link page says under its title. */
+export const INVALID_INVITE_DESCRIPTION = "Ask the workspace owner for a new link.";
+
+/** The preview's and Join's 404 body for any dead link: the page title already says it. */
+const GENERIC_INVALID_BODY = "This invite link is invalid or has expired.";
+
+/** The server's sentence when it says more than the title (a maker's link), else the next step. */
+export function invalidInviteDescription(message: string | undefined): string {
+  return message && message !== GENERIC_INVALID_BODY ? message : INVALID_INVITE_DESCRIPTION;
+}
 
 /**
  * Reads the invite preview. Only a 404 means the link is dead (the uniform
@@ -29,7 +50,7 @@ export type InviteLoad = { kind: "ok"; preview: InvitePreview } | { kind: "inval
 export async function loadInvite(fetchImpl: typeof fetch, token: string): Promise<InviteLoad> {
   try {
     const response = await fetchImpl(`/api/invites/${token}`);
-    if (response.status === 404) return { kind: "invalid" };
+    if (response.status === 404) return await invalidFrom(response);
     if (!response.ok) return { kind: "unreachable" };
     return { kind: "ok", preview: (await response.json()) as InvitePreview };
   } catch {
@@ -41,6 +62,25 @@ export async function loadInvite(fetchImpl: typeof fetch, token: string): Promis
 export const JOIN_FAILED_MESSAGE = "You weren't added to the workspace. Please press Join workspace again in a minute.";
 export const JOIN_OFFLINE_MESSAGE =
   "We couldn't reach Vibe Socials, so you weren't added. Check your internet connection and press Join workspace again.";
+
+export type AcceptOutcome = { kind: "joined" } | { kind: "invalid"; message?: string } | { kind: "failed"; message: string };
+
+/**
+ * Join. A 404 means the invite died (expired, revoked, or its maker is no
+ * longer an owner) between the preview and the click: the page shows the same
+ * dead-link state as the preview rather than a dead-end toast.
+ */
+export async function acceptInvite(fetchImpl: typeof fetch, token: string): Promise<AcceptOutcome> {
+  try {
+    const response = await fetchImpl(`/api/invites/${token}/accept`, { method: "POST" });
+    if (response.ok) return { kind: "joined" };
+    if (response.status === 404) return await invalidFrom(response);
+    const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    return { kind: "failed", message: typeof data?.error === "string" && data.error ? data.error : JOIN_FAILED_MESSAGE };
+  } catch {
+    return { kind: "failed", message: JOIN_OFFLINE_MESSAGE };
+  }
+}
 
 /**
  * R6-pages L4: what joining lets a member do. Invites add members, and a
@@ -77,27 +117,18 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
 
   async function handleJoin() {
     setJoining(true);
-    try {
-      const response = await fetch(`/api/invites/${token}/accept`, { method: "POST" });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        // A 404 here means the invite died (expired/revoked) in the window
-        // between the preview load and clicking Join — fall back to the same
-        // invalid-link state rather than a dead-end toast.
-        if (response.status === 404) {
-          setLoad({ kind: "invalid" });
-          return;
-        }
-        toast.error(data?.error ?? JOIN_FAILED_MESSAGE);
-        return;
-      }
-      toast.success(`Joined ${preview?.workspaceName ?? "the workspace"}.`);
-      router.push("/");
-    } catch {
-      toast.error(JOIN_OFFLINE_MESSAGE);
-    } finally {
-      setJoining(false);
+    const outcome = await acceptInvite(fetch, token);
+    setJoining(false);
+    if (outcome.kind === "invalid") {
+      setLoad(outcome);
+      return;
     }
+    if (outcome.kind === "failed") {
+      toast.error(outcome.message);
+      return;
+    }
+    toast.success(`Joined ${preview?.workspaceName ?? "the workspace"}.`);
+    router.push("/");
   }
 
   if (!load) {
@@ -136,7 +167,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
         <EmptyState
           icon={<UserPlus />}
           title="This invite link isn't valid anymore."
-          description="Ask the workspace owner for a new link."
+          description={invalidInviteDescription(load.kind === "invalid" ? load.message : undefined)}
           action={
             <Link href="/" className={buttonVariants({ variant: "primary" })}>
               Go to dashboard

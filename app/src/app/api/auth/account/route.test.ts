@@ -28,6 +28,7 @@ const m = vi.hoisted(() => {
     workspaceDeleteMany: fn(),
     pendingDeleteMany: fn(),
     handshakeDeleteMany: fn(),
+    inviteUpdateMany: fn(),
     userDelete: fn(),
     queueCreate: fn(),
     queueDeleteMany: fn(),
@@ -63,6 +64,7 @@ vi.mock("@/lib/db", () => {
     postMetric: { findMany: m.metricFindMany, updateMany: m.metricUpdateMany },
     pendingConnection: { deleteMany: m.pendingDeleteMany },
     oAuthHandshake: { deleteMany: m.handshakeDeleteMany },
+    workspaceInvite: { updateMany: m.inviteUpdateMany },
     user: { delete: m.userDelete },
     pendingBlobDeletion: { createManyAndReturn: m.queueCreate, deleteMany: m.queueDeleteMany },
     $transaction: async (cb: (tx: unknown) => unknown) => {
@@ -182,6 +184,11 @@ beforeEach(() => {
   m.workspaceDeleteMany.mockImplementation(logged("delete workspaces"));
   m.pendingDeleteMany.mockImplementation(logged("delete pendingConnection"));
   m.handshakeDeleteMany.mockImplementation(logged("delete oAuthHandshake"));
+  // The revoke stamps the current time, so the log keeps its filter and whether it stamps one.
+  m.inviteUpdateMany.mockImplementation(async (args: { where: unknown; data: { revokedAt: unknown } }) => {
+    m.callLog.push(`revoke workspaceInvite ${JSON.stringify(args.where)} ${args.data.revokedAt instanceof Date}`);
+    return { count: 1 };
+  });
   m.userDelete.mockImplementation(logged("delete user", {}));
   m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) => {
     m.callLog.push(`queue ${data.map((row) => row.url).join(",")}`);
@@ -202,6 +209,7 @@ function nothingChanged() {
     m.postJobUpdateMany,
     m.metricUpdateMany,
     m.workspaceDeleteMany,
+    m.inviteUpdateMany,
     m.userDelete,
   ]) {
     expect(mock).not.toHaveBeenCalled();
@@ -446,6 +454,8 @@ describe("DELETE /api/auth/account", () => {
       `delete workspaces ${JSON.stringify({ where: { id: { in: ["ws-personal"] } } })}`,
       `delete pendingConnection ${JSON.stringify({ where: { userId: USER_ID } })}`,
       `delete oAuthHandshake ${JSON.stringify({ where: { userId: USER_ID } })}`,
+      // R10-client-journey L3: the links this person made stop working with the account.
+      `revoke workspaceInvite ${JSON.stringify({ createdById: USER_ID, revokedAt: null })} true`,
       `delete user ${JSON.stringify({ where: { id: USER_ID } })}`,
       "commit",
       expect.stringMatching(/^del /),

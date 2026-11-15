@@ -148,6 +148,18 @@ describe("composerSubmitOutcome - platforms not sent", () => {
     });
   });
 
+  // R10-client-journey L1: the server words the not-sent text for its reader (a member names the owner).
+  it("a member's answer: the server's not-sent text, not the owner's Settings step", () => {
+    const text = "Not sent to X: The workspace owner can reconnect X; then use Retry in Activity.";
+    const outcome = now({ notSent: [{ platform: "x", reason: "RECONNECT_REQUIRED" }], notSentText: text });
+    expect(outcome).toMatchObject({ kind: "success", toast: "Post queued — track it in Activity", notSent: { allFailed: false, text } });
+    const nothing = "Nothing was sent: The workspace owner can reconnect X; then use Retry in Activity.";
+    expect(now({ allFailed: true, notSent: [{ platform: "x", reason: "RECONNECT_REQUIRED" }], notSentText: nothing })).toMatchObject({
+      toast: nothing,
+      notSent: { allFailed: true, text: nothing },
+    });
+  });
+
   it("healthy, or entries it cannot read: unchanged", () => {
     expect(now({ postJob: { id: "j" } })).not.toHaveProperty("notSent");
     expect(now({ notSent: [] })).not.toHaveProperty("notSent");

@@ -229,6 +229,12 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
       // hold sealed OAuth secrets of an unfinished connect.
       await tx.pendingConnection.deleteMany({ where: { userId } });
       await tx.oAuthHandshake.deleteMany({ where: { userId } });
+      // R10-client-journey L3: also keyed by a plain id. The invite links this
+      // person made in the workspaces that survive stop working with them.
+      await tx.workspaceInvite.updateMany({
+        where: { createdById: userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
 
       await tx.user.delete({ where: { id: userId } });
       return queued;

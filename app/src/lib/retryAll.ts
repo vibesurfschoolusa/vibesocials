@@ -29,14 +29,19 @@ export function retryAllPlan(
   return { included, leftOut };
 }
 
-/** What was left out and what to do about each, or null when nothing was. */
-export function leftOutSentence(leftOut: readonly LeftOut[]): string | null {
+/**
+ * What was left out and what to do about each, or null when nothing was. Only
+ * an owner can reconnect, so a member's names the owner (R10-client-journey L1).
+ */
+export function leftOutSentence(leftOut: readonly LeftOut[], role: "owner" | "member" = "owner"): string | null {
   if (leftOut.length === 0) return null;
   return leftOut
     .map(({ platform, reason }) =>
       reason === "unconfirmed"
         ? `${platformLabel(platform)} left out: check whether it posted first.`
-        : `${platformLabel(platform)} left out: reconnect it in Settings.`,
+        : role === "member"
+          ? `${platformLabel(platform)} left out: the workspace owner can reconnect it.`
+          : `${platformLabel(platform)} left out: reconnect it in Settings.`,
     )
     .join(" ");
 }

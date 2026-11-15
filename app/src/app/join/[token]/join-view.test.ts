@@ -12,7 +12,16 @@ vi.mock("@/lib/db", () => ({ prisma: { workspaceInvite: { findUnique: inviteFind
 import { hashInviteToken } from "@/lib/inviteToken";
 
 import JoinPage, { metadata } from "./page";
-import { JOIN_FAILED_MESSAGE, JOIN_OFFLINE_MESSAGE, JoinView, joinPromise, loadInvite } from "./join-view";
+import {
+  acceptInvite,
+  INVALID_INVITE_DESCRIPTION,
+  invalidInviteDescription,
+  JOIN_FAILED_MESSAGE,
+  JOIN_OFFLINE_MESSAGE,
+  JoinView,
+  joinPromise,
+  loadInvite,
+} from "./join-view";
 
 function respond(status: number, body: unknown = {}) {
   return vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
@@ -38,6 +47,14 @@ describe("loadInvite", () => {
     await expect(loadInvite(respond(404), "tok")).resolves.toEqual({ kind: "invalid" });
   });
 
+  // R10-pages L3: the server says why (a link whose maker is no longer an owner).
+  it("keeps the 404's sentence when there is one", async () => {
+    const why = "This invite link is no longer active. Ask an owner for a new one.";
+    await expect(loadInvite(respond(404, { error: why }), "tok")).resolves.toEqual({ kind: "invalid", message: why });
+    const notJson = vi.fn(async () => new Response("Not found", { status: 404 })) as unknown as typeof fetch;
+    await expect(loadInvite(notJson, "tok")).resolves.toEqual({ kind: "invalid" });
+  });
+
   it("tells a network or server failure apart from an invalid link", async () => {
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
@@ -45,6 +62,41 @@ describe("loadInvite", () => {
     await expect(loadInvite(offline, "tok")).resolves.toEqual({ kind: "unreachable" });
     await expect(loadInvite(respond(500), "tok")).resolves.toEqual({ kind: "unreachable" });
     await expect(loadInvite(respond(429), "tok")).resolves.toEqual({ kind: "unreachable" });
+  });
+});
+
+// R10-pages L3: Join's 404 shows the same state, with the server's sentence.
+describe("acceptInvite", () => {
+  it("joined", async () => {
+    await expect(acceptInvite(respond(200, { ok: true }), "tok")).resolves.toEqual({ kind: "joined" });
+  });
+
+  it("a 404: the dead-link state with its sentence, or without one", async () => {
+    const why = "This invite link is no longer active. Ask an owner for a new one.";
+    await expect(acceptInvite(respond(404, { error: why }), "tok")).resolves.toEqual({ kind: "invalid", message: why });
+    await expect(acceptInvite(respond(404), "tok")).resolves.toEqual({ kind: "invalid" });
+  });
+
+  it("another refusal: its sentence, else the try-again one; no network: the offline one", async () => {
+    await expect(acceptInvite(respond(429, { error: "Too many requests. Please slow down." }), "tok")).resolves.toEqual({
+      kind: "failed",
+      message: "Too many requests. Please slow down.",
+    });
+    await expect(acceptInvite(respond(500), "tok")).resolves.toEqual({ kind: "failed", message: JOIN_FAILED_MESSAGE });
+    const offline = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+    await expect(acceptInvite(offline, "tok")).resolves.toEqual({ kind: "failed", message: JOIN_OFFLINE_MESSAGE });
+  });
+
+  it("the dead-link page says the server's sentence, else the generic one", () => {
+    expect(invalidInviteDescription("This invite link is no longer active. Ask an owner for a new one.")).toBe(
+      "This invite link is no longer active. Ask an owner for a new one.",
+    );
+    expect(invalidInviteDescription(undefined)).toBe(INVALID_INVITE_DESCRIPTION);
+    // The generic 404 body says what the title already says, so the next step stays.
+    expect(invalidInviteDescription("This invite link is invalid or has expired.")).toBe(INVALID_INVITE_DESCRIPTION);
+    expect(INVALID_INVITE_DESCRIPTION).toBe("Ask the workspace owner for a new link.");
   });
 });
 

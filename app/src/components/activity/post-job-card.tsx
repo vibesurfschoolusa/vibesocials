@@ -15,7 +15,7 @@ import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
+import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
 import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { retryAllPlan, type LeftOut } from "@/lib/retryAll";
@@ -59,6 +59,46 @@ function platformList(platforms: readonly Platform[]): string {
 /** R7 review, points 1 and 2: what Retry all failed says once the server took it. */
 export function retryAllToast(retrying: readonly Platform[], notice: string | undefined): string {
   return notice ? `Retrying ${platformList(retrying)}. ${notice}` : `Retrying ${platformList(retrying)}.`;
+}
+
+/** Who reads the card: only an owner can reconnect (R10-client-journey L1). */
+export type ViewerRole = "owner" | "member";
+
+/** A failure's stored sentence as the viewer should read it. */
+export function failureSentence(result: Pick<PostJobDTO["results"][number], "errorMessage" | "platform">, role: ViewerRole): string | null {
+  return sentenceForRecipient(result.errorMessage, result.platform, role);
+}
+
+/** What a retry refused for reconnecting says: the server words it for the viewer; this is the fallback. */
+export function reconnectRefusalToast(
+  role: ViewerRole,
+  dead: readonly Platform[],
+  label: string,
+  serverError: string | undefined,
+): string {
+  if (serverError) return serverError;
+  const which = dead.length > 0 ? platformList(dead) : label;
+  return role === "member"
+    ? `The workspace owner can reconnect ${which}; then retry.`
+    : `Reconnect ${which} in Settings before retrying.`;
+}
+
+/** In place of a failed platform's Retry once the server said it needs reconnecting. */
+export function ReconnectStep({ platform, role }: { platform: Platform; role: ViewerRole }) {
+  const className =
+    "inline-flex items-center gap-1 rounded-[var(--radius)] border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-foreground";
+  if (role === "member") return <span className={className}>{memberReconnectMessage(platform)}</span>;
+  return (
+    <span className={className}>
+      Reconnect {platformLabel(platform)} in{" "}
+      <Link
+        href={SETTINGS_CONNECTIONS_HREF}
+        className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+      >
+        Settings
+      </Link>
+    </span>
+  );
 }
 
 /** One platform, or (R7-security L1) every failed platform of the post in one request. */
@@ -199,10 +239,13 @@ export function TextPostTile() {
 export function PostJobCard({
   job,
   showAttribution = false,
+  viewerRole = "owner",
   onRetryAccepted,
 }: {
   job: PostJobDTO;
   showAttribution?: boolean;
+  /** From the posts list answer (usePostJobs); a member gets the owner's step instead of Settings. */
+  viewerRole?: ViewerRole;
   onRetryAccepted: (jobId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -400,7 +443,7 @@ export function PostJobCard({
               ? (body.leftOut ?? []).filter((entry) => entry.reason === "reconnect").map((entry) => entry.platform)
               : [target];
           if (dead.length > 0) setReconnect((prev) => new Set([...prev, ...dead]));
-          toast.error(body.error ?? `Reconnect ${dead.length > 0 ? platformList(dead) : label} in Settings before retrying.`);
+          toast.error(reconnectRefusalToast(viewerRole, dead, label, body.error));
           return;
         }
 
@@ -410,7 +453,7 @@ export function PostJobCard({
         toast.error(`Couldn't retry ${label}. Please try again.`);
       }
     },
-    [job.id, onRetryAccepted, toast],
+    [job.id, onRetryAccepted, toast, viewerRole],
   );
 
   return (
@@ -539,18 +582,7 @@ export function PostJobCard({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {failedPlatforms.map((platform) =>
             reconnect.has(platform) ? (
-              <span
-                key={platform}
-                className="inline-flex items-center gap-1 rounded-[var(--radius)] border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-foreground"
-              >
-                Reconnect {platformLabel(platform)} in{" "}
-                <Link
-                  href={SETTINGS_CONNECTIONS_HREF}
-                  className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                >
-                  Settings
-                </Link>
-              </span>
+              <ReconnectStep key={platform} platform={platform} role={viewerRole} />
             ) : (
               <Button
                 key={platform}
@@ -605,7 +637,7 @@ export function PostJobCard({
                   <span className="font-semibold">
                     {platformLabel(result.platform)}:
                   </span>{" "}
-                  {result.errorMessage}
+                  {failureSentence(result, viewerRole)}
                 </li>
               ))}
             </ul>

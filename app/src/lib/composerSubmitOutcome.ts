@@ -88,7 +88,10 @@ export function composerSubmitOutcome(input: {
     const notSent = readNotSent(field(body, "notSent"));
     if (notSent.length === 0) return created;
     const allFailed = field(body, "allFailed") === true;
-    const text = notSentSentence(notSent, allFailed);
+    // R10-client-journey L1: the server words it for its reader (a member
+    // names the owner); an answer without it gets the owner's sentence.
+    const serverText = field(body, "notSentText");
+    const text = typeof serverText === "string" && serverText ? serverText : notSentSentence(notSent, allFailed);
     return { ...created, ...(allFailed ? { toast: text } : {}), notSent: { allFailed, text } };
   }
 

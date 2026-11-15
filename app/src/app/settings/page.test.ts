@@ -587,7 +587,7 @@ describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
     const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
     // R8-pages L5: what to do next.
     // R9-pages L2: no date of its own; the row shows it.
-    expect(html).toContain("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
+    expect(html).toContain("LinkedIn kept the same end date. Reconnect after that date to keep posting; posts due after it fail until you do.");
     // R7 review 2: a warning, as on /c.
     expect(html).toMatch(/<div role="alert" class="[^"]*border-warning\/25[^"]*"/);
   });

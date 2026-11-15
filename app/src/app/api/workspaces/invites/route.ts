@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { inviteLinkWorks } from "@/app/api/invites/[token]/inviteMaker";
 import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
 import { generateInviteToken, INVITE_TTL_MS } from "@/lib/inviteToken";
@@ -16,6 +17,9 @@ import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
  * has been shown, the link is unrecoverable — `url: null` signals "an
  * active invite exists but its link can't be re-shown." Task 7's UI offers
  * Revoke + Create-new instead of a re-show affordance.
+ *
+ * R10-client-journey L3: only a link that still works (inviteLinkWorks: not
+ * expired, its maker still an owner); otherwise null, so the card offers Create.
  */
 export async function GET() {
   const contextOrError = await requireOwnerContext();
@@ -29,7 +33,7 @@ export async function GET() {
     orderBy: { createdAt: "desc" },
   });
 
-  if (!invite) {
+  if (!invite || (await inviteLinkWorks(prisma, invite)) !== true) {
     return NextResponse.json({ invite: null }, { status: 200 });
   }
 

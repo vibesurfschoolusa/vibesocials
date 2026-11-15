@@ -270,6 +270,29 @@ describe("notSentSentence", () => {
     ).toBe("Nothing was sent: Reconnect X and Instagram, and connect Facebook Page, in Settings, then use Retry in Activity.");
   });
 
+  // R10-client-journey L1: a member can't reconnect, so their answer names the owner.
+  it("a member's sentence names the owner and not Settings", () => {
+    expect(notSentSentence([{ platform: "x", reason: "RECONNECT_REQUIRED" }], true, "member")).toBe(
+      "Nothing was sent: The workspace owner can reconnect X; then use Retry in Activity.",
+    );
+    expect(
+      notSentSentence(
+        [
+          { platform: "x", reason: "RECONNECT_REQUIRED" },
+          { platform: "instagram", reason: "RECONNECT_REQUIRED" },
+          { platform: "facebook_page", reason: "CONNECTION_GONE" },
+        ],
+        false,
+        "member",
+      ),
+    ).toBe(
+      "Not sent to X, Instagram and Facebook Page: The workspace owner can reconnect X and Instagram, and connect Facebook Page; then use Retry in Activity.",
+    );
+    expect(notSentSentence([{ platform: "x", reason: "RECONNECT_REQUIRED" }], true, "owner")).toBe(
+      "Nothing was sent: Reconnect X in Settings, then use Retry in Activity.",
+    );
+  });
+
   it("some sent: names the platforms that were not", () => {
     expect(notSentSentence([{ platform: "x", reason: "RECONNECT_REQUIRED" }], false)).toBe(
       "Not sent to X: Reconnect X in Settings, then use Retry in Activity.",
@@ -284,6 +307,19 @@ describe("notSentSentence", () => {
 // post emails never tell them to act in Settings.
 describe("sentenceForRecipient", () => {
   const PLATFORMS = Object.keys(PLATFORM_LABELS) as Platform[];
+  // What a sentence says went wrong, beside the step it asks for.
+  const REASONS = [
+    /store code/i,
+    /board/i,
+    /company page/i,
+    /\badmin\b/i,
+    /renew/i,
+    /expired/i,
+    /no longer valid/i,
+    /removed/i,
+    /no longer connected/i,
+    /no longer exists/i,
+  ];
 
   it("gives a member the owner variant of each sentence this module writes", () => {
     expect(memberReconnectMessage("instagram")).toBe("The workspace owner can reconnect Instagram; then retry.");
@@ -346,12 +382,18 @@ describe("sentenceForRecipient", () => {
       expect(member, owner).not.toContain("Settings");
       expect(member, owner).toContain("workspace owner can");
       expect(sentenceForRecipient(owner, "linkedin", "owner")).toBe(owner);
+      // R10-new-customer L2: the member sentence keeps the owner sentence's
+      // reason, and never says reconnect when reconnecting is not the step.
+      for (const reason of REASONS) {
+        if (reason.test(owner)) expect(member, owner).toMatch(reason);
+      }
+      if (!/connect/i.test(owner)) expect(member, owner).not.toMatch(/connect/i);
     }
   });
 
   it("a removed connection, and LinkedIn with no company page, keep their reason for a member", () => {
     expect(sentenceForRecipient("This platform connection was removed. Reconnect and retry.", "x", "member")).toBe(
-      "The workspace owner can reconnect X; then retry.",
+      "The X connection was removed. The workspace owner can reconnect X; then retry.",
     );
     const noOrganization =
       "No LinkedIn company pages configured. This app only posts to company pages, not personal profiles.\n\nTo fix this:\n2. Go to Settings → Connections\n";
@@ -372,7 +414,40 @@ describe("sentenceForRecipient", () => {
     );
     expect(
       sentenceForRecipient("This platform is no longer connected. Reconnect it in Settings and try again.", "youtube", "member"),
-    ).toBe("The workspace owner can reconnect YouTube; then retry.");
+    ).toBe("YouTube is no longer connected. The workspace owner can reconnect YouTube; then retry.");
+  });
+
+  // R10-new-customer L2: reconnecting fixes nothing for a wrong store code.
+  it("a Google Business Profile store code a member can't find: the owner checks it, no reconnect", () => {
+    expect(
+      sentenceForRecipient(
+        "Could not find a Google Business Profile location for the given store code. Double-check the store code in Advanced settings.",
+        "google_business_profile",
+        "member",
+      ),
+    ).toBe("The workspace owner can check the store code for Google Business Profile; then retry.");
+  });
+
+  it("an expired or invalid connection keeps saying so for a member", () => {
+    expect(sentenceForRecipient("Your Instagram connection has expired — please reconnect it in Settings.", "instagram", "member")).toBe(
+      "The Instagram connection has expired. The workspace owner can reconnect Instagram; then retry.",
+    );
+    expect(
+      sentenceForRecipient("Your Facebook Page connection is no longer valid — please reconnect it in Settings.", "facebook_page", "member"),
+    ).toBe("The Facebook Page connection is no longer valid. The workspace owner can reconnect Facebook Page; then retry.");
+    expect(
+      sentenceForRecipient(
+        "Pinterest did not renew this connection (status 403). If this keeps happening, reconnect Pinterest in Settings.",
+        "pinterest",
+        "member",
+      ),
+    ).toBe("Pinterest did not renew this connection. If this keeps happening, the workspace owner can reconnect Pinterest.");
+  });
+
+  it("a sentence nobody wrote a member variant for: the owner can fix the connection, not reconnect it", () => {
+    expect(sentenceForRecipient("Something new happened. Check Settings.", "x", "member")).toBe(
+      "The workspace owner can fix X's connection; then retry.",
+    );
   });
 
   it("leaves an owner's sentence, and every sentence without Settings, as stored", () => {
