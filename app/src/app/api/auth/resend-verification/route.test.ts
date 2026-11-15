@@ -148,8 +148,22 @@ describe("POST /api/auth/resend-verification", () => {
     const response = await POST();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to send verification email." });
+    await expect(response.json()).resolves.toEqual({
+      error: "We couldn't send the verification email just now. Please try again in a few minutes.",
+    });
 
     consoleSpy.mockRestore();
+  });
+
+  // R5 new-customer L2: a delivery the email service refused is not "sent".
+  it("returns 502 with a plain sentence when the email could not be delivered", async () => {
+    deliverAccountEmailMock.mockResolvedValue(false);
+
+    const response = await POST();
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "We couldn't send the verification email just now. Please try again in a few minutes.",
+    });
   });
 });

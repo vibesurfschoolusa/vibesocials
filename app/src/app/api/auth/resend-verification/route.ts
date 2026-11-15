@@ -24,6 +24,8 @@ import { checkRateLimit } from "@/lib/rateLimit";
 
 const RATE_LIMIT = { route: "auth/resend-verify", limit: 3, windowMs: 15 * 60 * 1000 } as const;
 
+const SEND_FAILED = "We couldn't send the verification email just now. Please try again in a few minutes.";
+
 export async function POST() {
   const user = await getCurrentUser();
   if (!user) {
@@ -62,13 +64,16 @@ export async function POST() {
       rawToken,
       baseUrl: process.env.NEXTAUTH_URL ?? "",
     });
-    // Best-effort; deliverAccountEmail is fail-safe and never throws. We've
-    // already confirmed the key is set, so this attempts a real send.
-    await deliverAccountEmail(user.email, verifyEmail);
+    // deliverAccountEmail never throws; false means the email service did not
+    // take the email (R5 new-customer L2), so the person must not read "sent".
+    const delivered = await deliverAccountEmail(user.email, verifyEmail);
+    if (!delivered) {
+      return NextResponse.json({ error: SEND_FAILED }, { status: 502 });
+    }
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
     logger.error("[POST /api/auth/resend-verification] issuance/delivery error", { error });
-    return NextResponse.json({ error: "Failed to send verification email." }, { status: 500 });
+    return NextResponse.json({ error: SEND_FAILED }, { status: 500 });
   }
 }
