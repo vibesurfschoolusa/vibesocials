@@ -162,7 +162,21 @@ export function refreshesInline(workspace: SweepWorkspace, now: Date, env: Billi
  * its last refresh attempt failed without flagging it (`refreshFailedAt` on an
  * unflagged row; every refresher's success write clears it).
  */
-export type InlineRefreshCandidate = { id: string; expiresAt: string; failed?: boolean };
+export type InlineRefreshCandidate = {
+  id: string;
+  expiresAt: string;
+  failed?: boolean;
+  /** When that last refresh failed (`refreshFailedAt`); a new failure moves the row to the back. */
+  failedAt?: string;
+};
+
+/** Failed ones: oldest failure first; one from a page memoized without the time goes after, by expiry. */
+function byFailureTime(a: InlineRefreshCandidate, b: InlineRefreshCandidate): number {
+  if (a.failedAt === undefined || b.failedAt === undefined) {
+    return Number(a.failedAt === undefined) - Number(b.failedAt === undefined);
+  }
+  return new Date(a.failedAt).getTime() - new Date(b.failedAt).getTime();
+}
 
 /**
  * R11-publishing L2: of the cap's places, this many are kept for connections
@@ -173,8 +187,9 @@ export const FAILED_INLINE_REFRESH_PLACES = 10;
 
 /**
  * The free connections to refresh today, at most `cap`: the healthy ones,
- * then those whose last refresh failed, each soonest-expiring first (ties by
- * id); the count left is reported. A failing connection keeps its old
+ * soonest-expiring first, then those whose last refresh failed, oldest
+ * failure first so more failing ones than their places take turns (ties by
+ * expiry, then id); the count left is reported. A failing connection keeps its old
  * expiresAt, so by expiry alone a few failing or hanging ones would come first
  * every day and push healthy ones to the next; they run last, and up to
  * {@link FAILED_INLINE_REFRESH_PLACES} of the places are theirs whatever is
@@ -191,7 +206,8 @@ export function inlineRefreshQueue(
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
   const healthy = ordered.filter((candidate) => candidate.failed !== true);
-  const failed = ordered.filter((candidate) => candidate.failed === true);
+  // A stable sort, so equal failure times keep the expiry order.
+  const failed = ordered.filter((candidate) => candidate.failed === true).sort(byFailureTime);
   const healthyTaken = Math.min(healthy.length, cap - Math.min(failed.length, FAILED_INLINE_REFRESH_PLACES, cap));
   const failedTaken = Math.min(failed.length, cap - healthyTaken);
   const ids = [...healthy.slice(0, healthyTaken), ...failed.slice(0, failedTaken)].map((candidate) => candidate.id);

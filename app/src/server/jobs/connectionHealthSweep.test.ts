@@ -354,6 +354,36 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
     expect(queue.leftForTomorrow).toBe(51);
   });
 
+  // Coordinator, round 11: within their places the failed ones go oldest
+  // failure first, and a new failure moves a row to the back, so more than 10
+  // failing ones take turns.
+  it("15 failing over two days: the 10 oldest failures on day one, the other 5 first on day two", () => {
+    const healthy = Array.from({ length: 150 }, (_, i) => ({ id: `h-${String(i).padStart(3, "0")}`, expiresAt: at(-HOUR) }));
+    // f-14 failed longest ago, f-00 most recently; expiry would put f-00 first.
+    const failing = Array.from({ length: 15 }, (_, i) => ({
+      id: `f-${String(i).padStart(2, "0")}`,
+      expiresAt: at(-(30 - i) * DAY),
+      failed: true,
+      failedAt: at(-(i + 1) * HOUR),
+    }));
+    const dayOne = inlineRefreshQueue([...healthy, ...failing]).ids.filter((id) => id.startsWith("f-"));
+    expect(dayOne).toEqual(["f-14", "f-13", "f-12", "f-11", "f-10", "f-09", "f-08", "f-07", "f-06", "f-05"]);
+
+    // They all fail again on day one: a new failure time, at the back.
+    const dayTwoFailing = failing.map((row) => (dayOne.includes(row.id) ? { ...row, failedAt: at(DAY) } : row));
+    const dayTwo = inlineRefreshQueue([...healthy, ...dayTwoFailing]).ids.filter((id) => id.startsWith("f-"));
+    expect(dayTwo.slice(0, 5)).toEqual(["f-04", "f-03", "f-02", "f-01", "f-00"]);
+    expect(dayTwo).toHaveLength(10);
+  });
+
+  it("a failed one without a failure time (a page memoized before this release) goes by expiry, after those with one", () => {
+    const queue = inlineRefreshQueue([
+      { id: "old-page", expiresAt: at(-30 * DAY), failed: true },
+      { id: "timed", expiresAt: at(-DAY), failed: true, failedAt: at(-HOUR) },
+    ]);
+    expect(queue.ids).toEqual(["timed", "old-page"]);
+  });
+
   it("at most 10 places go to failed ones while healthy ones wait; unused places go to the other kind", () => {
     const healthy = Array.from({ length: 150 }, (_, i) => ({ id: `h-${String(i).padStart(3, "0")}`, expiresAt: at(-HOUR) }));
     const failed = Array.from({ length: 30 }, (_, i) => ({ id: `f-${String(i).padStart(2, "0")}`, expiresAt: at(-DAY), failed: true }));
