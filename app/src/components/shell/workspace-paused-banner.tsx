@@ -8,12 +8,15 @@ import { useSession } from "next-auth/react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
+import { subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 
 /**
  * The one banner a paused workspace's members see on every signed-in page
  * (2026-11-10), and (21a, billing on) a workspace whose trial or plan ended.
  * Asks GET /api/workspaces/status on each page change, so a pause or resume
- * shows on the next navigation; renders nothing unless the workspace is
+ * shows on the next navigation, and on each announceWorkspaceChange (R16: an
+ * owner who makes themselves a member gets the member's wording without
+ * navigating); renders nothing unless the workspace is
  * blocked, or while the answer is loading or failed. In the last 3 days of a
  * trial, owners get a quieter line instead. 23: with billing on, a person whose
  * email address is not confirmed gets the routes' sentence and a button that
@@ -34,21 +37,18 @@ export function WorkspacePausedBanner({
   useEffect(() => {
     if (status !== "authenticated") return;
     let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch("/api/workspaces/status", { cache: "no-store" });
-        if (!response.ok) return;
-        const data: unknown = await response.json();
-        if (cancelled) return;
-        setWorkspaceStatus(readWorkspaceStatus(data));
-      } catch {
-        // Best effort: the routes still refuse with the same message.
-      }
-    })();
+    void fetchWorkspaceStatus(fetch).then((next) => {
+      if (!cancelled && next) setWorkspaceStatus(next);
+    });
     return () => {
       cancelled = true;
     };
   }, [status, pathname]);
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    return watchWorkspaceStatus(setWorkspaceStatus);
+  }, [status]);
 
   const confirmShown = confirmEmailBannerShown(workspaceStatus);
   useEffect(() => {
@@ -74,6 +74,35 @@ export function WorkspacePausedBanner({
   }
 
   return <WorkspaceStatusAlert status={workspaceStatus} sending={sending} onResend={handleResend} />;
+}
+
+/** The status route's answer, or null when it can't be read (best effort: the routes still refuse with the same message). */
+async function fetchWorkspaceStatus(fetchImpl: typeof fetch): Promise<WorkspaceStatus | null> {
+  try {
+    const response = await fetchImpl("/api/workspaces/status", { cache: "no-store" });
+    if (!response.ok) return null;
+    return readWorkspaceStatus(await response.json());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads the status again on each announceWorkspaceChange; `onStatus` gets each
+ * good answer. The answer stops listening, and an answer that arrives after
+ * that is dropped.
+ */
+export function watchWorkspaceStatus(onStatus: (status: WorkspaceStatus) => void, fetchImpl: typeof fetch = fetch): () => void {
+  let stopped = false;
+  const unsubscribe = subscribeWorkspaceChange(() => {
+    void fetchWorkspaceStatus(fetchImpl).then((next) => {
+      if (!stopped && next) onStatus(next);
+    });
+  });
+  return () => {
+    stopped = true;
+    unsubscribe();
+  };
 }
 
 export type WorkspaceStatus = {

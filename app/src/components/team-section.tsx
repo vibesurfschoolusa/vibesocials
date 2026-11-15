@@ -28,6 +28,7 @@ import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 import { personLabel } from "@/lib/usageLimits";
+import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
 
 import { FormError } from "./account-section";
 import { announceClientLinksReplaced, subscribeClientLinksReplaced } from "./client-links-refresh";
@@ -550,14 +551,18 @@ function OwnerView({
       setSavedName(trimmed);
       setName(trimmed);
       toast.success("Workspace renamed.");
-      // R15: a full load of Settings, so the top bar (read once per page load) shows the new name.
-      afterWorkspaceChange();
+      // R16 L1: the active workspace stays, so no full load, which threw away
+      // unsaved typing on Settings and a freshly shown invite or connect link.
+      // The server parts re-render; the account menu hears the announce and
+      // reads the new name.
+      router.refresh();
+      announceWorkspaceChange();
     } catch {
       toast.error("Couldn't rename workspace.");
     } finally {
       setSavingName(false);
     }
-  }, [name, savedName, toast, workspaceId]);
+  }, [name, router, savedName, toast, workspaceId]);
 
   // --- Invite link (GET/POST/DELETE /api/workspaces/invites) ---
   const [invite, setInvite] = useState<InviteMeta | null>(null);
@@ -748,8 +753,8 @@ function OwnerView({
   // ConfirmDialog contract: throw to keep the dialog open on failure. Demote
   // owner -> member. Demoting YOURSELF drops you out of OwnerView, so on that
   // branch refresh the route (the server now resolves role="member" and the
-  // card re-renders as MemberView) instead of patching local state — mirrors
-  // MemberView.handleLeave. The server enforces the >=1-owner invariant, so a
+  // card re-renders as MemberView) instead of patching local state, and
+  // announce it for the top bar. The server enforces the >=1-owner invariant, so a
   // last-owner demote is refused there and surfaced via toast.
   const confirmDemote = useCallback(async () => {
     if (!demoteTarget) return;
@@ -766,6 +771,9 @@ function OwnerView({
     if (demoteTarget.userId === currentUserId) {
       toast.success(demotedMessage(null, true));
       router.refresh();
+      // R16 L2: the banner reads its status again, so the owner-only trial and
+      // plan line goes; the menu reads the new role.
+      announceWorkspaceChange();
       return;
     }
     const revoked = demotionOutcome(await response.json().catch(() => null));

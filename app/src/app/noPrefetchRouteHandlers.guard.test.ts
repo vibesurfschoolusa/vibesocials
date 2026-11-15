@@ -196,27 +196,45 @@ describe("no client-router navigation to a route handler", () => {
 });
 
 /**
- * R14-client-journey L1, R15 (all four reports): the account menu reads its
- * workspaces, and the workspace banner its status, once per page load. So any
- * action that changes the active workspace, the list of workspaces or a
- * workspace's name ends with a full page load through afterWorkspaceChange.
- * router.refresh() re-renders only server components: after Leave and a
- * rename it left the top bar naming the old workspace, once #165 had fixed
- * Join and delete.
+ * R14-client-journey L1, R15 (all four reports): client views fetch under the
+ * workspace active when they mounted. So any action that changes the ACTIVE
+ * workspace ends with a full page load through afterWorkspaceChange.
+ * router.refresh() re-renders only server components: after Leave it left the
+ * top bar naming the old workspace, once #165 had fixed Join and delete.
+ *
+ * R16 (all four reports): a change that keeps the active workspace (a rename,
+ * an owner making themselves a member) must not load the page again, which
+ * threw away unsaved Settings typing and a freshly shown invite or connect
+ * link. It ends with router.refresh() and announceWorkspaceChange(), which the
+ * account menu and the workspace banner hear and read again.
  *
  * Rule: every fetch (or fetchImpl) to one of WORKSPACE_CHANGES is followed by
- * afterWorkspaceChange before the next such call in the same file. Every route
- * that sets or clears the active-workspace cookie must be listed, so a new one
- * is caught; /go is reached only by plain links, which load in full already.
- * A route held in a variable is not followed.
+ * afterWorkspaceChange, and every one to WORKSPACE_ANNOUNCES by
+ * announceWorkspaceChange and no full load, before the next such call in the
+ * same file. Every route that sets or clears the active-workspace cookie must
+ * be listed, so a new one is caught; /go is reached only by plain links, which
+ * load in full already. A route held in a variable is not followed.
  */
 const WORKSPACE_CHANGES: Array<{ route: string; methods: string[] }> = [
   { route: "/api/workspaces", methods: ["POST"] }, // create
   { route: "/api/workspaces/switch", methods: ["POST"] },
   { route: "/api/workspaces/leave", methods: ["POST"] },
-  { route: "/api/workspaces/active", methods: ["PATCH", "DELETE"] }, // rename, delete
+  { route: "/api/workspaces/active", methods: ["DELETE"] }, // delete
   { route: "/api/invites/[token]/accept", methods: ["POST"] }, // join
 ];
+
+/** Changes that keep the active workspace but change what the menu or the banner shows. */
+const WORKSPACE_ANNOUNCES: Array<{ route: string; methods: string[] }> = [
+  { route: "/api/workspaces/active", methods: ["PATCH"] }, // rename
+  { route: "/api/workspaces/members/[userId]", methods: ["PATCH"] }, // a role change, one's own included
+];
+
+/**
+ * Role changes that can never be the caller's own, by "file: handler". An
+ * owner's own row shows "Make member", never "Make owner", so a promotion
+ * always names someone else, and nothing the menu or the banner shows changes.
+ */
+const ANNOUNCE_NOT_NEEDED = ["components/team-section.tsx: confirmPromote"];
 
 /** Routes that touch the cookie but are never fetched: each is reached by a full load. */
 const COOKIE_ROUTES_REACHED_BY_FULL_LOAD = ["/go"];
@@ -226,10 +244,11 @@ function withoutComments(source: string): string {
   return source.replace(/\r\n/g, "\n").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
-/** Each fetch in a source that changes workspaces: where it is, its route and method. */
+/** Each fetch in a source to one of `listed`: where it is, its route and method. */
 export function workspaceChangeCalls(
   source: string,
   patterns = routeHandlerPatterns(),
+  listed = WORKSPACE_CHANGES,
 ): Array<{ index: number; route: string; method: string }> {
   const out: Array<{ index: number; route: string; method: string }> = [];
   for (const match of source.matchAll(/\b(?:fetch|fetchImpl)\(/g)) {
@@ -240,20 +259,52 @@ export function workspaceChangeCalls(
     const method = (/\bmethod:\s*["'`](\w+)["'`]/.exec(options)?.[1] ?? "GET").toUpperCase();
     for (const target of literalPaths(first)) {
       const hit = patterns.find(({ pattern }) => pattern.test(target));
-      const change = hit ? WORKSPACE_CHANGES.find((entry) => entry.route === hit.route) : undefined;
-      if (change && change.methods.includes(method)) out.push({ index: match.index, route: change.route, method });
+      const change = hit ? listed.find((entry) => entry.route === hit.route && entry.methods.includes(method)) : undefined;
+      if (change) out.push({ index: match.index, route: change.route, method });
     }
   }
   return out;
 }
 
+/** Each listed call with the code after it, up to the next listed call of either kind. */
+function callsWithTheirEnding(code: string, patterns: Array<{ route: string; pattern: RegExp }>) {
+  const calls = [
+    ...workspaceChangeCalls(code, patterns, WORKSPACE_CHANGES).map((call) => ({ ...call, kind: "change" as const })),
+    ...workspaceChangeCalls(code, patterns, WORKSPACE_ANNOUNCES).map((call) => ({ ...call, kind: "announce" as const })),
+  ].sort((a, b) => a.index - b.index);
+  return calls.map((call, i) => ({ ...call, ending: code.slice(call.index, calls[i + 1]?.index ?? code.length) }));
+}
+
 /** The changing calls not followed by afterWorkspaceChange before the next one. */
 export function changesWithoutFullLoad(source: string, patterns = routeHandlerPatterns()): string[] {
-  const code = withoutComments(source);
-  const calls = workspaceChangeCalls(code, patterns);
-  return calls
-    .filter((call, i) => !/\bafterWorkspaceChange\b/.test(code.slice(call.index, calls[i + 1]?.index ?? code.length)))
+  return callsWithTheirEnding(withoutComments(source), patterns)
+    .filter((call) => call.kind === "change" && !/\bafterWorkspaceChange\b/.test(call.ending))
     .map((call) => `${call.method} ${call.route}`);
+}
+
+/** The handler a call sits in: the nearest `const name = useCallback(` or `function name(` before it. */
+function enclosingHandler(code: string, index: number): string | null {
+  let name: string | null = null;
+  for (const match of code.slice(0, index).matchAll(/const (\w+) = useCallback\(|function (\w+)\(/g)) name = match[1] ?? match[2];
+  return name;
+}
+
+/**
+ * The keep-the-workspace calls that do not announce, or that load the page
+ * again, before the next listed call. `notNeeded` names handlers that need no
+ * announce; the no-reload rule holds for them too.
+ */
+export function announcesMissing(source: string, patterns = routeHandlerPatterns(), notNeeded: string[] = []): string[] {
+  const code = withoutComments(source);
+  return callsWithTheirEnding(code, patterns)
+    .filter((call) => call.kind === "announce")
+    .flatMap((call) => {
+      const label = `${call.method} ${call.route}`;
+      if (/\bafterWorkspaceChange\b|\blocation\.(?:reload|assign|replace)\b/.test(call.ending)) return [`${label}: loads the page again`];
+      const handler = enclosingHandler(code, call.index);
+      if (handler && notNeeded.includes(handler)) return [];
+      return /\bannounceWorkspaceChange\(\)/.test(call.ending) ? [] : [`${label}: no announce`];
+    });
 }
 
 describe("a full page load after the workspaces change", () => {
@@ -292,7 +343,7 @@ describe("a full page load after the workspaces change", () => {
   });
 
   it("each listed change is a route handler with that method", () => {
-    for (const { route, methods } of WORKSPACE_CHANGES) {
+    for (const { route, methods } of [...WORKSPACE_CHANGES, ...WORKSPACE_ANNOUNCES]) {
       const source = readSource(path.join(APP, ...route.split("/").filter(Boolean), "route.ts"));
       for (const method of methods) {
         expect(source, `${method} ${route}`).toMatch(new RegExp(`export (?:async function|const) ${method}\\b`));
@@ -329,8 +380,39 @@ describe("a full page load after the workspaces change", () => {
     }
   });
 
-  it("no file under src changes workspaces without a full load after it", () => {
+  it("the scan wants an announce and no full load after a rename or a role change", () => {
+    const shapes: Array<[string, string[]]> = [
+      ['await fetch("/api/workspaces/active", { method: "PATCH" });\nrouter.refresh();\nannounceWorkspaceChange();', []],
+      ['await fetch("/api/workspaces/active", { method: "PATCH" });\nrouter.refresh();', ["PATCH /api/workspaces/active: no announce"]],
+      // R16 L1: the reload threw away unsaved typing and a fresh invite link.
+      ['await fetch("/api/workspaces/active", { method: "PATCH" });\nafterWorkspaceChange();', ["PATCH /api/workspaces/active: loads the page again"]],
+      [
+        'await fetch("/api/workspaces/active", { method: "PATCH" });\nannounceWorkspaceChange();\nwindow.location.reload();',
+        ["PATCH /api/workspaces/active: loads the page again"],
+      ],
+      ['await fetch(`/api/workspaces/members/${id}`, { method: "PATCH" });', ["PATCH /api/workspaces/members/[userId]: no announce"]],
+      // Removing someone changes nothing the menu shows; a read is not a change.
+      ['await fetch(`/api/workspaces/members/${id}`, { method: "DELETE" }); await fetch("/api/workspaces/active");', []],
+      // An announce before the next call covers only the call before it.
+      [
+        'await fetch("/api/workspaces/active", { method: "PATCH" });\nawait fetch(`/api/workspaces/members/${id}`, { method: "PATCH" });\nannounceWorkspaceChange();',
+        ["PATCH /api/workspaces/active: no announce"],
+      ],
+      // A comment is not an announce.
+      ['await fetch("/api/workspaces/active", { method: "PATCH" });\n// announceWorkspaceChange();', ["PATCH /api/workspaces/active: no announce"]],
+    ];
+    for (const [shape, missing] of shapes) {
+      expect(announcesMissing(shape, patterns), shape).toEqual(missing);
+      expect(changesWithoutFullLoad(shape, patterns), shape).toEqual([]);
+    }
+    const promote = 'const confirmPromote = useCallback(async () => {\n  await fetch(`/api/workspaces/members/${id}`, { method: "PATCH" });\n});';
+    expect(announcesMissing(promote, patterns, ["confirmPromote"])).toEqual([]);
+    expect(announcesMissing(promote, patterns, ["confirmDemote"])).toEqual(["PATCH /api/workspaces/members/[userId]: no announce"]);
+  });
+
+  it("no file under src changes workspaces without a full load or an announce after it", () => {
     const covered: string[] = [];
+    const announced: string[] = [];
     const offenders: string[] = [];
     for (const file of files(SRC, (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.endsWith(".d.ts"))) {
       const source = readSource(file);
@@ -338,9 +420,22 @@ describe("a full page load after the workspaces change", () => {
       for (const call of workspaceChangeCalls(withoutComments(source), patterns)) {
         covered.push(`${relative}: ${call.method} ${call.route}`);
       }
+      for (const call of workspaceChangeCalls(withoutComments(source), patterns, WORKSPACE_ANNOUNCES)) {
+        announced.push(`${relative}: ${call.method} ${call.route}`);
+      }
       for (const missing of changesWithoutFullLoad(source, patterns)) offenders.push(`${relative}: ${missing}`);
+      const notNeeded = ANNOUNCE_NOT_NEEDED.filter((entry) => entry.startsWith(`${relative}: `)).map((entry) => entry.slice(relative.length + 2));
+      for (const missing of announcesMissing(source, patterns, notNeeded)) offenders.push(`${relative}: ${missing}`);
     }
     expect(offenders).toEqual([]);
+    // The rename, the promotion (exempt) and the demotion; a new caller shows up here for review.
+    expect(announced.sort()).toEqual(
+      [
+        "components/team-section.tsx: PATCH /api/workspaces/active",
+        "components/team-section.tsx: PATCH /api/workspaces/members/[userId]",
+        "components/team-section.tsx: PATCH /api/workspaces/members/[userId]",
+      ].sort(),
+    );
     // What the rule covers today; a new caller shows up here for review.
     expect(covered.sort()).toEqual(
       [
@@ -349,7 +444,6 @@ describe("a full page load after the workspaces change", () => {
         "components/shell/account-menu.tsx: POST /api/workspaces",
         "components/shell/account-menu.tsx: POST /api/workspaces/switch",
         "components/team-section.tsx: DELETE /api/workspaces/active",
-        "components/team-section.tsx: PATCH /api/workspaces/active",
         "components/team-section.tsx: POST /api/workspaces/leave",
         "components/team-section.tsx: POST /api/workspaces/leave",
       ].sort(),
@@ -372,16 +466,44 @@ describe("a full page load after the workspaces change", () => {
   });
 
   // R15: a member of A and B leaves B -> the page loads again and the menu,
-  // reading its list afresh, names A; an owner renames "Surf Co" -> the new
-  // name; a paused workspace left -> the banner's fresh status has no banner.
-  it("Leave (member and owner views), rename and the menu's switch load the page they were on", () => {
+  // reading its list afresh, names A; a paused workspace left -> the banner's
+  // fresh status has no banner. R16: the page loads without A's one-time
+  // message (afterWorkspaceChange.test.ts).
+  it("Leave (member and owner views) and the menu's switch load the page they were on", () => {
     const team = read(path.join("components", "team-section.tsx"));
     const leaves = bodies(team, "handleLeave");
     expect(leaves).toHaveLength(2);
-    const handlers = [...leaves, ...bodies(team, "handleSaveName"), ...bodies(read(path.join("components", "shell", "account-menu.tsx")), "handleSwitch")];
+    const handlers = [...leaves, ...bodies(read(path.join("components", "shell", "account-menu.tsx")), "handleSwitch")];
     for (const handler of handlers.map(withoutComments)) {
       expect(handler).toContain("afterWorkspaceChange()");
       expect(handler).not.toMatch(/router\./);
     }
+  });
+
+  // R16 L1: a rename keeps typed brand voice and a fresh invite or connect link
+  // on screen (no load), and the menu shows the new name. R16 L2: an owner who
+  // makes themselves a member gets the member banner.
+  it("rename and self-demotion refresh in place and announce", () => {
+    const team = read(path.join("components", "team-section.tsx"));
+    const rename = withoutComments(bodies(team, "handleSaveName")[0]);
+    const demote = withoutComments(bodies(team, "confirmDemote")[0]);
+    const selfAt = demote.indexOf("if (demoteTarget.userId === currentUserId)");
+    expect(selfAt).toBeGreaterThan(-1);
+    const self = balanced(demote, demote.indexOf("{", selfAt), "{", "}");
+    for (const handler of [rename, self]) {
+      expect(handler).toContain("router.refresh()");
+      expect(handler).toContain("announceWorkspaceChange()");
+      expect(handler).not.toMatch(/afterWorkspaceChange|location\./);
+    }
+    // The Settings cards survive the refresh: keyed by the workspace, never its name.
+    const settings = read(path.join("app", "settings", "page.tsx"));
+    expect(settings).toMatch(/<SettingsForm\s+key=\{context\.workspace\.id\}/);
+    expect(settings).toMatch(/<TeamSection\s+key=\{context\.workspace\.id\}/);
+    expect(settings).toContain("key={`connect-link-${context.workspace.id}`}");
+    // Both listen: the menu reads /api/workspaces again, the banner /api/workspaces/status.
+    expect(withoutComments(read(path.join("components", "shell", "account-menu.tsx")))).toMatch(/useEffect\([^]*?watchWorkspaceList\(/);
+    expect(withoutComments(read(path.join("components", "shell", "workspace-paused-banner.tsx")))).toMatch(
+      /useEffect\([^]*?watchWorkspaceStatus\(/,
+    );
   });
 });

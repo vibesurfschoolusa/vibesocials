@@ -11,6 +11,7 @@ import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 
 import {
+  ByName,
   cardTime,
   createSendAgain,
   displayedJobStatus,
@@ -359,5 +360,26 @@ describe("PostJobCard - what a member reads", () => {
       ),
     ).replace(/<!-- -->/g, "");
     expect(html).toContain("Retry Instagram</button>");
+  });
+});
+
+// R16-pages L4: on a phone an owner sees a full address in the "by" line; it
+// wraps inside its column instead of drawing over the status badge.
+describe("PostJobCard - the by line", () => {
+  const LONG = "very.long.address.for.a.teammate@example-agency.com";
+
+  it("wraps the name, whatever its length", () => {
+    expect(renderToStaticMarkup(createElement(ByName, { name: LONG }))).toBe(`<span class="break-words">${LONG}</span>`);
+  });
+
+  it("the card puts the name in that span", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(PostJobCard, { job: job({ createdBy: { name: LONG } }), showAttribution: true, onRetryAccepted: () => {} }),
+      ),
+    );
+    expect(html.replace(/<!-- -->/g, "")).toContain(` · by <span class="break-words">${LONG}</span>`);
   });
 });

@@ -10,6 +10,7 @@ import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accou
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
 import { contactUsHref } from "@/lib/contactUs";
+import { subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,6 +30,30 @@ interface WorkspaceSummary {
 interface OperatorLink {
   href: string;
   label: string;
+}
+
+/**
+ * R16: re-reads GET /api/workspaces on each announceWorkspaceChange (a rename,
+ * an owner stepping down), which keep the page; `onList` gets each good answer.
+ * The answer stops listening, and an answer that arrives after that is dropped.
+ */
+export function watchWorkspaceList(
+  onList: (workspaces: WorkspaceSummary[]) => void,
+  fetchImpl: typeof fetch = fetch,
+): () => void {
+  let stopped = false;
+  const unsubscribe = subscribeWorkspaceChange(() => {
+    fetchImpl("/api/workspaces")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { workspaces?: WorkspaceSummary[] } | null) => {
+        if (!stopped && Array.isArray(data?.workspaces)) onList(data.workspaces);
+      })
+      .catch(() => {});
+  });
+  return () => {
+    stopped = true;
+    unsubscribe();
+  };
 }
 
 /**
@@ -127,8 +152,8 @@ export function AccountMenu() {
   // The button's second line names the active workspace when there are several,
   // so it needs the list before the menu is first opened: one read per page
   // load. Opening the menu still fetches it fresh; a failure only drops the line.
-  // Every change of workspace ends in a full load (afterWorkspaceChange), so
-  // this read is never older than the last change made on this page.
+  // A change of the active workspace ends in a full load (afterWorkspaceChange);
+  // a rename or a role change of one's own is announced, and read again below.
   useEffect(() => {
     let cancelled = false;
     fetch("/api/workspaces")
@@ -144,6 +169,8 @@ export function AccountMenu() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => watchWorkspaceList(setWorkspaces), []);
 
   async function handleSwitch(workspace: WorkspaceSummary) {
     if (workspace.isActive || switchingId) return;
@@ -167,7 +194,8 @@ export function AccountMenu() {
       // load of the current page remounts every client component, which
       // refetches under the new active workspace. `switchingId` is left set on
       // purpose: the page is unloading, and the buttons staying disabled stops
-      // a second switch from racing the navigation.
+      // a second switch from racing the navigation. The page loads without the
+      // last workspace's one-time message (R16).
       afterWorkspaceChange();
     } catch {
       toast.error("Couldn't switch workspaces.");

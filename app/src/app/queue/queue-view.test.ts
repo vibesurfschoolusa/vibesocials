@@ -239,3 +239,13 @@ describe("labelName, the caption in a Queue button's name", () => {
     for (const name of names) expect(name).toContain("${name}");
   });
 });
+
+// R16-pages L4: each of the Queue card's three "by" lines wraps a long label
+// (a full address on a phone) in ByName, never the bare name.
+describe("Queue card by lines", () => {
+  it("name the author through ByName", () => {
+    const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+    expect(queueSource.match(/by \{job\.createdBy\.name\}/g) ?? []).toEqual([]);
+    expect(queueSource.match(/ · by <ByName name=\{job\.createdBy\.name\} \/>/g) ?? []).toHaveLength(3);
+  });
+});

@@ -26,7 +26,7 @@ import { CaptionCounter } from "@/components/caption-counter";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { PlatformCaptionEditor } from "@/components/composer/platform-caption-editor";
 import { useConnections } from "@/hooks/useConnections";
-import { isTextPost, TextPostTile } from "@/components/activity/post-job-card";
+import { ByName, isTextPost, TextPostTile } from "@/components/activity/post-job-card";
 import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
 import {
@@ -302,7 +302,7 @@ function QueueCard({
               <time dateTime={job.scheduledFor}>
                 {formatTimestamp(job.scheduledFor)}
               </time>
-              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
+              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
             </p>
           ) : job.status === "scheduled" && job.scheduledFor ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
@@ -310,13 +310,13 @@ function QueueCard({
               <time dateTime={job.scheduledFor}>
                 {formatTimestamp(job.scheduledFor)}
               </time>
-              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
+              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
             </p>
           ) : (
             <p className="mt-0.5 text-xs text-muted-foreground">
               Saved{" "}
               <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
-              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
+              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
             </p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">

@@ -224,6 +224,15 @@ export function isTextPost(job: Pick<PostJobDTO, "media" | "mediaCount">): boole
   return job.media === null && job.mediaCount === 0;
 }
 
+/**
+ * The author in a card's "by" line (Activity, dashboard, Queue). R16-pages L4:
+ * owners see a full address, which on a phone is wider than the column, so it
+ * wraps instead of running over the status badge.
+ */
+export function ByName({ name }: { name: string }) {
+  return <span className="break-words">{name}</span>;
+}
+
 /** The small tile a text post shows where a photo's thumbnail would be (Activity and Queue). */
 export function TextPostTile() {
   return (
@@ -468,7 +477,7 @@ export function PostJobCard({
             <p className="mt-0.5 text-xs text-muted-foreground">
               {time.label ? <>{time.label} </> : null}
               <time dateTime={time.iso}>{formatTimestamp(time.iso)}</time>
-              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
+              {showAttribution && job.createdBy ? <> · by <ByName name={job.createdBy.name} /></> : null}
             </p>
           ) : null}
         </div>

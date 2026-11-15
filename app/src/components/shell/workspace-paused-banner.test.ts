@@ -1,12 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next-auth/react", () => ({ useSession: () => ({ status: "loading" }) }));
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { readWorkspaceStatus, WorkspaceStatusAlert } from "./workspace-paused-banner";
+import { readWorkspaceStatus, watchWorkspaceStatus, WorkspaceStatusAlert } from "./workspace-paused-banner";
+import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
 
 /** 23: the banner's line for an unconfirmed address, with its resend button, and only for it. */
 
@@ -80,5 +81,66 @@ describe("WorkspaceStatusAlert links to Settings, Plan (S1 item 7)", () => {
   it("links the plan-ended banner for owners only", () => {
     expect(render({ blockedMessage: "Your free trial has ended.", planLink: true })).toMatch(PLAN_LINK);
     expect(render({ blockedMessage: "Your free trial has ended." })).not.toContain("<a ");
+  });
+});
+
+// R16-publishing L2 = security L2 = client-journey L2/L3: an owner who makes
+// themselves a member stays on the page; the banner reads its status again on
+// the announce, so the owner-only "Free trial: 9 days left. Choose a plan" goes.
+describe("watchWorkspaceStatus", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", new EventTarget());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const answer = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+  it("reads the status again on each announce, until it stops", async () => {
+    const fetchImpl = vi.fn(() => answer({ blockedMessage: null }));
+    const onStatus = vi.fn();
+    const stop = watchWorkspaceStatus(onStatus, fetchImpl as unknown as typeof fetch);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    announceWorkspaceChange();
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledTimes(1));
+    expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces/status", { cache: "no-store" });
+
+    stop();
+    announceWorkspaceChange();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("self-demotion: the member's answer replaces the owner's trial line", async () => {
+    const owner = readWorkspaceStatus({ blockedMessage: null, trialDaysLeft: "Free trial: 9 days left." });
+    expect(render({ blockedMessage: null, trialDaysLeft: "Free trial: 9 days left." })).toContain("Choose a plan");
+    let shown = owner;
+    watchWorkspaceStatus(
+      (status) => {
+        shown = status;
+      },
+      (() => answer({ blockedMessage: null })) as unknown as typeof fetch,
+    );
+    announceWorkspaceChange();
+    await vi.waitFor(() => expect(shown).not.toBe(owner));
+    expect(renderToStaticMarkup(createElement(WorkspaceStatusAlert, { status: shown, sending: false, onResend: () => {} }))).toBe("");
+  });
+
+  it("an answer that comes after it stopped, or a failed read, changes nothing", async () => {
+    let release: (value: Response) => void = () => {};
+    const onStatus = vi.fn();
+    const stop = watchWorkspaceStatus(onStatus, (() => new Promise<Response>((resolve) => (release = resolve))) as unknown as typeof fetch);
+    announceWorkspaceChange();
+    stop();
+    release(new Response(JSON.stringify({ blockedMessage: "Paused." }), { status: 200 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onStatus).not.toHaveBeenCalled();
+
+    watchWorkspaceStatus(onStatus, (() => Promise.resolve(new Response("", { status: 500 }))) as unknown as typeof fetch);
+    announceWorkspaceChange();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onStatus).not.toHaveBeenCalled();
   });
 });

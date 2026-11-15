@@ -28,6 +28,34 @@ function CardShell({ title, description, children }: { title: string; descriptio
 }
 
 /**
+ * A used, expired or missing link. R16-pages L3: when it follows a press of
+ * Reset password the form and its focused button disappear, so the reason is
+ * in an alert, which screen readers announce; arriving on a dead link it is the
+ * page itself, with nothing to interrupt.
+ */
+export function DeadLinkCard({ afterSubmit }: { afterSubmit: boolean }) {
+  const reason = "This password reset link is invalid or has expired.";
+  return (
+    <CardShell title="This link isn't valid" description={afterSubmit ? undefined : reason}>
+      {afterSubmit ? (
+        <Alert variant="danger" className="mb-4">
+          {reason}
+        </Alert>
+      ) : null}
+      <p className="text-sm text-muted-foreground">
+        Request a new link to reset your password.
+      </p>
+      <Link
+        href="/forgot-password"
+        className="mt-4 inline-block font-semibold text-primary outline-none hover:underline focus-visible:underline"
+      >
+        Request a new link
+      </Link>
+    </CardShell>
+  );
+}
+
+/**
  * Choose-a-new-password form. The raw token arrives in the URL FRAGMENT
  * (`/reset-password#<token>`), never a query string — so it is never sent to
  * the server on navigation, logged in access logs, or leaked via the Referer
@@ -88,21 +116,7 @@ export function ResetPasswordForm() {
     );
   }
 
-  if (!token || linkDead) {
-    return (
-      <CardShell title="This link isn't valid" description="This password reset link is invalid or has expired.">
-        <p className="text-sm text-muted-foreground">
-          Request a new link to reset your password.
-        </p>
-        <Link
-          href="/forgot-password"
-          className="mt-4 inline-block font-semibold text-primary outline-none hover:underline focus-visible:underline"
-        >
-          Request a new link
-        </Link>
-      </CardShell>
-    );
-  }
+  if (!token || linkDead) return <DeadLinkCard afterSubmit={linkDead} />;
 
   if (done) {
     return (
