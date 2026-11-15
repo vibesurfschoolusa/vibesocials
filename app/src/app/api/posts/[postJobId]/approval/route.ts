@@ -362,7 +362,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
           ...(notSent ? { notSent } : {}),
         });
-        await sendEmail({ to: submitter.email, ...email });
+        await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
       }
     } catch {
       // Ignored on purpose — the decision is already committed.

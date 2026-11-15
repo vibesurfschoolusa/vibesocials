@@ -61,7 +61,10 @@ export async function notifyOwnersOfApprovalRequest(params: {
       });
 
     await Promise.all(
-      owners.map((owner) => sendEmail({ to: owner.user.email, ...emailFor(owner.user.timeZone ?? null) })),
+      owners.map((owner) => sendEmail(
+          { to: owner.user.email, ...emailFor(owner.user.timeZone ?? null) },
+          { label: "approval-requested" },
+        )),
     );
   } catch (error) {
     logger.error("[Notifications] Failed to notify owners of an approval request", {

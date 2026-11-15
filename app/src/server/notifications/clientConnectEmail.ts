@@ -118,7 +118,7 @@ export async function notifyOwnersOfClientConnect(params: {
         locationChosen,
         ...(keptEnd ? { keptEndDate: emailDate(keptEnd, owner.user.timeZone) } : {}),
       });
-      await sendEmail({ to: owner.user.email, ...email });
+      await sendEmail({ to: owner.user.email, ...email }, { label: "client-connect" });
     }
   } catch (error) {
     logger.error("[connect-link] Couldn't email the owners about a client connect (ignored)", {

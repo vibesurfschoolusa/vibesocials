@@ -101,7 +101,7 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
       appBaseUrl: process.env.NEXTAUTH_URL || null,
     });
     for (const owner of owners) {
-      await sendEmail({ to: owner.user.email, ...email });
+      await sendEmail({ to: owner.user.email, ...email }, { label: "refused-connect" });
     }
   } catch (error) {
     logger.error("[connect-link] Couldn't email the owners about a refused client sign-in (ignored)", {

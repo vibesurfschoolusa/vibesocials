@@ -79,7 +79,7 @@ export async function notifyOwnersOfMemberJoined(params: {
       appBaseUrl: process.env.NEXTAUTH_URL || null,
     });
     for (const owner of owners) {
-      await sendEmail({ to: owner.user.email, ...email });
+      await sendEmail({ to: owner.user.email, ...email }, { label: "member-joined" });
     }
   } catch (error) {
     logger.error("[invites] Couldn't email the owners about a new member (ignored)", {

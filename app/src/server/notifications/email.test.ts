@@ -620,6 +620,27 @@ describe("sendEmail - no subject in any log line", () => {
     expect(text).toContain('"kind":"client-upload"');
   });
 
+  it("an explicit label is the kind, and wins over the key", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+    await sendEmail(params, { label: "member-joined", idempotencyKey: KEY });
+    expect(logged()).toContain('"kind":"member-joined"');
+    expect(logged()).not.toContain("client-upload");
+  });
+
+  it("an explicit label without a key is the kind", async () => {
+    sendMock.mockRejectedValueOnce(new Error("network"));
+    await sendEmail(params, { label: "approval-requested" });
+    expect(logged()).toContain('"kind":"approval-requested"');
+    expect(logged()).not.toContain("Maria");
+  });
+
+  it("a label that is not a plain label is never logged", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+    await sendEmail(params, { label: "Maria Lopez" });
+    expect(logged()).not.toContain("Maria");
+    expect(logged()).toContain('"kind":"unlabelled"');
+  });
+
   it("a key whose first part is not a plain label is not logged as the kind", async () => {
     sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
     await sendEmail(params, { idempotencyKey: "Maria Lopez/1" });

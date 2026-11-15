@@ -67,6 +67,13 @@ export interface SendEmailParams {
 
 export interface SendEmailOptions {
   /**
+   * A fixed label for this kind of email ("member-joined"), the only thing the
+   * log lines name the send by (R21 client-journey L2). Without it the
+   * idempotency key's first segment is used; sendEmailLabels.test.ts checks
+   * every caller gives one or the other.
+   */
+  label?: string;
+  /**
    * Sent as Resend's `Idempotency-Key` (kept 24 h): a repeat of the same key is a
    * no-op, so a retry after a lost ack cannot send the email twice.
    */
@@ -151,21 +158,21 @@ function loggableError(error: unknown, to: string): { name: string; message: str
 /**
  * R21 client-journey L2: what the log lines name the send by. Never the subject:
  * the client upload email's carries the name a client typed, and logger.error
- * reaches Sentry. Every keyed caller starts its idempotency key with a fixed
- * label ("client-upload/...", "post-outcome/..."), so that first part is the kind;
- * anything else is "unlabelled".
+ * reaches Sentry. The caller's `label`, else the first segment of its
+ * idempotency key (every keyed caller starts it with a fixed label:
+ * "client-upload/..."); anything that is not a plain label is "unlabelled".
  */
-function emailKind(idempotencyKey: string | undefined): string {
-  const first = idempotencyKey?.split("/")[0] ?? "";
-  return /^[a-z][a-z0-9-]{0,40}$/.test(first) ? first : "unlabelled";
+function emailKind(label: string | undefined, idempotencyKey: string | undefined): string {
+  const plain = (value: string | undefined) => (value && /^[a-z][a-z0-9-]{0,40}$/.test(value) ? value : null);
+  return plain(label) ?? plain(idempotencyKey?.split("/")[0]) ?? "unlabelled";
 }
 
 export async function sendEmail(
   { to, subject, html, text }: SendEmailParams,
-  { idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
+  { label, idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
 ): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
-  const kind = emailKind(idempotencyKey);
+  const kind = emailKind(label, idempotencyKey);
 
   if (!apiKey) {
     console.log(
