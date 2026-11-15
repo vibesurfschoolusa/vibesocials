@@ -52,6 +52,14 @@ const CHANGED_SINCE_REVIEW_BODY = {
 } as const;
 
 /** See the sibling routes — generous throttle shared by the DB-only mutations. */
+/**
+ * R9-client-journey L3: why nothing went out, in the submitter's decision
+ * email. The submitter is a member: only an owner can reconnect.
+ */
+const NOT_SENT_NOTHING_CONNECTED =
+  "none of this post's platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.";
+const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and send it again.";
+
 const MUTATE_RATE_LIMIT = {
   route: "posts/mutate",
   limit: 60,
@@ -316,6 +324,50 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // One half went out and the other had nothing to send: a success that says both.
   let partial: string | null = null;
 
+  // The time the post is now scheduled for — only when approval kept its slot.
+  const scheduledForIso =
+    nextStatus === "scheduled" && job.scheduledFor ? job.scheduledFor.toISOString() : null;
+
+  // Tell the member, once, naming the Story when the decision took it too.
+  // Fire-and-forget: sendEmail never throws, and the extra try/catch documents
+  // that a mail failure must not fail the decision. R9-client-journey L3:
+  // `notSent` when it was approved to publish now and then nothing went out.
+  const tellSubmitter = async (notSent?: string) => {
+    try {
+      // R7-client-journey L1: only a submitter who is still a member hears about
+      // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
+      // removed or left gets no caption, time or link.
+      const stillMember = await prisma.workspaceMember.findUnique({
+        where: { workspaceId_userId: { workspaceId, userId: job.userId } },
+        select: { id: true },
+      });
+      const submitter = stillMember
+        ? await prisma.user.findUnique({
+            where: { id: job.userId },
+            // F4: the scheduled time is shown in the member's own zone.
+            select: { email: true, timeZone: true },
+          })
+        : null;
+      if (submitter?.email) {
+        const email = buildApprovalDecisionEmail({
+          approved: approving,
+          workspaceId,
+          workspaceName: workspaceContext.workspace.name,
+          // R4 lows, item 3: decided from a Story, the email shows its feed post.
+          caption: (takenFeedHalf(half, pair) ?? job).baseCaption ?? "",
+          scheduledFor: scheduledForIso,
+          timeZone: submitter.timeZone ?? null,
+          appBaseUrl: process.env.NEXTAUTH_URL || null,
+          ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
+          ...(notSent ? { notSent } : {}),
+        });
+        await sendEmail({ to: submitter.email, ...email });
+      }
+    } catch {
+      // Ignored on purpose — the decision is already committed.
+    }
+  };
+
   // Publish-now path: materialize results from current connections and fire the
   // publish events (one per half of a pair), exactly like the publish route.
   if (outcome === "publish_now") {
@@ -345,6 +397,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // item 5): when this post had nothing sendable but its other half was
     // prepared, a failed send is still "try again", not "reconnect".
     if (dispatch.sendFailed) {
+      await tellSubmitter(NOT_SENT_SEND_FAILED);
       return NextResponse.json(
         { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
         { status: 503 },
@@ -362,6 +415,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       // No chosen platform is connected (F1 H1): `prepare` gave each one a
       // failed result with its sentence and marked the job failed, so it never
       // hangs in_progress. The approval itself stands (recorded above).
+      await tellSubmitter(NOT_SENT_NOTHING_CONNECTED);
       return NextResponse.json(
         {
           error:
@@ -374,45 +428,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
-  // The time the post is now scheduled for — only when approval kept its slot.
-  const scheduledForIso =
-    nextStatus === "scheduled" && job.scheduledFor ? job.scheduledFor.toISOString() : null;
-
-  // Tell the member, once, naming the Story when the decision took it too.
-  // Fire-and-forget: sendEmail never throws, and the extra try/catch documents
-  // that a mail failure must not fail the decision.
-  try {
-    // R7-client-journey L1: only a submitter who is still a member hears about
-    // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
-    // removed or left gets no caption, time or link.
-    const stillMember = await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId: job.userId } },
-      select: { id: true },
-    });
-    const submitter = stillMember
-      ? await prisma.user.findUnique({
-          where: { id: job.userId },
-          // F4: the scheduled time is shown in the member's own zone.
-          select: { email: true, timeZone: true },
-        })
-      : null;
-    if (submitter?.email) {
-      const email = buildApprovalDecisionEmail({
-        approved: approving,
-        workspaceId,
-        workspaceName: workspaceContext.workspace.name,
-        // R4 lows, item 3: decided from a Story, the email shows its feed post.
-        caption: (takenFeedHalf(half, pair) ?? job).baseCaption ?? "",
-        scheduledFor: scheduledForIso,
-        timeZone: submitter.timeZone ?? null,
-        appBaseUrl: process.env.NEXTAUTH_URL || null,
-        ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
-      });
-      await sendEmail({ to: submitter.email, ...email });
-    }
-  } catch {
-    // Ignored on purpose — the decision is already committed.
-  }
+  await tellSubmitter();
 
   return NextResponse.json(
     {

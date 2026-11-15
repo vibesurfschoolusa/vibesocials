@@ -323,3 +323,29 @@ describe("buildApprovalDecisionEmail - Feed and Story", () => {
     }
   });
 });
+
+// R9-client-journey L3: approved to publish now, then nothing went out.
+describe("buildApprovalDecisionEmail - approved but nothing sent", () => {
+  const base = {
+    approved: true,
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    timeZone: null,
+    caption: "Now post",
+    scheduledFor: null,
+    appBaseUrl: null,
+  } as const;
+
+  it("says the approval stands but nothing was sent, and why, instead of publishing now", () => {
+    const email = buildApprovalDecisionEmail({ ...base, notSent: "none of this post's platforms is connected." });
+    expect(email.subject).toBe("Your post in Acme was approved, but nothing was sent");
+    expect(email.html).toContain("<p>Approved, but nothing was sent: none of this post&#39;s platforms is connected.</p>");
+    expect(email.html).not.toMatch(/publishing now/i);
+  });
+
+  it("without a reason, is the usual approved email", () => {
+    const email = buildApprovalDecisionEmail(base);
+    expect(email.subject).toBe("Your post in Acme was approved");
+    expect(email.html).toMatch(/publishing now/i);
+  });
+});

@@ -155,6 +155,11 @@ export function buildApprovalDecisionEmail(params: {
   appBaseUrl: string | null;
   /** A Feed and Story post whose Story this decision took too: the Story's platforms. */
   alsoAsStory?: readonly Platform[];
+  /**
+   * R9-client-journey L3: approved to publish now, then nothing went out: why,
+   * as a sentence. Replaces "publishing now".
+   */
+  notSent?: string;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const storyLine = decidedStoryLine(params.approved, params.alsoAsStory);
@@ -180,7 +185,9 @@ export function buildApprovalDecisionEmail(params: {
     };
   }
 
-  const outcome = params.scheduledFor
+  const outcome = params.notSent
+    ? `<p>Approved, but nothing was sent: ${escapeHtml(params.notSent)}</p>`
+    : params.scheduledFor
     ? `<p>It is approved and <strong>scheduled</strong> for ${escapeHtml(
         emailDateTime(new Date(params.scheduledFor), params.timeZone),
       )}.</p>`
@@ -190,7 +197,7 @@ export function buildApprovalDecisionEmail(params: {
     : `<p>Track it in Activity.</p>`;
 
   return {
-    subject: `Your post in ${subjectText(params.workspaceName)} was approved`,
+    subject: `Your post in ${subjectText(params.workspaceName)} was approved${params.notSent ? ", but nothing was sent" : ""}`,
     html: [
       `<p>An owner of <strong>${workspace}</strong> approved your post.</p>`,
       captionBlock(params.caption),

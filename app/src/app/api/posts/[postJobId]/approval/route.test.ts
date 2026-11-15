@@ -319,6 +319,12 @@ describe("POST /api/posts/[postJobId]/approval", () => {
         "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
     });
     expect(inngestSendMock).not.toHaveBeenCalled();
+    // R9-client-journey L3: the decision was recorded, so the submitter is told, with why nothing went out.
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0].subject).toContain("was approved, but nothing was sent");
+    expect(sendEmailMock.mock.calls[0][0].html).toContain(
+      "Approved, but nothing was sent: none of this post&#39;s platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.",
+    );
   });
 
   // Review of T1, item 1: the approval stands; the reservation as it went out refused it.
@@ -335,6 +341,8 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(429);
     await expect(res.json()).resolves.toEqual({ error: `Approved, but not sent. ${refusal.errorMessage}`, code: refusal.errorCode });
     expect(inngestSendMock).not.toHaveBeenCalled();
+    // R9-client-journey L3 (lead): no decision email here.
+    expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
   it("publishes now when the chosen time passed while awaiting approval", async () => {
@@ -739,8 +747,14 @@ describe("POST /api/posts/[postJobId]/approval — dispatch failure (2026-11-01 
       errorCode: "DISPATCH_FAILED",
       errorMessage: "Couldn't start publishing. Please try again.",
     });
-    // The member isn't told "publishing now" about a publish that never started.
-    expect(sendEmailMock).not.toHaveBeenCalled();
+    // The member isn't told "publishing now" about a publish that never started;
+    // R9-client-journey L3: they are told it was approved and nothing was sent.
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const html = sendEmailMock.mock.calls[0][0].html as string;
+    expect(html).toContain(
+      "Approved, but nothing was sent: publishing couldn&#39;t start. Open the post in Activity and send it again.",
+    );
+    expect(html).not.toMatch(/publishing now/i);
     consoleSpy.mockRestore();
   });
 });
@@ -1141,6 +1155,8 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     expect(res.status).toBe(503);
     expect((await res.json()).code).toBe("DISPATCH_FAILED");
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("Approved, but nothing was sent: publishing couldn&#39;t start.");
     consoleSpy.mockRestore();
   });
 
