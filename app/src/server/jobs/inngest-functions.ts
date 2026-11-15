@@ -893,10 +893,42 @@ interface PublishRunFailureArgs {
       function_id?: string;
       run_id?: string;
       /** The ORIGINAL triggering event (`post/publish.requested` / `post/retry.requested`). */
-      event: { data?: { postJobId?: unknown; platforms?: unknown } };
+      event: { data?: { postJobId?: unknown; userId?: unknown; platforms?: unknown } };
     };
   };
   error: unknown;
+  /** The failure handler's own steps: its notice is memoized per failed run. */
+  step: { sendEvent(id: string, payload: { id: string; name: "notification.requested"; data: Record<string, string> }): Promise<unknown> };
+}
+
+/**
+ * Review 2: a job the failure handler closed is announced like a finished run,
+ * so a run whose retries were all killed still emails once. Memoized per failed
+ * run (the event id carries its run id), and the email is keyed on the job's
+ * publish attempt (postOutcomeEmail.ts), so a notice of the same attempt from
+ * any other path dedupes. A job still publishing (another run owns its other
+ * platforms) is announced by that run. A failed send is logged only.
+ */
+async function notifyClosedByFailure(
+  args: PublishRunFailureArgs,
+  postJobId: string,
+  status: string,
+): Promise<void> {
+  if (!isTerminalOutcome(status)) return;
+  const userId = args.event.data.event.data?.userId;
+  if (typeof userId !== "string" || userId.length === 0) {
+    logger.error("[Inngest] Failed run has no userId; its outcome email is not sent", { postJobId });
+    return;
+  }
+  try {
+    await args.step.sendEvent("notify-outcome-after-failure", {
+      id: `notify-failed-${postJobId}-${args.event.data.run_id ?? "run"}`,
+      name: "notification.requested",
+      data: { userId, postJobId },
+    });
+  } catch (error) {
+    logger.error("[Inngest] Announcing a job closed by a failed run failed", { postJobId, error });
+  }
 }
 
 /** The failed run's postJobId, or null (logged) when its event carries none. */
@@ -937,6 +969,7 @@ export async function failInterruptedPublishRun(args: PublishRunFailureArgs): Pr
     ...outcome,
     error: args.error,
   });
+  await notifyClosedByFailure(args, postJobId, outcome.status);
 }
 
 /**
@@ -975,6 +1008,7 @@ export async function failInterruptedRetryRun(args: PublishRunFailureArgs): Prom
     ...outcome,
     error: args.error,
   });
+  await notifyClosedByFailure(args, postJobId, outcome.status);
 }
 
 /**
@@ -2030,20 +2064,18 @@ export const sendNotification = inngest.createFunction(
     throttle: { limit: 8, period: "1s", burst: 1 },
   },
   { event: "notification.requested" },
-  async ({ event, step, runId }) => {
+  async ({ event, step }) => {
     // `event.data` is untyped (schemaless Inngest client) — assign into typed
     // locals here rather than annotating with `any` (mirrors retryPlatforms).
     const userId: string = event.data.userId;
     const postJobId: string = event.data.postJobId;
 
     // At-least-once: if the email sends but Inngest loses the step ack, the retry
-    // re-runs this step, and Resend dedupes the repeat by this key (no second email).
+    // re-runs this step, and Resend dedupes the repeat by the outcome's key (the
+    // job and its publish attempt, built in deliverPostOutcomeNotification), which
+    // also dedupes a second notice of the same attempt sent by another path.
     const delivered = await step.run("deliver-notification", () =>
-      deliverPostOutcomeNotification({
-        userId,
-        postJobId,
-        idempotencyKey: `post-outcome/${runId}`,
-      }),
+      deliverPostOutcomeNotification({ userId, postJobId }),
     );
 
     // R5-client-journey L3 review: half of a Feed and Story pair whose other half
@@ -2054,12 +2086,7 @@ export const sendNotification = inngest.createFunction(
     if (delivered?.waitUntil) {
       await step.sleepUntil("wait-for-pair", delivered.waitUntil);
       await step.run("deliver-after-pair-wait", () =>
-        deliverPostOutcomeNotification({
-          userId,
-          postJobId,
-          idempotencyKey: `post-outcome/${runId}`,
-          afterPairWait: true,
-        }),
+        deliverPostOutcomeNotification({ userId, postJobId, afterPairWait: true }),
       );
     }
 
@@ -2238,7 +2265,9 @@ export const stalePostJobSweep = inngest.createFunction(
     // Its owner hears the outcome, and the other half of a Feed and Story pair
     // applies the pair rule (postOutcomeEmail.ts). Memoized, so a replay sends
     // nothing twice; a failed send is logged and never fails the sweep.
-    const { closed, ...swept } = summary;
+    // A sweep that began on the previous deployment replays its step output,
+    // which has no `closed` list: nothing to announce then.
+    const { closed = [], ...swept } = summary as typeof summary & { closed?: typeof summary.closed };
     if (closed.length > 0) {
       try {
         await step.sendEvent("notify-stale-closed", closed);

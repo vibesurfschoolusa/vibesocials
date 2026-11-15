@@ -334,7 +334,6 @@ describe("deliverPostOutcomeNotification", () => {
       status: true,
       errorCode: true,
       errorMessage: true,
-      claimRunId: true,
       updatedAt: true,
       deferredUntil: true,
     });
@@ -468,21 +467,46 @@ describe("deliverPostOutcomeNotification - retryable delivery", () => {
     }));
   };
 
-  it("passes the idempotency key and throwOnRetryable to sendEmail", async () => {
+  // Review 2: the key names the outcome (the job and its publish attempt), not
+  // the run that asked, so the publish run, the reconciler, the stale sweep and
+  // onFailure announcing one attempt all send under one key: Resend sends once.
+  it("keys the email on the job and its publish attempt, and throws on retryable errors", async () => {
     sendable();
 
-    await deliverPostOutcomeNotification({
-      userId: "user-1",
-      postJobId: "job-1",
-      idempotencyKey: "post-outcome/run-1",
-    });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0][0]).toMatchObject({ to: "user@example.com" });
     expect(sendEmailMock.mock.calls[0][1]).toEqual({
-      idempotencyKey: "post-outcome/run-1",
+      idempotencyKey: "post-outcome/job-1/first",
       throwOnRetryable: true,
     });
+  });
+
+  it("two notifications of one attempt (the run's and the reconciler's) share the key: one email", async () => {
+    sendable();
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey)).toEqual([
+      "post-outcome/job-1/first",
+      "post-outcome/job-1/first",
+    ]);
+  });
+
+  it("a Retry starts a new attempt (retriedAt): a second email under a new key", async () => {
+    sendable();
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+    const retriedAt = new Date("2026-11-14T13:00:00.000Z");
+    findUniquePostJobMock.mockResolvedValue(jobRow({
+      status: "completed",
+      retriedAt,
+      results: [{ platform: "tiktok", status: "success", errorMessage: null }],
+    }));
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(sendEmailMock.mock.calls[1][1].idempotencyKey).toBe(`post-outcome/job-1/${retriedAt.getTime()}`);
   });
 
   it("rethrows an EmailRetryableError", async () => {
@@ -704,7 +728,7 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
   it("the first half to finish sends nothing and asks to wait until it finished + PAIR_EMAIL_WAIT_MS", async () => {
     pair(feedJob(), storyPublishing());
 
-    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
 
     expect(out).toEqual({ waitUntil: at(PAIR_EMAIL_WAIT_MS).toISOString() });
     expect(sendEmailMock).not.toHaveBeenCalled();
@@ -713,7 +737,7 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
   it("NORMAL PAIR: the last half sends ONE email for both, the Story rows labelled, about the feed post", async () => {
     pair(feedJob(), storyJob());
 
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sent(0).subject).toBe("Surf Co: your post and Story finished: 3 of 4 succeeded");
@@ -725,20 +749,19 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
 
   it("NORMAL PAIR, replayed: the first half's delivery after its wait sends under the pair's key too, so Resend delivers it once", async () => {
     pair(feedJob(), storyJob());
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
     vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
     await deliverPostOutcomeNotification({
       userId: "user-1",
       postJobId: FEED_ID,
-      idempotencyKey: "post-outcome/run-1",
       afterPairWait: true,
     });
     // And a replay of the same step.
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(3);
     expect(new Set([keyOf(0), keyOf(1), keyOf(2)]).size).toBe(1);
-    expect(keyOf(0)).toMatch(/^post-outcome-pair\/job-feed\/[0-9a-f]{64}$/);
+    expect(keyOf(0)).toBe("post-outcome-pair/job-feed/first/first");
     expect(sent(1).subject).toBe(sent(0).subject);
   });
 
@@ -746,10 +769,14 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     pair(feedJob(), storyJob());
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
     const retried = storyResults(NOW);
-    pair(feedJob(), storyJob({ results: [retried[0], { ...retried[1], status: "success", claimRunId: "run-c" }] }));
+    pair(
+      feedJob(),
+      storyJob({ retriedAt: NOW, results: [retried[0], { ...retried[1], status: "success", claimRunId: "run-c" }] }),
+    );
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(keyOf(0)).not.toBe(keyOf(1));
+    expect(keyOf(1)).toBe(`post-outcome-pair/job-feed/first/${NOW.getTime()}`);
     expect(sent(1).subject).toBe("Surf Co: your post and Story published successfully");
   });
 
@@ -771,12 +798,11 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     );
     pair(feedJob(), closed);
     vi.setSystemTime(closedAt);
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-r" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
     vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
     await deliverPostOutcomeNotification({
       userId: "user-1",
       postJobId: FEED_ID,
-      idempotencyKey: "post-outcome/run-1",
       afterPairWait: true,
     });
 
@@ -792,7 +818,6 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     const out = await deliverPostOutcomeNotification({
       userId: "user-1",
       postJobId: FEED_ID,
-      idempotencyKey: "post-outcome/run-1",
       afterPairWait: true,
     });
 
@@ -800,17 +825,17 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sent(0).subject).toBe("Surf Co: your post published successfully to all 2 platforms");
     expect(sent(0).html).not.toContain("Story");
-    expect(keyOf(0)).toBe("post-outcome/run-1");
+    expect(keyOf(0)).toBe("post-outcome/job-feed/first");
   });
 
   it("DEFERRED FOR HOURS: a partner waiting out a platform limit past the wait: this half sends alone at once", async () => {
     pair(feedJob(), storyPublishing(at(20 * HOUR)));
 
-    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
 
     expect(out).toBeUndefined();
     expect(sent(0).subject).toBe("Surf Co: your post published successfully to all 2 platforms");
-    expect(keyOf(0)).toBe("post-outcome/run-1");
+    expect(keyOf(0)).toBe("post-outcome/job-feed/first");
   });
 
   it("DEFERRED FOR HOURS, then finished: the late half sends alone too (its partner already had its email)", async () => {
@@ -818,11 +843,11 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     pair(feedJob(), storyJob({}, finishedAt));
     vi.setSystemTime(finishedAt);
 
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(sent(0).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
     expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
-    expect(keyOf(0)).toBe("post-outcome/run-2");
+    expect(keyOf(0)).toBe("post-outcome/job-story/first");
   });
 
   it("a short deferral (inside the wait) is waited for", async () => {
@@ -848,13 +873,13 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     async (status) => {
       pair(feedJob({ status }), storyJob());
 
-      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
       expect(sendEmailMock).toHaveBeenCalledTimes(1);
       expect(sent(0).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
       expect(sent(0).html).toContain("<li>Instagram Story: Succeeded</li>");
       expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
-      expect(keyOf(0)).toBe("post-outcome/run-2");
+      expect(keyOf(0)).toBe("post-outcome/job-story/first");
     },
   );
 
@@ -882,14 +907,14 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     pair(feedJob(), swept);
     vi.setSystemTime(sweptAt);
 
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-s" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
     expect(sent(0).html).toContain(
       "<li>Instagram Story: Not sent — publishing stopped before it reached Instagram. Open the post in Activity to send it again.</li>",
     );
-    expect(keyOf(0)).toBe("post-outcome/run-s");
+    expect(keyOf(0)).toBe("post-outcome/job-story/first");
   });
 
   it("STALE SWEEP, single job: one email, its unsent rows say so instead of Pending", async () => {
@@ -905,12 +930,33 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       }),
     );
 
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-s" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sent(0).subject).toBe("Surf Co: your post failed to publish");
     expect(sent(0).html).toContain("<li>Instagram: Not sent — publishing stopped before it reached Instagram.");
     expect(sent(0).html).not.toContain("Pending");
+  });
+
+  // Review 2: both runs died and each onFailure closed its job and announced it.
+  it("BOTH RUNS DIE: the two onFailure notices send one email for the pair (same key)", async () => {
+    const interrupted = (r: Record<string, unknown>) => ({
+      ...r,
+      status: "failed",
+      errorCode: "PUBLISH_INTERRUPTED",
+      errorMessage: "Publishing was interrupted. Please retry.",
+    });
+    const feed = feedJob({ status: "failed", results: (feedJob().results as Array<Record<string, unknown>>).map(interrupted) });
+    const story = storyJob({ status: "failed", results: storyResults(at(60_000)).map(interrupted) }, at(60_000));
+    pair(feed, story);
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+    expect(keyOf(0)).toBe("post-outcome-pair/job-feed/first/first");
+    expect(keyOf(1)).toBe(keyOf(0));
+    expect(sent(0).subject).toBe("Surf Co: your post and Story failed to publish");
   });
 
   it("a Story-only post (no pair) labels its rows too", async () => {

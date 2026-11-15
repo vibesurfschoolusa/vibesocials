@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
@@ -254,6 +252,8 @@ const OUTCOME_JOB_SELECT = {
   publishMetadata: true,
   // When the job finished, for a job without results (see finishedAt).
   updatedAt: true,
+  // The publish attempt the email is about (a Retry sets it): its key.
+  retriedAt: true,
   results: {
     // Only what the email renders or keys on — externalPostId was selected but
     // never read (review Minor #3), so it's dropped.
@@ -264,8 +264,6 @@ const OUTCOME_JOB_SELECT = {
       // Pause (2026-11-10): to send nothing for a paused workspace's job.
       errorCode: true,
       errorMessage: true,
-      // The run that last published the result: a pair's key changes with a retry.
-      claimRunId: true,
       // When the result finished, and a platform limit the other half waits out.
       updatedAt: true,
       deferredUntil: true,
@@ -358,24 +356,30 @@ function summaryRows(job: OutcomeJob) {
   }));
 }
 
-/** One Resend key per pair outcome: the same from either half, new after a retry. */
+/**
+ * Review 2: which publish of the job an email is about. Stable for one publish
+ * (the job's first, or the Retry that set `retriedAt`), so every notice of that
+ * publish, from its run, onFailure, the reconciler or the stale sweep, builds
+ * the same Resend key and Resend sends one email; a Retry is a new attempt and
+ * emails again.
+ */
+function attemptOf(job: OutcomeJob): string {
+  return job.retriedAt ? String(new Date(job.retriedAt).getTime()) : "first";
+}
+
+/** The Resend key of one job's email for one publish attempt. */
+function outcomeIdempotencyKey(postJobId: string, job: OutcomeJob): string {
+  return `post-outcome/${postJobId}/${attemptOf(job)}`;
+}
+
+/** The Resend key of a pair's one email: the same from either half, new after a Retry of either. */
 function pairIdempotencyKey(feed: OutcomeJob, story: OutcomeJob): string {
-  const outcome = [feed, story].map((job) =>
-    job.results
-      .map((result) => [result.id, result.status, result.errorCode, result.claimRunId])
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-  );
-  return `post-outcome-pair/${feed.id}/${createHash("sha256").update(JSON.stringify(outcome)).digest("hex")}`;
+  return `post-outcome-pair/${feed.id}/${attemptOf(feed)}/${attemptOf(story)}`;
 }
 
 export interface DeliverPostOutcomeNotificationParams {
   userId: string;
   postJobId: string;
-  /**
-   * Resend `Idempotency-Key` for this outcome (`post-outcome/<runId>`): a retry
-   * after a lost ack is a no-op instead of a second email.
-   */
-  idempotencyKey?: string;
   /** The second delivery, after the pair wait: never asks to wait again. */
   afterPairWait?: boolean;
 }
@@ -403,7 +407,6 @@ export interface DeliverPostOutcomeNotificationResult {
 export async function deliverPostOutcomeNotification({
   userId,
   postJobId,
-  idempotencyKey,
   afterPairWait = false,
 }: DeliverPostOutcomeNotificationParams): Promise<DeliverPostOutcomeNotificationResult | undefined> {
   try {
@@ -480,10 +483,13 @@ export async function deliverPostOutcomeNotification({
 
     await sendEmail(
       { to: user.email, subject, html },
-      // Both halves can find the pair finished at once (they publish side by
-      // side): the pair's key is the same for both, so Resend delivers it once.
-      // A later retry changes a result, and so the key: a new outcome, a new email.
-      { idempotencyKey: story ? pairIdempotencyKey(feed, story) : idempotencyKey, throwOnRetryable: true },
+      // Keyed on the outcome, not on who asked: a replay, a lost ack, or a second
+      // notice of the same attempt (or the other half of the pair) is a no-op at
+      // Resend, so no outcome is emailed twice; a Retry is a new attempt.
+      {
+        idempotencyKey: story ? pairIdempotencyKey(feed, story) : outcomeIdempotencyKey(postJobId, postJob),
+        throwOnRetryable: true,
+      },
     );
   } catch (error) {
     if (isRetryableEmailError(error)) throw error;

@@ -619,12 +619,57 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
     };
   }
 
+  // Review 2: a job closed here is announced like a finished run (a memoized
+  // step), so a run whose retries were all killed still emails once; the email
+  // is keyed on the job's attempt, so any other notice of it dedupes.
+  it.each([
+    ["publish", failInterruptedPublishRun, { postJobId: "job-9", userId: "user-1" }],
+    ["retry", failInterruptedRetryRun, { postJobId: "job-9", userId: "user-1", platforms: ["x"] }],
+  ] as const)("a %s run whose job it closed sends notification.requested once", async (_kind, handler, data) => {
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "failed" });
+    const step = fakeStep();
+
+    await handler({ event: failureEvent(data), error: new Error("step timed out"), step });
+
+    expect(step.sendEvent).toHaveBeenCalledTimes(1);
+    expect(step.sendEvent).toHaveBeenCalledWith("notify-outcome-after-failure", {
+      id: "notify-failed-job-9-run-1",
+      name: "notification.requested",
+      data: { userId: "user-1", postJobId: "job-9" },
+    });
+  });
+
+  it("sends nothing while the job is still publishing (another run owns its other platforms)", async () => {
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "in_progress" });
+    const step = fakeStep();
+
+    await failInterruptedRetryRun({
+      event: failureEvent({ postJobId: "job-9", userId: "user-1", platforms: ["x"] }),
+      error: new Error("boom"),
+      step,
+    });
+
+    expect(step.sendEvent).not.toHaveBeenCalled();
+  });
+
+  it("a failed send is logged; the cleanup still stands", async () => {
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "failed" });
+    const step = fakeStep();
+    step.sendEvent.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(
+      failInterruptedPublishRun({ event: failureEvent({ postJobId: "job-9", userId: "user-1" }), error: new Error("x"), step }),
+    ).resolves.toBeUndefined();
+    expect(failPendingMock).toHaveBeenCalledTimes(1);
+  });
+
   it("fails the job's still-pending results with PUBLISH_INTERRUPTED via the shared helper", async () => {
     failPendingMock.mockResolvedValue({ failedCount: 2, status: "completed" });
 
     await failInterruptedPublishRun({
       event: failureEvent({ postJobId: "job-9", userId: "user-1" }),
       error: new Error("step timed out"),
+      step: fakeStep(),
     });
 
     expect(failPendingMock).toHaveBeenCalledTimes(1);
@@ -635,7 +680,7 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
   });
 
   it("does nothing (but logs) when the failed event carries no postJobId", async () => {
-    await failInterruptedPublishRun({ event: failureEvent({}), error: new Error("boom") });
+    await failInterruptedPublishRun({ event: failureEvent({}), error: new Error("boom"), step: fakeStep() });
     expect(failPendingMock).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalled();
   });
@@ -650,6 +695,7 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
     await failInterruptedRetryRun({
       event: failureEvent({ postJobId: "job-9", userId: "user-1", platforms: ["x", "tiktok"] }),
       error: new Error("step timed out"),
+      step: fakeStep(),
     });
 
     expect(failPendingMock).toHaveBeenCalledTimes(1);
@@ -665,7 +711,7 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
     ["an empty platforms list", { postJobId: "job-9", platforms: [] }],
     ["no postJobId", { platforms: ["x"] }],
   ])("a failed retry run with %s touches nothing (but logs)", async (_label, data) => {
-    await failInterruptedRetryRun({ event: failureEvent(data), error: new Error("boom") });
+    await failInterruptedRetryRun({ event: failureEvent(data), error: new Error("boom"), step: fakeStep() });
     expect(failPendingMock).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalled();
   });
@@ -4097,6 +4143,21 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
       expect((await sweep()).sendEvent).not.toHaveBeenCalled();
     });
 
+    // Review 2: a sweep that began on the old code and resumes on this one
+    // replays the old step output, which has no `closed`.
+    it("a step output saved by the old code (no closed list) sends nothing and does not fail", async () => {
+      const step = fakeStep();
+      const runStep = step.run.getMockImplementation()!;
+      step.run.mockImplementation(async (id: string, cb: () => unknown) =>
+        id === "fail-stale-post-jobs" ? { swept: 1, cutoff: "2026-11-02T04:30:00.000Z" } : runStep(id, cb),
+      );
+
+      await expect(
+        handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step }),
+      ).resolves.toMatchObject({ swept: 1 });
+      expect(step.sendEvent).not.toHaveBeenCalled();
+    });
+
     it("a failed send is logged and the sweep still completes", async () => {
       const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
       try {
@@ -4401,7 +4462,10 @@ describe("sendNotification - throttle, retries and idempotent delivery", () => {
     expect(opts.retries).toBe(4);
   });
 
-  it("delivers inside the deliver-notification step with the run-scoped idempotency key", async () => {
+  // Review 2: the email's key is the outcome's (job + publish attempt, built in
+  // deliverPostOutcomeNotification), never the run's: two runs announcing one
+  // attempt send one email.
+  it("delivers inside the deliver-notification step, passing no run-scoped key", async () => {
     const step = fakeStep();
 
     const out = await handlerOf(sendNotification)({ event, step });
@@ -4409,19 +4473,13 @@ describe("sendNotification - throttle, retries and idempotent delivery", () => {
     expect(out).toEqual({ postJobId: "job-1" });
     expect(step.order).toEqual(["run:deliver-notification"]);
     expect(deliverNotificationMock).toHaveBeenCalledTimes(1);
-    expect(deliverNotificationMock).toHaveBeenCalledWith({
-      userId: "user-1",
-      postJobId: "job-1",
-      idempotencyKey: "post-outcome/run-1",
-    });
+    expect(deliverNotificationMock).toHaveBeenCalledWith({ userId: "user-1", postJobId: "job-1" });
   });
 
-  it("another run of the same job uses its own key (a retry is a new outcome)", async () => {
+  it("another run for the same job asks for the same delivery (the attempt decides the key)", async () => {
     await handlerOf(sendNotification)({ event, step: fakeStep(), runId: "run-2" });
 
-    expect(deliverNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({ idempotencyKey: "post-outcome/run-2" }),
-    );
+    expect(deliverNotificationMock).toHaveBeenCalledWith({ userId: "user-1", postJobId: "job-1" });
   });
 
   it("a retryable delivery error makes the deliver-notification step reject, so Inngest retries it", async () => {
@@ -4435,7 +4493,7 @@ describe("sendNotification - throttle, retries and idempotent delivery", () => {
   // R5-client-journey L3 review: half of a Feed and Story pair whose other half
   // is still publishing waits (a durable sleep) and then delivers again, so the
   // pair never ends without an email.
-  it("waits for the other half of a pair until the time deliver names, then delivers once more with the same key", async () => {
+  it("waits for the other half of a pair until the time deliver names, then delivers once more", async () => {
     deliverNotificationMock
       .mockResolvedValueOnce({ waitUntil: "2026-11-14T15:00:00.000Z" })
       .mockResolvedValueOnce({});
@@ -4450,8 +4508,8 @@ describe("sendNotification - throttle, retries and idempotent delivery", () => {
     ]);
     expect(step.sleepUntil).toHaveBeenCalledWith("wait-for-pair", "2026-11-14T15:00:00.000Z");
     expect(deliverNotificationMock.mock.calls.map((call) => call[0])).toEqual([
-      { userId: "user-1", postJobId: "job-1", idempotencyKey: "post-outcome/run-1" },
-      { userId: "user-1", postJobId: "job-1", idempotencyKey: "post-outcome/run-1", afterPairWait: true },
+      { userId: "user-1", postJobId: "job-1" },
+      { userId: "user-1", postJobId: "job-1", afterPairWait: true },
     ]);
   });
 
