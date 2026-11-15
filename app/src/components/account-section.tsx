@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { signOut } from "next-auth/react";
 
 import { Alert } from "@/components/ui/alert";
@@ -32,8 +33,6 @@ interface AccountSectionProps {
 
 const GOOGLE_ONLY = "You sign in with Google, so this account has no password to change.";
 const PASSWORD_CHANGED = "Password changed. Sign in again with your new password.";
-const GOOGLE_ONLY_EMAIL =
-  "You sign in with Google, so your sign-in email is your Google account's address. To use another address, set a password with Forgot password on the sign-in page, then change it here.";
 
 /** R5 new-customer L4: nothing changes until the link sent to the new address is followed. */
 export function emailChangeSentMessage(newEmail: string, currentEmail: string): string {
@@ -88,7 +87,16 @@ export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan =
             <UndoLinkNotice />
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">{GOOGLE_ONLY_EMAIL}</p>
+          // R18 new-customer L2: the sign-in page shows a signed-in person the
+          // notice, not its Forgot password link, so this links the page itself.
+          <p className="text-sm text-muted-foreground">
+            You sign in with Google, so your sign-in email is your Google account&apos;s address. To use another
+            address,{" "}
+            <Link href="/forgot-password" className="font-medium underline underline-offset-2">
+              set a password
+            </Link>
+            , then change it here.
+          </p>
         )}
       </div>
 

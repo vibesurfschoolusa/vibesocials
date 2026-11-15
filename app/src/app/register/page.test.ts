@@ -2,7 +2,11 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { search } = vi.hoisted(() => ({ search: { value: "" } }));
+const { search, fresh } = vi.hoisted(() => ({
+  search: { value: "" },
+  // R18 L1: what the server's fresh session read answered; undefined uses the real hook.
+  fresh: { account: undefined as { name: string | null; email: string | null } | null | undefined },
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -11,7 +15,23 @@ vi.mock("next/navigation", () => ({
 // R17-pages L1: the pages read the session through next-auth's own context.
 vi.mock("next-auth/react", async () => {
   const { createContext } = await import("react");
-  return { signIn: vi.fn(), signOut: vi.fn(), getProviders: vi.fn(async () => null), SessionContext: createContext(undefined) };
+  return {
+    signIn: vi.fn(),
+    signOut: vi.fn(),
+    getSession: vi.fn(async () => null),
+    getProviders: vi.fn(async () => null),
+    SessionContext: createContext(undefined),
+  };
+});
+vi.mock("@/components/signed-in-swap", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/components/signed-in-swap")>();
+  return {
+    ...real,
+    useFreshSignedInAccount: () => {
+      const account = real.useFreshSignedInAccount();
+      return fresh.account === undefined ? account : fresh.account;
+    },
+  };
 });
 
 import RegisterPage from "./page";
@@ -24,6 +44,7 @@ function render(): string {
 
 beforeEach(() => {
   search.value = "";
+  fresh.account = undefined;
   vi.stubEnv("BILLING_ENABLED", "true");
   vi.stubEnv("BILLING_TRIAL_DAYS", "21");
 });
@@ -114,6 +135,7 @@ describe("Register for a signed-in visitor", () => {
   }
 
   it("says who is signed in and offers the dashboard and Sign out, not the form", async () => {
+    fresh.account = { name: null, email: "owner@example.com" };
     const html = await renderWith("authenticated");
     const page = html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'");
     expect(page).toContain("You're already signed in");
@@ -127,8 +149,19 @@ describe("Register for a signed-in visitor", () => {
 
   it("lets a signed-in invitee continue to the invite", async () => {
     search.value = "callbackUrl=%2Fjoin%2Fabc";
+    fresh.account = { name: null, email: "owner@example.com" };
     const html = await renderWith("authenticated");
     expect(html).toMatch(/<a [^>]*href="\/join\/abc"[^>]*>Continue<\/a>/);
+  });
+
+  // R18 L1: the cached session alone is not enough; the server must say so.
+  it("shows the form until the server answers, and when it has no session", async () => {
+    for (const answer of [undefined, null]) {
+      fresh.account = answer;
+      const html = await renderWith("authenticated");
+      expect(html).toContain('id="password"');
+      expect(html).not.toContain("already signed in");
+    }
   });
 
   it("shows the form once signed out, and while the session is still loading", async () => {

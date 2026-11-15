@@ -38,6 +38,17 @@ describe("Settings, Account: sign-in email", () => {
     expect(html).toContain("You sign in with Google");
   });
 
+  // R18 new-customer L2: the sign-in page shows a signed-in person the notice,
+  // not its Forgot password link, so the sentence links the page itself.
+  it("links a Google-only account straight to setting a password", () => {
+    const html = render(false);
+    expect(html).toMatch(/<a [^>]*href="\/forgot-password"[^>]*>set a password<\/a>/);
+    expect(html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'")).toContain(
+      "You sign in with Google, so your sign-in email is your Google account's address. To use another address, set a password, then change it here.",
+    );
+    expect(html).not.toContain("on the sign-in page");
+  });
+
   it("labels both fields of the change form", () => {
     const html = renderToStaticMarkup(createElement(ChangeEmailForm, { email: "old@example.com", startOpen: true }));
     expect(html).toMatch(/<label[^>]*for="new-email"[^>]*>New email<\/label>/);

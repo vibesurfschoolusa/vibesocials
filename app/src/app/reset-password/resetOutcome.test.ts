@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RESET_FAILED_MESSAGE, RESET_OFFLINE_MESSAGE, submitReset } from "./resetOutcome";
+import { RESET_FAILED_MESSAGE, RESET_OFFLINE_MESSAGE, signOutAfterReset, submitReset } from "./resetOutcome";
 
 function respond(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
   return vi.fn(async () => new Response(JSON.stringify(body), { status, headers })) as unknown as typeof fetch;
@@ -76,5 +76,30 @@ describe("reset password failure sentences", () => {
     expect(RESET_OFFLINE_MESSAGE).toBe(
       "We couldn't reach Vibe Socials, so your password wasn't changed. Check your internet connection and try again.",
     );
+  });
+});
+
+// R18 new-customer L1 (= security L1, pages L1): the reset ended the session on
+// the server, so this browser signs out too and "Log in" opens the form.
+describe("signOutAfterReset", () => {
+  it("signs this browser out once after a successful reset, staying on the page", async () => {
+    const signOut = vi.fn(async () => undefined);
+    await signOutAfterReset({ kind: "done" }, signOut);
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveBeenCalledWith({ redirect: false });
+  });
+
+  it("leaves the session alone when the password was not changed", async () => {
+    const signOut = vi.fn(async () => undefined);
+    await signOutAfterReset({ kind: "invalid_link" }, signOut);
+    await signOutAfterReset({ kind: "error", message: RESET_FAILED_MESSAGE }, signOut);
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it("does not fail when signing out fails, so the success message still shows", async () => {
+    const signOut = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    await expect(signOutAfterReset({ kind: "done" }, signOut)).resolves.toBeUndefined();
   });
 });

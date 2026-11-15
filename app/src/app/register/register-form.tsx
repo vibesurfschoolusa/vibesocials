@@ -13,10 +13,10 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
-import { useSignedInAccount } from "@/components/signed-in-swap";
+import { useFreshSignedInAccount } from "@/components/signed-in-swap";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
-import { SignedInNotice, showSignedInNotice } from "../login/signed-in-notice";
+import { FormHeading, SignedInNotice, showSignedInNotice } from "../login/signed-in-notice";
 
 /**
  * What the page says under the button, as plain strings from the server page:
@@ -48,8 +48,11 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // R17-pages L1: a signed-in visitor sees who they are, not this form.
-  const account = useSignedInAccount();
+  // R17-pages L1: a signed-in visitor sees who they are, not this form; R18 L1:
+  // once the server's own session says so, not the cached one alone.
+  const account = useFreshSignedInAccount();
+  // R18-pages L2: after Sign out on the notice, the form's heading takes the focus.
+  const [signedOutHere, setSignedOutHere] = useState(false);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -120,13 +123,16 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
         </div>
 
         {account && showSignedInNotice(account, loading) ? (
-          <SignedInNotice account={account} callbackUrl={callbackUrl} purpose="register" />
+          <SignedInNotice
+            account={account}
+            callbackUrl={callbackUrl}
+            purpose="register"
+            onSignedOut={() => setSignedOutHere(true)}
+          />
         ) : (
         <Card>
           <CardHeader>
-            <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">
-              Create an account
-            </h1>
+            <FormHeading focus={signedOutHere}>Create an account</FormHeading>
             <CardDescription>Join Vibe Socials today</CardDescription>
           </CardHeader>
           <CardContent>

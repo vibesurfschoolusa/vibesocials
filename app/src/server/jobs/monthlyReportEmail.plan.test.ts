@@ -106,6 +106,11 @@ describe("the monthly report email by plan", () => {
     expect(sentTo()).toHaveLength(4);
     expect(result).toMatchObject({ handled: 4, emailed: 4, notIncluded: 0 });
     expect(m.findMany.mock.calls[0][0]).toMatchObject({ select: { id: true, createdAt: true } });
-    expect(Object.keys((m.findMany.mock.calls[0][0] as { select: object }).select)).toEqual(["id", "createdAt"]);
+    // pausedAt (R18 client-journey L1) is not a billing column: a paused workspace's link does not open.
+    expect(Object.keys((m.findMany.mock.calls[0][0] as { select: object }).select)).toEqual([
+      "id",
+      "createdAt",
+      "pausedAt",
+    ]);
   });
 });

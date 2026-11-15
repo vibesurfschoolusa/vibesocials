@@ -2,7 +2,11 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { search } = vi.hoisted(() => ({ search: { value: "" } }));
+const { search, fresh } = vi.hoisted(() => ({
+  search: { value: "" },
+  // R18 L1: what the server's fresh session read answered; undefined uses the real hook.
+  fresh: { account: undefined as { name: string | null; email: string | null } | null | undefined },
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -11,7 +15,23 @@ vi.mock("next/navigation", () => ({
 // R17-pages L1: the pages read the session through next-auth's own context.
 vi.mock("next-auth/react", async () => {
   const { createContext } = await import("react");
-  return { signIn: vi.fn(), signOut: vi.fn(), getProviders: vi.fn(async () => null), SessionContext: createContext(undefined) };
+  return {
+    signIn: vi.fn(),
+    signOut: vi.fn(),
+    getSession: vi.fn(async () => null),
+    getProviders: vi.fn(async () => null),
+    SessionContext: createContext(undefined),
+  };
+});
+vi.mock("@/components/signed-in-swap", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/components/signed-in-swap")>();
+  return {
+    ...real,
+    useFreshSignedInAccount: () => {
+      const account = real.useFreshSignedInAccount();
+      return fresh.account === undefined ? account : fresh.account;
+    },
+  };
 });
 
 import LoginPage from "./page";
@@ -26,6 +46,7 @@ function text(html: string): string {
 
 beforeEach(() => {
   search.value = "";
+  fresh.account = undefined;
 });
 
 describe("login page after sign-up", () => {
@@ -54,14 +75,17 @@ describe("login page landmarks", () => {
 });
 
 // R17-pages L1: someone already signed in is told so before any form, so no
-// second account or sign-in happens by accident.
+// second account or sign-in happens by accident. R18 L1: only once the server's
+// own session read says so; the cached client session alone is not enough.
 describe("login page for a signed-in visitor", () => {
+  const OWNER = { name: "Owner", email: "owner@example.com" };
+
   async function renderWith(status: "authenticated" | "unauthenticated" | "loading"): Promise<string> {
     const { SessionContext } = await import("next-auth/react");
     const { createElement } = await import("react");
     const value =
       status === "authenticated"
-        ? { status, data: { user: { name: "Owner", email: "owner@example.com" }, expires: "2099-01-01T00:00:00Z" }, update: async () => null }
+        ? { status, data: { user: OWNER, expires: "2099-01-01T00:00:00Z" }, update: async () => null }
         : { status, data: null, update: async () => null };
     return renderToStaticMarkup(
       createElement(SessionContext.Provider, { value: value as never }, LoginPage() as ReactElement),
@@ -69,6 +93,7 @@ describe("login page for a signed-in visitor", () => {
   }
 
   it("says who is signed in and offers the dashboard and Sign out, not the form", async () => {
+    fresh.account = OWNER;
     const html = await renderWith("authenticated");
     expect(text(html)).toContain("You're already signed in");
     expect(text(html)).toContain("You're signed in as owner@example.com.");
@@ -80,10 +105,36 @@ describe("login page for a signed-in visitor", () => {
 
   it("lets a signed-in invitee continue to the invite", async () => {
     search.value = "callbackUrl=%2Fjoin%2Fabc";
+    fresh.account = OWNER;
     const html = await renderWith("authenticated");
     expect(html).toMatch(/<a [^>]*href="\/join\/abc"[^>]*>Continue<\/a>/);
     expect(html).toMatch(/<button[^>]*>Sign out<\/button>/);
     expect(html).not.toContain('id="password"');
+  });
+
+  it("shows the form until the server has answered, even when the cached session says signed in", async () => {
+    const html = await renderWith("authenticated");
+    expect(html).toContain('id="password"');
+    expect(html).not.toContain("already signed in");
+  });
+
+  // The loops in the R18 reports: a reset in this browser then "Log in" (/login),
+  // a reset on another device then a page's redirect (/login?callbackUrl=/activity)
+  // or Join's "Sign in again" (/login?callbackUrl=/join/abc). The cached session
+  // still says signed in; the server has none, so the form shows, keeping the way back.
+  it("shows the form when the server has no session, on every loop path", async () => {
+    for (const [query, back] of [
+      ["", "/register"],
+      ["callbackUrl=%2Factivity", "/register?callbackUrl=%2Factivity"],
+      ["callbackUrl=%2Fjoin%2Fabc", "/register?callbackUrl=%2Fjoin%2Fabc"],
+    ] as const) {
+      search.value = query;
+      fresh.account = null;
+      const html = await renderWith("authenticated");
+      expect(html).toContain('id="password"');
+      expect(html).not.toContain("already signed in");
+      expect(html).toContain(`href="${back}"`);
+    }
   });
 
   it("shows the form once signed out, and while the session is still loading", async () => {

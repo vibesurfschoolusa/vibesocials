@@ -137,6 +137,19 @@ describe("the Reports page", () => {
     linkFindFirstMock.mockResolvedValue(null);
     expect(await render()).not.toContain("Your client can open");
   });
+  // R18 client-journey L1: a paused workspace's link does not open (server/reviewLink.ts).
+  it("says nothing of the client's link while the workspace is paused, and says it once resumed", async () => {
+    linkFindFirstMock.mockResolvedValue({ id: "link-1" });
+    const owner = (pausedAt: Date | null) => ({
+      ...context("owner"),
+      workspace: { id: "ws-1", name: "Surf Co", pausedAt, pausedReason: null },
+    });
+    getWorkspaceContextMock.mockResolvedValue(owner(new Date("2026-11-09T00:00:00Z")));
+    expect(await render()).not.toContain("Your client can open");
+    getWorkspaceContextMock.mockResolvedValue(owner(null));
+    expect(await render()).toContain("Your client can open");
+  });
+
   // P1: on Starter the review link is paused, so the client cannot open it.
   it("says nothing of the client's link on Starter, and says it on Growth", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");

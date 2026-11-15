@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { parseReportMonth, reportMonths } from "@/lib/monthlyReport";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { planIncludes } from "@/lib/planFeatures";
+import { workspaceBlock } from "@/lib/workspaceStatus";
 import { buildMonthlyReport } from "@/server/reports/monthlyReport";
 
 export const metadata = { title: "Reports | Vibe Socials" };
@@ -47,8 +48,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const report = parsed.ok ? await buildMonthlyReport(workspaceId, parsed.month, now) : null;
   // Owners only: whether a client link is on. The token is never read here.
   // P1: a link the plan pauses cannot be opened, so it is not mentioned.
+  // R18 client-journey L1: nor one of a paused workspace, by the rule
+  // findActiveReviewLink (server/reviewLink.ts) answers the client with.
   const hasClientLink =
-    context.role === "owner" && planIncludes(context.workspace, "clientLinks")
+    context.role === "owner" &&
+    planIncludes(context.workspace, "clientLinks") &&
+    !workspaceBlock(context.workspace, now)
       ? (await prisma.workspaceReviewLink.findFirst({
           where: { workspaceId, revokedAt: null },
           select: { id: true },

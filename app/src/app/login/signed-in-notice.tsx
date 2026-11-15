@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 
@@ -33,14 +33,49 @@ export async function signOutHere(
   }
 }
 
+/**
+ * R18-pages L2: Sign out replaces this card, and its focused button, with the
+ * form, so the page is told and moves the focus to the form's heading.
+ */
+export async function pressSignOut(
+  signOutFn: (options: { redirect: false }) => Promise<unknown>,
+  onSignedOut: () => void,
+): Promise<string | null> {
+  const failed = await signOutHere(signOutFn);
+  if (!failed) onSignedOut();
+  return failed;
+}
+
+/**
+ * The form's h1 on Log in and Register. Focusable and focused only when it
+ * appears after a Sign out on the notice, so the page's first HTML is unchanged.
+ */
+export function FormHeading({ focus, children }: { focus: boolean; children?: ReactNode }) {
+  const ref = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focus) ref.current?.focus();
+  }, [focus]);
+  return (
+    <h1
+      ref={ref}
+      tabIndex={focus ? -1 : undefined}
+      className="text-2xl font-semibold leading-none tracking-tight text-foreground"
+    >
+      {children}
+    </h1>
+  );
+}
+
 export function SignedInNotice({
   account,
   callbackUrl,
   purpose,
+  onSignedOut = () => undefined,
 }: {
   account: SignedInAccount;
   callbackUrl: string;
   purpose: "login" | "register";
+  onSignedOut?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +86,8 @@ export function SignedInNotice({
         <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">
           You&apos;re already signed in
         </h1>
-        <CardDescription>You&apos;re signed in as {who}.</CardDescription>
+        {/* R18-pages L3: a long address wraps inside the card at 375 px. */}
+        <CardDescription className="break-words">You&apos;re signed in as {who}.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
@@ -71,8 +107,8 @@ export function SignedInNotice({
             onClick={async () => {
               setBusy(true);
               setError(null);
-              const failed = await signOutHere();
               // On success the session turns signed out and the page shows its form.
+              const failed = await pressSignOut(signOut, onSignedOut);
               setError(failed);
               setBusy(false);
             }}

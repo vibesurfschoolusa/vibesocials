@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { signOut } from "next-auth/react";
 import { Eye, EyeOff } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
@@ -11,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 
-import { submitReset } from "./resetOutcome";
+import { signOutAfterReset, submitReset } from "./resetOutcome";
 
 function CardShell({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
@@ -98,6 +99,8 @@ export function ResetPasswordForm() {
 
     setLoading(true);
     const outcome = await submitReset(fetch, token ?? "", password);
+    // Before "Log in" shows, so it opens the form, not the signed-in notice.
+    await signOutAfterReset(outcome, signOut);
     setLoading(false);
     if (outcome.kind === "done") setDone(true);
     else if (outcome.kind === "invalid_link") setLinkDead(true);

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // An in-memory Workspace table behind the job's three workspace queries, so
 // the selection, the marker and the continuation are tested as behaviour.
 const m = vi.hoisted(() => ({
-  workspaces: [] as { id: string; createdAt: Date; monthlyReportSentFor: string | null }[],
+  workspaces: [] as { id: string; createdAt: Date; monthlyReportSentFor: string | null; pausedAt?: Date | null }[],
   owners: {} as Record<string, { userId: string; email: string; notifyMonthlyReport: boolean }[]>,
   links: new Set<string>(),
   buildMonthlyReport: vi.fn(),
@@ -49,7 +49,7 @@ vi.mock("@/lib/db", () => ({
         sorted()
           .filter((row) => matches(row, where))
           .slice(0, take)
-          .map(({ id, createdAt }) => ({ id, createdAt })),
+          .map(({ id, createdAt, pausedAt }) => ({ id, createdAt, pausedAt: pausedAt ?? null })),
       count: async ({ where }: { where: Where }) => m.workspaces.filter((row) => matches(row, where)).length,
       updateMany: (...args: unknown[]) => m.workspaceUpdateMany(...args),
     },
@@ -234,6 +234,32 @@ describe("runMonthlyReportEmails", () => {
     const html: string = m.sendEmail.mock.calls[0][0].html;
     expect(html).toContain("Your client can open the same report from their review link.");
     expect(html).not.toContain("/v/");
+  });
+
+  // R18 client-journey L1: a paused workspace's link does not open
+  // (server/reviewLink.ts), so the owners are not told it does. The report
+  // itself still goes out.
+  it("does not say the client can open it while the workspace is paused", async () => {
+    addWorkspace("ws-1", 1);
+    addOwners("ws-1", 1);
+    m.links.add("ws-1");
+    m.workspaces[0].pausedAt = new Date("2026-10-20T00:00:00Z");
+
+    await run();
+
+    expect(m.sendEmail).toHaveBeenCalledTimes(1);
+    const html: string = m.sendEmail.mock.calls[0][0].html;
+    expect(html).not.toContain("Your client can open");
+    expect(m.linkFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("says nothing of a link when there is none on (revoked)", async () => {
+    addWorkspace("ws-1", 1);
+    addOwners("ws-1", 1);
+
+    await run();
+
+    expect(m.sendEmail.mock.calls[0][0].html).not.toContain("Your client can open");
   });
 
   it("retries a failed send once, then counts it, writes the marker and carries on", async () => {

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { defaultReportMonth } from "@/lib/monthlyReport";
 import { planIncludes } from "@/lib/planFeatures";
+import { workspaceBlock } from "@/lib/workspaceStatus";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import { buildMonthlyReportEmail } from "@/server/notifications/monthlyReportEmail";
 import { buildMonthlyReport } from "@/server/reports/monthlyReport";
@@ -108,7 +109,8 @@ export async function runMonthlyReportEmails(
   let outOfTime = false;
 
   while (!outOfTime) {
-    const page: ({ id: string; createdAt: Date } & BillingFields)[] = await prisma.workspace.findMany({
+    type PageRow = { id: string; createdAt: Date; pausedAt: Date | null } & BillingFields;
+    const page: PageRow[] = await prisma.workspace.findMany({
       where: after
         ? {
             ...pending,
@@ -117,7 +119,7 @@ export async function runMonthlyReportEmails(
         : pending,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: PAGE_SIZE,
-      select: { id: true, createdAt: true, ...billingFieldsSelect() },
+      select: { id: true, createdAt: true, pausedAt: true, ...billingFieldsSelect() },
     });
 
     for (const workspace of page) {
@@ -151,11 +153,16 @@ export async function runMonthlyReportEmails(
             orderBy: { userId: "asc" },
             select: { userId: true, user: { select: { email: true } } },
           }),
-          // Whether a client link is on; the token is never read.
-          prisma.workspaceReviewLink.findFirst({
-            where: { workspaceId, revokedAt: null },
-            select: { id: true },
-          }),
+          // Whether a client link is on; the token is never read. R18 client-journey
+          // L1: only when it opens, by findActiveReviewLink's rule (server/reviewLink.ts):
+          // a paused workspace still gets its report, but its client's link answers
+          // "not active".
+          planIncludes(workspace, "clientLinks", process.env, now) && !workspaceBlock(workspace, now)
+            ? prisma.workspaceReviewLink.findFirst({
+                where: { workspaceId, revokedAt: null },
+                select: { id: true },
+              })
+            : null,
         ]);
         const email = buildMonthlyReportEmail({ report, workspaceId, appBaseUrl, hasClientLink: link !== null });
 

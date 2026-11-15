@@ -48,3 +48,18 @@ export async function submitReset(fetchImpl: typeof fetch, token: string, passwo
   // already match the route's password rule.
   return { kind: "invalid_link" };
 }
+
+/**
+ * R18 new-customer L1 (= security L1, pages L1): a reset ends every session on
+ * the server (sessionVersion), but this browser's cached session would still
+ * say signed in, and "Log in" would open the signed-in notice. So the browser
+ * signs out here, as the new-email page does. A failed sign-out is ignored: the
+ * password did change, and the success message must still show.
+ */
+export async function signOutAfterReset(
+  outcome: ResetOutcome,
+  signOutFn: (options: { redirect: false }) => Promise<unknown>,
+): Promise<void> {
+  if (outcome.kind !== "done") return;
+  await signOutFn({ redirect: false }).catch(() => undefined);
+}
