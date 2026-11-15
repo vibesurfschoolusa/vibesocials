@@ -45,12 +45,16 @@ function linkedInRow(reconnectSoon: ("linkedin" | "youtube")[], endedAt: Record<
   return html.slice(start, start + 4000);
 }
 
-const RECONNECT = /<a href="\/api\/auth\/linkedin\/start\?workspaceId=ws-1"[^>]*>Reconnect<\/a>/;
+// R7-pages M2: LinkedIn's Reconnect is a button that opens the sign-out steps
+// (the dialog, stubbed here, then starts the sign-in); never a link straight to it.
+const RECONNECT = /<button[^>]*>Reconnect<\/button>/;
+const START = "/api/auth/linkedin/start";
 
 describe("Settings, Connections: a LinkedIn connection about to end", () => {
-  it("in its warning window: Ends soon and a Reconnect link straight to the sign-in", () => {
+  it("in its warning window: Ends soon and a Reconnect that opens the sign-out steps", () => {
     const html = linkedInRow(["linkedin"]);
     expect(html).toMatch(RECONNECT);
+    expect(html).not.toContain(START);
     expect(html).toContain("Ends soon");
   });
 

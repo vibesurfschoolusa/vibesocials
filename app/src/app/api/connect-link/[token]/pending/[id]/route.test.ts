@@ -196,7 +196,8 @@ describe("POST: the visitor's choice", () => {
 
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(
-      "You signed in to a different Facebook Page account than the one connected (My Surf School). Sign in to that account, or ask the workspace owner to switch it.",
+      // R7-client-journey L4: what works for a client is the owner disconnecting it.
+      "This connection belongs to My Surf School. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
     expect(h.pendingDeleteMany).not.toHaveBeenCalled();
     expect(h.linkUpdate).not.toHaveBeenCalled();

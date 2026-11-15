@@ -250,7 +250,7 @@ describe("X OAuth callback: a reconnect keeps the same account", () => {
     expect(updateManyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a different account leaves the connection unchanged and names the one signed in to", async () => {
+  it("a different account leaves the connection unchanged and puts no name in the address", async () => {
     getCurrentUserMock.mockResolvedValue({ id: STARTER });
     fetchMock.mockResolvedValue(accessTokenResponse());
     connectionFindUniqueMock.mockResolvedValue({ platform: "x", needsReconnect: true, accountIdentifier: "77", metadata: { username: "surfco" } });
@@ -260,7 +260,8 @@ describe("X OAuth callback: a reconnect keeps the same account", () => {
     const loc = location(res);
     expect(loc.pathname).toBe("/settings");
     expect(loc.searchParams.get("error")).toBe("x_different_account");
-    expect(loc.searchParams.get("signed_in_as")).toBe("@brand");
+    expect(loc.searchParams.has("signed_in_as")).toBe(false);
+    expect(loc.toString()).not.toContain("brand");
     expect(createMock).not.toHaveBeenCalled();
     expect(updateManyMock).not.toHaveBeenCalled();
     // The one-time handshake is used up either way.

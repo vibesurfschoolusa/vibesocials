@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { EXPIRY_WARNING_LEAD_MS } from "@/server/jobs/connectionHealthSweep";
 
-import { CONNECTION_EXPIRY_SELECT, expiryEnded, inExpiryWarningWindow } from "./connectionExpiry";
+import {
+  CONNECTION_EXPIRY_SELECT,
+  connectionExpiryState,
+  expiryEnded,
+  inExpiryWarningWindow,
+  sameEndDateMessage,
+} from "./connectionExpiry";
 
 /**
  * R6-pages M1 / R6-client-journey M1: a connection that cannot be renewed and
@@ -77,5 +83,31 @@ describe("expiryEnded", () => {
   it("flagged, renewable or far: not this state", () => {
     expect(expiryEnded(linkedIn({ expiresAt: new Date(NOW.getTime() - DAY), needsReconnect: true }), NOW)).toBe(false);
     expect(expiryEnded(linkedIn({ expiresAt: new Date(NOW.getTime() - DAY), refreshToken: "sealed" }), NOW)).toBe(false);
+  });
+});
+
+// R7-pages L4 / client-journey L3: one state for every page that shows a connection.
+describe("connectionExpiryState", () => {
+  it("ends in 2 days: ends_soon", () => {
+    expect(connectionExpiryState(linkedIn({ expiresAt: new Date(NOW.getTime() + 2 * DAY) }), NOW)).toBe("ends_soon");
+  });
+
+  it("ended, not flagged yet: ended", () => {
+    expect(connectionExpiryState(linkedIn({ expiresAt: new Date(NOW.getTime() - DAY) }), NOW)).toBe("ended");
+  });
+
+  it("healthy, renewable or already flagged: null", () => {
+    expect(connectionExpiryState(linkedIn({ expiresAt: new Date(NOW.getTime() + 40 * DAY) }), NOW)).toBeNull();
+    expect(connectionExpiryState(linkedIn({ refreshToken: "sealed" }), NOW)).toBeNull();
+    expect(connectionExpiryState(linkedIn({ needsReconnect: true }), NOW)).toBeNull();
+  });
+});
+
+// Unconfirmed (client-journey): a reconnect that LinkedIn answered with the same end date.
+describe("sameEndDateMessage", () => {
+  it("names the platform and the date", () => {
+    expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe(
+      "LinkedIn gave the same end date (November 16, 2026); it still ends then.",
+    );
   });
 });

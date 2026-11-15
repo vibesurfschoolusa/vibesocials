@@ -24,3 +24,40 @@ describe("LinkedIn Switch account dialog", () => {
     expect(html).toContain("Scheduled posts that chose LinkedIn go to the new account once you finish signing in.");
   });
 });
+
+// R7-pages M2: Reconnect goes through the same sign-out steps, naming the account to sign in to.
+describe("LinkedIn Reconnect dialog", () => {
+  function render(accountName?: string): string {
+    return renderToStaticMarkup(
+      createElement(LinkedInAccountDialog, {
+        workspaceId: "ws-1",
+        open: true,
+        onOpenChange: () => {},
+        mode: "reconnect",
+        accountName,
+      }),
+    );
+  }
+
+  it("says to sign out first, then sign in to the connected account", () => {
+    const html = render("Surf Co page");
+    expect(html).toContain("Reconnect LinkedIn");
+    expect(html).toContain("Open LinkedIn sign-out");
+    expect(html).toContain("Come back here and click Continue. LinkedIn asks you to sign in: sign in to Surf Co page.");
+    expect(html).toContain("Already signed in to LinkedIn as Surf Co page? Just click Continue.");
+    expect(html).toContain(">Continue<");
+    expect(html).not.toContain("post numbers");
+  });
+
+  it("without a name: the account connected now", () => {
+    expect(render()).toContain("sign in to the LinkedIn account connected now.");
+  });
+
+  it("Connect and Switch account keep their own words", () => {
+    const html = renderToStaticMarkup(
+      createElement(LinkedInAccountDialog, { workspaceId: "ws-1", open: true, onOpenChange: () => {}, mode: "connect" }),
+    );
+    expect(html).toContain("Connect LinkedIn");
+    expect(html).toContain("use the account that manages your company page.");
+  });
+});

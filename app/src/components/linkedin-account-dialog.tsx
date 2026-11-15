@@ -15,16 +15,41 @@ import {
   LINKEDIN_CONNECT_URL,
   LINKEDIN_SIGN_OUT_URL,
   linkedInAccountDialogCopy,
+  type LinkedInAccountDialogCopy,
   type LinkedInAccountDialogMode,
 } from "@/lib/linkedinAccount";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
+
+/**
+ * R7-pages M2: Reconnect goes through the same sign-out steps as Connect and
+ * Switch account. LinkedIn reuses the browser's signed-in account, so a
+ * Reconnect straight to the sign-in came back with the same wrong account
+ * every time. Nothing is disconnected first: the save updates the connection
+ * in place, so its post numbers stay.
+ */
+export type LinkedInDialogMode = LinkedInAccountDialogMode | "reconnect";
+
+function reconnectCopy(accountName: string | undefined): LinkedInAccountDialogCopy {
+  const connect = linkedInAccountDialogCopy("connect");
+  const account = accountName?.trim() || "the LinkedIn account connected now";
+  return {
+    ...connect,
+    title: "Reconnect LinkedIn",
+    steps: [connect.steps[0], `Come back here and click Continue. LinkedIn asks you to sign in: sign in to ${account}.`],
+    shortcut: accountName?.trim()
+      ? `Already signed in to LinkedIn as ${account}? Just click Continue.`
+      : connect.shortcut,
+  };
+}
 
 interface Props {
   /** The workspace this page was rendered for; the start route refuses any other (F3). */
   workspaceId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  mode: LinkedInAccountDialogMode;
+  mode: LinkedInDialogMode;
+  /** Reconnect: the connected account's name, the one to sign in to. */
+  accountName?: string;
   /**
    * Runs before the connect starts (Switch account disconnects the current
    * connection). Throw to stay on the dialog; the caller reports the error.
@@ -38,7 +63,7 @@ interface Props {
  * G4 (R2-security L2): Switch account disconnects the current page first, which
  * deletes the post numbers read from it (api/connections/[platform] DELETE).
  */
-export function linkedInSwitchNumbersNote(mode: LinkedInAccountDialogMode): string | null {
+export function linkedInSwitchNumbersNote(mode: LinkedInDialogMode): string | null {
   return mode === "switch"
     ? "The post numbers read from this platform are deleted and cannot be brought back."
     : null;
@@ -49,9 +74,17 @@ export function linkedInSwitchNumbersNote(mode: LinkedInAccountDialogMode): stri
  * account to use instead of silently reusing the signed-in one
  * (lib/linkedinAccount.ts).
  */
-export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, beforeContinue, scheduledNote }: Props) {
+export function LinkedInAccountDialog({
+  workspaceId,
+  open,
+  onOpenChange,
+  mode,
+  accountName,
+  beforeContinue,
+  scheduledNote,
+}: Props) {
   const [busy, setBusy] = useState(false);
-  const copy = linkedInAccountDialogCopy(mode);
+  const copy = mode === "reconnect" ? reconnectCopy(accountName) : linkedInAccountDialogCopy(mode);
   const numbersNote = linkedInSwitchNumbersNote(mode);
 
   async function handleContinue() {

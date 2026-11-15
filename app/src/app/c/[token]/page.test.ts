@@ -7,7 +7,11 @@ const h = vi.hoisted(() => ({
   listConnections: vi.fn(),
   choiceProps: vi.fn(),
   findLogo: vi.fn(),
+  notifyRefused: vi.fn(),
+  findConnection: vi.fn(),
 }));
+vi.mock("@/server/notifications/refusedConnectEmail", () => ({ notifyOwnersOfRefusedConnect: h.notifyRefused }));
+vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findUnique: h.findConnection } } }));
 vi.mock("@/lib/clientPageLogo", () => ({ findClientPageLogo: h.findLogo }));
 vi.mock("@/server/connectLink/link", () => ({
   findActiveConnectLink: h.findLink,
@@ -158,16 +162,41 @@ describe("the connect link page", () => {
     expect(html).toMatch(/value="instagram"[\s\S]*?Reconnect/);
   });
 
-  // R6 review low 1: the reconnect came back with another account; nothing changed.
-  it("a different account than the one connected: says so, naming the connected one", async () => {
+  // R6 review low 1 / R7-client-journey L4: the reconnect came back with another account; nothing changed.
+  it("a different account than the one connected: says whose it is and what works; a name in the address is ignored", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
     ]);
     const html = await render({ error: "facebook_page_different_account", signed_in_as: "Client Cafe" });
     expect(html).toContain(
-      "You signed in to a different Facebook Page account than the one connected (Surf Co). Sign in to that account, or ask the workspace owner to switch it.",
+      "This connection belongs to Surf Co. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
     expect(html).not.toContain("Client Cafe");
+  });
+
+  // R7-client-journey L4: the owners hear of it (the email itself is sent once per connection per day).
+  it("a different account: the owners are told, for this workspace and platform", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
+    ]);
+    await render({ error: "facebook_page_different_account" });
+    expect(h.notifyRefused).toHaveBeenCalledTimes(1);
+    expect(h.notifyRefused).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
+  });
+
+  it("a different-account code without such a connection: no sentence, no email", async () => {
+    const html = await render({ error: "facebook_page_different_account" });
+    expect(html).not.toContain("This connection belongs to");
+    expect(h.notifyRefused).not.toHaveBeenCalled();
+  });
+
+  it("no refusal: no email", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
+    ]);
+    await render({ error: "facebook_page_cancelled" });
+    await render();
+    expect(h.notifyRefused).not.toHaveBeenCalled();
   });
 
   it("a Business Profile reconnect that couldn't be checked: names the location, try again", async () => {
@@ -190,7 +219,7 @@ describe("the connect link page", () => {
     h.listConnections.mockResolvedValue([
       { platform: "google_business_profile", accountIdentifier: "", username: null, locationName: null, needsReconnect: false, reconnectSoon: false, ended: false },
     ]);
-    const html = await render({ success: "google_business_profile_connected", location_cleared: "Surf Co Dania" });
+    const html = await render({ success: "google_business_profile_connected", location_cleared: "1" });
     expect(html).toContain("Connected. The workspace owner will choose the location.");
     expect(html).not.toContain("Surf Co Dania");
   });
@@ -274,5 +303,90 @@ describe("the success sentence is checked against the connection", () => {
     const inactive = await render();
     expect(inactive).toContain("Vibe Socials");
     expect(inactive).not.toContain("logos/ws-1");
+  });
+});
+
+// R7-pages M2: LinkedIn connects whichever account the browser is signed in to,
+// so Reconnect on the client's page shows the sign-out steps before the sign-in.
+describe("LinkedIn on the client's page", () => {
+  const linkedin = (extra: Record<string, unknown> = {}) => ({
+    platform: "linkedin",
+    accountIdentifier: "org-1",
+    username: "Surf Co page",
+    locationName: null,
+    needsReconnect: false,
+    reconnectSoon: true,
+    ended: false,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    vi.stubEnv("LINKEDIN_CLIENT_ID", "k");
+    vi.stubEnv("LINKEDIN_CLIENT_SECRET", "s");
+    vi.stubEnv("LINKEDIN_REDIRECT_URI", "r");
+    h.findLink.mockResolvedValue({ ...LINK, platforms: [...LINK.platforms, "linkedin"] });
+  });
+
+  function linkedInRow(html: string): string {
+    const start = html.indexOf(">LinkedIn<");
+    expect(start).toBeGreaterThan(-1);
+    // Up to the next platform's row: the steps are an inner list of their own.
+    const next = html.indexOf('<li class="flex min-h-14', start);
+    return html.slice(start, next === -1 ? undefined : next);
+  }
+
+  it.each([
+    ["ends soon", linkedin()],
+    ["flagged", linkedin({ needsReconnect: true, reconnectSoon: false })],
+  ])("Reconnect (%s) opens the steps: sign out of LinkedIn, then the sign-in to the connected account", async (_case, connection) => {
+    h.listConnections.mockResolvedValue([connection]);
+    const row = linkedInRow(await render());
+    expect(row).toMatch(/<details[\s\S]*<summary[^>]*>Reconnect<\/summary>/);
+    expect(row).toContain('href="https://www.linkedin.com/m/logout/"');
+    expect(row).toContain('target="_blank"');
+    expect(row).toContain("sign in to Surf Co page");
+    // The sign-in is the last step, inside the steps, posting as before.
+    const steps = row.slice(row.indexOf("<details"));
+    expect(steps).toContain(`<form action="/api/connect-link/${TOKEN}/start" method="post">`);
+    expect(steps).toContain('name="platform" value="linkedin"');
+    expect(steps).toMatch(/<button[^>]*type="submit"[^>]*>Continue<\/button>/);
+  });
+
+  it("other platforms keep the plain Reconnect form", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "tiktok", accountIdentifier: "open-1", username: "Surf TT", locationName: null, needsReconnect: true },
+    ]);
+    const html = await render();
+    expect(html).not.toContain("<details");
+    expect(html).not.toContain("linkedin.com/m/logout");
+    expect(html).toMatch(/value="tiktok"[\s\S]*?Reconnect/);
+  });
+
+  it("a different LinkedIn account: the sentence names the sign-out step", async () => {
+    h.listConnections.mockResolvedValue([linkedin({ needsReconnect: true, reconnectSoon: false })]);
+    expect(await render({ error: "linkedin_different_account" })).toContain(
+      "This connection belongs to Surf Co page. If that is your account, sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+    );
+  });
+
+  // Unconfirmed (client-journey): LinkedIn may give the same end date on a reconnect.
+  it("a reconnect that left the same end date says so instead of nothing", async () => {
+    h.listConnections.mockResolvedValue([linkedin()]);
+    h.findConnection.mockResolvedValue({ expiresAt: new Date("2026-11-16T12:00:00Z") });
+    const html = await render({ success: "linkedin_connected" });
+    expect(html).toContain("LinkedIn gave the same end date (November 16, 2026); it still ends then.");
+    expect(html).not.toContain("is connected");
+    expect(h.findConnection).toHaveBeenCalledWith({
+      where: { workspaceId_platform: { workspaceId: "ws-1", platform: "linkedin" } },
+      select: { expiresAt: true },
+    });
+  });
+
+  it("a reconnect that renewed it: the usual sentence, and no end-date read", async () => {
+    h.listConnections.mockResolvedValue([linkedin({ reconnectSoon: false })]);
+    const html = await render({ success: "linkedin_connected" });
+    expect(html).toContain("LinkedIn is connected.");
+    expect(html).not.toContain("same end date");
+    expect(h.findConnection).not.toHaveBeenCalled();
   });
 });

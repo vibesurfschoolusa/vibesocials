@@ -1,6 +1,7 @@
 import type { Platform, Prisma, WorkspaceRole } from "@prisma/client";
 
 import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
+import { CONNECTION_EXPIRY_SELECT, connectionExpiryState } from "@/lib/connectionExpiry";
 import { countPostsOnce, withoutPairedStories, type PairableJob } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import { utcMonthRange } from "@/lib/usageLimits";
@@ -35,6 +36,10 @@ export interface WorkspaceOverviewEntry {
   failedLast7Days: number;
   failedPlatforms: Platform[];
   needsReconnect: Platform[];
+  /** R7-pages L4: can't be renewed and ends within the warning window (lib/connectionExpiry.ts). */
+  endsSoon: Platform[];
+  /** R7-pages L4: its end passed before the daily sweep flagged it. */
+  ended: Platform[];
   /** Connected platforms, including any that need reconnecting. */
   connected: number;
   /** Anything above that this person has to act on (approvals: owners only). */
@@ -154,7 +159,7 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
     // At most one row per platform per workspace (@@unique), so this stays small.
     prisma.socialConnection.findMany({
       where: { workspaceId: scope },
-      select: { workspaceId: true, platform: true, needsReconnect: true, metadata: true },
+      select: { workspaceId: true, metadata: true, ...CONNECTION_EXPIRY_SELECT },
     }),
   ]);
 
@@ -209,6 +214,13 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
       .filter((connection) => connection.needsReconnect)
       .map((connection) => connection.platform)
       .sort();
+    const byExpiry = (state: "ends_soon" | "ended") =>
+      own
+        .filter((connection) => connectionExpiryState(connection, now) === state)
+        .map((connection) => connection.platform)
+        .sort();
+    const endsSoon = byExpiry("ends_soon");
+    const ended = byExpiry("ended");
     const waiting = less(waitingForApproval, pairedWaiting, workspace.id);
     const clientChangesRequested = less(clientChanges, pairedClientChanges, workspace.id);
     // F4: a client's connect link always leaves the location unchosen, and
@@ -230,10 +242,14 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
       failedLast7Days,
       failedPlatforms,
       needsReconnect,
+      endsSoon,
+      ended,
       connected: own.length,
       needsAttention:
         failedLast7Days > 0 ||
         needsReconnect.length > 0 ||
+        endsSoon.length > 0 ||
+        ended.length > 0 ||
         // R6-client-journey L4: only an owner decides approvals (Needs you
         // gives a member no approvals row either).
         (role === "owner" && waiting > 0) ||

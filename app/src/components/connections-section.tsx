@@ -224,7 +224,10 @@ export function ConnectionsSection({
                   </div>
                 </div>
 
-                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                {/* R7-pages L7: not shrink-0, so an Ended sentence and three
+                    buttons wrap inside the card at 1024-1300 px instead of
+                    pushing past it. */}
+                <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
                   {connection ? (
                     <ConnectionActions
                       platform={key}
@@ -234,6 +237,7 @@ export function ConnectionsSection({
                       reconnectSoon={reconnectSoon.includes(key)}
                       endedAt={endedAt[key] ?? null}
                       readOnly={readOnly}
+                      accountName={username ?? undefined}
                     />
                   ) : readOnly ? null : key === "linkedin" ? (
                     // LinkedIn reuses whichever account is signed in to

@@ -69,22 +69,25 @@ describe("GET /api/connections", () => {
 
     expect(findManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1" },
-      select: { platform: true, needsReconnect: true },
+      select: { platform: true, needsReconnect: true, expiresAt: true, refreshToken: true },
     });
     expect(body.connections.find((c) => c.platform === "youtube")).toEqual({
       platform: "youtube",
       connected: true,
       needsReconnect: false,
+      expiry: null,
     });
     expect(body.connections.find((c) => c.platform === "x")).toEqual({
       platform: "x",
       connected: true,
       needsReconnect: true,
+      expiry: null,
     });
     expect(body.connections.find((c) => c.platform === "tiktok")).toEqual({
       platform: "tiktok",
       connected: false,
       needsReconnect: false,
+      expiry: null,
     });
   });
 
@@ -113,6 +116,28 @@ describe("GET /api/connections", () => {
       platform: "pinterest",
       connected: true,
       needsReconnect: true,
+      expiry: null,
     });
+  });
+
+  // R7-pages L4 / client-journey L3: the dashboard widget shows the warning window and the end too.
+  it("says when a connection ends soon or has ended, and never sends the token", async () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    findManyMock.mockResolvedValue([
+      { platform: "linkedin", needsReconnect: false, expiresAt: new Date(now + 2 * day), refreshToken: null },
+      { platform: "x", needsReconnect: false, expiresAt: new Date(now - day), refreshToken: null },
+      { platform: "youtube", needsReconnect: false, expiresAt: new Date(now + day), refreshToken: "sealed-secret" },
+    ]);
+
+    const response = await GET();
+    const text = await response.text();
+    const body = JSON.parse(text) as { connections: Array<{ platform: string; expiry: string | null }> };
+
+    expect(body.connections.find((c) => c.platform === "linkedin")?.expiry).toBe("ends_soon");
+    expect(body.connections.find((c) => c.platform === "x")?.expiry).toBe("ended");
+    expect(body.connections.find((c) => c.platform === "youtube")?.expiry).toBeNull();
+    expect(text).not.toContain("sealed-secret");
+    expect(text).not.toContain("expiresAt");
   });
 });

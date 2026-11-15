@@ -34,14 +34,12 @@ import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
 import {
   LOCATION_CLEARED_PARAM,
-  SIGNED_IN_AS_PARAM,
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
   differentAccountPlatform,
   locationClearedSettingsMessage,
-  settingsDifferentAccountMessage,
-  signedInNameFromQuery,
+  reconnectDifferentAccountMessage,
 } from "@/lib/differentAccount";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { platformHelpHref } from "@/lib/platformGuides";
@@ -68,7 +66,6 @@ export default async function SettingsPage({
     error?: string;
     success?: string;
     billing?: string;
-    signed_in_as?: string;
     location_cleared?: string;
   }>;
 }) {
@@ -128,7 +125,8 @@ export default async function SettingsPage({
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
 
   // R6 review low 1: a reconnect came back with another account and nothing
-  // changed; the sentence names both, the connected one from this workspace.
+  // changed; the sentence names only the connected one, from this workspace
+  // (R7-new-customer L2: nothing from the address is shown).
   const differentPlatform = differentAccountPlatform(params.error);
   const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
   // Anyone can type the parameter: the sentence only for a Business Profile
@@ -142,7 +140,7 @@ export default async function SettingsPage({
     oauthResult = {
       variant: "success",
       platform: "google_business_profile",
-      message: locationClearedSettingsMessage(params[LOCATION_CLEARED_PARAM]),
+      message: locationClearedSettingsMessage(),
     };
   }
   const uncheckedPlatform = accountCheckFailedPlatform(params.error);
@@ -158,10 +156,7 @@ export default async function SettingsPage({
     oauthResult = {
       variant: "danger",
       platform: differentPlatform,
-      message: settingsDifferentAccountMessage(
-        signedInNameFromQuery(params[SIGNED_IN_AS_PARAM], differentPlatform),
-        connectedAccountName(differentFrom),
-      ),
+      message: reconnectDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)),
     };
   }
   const now = new Date();

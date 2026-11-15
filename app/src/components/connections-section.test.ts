@@ -6,7 +6,13 @@ import type { Platform } from "@prisma/client";
 // The dialogs read the address bar and the router; not what these tests are about.
 vi.mock("./linkedin-setup-dialog", () => ({ LinkedInSetupDialog: () => null }));
 vi.mock("./pending-connection-dialog", () => ({ PendingConnectionDialog: () => null }));
-vi.mock("./connection-actions", () => ({ ConnectionActions: () => null }));
+const actionProps = vi.hoisted(() => [] as Record<string, unknown>[]);
+vi.mock("./connection-actions", () => ({
+  ConnectionActions: (props: Record<string, unknown>) => {
+    actionProps.push(props);
+    return null;
+  },
+}));
 vi.mock("./linkedin-account-dialog", () => ({ LinkedInConnectButton: () => null }));
 vi.mock("./google-business-location-form", () => ({ GoogleBusinessLocationForm: () => null }));
 
@@ -84,5 +90,26 @@ describe("ConnectionsSection Connect links", () => {
     // LinkedIn's Connect is a button that opens a dialog (mocked here).
     expect(starts).toHaveLength(ALL.length - 1);
     for (const href of starts) expect(href).toMatch(/^\/api\/auth\/[a-z_]+\/start\?workspaceId=ws-1$/);
+  });
+});
+
+describe("ConnectionsSection connected rows", () => {
+  // R7-pages M2: LinkedIn's Reconnect names the account to sign in to.
+  it("hands the row's actions the connected account's name", () => {
+    actionProps.length = 0;
+    render({ connections: [{ ...connected("linkedin"), username: "Surf Co page" }] });
+    expect(actionProps[0]).toMatchObject({ platform: "linkedin", accountName: "Surf Co page" });
+  });
+
+  // R7-pages L7: the Ended sentence and three buttons must fit at 1024-1300 px.
+  it("the actions block may shrink and wrap; it is never shrink-0 at sm-lg widths", () => {
+    const html = render({ connections: [connected("linkedin")] });
+    const block = html.match(/<div class="([^"]*sm:justify-end[^"]*)">/);
+    expect(block).not.toBeNull();
+    const classes = block![1].split(" ");
+    expect(classes).not.toContain("shrink-0");
+    expect(classes).not.toContain("sm:shrink-0");
+    expect(classes).not.toContain("md:shrink-0");
+    expect(classes).toContain("min-w-0");
   });
 });

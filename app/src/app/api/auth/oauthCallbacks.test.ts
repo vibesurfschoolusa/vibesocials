@@ -1133,7 +1133,9 @@ describe("a reconnect keeps the same account", () => {
       const loc = location(res);
       expect(loc.pathname).toBe("/settings");
       expect(loc.searchParams.get("error")).toBe(`${platform}_different_account`);
-      expect(loc.searchParams.get("signed_in_as")).toBe(STORED[platform].signedInAs);
+      // R7-new-customer L2: no name in the address; Settings names the stored connection.
+      expect(loc.searchParams.has("signed_in_as")).toBe(false);
+      expect(loc.toString()).not.toContain(encodeURIComponent(STORED[platform].signedInAs).replace(/%20/g, "+"));
       expect(loc.searchParams.get("success")).toBeNull();
       expectNoConnectionWrites();
     },
@@ -1167,7 +1169,9 @@ describe("a reconnect keeps the same account", () => {
 
       expect(loc.pathname).toBe("/settings");
       expect(loc.searchParams.get("success")).toBe("google_business_profile_connected");
-      expect(loc.searchParams.get("location_cleared")).toBe("Surf Co Dania");
+      // R7-new-customer L2: a flag only, never the location's title.
+      expect(loc.searchParams.get("location_cleared")).toBe("1");
+      expect(loc.toString()).not.toContain("Surf");
       expect(loc.searchParams.get("error")).toBeNull();
       const update = updateManyMock.mock.calls[0][0] as { data: { metadata: Record<string, unknown> } };
       expect(update.data.metadata).toMatchObject({ locationName: null, locationTitle: null });

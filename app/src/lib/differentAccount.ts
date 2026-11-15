@@ -8,18 +8,16 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
  * ever replaces a connection with the same platform account
  * (server/connections/saveConnection.ts saveSocialConnection). When a
  * different account comes back, nothing is changed and the callback answers
- * `<platform>_different_account`, with the name it signed in to in
- * `signed_in_as`. These are the sentences for that, in Settings and on /c.
- * Changing to another account stays Switch account's job.
+ * `<platform>_different_account`. These are the sentences for that, in
+ * Settings and on /c. Changing to another account stays Switch account's job.
+ *
+ * R7-new-customer L2: the address carries no name. Anyone can send a link with
+ * any query, so the sentences name only what the server knows: the stored
+ * connection.
  */
 
 const SUFFIX = "_different_account";
 const CHECK_FAILED_SUFFIX = "_account_check_failed";
-
-/** The query parameter that carries the name of the account the person signed in to. */
-export const SIGNED_IN_AS_PARAM = "signed_in_as";
-
-const NAME_MAX_CHARS = 100;
 
 export function differentAccountCode(platform: Platform): string {
   return `${platform}${SUFFIX}`;
@@ -42,20 +40,38 @@ export function connectedAccountName(connection: {
 }
 
 /**
- * The signed-in name from the address. Anyone can type it, so it is only ever
- * shown as text, trimmed and capped; without one, a plain description.
+ * A choice among several accounts (api/connections/pending) that the save
+ * refused: both names come from the platform's own answer on the server.
  */
-export function signedInNameFromQuery(value: string | string[] | null | undefined, platform: Platform): string {
-  const raw = (Array.isArray(value) ? value[0] : value)?.trim() ?? "";
-  return raw ? raw.slice(0, NAME_MAX_CHARS) : `a different ${platformLabel(platform)} account`;
-}
-
 export function settingsDifferentAccountMessage(signedInName: string, connectedName: string): string {
   return `You signed in to ${signedInName}, not ${connectedName}. Sign in to ${connectedName} to reconnect it, or use Switch account to change to ${signedInName}.`;
 }
 
+/**
+ * Settings after a callback refused the reconnect. R7-pages M2: LinkedIn
+ * connects whichever account is signed in to linkedin.com in this browser, so
+ * signing in to the right one takes a sign-out first (Reconnect shows the steps).
+ */
+export function reconnectDifferentAccountMessage(platform: Platform, connectedName: string): string {
+  const label = platformLabel(platform);
+  const what = `You signed in to a different ${label} account than ${connectedName}.`;
+  if (platform === "linkedin") {
+    return `${what} Sign out of LinkedIn first (Reconnect shows the steps), then sign in to ${connectedName}. To use the other account instead, use Switch account.`;
+  }
+  return `${what} Sign in to ${connectedName} to reconnect it, or use Switch account to change accounts.`;
+}
+
+/**
+ * The client's /c page. R7-client-journey L4: a client can't switch the
+ * account (that needs the connected account's own sign-in); what works is the
+ * owner disconnecting it, then the client connecting theirs.
+ */
 export function linkDifferentAccountMessage(platform: Platform, connectedName: string): string {
-  return `You signed in to a different ${platformLabel(platform)} account than the one connected (${connectedName}). Sign in to that account, or ask the workspace owner to switch it.`;
+  const owner = "ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.";
+  if (platform === "linkedin") {
+    return `This connection belongs to ${connectedName}. If that is your account, sign out of LinkedIn first (Reconnect shows the steps), then sign in to ${connectedName}. If not, ${owner}`;
+  }
+  return `This connection belongs to ${connectedName}. ${owner.charAt(0).toUpperCase()}${owner.slice(1)}`;
 }
 
 /**
@@ -74,7 +90,7 @@ export function accountCheckFailedMessage(locationTitle: string): string {
 }
 
 /** A save the shared save refused (server/connections/saveConnection.ts). */
-export type SaveRefusal = { reason: "different_account"; signedInName: string } | { reason: "check_failed" };
+export type SaveRefusal = { reason: "different_account" } | { reason: "check_failed" };
 
 /** Where a callback sends the owner when the save was refused (a link flow turns it into /c). */
 export function refusedSaveSettingsUrl(base: string | URL, platform: Platform, refusal: SaveRefusal): URL {
@@ -84,7 +100,6 @@ export function refusedSaveSettingsUrl(base: string | URL, platform: Platform, r
     return url;
   }
   url.searchParams.set("error", differentAccountCode(platform));
-  url.searchParams.set(SIGNED_IN_AS_PARAM, refusal.signedInName.slice(0, NAME_MAX_CHARS));
   return url;
 }
 
@@ -92,13 +107,14 @@ export function refusedSaveSettingsUrl(base: string | URL, platform: Platform, r
  * R6 third review: Google Business Profile is never refused as another
  * account. When the chosen location isn't available to the Google account
  * signed in to, the reconnect is saved with the location cleared, and this
- * parameter carries the old location's title ("" when it had none).
+ * parameter says so. R7-new-customer L2: a flag only ("1"), never the old
+ * title; the pages show the sentence only when the connection really has no
+ * location.
  */
 export const LOCATION_CLEARED_PARAM = "location_cleared";
 
-export function locationClearedSettingsMessage(oldTitle: string | null | undefined): string {
-  const title = oldTitle?.trim().slice(0, 200) || "The location you chose";
-  return `Reconnected. Choose the location to post to; ${title} isn't available to this Google account.`;
+export function locationClearedSettingsMessage(): string {
+  return "Reconnected. Choose the location to post to; the one chosen before isn't available to this Google account.";
 }
 
 export const LOCATION_CLEARED_LINK_MESSAGE = "Connected. The workspace owner will choose the location.";

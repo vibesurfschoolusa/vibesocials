@@ -167,6 +167,8 @@ describe("getWorkspacesOverview", () => {
       failedLast7Days: 0,
       failedPlatforms: [],
       needsReconnect: [],
+      endsSoon: [],
+      ended: [],
       connected: 0,
       needsAttention: false,
     });
@@ -211,6 +213,8 @@ describe("getWorkspacesOverview", () => {
       failedLast7Days: 3,
       failedPlatforms: ["instagram", "x"],
       needsReconnect: ["linkedin"],
+      endsSoon: [],
+      ended: [],
       connected: 3,
       needsAttention: true,
     });
@@ -470,5 +474,41 @@ describe("getWorkspacesOverview", () => {
       expect(calm?.chooseGoogleLocation).toBe(false);
       expect(calm?.needsAttention).toBe(false);
     });
+  });
+});
+
+// R7-pages L4 / client-journey L3: a connection in its warning window, or one
+// that ended before the daily sweep flagged it, needs attention here too.
+describe("getWorkspacesOverview: connections that end", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("reads the expiry columns with the connections", async () => {
+    await getWorkspacesOverview("user-1", NOW);
+    expect(db.connectionFindMany.mock.calls[0][0].select).toMatchObject({ expiresAt: true, refreshToken: true });
+  });
+
+  it("ends in 2 days: Ends soon and needs attention", async () => {
+    db.connectionFindMany.mockResolvedValue([
+      { workspaceId: "ws-calm", platform: "linkedin", needsReconnect: false, metadata: {}, expiresAt: new Date(NOW.getTime() + 2 * DAY), refreshToken: null },
+    ]);
+    const calm = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-calm");
+    expect(calm).toMatchObject({ endsSoon: ["linkedin"], ended: [], needsReconnect: [], needsAttention: true });
+  });
+
+  it("ended, not flagged yet: Ended and needs attention", async () => {
+    db.connectionFindMany.mockResolvedValue([
+      { workspaceId: "ws-calm", platform: "linkedin", needsReconnect: false, metadata: {}, expiresAt: new Date(NOW.getTime() - DAY), refreshToken: null },
+    ]);
+    const calm = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-calm");
+    expect(calm).toMatchObject({ endsSoon: [], ended: ["linkedin"], needsAttention: true });
+  });
+
+  it("healthy: unchanged", async () => {
+    db.connectionFindMany.mockResolvedValue([
+      { workspaceId: "ws-calm", platform: "linkedin", needsReconnect: false, metadata: {}, expiresAt: new Date(NOW.getTime() + 40 * DAY), refreshToken: null },
+      { workspaceId: "ws-calm", platform: "youtube", needsReconnect: false, metadata: {}, expiresAt: new Date(NOW.getTime() + DAY), refreshToken: "sealed" },
+    ]);
+    const calm = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-calm");
+    expect(calm).toMatchObject({ endsSoon: [], ended: [], needsAttention: false, connected: 2 });
   });
 });

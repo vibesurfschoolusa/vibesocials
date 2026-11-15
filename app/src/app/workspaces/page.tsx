@@ -63,6 +63,8 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
 
       {entry.failedPlatforms.length > 0 ||
       entry.needsReconnect.length > 0 ||
+      entry.endsSoon.length > 0 ||
+      entry.ended.length > 0 ||
       entry.clientChangesRequested > 0 ||
       entry.chooseGoogleLocation ? (
         <div className="flex flex-col gap-1 text-sm">
@@ -87,6 +89,19 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
             <p className="text-muted-foreground">
               <span className="font-medium text-foreground">Needs reconnecting:</span>{" "}
               {platformList(entry.needsReconnect)}
+            </p>
+          ) : null}
+          {/* R7-pages L4: can't be renewed, so it needs a Reconnect too. */}
+          {entry.ended.length > 0 ? (
+            <p className="text-muted-foreground">
+              <span className="font-medium text-foreground">Ended:</span> {platformList(entry.ended)}. Reconnect it in
+              Settings, Connections.
+            </p>
+          ) : null}
+          {entry.endsSoon.length > 0 ? (
+            <p className="text-muted-foreground">
+              <span className="font-medium text-foreground">Ends soon:</span> {platformList(entry.endsSoon)}. Reconnect
+              it in Settings, Connections.
             </p>
           ) : null}
         </div>

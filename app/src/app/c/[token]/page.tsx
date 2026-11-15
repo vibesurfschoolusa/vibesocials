@@ -2,13 +2,16 @@ import type { Metadata } from "next";
 
 import { ClientPageShell } from "@/components/client-page-header";
 import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 import {
   CONNECT_LINK_INACTIVE_MESSAGE,
   connectLinkPlatformConfigured,
   describeConnectLinkResult,
 } from "@/lib/connectLink";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
+import { sameEndDateMessage } from "@/lib/connectionExpiry";
+import { prisma } from "@/lib/db";
 import {
   LOCATION_CLEARED_LINK_MESSAGE,
   LOCATION_CLEARED_PARAM,
@@ -18,8 +21,10 @@ import {
   differentAccountPlatform,
   linkDifferentAccountMessage,
 } from "@/lib/differentAccount";
+import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
+import { notifyOwnersOfRefusedConnect } from "@/server/notifications/refusedConnectEmail";
 
 import { ConnectLinkChoice } from "./connect-link-choice";
 
@@ -85,10 +90,25 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const succeeded = PLATFORM_ORDER.find((platform) => success === `${platform}_connected`);
   const working = succeeded ? byPlatform.get(succeeded) : undefined;
   if (success && working && !working.needsReconnect && !working.reconnectSoon) outcome.set("success", success);
+  // Unconfirmed (R7 client-journey): a reconnect saved, yet still inside the
+  // warning window: the platform gave the same end date. Said, from the stored
+  // date, instead of no sentence at all.
+  const sameEnd =
+    success && working && !working.needsReconnect && working.reconnectSoon && !working.ended
+      ? await prisma.socialConnection.findUnique({
+          where: { workspaceId_platform: { workspaceId: link.workspaceId, platform: working.platform } },
+          select: { expiresAt: true },
+        })
+      : null;
   // R6 review low 1: the sign-in came back with another account than the one
   // connected, and nothing changed. Named by the connected account only.
   const differentPlatform = differentAccountPlatform(outcome.get("error"));
   const differentFrom = differentPlatform ? byPlatform.get(differentPlatform) : undefined;
+  if (differentPlatform && differentFrom) {
+    // R7-client-journey L4: the client is told to ask the owner, so the owners
+    // hear of it (at most once per connection per day; never throws).
+    await notifyOwnersOfRefusedConnect({ workspaceId: link.workspaceId, platform: differentPlatform });
+  }
   const uncheckedPlatform = accountCheckFailedPlatform(outcome.get("error"));
   const uncheckedFrom = uncheckedPlatform ? byPlatform.get(uncheckedPlatform) : undefined;
   // R6 third review: a Business Profile reconnect whose location this Google
@@ -97,7 +117,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
     outcome.get("success") === "google_business_profile_connected" && first(query[LOCATION_CLEARED_PARAM]) !== null;
   const result = locationCleared
     ? { variant: "success" as const, message: LOCATION_CLEARED_LINK_MESSAGE }
-    : differentPlatform && differentFrom
+    : sameEnd?.expiresAt && working
+      ? { variant: "warning" as const, message: sameEndDateMessage(working.platform, sameEnd.expiresAt) }
+      : differentPlatform && differentFrom
       ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
@@ -142,14 +164,46 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
             const working = connection && !connection.needsReconnect;
             const name = connection?.username || connection?.accountIdentifier || null;
             const connected = name ? `Connected: ${name}` : "Connected";
-            const button = (
+            const form = (label: string) => (
               <form action={action} method="post">
                 <input type="hidden" name="platform" value={platform} />
                 <Button type="submit" size="md">
-                  {connection ? "Reconnect" : "Connect"}
+                  {label}
                 </Button>
               </form>
             );
+            // R7-pages M2: LinkedIn connects whichever account this browser is
+            // signed in to, without asking, so Reconnect first shows the
+            // sign-out steps (as Settings does), then the sign-in. A plain
+            // <details>: it works without JavaScript, like the rest of the page.
+            const button =
+              connection && platform === "linkedin" ? (
+                <details className="min-w-0 max-w-sm flex-1 text-right">
+                  <summary
+                    className={cn(buttonVariants({ size: "md" }), "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}
+                  >
+                    Reconnect
+                  </summary>
+                  <div className="mt-3 rounded-[var(--radius)] border p-3 text-left text-sm text-muted-foreground">
+                    <ol className="list-decimal space-y-1.5 pl-5">
+                      <li>
+                        <a href={LINKEDIN_SIGN_OUT_URL} target="_blank" rel="noopener noreferrer" className="underline">
+                          Open LinkedIn sign-out
+                        </a>{" "}
+                        and sign out in the new tab. If that tab shows a sign-in page instead, you&apos;re already
+                        signed out: close it.
+                      </li>
+                      <li>
+                        Come back here and click Continue. LinkedIn asks you to sign in: sign in to{" "}
+                        {connectedAccountName(connection)}.
+                      </li>
+                    </ol>
+                    <div className="mt-3 flex justify-end">{form("Continue")}</div>
+                  </div>
+                </details>
+              ) : (
+                form(connection ? "Reconnect" : "Connect")
+              );
             return (
               <li key={platform} className="flex min-h-14 items-center justify-between gap-3 px-4 py-3">
                 <span className="font-medium">{PLATFORM_LABELS[platform]}</span>
