@@ -10,11 +10,32 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
+import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { UseConnectionsResult } from "@/hooks/useConnections";
+
+/**
+ * R11-client-journey L2: what a member reads for a row that isn't healthy.
+ * Only the owner can connect or reconnect (a member's Settings is read-only),
+ * so a member gets the state, not a button into Settings.
+ */
+function MemberState({ connection }: { connection: ConnectionStatus }) {
+  if (!connection.connected) return <Badge variant="neutral">Not connected</Badge>;
+  if (connection.needsReconnect) return <Badge variant="danger">Needs reconnecting</Badge>;
+  return (
+    <Badge variant={connection.expiry === "ended" ? "danger" : "warning"}>
+      {connection.expiry === "ended" ? "Ended" : "Ends soon"}
+    </Badge>
+  );
+}
+
+function isHealthy(connection: ConnectionStatus): boolean {
+  return connection.connected && !connection.needsReconnect && !connection.expiry;
+}
 
 /**
  * Dashboard widget: at-a-glance connected/disconnected status per platform.
@@ -26,7 +47,8 @@ export function ConnectionHealth({
   connections,
   loading,
   error,
-}: Pick<UseConnectionsResult, "connections" | "loading" | "error">) {
+  isMember = false,
+}: Pick<UseConnectionsResult, "connections" | "loading" | "error"> & { isMember?: boolean }) {
   const ordered = connections
     ? [...connections].sort(
         (a, b) =>
@@ -80,7 +102,9 @@ export function ConnectionHealth({
                   />
                   {platformLabel(connection.platform)}
                 </span>
-                {connection.connected && !connection.needsReconnect && connection.expiry ? (
+                {isMember && !isHealthy(connection) ? (
+                  <MemberState connection={connection} />
+                ) : connection.connected && !connection.needsReconnect && connection.expiry ? (
                   // R7-pages L4: it still works (or just stopped) but can't be
                   // renewed: Settings has its Reconnect.
                   <Link
@@ -135,16 +159,24 @@ export function ConnectionHealth({
           </ul>
         )}
 
-        <Link
-          href={SETTINGS_CONNECTIONS_HREF}
-          className={buttonVariants({
-            variant: "outline",
-            size: "sm",
-            className: "w-full",
-          })}
-        >
-          Manage connections
-        </Link>
+        {isMember ? (
+          !loading && !error && ordered.some((connection) => !isHealthy(connection)) ? (
+            <p className="text-sm text-muted-foreground">
+              The workspace owner can connect and reconnect accounts for this workspace.
+            </p>
+          ) : null
+        ) : (
+          <Link
+            href={SETTINGS_CONNECTIONS_HREF}
+            className={buttonVariants({
+              variant: "outline",
+              size: "sm",
+              className: "w-full",
+            })}
+          >
+            Manage connections
+          </Link>
+        )}
       </CardContent>
     </Card>
   );

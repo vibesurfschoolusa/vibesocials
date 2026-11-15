@@ -84,3 +84,52 @@ describe("ConnectionHealth: connections that end", () => {
     expect(row).toContain('<span class="sr-only">Connected</span>');
   });
 });
+
+// R11-client-journey L2: only the owner can connect or reconnect, so a member
+// reads each row's state as a badge, with no buttons into Settings.
+describe("ConnectionHealth for a member", () => {
+  function renderMember(connections: Row[]) {
+    return renderToStaticMarkup(
+      createElement(ConnectionHealth, {
+        connections: connections as never,
+        loading: false,
+        error: null,
+        isMember: true,
+      }) as ReactElement,
+    );
+  }
+
+  const ROWS: Row[] = [
+    { platform: "tiktok", connected: false },
+    { platform: "linkedin", connected: true, needsReconnect: true },
+    { platform: "youtube", connected: true, expiry: "ends_soon" },
+    { platform: "instagram", connected: true, expiry: "ended" },
+    { platform: "x", connected: true },
+  ];
+
+  it("no link into Settings anywhere on the card, and no Manage connections", () => {
+    const html = renderMember(ROWS);
+    expect(html).not.toContain("<a");
+    expect(html).not.toContain("Manage connections");
+  });
+
+  it("each state is a badge: Not connected, Needs reconnecting, Ends soon, Ended", () => {
+    const html = renderMember(ROWS);
+    expect(rowFor(html, "TikTok")).toContain("Not connected");
+    expect(rowFor(html, "LinkedIn")).toContain("Needs reconnecting");
+    expect(rowFor(html, "YouTube")).toContain("Ends soon");
+    expect(rowFor(html, "Instagram")).toContain("Ended");
+    expect(rowFor(html, "X")).toContain('<span class="sr-only">Connected</span>');
+  });
+
+  it("says the owner connects and reconnects", () => {
+    expect(renderMember(ROWS)).toContain("The workspace owner can connect and reconnect accounts for this workspace.");
+  });
+
+  it("the owner keeps the buttons", () => {
+    const html = render(ROWS);
+    expect(html).toContain("Manage connections");
+    expect(rowFor(html, "TikTok")).toContain(">Connect</a>");
+    expect(html).not.toContain("The workspace owner can");
+  });
+});

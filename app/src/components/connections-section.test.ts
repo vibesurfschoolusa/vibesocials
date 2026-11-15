@@ -160,3 +160,17 @@ describe("ConnectionsSection row layout per width", () => {
     expect(at(actions, 1280).has("shrink-0")).toBe(false);
   });
 });
+
+// R11-pages L2: a member's unconnected row says who can connect it.
+describe("ConnectionsSection unconnected rows for a member", () => {
+  const NOTE = "Not connected. The workspace owner can connect it.";
+
+  it("a member reads that the owner can connect it, on every unconnected row and no connected one", () => {
+    const html = render({ readOnly: true, connections: [connected("youtube")] });
+    expect(html.split(NOTE).length - 1).toBe(ALL.length - 1);
+  });
+
+  it("the owner does not", () => {
+    expect(render({})).not.toContain(NOTE);
+  });
+});

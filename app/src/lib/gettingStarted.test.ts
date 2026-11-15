@@ -332,3 +332,21 @@ describe("dashboardHeading", () => {
     expect(dashboardHeading(state(false, false, false), "Klaus")).toBe("Dashboard");
   });
 });
+
+// R11-client-journey L2: only the owner can connect, so a member is never led to Settings.
+describe("deriveDashboardCta for a member", () => {
+  it("nothing connected: a member gets Create post (Create says the owner connects), the owner Connect a platform", () => {
+    expect(deriveDashboardCta([], "member")).toEqual(COMPOSE_CTA);
+    expect(deriveDashboardCta([connection({ connected: false })], "member")).toEqual(COMPOSE_CTA);
+    expect(deriveDashboardCta([], "owner")).toMatchObject({ kind: "connect", label: "Connect a platform" });
+  });
+
+  it("connected: both get Create post", () => {
+    expect(deriveDashboardCta([connection({ connected: true })], "member")).toEqual(COMPOSE_CTA);
+    expect(deriveDashboardCta([connection({ connected: true })], "owner")).toEqual(COMPOSE_CTA);
+  });
+
+  it("still null while connections are unresolved", () => {
+    expect(deriveDashboardCta(null, "member")).toBeNull();
+  });
+});

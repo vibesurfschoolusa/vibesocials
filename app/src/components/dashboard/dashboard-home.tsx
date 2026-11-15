@@ -81,7 +81,7 @@ function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
   // permanently. On failure we degrade to the neutral heading and the
   // steady-state CTA rather than asserting anything we can't back up.
   const headerLoading = connectionsState.loading || postJobs.loading;
-  const cta = deriveDashboardCta(connectionsState.connections) ?? COMPOSE_CTA;
+  const cta = deriveDashboardCta(connectionsState.connections, setup?.role ?? null) ?? COMPOSE_CTA;
 
   // Latched: once the card is mounted, a manual reload of posts or
   // connections (loading flips back to true) must not unmount it and fire its
@@ -180,7 +180,7 @@ function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
           <WorkingForClients connections={connectionsState.connections} jobs={postJobs.jobs} setup={setup} />
         </div>
         <div className="space-y-6">
-          <ConnectionHealth {...connectionsState} />
+          <ConnectionHealth {...connectionsState} isMember={setup?.role === "member"} />
           {/* Renders only once this workspace has finished at least one
               publish, so a new user never meets an empty "0%" card. */}
           <PublishHealthCard />

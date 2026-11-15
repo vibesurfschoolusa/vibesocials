@@ -203,7 +203,10 @@ export function ConnectionsSection({
                           : isGoogleBusinessProfile
                             ? "Connected. Choose the Maps location to post to below."
                             : "Connected"
-                        : description}
+                        : readOnly
+                          ? // R11-pages L2: a member can't connect; say who can.
+                            "Not connected. The workspace owner can connect it."
+                          : description}
                     </p>
                     {PLATFORM_MATURITY_NOTES[key] ? (
                       <p className="mt-1 break-words text-xs text-muted-foreground/90">

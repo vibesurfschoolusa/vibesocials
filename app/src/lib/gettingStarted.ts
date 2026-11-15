@@ -113,14 +113,19 @@ export const COMPOSE_CTA: DashboardCta = {
  * failed. The caller distinguishes those two (a skeleton while loading, the
  * COMPOSE_CTA fallback once a fetch has actually failed), because a `null`
  * that never resolves must not leave a skeleton on screen forever.
+ *
+ * R11-client-journey L2: only the owner can connect, and a member's Settings
+ * is read-only, so a member is never led there: Create post, whose empty
+ * state says the owner connects platforms.
  */
 export function deriveDashboardCta(
   connections: ConnectionStatus[] | null,
+  role: WorkspaceRole | null = "owner",
 ): DashboardCta | null {
   if (connections === null) return null;
 
   const hasConnection = connections.some((connection) => connection.connected);
-  return hasConnection
+  return hasConnection || role === "member"
     ? { kind: "compose", href: "/posts/new", label: "Create post" }
     : { kind: "connect", href: SETTINGS_CONNECTIONS_HREF, label: "Connect a platform" };
 }
