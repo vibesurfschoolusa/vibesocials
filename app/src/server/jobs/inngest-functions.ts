@@ -60,6 +60,7 @@ import { syncListingMetrics } from "@/server/jobs/listingMetrics";
 import { syncSocialPostMetrics } from "@/server/jobs/socialMetricsSync";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
+  FAILED_INLINE_REFRESH_SHARE_MS,
   INLINE_REFRESH_BUDGET_MS,
   inlineRefreshQueue,
   isProactiveRefreshEligible,
@@ -2330,6 +2331,7 @@ export const stalePostJobSweep = inngest.createFunction(
  * A page shorter than HEALTH_SWEEP_PAGE_SIZE is the last: no further query.
  *  - `refresh-free-connections` (R10, V3), only when a free workspace has a
  *    connection due: at most FREE_INLINE_REFRESH_DAILY_CAP of them,
+ *    up to 10 failed ones first in a 40 s share, then the healthy ones
  *    soonest-expiring first, refreshed one after another within
  *    INLINE_REFRESH_BUDGET_MS, each as `refresh-connection` would (same lock,
  *    flag and reconnect email); see refreshConnectionsInline. A fanned-out
@@ -2424,7 +2426,7 @@ export const connectionHealthSweep = inngest.createFunction(
     let freeRefresh: FreeRefreshCounts = { ...NO_FREE_REFRESH, due: freeDue.length };
     if (queue.ids.length > 0) {
       const counts: FreeRefreshCounts = await step.run("refresh-free-connections", () =>
-        refreshConnectionsInline(queue.ids, day),
+        refreshConnectionsInline(queue.ids, day, queue.failedFirst),
       );
       freeRefresh = { ...counts, due: freeDue.length, leftForTomorrow: counts.leftForTomorrow + queue.leftForTomorrow };
     }
@@ -2556,7 +2558,8 @@ type SweepPageRead = { fanOut: string[]; inline: InlineRefreshCandidate[]; last:
 /**
  * Coordinator's review of R10 (V3): an inline refresh that failed without
  * flagging leaves `refreshFailedAt` set on the unflagged row, so tomorrow's
- * queue puts it after the healthy ones (inlineRefreshQueue). A flag writes
+ * queue gives it one of the failed places, by that time, in their own share
+ * of the step's time (inlineRefreshQueue, refreshConnectionsInline). A flag writes
  * its own time there and every refresher's success write clears it, so it
  * means "the last attempt failed" until one succeeds. Best effort: losing
  * the mark only changes the order.
@@ -2612,44 +2615,68 @@ const NO_FREE_REFRESH: FreeRefreshCounts = {
  * re-checks each connection, so one refreshed already is not refreshed again.
  * Returns counts only.
  */
-async function refreshConnectionsInline(ids: readonly string[], utcDay: string): Promise<FreeRefreshCounts> {
-  const deadline = Date.now() + INLINE_REFRESH_BUDGET_MS;
+async function refreshConnectionsInline(
+  ids: readonly string[],
+  utcDay: string,
+  /** R11 review: the first this many are the reserved failed ones, run in their own share of the time. */
+  failedFirst = 0,
+): Promise<FreeRefreshCounts> {
+  const startedAt = Date.now();
+  const deadline = startedAt + INLINE_REFRESH_BUDGET_MS;
+  const failedDeadline = Math.min(deadline, startedAt + FAILED_INLINE_REFRESH_SHARE_MS);
   const counts: FreeRefreshCounts = { ...NO_FREE_REFRESH };
-  for (const [index, socialConnectionId] of ids.entries()) {
-    if (remainingMs(deadline) < MIN_REQUEST_WINDOW_MS) {
-      counts.leftForTomorrow = ids.length - index;
-      break;
+  // The failed ones' share ends at failedDeadline; whatever it leaves unused
+  // goes to the healthy ones, up to the step's own deadline.
+  for (const [group, groupDeadline] of [
+    [ids.slice(0, failedFirst), failedDeadline],
+    [ids.slice(failedFirst), deadline],
+  ] as const) {
+    for (const [index, socialConnectionId] of group.entries()) {
+      if (remainingMs(groupDeadline) < MIN_REQUEST_WINDOW_MS) {
+        counts.leftForTomorrow += group.length - index;
+        break;
+      }
+      await refreshInlineOne(socialConnectionId, groupDeadline, utcDay, counts);
     }
-    let outcome: ConnectionRefreshOutcome;
+  }
+  return counts;
+}
+
+/** One connection of the inline refresh, its outcome added to `counts`. */
+async function refreshInlineOne(
+  socialConnectionId: string,
+  deadline: number,
+  utcDay: string,
+  counts: FreeRefreshCounts,
+): Promise<void> {
+  let outcome: ConnectionRefreshOutcome;
+  try {
+    outcome = await refreshOneConnection(socialConnectionId, deadline);
+  } catch (error) {
+    logger.warn("[Inngest] Inline connection refresh failed; retried by the next sweep", {
+      socialConnectionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    counts.failed++;
+    await markInlineRefreshFailed(socialConnectionId);
+    return;
+  }
+  if (outcome === "refreshed") counts.refreshed++;
+  else if (outcome === "transient_error") {
+    counts.failed++;
+    await markInlineRefreshFailed(socialConnectionId);
+  }
+  else if (outcome === "flagged") {
+    counts.flagged++;
     try {
-      outcome = await refreshOneConnection(socialConnectionId, deadline);
+      counts.emailed += (await notifyOwnersToReconnect(socialConnectionId, utcDay)).emailed;
     } catch (error) {
-      logger.warn("[Inngest] Inline connection refresh failed; retried by the next sweep", {
+      logger.warn("[Inngest] Reconnect email not sent yet; the connection-notices step sends it", {
         socialConnectionId,
         error: error instanceof Error ? error.message : String(error),
       });
-      counts.failed++;
-      await markInlineRefreshFailed(socialConnectionId);
-      continue;
     }
-    if (outcome === "refreshed") counts.refreshed++;
-    else if (outcome === "transient_error") {
-      counts.failed++;
-      await markInlineRefreshFailed(socialConnectionId);
-    }
-    else if (outcome === "flagged") {
-      counts.flagged++;
-      try {
-        counts.emailed += (await notifyOwnersToReconnect(socialConnectionId, utcDay)).emailed;
-      } catch (error) {
-        logger.warn("[Inngest] Reconnect email not sent yet; the connection-notices step sends it", {
-          socialConnectionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else counts.unchanged++;
-  }
-  return counts;
+  } else counts.unchanged++;
 }
 
 /**

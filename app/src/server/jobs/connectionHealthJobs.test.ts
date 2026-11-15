@@ -785,7 +785,7 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
   // expiry alone they would come first every day; they run after the healthy
   // ones. R11-publishing L2: but they keep places in the cap, so more healthy
   // ones due than the cap never leave them out for good.
-  it("3 connections whose last refresh failed and 100 healthy ones due: 97 healthy, then the 3", async () => {
+  it("3 connections whose last refresh failed and 100 healthy ones due: the 3 first, then 97 healthy", async () => {
     for (let i = 0; i < 3; i++) {
       add(`bad-${i}`, { expiresAt: new Date(NOW.getTime() - 30 * 86_400_000), refreshFailedAt: new Date(NOW.getTime() - 86_400_000) });
     }
@@ -794,8 +794,8 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
     const { summary } = await runCron();
 
     expect(refreshedIds()).toHaveLength(100);
-    expect(refreshedIds().slice(0, 97).every((id) => id.startsWith("ok-"))).toBe(true);
-    expect(refreshedIds().slice(97)).toEqual(["bad-0", "bad-1", "bad-2"]);
+    expect(refreshedIds().slice(0, 3)).toEqual(["bad-0", "bad-1", "bad-2"]);
+    expect(refreshedIds().slice(3).every((id) => id.startsWith("ok-"))).toBe(true);
     expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 103, refreshed: 100, leftForTomorrow: 3 });
   });
 
@@ -825,6 +825,64 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
     refreshConnectionTokenMock.mockClear();
     await runCron();
     expect(bad().slice(0, 5)).toEqual(["bad-04", "bad-03", "bad-02", "bad-01", "bad-00"]);
+  });
+
+  // R11 review: the reserved failed ones run first, in their own 40 s share,
+  // so a slow day never leaves them out and hanging ones never eat the rest.
+  describe("the failed ones' share of the step's time", () => {
+    /** Each call's start and deadline (ms after NOW), as the refresher saw them. */
+    const seen: Array<{ id: string; at: number; deadline: number }> = [];
+    const timed = (takes: (id: string, deadline: number) => number) =>
+      refresher.mockImplementation(async (conn: Row, options?: { deadline?: number }) => {
+        const deadline = options?.deadline ?? Number.POSITIVE_INFINITY;
+        seen.push({ id: conn.id, at: Date.now() - NOW.getTime(), deadline: deadline - NOW.getTime() });
+        vi.setSystemTime(new Date(Date.now() + takes(conn.id, deadline)));
+        if (conn.id.startsWith("bad-")) throw Object.assign(new Error("timeout"), { code: "TIKTOK_TOKEN_REFRESH_FAILED" });
+        const row = rows.get(conn.id)!;
+        row.expiresAt = new Date(Date.now() + 86_400_000);
+        return row;
+      });
+    beforeEach(() => {
+      seen.length = 0;
+    });
+
+    it("90 healthy at 2.2 s + 1 failed: the failed one is tried today, first", async () => {
+      add("bad-0", { expiresAt: new Date(NOW.getTime() - 30 * 86_400_000), refreshFailedAt: new Date(NOW.getTime() - 86_400_000) });
+      for (let i = 0; i < 90; i++) add(`ok-${String(i).padStart(3, "0")}`);
+      timed(() => 2_200);
+
+      await runCron();
+
+      expect(seen[0]).toEqual({ id: "bad-0", at: 0, deadline: 40_000 });
+      expect(seen[1]).toMatchObject({ id: "ok-000", at: 2_200, deadline: 200_000 });
+    });
+
+    it("10 failed that each hang: they stop at 40 s, and the healthy still get the 160 s after", async () => {
+      for (let i = 0; i < 10; i++) {
+        add(`bad-${i}`, { expiresAt: new Date(NOW.getTime() - 30 * 86_400_000), refreshFailedAt: new Date(NOW.getTime() - (i + 1) * 3_600_000) });
+      }
+      for (let i = 0; i < 90; i++) add(`ok-${String(i).padStart(3, "0")}`);
+      // A hang lasts until its deadline; a healthy refresh takes 1 s.
+      timed((id, deadline) => (id.startsWith("bad-") ? deadline - Date.now() : 1_000));
+
+      const { summary } = await runCron();
+
+      const bad = seen.filter((call) => call.id.startsWith("bad-"));
+      expect(bad).toEqual([{ id: "bad-9", at: 0, deadline: 40_000 }]);
+      const healthy = seen.filter((call) => call.id.startsWith("ok-"));
+      expect(healthy[0]).toMatchObject({ at: 40_000, deadline: 200_000 });
+      expect(healthy).toHaveLength(90);
+      expect(summary.freeRefresh).toMatchObject({ refreshed: 90, failed: 1, leftForTomorrow: 9 });
+    });
+
+    it("no failed ones: the healthy ones get the whole 200 s", async () => {
+      for (let i = 0; i < 5; i++) add(`ok-${i}`);
+      timed(() => 1_000);
+
+      await runCron();
+
+      expect(seen[0]).toEqual({ id: "ok-0", at: 0, deadline: 200_000 });
+    });
   });
 
   it("a refresh that fails without flagging records refreshFailedAt (not the flag), so it goes last next time", async () => {

@@ -186,20 +186,29 @@ function byFailureTime(a: InlineRefreshCandidate, b: InlineRefreshCandidate): nu
 export const FAILED_INLINE_REFRESH_PLACES = 10;
 
 /**
- * The free connections to refresh today, at most `cap`: the healthy ones,
- * soonest-expiring first, then those whose last refresh failed, oldest
- * failure first so more failing ones than their places take turns (ties by
- * expiry, then id); the count left is reported. A failing connection keeps its old
- * expiresAt, so by expiry alone a few failing or hanging ones would come first
- * every day and push healthy ones to the next; they run last, and up to
- * {@link FAILED_INLINE_REFRESH_PLACES} of the places are theirs whatever is
- * due, so they are never crowded out. A place one kind leaves unused goes to
- * the other.
+ * R11 review: the reserved failed connections run first, in this share of
+ * {@link INLINE_REFRESH_BUDGET_MS} (each refresh's deadline ends with it), so
+ * a slow day cannot leave them out and ones that hang stop at it, leaving the
+ * rest of the budget to the healthy ones.
+ */
+export const FAILED_INLINE_REFRESH_SHARE_MS = 40_000;
+
+/**
+ * The free connections to refresh today, at most `cap`, in run order: up to
+ * {@link FAILED_INLINE_REFRESH_PLACES} whose last refresh failed (the first
+ * `failedFirst` ids, run in their own share of the time), the healthy ones,
+ * then any more failed ones in places the healthy ones left unused. Healthy
+ * ones go soonest-expiring first (ties by id); failed ones oldest failure
+ * first, so more failing ones than their places take turns (ties by expiry,
+ * then id). The count left is reported. A failing connection keeps its old
+ * expiresAt, so by expiry alone it would come first every day; its places and
+ * its share of the time keep it from crowding out the healthy ones, and keep
+ * the healthy ones from crowding it out.
  */
 export function inlineRefreshQueue(
   candidates: readonly InlineRefreshCandidate[],
   cap: number = FREE_INLINE_REFRESH_DAILY_CAP,
-): { ids: string[]; leftForTomorrow: number } {
+): { ids: string[]; failedFirst: number; leftForTomorrow: number } {
   const ordered = [...candidates].sort(
     (a, b) =>
       new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime() ||
@@ -208,10 +217,15 @@ export function inlineRefreshQueue(
   const healthy = ordered.filter((candidate) => candidate.failed !== true);
   // A stable sort, so equal failure times keep the expiry order.
   const failed = ordered.filter((candidate) => candidate.failed === true).sort(byFailureTime);
-  const healthyTaken = Math.min(healthy.length, cap - Math.min(failed.length, FAILED_INLINE_REFRESH_PLACES, cap));
+  const failedFirst = Math.min(failed.length, FAILED_INLINE_REFRESH_PLACES, cap);
+  const healthyTaken = Math.min(healthy.length, cap - failedFirst);
   const failedTaken = Math.min(failed.length, cap - healthyTaken);
-  const ids = [...healthy.slice(0, healthyTaken), ...failed.slice(0, failedTaken)].map((candidate) => candidate.id);
-  return { ids, leftForTomorrow: candidates.length - ids.length };
+  const ids = [
+    ...failed.slice(0, failedFirst),
+    ...healthy.slice(0, healthyTaken),
+    ...failed.slice(failedFirst, failedTaken),
+  ].map((candidate) => candidate.id);
+  return { ids, failedFirst, leftForTomorrow: candidates.length - ids.length };
 }
 
 /**

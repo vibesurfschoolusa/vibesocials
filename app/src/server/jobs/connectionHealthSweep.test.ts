@@ -6,6 +6,7 @@ import {
   FREE_INLINE_REFRESH_DAILY_CAP,
   GOOGLE_IDLE_REFRESH_MS,
   HEALTH_SWEEP_PAGE_SIZE,
+  FAILED_INLINE_REFRESH_SHARE_MS,
   INLINE_REFRESH_BUDGET_MS,
   REFRESH_HORIZON_MS,
   expiryNoticeDue,
@@ -299,6 +300,8 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
   it("pins the cap (100 a day) and the step's time budget (200 s, inside the 300 s function limit)", () => {
     expect(FREE_INLINE_REFRESH_DAILY_CAP).toBe(100);
     expect(INLINE_REFRESH_BUDGET_MS).toBe(200_000);
+    // R11 review: the reserved failed ones' own share of it.
+    expect(FAILED_INLINE_REFRESH_SHARE_MS).toBe(40_000);
   });
 
   it("orders by expiresAt (ties by id) and leaves the rest for tomorrow", () => {
@@ -311,13 +314,13 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
       ],
       3,
     );
-    expect(queue).toEqual({ ids: ["a", "b", "c"], leftForTomorrow: 1 });
+    expect(queue).toEqual({ ids: ["a", "b", "c"], failedFirst: 0, leftForTomorrow: 1 });
   });
 
-  // Coordinator's review: a connection whose last refresh failed (refreshFailedAt
-  // on an unflagged row) goes after the healthy ones, so a few failing or
-  // hanging ones cannot push healthy ones to tomorrow.
-  it("puts connections whose last refresh failed after the healthy ones, each soonest-expiring first", () => {
+  // R11 review: the reserved failed ones run first, in their own share of the
+  // time (refreshConnectionsInline), so hanging ones cannot push healthy ones
+  // to tomorrow and a slow day cannot leave a failed one out.
+  it("puts the reserved failed connections first (failedFirst), then the healthy ones", () => {
     const queue = inlineRefreshQueue(
       [
         { id: "failed-old", expiresAt: at(-10 * DAY), failed: true },
@@ -326,8 +329,11 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
         { id: "healthy-early", expiresAt: at(-2 * HOUR), failed: false },
       ],
     );
-    // In the run they come last (R11-publishing L2: their places are kept, below).
-    expect(queue).toEqual({ ids: ["healthy-early", "healthy-late", "failed-old", "failed-new"], leftForTomorrow: 0 });
+    expect(queue).toEqual({
+      ids: ["failed-old", "failed-new", "healthy-early", "healthy-late"],
+      failedFirst: 2,
+      leftForTomorrow: 0,
+    });
   });
 
   it("150 due: the 100 soonest today, 50 left", () => {
@@ -338,19 +344,20 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
   });
 
   it("nothing due: nothing to do", () => {
-    expect(inlineRefreshQueue([])).toEqual({ ids: [], leftForTomorrow: 0 });
+    expect(inlineRefreshQueue([])).toEqual({ ids: [], failedFirst: 0, leftForTomorrow: 0 });
   });
 
   // R11-publishing L2: with more healthy ones due than the cap, a failed one
   // sorted after all of them was never reached. 10 of the places are kept for
-  // failed ones, still after the healthy ones in the run.
+  // failed ones.
   it("150 healthy due every day + 1 failed: the failed one is refreshed today, not never", () => {
     const healthy = Array.from({ length: 150 }, (_, i) => ({ id: `h-${String(i).padStart(3, "0")}`, expiresAt: at(-(150 - i) * HOUR) }));
     const failed = { id: "yt-failed", expiresAt: at(-30 * DAY), failed: true };
     const queue = inlineRefreshQueue([...healthy, failed]);
     expect(queue.ids).toHaveLength(100);
-    expect(queue.ids.at(-1)).toBe("yt-failed");
-    expect(queue.ids.slice(0, 99)).toEqual(healthy.slice(0, 99).map((row) => row.id));
+    expect(queue.ids[0]).toBe("yt-failed");
+    expect(queue.failedFirst).toBe(1);
+    expect(queue.ids.slice(1)).toEqual(healthy.slice(0, 99).map((row) => row.id));
     expect(queue.leftForTomorrow).toBe(51);
   });
 
@@ -390,11 +397,16 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
     const crowded = inlineRefreshQueue([...failed, ...healthy]);
     expect(crowded.ids.filter((id) => id.startsWith("f-"))).toEqual(failed.slice(0, 10).map((row) => row.id));
     expect(crowded.ids.filter((id) => id.startsWith("h-"))).toHaveLength(90);
+    expect(crowded.failedFirst).toBe(10);
 
-    // Few healthy ones: the failed ones fill the rest of the cap.
+    // Few healthy ones: the failed ones fill the rest of the cap; the reserved
+    // 10 first, the others after the healthy ones.
     const fewHealthy = inlineRefreshQueue([...failed, ...healthy.slice(0, 5)]);
     expect(fewHealthy.ids).toHaveLength(35);
-    expect(fewHealthy.ids.slice(0, 5)).toEqual(healthy.slice(0, 5).map((row) => row.id));
+    expect(fewHealthy.failedFirst).toBe(10);
+    expect(fewHealthy.ids.slice(0, 10)).toEqual(failed.slice(0, 10).map((row) => row.id));
+    expect(fewHealthy.ids.slice(10, 15)).toEqual(healthy.slice(0, 5).map((row) => row.id));
+    expect(fewHealthy.ids.slice(15)).toEqual(failed.slice(10).map((row) => row.id));
   });
 });
 
