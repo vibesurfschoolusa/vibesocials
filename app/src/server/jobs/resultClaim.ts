@@ -139,25 +139,33 @@ export async function finalizeClaimedResult(
 
   try {
     if (usageRow) {
-      await prisma.$transaction(async (tx) => {
-        await tx.postJobResult.update(update);
-        await tx.usageEvent.createMany({ data: [usageRow], skipDuplicates: true });
-      });
-    } else {
+      // A batch, not an interactive transaction (second review): it holds no
+      // connection between statements, so a busy pool cannot time it out
+      // half-way. Any failure but a lost claim falls back to the success alone.
+      try {
+        await prisma.$transaction([
+          prisma.postJobResult.update(update),
+          prisma.usageEvent.createMany({ data: [usageRow], skipDuplicates: true }),
+        ]);
+        return true;
+      } catch (batchError) {
+        if (isRecordNotFound(batchError)) throw batchError;
+        logger.error("[Inngest] Couldn't write an X success with its usage; writing the success alone", {
+          resultId,
+          error: batchError,
+        });
+      }
       await prisma.postJobResult.update(update);
+      await recordLiveXUsage(resultId, usageRow);
+      return true;
     }
+    await prisma.postJobResult.update(update);
     return true;
   } catch (error) {
     if (isRecordNotFound(error)) {
       if (data.status === "success") {
         // The post is live, so it still counts for its X account.
-        if (usageRow) {
-          try {
-            await prisma.usageEvent.createMany({ data: [usageRow], skipDuplicates: true });
-          } catch (usageError) {
-            logger.error("[Inngest] Couldn't record a live X post's usage", { resultId, error: usageError });
-          }
-        }
+        if (usageRow) await recordLiveXUsage(resultId, usageRow);
         await logLostSuccess(resultId, runId, data.externalPostId);
       } else {
         logger.warn("[Inngest] Result not written: this run no longer holds its claim", {
@@ -169,6 +177,15 @@ export async function finalizeClaimedResult(
       return false;
     }
     throw error;
+  }
+}
+
+/** A live X post's usage row on its own, best-effort: never throws. */
+async function recordLiveXUsage(resultId: string, usageRow: ReturnType<typeof xPostUsageRow>): Promise<void> {
+  try {
+    await prisma.usageEvent.createMany({ data: [usageRow], skipDuplicates: true });
+  } catch (error) {
+    logger.error("[Inngest] Couldn't record a live X post's usage", { resultId, error });
   }
 }
 

@@ -95,11 +95,11 @@ vi.mock("@/lib/db", () => ({
     usageEvent: { createMany: db.usageCreateMany },
     // The finalize steps recompute the job's status in a row-locked transaction
     // (failPendingResults.ts); its client reads and writes through the same mocks.
-    $transaction: (callback: (tx: unknown) => unknown) =>
-      callback({
+    // An array is a batch (the X success with its usage row, resultClaim.ts).
+    $transaction: (callback: ((tx: unknown) => unknown) | Promise<unknown>[]) =>
+      Array.isArray(callback) ? Promise.all(callback) : callback({
         $executeRaw: db.executeRaw,
-        postJobResult: { findMany: db.resultFindMany, update: db.resultUpdate },
-        usageEvent: { createMany: db.usageCreateMany },
+        postJobResult: { findMany: db.resultFindMany },
         postJob: { update: db.postJobUpdate, findUnique: db.stampJobFindUnique },
         mediaItem: { updateMany: db.mediaItemUpdateMany },
       }),
@@ -1098,11 +1098,12 @@ describe("platform steps claim their result before calling the platform (jobs H6
     await expect(run("run-1")).rejects.toThrow("Timed out fetching a new connection");
 
     expect(publishCtxs).toHaveLength(1);
-    // The one and only result write attempted was the success; no `failed` write
-    // followed it.
-    expect(resultWrites()).toEqual([
-      expect.objectContaining({ status: "success", externalPostId: "ext-x" }),
-    ]);
+    // Every result write attempted was the success (an X success tries it with
+    // its usage row, then alone: resultClaim.ts); no `failed` write followed.
+    expect(resultWrites().length).toBeGreaterThanOrEqual(1);
+    for (const write of resultWrites()) {
+      expect(write).toEqual(expect.objectContaining({ status: "success", externalPostId: "ext-x" }));
+    }
   });
 
   it("claims before every write, including the failures that never reach the platform", async () => {
