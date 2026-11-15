@@ -7,6 +7,7 @@ import { newWorkspaceBillingData, type TrialClient } from "@/server/billing/newW
 
 import { billingEnabled } from "./billing";
 import { prisma } from "./db";
+import { signedOutResponse } from "./signedOutResponse";
 
 /**
  * httpOnly cookie holding the active workspace id (design doc §1). Written by
@@ -333,7 +334,7 @@ export async function getWorkspaceContext(
  * Shared route-layer owner gate (review fix round 1, Minor 1 — hoisted from
  * 4 byte-identical per-route copies). Resolves the caller's owner-role
  * workspace context, or an error response for the route to return as-is:
- * 401 `{ error: "Unauthorized" }` when unauthenticated, 403 `{ error: "Only
+ * 401 {@link signedOutResponse} when unauthenticated, 403 `{ error: "Only
  * the workspace owner can do that." }` when {@link getWorkspaceContext}
  * throws {@link WorkspaceForbiddenError}. Anything else rethrows (routes
  * surface it through their own 500 handling). Usage:
@@ -345,7 +346,7 @@ export async function requireOwnerContext(): Promise<WorkspaceContext | NextResp
   try {
     const context = await getWorkspaceContext({ requireRole: "owner" });
     if (!context) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return signedOutResponse();
     }
     return context;
   } catch (error) {

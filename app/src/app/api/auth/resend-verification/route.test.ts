@@ -76,7 +76,7 @@ describe("POST /api/auth/resend-verification", () => {
     const response = await POST();
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    await expect(response.json()).resolves.toEqual({ error: "You were signed out. Sign in again." });
     expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(issueAccountTokenMock).not.toHaveBeenCalled();
   });

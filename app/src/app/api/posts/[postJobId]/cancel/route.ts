@@ -9,6 +9,7 @@ import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 
 import { applyToPair, readPairHalf, wantsPair } from "../pairRule";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -52,7 +53,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({ userId: workspaceContext.user.id, ...MUTATE_RATE_LIMIT });

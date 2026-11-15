@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * POST /api/auth/resend-verification — re-send the email-verification link for
@@ -29,7 +30,7 @@ const SEND_FAILED = "We couldn't send the verification email just now. Please tr
 export async function POST() {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Per-user throttle (this is an authenticated action, so the key is the user

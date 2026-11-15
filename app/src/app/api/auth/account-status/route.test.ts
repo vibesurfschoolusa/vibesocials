@@ -26,7 +26,7 @@ describe("GET /api/auth/account-status", () => {
     const response = await GET();
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    await expect(response.json()).resolves.toEqual({ error: "You were signed out. Sign in again." });
   });
 
   it("reports emailVerified false for an unverified user when email is configured", async () => {

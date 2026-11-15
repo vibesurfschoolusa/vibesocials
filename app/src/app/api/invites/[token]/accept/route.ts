@@ -11,6 +11,7 @@ import { JOIN_FAILED_MESSAGE } from "@/app/join/[token]/joinMessages";
 import { notifyOwnersOfMemberJoined } from "@/server/notifications/memberJoinedEmail";
 
 import { inviteLinkWorks, MAKER_NOT_OWNER_MESSAGE } from "../inviteMaker";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface AcceptRouteContext {
   params: Promise<{ token: string }>;
@@ -58,7 +59,7 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
   const user = await getCurrentUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({ userId: user.id, ...RATE_LIMIT });

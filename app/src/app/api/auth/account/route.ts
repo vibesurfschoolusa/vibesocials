@@ -31,6 +31,7 @@ import { accountUndoWindowUntil } from "@/server/auth/undoWindow";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 import { noticeOwnersOfFormerOwner } from "@/app/api/workspaces/members/formerOwnerNotice";
 import { copyUsageBeforeDeletion } from "@/server/usage/usageLog";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 // Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
 // most 20 s of file deletion.
@@ -56,7 +57,7 @@ const PLAN_CHANGED_MESSAGE =
 export async function DELETE(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Fails closed: this guards a password check.

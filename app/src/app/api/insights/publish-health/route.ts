@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { summarizePublishHealthCounts, type PublishHealthSummary } from "@/lib/publishHealth";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,7 @@ export async function GET() {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const now = new Date();

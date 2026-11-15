@@ -37,6 +37,7 @@ import {
   wantsPair,
   type PairHalf,
 } from "../pairRule";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.

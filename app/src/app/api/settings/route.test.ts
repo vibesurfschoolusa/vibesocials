@@ -564,7 +564,7 @@ describe("POST /api/settings", () => {
     );
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    await expect(response.json()).resolves.toEqual({ error: "You were signed out. Sign in again." });
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
     expect(userUpdateMock).not.toHaveBeenCalled();
   });

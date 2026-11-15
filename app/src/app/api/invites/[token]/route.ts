@@ -6,6 +6,7 @@ import { hashInviteToken } from "@/lib/inviteToken";
 import { checkRateLimit } from "@/lib/rateLimit";
 
 import { inviteLinkWorks, MAKER_NOT_OWNER_MESSAGE } from "./inviteMaker";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface InviteRouteContext {
   params: Promise<{ token: string }>;
@@ -31,7 +32,7 @@ export async function GET(_request: Request, { params }: InviteRouteContext) {
   const user = await getCurrentUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Post-release review (Task D): this preview GET was unguarded — per-user

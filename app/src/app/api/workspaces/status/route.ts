@@ -8,6 +8,7 @@ import {
   trialDaysLeftNotice,
   trialEndingNotice,
 } from "@/lib/workspaceStatus";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const context = await getWorkspaceContext();
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
   const block = accessBlock(context);
   const trialNotice = block ? null : trialEndingNotice(context.workspace, context.role, new Date(), context.user.timeZone ?? null);

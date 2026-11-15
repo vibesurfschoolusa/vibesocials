@@ -18,6 +18,7 @@ import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
 import { reserveRetry, withdrawRetry } from "@/server/usage/usageLog";
 import { Prisma, type Platform } from "@prisma/client";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface RetryRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.

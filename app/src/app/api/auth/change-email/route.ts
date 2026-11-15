@@ -11,6 +11,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { accountUndoWindowUntil, addressHeldUntil, clearPassedUndoWindows } from "@/server/auth/undoWindow";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /** How long the confirmation link works. */
 const EMAIL_CHANGE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -39,7 +40,7 @@ const RATE_LIMIT = { route: "auth/change-email", limit: 5, windowMs: 60 * 60 * 1
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({ userId: user.id, ...RATE_LIMIT, failClosed: true });

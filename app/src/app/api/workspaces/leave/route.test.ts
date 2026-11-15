@@ -225,7 +225,7 @@ describe("POST /api/workspaces/leave", () => {
     const response = await POST(leaveReq());
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    await expect(response.json()).resolves.toEqual({ error: "You were signed out. Sign in again." });
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
   });

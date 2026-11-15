@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface PlatformRouteContext {
   params: Promise<{ platform: string }> | { platform: string };
@@ -23,7 +24,7 @@ interface PlatformRouteContext {
 export async function GET(request: NextRequest, context: PlatformRouteContext) {
   const wsContext = await getWorkspaceContext();
   if (!wsContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const sent = request.nextUrl.searchParams.get("workspaceId");

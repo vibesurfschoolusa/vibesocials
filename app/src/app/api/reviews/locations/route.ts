@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { listGbpLocations, refreshAccessToken, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ export async function GET() {
     const context = await getWorkspaceContext();
 
     if (!context) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return signedOutResponse();
     }
     role = context.role;
 

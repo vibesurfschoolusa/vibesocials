@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * POST /api/workspaces/switch { workspaceId }
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Post-release review (Task D): this mutation was unguarded — per-user

@@ -13,6 +13,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import type { Prisma } from "@prisma/client";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * Library page size: both the default and the maximum `?limit=`. 60 items at
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const url = new URL(request.url);
@@ -122,7 +123,7 @@ export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.

@@ -8,6 +8,7 @@ import { parseGoogleButton } from "@/lib/googlePostOptions";
 import { cleanBrandVoice, cleanBrandVoiceExamples } from "@/lib/brandVoice";
 import { normalizePostingSlots, type PostingSlot } from "@/lib/postingSlots";
 import { Prisma } from "@prisma/client";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
@@ -312,7 +313,7 @@ export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const body = await readJsonObject(request);

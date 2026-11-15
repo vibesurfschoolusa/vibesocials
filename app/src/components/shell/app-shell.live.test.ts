@@ -49,8 +49,8 @@ let mounts = 0;
 let setCaption: (value: string) => void = () => {};
 function Composer() {
   const [caption, set] = useState("");
-  setCaption = set;
   useEffect(() => {
+    setCaption = set;
     mounts += 1;
   }, []);
   return createElement("textarea", { value: caption, readOnly: true, "data-caption": caption });

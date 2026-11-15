@@ -10,6 +10,7 @@ import type {
   ConnectionStatus,
   ConnectionsResponse,
 } from "@/lib/connectionsDto";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * GET /api/connections
@@ -25,7 +26,7 @@ export async function GET() {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   try {

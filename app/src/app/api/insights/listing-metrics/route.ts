@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { shiftDay, summarizeListingMetrics, type ListingMetricTotals } from "@/lib/listingMetrics";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,7 @@ function nonEmptyString(value: unknown): string | null {
 export async function GET() {
   const context = await getWorkspaceContext();
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
   const workspaceId = context.workspace.id;
   const empty: ListingMetricsResponse = { listing: null };

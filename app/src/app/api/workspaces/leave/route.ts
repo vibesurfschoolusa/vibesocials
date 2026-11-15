@@ -10,6 +10,7 @@ import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 
 import { noticeOwnersOfFormerOwner } from "../members/formerOwnerNotice";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * POST /api/workspaces/leave
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, context.workspace.id);

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * POST /api/auth/change-password { currentPassword, newPassword }
@@ -21,7 +22,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({

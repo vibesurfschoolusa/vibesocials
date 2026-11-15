@@ -10,6 +10,7 @@ export type FakeNode = {
   parentNode: FakeNode | null;
   attributes: Record<string, string>;
   nodeValue: string | null;
+  appendChild(child: FakeNode): FakeNode;
   [key: string]: unknown;
 };
 

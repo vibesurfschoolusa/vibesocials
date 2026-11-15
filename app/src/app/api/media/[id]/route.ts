@@ -7,6 +7,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { deletedMediaData } from "@/server/jobs/deletedMediaData";
 import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface MediaItemRouteContext {
   params: Promise<{ id: string }> | { id: string };
@@ -43,7 +44,7 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const { id } = await Promise.resolve(context.params);
@@ -98,7 +99,7 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const { id } = await Promise.resolve(context.params);

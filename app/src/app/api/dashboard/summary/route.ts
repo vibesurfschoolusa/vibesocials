@@ -8,6 +8,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
 import { planIncludes } from "@/lib/planFeatures";
 import type { DashboardSummary } from "@/lib/needsYou";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -65,7 +66,7 @@ const AWAITING_APPROVAL: Prisma.PostJobWhereInput = {
 export async function GET() {
   const context = await getWorkspaceContext();
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({

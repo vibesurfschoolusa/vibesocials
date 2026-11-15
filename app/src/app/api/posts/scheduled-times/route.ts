@@ -4,6 +4,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { readPostingSlots } from "@/lib/postingSlots";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /** As far ahead as "Next free slot" looks for posts already there. */
 const LOOKAHEAD_MS = 90 * 24 * 60 * 60 * 1000;
@@ -24,7 +25,7 @@ export async function GET() {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const now = new Date();

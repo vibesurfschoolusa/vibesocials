@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * GET /api/auth/account-status — the minimal, user-level account facts the
@@ -17,7 +18,7 @@ import { getCurrentUser } from "@/lib/auth";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   return NextResponse.json({

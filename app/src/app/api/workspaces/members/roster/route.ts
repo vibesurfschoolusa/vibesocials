@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { personLabel } from "@/lib/usageLimits";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * GET /api/workspaces/members/roster
@@ -19,7 +20,7 @@ export async function GET() {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const memberships = await prisma.workspaceMember.findMany({

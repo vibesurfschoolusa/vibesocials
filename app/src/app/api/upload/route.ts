@@ -21,6 +21,7 @@ import {
   releaseUploadDayBytes,
 } from "./uploadBudget";
 import { clearUploadRefusal, readUploadRefusal, recordUploadRefusal } from "./uploadRefusal";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * R2 M1: the only pathnames a signed-in token is signed for: a generateBlobKey
@@ -41,7 +42,7 @@ function isSignablePathname(pathname: string, workspaceId: string): boolean {
 export async function GET(): Promise<NextResponse> {
   const context = await getWorkspaceContext();
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
   // Why this person's last token was refused (uploadRefusal.ts): one row read,
   // so it is answered before the throttle below. `storageFull: true` too,
@@ -71,7 +72,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.

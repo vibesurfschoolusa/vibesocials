@@ -6,6 +6,7 @@ import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -33,7 +34,7 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // No pause check: cancelling only stops work, so it stays allowed while the

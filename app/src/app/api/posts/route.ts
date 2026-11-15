@@ -79,6 +79,7 @@ import {
   decodePostsCursor,
   METRIC_PLATFORMS,
 } from "@/lib/postsDto";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
 const VALID_POST_JOB_STATUSES = new Set<string>(Object.values(PostJobStatus));
@@ -301,7 +302,7 @@ export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Optional `?status=` filter (Roadmap Phase 5) — a comma-separated list of
@@ -733,7 +734,7 @@ export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.

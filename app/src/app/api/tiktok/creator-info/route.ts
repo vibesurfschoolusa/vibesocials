@@ -6,6 +6,7 @@ import {
   ensureFreshTikTokToken,
   getTikTokCreatorInfo,
 } from "@/server/platforms/tiktokClient";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * GET /api/tiktok/creator-info
@@ -22,7 +23,7 @@ import {
 export async function GET() {
   const context = await getWorkspaceContext();
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   try {

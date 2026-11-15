@@ -6,6 +6,7 @@ import { readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform } from "@prisma/client";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface PlatformRouteContext {
   params: Promise<{ platform: string }> | { platform: string };
@@ -22,7 +23,7 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
   const wsContext = await getWorkspaceContext();
 
   if (!wsContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // In Next.js 15+, params might be a Promise

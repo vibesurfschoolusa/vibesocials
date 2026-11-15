@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { fetchNewReviewUri, refreshAccessToken, reviewLinkReason, savedNewReviewUri } from "@/server/googleReviews";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,7 @@ async function saveLinkIfUnchanged(id: string, locationName: string, url: string
 export async function GET() {
   const context = await getWorkspaceContext();
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({

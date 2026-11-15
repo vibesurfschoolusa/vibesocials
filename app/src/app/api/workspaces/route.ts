@@ -12,6 +12,7 @@ import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { newWorkspaceBillingData } from "@/server/billing/newWorkspaceTrial";
 import { recordWorkspaceCreated, workspaceCreationRefusal } from "@/server/usage/usageLog";
 import { createWorkspaceWhileBlockedMessage, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /** The longest workspace name accepted (it shows in the account menu). */
 export const WORKSPACE_NAME_MAX_LENGTH = 60;
@@ -35,7 +36,7 @@ export async function GET() {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const memberships = await prisma.workspaceMember.findMany({
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Pause (2026-11-10, fix round 1): an owner of a paused workspace cannot start

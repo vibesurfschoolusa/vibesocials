@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { clearPassedUndoWindows } from "@/server/auth/undoWindow";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * The undo links that still work for this person: made by a change to the
@@ -31,7 +32,7 @@ function liveUndoLinks(user: { id: string; email: string }, now: Date) {
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
   try {
     const now = new Date();

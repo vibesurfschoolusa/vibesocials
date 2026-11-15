@@ -26,6 +26,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
     const context = await getWorkspaceContext();
 
     if (!context) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return signedOutResponse();
     }
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.

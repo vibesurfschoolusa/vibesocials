@@ -32,6 +32,7 @@ import {
   wantsPair,
   type PairHalf,
 } from "./pairRule";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -97,7 +98,7 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   // Next 16 passes `params` as a promise — it MUST be awaited. Reading it
@@ -161,7 +162,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const limited = await enforceMutateRateLimit(workspaceContext.user.id);
@@ -447,7 +448,7 @@ export async function DELETE(request: NextRequest, context: PostJobRouteContext)
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const limited = await enforceMutateRateLimit(workspaceContext.user.id);

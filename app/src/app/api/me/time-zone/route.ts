@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { usableTimeZone } from "@/server/notifications/emailTime";
+import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
  * POST /api/me/time-zone { timeZone } (fix round 1, F4): the signed-in
@@ -15,7 +16,7 @@ import { usableTimeZone } from "@/server/notifications/emailTime";
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return signedOutResponse();
   }
 
   const rateLimit = await checkRateLimit({
