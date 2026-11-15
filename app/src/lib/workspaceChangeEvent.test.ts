@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { announceWorkspaceChange, subscribeWorkspaceChange, WORKSPACE_CHANGED_EVENT } from "./workspaceChangeEvent";
+import { announceWorkspaceChange, newestAnswer, subscribeWorkspaceChange, WORKSPACE_CHANGED_EVENT } from "./workspaceChangeEvent";
 
 /**
  * R16 L1/L2: a rename or an owner stepping down keeps the active workspace, so
@@ -38,5 +38,33 @@ describe("workspace changed event", () => {
     window.addEventListener(WORKSPACE_CHANGED_EVENT, listener);
     announceWorkspaceChange();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Review note: two reads of the same data can answer out of order; an older
+// read finishing last must not overwrite a newer one.
+describe("newestAnswer", () => {
+  it("lets an answer show only when no newer read has shown one", () => {
+    const reads = newestAnswer();
+    const older = reads.next();
+    const newer = reads.next();
+    expect(newer()).toBe(true);
+    expect(older()).toBe(false);
+  });
+
+  it("in order, each answer shows", () => {
+    const reads = newestAnswer();
+    const first = reads.next();
+    expect(first()).toBe(true);
+    const second = reads.next();
+    expect(second()).toBe(true);
+  });
+
+  // A newer read that failed never shows, so it must not hold back the older answer.
+  it("an older answer still shows when the newer read never answers", () => {
+    const reads = newestAnswer();
+    const older = reads.next();
+    reads.next();
+    expect(older()).toBe(true);
   });
 });

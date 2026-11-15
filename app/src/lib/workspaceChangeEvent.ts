@@ -16,6 +16,29 @@ export function announceWorkspaceChange(): void {
   window.dispatchEvent(new Event(WORKSPACE_CHANGED_EVENT));
 }
 
+/**
+ * One order for several reads of the same data (the menu's list, the banner's
+ * status): a page load or navigation read and an announce read can answer out
+ * of order. `next()` is called as a read starts; the function it returns is
+ * called when its answer arrives and says whether to show it: not when a read
+ * started later has already shown its answer. A later read that fails never
+ * shows, so it holds nothing back.
+ */
+export function newestAnswer(): { next(): () => boolean } {
+  let started = 0;
+  let shown = 0;
+  return {
+    next() {
+      const mine = ++started;
+      return () => {
+        if (mine < shown) return false;
+        shown = mine;
+        return true;
+      };
+    },
+  };
+}
+
 /** Calls `listener` on each announce; the answer unsubscribes. */
 export function subscribeWorkspaceChange(listener: () => void): () => void {
   const onEvent = () => listener();

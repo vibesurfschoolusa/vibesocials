@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,8 +8,8 @@ vi.mock("next-auth/react", () => ({ useSession: () => ({ status: "loading" }) })
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { readWorkspaceStatus, watchWorkspaceStatus, WorkspaceStatusAlert } from "./workspace-paused-banner";
-import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
+import { readWorkspaceStatus, readWorkspaceStatusOnce, watchWorkspaceStatus, WorkspaceStatusAlert } from "./workspace-paused-banner";
+import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 /** 23: the banner's line for an unconfirmed address, with its resend button, and only for it. */
 
@@ -142,5 +144,74 @@ describe("watchWorkspaceStatus", () => {
     announceWorkspaceChange();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onStatus).not.toHaveBeenCalled();
+  });
+});
+
+// Review note: the navigation read and the announce read share one order, so
+// whichever started later shows, however they answer.
+describe("the banner keeps the newest answer", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", new EventTarget());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function deferredFetches() {
+    const pending: Array<(body: unknown) => void> = [];
+    const fetchImpl = (() =>
+      new Promise<Response>((resolve) => pending.push((body) => resolve(new Response(JSON.stringify(body), { status: 200 }))))) as unknown as typeof fetch;
+    return { pending, fetchImpl };
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("announce read and navigation read answer out of order: the newer one shows", async () => {
+    const { pending, fetchImpl } = deferredFetches();
+    const reads = newestAnswer();
+    const shown: Array<string | null> = [];
+    const onStatus = (status: { daysLeft: string | null }) => shown.push(status.daysLeft);
+    readWorkspaceStatusOnce(onStatus, fetchImpl, reads); // navigation, as owner
+    watchWorkspaceStatus(onStatus, fetchImpl, reads);
+    announceWorkspaceChange(); // after stepping down
+    expect(pending).toHaveLength(2);
+
+    pending[1]({ blockedMessage: null });
+    await settle();
+    pending[0]({ blockedMessage: null, trialDaysLeft: "Free trial: 9 days left." });
+    await settle();
+    expect(shown).toEqual([null]);
+  });
+
+  it("in order, both show and the last stays", async () => {
+    const { pending, fetchImpl } = deferredFetches();
+    const reads = newestAnswer();
+    const shown: Array<string | null> = [];
+    const onStatus = (status: { daysLeft: string | null }) => shown.push(status.daysLeft);
+    readWorkspaceStatusOnce(onStatus, fetchImpl, reads);
+    watchWorkspaceStatus(onStatus, fetchImpl, reads);
+    announceWorkspaceChange();
+    pending[0]({ blockedMessage: null, trialDaysLeft: "Free trial: 9 days left." });
+    await settle();
+    pending[1]({ blockedMessage: null });
+    await settle();
+    expect(shown).toEqual(["Free trial: 9 days left.", null]);
+  });
+
+  it("a navigation read cancelled by the next page change shows nothing", async () => {
+    const { pending, fetchImpl } = deferredFetches();
+    const onStatus = vi.fn();
+    const cancel = readWorkspaceStatusOnce(onStatus, fetchImpl, newestAnswer());
+    cancel();
+    pending[0]({ blockedMessage: "Paused." });
+    await settle();
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  it("every status read in the banner takes its place in the order", () => {
+    const source = readFileSync(fileURLToPath(new URL("./workspace-paused-banner.tsx", import.meta.url)), "utf8");
+    const reads = source.match(/fetchWorkspaceStatus\(fetchImpl\)/g) ?? [];
+    expect(reads.length).toBeGreaterThan(0);
+    expect((source.match(/\breads\.next\(\)/g) ?? []).length).toBe(reads.length);
+    expect(source).not.toMatch(/fetchWorkspaceStatus\(fetch\)/);
   });
 });

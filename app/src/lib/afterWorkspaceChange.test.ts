@@ -121,15 +121,75 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-/** The address parameters a page or component source reads by name. */
-function paramsRead(source: string): string[] {
+/** The text from the `{` at `start` to its matching `}`. */
+function block(source: string, start: number): string {
+  let depth = 0;
+  for (let i = start; i < source.length; i += 1) {
+    if (source[i] === "{") depth += 1;
+    else if (source[i] === "}" && --depth === 0) return source.slice(start, i + 1);
+  }
+  return source.slice(start);
+}
+
+/** The names `holder` is read with: .get/.has/.getAll("x"), .x, ["x"], [CONSTANT], and [key] over a literal list. */
+function readsThrough(source: string, holder: string, constants: Map<string, string>): string[] {
+  const names: string[] = [];
+  const h = holder.replace(/[$]/g, "\\$");
+  for (const match of source.matchAll(new RegExp(`\\b${h}\\??\\.(?:get|has|getAll)\\(\\s*["'](\\w+)["']`, "g"))) names.push(match[1]);
+  // A field, not a method: `.x` not followed by "(".
+  for (const match of source.matchAll(new RegExp(`\\b${h}\\??\\.(\\w+)\\b(?!\\s*\\()`, "g"))) names.push(match[1]);
+  for (const match of source.matchAll(new RegExp(`\\b${h}\\[\\s*["'](\\w+)["']\\s*\\]`, "g"))) names.push(match[1]);
+  for (const match of source.matchAll(new RegExp(`\\b${h}\\[\\s*([A-Z][A-Z0-9_]*)\\s*\\]`, "g"))) {
+    const value = constants.get(match[1]);
+    if (value) names.push(value);
+  }
+  for (const loop of source.matchAll(/for\s*\(\s*const\s+(\w+)\s+of\s+\[([^\]]*)\]\s*\)/g)) {
+    if (new RegExp(`\\b${h}\\[\\s*${loop[1]}\\s*\\]`).test(source)) {
+      for (const literal of loop[2].matchAll(/["'](\w+)["']/g)) names.push(literal[1]);
+    }
+  }
+  return names;
+}
+
+/**
+ * The address parameters a page or component source reads by name. `library`
+ * is the rest of src: the definitions of helpers it hands the params object to,
+ * and the string constants it reads them with.
+ */
+function paramsRead(source: string, library = ""): string[] {
   const names = new Set<string>();
-  for (const match of source.matchAll(/searchParams\.get\(\s*["'](\w+)["']/g)) names.add(match[1]);
+  const constants = new Map<string, string>();
+  for (const match of `${library}\n${source}`.matchAll(/(?:export\s+)?const\s+([A-Z][A-Z0-9_]*)\s*=\s*["'](\w+)["']/g)) {
+    constants.set(match[1], match[2]);
+  }
   for (const match of source.matchAll(/searchParams\??:\s*Promise<\{([^}]*)\}>/g)) {
     for (const key of match[1].matchAll(/(\w+)\??:/g)) names.add(key[1]);
   }
   for (const match of source.matchAll(/const\s*\{([^}]*)\}\s*=\s*\(?\s*await\s+searchParams/g)) {
     for (const key of match[1].split(",")) if (key.trim()) names.add(key.trim().split(/[\s:=]/)[0]);
+  }
+  for (const match of source.matchAll(/\(\s*await\s+searchParams\s*\)\s*\??\.(\w+)/g)) names.add(match[1]);
+  // Every name the params object is held under: the prop, useSearchParams(), `await searchParams`.
+  const holders = new Set(["searchParams"]);
+  for (const match of source.matchAll(/const\s+(\w+)\s*=\s*(?:useSearchParams\(\)|\(?\s*await\s+searchParams\b)/g)) holders.add(match[1]);
+  for (const holder of holders) {
+    for (const name of readsThrough(source, holder, constants)) if (holder !== "searchParams" || name !== "then") names.add(name);
+    // A helper handed the params object reads them under its own parameter name.
+    for (const call of source.matchAll(new RegExp(`\\b(\\w+)\\(\\s*${holder}\\s*[,)]`, "g"))) {
+      const definition = new RegExp(`function\\s+${call[1]}\\s*\\(\\s*(\\w+)`).exec(library);
+      if (!definition) continue;
+      // The body opens after the parameter list, whose defaults may hold braces of their own.
+      let depth = 0;
+      let close = definition.index + definition[0].indexOf("(");
+      for (; close < library.length; close += 1) {
+        if (library[close] === "(") depth += 1;
+        else if (library[close] === ")" && --depth === 0) break;
+      }
+      const body = block(library, library.indexOf("{", close));
+      const aliases = [definition[1]];
+      for (const alias of body.matchAll(new RegExp(`const\\s+(\\w+)\\s*=[^;]*\\b${definition[1]}\\b`, "g"))) aliases.push(alias[1]);
+      for (const alias of aliases) for (const name of readsThrough(body, alias, constants)) names.add(name);
+    }
   }
   return [...names].sort();
 }
@@ -140,16 +200,52 @@ describe("every parameter a page reads is sorted", () => {
     expect(paramsRead("searchParams: Promise<{\n error?: string;\n same_end?: string;\n}>")).toEqual(["error", "same_end"]);
     expect(paramsRead("const { notice } = (await searchParams) ?? {};")).toEqual(["notice"]);
     expect(paramsRead("const { month } = await searchParams;")).toEqual(["month"]);
+    expect(paramsRead("const media = (await searchParams)?.media;")).toEqual(["media"]);
+  });
+
+  // Review note: a read through any name the params object is held under.
+  it("reads through a variable bound to useSearchParams() or searchParams", () => {
+    expect(paramsRead('const q = useSearchParams();\nconst id = q.get("x");\nif (q.has("y")) q.toString();')).toEqual(["x", "y"]);
+    const page = [
+      "const params = await searchParams;",
+      "describe({ error: params.error ?? null });",
+      'if (params["same_end"] !== undefined && params[CLEARED] !== undefined) {}',
+    ].join("\n");
+    expect(paramsRead(page, 'export const CLEARED = "location_cleared";')).toEqual(["error", "location_cleared", "same_end"]);
+    const loop = 'const query = await searchParams;\nfor (const key of ["error", "linkedin_setup"]) {\n  const value = first(query[key]);\n}';
+    expect(paramsRead(loop)).toEqual(["error", "linkedin_setup"]);
+  });
+
+  // Review note: a lib helper given the params object reads them itself.
+  it("reads through a helper the params object is handed to", () => {
+    const view = "const searchParams = useSearchParams();\nconst tab = tabFrom(searchParams);";
+    const helper = [
+      "export function tabFrom(search: string | URLSearchParams): string {",
+      '  const params = typeof search === "string" ? new URLSearchParams(search) : search;',
+      '  return params.get("tab") ?? "all";',
+      "}",
+    ].join("\n");
+    expect(paramsRead(view, helper)).toEqual(["tab"]);
+    const bound = 'const q = useSearchParams();\nconst result = describeResult(q, { kept: true });';
+    const direct = 'export function describeResult(query: URLSearchParams, options = {}) {\n  return query.get("outcome");\n}';
+    expect(paramsRead(bound, direct)).toEqual(["outcome"]);
+    // No definition found: nothing is invented.
+    expect(paramsRead("const q = useSearchParams();\nunknownHelper(q);")).toEqual([]);
   });
 
   it("is one-time or kept", () => {
     const sorted = new Set<string>([...ONE_TIME_PARAMS, ...Object.keys(ONE_TIME_VALUES), ...KEPT_PARAMS]);
     const unsorted: string[] = [];
     const seen: string[] = [];
+    // Helpers and constants can live anywhere in src.
+    const library = sourceFiles(SRC)
+      .sort()
+      .map((file) => readFileSync(file, "utf8").replace(/\r\n/g, "\n"))
+      .join("\n");
     // Pages and the components they render; route handlers and server code read requests, not the address bar.
     for (const file of ["app", "components", "hooks"].flatMap((dir) => sourceFiles(path.join(SRC, dir)))) {
       const relative = path.relative(SRC, file).split(/[\\/]/).join("/");
-      for (const name of paramsRead(readFileSync(file, "utf8"))) {
+      for (const name of paramsRead(readFileSync(file, "utf8").replace(/\r\n/g, "\n"), library)) {
         seen.push(name);
         if (!sorted.has(name)) unsorted.push(`${relative}: ${name}`);
       }

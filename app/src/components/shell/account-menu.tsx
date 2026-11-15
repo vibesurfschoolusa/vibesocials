@@ -10,7 +10,7 @@ import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accou
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
 import { contactUsHref } from "@/lib/contactUs";
-import { subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
+import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,20 +33,44 @@ interface OperatorLink {
 }
 
 /**
+ * One read of GET /api/workspaces, for the page load; `onList` gets a good
+ * answer unless a read started later has shown its own. The answer cancels it.
+ */
+export function readWorkspaceListOnce(
+  onList: (workspaces: WorkspaceSummary[]) => void,
+  fetchImpl: typeof fetch = fetch,
+  reads = newestAnswer(),
+): () => void {
+  let cancelled = false;
+  const show = reads.next();
+  fetchImpl("/api/workspaces")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data: { workspaces?: WorkspaceSummary[] } | null) => {
+      if (!cancelled && Array.isArray(data?.workspaces) && show()) onList(data.workspaces);
+    })
+    .catch(() => {});
+  return () => {
+    cancelled = true;
+  };
+}
+
+/**
  * R16: re-reads GET /api/workspaces on each announceWorkspaceChange (a rename,
- * an owner stepping down), which keep the page; `onList` gets each good answer.
+ * an owner stepping down), which keep the page, in the same order as `reads`.
  * The answer stops listening, and an answer that arrives after that is dropped.
  */
 export function watchWorkspaceList(
   onList: (workspaces: WorkspaceSummary[]) => void,
   fetchImpl: typeof fetch = fetch,
+  reads = newestAnswer(),
 ): () => void {
   let stopped = false;
   const unsubscribe = subscribeWorkspaceChange(() => {
+    const show = reads.next();
     fetchImpl("/api/workspaces")
       .then((response) => (response.ok ? response.json() : null))
       .then((data: { workspaces?: WorkspaceSummary[] } | null) => {
-        if (!stopped && Array.isArray(data?.workspaces)) onList(data.workspaces);
+        if (!stopped && Array.isArray(data?.workspaces) && show()) onList(data.workspaces);
       })
       .catch(() => {});
   });
@@ -89,6 +113,8 @@ export function AccountMenu() {
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
+  // The page-load, menu-open and announce reads share one order: the later one shows.
+  const [reads] = useState(newestAnswer);
 
   useEffect(() => {
     if (!open) return;
@@ -117,6 +143,7 @@ export function AccountMenu() {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- loads workspaces when the menu opens; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
     setWorkspacesLoading(true);
+    const show = reads.next();
 
     (async () => {
       try {
@@ -125,7 +152,7 @@ export function AccountMenu() {
         const data: { workspaces: WorkspaceSummary[]; operatorLink?: OperatorLink; newWorkspaceNote?: unknown } =
           await response.json();
         if (!cancelled) {
-          setWorkspaces(data.workspaces);
+          if (show()) setWorkspaces(data.workspaces);
           setOperatorLink(
             typeof data.operatorLink?.href === "string" && typeof data.operatorLink.label === "string"
               ? data.operatorLink
@@ -147,30 +174,17 @@ export function AccountMenu() {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, reads]);
 
   // The button's second line names the active workspace when there are several,
   // so it needs the list before the menu is first opened: one read per page
   // load. Opening the menu still fetches it fresh; a failure only drops the line.
   // A change of the active workspace ends in a full load (afterWorkspaceChange);
   // a rename or a role change of one's own is announced, and read again below.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/workspaces")
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: { workspaces?: WorkspaceSummary[] } | null) => {
-        if (!cancelled && Array.isArray(data?.workspaces)) {
-          const loaded = data.workspaces;
-          setWorkspaces((current) => current ?? loaded);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // A menu-open read started later wins over this one, as `current ?? loaded` did.
+  useEffect(() => readWorkspaceListOnce(setWorkspaces, fetch, reads), [reads]);
 
-  useEffect(() => watchWorkspaceList(setWorkspaces), []);
+  useEffect(() => watchWorkspaceList(setWorkspaces, fetch, reads), [reads]);
 
   async function handleSwitch(workspace: WorkspaceSummary) {
     if (workspace.isActive || switchingId) return;

@@ -8,7 +8,7 @@ import { useSession } from "next-auth/react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
+import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 
 /**
  * The one banner a paused workspace's members see on every signed-in page
@@ -33,22 +33,18 @@ export function WorkspacePausedBanner({
   const { success, error } = useToast();
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>(NO_STATUS);
   const [sending, setSending] = useState(false);
+  // The navigation read and the announce read share one order: the later one shows.
+  const [reads] = useState(newestAnswer);
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    let cancelled = false;
-    void fetchWorkspaceStatus(fetch).then((next) => {
-      if (!cancelled && next) setWorkspaceStatus(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [status, pathname]);
+    return readWorkspaceStatusOnce(setWorkspaceStatus, fetch, reads);
+  }, [status, pathname, reads]);
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    return watchWorkspaceStatus(setWorkspaceStatus);
-  }, [status]);
+    return watchWorkspaceStatus(setWorkspaceStatus, fetch, reads);
+  }, [status, reads]);
 
   const confirmShown = confirmEmailBannerShown(workspaceStatus);
   useEffect(() => {
@@ -88,15 +84,39 @@ async function fetchWorkspaceStatus(fetchImpl: typeof fetch): Promise<WorkspaceS
 }
 
 /**
- * Reads the status again on each announceWorkspaceChange; `onStatus` gets each
- * good answer. The answer stops listening, and an answer that arrives after
+ * One read of the status, for a page change; `onStatus` gets a good answer
+ * unless a read started later has shown its own. The answer cancels it.
+ */
+export function readWorkspaceStatusOnce(
+  onStatus: (status: WorkspaceStatus) => void,
+  fetchImpl: typeof fetch = fetch,
+  reads = newestAnswer(),
+): () => void {
+  let cancelled = false;
+  const show = reads.next();
+  void fetchWorkspaceStatus(fetchImpl).then((next) => {
+    if (!cancelled && next && show()) onStatus(next);
+  });
+  return () => {
+    cancelled = true;
+  };
+}
+
+/**
+ * Reads the status again on each announceWorkspaceChange, in the same order
+ * as `reads`. The answer stops listening, and an answer that arrives after
  * that is dropped.
  */
-export function watchWorkspaceStatus(onStatus: (status: WorkspaceStatus) => void, fetchImpl: typeof fetch = fetch): () => void {
+export function watchWorkspaceStatus(
+  onStatus: (status: WorkspaceStatus) => void,
+  fetchImpl: typeof fetch = fetch,
+  reads = newestAnswer(),
+): () => void {
   let stopped = false;
   const unsubscribe = subscribeWorkspaceChange(() => {
+    const show = reads.next();
     void fetchWorkspaceStatus(fetchImpl).then((next) => {
-      if (!stopped && next) onStatus(next);
+      if (!stopped && next && show()) onStatus(next);
     });
   });
   return () => {
