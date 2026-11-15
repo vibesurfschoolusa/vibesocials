@@ -10,7 +10,7 @@ import type { Platform } from "@prisma/client";
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 
-import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, SEND_AGAIN_FAILED } from "./post-job-card";
+import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, retryRequestBody, SEND_AGAIN_FAILED } from "./post-job-card";
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
 // builds no link from a Facebook Story's id.
@@ -237,5 +237,30 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       await expect(offline()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });
       expect(SEND_AGAIN_FAILED).toBe("Couldn't send this post again. Please try again.");
     });
+  });
+});
+
+// R7-security L1: a retry request is one run whatever it includes, so the card
+// offers one request for every failed platform beside the per-platform buttons.
+describe("PostJobCard - Retry all failed", () => {
+  const failed = (platform: Platform) => result({ platform, status: "failed", externalPostId: null, errorMessage: "No." });
+
+  it("shows Retry all failed beside the per-platform buttons when two or more platforms failed", () => {
+    const html = render(
+      job({ status: "failed", results: ["x", "facebook_page", "instagram", "linkedin"].map((p) => failed(p as Platform)) }),
+    ).replace(/<!-- -->/g, "");
+    expect(html).toContain("Retry all failed</button>");
+    expect(html).toContain("Retry X</button>");
+    expect(html).toContain("Retry LinkedIn</button>");
+  });
+
+  it("shows no Retry all failed for a single failed platform", () => {
+    const html = render(job({ status: "failed", results: [failed("x"), result({ platform: "instagram" })] }));
+    expect(html).not.toContain("Retry all failed");
+  });
+
+  it("asks the server for one retry of every failed platform", () => {
+    expect(retryRequestBody("all")).toEqual({ retryAllFailed: true });
+    expect(retryRequestBody("x")).toEqual({ platform: "x" });
   });
 });

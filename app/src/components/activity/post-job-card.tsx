@@ -41,6 +41,16 @@ const JOB_STATUS_META: Record<
 interface RetryErrorBody {
   error?: string;
   code?: string;
+  /** RECONNECT_REQUIRED: the first platform to reconnect. */
+  platform?: Platform;
+}
+
+/** One platform, or (R7-security L1) every failed platform of the post in one request. */
+export type RetryTarget = Platform | "all";
+
+/** The retry route's body for a target. */
+export function retryRequestBody(target: RetryTarget): { platform: Platform } | { retryAllFailed: true } {
+  return target === "all" ? { retryAllFailed: true } : { platform: target };
 }
 
 function formatTimestamp(iso: string): string {
@@ -298,25 +308,38 @@ export function PostJobCard({
     toast.error(outcome.error);
   }, [job.id, onRetryAccepted, pressSendAgain, toast]);
 
+  // R7-security L1: the platforms "Retry all failed" sends, the ones not
+  // waiting for a reconnect. Shown with two or more: one is its own button.
+  const retryAllPlatforms = failedPlatforms.filter((platform) => !reconnect.has(platform));
+
   const retry = useCallback(
-    async (platform: Platform) => {
+    // `all`: the platforms it sends, for the optimistic state.
+    async (target: RetryTarget, all: readonly Platform[] = []) => {
+      const platforms = target === "all" ? all : [target];
+      const label = target === "all" ? "the failed platforms" : platformLabel(target);
       setReconnect((prev) => {
-        if (!prev.has(platform)) return prev;
+        if (!platforms.some((platform) => prev.has(platform))) return prev;
         const next = new Set(prev);
-        next.delete(platform);
+        for (const platform of platforms) next.delete(platform);
         return next;
       });
-      setPending((prev) => new Set(prev).add(platform));
+      setPending((prev) => new Set([...prev, ...platforms]));
+      const rollBack = () =>
+        setPending((prev) => {
+          const next = new Set(prev);
+          for (const platform of platforms) next.delete(platform);
+          return next;
+        });
 
       try {
         const response = await fetch(`/api/posts/${job.id}/retry`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ platform }),
+          body: JSON.stringify(retryRequestBody(target)),
         });
 
         if (response.ok) {
-          toast.success(`Retrying ${platformLabel(platform)}…`);
+          toast.success(`Retrying ${label}…`);
           // Keep the optimistic pending state until the refetch this triggers
           // delivers the server's view of the job.
           onRetryAccepted(job.id);
@@ -331,34 +354,19 @@ export function PostJobCard({
         }
 
         // Roll back the optimistic pending state: the retry never started.
-        setPending((prev) => {
-          const next = new Set(prev);
-          next.delete(platform);
-          return next;
-        });
+        rollBack();
 
         if (body.code === "RECONNECT_REQUIRED") {
-          setReconnect((prev) => new Set(prev).add(platform));
-          toast.error(
-            body.error ??
-              `Reconnect ${platformLabel(platform)} in Settings before retrying.`,
-          );
+          const dead = target === "all" ? body.platform : target;
+          if (dead) setReconnect((prev) => new Set(prev).add(dead));
+          toast.error(body.error ?? `Reconnect ${dead ? platformLabel(dead) : label} in Settings before retrying.`);
           return;
         }
 
-        toast.error(
-          body.error ??
-            `Couldn't retry ${platformLabel(platform)}. Please try again.`,
-        );
+        toast.error(body.error ?? `Couldn't retry ${label}. Please try again.`);
       } catch {
-        setPending((prev) => {
-          const next = new Set(prev);
-          next.delete(platform);
-          return next;
-        });
-        toast.error(
-          `Couldn't retry ${platformLabel(platform)}. Please try again.`,
-        );
+        rollBack();
+        toast.error(`Couldn't retry ${label}. Please try again.`);
       }
     },
     [job.id, onRetryAccepted, toast],
@@ -515,6 +523,16 @@ export function PostJobCard({
               </Button>
             ),
           )}
+          {retryAllPlatforms.length >= 2 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={retryAllPlatforms.some((platform) => pending.has(platform))}
+              onClick={() => retry("all", retryAllPlatforms)}
+            >
+              Retry all failed
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
