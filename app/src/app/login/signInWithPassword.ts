@@ -1,6 +1,6 @@
 import type { signIn as nextAuthSignIn } from "next-auth/react";
 
-import { beforeSignIn } from "@/components/signed-in-swap";
+import { beforeSignIn } from "@/lib/staleSignOut";
 
 export const LOGIN_FAILED_MESSAGE = "Invalid email or password.";
 export const LOGIN_UNREACHABLE_MESSAGE =

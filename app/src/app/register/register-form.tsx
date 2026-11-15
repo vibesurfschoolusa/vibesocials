@@ -13,7 +13,8 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
-import { beforeSignIn, useFreshSignedInAccount } from "@/components/signed-in-swap";
+import { useFreshSignedInAccount } from "@/components/signed-in-swap";
+import { beforeSignIn } from "@/lib/staleSignOut";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 import { FormHeading, SignedInNotice, showSignedInNotice } from "../login/signed-in-notice";
