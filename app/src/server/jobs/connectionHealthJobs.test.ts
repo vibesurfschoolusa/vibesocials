@@ -512,7 +512,14 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
     { user: { email: "owner-b@example.com", emailVerifiedAt: NOW } },
   ];
   const FREE_WS = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null, members: OWNERS };
-  const PAID_WS = { ...FREE_WS, plan: "growth", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * 86_400_000) };
+  // R10-security M1: paid means a paid invoice recorded (planPaidAt).
+  const PAID_WS = {
+    ...FREE_WS,
+    plan: "growth",
+    planStatus: "active",
+    currentPeriodEnd: new Date(NOW.getTime() + 20 * 86_400_000),
+    planPaidAt: new Date(NOW.getTime() - 10 * 86_400_000),
+  };
   /** Access-token lifetime each refresher writes, per platform. */
   const LIFETIME: Partial<Record<Platform, number>> = { tiktok: 86_400_000, pinterest: 30 * 86_400_000 };
 
@@ -672,6 +679,22 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
     expect(refreshedIds()).toEqual(["conn-free"]);
     expect(summary.connections).toBe(1);
     expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, refreshed: 1 });
+  });
+
+  // R10-security M1: the page reads planPaidAt with the plan columns, and only a paid invoice keeps the fan-out.
+  it("a paid workspace (planPaidAt set) is fanned out; a trialing one and an active one not yet paid are refreshed inline", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(SWEEP_PAGE_SELECT.workspace.select).toMatchObject({ planPaidAt: true });
+    add("conn-paid", { workspace: PAID_WS });
+    add("conn-trialing", {
+      workspace: { ...PAID_WS, planStatus: "trialing", trialEndsAt: new Date(NOW.getTime() + 5 * 86_400_000), planPaidAt: null },
+    });
+    add("conn-unpaid", { workspace: { ...PAID_WS, planPaidAt: null } });
+
+    const { step } = await runCron();
+
+    expect(fannedOut(step)).toEqual(["conn-paid"]);
+    expect(refreshedIds()).toEqual(["conn-trialing", "conn-unpaid"]);
   });
 
   it("a grandfathered workspace's connection is fanned out", async () => {

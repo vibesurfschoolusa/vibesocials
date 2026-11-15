@@ -250,7 +250,14 @@ describe("refreshesInline: which workspaces' connections the sweep refreshes its
   const OWNER = { user: { email: "owner@example.com", emailVerifiedAt: new Date("2026-01-01T00:00:00Z") } };
   const OPERATOR = { user: { email: "operator@example.com", emailVerifiedAt: new Date("2026-01-01T00:00:00Z") } };
   const FREE = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null, members: [OWNER] };
-  const PAID = { ...FREE, plan: "growth", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) };
+  // R10-security M1: paid means a paid invoice recorded (planPaidAt).
+  const PAID = {
+    ...FREE,
+    plan: "growth",
+    planStatus: "active",
+    currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY),
+    planPaidAt: new Date(NOW.getTime() - 10 * DAY),
+  };
   const withOperator = (env: Record<string, string>) => ({ ...env, ADMIN_EMAILS: "operator@example.com" });
 
   it("a free workspace is refreshed inline, with billing on or off", () => {
@@ -260,8 +267,14 @@ describe("refreshesInline: which workspaces' connections the sweep refreshes its
     expect(refreshesInline({ ...FREE, trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, NOW, ON)).toBe(true);
     expect(refreshesInline({ ...FREE, trialEndsAt: new Date(NOW.getTime() - 5 * DAY) }, NOW, ON)).toBe(true);
     expect(
-      refreshesInline({ ...PAID, planStatus: "trialing", trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, NOW, ON),
+      refreshesInline(
+        { ...PAID, planStatus: "trialing", trialEndsAt: new Date(NOW.getTime() + 5 * DAY), planPaidAt: null },
+        NOW,
+        ON,
+      ),
     ).toBe(true);
+    // R10-security M1: active at Stripe with no paid invoice yet (the trial just ended): still free.
+    expect(refreshesInline({ ...PAID, planPaidAt: null }, NOW, ON)).toBe(true);
     // With billing off nobody pays, so a plan does not keep the fan-out.
     expect(refreshesInline(PAID, NOW, OFF)).toBe(true);
   });
