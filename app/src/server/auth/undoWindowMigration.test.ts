@@ -17,10 +17,12 @@ const statements = SQL.replace(/--.*$/gm, "")
   .filter(Boolean);
 
 describe("20261114610000_email_change_previous_email_index", () => {
-  it("sets a lock timeout, then only adds the previous-address index", () => {
+  // The daily sweep and the lazy clear find passed windows by undoExpiresAt.
+  it("sets a lock timeout, then only adds the previous-address and undo-expiry indexes", () => {
     expect(statements).toEqual([
       "SET lock_timeout = '5s'",
       'CREATE INDEX "EmailChangeRequest_previousEmail_idx" ON "EmailChangeRequest"("previousEmail")',
+      'CREATE INDEX "EmailChangeRequest_undoExpiresAt_idx" ON "EmailChangeRequest"("undoExpiresAt")',
     ]);
   });
 
@@ -28,5 +30,6 @@ describe("20261114610000_email_change_previous_email_index", () => {
     const schema = read("../../../prisma/schema.prisma");
     const model = schema.slice(schema.indexOf("model EmailChangeRequest {"));
     expect(model.slice(0, model.indexOf("\n}"))).toContain("@@index([previousEmail])");
+    expect(model.slice(0, model.indexOf("\n}"))).toContain("@@index([undoExpiresAt])");
   });
 });

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { buildAccountDeletedEmail, deliverAccountEmail } from "@/lib/accountEmails";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { accountDeleteLockedSentence } from "@/lib/displayDate";
 import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -25,6 +26,7 @@ import {
   CANCELLED_ACCOUNT_KEPT_PREFIX,
   cancelSubscriptionsBeforeDelete,
 } from "@/server/billing/cancelOnDelete";
+import { accountUndoWindowUntil } from "@/server/auth/undoWindow";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 import { noticeOwnersOfFormerOwner } from "@/app/api/workspaces/members/formerOwnerNotice";
 import { copyUsageBeforeDeletion } from "@/server/usage/usageLog";
@@ -87,6 +89,19 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       { error: "That email does not match the one on this account." },
       { status: 400 },
+    );
+  }
+
+  // R6 review: while the previous address can undo an email change, deleting
+  // the account would leave the undo nothing to put back (a hijacker who
+  // changed the email could then erase the account for good). Asked before
+  // anything else, Stripe included. `until` lets the dialog write the date in
+  // the viewer's time zone.
+  const lockedUntil = await accountUndoWindowUntil(prisma, user.id, new Date());
+  if (lockedUntil) {
+    return NextResponse.json(
+      { error: accountDeleteLockedSentence(lockedUntil), until: lockedUntil.toISOString() },
+      { status: 409 },
     );
   }
 

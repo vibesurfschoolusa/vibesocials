@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
+import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
@@ -57,6 +57,12 @@ async function errorFrom(response: Response, fallback: string): Promise<string> 
  */
 export function emailChangeRefusal(data: { error?: string; until?: string } | null, fallback: string): string {
   if (typeof data?.until === "string") return emailChangeLockedSentence(data.until);
+  return data?.error ?? fallback;
+}
+
+/** R6 review: deletion waits for the undo window; the date in the viewer's zone, as above. */
+export function accountDeleteRefusal(data: { error?: string; until?: string } | null, fallback: string): string {
+  if (typeof data?.until === "string") return accountDeleteLockedSentence(data.until);
   return data?.error ?? fallback;
 }
 
@@ -341,7 +347,8 @@ function DeleteAccount({
         body: JSON.stringify(hasPassword ? { password: confirmValue } : { confirmEmail: confirmValue }),
       });
       if (!response.ok) {
-        setError(await errorFrom(response, "Could not delete your account. Try again."));
+        const data = (await response.json().catch(() => null)) as { error?: string; until?: string } | null;
+        setError(accountDeleteRefusal(data, "Could not delete your account. Try again."));
         setBusy(false);
         return;
       }

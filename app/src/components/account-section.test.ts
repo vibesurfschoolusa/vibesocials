@@ -12,6 +12,7 @@ import {
   ChangeEmailForm,
   FormError,
   UndoLinkNotice,
+  accountDeleteRefusal,
   emailChangeRefusal,
   emailChangeSentMessage,
   undoLinkSentence,
@@ -118,5 +119,27 @@ describe("Settings, Account: dates", () => {
     const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
     expect(source).toContain("formatDisplayDate(untilIso)");
     expect(source).not.toContain("toLocaleDateString");
+  });
+});
+
+// R6 review: account deletion waits for the undo window; the dialog writes
+// the date in the viewer's time zone.
+describe("Settings, Account: deletion refused during the undo window", () => {
+  it("writes the refusal from the date the server sends", () => {
+    expect(accountDeleteRefusal({ error: "server", until: "2026-11-17T12:00:00.000Z" }, "fallback")).toBe(
+      "You changed your email recently. You can delete the account after November 17, 2026, or undo the change from the link sent to your previous address.",
+    );
+  });
+
+  it("shows any other refusal as the server wrote it, or the fallback", () => {
+    expect(accountDeleteRefusal({ error: "Your password is not correct." }, "fallback")).toBe(
+      "Your password is not correct.",
+    );
+    expect(accountDeleteRefusal(null, "fallback")).toBe("fallback");
+  });
+
+  it("is what the delete dialog uses", () => {
+    const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+    expect(source).toContain('accountDeleteRefusal(data, "Could not delete your account. Try again.")');
   });
 });

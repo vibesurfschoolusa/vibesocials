@@ -34,6 +34,7 @@ const m = vi.hoisted(() => {
     copyUsage: fn(),
     payerRefusal: fn(),
     notice: fn(),
+    undoWindowUntil: fn(),
   };
 });
 
@@ -88,6 +89,8 @@ vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: m.copyUsage
 vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: m.payerRefusal }));
 // R5-security L1 (review): the email itself is tested in formerOwnerNotice.test.ts.
 vi.mock("@/app/api/workspaces/members/formerOwnerNotice", () => ({ noticeOwnersOfFormerOwner: m.notice }));
+// The window query itself is tested in server/auth/undoWindow.test.ts.
+vi.mock("@/server/auth/undoWindow", () => ({ accountUndoWindowUntil: m.undoWindowUntil }));
 
 import { DELETE } from "./route";
 
@@ -131,6 +134,7 @@ beforeEach(() => {
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
   m.payerRefusal.mockResolvedValue(null);
+  m.undoWindowUntil.mockResolvedValue(null);
   m.notice.mockResolvedValue({ clientLinksToReplace: true });
   m.copyUsage.mockImplementation(async (_tx: unknown, input: { workspaceIds: string[]; userId: string }) => {
     m.callLog.push(`copy usage ${JSON.stringify({ workspaceIds: input.workspaceIds, userId: input.userId })}`);
@@ -291,6 +295,25 @@ describe("DELETE /api/auth/account", () => {
       error:
         "You are the only owner of Surf Team and Shop. Make another member an owner, or delete the workspace, then try again.",
     });
+    nothingChanged();
+  });
+
+  // R6 review: deleting the account would leave an open undo window nothing
+  // to put back, so it waits until the window closes.
+  it("refuses while an email change can still be undone, before any Stripe call, and changes nothing", async () => {
+    const until = new Date("2026-11-17T12:00:00.000Z");
+    m.undoWindowUntil.mockResolvedValue(until);
+
+    const response = await DELETE(request({ password: "right-password" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "You changed your email recently. You can delete the account after November 17, 2026, or undo the change from the link sent to your previous address.",
+      until: until.toISOString(),
+    });
+    expect(m.undoWindowUntil).toHaveBeenCalledWith(expect.anything(), USER_ID, expect.any(Date));
+    expect(m.payerRefusal).not.toHaveBeenCalled();
     nothingChanged();
   });
 

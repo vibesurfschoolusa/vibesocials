@@ -71,17 +71,40 @@ describe("what joining lets a member do", () => {
 
   it("the page reads whether the invite's workspace asks for approval", async () => {
     getCurrentUserMock.mockResolvedValue({ id: "user-1" });
-    inviteFindUniqueMock.mockResolvedValue({ workspace: { requireApproval: true } });
+    inviteFindUniqueMock.mockResolvedValue({ workspace: { requireApproval: true, members: [] } });
     const element = (await JoinPage({ params: Promise.resolve({ token: "tok" }) })) as {
       type: unknown;
       props: { token: string; requiresApproval: boolean };
     };
     expect(inviteFindUniqueMock).toHaveBeenCalledWith({
       where: { tokenHash: hashInviteToken("tok") },
-      select: { workspace: { select: { requireApproval: true } } },
+      select: {
+        workspace: {
+          select: { requireApproval: true, members: { where: { userId: "user-1" }, select: { role: true } } },
+        },
+      },
     });
     expect(element.type).toBe(JoinView);
     expect(element.props).toEqual({ token: "tok", requiresApproval: true });
+  });
+
+  // R6 review: approval holds a member's posts, never an owner's.
+  it("doesn't speak of approval to someone who is already an owner there", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-1" });
+    inviteFindUniqueMock.mockResolvedValue({ workspace: { requireApproval: true, members: [{ role: "owner" }] } });
+    const element = (await JoinPage({ params: Promise.resolve({ token: "tok" }) })) as {
+      props: { requiresApproval: boolean };
+    };
+    expect(element.props.requiresApproval).toBe(false);
+  });
+
+  it("does to someone who is already a member there", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-1" });
+    inviteFindUniqueMock.mockResolvedValue({ workspace: { requireApproval: true, members: [{ role: "member" }] } });
+    const element = (await JoinPage({ params: Promise.resolve({ token: "tok" }) })) as {
+      props: { requiresApproval: boolean };
+    };
+    expect(element.props.requiresApproval).toBe(true);
   });
 
   it("promises publishing when the invite can't be read (the view then says the link is dead)", async () => {

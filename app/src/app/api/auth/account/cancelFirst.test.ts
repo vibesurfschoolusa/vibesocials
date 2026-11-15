@@ -46,6 +46,7 @@ vi.mock("@/app/api/workspaces/members/formerOwnerNotice", () => ({
 }));
 vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: vi.fn(async () => null) }));
 vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: vi.fn(async () => undefined) }));
+vi.mock("@/server/auth/undoWindow", () => ({ accountUndoWindowUntil: vi.fn(async () => null) }));
 vi.mock("@/server/billing/cancelOnDelete", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/billing/cancelOnDelete")>()),
   cancelSubscriptionsBeforeDelete: m.cancel,

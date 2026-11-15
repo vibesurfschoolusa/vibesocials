@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { addressHeldSentence, emailChangeLockedSentence, formatDisplayDate } from "./displayDate";
+import { accountDeleteLockedSentence, addressHeldSentence, emailChangeLockedSentence, formatDisplayDate } from "./displayDate";
 
 // R6-pages L8: one date format across Settings (account, team, connect link).
 describe("formatDisplayDate", () => {
@@ -49,6 +49,14 @@ describe("addressHeldSentence", () => {
   it("says why the email is unchanged and from when to ask again", () => {
     expect(addressHeldSentence("2026-11-17T12:00:00.000Z")).toBe(
       "This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until November 17, 2026, so your email is unchanged. After that, ask for the change again in Settings, Account.",
+    );
+  });
+});
+
+describe("accountDeleteLockedSentence", () => {
+  it("says when the account can be deleted, and the other way out", () => {
+    expect(accountDeleteLockedSentence("2026-11-17T12:00:00.000Z")).toBe(
+      "You changed your email recently. You can delete the account after November 17, 2026, or undo the change from the link sent to your previous address.",
     );
   });
 });

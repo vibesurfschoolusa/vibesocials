@@ -19,6 +19,14 @@ export function emailChangeLockedSentence(until: string | Date): string {
 }
 
 /**
+ * R6 review: why deleting the account waits. Deleting it would leave the
+ * undo nothing to put back, so a hijacker could no longer be undone.
+ */
+export function accountDeleteLockedSentence(until: string | Date): string {
+  return `You changed your email recently. You can delete the account after ${formatDisplayDate(until)}, or undo the change from the link sent to your previous address.`;
+}
+
+/**
  * R6-security M1: why a confirm link can't move this account to an address
  * another account's undo may still take back. Shared like the one above.
  */
