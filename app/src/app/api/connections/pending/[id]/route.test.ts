@@ -554,7 +554,8 @@ describe("POST /api/connections/pending/[id]", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
       error:
-        "You signed in to Client Cafe, not My Surf School. Sign in to My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+        // R8-pages L1: a Facebook Page is managed, not signed in to.
+        "You chose Client Cafe, not My Surf School, and My Surf School wasn't in the list. Sign in with a Facebook account that manages My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
     });
     expect(deleteManyMock).not.toHaveBeenCalled();
   });
@@ -678,7 +679,8 @@ describe("POST: a refused choice, by whether the connected one was on the list",
 
     expect(response.status).toBe(409);
     expect((await response.json()).error).toBe(
-      "You signed in to a different LinkedIn account than Old Page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Old Page. To use the other account instead, use Switch account.",
+      // R8-client-journey L2: a LinkedIn page is managed, not signed in to.
+      "LinkedIn connected a different page than Old Page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Old Page. To use the other page instead, use Switch account.",
     );
   });
 
