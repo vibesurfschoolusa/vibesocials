@@ -11,7 +11,8 @@
  * With no address the current page loads again (Leave stays on Settings, a
  * switch stays where it was), without the one-time parameters below: they
  * carried the last workspace's message, such as "Facebook connected." or a
- * plan's "Thanks", which the next workspace must not show (R16-pages L1). The
+ * plan's "Thanks", or one of its items, which the next workspace must not
+ * show (R16-pages L1). The
  * load then replaces the history entry, as a reload would. Otherwise the given
  * page loads.
  */
@@ -30,28 +31,45 @@ export function afterWorkspaceChange(
 }
 
 /**
- * Address parameters that say what just happened, in the workspace active at
- * the time: OAuth returns (success, error, location_cleared, same_end,
- * signed_in_as), checkout's return (billing), /go's notice, and the
- * connection dialogs (choose, linkedin_setup). afterWorkspaceChange.test.ts
- * fails a parameter a page reads that is neither here nor kept on purpose.
+ * Address parameters that belong to the workspace active at the time: what
+ * just happened there (OAuth returns: success, error, location_cleared,
+ * same_end, signed_in_as; /go's notice), its connection dialogs (choose,
+ * linkedin_setup), and its items (Create's mediaItemId, Add many's media),
+ * which the next workspace could only fail to load. afterWorkspaceChange.test.ts
+ * fails a parameter a page reads that is neither here, in ONE_TIME_VALUES, nor
+ * kept on purpose.
  */
 export const ONE_TIME_PARAMS: readonly string[] = [
   "success",
   "error",
-  "billing",
   "notice",
   "location_cleared",
   "same_end",
   "signed_in_as",
   "choose",
   "linkedin_setup",
+  "mediaItemId",
+  "media",
 ];
+
+/**
+ * Parameters dropped only with these values: billing is checkout's one-time
+ * result on Settings (?billing=success) but a view setting on Pricing
+ * (?billing=year), which stays.
+ */
+export const ONE_TIME_VALUES: Readonly<Record<string, readonly string[]>> = {
+  billing: ["success", "cancel", "canceled", "cancelled"],
+};
 
 /** The path, query and section of `href` without the one-time parameters, or null when it has none. */
 export function withoutOneTimeParams(href: string): string | null {
   const url = new URL(href);
-  const present = ONE_TIME_PARAMS.filter((name) => url.searchParams.has(name));
+  const present = [
+    ...ONE_TIME_PARAMS.filter((name) => url.searchParams.has(name)),
+    ...Object.entries(ONE_TIME_VALUES)
+      .filter(([name, values]) => url.searchParams.getAll(name).some((value) => values.includes(value)))
+      .map(([name]) => name),
+  ];
   if (present.length === 0) return null;
   for (const name of present) url.searchParams.delete(name);
   return `${url.pathname}${url.search}${url.hash}`;

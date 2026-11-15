@@ -2,8 +2,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { planReturnNotice } from "@/components/planSectionView";
+
 import { LOCATION_CLEARED_PARAM, SAME_END_PARAM } from "./differentAccount";
-import { afterWorkspaceChange, ONE_TIME_PARAMS, withoutOneTimeParams } from "./afterWorkspaceChange";
+import { afterWorkspaceChange, ONE_TIME_PARAMS, ONE_TIME_VALUES, withoutOneTimeParams } from "./afterWorkspaceChange";
 
 function fakeLocation(href = "https://vibesocials.test/settings") {
   return { href, assign: vi.fn(), reload: vi.fn(), replace: vi.fn() };
@@ -58,6 +60,33 @@ describe("withoutOneTimeParams", () => {
     }
   });
 
+  // Coordinator: they name the previous workspace's items, which the new one can't load.
+  it("drops Create's reused item and Add many's items", () => {
+    expect(withoutOneTimeParams("https://vibesocials.test/posts/new?mediaItemId=m1")).toBe("/posts/new");
+    expect(withoutOneTimeParams("https://vibesocials.test/posts/bulk?media=m1,m2")).toBe("/posts/bulk");
+    // A file shared to the app waits in this browser, for any workspace.
+    expect(withoutOneTimeParams("https://vibesocials.test/posts/new?shared=1")).toBeNull();
+  });
+
+  // Coordinator: billing is a one-time result on Settings, a view setting on Pricing.
+  it("drops billing only when it carries a result", () => {
+    expect(withoutOneTimeParams("https://vibesocials.test/settings?billing=success#plan")).toBe("/settings#plan");
+    for (const value of ["cancel", "canceled", "cancelled"]) {
+      expect(withoutOneTimeParams(`https://vibesocials.test/settings?billing=${value}`), value).toBe("/settings");
+    }
+    expect(withoutOneTimeParams("https://vibesocials.test/pricing?billing=year")).toBeNull();
+    expect(withoutOneTimeParams("https://vibesocials.test/pricing?billing=year&success=x")).toBe("/pricing?billing=year");
+  });
+
+  it("every billing value Settings shows as a message is a result", () => {
+    // planReturnNotice answers before it looks at the workspace for any other value.
+    const shown = ["success", "cancel", "canceled", "cancelled", "year", "month", ""].filter(
+      (value) => planReturnNotice(value, {} as never, new Date()) !== null || ONE_TIME_VALUES.billing.includes(value),
+    );
+    expect(shown.sort()).toEqual([...ONE_TIME_VALUES.billing].sort());
+    expect(ONE_TIME_VALUES.billing).toContain("success");
+  });
+
   it("names the Settings parameters the callbacks set", () => {
     expect(ONE_TIME_PARAMS).toContain(LOCATION_CLEARED_PARAM);
     expect(ONE_TIME_PARAMS).toContain(SAME_END_PARAM);
@@ -76,8 +105,6 @@ const KEPT_PARAMS = [
   "callbackUrl", // sign-in return address
   "registered", // sign-in page only, signed out
   "shared", // a file shared to the app waits in this browser, for any workspace
-  "mediaItemId", // Create's reuse: the page answers "couldn't load" and offers an upload
-  "media", // Add many: only this workspace's items come back
 ];
 
 const SRC = path.join(__dirname, "..");
@@ -116,7 +143,7 @@ describe("every parameter a page reads is sorted", () => {
   });
 
   it("is one-time or kept", () => {
-    const sorted = new Set<string>([...ONE_TIME_PARAMS, ...KEPT_PARAMS]);
+    const sorted = new Set<string>([...ONE_TIME_PARAMS, ...Object.keys(ONE_TIME_VALUES), ...KEPT_PARAMS]);
     const unsorted: string[] = [];
     const seen: string[] = [];
     // Pages and the components they render; route handlers and server code read requests, not the address bar.
@@ -129,6 +156,6 @@ describe("every parameter a page reads is sorted", () => {
     }
     expect(unsorted.sort()).toEqual([]);
     // The scan finds the Settings and dashboard messages at all.
-    for (const name of ["success", "error", "billing", "notice", "choose", "linkedin_setup"]) expect(seen).toContain(name);
+    for (const name of ["success", "error", "billing", "notice", "choose", "linkedin_setup", "mediaItemId", "media"]) expect(seen).toContain(name);
   });
 });
