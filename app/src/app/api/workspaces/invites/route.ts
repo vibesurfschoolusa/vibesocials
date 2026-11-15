@@ -33,7 +33,7 @@ export async function GET() {
     orderBy: { createdAt: "desc" },
   });
 
-  if (!invite || !(await inviteLinkWorks(prisma, invite))) {
+  if (!invite || (await inviteLinkWorks(prisma, invite)) !== true) {
     return NextResponse.json({ invite: null }, { status: 200 });
   }
 

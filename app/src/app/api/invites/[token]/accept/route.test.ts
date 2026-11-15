@@ -30,6 +30,14 @@ const {
   cookiesMock: vi.fn(),
 }));
 
+// R10: the one rule (inviteMaker.ts), spied so the test sees Join call it.
+const inviteLinkWorksSpy = vi.hoisted(() => ({ fn: vi.fn() }));
+vi.mock("../inviteMaker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../inviteMaker")>();
+  inviteLinkWorksSpy.fn.mockImplementation(actual.inviteLinkWorks);
+  return { ...actual, inviteLinkWorks: inviteLinkWorksSpy.fn };
+});
+
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: getCurrentUserMock,
 }));
@@ -97,7 +105,7 @@ beforeEach(() => {
   createMemberMock.mockResolvedValue({ count: 1 });
   // The link's maker is still an owner by default.
   makerMock.mockReset();
-  makerMock.mockResolvedValue({ id: "owner-row" });
+  makerMock.mockResolvedValue(1);
 
   getCurrentUserMock.mockResolvedValue(USER);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -108,7 +116,7 @@ beforeEach(() => {
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
       workspaceInvite: { updateMany: updateManyInviteMock },
-      workspaceMember: { createMany: createMemberMock, findFirst: makerMock },
+      workspaceMember: { createMany: createMemberMock, count: makerMock },
     }),
   );
 });
@@ -177,7 +185,10 @@ describe("POST /api/invites/[token]/accept", () => {
     await expect(response.json()).resolves.toEqual({
       error: "This invite link is invalid or has expired.",
     });
-    expect(transactionMock).not.toHaveBeenCalled();
+    // R10: inviteLinkWorks refuses it inside the transaction, before anything is written.
+    expect(updateManyInviteMock).not.toHaveBeenCalled();
+    expect(createMemberMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
   });
 
   it("returns the SAME 404 message for an expired invite (no oracle)", async () => {
@@ -188,7 +199,9 @@ describe("POST /api/invites/[token]/accept", () => {
     const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
 
     expect(response.status).toBe(404);
-    expect(transactionMock).not.toHaveBeenCalled();
+    expect(updateManyInviteMock).not.toHaveBeenCalled();
+    expect(createMemberMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
   });
 
   it("creates a member membership and increments usedCount inside one transaction, for a brand-new member", async () => {
@@ -332,7 +345,7 @@ describe("POST /api/invites/[token]/accept", () => {
   // the workspace (demoted or gone, also before demotion revoked links) adds nobody.
   it("refuses a link whose maker is no longer an owner: 404 with its own sentence, nothing written, no cookie", async () => {
     findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-7", createdById: "former-owner" }));
-    makerMock.mockResolvedValue(null);
+    makerMock.mockResolvedValue(0);
 
     const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
 
@@ -342,7 +355,6 @@ describe("POST /api/invites/[token]/accept", () => {
     });
     expect(makerMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-7", userId: "former-owner", role: "owner" },
-      select: { id: true },
     });
     expect(updateManyInviteMock).not.toHaveBeenCalled();
     expect(createMemberMock).not.toHaveBeenCalled();
@@ -357,5 +369,19 @@ describe("POST /api/invites/[token]/accept", () => {
 
     expect(response.status).toBe(200);
     expect(makerMock.mock.invocationCallOrder[0]).toBeLessThan(updateManyInviteMock.mock.invocationCallOrder[0]);
+  });
+
+  // R10 (lead): Join applies the one rule, inviteLinkWorks, with the transaction's client.
+  it("checks the link with inviteLinkWorks inside the transaction", async () => {
+    inviteLinkWorksSpy.fn.mockClear();
+    const row = makeInviteRow();
+    findUniqueInviteMock.mockResolvedValue(row);
+
+    await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(inviteLinkWorksSpy.fn).toHaveBeenCalledTimes(1);
+    const [db, invite] = inviteLinkWorksSpy.fn.mock.calls[0];
+    expect(invite).toBe(row);
+    expect((db as { workspaceMember: { count: unknown } }).workspaceMember.count).toBe(makerMock);
   });
 });

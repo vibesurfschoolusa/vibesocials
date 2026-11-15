@@ -9,7 +9,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/workspace";
 import { notifyOwnersOfMemberJoined } from "@/server/notifications/memberJoinedEmail";
 
-import { MAKER_NOT_OWNER_MESSAGE } from "../inviteMaker";
+import { inviteLinkWorks, MAKER_NOT_OWNER_MESSAGE } from "../inviteMaker";
 
 interface AcceptRouteContext {
   params: Promise<{ token: string }>;
@@ -74,7 +74,7 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
     where: { tokenHash: hashInviteToken(token) },
   });
 
-  if (!invite || invite.revokedAt || invite.expiresAt <= new Date()) {
+  if (!invite) {
     return invalidInviteResponse();
   }
 
@@ -82,12 +82,11 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
   let added = false;
   try {
     joined = await prisma.$transaction(async (tx) => {
-      const maker = await tx.workspaceMember.findFirst({
-        where: { workspaceId: invite.workspaceId, userId: invite.createdById, role: "owner" },
-        select: { id: true },
-      });
-      if (!maker) {
-        return "maker_not_owner" as const;
+      // R10: the one rule the preview and the Team card apply (inviteMaker.ts),
+      // read in this transaction, before the link is used.
+      const works = await inviteLinkWorks(tx, invite);
+      if (works !== true) {
+        return works === "dead" ? false : works;
       }
 
       // Atomic re-validation + use-count bump in one statement (see the

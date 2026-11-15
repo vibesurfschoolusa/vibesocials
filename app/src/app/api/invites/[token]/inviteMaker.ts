@@ -13,19 +13,20 @@ interface MemberCounter {
 }
 
 /**
- * R10-client-journey L3: whether an invite link still works, by the rule the
- * preview and Join apply: not revoked, not expired, and its maker still an
- * owner of its workspace. The Team card shows only such a link, so it offers
- * Create instead of one that would be refused.
+ * R10-client-journey L3: whether an invite link still works, the one rule the
+ * preview, Join and the Team card apply: not revoked, not expired, and its
+ * maker still an owner of its workspace. True when it works; otherwise why
+ * not, since the preview and Join say a maker's link apart ({@link MAKER_NOT_OWNER_MESSAGE}).
+ * Join passes its transaction, so the maker is checked before the link is used.
  */
 export async function inviteLinkWorks(
   db: MemberCounter,
   invite: { workspaceId: string; createdById: string; revokedAt: Date | null; expiresAt: Date },
   now: Date = new Date(),
-): Promise<boolean> {
-  if (invite.revokedAt || invite.expiresAt <= now) return false;
+): Promise<true | "dead" | "maker_not_owner"> {
+  if (invite.revokedAt || invite.expiresAt <= now) return "dead";
   const owners = await db.workspaceMember.count({
     where: { workspaceId: invite.workspaceId, userId: invite.createdById, role: "owner" },
   });
-  return owners > 0;
+  return owners > 0 ? true : "maker_not_owner";
 }
