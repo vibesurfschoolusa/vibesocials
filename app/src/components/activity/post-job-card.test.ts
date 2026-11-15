@@ -10,7 +10,19 @@ import type { Platform } from "@prisma/client";
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 
-import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, retryAllToast, retryRequestBody, SEND_AGAIN_FAILED } from "./post-job-card";
+import {
+  cardTime,
+  createSendAgain,
+  displayedJobStatus,
+  failureSentence,
+  PostJobCard,
+  ReconnectStep,
+  reconnectRefusalToast,
+  retryAllNotice,
+  retryAllToast,
+  retryRequestBody,
+  SEND_AGAIN_FAILED,
+} from "./post-job-card";
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
 // builds no link from a Facebook Story's id.
@@ -306,5 +318,60 @@ describe("PostJobCard - Retry all failed", () => {
   it("asks the server for one retry of every failed platform", () => {
     expect(retryRequestBody("all")).toEqual({ retryAllFailed: true });
     expect(retryRequestBody("x")).toEqual({ platform: "x" });
+  });
+});
+
+// R10-client-journey L1: only an owner can reconnect, so a member's Activity
+// card never sends them to Settings.
+describe("PostJobCard - what a member reads", () => {
+  const stored = "Reconnect Instagram in Settings, then retry.";
+  const failedInstagram = result({ platform: "instagram", status: "failed", externalPostId: null, errorMessage: stored });
+
+  it("a failure's sentence: the owner reads it as stored, a member the owner's step", () => {
+    expect(failureSentence(failedInstagram, "owner")).toBe(stored);
+    expect(failureSentence(failedInstagram, "member")).toBe("The workspace owner can reconnect Instagram; then retry.");
+  });
+
+  it("the reconnect step: a Settings link for an owner, the owner's step and no link for a member", () => {
+    const owner = renderToStaticMarkup(createElement(ReconnectStep, { platform: "instagram", role: "owner" })).replace(/<!-- -->/g, "");
+    expect(owner).toContain("Reconnect Instagram in");
+    expect(owner).toContain("href=\"/settings");
+    const member = renderToStaticMarkup(createElement(ReconnectStep, { platform: "instagram", role: "member" })).replace(/<!-- -->/g, "");
+    expect(member).toContain("The workspace owner can reconnect Instagram; then retry.");
+    expect(member).not.toContain("Settings");
+    expect(member).not.toContain("href=");
+  });
+
+  it("a retry refused for reconnecting: the server's sentence for an owner, the owner's step for a member", () => {
+    const server = "Reconnect X in Settings before retrying.";
+    expect(reconnectRefusalToast("owner", ["x"], "X", server)).toBe(server);
+    expect(reconnectRefusalToast("owner", ["x"], "X", undefined)).toBe("Reconnect X in Settings before retrying.");
+    expect(reconnectRefusalToast("member", ["x", "instagram"], "the failed platforms", server)).toBe(
+      "The workspace owner can reconnect X and Instagram; then retry.",
+    );
+  });
+
+  it("Retry all failed's note about what it left out: as the server wrote it for an owner, the owner's step for a member", () => {
+    const leftOut = [
+      { platform: "instagram" as const, reason: "unconfirmed" as const },
+      { platform: "x" as const, reason: "reconnect" as const },
+    ];
+    const notice = "Instagram left out: check whether it posted first. X left out: reconnect it in Settings.";
+    expect(retryAllNotice("owner", leftOut, notice)).toBe(notice);
+    expect(retryAllNotice("member", leftOut, notice)).toBe(
+      "Instagram left out: check whether it posted first. X left out: the workspace owner can reconnect it.",
+    );
+    expect(retryAllNotice("member", [], undefined)).toBeUndefined();
+  });
+
+  it("the card takes the viewer's role", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(PostJobCard, { job: job({ status: "failed", results: [failedInstagram] }), viewerRole: "member", onRetryAccepted: () => {} }),
+      ),
+    ).replace(/<!-- -->/g, "");
+    expect(html).toContain("Retry Instagram</button>");
   });
 });

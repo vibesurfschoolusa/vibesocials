@@ -35,7 +35,12 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
       `${label} didn't renew the connection. Try again later; if it keeps happening, the workspace owner can reconnect ${label}.`,
     ],
     ["This platform needs to be reconnected in Settings before publishing.", reconnect],
-    ["This platform is no longer connected. Reconnect it in Settings and try again.", reconnect],
+    ["This platform is no longer connected. Reconnect it in Settings and try again.", `${label} is no longer connected. ${reconnect}`],
+    ["This platform connection was removed. Reconnect and retry.", `The ${label} connection was removed. ${reconnect}`],
+    [
+      "Could not find a Google Business Profile location for the given store code. Double-check the store code in Advanced settings.",
+      "The workspace owner can check the store code for Google Business Profile; then retry.",
+    ],
     [
       "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
       "LinkedIn refused the post because the connected LinkedIn account is not an admin of this company page. A page admin can add that account as a Super admin or Content admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.",
@@ -51,6 +56,9 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
   ]);
 }
 
+/** The clients' "Your <Platform> connection has expired / is no longer valid" sentences. */
+const CONNECTION_STATE = /^Your (.+?) connection (has expired|is no longer valid)\b/;
+
 /**
  * A step only an owner can take: connect or reconnect (with or without
  * "Settings"), or anything in Settings. Choices on the post itself ("Choose
@@ -62,8 +70,10 @@ const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b/i;
  * A stored result sentence as its reader should see it (R9-client-journey L4).
  * Only an owner can connect or reconnect, so a member gets the member variant
  * of any sentence that asks for such a step ({@link OWNER_STEP}): the exact one
- * above, LinkedIn's no-company-page help, or, for a sentence nobody wrote one
- * for, the reconnect sentence. Owners, and every other sentence, read it as stored.
+ * above, or one of the client sentences below, each keeping its reason. A
+ * sentence nobody wrote one for says the owner can fix the connection, not
+ * "reconnect", since reconnecting may not be the step (R10-new-customer L2).
+ * Owners, and every other sentence, read it as stored.
  */
 export function sentenceForRecipient(
   message: string | null,
@@ -77,7 +87,13 @@ export function sentenceForRecipient(
   if (message.startsWith("No LinkedIn company pages configured")) {
     return "The connected LinkedIn account manages no company page. The workspace owner can reconnect with an account that manages one; then retry.";
   }
-  return memberReconnectMessage(platform);
+  const state = CONNECTION_STATE.exec(message);
+  if (state) return `The ${state[1]} connection ${state[2]}. The workspace owner can reconnect ${state[1]}; then retry.`;
+  // pinterestClient's renewal refusal carries the HTTP status.
+  if (message.startsWith("Pinterest did not renew this connection")) {
+    return "Pinterest did not renew this connection. If this keeps happening, the workspace owner can reconnect Pinterest.";
+  }
+  return `The workspace owner can fix ${platformLabel(platform)}'s connection; then retry.`;
 }
 
 /** A chosen platform with no connection at all when the post is sent (H1). */
@@ -120,9 +136,14 @@ function joinWithAnd(words: readonly string[]): string {
 /**
  * What the composer says about them: "Nothing was sent: Reconnect X in
  * Settings, then use Retry in Activity." when nothing went out, "Not sent to
- * X: ..." beside the usual confirmation when the others did.
+ * X: ..." beside the usual confirmation when the others did. A member can't
+ * reconnect, so theirs names the owner instead (R10-client-journey L1).
  */
-export function notSentSentence(notSent: readonly NotSentPlatform[], allFailed: boolean): string {
+export function notSentSentence(
+  notSent: readonly NotSentPlatform[],
+  allFailed: boolean,
+  role: "owner" | "member" = "owner",
+): string {
   const labelsFor = (reason: NotSentReason) =>
     notSent.filter((entry) => entry.reason === reason).map((entry) => platformLabel(entry.platform));
   const reconnect = labelsFor("RECONNECT_REQUIRED");
@@ -132,7 +153,10 @@ export function notSentSentence(notSent: readonly NotSentPlatform[], allFailed: 
     ...(connect.length > 0 ? [`connect ${joinWithAnd(connect)}`] : []),
   ];
   const what = steps.length > 1 ? `${steps.join(", and ")}, in Settings` : `${steps[0] ?? ""} in Settings`;
-  const action = `${what.charAt(0).toUpperCase()}${what.slice(1)}, then use Retry in Activity.`;
+  const action =
+    role === "member"
+      ? `The workspace owner can ${steps.join(", and ")}; then use Retry in Activity.`
+      : `${what.charAt(0).toUpperCase()}${what.slice(1)}, then use Retry in Activity.`;
   const lead = allFailed ? "Nothing was sent" : `Not sent to ${joinWithAnd(notSent.map((entry) => platformLabel(entry.platform)))}`;
   return `${lead}: ${action}`;
 }

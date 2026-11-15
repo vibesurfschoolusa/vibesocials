@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { WorkspaceRole } from "@prisma/client";
+
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import {
   decidePollAction,
@@ -26,6 +28,12 @@ export interface UsePostJobsResult {
    * (design doc §7 — a solo workspace's activity feed looks unchanged).
    */
   workspaceMemberCount: number | null;
+  /**
+   * R10-client-journey L1: the viewer's role in the workspace, straight from
+   * `PostsResponse.workspaceRole` (`null` until the first load). Only an owner
+   * can reconnect, so `PostJobCard` words a member's steps for the owner.
+   */
+  workspaceRole: WorkspaceRole | null;
   /**
    * Activity pagination (Task C2) — fetch the next (older) page via the last
    * response's `nextCursor` and APPEND it, de-duplicated by id. A no-op while a
@@ -122,6 +130,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
+  const [workspaceRole, setWorkspaceRole] = useState<WorkspaceRole | null>(null);
   // Bumped in the `finally` of every *background* load (see the poll effect
   // below). A failed background poll intentionally never calls `setJobs`, so
   // without this counter the poll effect would have no changed dependency to
@@ -188,6 +197,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
         setJobsShow(show);
       }
       setWorkspaceMemberCount(data.workspaceMemberCount);
+      setWorkspaceRole(data.workspaceRole ?? null);
       setRetryWatch((prev) => settleRetryWatch(prev, data.jobs));
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
@@ -332,6 +342,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     error,
     reload: load,
     workspaceMemberCount,
+    workspaceRole,
     loadMore,
     loadingMore,
     hasMore: rowsMatchFilter && nextCursor !== null,

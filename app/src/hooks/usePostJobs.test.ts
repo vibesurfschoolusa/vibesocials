@@ -490,3 +490,18 @@ describe("usePostJobs show filter - fix round 1", () => {
     expect(latest.jobs).toBeNull();
   });
 });
+
+// R10-client-journey L1: the cards need the viewer's role, from the list answer.
+describe("usePostJobs viewer role", () => {
+  it("is null until the first answer, then the answer's workspaceRole", async () => {
+    payloadJobs = [jobFixture({ status: "completed" })];
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jobs: payloadJobs, nextCursor: null, workspaceMemberCount: 2, workspaceRole: "member" }),
+    }));
+    await mount();
+    expect(history[0].workspaceRole).toBeNull();
+    expect(latest.workspaceRole).toBe("member");
+  });
+});

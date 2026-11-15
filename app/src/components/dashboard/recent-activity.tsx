@@ -26,6 +26,7 @@ export function RecentActivity({
   error,
   reload,
   workspaceMemberCount,
+  workspaceRole,
   watchRetry,
   pollingStopped,
   showCreateCta = true,
@@ -112,6 +113,7 @@ export function RecentActivity({
               key={job.id}
               job={job}
               showAttribution={showAttribution}
+              viewerRole={workspaceRole ?? "owner"}
               onRetryAccepted={watchRetry}
             />
           ))}
