@@ -172,8 +172,12 @@ async function syncSubscription(
           // R10 review: so does an ended one that is not the stored one (a late
           // event for an old subscription, or none stored yet): only the list
           // may say it is the workspace's current one, so the stored
-          // subscription and planPaidAt are never replaced on its word.
-          if (isInUse(subscription.status) || subscription.id !== workspace?.stripeSubscriptionId) throw error;
+          // subscription and planPaidAt are never replaced on its word. A
+          // workspace that is gone has nothing to replace: the sync below
+          // writes nothing and the event is recorded, not retried.
+          if (workspace && (isInUse(subscription.status) || subscription.id !== workspace.stripeSubscriptionId)) {
+            throw error;
+          }
           logger.warn("[stripe webhook] Could not list the customer's subscriptions; syncing the ended one alone", {
             eventId: event.id,
             error: errorFields(error),

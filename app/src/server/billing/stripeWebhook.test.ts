@@ -518,6 +518,15 @@ describe("when Stripe's list cannot be read", () => {
     expect(ws()).toEqual(before);
   });
 
+  // R10 second look, low 1: nothing to write, so nothing to retry.
+  it("fails with an ended subscription whose workspace is gone: recorded, 200, nothing written", async () => {
+    stripeHas(sub({ status: "canceled", ended_at: T + DAY, metadata: { workspaceId: "ws_gone" } }));
+    m.listFails = new Error("Stripe answered 500");
+    expect(await handleStripeEvent(subscriptionEvent("evt_g", "customer.subscription.deleted"), ENV)).toBe(200);
+    expect(m.events.has("evt_g")).toBe(true);
+    expect(m.workspaces.has("ws_gone")).toBe(false);
+  });
+
   it("fails with a live event subscription: 500, nothing recorded, nothing written", async () => {
     const before = { ...ws() };
     stripeHas(sub());
