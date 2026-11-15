@@ -23,7 +23,7 @@ describe("PublicHeader", () => {
   it("offers Log in when signed out, also with no session provider", () => {
     const html = render(createElement(PublicHeader, { showPricing: true }));
     expect(html).toMatch(/<a [^>]*href="\/login"[^>]*>Log in<\/a>/);
-    expect(html).not.toContain("Go to your dashboard");
+    expect(html).not.toContain(">Dashboard<");
   });
 
   it("offers Log in while the session is still loading (the server's HTML)", () => {
@@ -35,16 +35,18 @@ describe("PublicHeader", () => {
     expect(html).toContain(">Log in</a>");
   });
 
-  it("offers only Go to your dashboard to a signed-in visitor", () => {
+  // Short like "Log in": the nav's buttons don't wrap, and a longer label made
+  // the header wider than a 375 px phone beside Pricing and About.
+  it("offers only Dashboard to a signed-in visitor", () => {
     const html = render(createElement(PublicHeader, { showPricing: true }), signedIn);
-    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Go to your dashboard<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Dashboard<\/a>/);
     expect(html).not.toContain("Log in");
     expect(html).not.toContain('href="/login"');
   });
 
-  it("offers Go to your dashboard when the server already knows the visitor is signed in", () => {
+  it("offers Dashboard when the server already knows the visitor is signed in", () => {
     const html = render(createElement(PublicHeader, { showPricing: true, signedIn: true }));
-    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Go to your dashboard<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Dashboard<\/a>/);
     expect(html).not.toContain("Log in");
   });
 });

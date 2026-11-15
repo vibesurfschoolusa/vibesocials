@@ -38,10 +38,11 @@ export function PublicHeader({
     </>
   );
   // R17-pages L1: someone signed in already has an account; "Log in" would
-  // only lead to a second sign-in.
+  // only lead to a second sign-in. Short like "Log in": the nav's buttons don't
+  // wrap, and a longer label made the header wider than a 375 px phone.
   const dashboardLink = (
     <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-      Go to your dashboard
+      Dashboard
     </Link>
   );
   return (
