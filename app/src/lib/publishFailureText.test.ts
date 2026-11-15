@@ -442,6 +442,17 @@ describe("sentenceForRecipient", () => {
     }
   });
 
+  // R12-pages L5: an owner reading a post that failed before #158 reads the
+  // current owner sentence, not the old "Super admin or Content admin" one.
+  it("LinkedIn's old not-a-page-admin sentence reads as the current owner sentence for an owner", () => {
+    const old =
+      "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+    const current =
+      "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+    expect(sentenceForRecipient(old, "linkedin", "owner")).toBe(current);
+    expect(sentenceForRecipient(current, "linkedin", "owner")).toBe(current);
+  });
+
   it("an expired or invalid connection keeps saying so for a member", () => {
     expect(sentenceForRecipient("Your Instagram connection has expired — please reconnect it in Settings.", "instagram", "member")).toBe(
       "The Instagram connection has expired. The workspace owner can reconnect Instagram; then retry.",

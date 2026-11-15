@@ -27,8 +27,6 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
   const label = platformLabel(platform);
   const reconnect = memberReconnectMessage(platform);
   const chooseBoard = `The workspace owner can reconnect ${label} and choose a board; then retry.`;
-  const linkedinNotSuperAdmin =
-    "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
   const linkedinNotSuperAdminMember =
     "LinkedIn refused the post because the connected LinkedIn account is not a Super admin of this company page. A Super admin of the page can add that account as a Super admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.";
   return new Map([
@@ -45,12 +43,7 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
       "Could not find a Google Business Profile location for the given store code. Double-check the store code in Advanced settings.",
       "The workspace owner can check the store code for Google Business Profile; then retry.",
     ],
-    [linkedinNotSuperAdmin, linkedinNotSuperAdminMember],
-    // R11-pages L1: the sentence posts that failed before carry; a Content admin can't be picked on reconnect.
-    [
-      "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
-      linkedinNotSuperAdminMember,
-    ],
+    [LINKEDIN_NOT_SUPER_ADMIN, linkedinNotSuperAdminMember],
     [
       "The Pinterest board this connection posts to no longer exists. Reconnect Pinterest in Settings and choose a board.",
       `The Pinterest board this connection posts to no longer exists. ${chooseBoard}`,
@@ -61,6 +54,22 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
     ],
   ]);
 }
+
+/** linkedinClient's sentence for an account that is not a Super admin of the page. */
+const LINKEDIN_NOT_SUPER_ADMIN =
+  "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+
+/**
+ * Sentences posts that failed earlier still carry, and the sentence written
+ * for the same failure now, for every reader (R11-pages L1, R12-pages L5): a
+ * Content admin can't be picked on reconnect, so the old advice misleads.
+ */
+const SUPERSEDED: ReadonlyMap<string, string> = new Map([
+  [
+    "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
+    LINKEDIN_NOT_SUPER_ADMIN,
+  ],
+]);
 
 /** The clients' "Your <Platform> connection has expired / is no longer valid" sentences. */
 const CONNECTION_STATE = /^Your (.+?) connection (has expired|is no longer valid)\b/;
@@ -79,13 +88,15 @@ const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b/i;
  * above, or one of the client sentences below, each keeping its reason. A
  * sentence nobody wrote one for says the owner can fix the connection, not
  * "reconnect", since reconnecting may not be the step (R10-new-customer L2).
- * Owners, and every other sentence, read it as stored.
+ * Owners, and every other sentence, read it as stored, except a superseded
+ * sentence, which everyone reads in its current wording.
  */
 export function sentenceForRecipient(
   message: string | null,
   platform: Platform,
   role: "owner" | "member",
 ): string | null {
+  if (message !== null) message = SUPERSEDED.get(message.trim()) ?? message;
   if (role !== "member" || message === null || !OWNER_STEP.test(message)) return message;
   const exact = memberVariants(platform).get(message.trim());
   if (exact) return exact;
