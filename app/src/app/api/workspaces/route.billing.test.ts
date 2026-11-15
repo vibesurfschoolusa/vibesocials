@@ -29,20 +29,16 @@ vi.mock("@/lib/workspace", () => ({
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.checkRateLimit }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: vi.fn() }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ set: h.cookieSet }) }));
+vi.mock("@/server/usage/usageLog", () => ({
+  workspaceCreationRefusal: vi.fn(async () => null),
+  recordWorkspaceCreated: vi.fn(async () => undefined),
+}));
 
 import { POST } from "./route";
 
 const NOW = new Date("2026-12-10T12:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
-const PAUSE_AND_BILLING_SELECT = {
-  pausedAt: true,
-  pausedReason: true,
-  billingExempt: true,
-  plan: true,
-  planStatus: true,
-  trialEndsAt: true,
-  currentPeriodEnd: true,
-};
+const NAME_AND_PAUSE_SELECT = { name: true, pausedAt: true, pausedReason: true };
 
 function request() {
   return new Request("http://localhost/api/workspaces", {
@@ -120,37 +116,38 @@ describe("POST /api/workspaces with billing on", () => {
     expect(h.workspaceCreate).toHaveBeenCalledWith({ data: { name: "Fresh start", billingExempt: true } });
   });
 
-  it("reads the plan columns of the caller's owned workspaces in the same query", async () => {
+  // R5-new-customer M2: an ended trial or plan blocks only that workspace. A
+  // new workspace after the trial window starts ended anyway, so refusing it
+  // protected nothing; only the operator's pause still blocks.
+  it("reads only the names and pause columns of the caller's owned workspaces", async () => {
     await POST(request());
     expect(h.findMany).toHaveBeenCalledWith({
       where: { userId: "user-1", role: "owner" },
-      select: { workspace: { select: PAUSE_AND_BILLING_SELECT } },
+      select: { workspace: { select: NAME_AND_PAUSE_SELECT } },
     });
   });
 
-  it("refuses an owner of a workspace whose trial ended, before writing anything", async () => {
+  it("lets an owner of a workspace whose trial or plan ended create one", async () => {
     h.findMany.mockResolvedValue([
-      {
-        workspace: {
-          pausedAt: null,
-          pausedReason: null,
-          billingExempt: false,
-          plan: null,
-          planStatus: null,
-          trialEndsAt: new Date(NOW.getTime() - DAY),
-          currentPeriodEnd: null,
-        },
-      },
+      { workspace: { name: "Old trial", pausedAt: null, pausedReason: null } },
+      { workspace: { name: "Lapsed plan", pausedAt: null, pausedReason: null } },
+    ]);
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(201);
+    expect(h.transaction).toHaveBeenCalled();
+  });
+
+  it("still refuses an owner of a paused workspace, naming it", async () => {
+    h.findMany.mockResolvedValue([
+      { workspace: { name: "Surf Co", pausedAt: new Date(NOW.getTime() - DAY), pausedReason: null } },
     ]);
 
     const response = await POST(request());
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error:
-        "You cannot create a workspace while one of your workspaces has no active plan. Choose a plan in Settings first.",
-      code: "PLAN_ENDED",
-    });
+    expect((await response.json()).error).toContain('while "Surf Co" is paused');
     expect(h.transaction).not.toHaveBeenCalled();
   });
 

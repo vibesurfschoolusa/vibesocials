@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { billingEnabled, billingFieldsSelect } from "@/lib/billing";
+import { billingEnabled } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -10,7 +10,8 @@ import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { newWorkspaceBillingData } from "@/server/billing/newWorkspaceTrial";
-import { createWorkspaceWhileBlockedMessage, workspaceBlock } from "@/lib/workspaceStatus";
+import { recordWorkspaceCreated, workspaceCreationRefusal } from "@/server/usage/usageLog";
+import { createWorkspaceWhileBlockedMessage, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
 
 /** The longest workspace name accepted (it shows in the account menu). */
 export const WORKSPACE_NAME_MAX_LENGTH = 60;
@@ -86,16 +87,18 @@ export async function POST(request: Request) {
 
   // Pause (2026-11-10, fix round 1): an owner of a paused workspace cannot start
   // another. Every owned workspace (at most MAX_OWNED_WORKSPACES) goes through
-  // workspaceBlock, so a later block cause is covered here too.
+  // workspaceBlock, which reads only the pause here. R5-new-customer M2: an
+  // ended trial or plan no longer blocks (createWorkspaceWhileBlockedMessage).
   const owned = await prisma.workspaceMember.findMany({
     where: { userId: context.user.id, role: "owner" },
-    // 21a: with billing on, the plan columns too, so an ended trial counts.
-    select: { workspace: { select: { pausedAt: true, pausedReason: true, ...billingFieldsSelect() } } },
+    select: { workspace: { select: { name: true, pausedAt: true, pausedReason: true } } },
   });
-  const block = owned.map((membership) => workspaceBlock(membership.workspace)).find(Boolean);
-  if (block) {
+  const paused = owned.find(
+    (membership) => workspaceBlock(membership.workspace)?.code === WORKSPACE_PAUSED_CODE,
+  );
+  if (paused) {
     return NextResponse.json(
-      { error: createWorkspaceWhileBlockedMessage(block.code), code: block.code },
+      { error: createWorkspaceWhileBlockedMessage(paused.workspace.name), code: WORKSPACE_PAUSED_CODE },
       { status: 403 },
     );
   }
@@ -136,13 +139,25 @@ export async function POST(request: Request) {
     );
   }
 
+  // R5-security M1: the owned count above falls when a workspace is deleted,
+  // so creations are counted too, deleted workspaces included. The operator,
+  // who makes a workspace per client, is never refused.
+  const now = new Date();
+  if (!isOperatorUser(context.user)) {
+    const creationRefusal = await workspaceCreationRefusal(context.user.id, now);
+    if (creationRefusal) {
+      return NextResponse.json(creationRefusal, { status: 429 });
+    }
+  }
+
   const workspace = await prisma.$transaction(async (tx) => {
     // 21a: the caller's trial (or an operator's exemption) with billing on; exactly today's row with it off.
-    const billing = await newWorkspaceBillingData(tx, context.user.id, new Date());
+    const billing = await newWorkspaceBillingData(tx, context.user.id, now);
     const created = await tx.workspace.create({ data: { name, ...billing } });
     await tx.workspaceMember.create({
       data: { workspaceId: created.id, userId: context.user.id, role: "owner" },
     });
+    await recordWorkspaceCreated(tx, { userId: context.user.id, workspaceId: created.id, at: now });
     return created;
   });
 

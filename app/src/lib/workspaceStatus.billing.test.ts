@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SUPPORT_EMAIL } from "./siteInfo";
 import {
-  CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE,
   createWorkspaceWhileBlockedMessage,
   PLAN_ENDED_CODE,
   PLAN_ENDED_RESULT_FAILURE,
@@ -250,11 +249,12 @@ describe("blockedResultFailure", () => {
   });
 });
 
+// R5-new-customer M2: only the operator's pause blocks a new workspace, and
+// the sentence names the paused workspace.
 describe("createWorkspaceWhileBlockedMessage", () => {
-  it("names the pause or the plan", () => {
-    expect(createWorkspaceWhileBlockedMessage("WORKSPACE_PAUSED")).toBe(CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE);
-    expect(createWorkspaceWhileBlockedMessage("PLAN_ENDED")).toBe(
-      "You cannot create a workspace while one of your workspaces has no active plan. Choose a plan in Settings first.",
+  it("names the paused workspace and who to contact", () => {
+    expect(createWorkspaceWhileBlockedMessage("Surf Co")).toBe(
+      `You cannot create a workspace while "Surf Co" is paused. Contact ${SUPPORT_EMAIL}.`,
     );
   });
 });

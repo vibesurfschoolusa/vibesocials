@@ -17,7 +17,11 @@ const {
   getOperatorMock,
   isOperatorUserMock,
   getCurrentUserMock,
+  creationRefusalMock,
+  recordCreatedMock,
 } = vi.hoisted(() => ({
+  creationRefusalMock: vi.fn(),
+  recordCreatedMock: vi.fn(),
   getOperatorMock: vi.fn(),
   isOperatorUserMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
@@ -56,6 +60,10 @@ vi.mock("@/lib/operator", async (importOriginal) => {
   return { ...actual, getOperator: getOperatorMock, isOperatorUser: isOperatorUserMock };
 });
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
+vi.mock("@/server/usage/usageLog", () => ({
+  workspaceCreationRefusal: creationRefusalMock,
+  recordWorkspaceCreated: recordCreatedMock,
+}));
 
 vi.mock("next/headers", () => ({
   cookies: cookiesMock,
@@ -107,9 +115,13 @@ beforeEach(() => {
   countMock.mockResolvedValue(1);
   workspaceCreateMock.mockImplementation(async ({ data }: { data: { name: string } }) => ({ id: "ws-new", name: data.name }));
   memberCreateMock.mockResolvedValue({});
+  creationRefusalMock.mockReset();
+  creationRefusalMock.mockResolvedValue(null);
+  recordCreatedMock.mockReset();
+  recordCreatedMock.mockResolvedValue(undefined);
   // The route runs its writes in an interactive transaction: hand it a tx.
   transactionMock.mockImplementation(async (fn: (tx: unknown) => unknown) =>
-    fn({ workspace: { create: workspaceCreateMock }, workspaceMember: { create: memberCreateMock } }),
+    fn({ workspace: { create: workspaceCreateMock }, workspaceMember: { create: memberCreateMock }, usageEvent: {} }),
   );
 });
 
@@ -173,6 +185,48 @@ describe("POST /api/workspaces", () => {
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
+  // R5-security M1: deleting a workspace must not give back a creation.
+  it("records the creation in the usage log, in the creating transaction", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+
+    await POST(createRequest({ name: "Sunrise Surf Co." }));
+
+    expect(recordCreatedMock).toHaveBeenCalledWith(expect.objectContaining({ usageEvent: {} }), {
+      userId: "user-1",
+      workspaceId: "ws-new",
+      at: expect.any(Date),
+    });
+  });
+
+  it("429s with the sentence when the caller created 30 workspaces in 30 days, deleted ones included", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    creationRefusalMock.mockResolvedValue({ error: "You have created 30 workspaces...", code: "WORKSPACE_CREATION_LIMIT" });
+
+    const response = await POST(createRequest({ name: "Sunrise Surf Co." }));
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: "You have created 30 workspaces...",
+      code: "WORKSPACE_CREATION_LIMIT",
+    });
+    expect(creationRefusalMock).toHaveBeenCalledWith("user-1", expect.any(Date));
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("never asks the creation limit for the operator", async () => {
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    getWorkspaceContextMock.mockResolvedValue({
+      ...makeContext(),
+      user: { id: "ops-1", email: "ops@example.com", emailVerifiedAt: new Date("2026-11-01T00:00:00Z") },
+    });
+    creationRefusalMock.mockResolvedValue({ error: "no", code: "WORKSPACE_CREATION_LIMIT" });
+
+    const response = await POST(createRequest({ name: "Client nine" }));
+
+    expect(response.status).toBe(201);
+    expect(creationRefusalMock).not.toHaveBeenCalled();
+  });
+
   it("429s with Retry-After when the create rate limit blocks", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeContext());
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
@@ -186,24 +240,25 @@ describe("POST /api/workspaces", () => {
 });
 
 // Fix round 1 (2026-11-10): a paused owner must not carry on in a new workspace.
+// R5-new-customer M2: the sentence names the paused workspace.
 describe("POST /api/workspaces while one of the caller's workspaces is paused", () => {
-  it("403s before counting or writing anything, with the support address", async () => {
+  it("403s before counting or writing anything, naming the workspace, with the support address", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeContext());
     findManyMock.mockResolvedValue([
-      { workspace: { pausedAt: null, pausedReason: null } },
-      { workspace: { pausedAt: new Date("2026-11-10T08:00:00Z"), pausedReason: "Unpaid invoice." } },
+      { workspace: { name: "Calm Co", pausedAt: null, pausedReason: null } },
+      { workspace: { name: "Surf Co", pausedAt: new Date("2026-11-10T08:00:00Z"), pausedReason: "Unpaid invoice." } },
     ]);
 
     const response = await POST(createRequest({ name: "Fresh start" }));
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
-      error: `You cannot create a workspace while one of your workspaces is paused. Contact ${SUPPORT_EMAIL}.`,
+      error: `You cannot create a workspace while "Surf Co" is paused. Contact ${SUPPORT_EMAIL}.`,
       code: "WORKSPACE_PAUSED",
     });
     expect(findManyMock).toHaveBeenCalledWith({
       where: { userId: "user-1", role: "owner" },
-      select: { workspace: { select: { pausedAt: true, pausedReason: true } } },
+      select: { workspace: { select: { name: true, pausedAt: true, pausedReason: true } } },
     });
     expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(countMock).not.toHaveBeenCalled();

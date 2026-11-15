@@ -137,16 +137,14 @@ export function trialDaysLeftNotice(
 }
 
 /**
- * POST /api/workspaces refuses an owner of any blocked workspace, so a paused
- * customer cannot carry on in a new workspace in one click.
+ * POST /api/workspaces refuses an owner of a paused workspace, so a paused
+ * customer cannot carry on in a new workspace in one click. R5-new-customer
+ * M2: only the pause. An ended trial or plan blocks just its own workspace: a
+ * new workspace after the trial window starts ended anyway, so refusing it
+ * protected nothing. The sentence names the paused workspace.
  */
-export const CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE = `You cannot create a workspace while one of your workspaces is paused. Contact ${SUPPORT_EMAIL}.`;
-
-const CREATE_WORKSPACE_WHILE_PLAN_ENDED_MESSAGE =
-  "You cannot create a workspace while one of your workspaces has no active plan. Choose a plan in Settings first.";
-
-export function createWorkspaceWhileBlockedMessage(code: WorkspaceBlockCode): string {
-  return code === PLAN_ENDED_CODE ? CREATE_WORKSPACE_WHILE_PLAN_ENDED_MESSAGE : CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE;
+export function createWorkspaceWhileBlockedMessage(pausedWorkspaceName: string): string {
+  return `You cannot create a workspace while "${pausedWorkspaceName}" is paused. Contact ${SUPPORT_EMAIL}.`;
 }
 
 /** For a route: the 403 to return as-is, or null to carry on. */
