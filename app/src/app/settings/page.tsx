@@ -190,6 +190,12 @@ export default async function SettingsPage({
   const endedAt = Object.fromEntries(
     rows.filter((row) => expiryEnded(row, now)).map((row) => [row.platform, new Date(row.expiresAt!).toISOString()]),
   );
+  // R13-pages L3: of those, the ends still ahead, so a member's Ends soon row says when.
+  const endsAt = Object.fromEntries(
+    rows
+      .filter((row) => inExpiryWarningWindow(row, now) && !expiryEnded(row, now))
+      .map((row) => [row.platform, new Date(row.expiresAt!).toISOString()]),
+  );
   // R8-pages L5: the row says LinkedIn kept the date while that warning shows.
   const sameEndAt = sameEndRow ? { linkedin: new Date(sameEndRow.expiresAt!).toISOString() } : {};
 
@@ -361,6 +367,7 @@ export default async function SettingsPage({
               reconnectSoon={reconnectSoon}
               endedAt={endedAt}
               sameEndAt={sameEndAt}
+              endsAt={endsAt}
               readOnly={context.role !== "owner"}
               // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
               unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}

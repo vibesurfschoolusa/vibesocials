@@ -1,4 +1,4 @@
-import { type ReactElement } from "react";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,7 +37,10 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new Error(`REDIRECT ${url}`);
   },
+  // For the real connection row one test renders.
+  useRouter: () => ({ push: () => {}, refresh: () => {} }),
 }));
+vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: () => {}, error: () => {} }) }));
 vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
   getWorkspaceMemberCount: async () => 1,
@@ -449,6 +452,34 @@ describe("SettingsPage — connections about to end", () => {
     await render("owner");
     expect(sectionProps.ConnectionsSection.reconnectSoon).toEqual(["linkedin", "youtube"]);
     expect(sectionProps.ConnectionsSection.endedAt).toEqual({ linkedin: ended.toISOString() });
+  });
+
+  // R13-pages L3: a member's Ends soon row says when, in UTC (connection-actions.tsx).
+  it("an end still ahead is passed on as endsAt, which a member's row writes in UTC", async () => {
+    const endsAt = new Date(Date.now() + 3 * DAY);
+    findConnectionsMock.mockResolvedValue([
+      linkedIn({ expiresAt: endsAt }),
+      { ...linkedIn({ expiresAt: new Date(Date.now() - DAY) }), platform: "youtube" },
+    ]);
+    await render("member");
+    const props = sectionProps.ConnectionsSection as { endsAt?: Record<string, string>; readOnly?: boolean };
+    expect(props.readOnly).toBe(true);
+    expect(props.endsAt).toEqual({ linkedin: endsAt.toISOString() });
+    const { ConnectionActions, endsAtText } = await vi.importActual<typeof import("@/components/connection-actions")>(
+      "@/components/connection-actions",
+    );
+    const html = renderToStaticMarkup(
+      createElement(ConnectionActions, {
+        platform: "linkedin",
+        workspaceId: "ws-1",
+        isConnected: true,
+        readOnly: true,
+        reconnectSoon: true,
+        endsAt: props.endsAt!.linkedin,
+      }),
+    );
+    expect(endsAtText(endsAt.toISOString())).toMatch(/ UTC$/);
+    expect(html).toContain(`Ends ${endsAtText(endsAt.toISOString())}. The workspace owner can reconnect it.`);
   });
 
   it("nothing about to end: an empty list", async () => {
