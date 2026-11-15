@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
+import { connectionEndNextStep } from "@/lib/connectionExpiry";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -91,17 +92,18 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
               {platformList(entry.needsReconnect)}
             </p>
           ) : null}
-          {/* R7-pages L4: can't be renewed, so it needs a Reconnect too. */}
+          {/* R7-pages L4: can't be renewed, so it needs a Reconnect too; R8
+              client-journey L4: which only an owner can do. */}
           {entry.ended.length > 0 ? (
             <p className="text-muted-foreground">
-              <span className="font-medium text-foreground">Ended:</span> {platformList(entry.ended)}. Reconnect it in
-              Settings, Connections.
+              <span className="font-medium text-foreground">Ended:</span> {platformList(entry.ended)}.{" "}
+              {connectionEndNextStep(entry.role, entry.ended.length)}
             </p>
           ) : null}
           {entry.endsSoon.length > 0 ? (
             <p className="text-muted-foreground">
-              <span className="font-medium text-foreground">Ends soon:</span> {platformList(entry.endsSoon)}. Reconnect
-              it in Settings, Connections.
+              <span className="font-medium text-foreground">Ends soon:</span> {platformList(entry.endsSoon)}.{" "}
+              {connectionEndNextStep(entry.role, entry.endsSoon.length)}
             </p>
           ) : null}
         </div>

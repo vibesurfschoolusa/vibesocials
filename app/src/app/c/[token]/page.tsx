@@ -20,7 +20,9 @@ import {
   connectedAccountName,
   differentAccountPlatform,
   linkDifferentAccountMessage,
+  linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
@@ -126,6 +128,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
         : describeConnectLinkResult(outcome);
+  const sameEndOn = sameEnd?.expiresAt && working ? { platform: working.platform, expiresAt: sameEnd.expiresAt } : null;
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 
@@ -164,7 +167,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           {platforms.map((platform) => {
             const connection = byPlatform.get(platform);
             const working = connection && !connection.needsReconnect;
-            const name = connection?.username || connection?.accountIdentifier || null;
+            // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, never shown.
+            const name =
+              connection?.username || (platform === "linkedin" ? null : connection?.accountIdentifier) || null;
             const connected = name ? `Connected: ${name}` : "Connected";
             const form = (label: string) => (
               <form action={action} method="post">
@@ -195,10 +200,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                         and sign out in the new tab. If that tab shows a sign-in page instead, you&apos;re already
                         signed out: close it.
                       </li>
-                      <li>
-                        Come back here and click Continue. LinkedIn asks you to sign in: sign in to{" "}
-                        {connectedAccountName(connection)}.
-                      </li>
+                      <li>{linkedInReconnectSignInStep(connectedAccountName(connection))}</li>
                     </ol>
                     <div className="mt-3 flex justify-end">{form("Continue")}</div>
                   </div>
@@ -216,7 +218,10 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                     <span className="text-right text-sm text-muted-foreground">
                       {connection.ended
                         ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
-                        : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
+                        : // R8-pages L5: just reconnected with the same end date; the warning says what to do.
+                          sameEndOn?.platform === platform
+                          ? `${connected}. It ends on ${formatDisplayDate(sameEndOn.expiresAt)}.`
+                          : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
                     </span>
                     {button}
                   </div>

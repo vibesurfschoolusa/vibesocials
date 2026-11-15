@@ -434,7 +434,7 @@ describe("SettingsPage — a reconnect with a different account", () => {
     );
 
     expect(html).toContain(
-      "You signed in to a different LinkedIn account than Surf Co page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. To use the other account instead, use Switch account.",
+      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. To use the other page instead, use Switch account.",
     );
     expect(html).not.toContain("evil.example");
   });
@@ -550,19 +550,22 @@ describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
   it("same date: says LinkedIn gave the same end date, with the stored date", async () => {
     const expiresAt = new Date(Date.now() + 3 * DAY);
     const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
-    expect(html).toContain(`LinkedIn gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`);
+    // R8-pages L5: what to do next.
+    expect(html).toContain(
+      `LinkedIn kept the end date ${formatDisplayDate(expiresAt)}. Reconnect again after that date, or sign out of LinkedIn and reconnect to get a new 60-day sign-in.`,
+    );
     // R7 review 2: a warning, as on /c.
     expect(html).toMatch(/<div role="alert" class="[^"]*border-warning\/25[^"]*"/);
   });
 
   it("renewed: the usual message, even with a crafted flag", async () => {
     const html = await renderWith(new Date(Date.now() + 60 * DAY), { success: "linkedin_connected", same_end: "1" });
-    expect(html).not.toContain("same end date");
+    expect(html).not.toContain("kept the end date");
     expect(html).toContain("LinkedIn");
   });
 
   it("no flag: the usual message", async () => {
     const html = await renderWith(new Date(Date.now() + 3 * DAY), { success: "linkedin_connected" });
-    expect(html).not.toContain("same end date");
+    expect(html).not.toContain("kept the end date");
   });
 });

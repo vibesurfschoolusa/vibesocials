@@ -4,6 +4,7 @@ import { EXPIRY_WARNING_LEAD_MS } from "@/server/jobs/connectionHealthSweep";
 
 import {
   CONNECTION_EXPIRY_SELECT,
+  connectionEndNextStep,
   connectionExpiryState,
   expiryEnded,
   inExpiryWarningWindow,
@@ -107,10 +108,24 @@ describe("connectionExpiryState", () => {
 
 // Unconfirmed (client-journey): a reconnect that LinkedIn answered with the same end date.
 describe("sameEndDateMessage", () => {
-  it("names the platform and the date", () => {
+  // R8-pages L5: says what to do, since pressing Reconnect again changes nothing.
+  it("names the date and the two ways forward", () => {
     expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe(
-      "LinkedIn gave the same end date (November 16, 2026); it still ends then.",
+      "LinkedIn kept the end date November 16, 2026. Reconnect again after that date, or sign out of LinkedIn and reconnect to get a new 60-day sign-in.",
     );
+  });
+});
+
+// R8-client-journey L4 / pages L4: the Workspaces page's Ended / Ends soon lines.
+describe("connectionEndNextStep", () => {
+  it("an owner: reconnect it, or them for several", () => {
+    expect(connectionEndNextStep("owner", 1)).toBe("Reconnect it in Settings, Connections.");
+    expect(connectionEndNextStep("owner", 2)).toBe("Reconnect them in Settings, Connections.");
+  });
+
+  it("a member can't reconnect: the workspace owner can", () => {
+    expect(connectionEndNextStep("member", 1)).toBe("The workspace owner can reconnect it.");
+    expect(connectionEndNextStep("member", 3)).toBe("The workspace owner can reconnect them.");
   });
 });
 

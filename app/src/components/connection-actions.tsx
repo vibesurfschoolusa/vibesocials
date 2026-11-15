@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Platform } from "@prisma/client";
 import { useRouter } from "next/navigation";
 
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { sameEndAddress } from "@/lib/differentAccount";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { platformLabel } from "@/lib/platforms";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
@@ -57,6 +58,10 @@ interface Props {
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
+
+function noSubscription(): () => void {
+  return () => {};
+}
 
 /**
  * G4 (R2-security L2): disconnecting deletes the post numbers read from the
@@ -181,6 +186,9 @@ export function ConnectionActions({
 
   const isTikTok = platform === "tiktok";
   const isLinkedIn = platform === "linkedin";
+  // R8-pages L5: just reconnected and LinkedIn kept the end date (Settings'
+  // warning says what to do); the row's Reconnect steps back meanwhile.
+  const sameEnd = useSyncExternalStore(noSubscription, () => sameEndAddress(window.location.search), () => false);
   const authUrl = withWorkspaceId(`/api/auth/${platform}/start`, workspaceId);
 
   // Read each time the Disconnect dialog opens, from no number, so it never
@@ -293,7 +301,7 @@ export function ConnectionActions({
 
   // R7-pages M2: LinkedIn's Reconnect opens the sign-out steps first (the
   // dialog then starts the same sign-in); other platforms go straight to it.
-  function reconnectButton(variant: "destructive" | "primary") {
+  function reconnectButton(variant: "destructive" | "primary" | "outline") {
     return isLinkedIn ? (
       <Button size="sm" variant={variant} onClick={() => setReconnectOpen(true)}>
         Reconnect
@@ -324,7 +332,7 @@ export function ConnectionActions({
             ) : (
               <Badge variant="warning">Ends soon</Badge>
             )}
-            {reconnectButton("primary")}
+            {reconnectButton(isLinkedIn && !endedAt && sameEnd ? "outline" : "primary")}
           </>
         ) : (
           <Badge variant="success">Connected</Badge>
