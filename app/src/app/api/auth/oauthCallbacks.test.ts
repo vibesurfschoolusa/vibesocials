@@ -710,6 +710,8 @@ describe("choosing which account to connect", () => {
       const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
       expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+      // The fake token lasts an hour, inside the warning window: flagged (no name, no date).
+      expect(location(res).searchParams.get("same_end")).toBe("1");
       expect(pendingCreateMock).not.toHaveBeenCalled();
       const fields = {
         accessToken: "li-access",
@@ -736,6 +738,21 @@ describe("choosing which account to connect", () => {
           accountIdentifier: `linkedin_${NOW.getTime()}`,
         },
       });
+    });
+
+    // Unconfirmed (R7 client-journey): a fresh 60-day sign-in renews it; no flag.
+    it("a token that lasts 60 days: connected, no same_end flag", async () => {
+      const pages = linkedinProvider([{ id: 101, localizedName: "Org" }]);
+      useProvider((url) =>
+        url.includes("oauth/v2/accessToken")
+          ? json({ access_token: "li-access", expires_in: 60 * 24 * 60 * 60, scope: "w_organization_social" })
+          : pages(url),
+      );
+
+      const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+      expect(location(res).searchParams.has("same_end")).toBe(false);
     });
 
     it("several organizations connect none: the member token and the pages wait for the user's choice", async () => {

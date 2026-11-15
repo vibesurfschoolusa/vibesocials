@@ -1,5 +1,6 @@
 import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock, findConnectionsMock } = vi.hoisted(() => ({
@@ -526,5 +527,40 @@ describe("SettingsPage — a Business Profile reconnect that cleared the locatio
 
     expect(html).not.toContain("Reconnected. Choose the location");
     expect(html).not.toContain("Somewhere Else");
+  });
+});
+
+// Unconfirmed (R7 client-journey): an owner's LinkedIn Reconnect that LinkedIn
+// answered with the same end date (the callback's same_end flag; no name, no date in the address).
+describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  const DAY = 24 * 60 * 60 * 1000;
+  async function renderWith(expiresAt: Date, query: Record<string, string>): Promise<string> {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "linkedin", accountIdentifier: "member-1", metadata: { username: "Surf Co page" }, needsReconnect: false, expiresAt, refreshToken: null },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+    return renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve(query) })) as ReactElement);
+  }
+
+  it("same date: says LinkedIn gave the same end date, with the stored date", async () => {
+    const expiresAt = new Date(Date.now() + 3 * DAY);
+    const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
+    expect(html).toContain(`LinkedIn gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`);
+  });
+
+  it("renewed: the usual message, even with a crafted flag", async () => {
+    const html = await renderWith(new Date(Date.now() + 60 * DAY), { success: "linkedin_connected", same_end: "1" });
+    expect(html).not.toContain("same end date");
+    expect(html).toContain("LinkedIn");
+  });
+
+  it("no flag: the usual message", async () => {
+    const html = await renderWith(new Date(Date.now() + 3 * DAY), { success: "linkedin_connected" });
+    expect(html).not.toContain("same end date");
   });
 });

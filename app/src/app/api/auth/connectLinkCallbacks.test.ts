@@ -78,7 +78,7 @@ function provider(url: string, pages = 1): Response {
   if (url.includes("youtube/v3/channels")) return json({ items: [{ id: "chan-1", snippet: { title: "Channel" } }] });
   if (url.includes("tiktokapis.com/v2/user/info")) return json({ data: { user: { display_name: "Brand" } } });
   if (url.includes("tiktokapis.com")) return json({ access_token: "tt", open_id: "open-1", scope: "video.publish", token_type: "Bearer" });
-  if (url.includes("oauth/v2/accessToken")) return json({ access_token: "li", expires_in: 3600, scope: "w_organization_social" });
+  if (url.includes("oauth/v2/accessToken")) return json({ access_token: "li", expires_in: 5184000, scope: "w_organization_social" }); // 60 days, as LinkedIn gives
   if (url.includes("/rest/organizationAcls")) {
     return json({ elements: [{ role: "ADMINISTRATOR", organization: "urn:li:organization:101", state: "APPROVED" }] });
   }

@@ -18,7 +18,9 @@ const h = vi.hoisted(() => ({
   rateLimit: vi.fn(),
   saveFacebookPage: vi.fn(),
   notifyConnect: vi.fn(),
+  notifyRefused: vi.fn(),
 }));
+vi.mock("@/server/notifications/refusedConnectEmail", () => ({ notifyOwnersOfRefusedConnect: h.notifyRefused }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     workspaceConnectLink: { findUnique: h.linkFind, update: h.linkUpdate },
@@ -202,6 +204,9 @@ describe("POST: the visitor's choice", () => {
     expect(h.pendingDeleteMany).not.toHaveBeenCalled();
     expect(h.linkUpdate).not.toHaveBeenCalled();
     expect(h.notifyConnect).not.toHaveBeenCalled();
+    // R7-client-journey L4: the choose-an-account path tells the owners too.
+    expect(h.notifyRefused).toHaveBeenCalledTimes(1);
+    expect(h.notifyRefused).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
   });
 
   it("a choice that is not one of the accounts is a 400 with the owner route's sentence", async () => {

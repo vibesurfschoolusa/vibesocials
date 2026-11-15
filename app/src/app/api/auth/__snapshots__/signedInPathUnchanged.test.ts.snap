@@ -748,7 +748,7 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
     ],
   ],
   "headers": {
-    "location": "https://app.example.com/settings?success=linkedin_connected",
+    "location": "https://app.example.com/settings?success=linkedin_connected&same_end=1",
   },
   "status": 307,
 }

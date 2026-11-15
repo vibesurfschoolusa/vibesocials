@@ -71,6 +71,14 @@ export function connectionExpiryState(
  * (a fresh LinkedIn sign-in lasts 60 days). Said rather than looking as if
  * nothing happened.
  */
+/**
+ * The flag an owner's or a client's LinkedIn callback adds to its success
+ * redirect when the new sign-in itself ends inside the warning window. A flag
+ * only, never a name or a date: the pages read the date from the stored
+ * connection and show the sentence only when it really is in that window.
+ */
+export const SAME_END_PARAM = "same_end";
+
 export function sameEndDateMessage(platform: Platform, expiresAt: Date | string): string {
   return `${platformLabel(platform)} gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`;
 }

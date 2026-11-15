@@ -10,7 +10,7 @@ import {
   describeConnectLinkResult,
 } from "@/lib/connectLink";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
-import { sameEndDateMessage } from "@/lib/connectionExpiry";
+import { SAME_END_PARAM, sameEndDateMessage } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
 import {
   LOCATION_CLEARED_LINK_MESSAGE,
@@ -24,7 +24,6 @@ import {
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
-import { notifyOwnersOfRefusedConnect } from "@/server/notifications/refusedConnectEmail";
 
 import { ConnectLinkChoice } from "./connect-link-choice";
 
@@ -90,11 +89,16 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const succeeded = PLATFORM_ORDER.find((platform) => success === `${platform}_connected`);
   const working = succeeded ? byPlatform.get(succeeded) : undefined;
   if (success && working && !working.needsReconnect && !working.reconnectSoon) outcome.set("success", success);
-  // Unconfirmed (R7 client-journey): a reconnect saved, yet still inside the
-  // warning window: the platform gave the same end date. Said, from the stored
-  // date, instead of no sentence at all.
+  // Unconfirmed (R7 client-journey): the callback flagged a sign-in that ends
+  // inside the warning window; said, with the stored date, only when the
+  // connection really is in it, instead of no sentence at all.
   const sameEnd =
-    success && working && !working.needsReconnect && working.reconnectSoon && !working.ended
+    success &&
+    first(query[SAME_END_PARAM]) !== null &&
+    working &&
+    !working.needsReconnect &&
+    working.reconnectSoon &&
+    !working.ended
       ? await prisma.socialConnection.findUnique({
           where: { workspaceId_platform: { workspaceId: link.workspaceId, platform: working.platform } },
           select: { expiresAt: true },
@@ -104,11 +108,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   // connected, and nothing changed. Named by the connected account only.
   const differentPlatform = differentAccountPlatform(outcome.get("error"));
   const differentFrom = differentPlatform ? byPlatform.get(differentPlatform) : undefined;
-  if (differentPlatform && differentFrom) {
-    // R7-client-journey L4: the client is told to ask the owner, so the owners
-    // hear of it (at most once per connection per day; never throws).
-    await notifyOwnersOfRefusedConnect({ workspaceId: link.workspaceId, platform: differentPlatform });
-  }
+  // R7-client-journey L4: the owners are emailed where the refusal happens
+  // (server/connectLink/callback.ts, the choice route), never from this page,
+  // which anyone holding the link can open with any query.
   const uncheckedPlatform = accountCheckFailedPlatform(outcome.get("error"));
   const uncheckedFrom = uncheckedPlatform ? byPlatform.get(uncheckedPlatform) : undefined;
   // R6 third review: a Business Profile reconnect whose location this Google

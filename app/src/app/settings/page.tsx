@@ -45,7 +45,13 @@ import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { platformHelpHref } from "@/lib/platformGuides";
 import { platformLabel } from "@/lib/platforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
-import { CONNECTION_EXPIRY_SELECT, expiryEnded, inExpiryWarningWindow } from "@/lib/connectionExpiry";
+import {
+  CONNECTION_EXPIRY_SELECT,
+  SAME_END_PARAM,
+  expiryEnded,
+  inExpiryWarningWindow,
+  sameEndDateMessage,
+} from "@/lib/connectionExpiry";
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -67,6 +73,7 @@ export default async function SettingsPage({
     success?: string;
     billing?: string;
     location_cleared?: string;
+    same_end?: string;
   }>;
 }) {
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
@@ -160,6 +167,21 @@ export default async function SettingsPage({
     };
   }
   const now = new Date();
+  // Unconfirmed (R7 client-journey): the LinkedIn callback flagged a reconnect
+  // whose new sign-in still ends inside the warning window. The date comes
+  // from the stored row, and only when it really is in that window.
+  const sameEndRow =
+    params.success === "linkedin_connected" && params[SAME_END_PARAM] !== undefined
+      ? rows.find((row) => row.platform === "linkedin" && inExpiryWarningWindow(row, now) && !expiryEnded(row, now))
+      : undefined;
+  if (sameEndRow) {
+    // The reconnect itself worked; OAuthResult has no warning variant.
+    oauthResult = {
+      variant: "success",
+      platform: "linkedin",
+      message: sameEndDateMessage("linkedin", sameEndRow.expiresAt!),
+    };
+  }
   const reconnectSoon = rows.filter((row) => inExpiryWarningWindow(row, now)).map((row) => row.platform);
   const endedAt = Object.fromEntries(
     rows.filter((row) => expiryEnded(row, now)).map((row) => [row.platform, new Date(row.expiresAt!).toISOString()]),

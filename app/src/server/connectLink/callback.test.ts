@@ -17,7 +17,9 @@ const h = vi.hoisted(() => ({
   isOwner: vi.fn(),
   getCurrentUser: vi.fn(),
   notifyConnect: vi.fn(),
+  notifyRefused: vi.fn(),
 }));
+vi.mock("@/server/notifications/refusedConnectEmail", () => ({ notifyOwnersOfRefusedConnect: h.notifyRefused }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     oAuthHandshake: { findUnique: h.handshakeFind },
@@ -309,6 +311,32 @@ describe("withConnectLink: running the callback with the link", () => {
     );
 
     expect(h.notifyConnect).not.toHaveBeenCalled();
+  });
+
+  // R7-client-journey L4: told where the refusal happens (the email itself is once per connection per UTC day).
+  it("a different account than the one connected: the visitor's page says so, and the owners are told once", async () => {
+    const res = await withConnectLink("tiktok", handlerAnswering("/settings?error=tiktok_different_account"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+
+    expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?error=tiktok_different_account`);
+    expect(h.notifyRefused).toHaveBeenCalledTimes(1);
+    expect(h.notifyRefused).toHaveBeenCalledWith({ workspaceId: WORKSPACE, platform: "tiktok" });
+    expect(h.notifyConnect).not.toHaveBeenCalled();
+  });
+
+  it("any other outcome: no refused-sign-in email", async () => {
+    await withConnectLink("tiktok", handlerAnswering("/settings?success=tiktok_connected"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+    await withConnectLink("tiktok", handlerAnswering("/settings?error=tiktok_token_exchange_failed"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+    // The platform's own refusal wins over whatever the callback answered.
+    await withConnectLink("tiktok", handlerAnswering("/settings?error=tiktok_different_account"))(
+      stateRequest(linkState(), cookieFor(), { error: "access_denied" }),
+    );
+    expect(h.notifyRefused).not.toHaveBeenCalled();
   });
 
   it("an error: the visitor's page with the same query, lastUsedAt not set, cookie cleared", async () => {

@@ -13,9 +13,9 @@ import { workspaceLink } from "@/server/notifications/links";
  * R7-client-journey L4: a client's reconnect through the workspace's connect
  * link came back with a different account than the one connected, so nothing
  * changed (server/connections/saveConnection.ts). The client is told to ask
- * the owner, so the owners hear of it here. Sent from the client's /c page,
- * which anyone holding the link can open with any query, so it goes out at
- * most once per connection per UTC day.
+ * the owner, so the owners hear of it here. Sent where the refusal happens
+ * (server/connectLink/callback.ts and the link's choice route), never from the
+ * /c page; at most once per connection per UTC day, however often it is tried.
  */
 
 function escapeHtml(value: string): string {

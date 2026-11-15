@@ -174,29 +174,19 @@ describe("the connect link page", () => {
     expect(html).not.toContain("Client Cafe");
   });
 
-  // R7-client-journey L4: the owners hear of it (the email itself is sent once per connection per day).
-  it("a different account: the owners are told, for this workspace and platform", async () => {
+  // R7-client-journey L4: the owners are told where the refusal happens (the
+  // callback and the choice route); typing the code into the address sends nothing.
+  it("a different-account code typed into the address: the sentence, but no email", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
     ]);
     await render({ error: "facebook_page_different_account" });
-    expect(h.notifyRefused).toHaveBeenCalledTimes(1);
-    expect(h.notifyRefused).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
+    expect(h.notifyRefused).not.toHaveBeenCalled();
   });
 
-  it("a different-account code without such a connection: no sentence, no email", async () => {
+  it("a different-account code without such a connection: no sentence", async () => {
     const html = await render({ error: "facebook_page_different_account" });
     expect(html).not.toContain("This connection belongs to");
-    expect(h.notifyRefused).not.toHaveBeenCalled();
-  });
-
-  it("no refusal: no email", async () => {
-    h.listConnections.mockResolvedValue([
-      { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
-    ]);
-    await render({ error: "facebook_page_cancelled" });
-    await render();
-    expect(h.notifyRefused).not.toHaveBeenCalled();
   });
 
   it("a Business Profile reconnect that couldn't be checked: names the location, try again", async () => {
@@ -370,10 +360,10 @@ describe("LinkedIn on the client's page", () => {
   });
 
   // Unconfirmed (client-journey): LinkedIn may give the same end date on a reconnect.
-  it("a reconnect that left the same end date says so instead of nothing", async () => {
+  it("a reconnect that left the same end date (the callback's flag) says so instead of nothing", async () => {
     h.listConnections.mockResolvedValue([linkedin()]);
     h.findConnection.mockResolvedValue({ expiresAt: new Date("2026-11-16T12:00:00Z") });
-    const html = await render({ success: "linkedin_connected" });
+    const html = await render({ success: "linkedin_connected", same_end: "1" });
     expect(html).toContain("LinkedIn gave the same end date (November 16, 2026); it still ends then.");
     expect(html).not.toContain("is connected");
     expect(h.findConnection).toHaveBeenCalledWith({
@@ -382,9 +372,16 @@ describe("LinkedIn on the client's page", () => {
     });
   });
 
-  it("a reconnect that renewed it: the usual sentence, and no end-date read", async () => {
-    h.listConnections.mockResolvedValue([linkedin({ reconnectSoon: false })]);
+  it("without the flag: no such sentence and no end-date read", async () => {
+    h.listConnections.mockResolvedValue([linkedin()]);
     const html = await render({ success: "linkedin_connected" });
+    expect(html).not.toContain("same end date");
+    expect(h.findConnection).not.toHaveBeenCalled();
+  });
+
+  it("a crafted flag on a connection that renewed: the usual sentence, and no end-date read", async () => {
+    h.listConnections.mockResolvedValue([linkedin({ reconnectSoon: false })]);
+    const html = await render({ success: "linkedin_connected", same_end: "1" });
     expect(html).toContain("LinkedIn is connected.");
     expect(html).not.toContain("same end date");
     expect(h.findConnection).not.toHaveBeenCalled();

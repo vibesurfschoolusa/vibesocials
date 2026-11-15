@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { accountCheckFailedMessage, linkDifferentAccountMessage } from "@/lib/differentAccount";
+import { notifyOwnersOfRefusedConnect } from "@/server/notifications/refusedConnectEmail";
 import {
   CONNECT_LINK_CHOICES_PER_HOUR,
   CONNECT_LINK_INACTIVE_MESSAGE,
@@ -132,6 +133,8 @@ export async function POST(request: Request, context: RouteContext) {
     }
     if (!result.ok && result.reason === "different_account") {
       // R6 review low 1: the connection stays as it was, and so does the choice.
+      // R7-client-journey L4: the owners are told (once per connection per day; never throws).
+      await notifyOwnersOfRefusedConnect({ workspaceId: link.workspaceId, platform: pending.platform });
       return NextResponse.json(
         { error: linkDifferentAccountMessage(pending.platform, result.connectedName) },
         { status: 409 },
