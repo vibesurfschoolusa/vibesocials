@@ -13,9 +13,10 @@ const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"]) =>
   renderToStaticMarkup(createElement(ReviewLinkPanelView, { state }));
 
 describe("reviewRequestMessage", () => {
-  it("is the message to send a customer, with the link", () => {
+  // R5 pages L5: any business sends it, so it names no activity.
+  it("is the message to send a customer, with the link, fit for any business", () => {
     expect(reviewRequestMessage(LINK)).toBe(
-      `Thanks for coming out with us! If you have a minute, a quick Google review helps us a lot: ${LINK}`,
+      `Thank you for choosing us! If you have a minute, a quick Google review helps us a lot: ${LINK}`,
     );
   });
 });

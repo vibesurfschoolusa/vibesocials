@@ -9,9 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { qrSvg } from "@/lib/qrSvg";
 
-/** The message an owner sends a customer to ask for a review. */
+/** The message an owner sends a customer to ask for a review; fits any kind of business. */
 export function reviewRequestMessage(link: string): string {
-  return `Thanks for coming out with us! If you have a minute, a quick Google review helps us a lot: ${link}`;
+  return `Thank you for choosing us! If you have a minute, a quick Google review helps us a lot: ${link}`;
 }
 
 export type ReviewLinkState =
