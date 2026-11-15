@@ -452,8 +452,8 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-2"));
 
     expect(response.status).toBe(200);
-    // R5-security L1: no client link is on in this test, so nothing to replace.
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", clientLinksToReplace: false });
+    // The Team card reads the client links itself after a demotion (Check 4).
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-2", role: "owner" },
       data: { role: "member" },
@@ -461,14 +461,14 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
   });
 
   // R5-security L1: a demoted owner could copy the client links, which keep working.
-  it("after a demotion, tells the other owners and offers new client links", async () => {
+  it("after a demotion, tells the other owners; the answer no longer carries clientLinksToReplace", async () => {
     findFirstMock.mockResolvedValue({ role: "owner" });
     noticeMock.mockResolvedValue({ clientLinksToReplace: true });
 
     const response = await PATCH(patchReq("member"), ctx("user-2"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", clientLinksToReplace: true });
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
     expect(noticeMock).toHaveBeenCalledWith({
       workspaceId: "ws-1",
       workspaceName: "Acme",
@@ -497,8 +497,8 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-1"));
 
     expect(response.status).toBe(200);
-    // R5-security L1: no client link is on in this test, so nothing to replace.
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", clientLinksToReplace: false });
+    // The Team card reads the client links itself after a demotion (Check 4).
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-1", role: "owner" },
       data: { role: "member" },

@@ -218,12 +218,13 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
   }
 
   // R5-security L1: as an owner they could copy the client links, which keep
-  // working. After the commit; never throws.
-  const { clientLinksToReplace } = await noticeOwnersOfFormerOwner({
+  // working, so the other owners are emailed. After the commit; never throws.
+  // The Team card reads which links still work itself (GET client-links).
+  await noticeOwnersOfFormerOwner({
     workspaceId,
     workspaceName: context.workspace.name,
     formerOwnerId: targetUserId,
     at: new Date(),
   });
-  return NextResponse.json({ ok: true, role, clientLinksToReplace }, { status: 200 });
+  return NextResponse.json({ ok: true, role }, { status: 200 });
 }
