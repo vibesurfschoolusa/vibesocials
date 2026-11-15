@@ -715,6 +715,23 @@ describe("materializeClaimedJobs", () => {
     });
   });
 
+  // R6-security M2: the scanner is where a scheduled post meets the service's
+  // cap, as it falls due; one refused is failed with its sentence and its
+  // owner is told, like a post with nothing connected.
+  it("asks prepare to check the service's cap now, and tells the owner of a post it refused", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "full" ? { ok: false, reason: "LIMIT_REACHED" } : okFor(id),
+    );
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["a", "full"], sleep);
+
+    expect(prepareDeferredMock).toHaveBeenCalledWith("a", { serviceCapAt: expect.any(Date) });
+    expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
+    expect(out.noConnections).toEqual([{ postJobId: "full", userId: "owner-1" }]);
+    expect(out.notFound).toEqual([]);
+  });
+
   it("puts a NOT_FOUND job in notFound and sends nothing for it", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
 

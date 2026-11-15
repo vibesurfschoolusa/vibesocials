@@ -230,26 +230,46 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  */
 
 /**
- * The most posts the whole service takes for one UTC day, so a month at the cap
- * stays inside the Inngest plan's 50,000 executions. Idle work (scanners,
- * sweeps, syncs) runs about 500 executions a day: 15,500 in a 31-day month. A
- * post costs about 6 executions plus 1 per platform, so about 10 for a post to
- * 4 platforms; an Instagram Reel adds about 10 more. 80 posts a day at 10 is
- * 800, plus 500 idle, 1,300 a day: 40,300 in a 31-day month, which leaves about
- * 9,700 (19%) for Reels, retries and posts to more platforms. Even with every
- * post at 6 platforms (12 each) the month is 45,260. The operator's own posts
- * count toward it but are never refused by it.
+ * The most posts (and retries, R6-security M3) the free workspaces of the
+ * whole service send in one UTC day: those on a trial, on no plan, or whose
+ * plan ended. The operator's workspaces and paying ones are never counted or
+ * refused here; their posts are sized in below instead (R6-security M2).
+ *
+ * It counts a post on the day it is SENT, checked when it goes out (Post now,
+ * and the scanner when a scheduled post is due), so scheduling far ahead
+ * reserves nothing.
+ *
+ * Sizing against the Inngest plan's 50,000 executions a month. About 28,000
+ * are used already (CLAUDE.md: idle work, the scanners, sweeps and syncs, and
+ * the operator's own posting). A post costs about 6 executions plus 1 per
+ * platform, so about 10 for a post to 4 platforms. Paying workspaces are
+ * expected at about 15 posts a day (five workspaces at 3). So 28,000 +
+ * (40 free + 15 paid) x 10 x 31 = 45,050 in a 31-day month, which leaves about
+ * 4,950 (10%) for Reels (about 10 more each) and posts to more platforms. Even
+ * with every post at 6 platforms (12 each) the month is 48,460.
  */
-export const SERVICE_DAILY_POST_LIMIT = 80;
+export const SERVICE_DAILY_POST_LIMIT = 40;
 
 /**
- * The most posts one owner's workspaces take for one UTC day, together, while
- * billing is off or the workspace is on its free trial (a paying workspace has
- * its plan's own limit). Sized for an agency like the operator's own: several
- * client workspaces at a few posts a day each (8 workspaces x 4 posts = 32)
- * fits with room. Below the service cap, so one person cannot take all of it.
+ * The most posts (and retries) one owner's free workspaces take in one UTC
+ * day, together: with billing off every workspace, with it on every workspace
+ * the service's cap counts. Sized for an agency on its trial: several client
+ * workspaces at a few posts a day each (7 workspaces x 4 posts = 28) fits.
+ * Below the service cap, so one person cannot take all of it.
  */
-export const OWNER_DAILY_POST_LIMIT = 60;
+export const OWNER_DAILY_POST_LIMIT = 30;
+
+/**
+ * R6-security M2: the per-person number for an owner whose email address is
+ * not confirmed, or whose account is less than NEW_ACCOUNT_HOURS old, so
+ * throwaway accounts take only a small share of the service's cap. Enough to
+ * try the app on the first day.
+ */
+export const NEW_ACCOUNT_DAILY_POST_LIMIT = 5;
+export const NEW_ACCOUNT_HOURS = 24;
+
+/** R6-security M3: how often one post may be retried in one UTC day. */
+export const RETRIES_PER_POST_PER_DAY = 3;
 
 /** Workspaces one person may create in WORKSPACES_CREATED_WINDOW_DAYS, deleted ones included. */
 export const WORKSPACES_CREATED_LIMIT = 30;
@@ -257,28 +277,69 @@ export const WORKSPACES_CREATED_WINDOW_DAYS = 30;
 
 export const OWNER_DAILY_POST_LIMIT_CODE = "OWNER_DAILY_POST_LIMIT";
 export const SERVICE_DAILY_POST_LIMIT_CODE = "SERVICE_DAILY_POST_LIMIT";
+export const POST_RETRY_LIMIT_CODE = "POST_RETRY_LIMIT";
 export const WORKSPACE_CREATION_LIMIT_CODE = "WORKSPACE_CREATION_LIMIT";
 
-/** Whether a workspace's posts count toward its owners' per-person daily total. */
+/** The limits across workspaces also refuse a retry (R6-security M3). */
+export type CrossWorkspaceLimitMode = DailyPostLimitMode | "retry";
+
+/**
+ * Whether a workspace's posts count toward its owners' per-person daily total.
+ * R6-new-customer M1: with billing on, every workspace not on a running plan,
+ * so also one made while billing was off (no plan, no trial) and one whose
+ * plan or trial ended: every workspace the service's cap counts.
+ */
 export function personalPostLimitApplies(
   workspace: BillingFields,
   env: Record<string, string | undefined> = process.env,
   now: Date = new Date(),
 ): boolean {
-  return !billingEnabled(env) || planState(workspace, now) === "trial";
+  if (!billingEnabled(env)) return true;
+  return !workspace.billingExempt && planState(workspace, now) !== "active";
 }
 
-export function ownerDailyPostLimitMessage(limit: number, mode: DailyPostLimitMode): string {
+/** One owner's per-person number, and whether it is the lower one for a new or unconfirmed account. */
+export function ownerDailyPostLimit(
+  owner: { emailVerifiedAt: Date | null; createdAt: Date },
+  now: Date,
+): { limit: number; reduced: boolean } {
+  const ageMs = now.getTime() - owner.createdAt.getTime();
+  const reduced = !owner.emailVerifiedAt || ageMs < NEW_ACCOUNT_HOURS * 60 * 60 * 1000;
+  return reduced
+    ? { limit: NEW_ACCOUNT_DAILY_POST_LIMIT, reduced: true }
+    : { limit: OWNER_DAILY_POST_LIMIT, reduced: false };
+}
+
+export function ownerDailyPostLimitMessage(limit: number, mode: CrossWorkspaceLimitMode, reduced = false): string {
   const posts = `${limit} ${countWord(limit, "post", "posts")}`;
-  return mode === "now"
-    ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
-    : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`;
+  const sentence =
+    mode === "now"
+      ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
+      : mode === "retry"
+        ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own, and retries count toward it. Retry tomorrow.`
+        : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`;
+  return reduced
+    ? `${sentence} The limit is ${OWNER_DAILY_POST_LIMIT} once the owner has confirmed their email address and the account is a day old.`
+    : sentence;
 }
 
-export function serviceDailyPostLimitMessage(mode: DailyPostLimitMode): string {
-  return mode === "now"
-    ? `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.`
-    : `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Pick another day.`;
+export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {
+  if (mode === "now") {
+    return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.`;
+  }
+  if (mode === "retry") {
+    return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service, and retries count toward it. Retry tomorrow.`;
+  }
+  return `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Pick another day.`;
+}
+
+/** On the results of a scheduled post the scanner did not send (Activity, and the owner's email). */
+export function serviceDailyPostLimitAtSendMessage(): string {
+  return `Not sent: ${PRODUCT_NAME} had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.`;
+}
+
+export function postRetryLimitMessage(limit: number): string {
+  return `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Retry it again tomorrow.`;
 }
 
 /** `openAt`: when the oldest creation in the window leaves it. */

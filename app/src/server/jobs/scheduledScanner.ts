@@ -229,13 +229,15 @@ export async function materializeClaimedJobs(
     try {
       await withMaterializeRetries(
         async () => {
-          const prep = await prepareDeferredPostJobDispatch(postJobId);
+          // R6-security M2: a scheduled post meets the service's daily cap as
+          // it falls due, so posts scheduled far ahead cannot fill a day.
+          const prep = await prepareDeferredPostJobDispatch(postJobId, { serviceCapAt: new Date() });
           if (prep.ok) {
             // The scanner is not "Post now": `immediate: false` keeps the run at
             // priority 0 behind user-triggered publishes.
             batch.publishEvents.push(buildPublishEvent(prep.event, { immediate: false }));
-          } else if (prep.reason === "NO_CONNECTIONS") {
-            // The job is already marked failed; look up whom to tell.
+          } else if (prep.reason === "NO_CONNECTIONS" || prep.reason === "LIMIT_REACHED") {
+            // The job is already marked failed, its results saying why; look up whom to tell.
             const owner = await prisma.postJob.findUnique({
               where: { id: postJobId },
               select: { userId: true },

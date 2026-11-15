@@ -17,6 +17,8 @@ const {
   inngestSendMock,
   checkRateLimitMock,
   recomputeStatusMock,
+  retryRefusalMock,
+  recordRetryMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   postJobFindFirstMock: vi.fn(),
@@ -26,6 +28,8 @@ const {
   inngestSendMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   recomputeStatusMock: vi.fn(),
+  retryRefusalMock: vi.fn(),
+  recordRetryMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -50,6 +54,8 @@ vi.mock("@/server/jobs/failPendingResults", () => ({
 vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
+// R6-security M3: the retry budgets are tested in server/usage/usageLog.test.ts.
+vi.mock("@/server/usage/usageLog", () => ({ retryRefusal: retryRefusalMock, recordRetry: recordRetryMock }));
 
 import { logger } from "@/lib/logger";
 
@@ -93,6 +99,10 @@ beforeEach(() => {
   inngestSendMock.mockResolvedValue(undefined);
   connectionFindUniqueMock.mockResolvedValue({ needsReconnect: false });
   recomputeStatusMock.mockResolvedValue({ status: "failed", successCount: 0 });
+  retryRefusalMock.mockReset();
+  retryRefusalMock.mockResolvedValue(null);
+  recordRetryMock.mockReset();
+  recordRetryMock.mockResolvedValue(undefined);
 });
 
 describe("parseRetryBody (pure)", () => {
@@ -514,7 +524,7 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     });
   });
 
-  it("retryAllFailed: claims every failed platform, skips reconnect preflight, emits one event", async () => {
+  it("retryAllFailed: claims every failed platform, runs the reconnect preflight for each, emits one event", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([
         { platform: "tiktok", status: "failed" },
@@ -531,13 +541,48 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(body.retrying).toEqual(["tiktok", "youtube"]);
     // The already-succeeded platform is never claimed.
     expect(resultUpdateManyMock).toHaveBeenCalledTimes(2);
-    // The all-failed path does not run the per-connection reconnect preflight.
-    expect(connectionFindUniqueMock).not.toHaveBeenCalled();
+    // R6-security M3: the same reconnect preflight as one platform, for each failed one.
+    expect(connectionFindUniqueMock).toHaveBeenCalledTimes(2);
+    expect(connectionFindUniqueMock).toHaveBeenCalledWith({
+      where: { workspaceId_platform: { workspaceId: "ws-1", platform: "youtube" } },
+      select: { needsReconnect: true },
+    });
     expect(inngestSendMock).toHaveBeenCalledWith({
       id: expect.stringMatching(/^retry-job-1-[0-9a-f-]{36}$/),
       name: "post/retry.requested",
       data: { postJobId: "job-1", userId: "user-1", workspaceId: "ws-1", platforms: ["tiktok", "youtube"] },
     });
+  });
+
+  // R6-security M3: retrying everything ran no reconnect check, so a dead
+  // connection was retried (and failed again) over and over.
+  it("retryAllFailed: asks for a reconnect when a failed platform's connection is dead or gone, and claims nothing", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "tiktok", status: "failed" },
+        { platform: "youtube", status: "failed" },
+        { platform: "x", status: "failed" },
+      ]),
+    );
+    connectionFindUniqueMock.mockImplementation(async ({ where }: { where: { workspaceId_platform: { platform: string } } }) =>
+      where.workspaceId_platform.platform === "youtube"
+        ? { needsReconnect: true }
+        : where.workspaceId_platform.platform === "x"
+          ? null
+          : { needsReconnect: false },
+    );
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "Reconnect YouTube and X in Settings before retrying.",
+      code: "RECONNECT_REQUIRED",
+      platform: "youtube",
+    });
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(retryRefusalMock).not.toHaveBeenCalled();
   });
 
   it("retryAllFailed: only the platforms actually claimed (count>0) go into the event", async () => {
@@ -719,5 +764,57 @@ describe("POST /api/posts/[postJobId]/retry - retriedAt (N3)", () => {
       },
     });
     expect(recomputeStatusMock).toHaveBeenCalledWith("job-1");
+  });
+});
+
+// R6-security M3: retries count. A post may be retried 3 times a day, and each
+// retry counts with the posts toward the per-person and service caps.
+describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
+  it("refuses with the budget's sentence before claiming anything", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    retryRefusalMock.mockResolvedValue({
+      error: "This post has been retried 3 times today, the most for one day. Retry it again tomorrow.",
+      code: "POST_RETRY_LIMIT",
+    });
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: "This post has been retried 3 times today, the most for one day. Retry it again tomorrow.",
+      code: "POST_RETRY_LIMIT",
+    });
+    expect(retryRefusalMock).toHaveBeenCalledWith({ workspaceId: "ws-1", postJobId: "job-1", now: expect.any(Date) });
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(recordRetryMock).not.toHaveBeenCalled();
+  });
+
+  it("records the retry once it was handed to the run, under the event's own request id", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    const { id } = inngestSendMock.mock.calls[0][0] as { id: string };
+    expect(recordRetryMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      postJobId: "job-1",
+      requestId: id.replace(/^retry-job-1-/, ""),
+      at: expect.any(Date),
+    });
+  });
+
+  it("records nothing when the retry could not be started", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    inngestSendMock.mockRejectedValue(new Error("inngest down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(500);
+    expect(recordRetryMock).not.toHaveBeenCalled();
   });
 });

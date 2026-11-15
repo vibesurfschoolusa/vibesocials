@@ -13,6 +13,7 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
+import { recordRetry, retryRefusal } from "@/server/usage/usageLog";
 import { Prisma, type Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -54,6 +55,21 @@ export function parseRetryBody(body: unknown): RetryTarget | { error: string } {
   }
 
   return { error: "Provide `platform` (one) or `retryAllFailed: true`." };
+}
+
+/** "X", "X and YouTube", "X, YouTube and Instagram". */
+function platformList(platforms: Platform[]): string {
+  const labels = platforms.map(platformLabel);
+  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/** Whether `platform` has no connection in the workspace, or one that needs reconnecting. */
+async function needsReconnect(workspaceId: string, platform: Platform): Promise<boolean> {
+  const connection = await prisma.socialConnection.findUnique({
+    where: { workspaceId_platform: { workspaceId, platform } },
+    select: { needsReconnect: true },
+  });
+  return !connection || connection.needsReconnect;
 }
 
 /**
@@ -195,36 +211,37 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  // Reconnect preflight for the single-platform path (the UI's call): if the
-  // connection is dead, retrying would just fail again — surface a reconnect
-  // signal the client can turn into a "Reconnect … in Settings" link, and don't
-  // flip anything to pending.
-  if (target.kind === "platform") {
-    // Team Workspaces (Task 4): the connection lookup now reads the caller's
-    // ACTIVE workspace directly off the context (replaces the Task 2
-    // `resolveWorkspaceForUser` bridge, which always resolved the caller's
-    // PERSONAL workspace — wrong for an invited member acting in someone
-    // else's shared workspace).
-    const connection = await prisma.socialConnection.findUnique({
-      where: {
-        workspaceId_platform: {
-          workspaceId: workspaceContext.workspace.id,
-          platform: target.platform,
-        },
+  // Reconnect preflight for every candidate (R6-security M3: the retry of all
+  // failed platforms runs it too): if a connection is dead, retrying would
+  // just fail again, at the cost of a run. Surface a reconnect signal the
+  // client can turn into a "Reconnect … in Settings" link (`platform`, the
+  // first one), and don't flip anything to pending.
+  // Team Workspaces (Task 4): the connection lookup reads the caller's ACTIVE
+  // workspace directly off the context (replaces the Task 2
+  // `resolveWorkspaceForUser` bridge, which always resolved the caller's
+  // PERSONAL workspace — wrong for an invited member acting in someone
+  // else's shared workspace).
+  const dead: Platform[] = [];
+  for (const platform of candidates) {
+    if (await needsReconnect(workspaceContext.workspace.id, platform)) dead.push(platform);
+  }
+  if (dead.length > 0) {
+    return NextResponse.json(
+      {
+        error: `Reconnect ${platformList(dead)} in Settings before retrying.`,
+        code: "RECONNECT_REQUIRED",
+        platform: dead[0],
       },
-      select: { needsReconnect: true },
-    });
+      { status: 409 },
+    );
+  }
 
-    if (!connection || connection.needsReconnect) {
-      return NextResponse.json(
-        {
-          error: `Reconnect ${platformLabel(target.platform)} in Settings before retrying.`,
-          code: "RECONNECT_REQUIRED",
-          platform: target.platform,
-        },
-        { status: 409 },
-      );
-    }
+  // R6-security M3: a retry costs background runs like a post, so it counts
+  // with the posts: a few per post a day, within the per-person and service
+  // caps. Checked before anything is claimed.
+  const budget = await retryRefusal({ workspaceId: workspaceContext.workspace.id, postJobId, now: new Date() });
+  if (budget) {
+    return NextResponse.json({ error: budget.error, code: budget.code }, { status: 429 });
   }
 
   // IDEMPOTENCY GUARD: atomically claim each candidate (failed -> pending).
@@ -288,6 +305,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // belongs to a run that is, or was, calling the platform, and reverting it to
   // `failed` would tell the user "couldn't start" about a post that may be live
   // (inviting a second post). Its run records the real outcome.
+  const requestId = randomUUID();
   try {
     // Parent job re-enters the running state while the retried platforms publish.
     await prisma.postJob.update({
@@ -309,7 +327,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
           workspaceId: workspaceContext.workspace.id,
           platforms: eligible,
         },
-        randomUUID(),
+        requestId,
       ),
     );
   } catch (error) {
@@ -339,6 +357,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
       { status: 500 },
     );
   }
+
+  // Counted once the run has it; never throws (recordRetry logs a failure).
+  await recordRetry({ workspaceId: workspaceContext.workspace.id, postJobId, requestId, at: new Date() });
 
   return NextResponse.json({ ok: true, retrying: eligible }, { status: 202 });
 }

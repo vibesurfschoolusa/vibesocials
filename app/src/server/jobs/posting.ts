@@ -14,6 +14,7 @@ import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLim
 import { connectionGoneMessage, reconnectRequiredMessage } from "@/lib/publishFailureText";
 import { finishPostJob, recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
+import { serviceCapRefusalAtSend } from "@/server/usage/usageLog";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -1064,7 +1065,7 @@ export function buildRetryEvent(
 /** Outcome of preparing a deferred (scheduled/draft) job for publishing. */
 export type DeferredDispatchResult =
   | { ok: true; event: PublishRequestedEventData }
-  | { ok: false; reason: "NOT_FOUND" | "NO_CONNECTIONS" };
+  | { ok: false; reason: "NOT_FOUND" | "NO_CONNECTIONS" | "LIMIT_REACHED" };
 
 /**
  * Roadmap Phase 5 — the review's KEY correctness fix (§6.3): materialize a
@@ -1101,9 +1102,16 @@ export type DeferredDispatchResult =
  * replayed from the job's `publishMetadata` snapshot (review B1) so the deferred
  * publish honors the privacy the user chose at compose time (a scheduled YouTube
  * "private" stays private, not silently escalated to the client-default unlisted).
+ *
+ * R6-security M2: `serviceCapAt` (the scanner, as a scheduled post falls due)
+ * checks the service's daily cap before the results are made. At the cap,
+ * every platform that would have published gets a failed result that says
+ * why (Retry is there from tomorrow) and the caller gets LIMIT_REACHED. Post
+ * now and approvals pass none: their routes checked the cap before the claim.
  */
 export async function prepareDeferredPostJobDispatch(
   postJobId: string,
+  options: { serviceCapAt?: Date } = {},
 ): Promise<DeferredDispatchResult> {
   const job = await prisma.postJob.findUnique({
     where: { id: postJobId },
@@ -1164,6 +1172,23 @@ export async function prepareDeferredPostJobDispatch(
   // Idempotent: only create the fan-out if it hasn't been created yet, so a
   // retried caller step never duplicates result rows.
   const existingResults = await prisma.postJobResult.count({ where: { postJobId } });
+
+  // A re-run that finds its results made has been past this check already.
+  if (options.serviceCapAt && existingResults === 0 && rows.some((row) => row.status === "pending")) {
+    const refusal = await serviceCapRefusalAtSend({
+      workspaceId: job.workspaceId,
+      postJobId,
+      now: options.serviceCapAt,
+    });
+    if (refusal) {
+      await prisma.postJobResult.createMany({
+        data: rows.map((row) => (row.status === "pending" ? { ...row, status: "failed" as const, ...refusal } : row)),
+      });
+      await recomputeAndStorePostJobStatus(postJobId);
+      return { ok: false, reason: "LIMIT_REACHED" };
+    }
+  }
+
   if (existingResults === 0) {
     await prisma.postJobResult.createMany({ data: rows });
   }

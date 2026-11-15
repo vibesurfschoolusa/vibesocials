@@ -11,6 +11,7 @@ const {
   resultCreateManyMock,
   recomputeMock,
   finishMock,
+  serviceCapMock,
 } = vi.hoisted(() => ({
   postJobFindUniqueMock: vi.fn(),
   postJobUpdateMock: vi.fn(),
@@ -19,6 +20,7 @@ const {
   resultCreateManyMock: vi.fn(),
   recomputeMock: vi.fn(),
   finishMock: vi.fn(),
+  serviceCapMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -35,6 +37,9 @@ vi.mock("./failPendingResults", async (importOriginal) => ({
   recomputeAndStorePostJobStatus: recomputeMock,
   finishPostJob: finishMock,
 }));
+
+// R6-security M2: the service's cap at send has its own suite (usageLog.test.ts).
+vi.mock("@/server/usage/usageLog", () => ({ serviceCapRefusalAtSend: serviceCapMock }));
 
 import { prepareDeferredPostJobDispatch } from "./posting";
 
@@ -65,6 +70,8 @@ beforeEach(() => {
   recomputeMock.mockResolvedValue({ status: "failed", successCount: 0 });
   resultCountMock.mockResolvedValue(0);
   resultCreateManyMock.mockResolvedValue({ count: 0 });
+  serviceCapMock.mockReset();
+  serviceCapMock.mockResolvedValue(null);
 });
 
 describe("prepareDeferredPostJobDispatch", () => {
@@ -553,5 +560,76 @@ describe("prepareDeferredPostJobDispatch - a post without a file", () => {
     expect(resultCreateManyMock.mock.calls[0][0].data.map((r: { platform: string }) => r.platform)).toEqual([
       "google_business_profile",
     ]);
+  });
+});
+
+// R6-security M2: a scheduled post meets the service's cap as it falls due,
+// so posts scheduled far ahead cannot fill a day.
+describe("prepareDeferredPostJobDispatch with the service's cap at send (the scanner)", () => {
+  const NOW = new Date("2026-11-14T15:00:00Z");
+  const FULL = {
+    errorCode: "SERVICE_DAILY_POST_LIMIT",
+    errorMessage:
+      "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
+  };
+  const RECONNECT_IG = {
+    postJobId: "job-1",
+    workspaceId: "workspace-1",
+    platform: "instagram",
+    socialConnectionId: "c-ig",
+    status: "failed",
+    errorCode: "RECONNECT_REQUIRED",
+    errorMessage: "Reconnect Instagram in Settings, then retry.",
+  };
+
+  it("sends below the cap, having asked about this post in its workspace", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob());
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobId: "job-1", now: NOW });
+    expect(result.ok).toBe(true);
+  });
+
+  it("at the cap, every platform gets a failed result that says why, and nothing is sent", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ publishMetadata: { targetPlatforms: ["x", "instagram"] } }));
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-x", platform: "x", needsReconnect: false },
+      { id: "c-ig", platform: "instagram", needsReconnect: true },
+    ]);
+    serviceCapMock.mockResolvedValue(FULL);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "x", socialConnectionId: "c-x", status: "failed", ...FULL },
+        RECONNECT_IG,
+      ],
+    });
+    expect(recomputeMock).toHaveBeenCalledWith("job-1");
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED" });
+  });
+
+  it("a re-run whose results were made already is not checked again", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob());
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+    resultCountMock.mockResolvedValue(1);
+    serviceCapMock.mockResolvedValue(FULL);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+  });
+
+  it("Post now and approvals (no option) are not checked here: their routes checked before the claim", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob());
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+    serviceCapMock.mockResolvedValue(FULL);
+
+    expect((await prepareDeferredPostJobDispatch("job-1")).ok).toBe(true);
+    expect(serviceCapMock).not.toHaveBeenCalled();
   });
 });
