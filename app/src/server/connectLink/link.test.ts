@@ -148,9 +148,19 @@ describe("listLinkConnections", () => {
       select: { accountIdentifier: true, metadata: true, platform: true, expiresAt: true, refreshToken: true, needsReconnect: true },
     });
     expect(connections).toEqual([
-      { platform: "linkedin", accountIdentifier: "li", username: "Surf Co page", locationName: null, needsReconnect: false, reconnectSoon: true },
-      { platform: "tiktok", accountIdentifier: "tt", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: false },
+      { platform: "linkedin", accountIdentifier: "li", username: "Surf Co page", locationName: null, needsReconnect: false, reconnectSoon: true, ended: false },
+      { platform: "tiktok", accountIdentifier: "tt", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: false, ended: false },
     ]);
     expect(JSON.stringify(connections)).not.toContain("sealed");
+  });
+});
+
+describe("listLinkConnections: an end date that has passed", () => {
+  it("is marked ended, so the page says it stopped working", async () => {
+    h.connectionFindMany.mockResolvedValue([
+      { platform: "linkedin", accountIdentifier: "li", metadata: {}, needsReconnect: false, expiresAt: new Date(NOW.getTime() - DAY), refreshToken: null },
+    ]);
+    const [connection] = await listLinkConnections("ws-1");
+    expect(connection).toMatchObject({ reconnectSoon: true, ended: true });
   });
 });

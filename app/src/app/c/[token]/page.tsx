@@ -133,7 +133,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                   // the sign-in replaces it in place (server/connectLink/link.ts).
                   <div className="flex flex-wrap items-center justify-end gap-3">
                     <span className="text-right text-sm text-muted-foreground">
-                      {connected}. It stops working soon: press Reconnect to keep it posting.
+                      {connection.ended
+                        ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
+                        : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
                     </span>
                     {button}
                   </div>

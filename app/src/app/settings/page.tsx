@@ -36,7 +36,7 @@ import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { platformHelpHref } from "@/lib/platformGuides";
 import { platformLabel } from "@/lib/platforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
-import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectionExpiry";
+import { CONNECTION_EXPIRY_SELECT, expiryEnded, inExpiryWarningWindow } from "@/lib/connectionExpiry";
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -111,6 +111,9 @@ export default async function SettingsPage({
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
   const now = new Date();
   const reconnectSoon = rows.filter((row) => inExpiryWarningWindow(row, now)).map((row) => row.platform);
+  const endedAt = Object.fromEntries(
+    rows.filter((row) => expiryEnded(row, now)).map((row) => [row.platform, new Date(row.expiresAt!).toISOString()]),
+  );
 
   // Posting times (brief 11): read here, not carried in every route's context.
   const slotRow = await prisma.workspace.findUnique({
@@ -266,6 +269,7 @@ export default async function SettingsPage({
               workspaceId={context.workspace.id}
               connections={connections}
               reconnectSoon={reconnectSoon}
+              endedAt={endedAt}
               readOnly={context.role !== "owner"}
               // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
               unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}

@@ -37,3 +37,12 @@ export function inExpiryWarningWindow(
   // Includes an expiry that has passed before the daily sweep flagged it.
   return new Date(connection.expiresAt!).getTime() - EXPIRY_WARNING_LEAD_MS <= now.getTime();
 }
+
+/**
+ * Inside the window with the end date already passed (the daily sweep has not
+ * flagged it yet): it no longer works, so the pages say it ended rather than
+ * that it ends soon.
+ */
+export function expiryEnded(connection: Parameters<typeof inExpiryWarningWindow>[0], now: Date = new Date()): boolean {
+  return inExpiryWarningWindow(connection, now) && new Date(connection.expiresAt!).getTime() <= now.getTime();
+}

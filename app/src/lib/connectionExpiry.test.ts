@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EXPIRY_WARNING_LEAD_MS } from "@/server/jobs/connectionHealthSweep";
 
-import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "./connectionExpiry";
+import { CONNECTION_EXPIRY_SELECT, expiryEnded, inExpiryWarningWindow } from "./connectionExpiry";
 
 /**
  * R6-pages M1 / R6-client-journey M1: a connection that cannot be renewed and
@@ -60,5 +60,22 @@ describe("inExpiryWarningWindow", () => {
 
   it("names the columns it needs, so every caller selects the same ones", () => {
     expect(CONNECTION_EXPIRY_SELECT).toEqual({ platform: true, expiresAt: true, refreshToken: true, needsReconnect: true });
+  });
+});
+
+// R6 review low 3: an end date that has passed before the sweep flagged it.
+describe("expiryEnded", () => {
+  it("5 days ahead: not ended (Ends soon)", () => {
+    expect(expiryEnded(linkedIn({ expiresAt: new Date(NOW.getTime() + 5 * DAY) }), NOW)).toBe(false);
+  });
+
+  it("passed and not flagged: ended", () => {
+    expect(expiryEnded(linkedIn({ expiresAt: new Date(NOW.getTime() - DAY) }), NOW)).toBe(true);
+    expect(expiryEnded(linkedIn({ expiresAt: NOW }), NOW)).toBe(true);
+  });
+
+  it("flagged, renewable or far: not this state", () => {
+    expect(expiryEnded(linkedIn({ expiresAt: new Date(NOW.getTime() - DAY), needsReconnect: true }), NOW)).toBe(false);
+    expect(expiryEnded(linkedIn({ expiresAt: new Date(NOW.getTime() - DAY), refreshToken: "sealed" }), NOW)).toBe(false);
   });
 });

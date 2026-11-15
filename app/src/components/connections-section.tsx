@@ -135,6 +135,8 @@ interface ConnectionsSectionProps {
    * Reconnect in place.
    */
   reconnectSoon?: readonly Platform[];
+  /** Of those, the ones whose end date has passed: platform -> end date (ISO). */
+  endedAt?: Partial<Record<Platform, string>>;
 }
 
 export function ConnectionsSection({
@@ -143,6 +145,7 @@ export function ConnectionsSection({
   readOnly = false,
   unavailablePlatforms = [],
   reconnectSoon = [],
+  endedAt = {},
 }: ConnectionsSectionProps) {
   return (
     <>
@@ -229,6 +232,7 @@ export function ConnectionsSection({
                       isConnected
                       needsReconnect={connection.needsReconnect}
                       reconnectSoon={reconnectSoon.includes(key)}
+                      endedAt={endedAt[key] ?? null}
                       readOnly={readOnly}
                     />
                   ) : readOnly ? null : key === "linkedin" ? (

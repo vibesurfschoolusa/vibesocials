@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 import { billingFieldsSelect } from "@/lib/billing";
 import { toConnectionSummary, type ConnectionSummary } from "@/lib/connectionSummary";
 import { connectLinkPlatformConfigured, isConnectLinkTokenShape } from "@/lib/connectLink";
-import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectionExpiry";
+import { CONNECTION_EXPIRY_SELECT, expiryEnded, inExpiryWarningWindow } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { isWorkspaceOwner } from "@/lib/workspace";
@@ -85,8 +85,11 @@ export async function placeTaken(workspaceId: string, platform: Platform): Promi
   return !!existing && !existing.needsReconnect && !inExpiryWarningWindow(existing);
 }
 
-/** A connection as the visitor's page shows it; `reconnectSoon`: offer Reconnect though it still works. */
-export type LinkConnection = ConnectionSummary & { reconnectSoon: boolean };
+/**
+ * A connection as the visitor's page shows it. `reconnectSoon`: offer
+ * Reconnect though it is not flagged; `ended`: its end date has passed.
+ */
+export type LinkConnection = ConnectionSummary & { reconnectSoon: boolean; ended: boolean };
 
 /**
  * The workspace's connections as the visitor's page may show them: the
@@ -98,5 +101,9 @@ export async function listLinkConnections(workspaceId: string): Promise<LinkConn
     select: { accountIdentifier: true, metadata: true, ...CONNECTION_EXPIRY_SELECT },
   });
   const now = new Date();
-  return rows.map((row) => ({ ...toConnectionSummary(row), reconnectSoon: inExpiryWarningWindow(row, now) }));
+  return rows.map((row) => ({
+    ...toConnectionSummary(row),
+    reconnectSoon: inExpiryWarningWindow(row, now),
+    ended: expiryEnded(row, now),
+  }));
 }

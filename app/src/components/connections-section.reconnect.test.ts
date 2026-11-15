@@ -36,9 +36,9 @@ const LINKEDIN: ConnectionSummary = {
   needsReconnect: false,
 };
 
-function linkedInRow(reconnectSoon: ("linkedin" | "youtube")[]): string {
+function linkedInRow(reconnectSoon: ("linkedin" | "youtube")[], endedAt: Record<string, string> = {}): string {
   const html = renderToStaticMarkup(
-    createElement(ConnectionsSection, { workspaceId: "ws-1", connections: [LINKEDIN], reconnectSoon }),
+    createElement(ConnectionsSection, { workspaceId: "ws-1", connections: [LINKEDIN], reconnectSoon, endedAt }),
   );
   // The LinkedIn card: from its label to the next card.
   const start = html.indexOf("Surf Co page");
@@ -52,6 +52,12 @@ describe("Settings, Connections: a LinkedIn connection about to end", () => {
     const html = linkedInRow(["linkedin"]);
     expect(html).toMatch(RECONNECT);
     expect(html).toContain("Ends soon");
+  });
+
+  it("its end date has passed (not flagged yet): Ended <date>", () => {
+    const html = linkedInRow(["linkedin"], { linkedin: "2026-11-12T12:00:00.000Z" });
+    expect(html).toContain("Ended November 12, 2026. Reconnect to keep posting.");
+    expect(html).toMatch(RECONNECT);
   });
 
   it("far from its expiry (another platform in the list): Connected, no Reconnect", () => {

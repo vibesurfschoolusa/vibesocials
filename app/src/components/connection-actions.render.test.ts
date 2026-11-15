@@ -29,7 +29,9 @@ import { ConnectionActions } from "./connection-actions";
  * disconnected first, so the post numbers stay and the save updates the row.
  */
 
-function row(props: { needsReconnect?: boolean; reconnectSoon?: boolean; readOnly?: boolean } = {}): string {
+function row(
+  props: { needsReconnect?: boolean; reconnectSoon?: boolean; endedAt?: string | null; readOnly?: boolean } = {},
+): string {
   return renderToStaticMarkup(
     createElement(ConnectionActions, { platform: "linkedin", workspaceId: "ws-1", isConnected: true, ...props }),
   );
@@ -54,6 +56,14 @@ describe("Settings connection row", () => {
     // Switch account and Disconnect are still there, for a different account.
     expect(html).toContain("Switch account");
     expect(html).toContain("Disconnect");
+  });
+
+  // R6 review low 3: the end date has passed but the sweep has not flagged it yet.
+  it("ended, not flagged yet: says when it ended, with Reconnect, not Ends soon", () => {
+    const html = row({ reconnectSoon: true, endedAt: "2026-11-12T12:00:00.000Z" });
+    expect(html).toContain("Ended November 12, 2026. Reconnect to keep posting.");
+    expect(html).toMatch(RECONNECT_LINK);
+    expect(html).not.toContain("Ends soon");
   });
 
   it("flagged: the danger Reconnect as before", () => {

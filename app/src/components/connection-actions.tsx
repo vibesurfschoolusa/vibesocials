@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { platformLabel } from "@/lib/platforms";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
@@ -39,6 +40,11 @@ interface Props {
    * the save updates this connection in place.
    */
   reconnectSoon?: boolean;
+  /**
+   * R6 review low 3: with reconnectSoon, the end date (ISO) when it has
+   * already passed: the row says it ended instead of "Ends soon".
+   */
+  endedAt?: string | null;
   /**
    * Team Workspaces (Task 7, design §7): connect/disconnect/switch/reconnect
    * are all owner-only mutations. A read-only (member) caller gets the same
@@ -159,6 +165,7 @@ export function ConnectionActions({
   isConnected,
   needsReconnect = false,
   reconnectSoon = false,
+  endedAt = null,
   readOnly = false,
 }: Props) {
   const router = useRouter();
@@ -287,7 +294,13 @@ export function ConnectionActions({
           </a>
         ) : reconnectSoon ? (
           <>
-            <Badge variant="warning">Ends soon</Badge>
+            {endedAt ? (
+              <span className="text-sm text-muted-foreground">
+                Ended {formatDisplayDate(endedAt)}. Reconnect to keep posting.
+              </span>
+            ) : (
+              <Badge variant="warning">Ends soon</Badge>
+            )}
             <a href={authUrl} className={buttonVariants({ size: "sm" })}>
               Reconnect
             </a>

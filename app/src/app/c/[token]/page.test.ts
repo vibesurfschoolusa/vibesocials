@@ -148,6 +148,16 @@ describe("the connect link page", () => {
     expect(html).not.toContain('value="tiktok"');
   });
 
+  it("a connection whose end date passed (not flagged yet) says it stopped working, with Reconnect", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true, ended: true },
+    ]);
+    const html = await render();
+    expect(html).toContain("surfco. It stopped working: press Reconnect.");
+    expect(html).not.toContain("stops working soon");
+    expect(html).toMatch(/value="instagram"[\s\S]*?Reconnect/);
+  });
+
   it("a typed-in success is not told for a connection in its warning window", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true },

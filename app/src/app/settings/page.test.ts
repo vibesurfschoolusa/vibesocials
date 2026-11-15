@@ -394,6 +394,17 @@ describe("SettingsPage — connections about to end", () => {
     expect(JSON.stringify(sectionProps.ConnectionsSection.connections)).not.toContain("expiresAt");
   });
 
+  it("an end date that has passed is passed on with the date, for Ended <date>", async () => {
+    const ended = new Date(Date.now() - DAY);
+    findConnectionsMock.mockResolvedValue([
+      linkedIn({ expiresAt: ended }),
+      { ...linkedIn({ expiresAt: new Date(Date.now() + 5 * DAY) }), platform: "youtube" },
+    ]);
+    await render("owner");
+    expect(sectionProps.ConnectionsSection.reconnectSoon).toEqual(["linkedin", "youtube"]);
+    expect(sectionProps.ConnectionsSection.endedAt).toEqual({ linkedin: ended.toISOString() });
+  });
+
   it("nothing about to end: an empty list", async () => {
     findConnectionsMock.mockResolvedValue([linkedIn({ expiresAt: new Date(Date.now() + 40 * DAY) })]);
     await render("owner");
