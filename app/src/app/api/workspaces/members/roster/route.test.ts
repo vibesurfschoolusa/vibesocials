@@ -74,6 +74,16 @@ describe("GET /api/workspaces/members/roster", () => {
     expect(raw).not.toContain("userId");
   });
 
+  // R15-new-customer L3: the roster keeps the member rule of the one person
+  // label (personLabel(user, false)), so a blank name counts as no name.
+  it("a blank name falls back to the part before the @", async () => {
+    findManyMock.mockResolvedValue([
+      { role: "member", user: { name: "  ", email: "pat.doe@example.com" } },
+    ]);
+    const response = await GET();
+    expect((await response.json()).members).toEqual([{ name: "pat.doe", role: "member" }]);
+  });
+
   it("works for owners too (any-member endpoint)", async () => {
     getWorkspaceContextMock.mockResolvedValue({ ...MEMBER_CONTEXT, role: "owner" });
     findManyMock.mockResolvedValue([]);

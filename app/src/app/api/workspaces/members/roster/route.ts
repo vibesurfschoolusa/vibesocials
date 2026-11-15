@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { personLabel } from "@/lib/usageLimits";
 import { getWorkspaceContext } from "@/lib/workspace";
 
 /**
@@ -9,10 +10,10 @@ import { getWorkspaceContext } from "@/lib/workspace";
  * Member-safe roster (design §7 "member view: names only"): any member of
  * the active workspace gets display names + roles — NEVER emails or user
  * ids (SEC-1; the owner-only GET /api/workspaces/members is the full
- * variant). `name` falls back to the email local-part with the exact
- * post-attribution rule (see GET /api/posts createdBy), so both surfaces
- * show the same label for the same person; the full email never leaves
- * the server on this route.
+ * variant). `name` is the one person label's member rule
+ * (personLabel(user, false), R15-new-customer L3): the name, else the email
+ * local-part, as posts' "by" shows it to members; the full email never
+ * leaves the server on this route, whoever reads it.
  */
 export async function GET() {
   const context = await getWorkspaceContext();
@@ -29,7 +30,7 @@ export async function GET() {
 
   return NextResponse.json({
     members: memberships.map((membership) => ({
-      name: membership.user.name ?? membership.user.email.split("@")[0],
+      name: personLabel(membership.user, false),
       role: membership.role,
     })),
   });

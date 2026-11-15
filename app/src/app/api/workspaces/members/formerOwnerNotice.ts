@@ -2,6 +2,7 @@ import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planIncludes } from "@/lib/planFeatures";
+import { personLabel } from "@/lib/usageLimits";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -230,7 +231,8 @@ export async function noticeOwnersOfFormerOwner(input: {
     const email = buildFormerOwnerEmail({
       workspaceId,
       workspaceName: input.workspaceName,
-      formerOwnerName: former?.name?.trim() || former?.email || "A former owner",
+      // Every reader is an owner: the one person label (R15-new-customer L3).
+      formerOwnerName: former ? personLabel(former, true) || "A former owner" : "A former owner",
       ...links,
       clientLinksIncluded,
       joinLinksRevoked: input.joinLinksRevoked ?? 0,

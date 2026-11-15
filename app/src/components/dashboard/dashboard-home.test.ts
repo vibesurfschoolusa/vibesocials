@@ -1,9 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+const session = vi.hoisted(() => ({ status: "authenticated" as string }));
 vi.mock("next-auth/react", () => ({
-  useSession: () => ({ status: "authenticated", data: { user: { name: "Jane Doe" } } }),
+  useSession: () => ({ status: session.status, data: { user: { name: "Jane Doe" } } }),
 }));
 // The cards fetch on their own; only the header is under test.
 vi.mock("@/components/dashboard/recent-activity", () => ({ RecentActivity: () => null }));
@@ -22,5 +23,21 @@ describe("dashboard header while loading", () => {
   it("has the page's h1", () => {
     const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], setup: null }));
     expect(html).toMatch(/<h1[^>]*>Dashboard<\/h1>/);
+  });
+});
+
+// R15-pages L2: while the browser still loads the session, the page already
+// has its h1 and says it is loading.
+describe("dashboard while the session loads", () => {
+  afterEach(() => {
+    session.status = "authenticated";
+  });
+
+  it("has the page's h1 and one loading line", () => {
+    session.status = "loading";
+    const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], setup: null }));
+    expect(html).toMatch(/<h1 class="sr-only">Dashboard<\/h1>/);
+    expect(html.match(/role="status"/g)).toHaveLength(1);
+    expect(html).toMatch(/<p role="status" class="sr-only">Loading your dashboard…<\/p>/);
   });
 });

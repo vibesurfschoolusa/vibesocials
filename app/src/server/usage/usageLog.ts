@@ -17,7 +17,7 @@ import {
   OWNER_DAILY_POST_LIMIT_CODE,
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
-  limitHolderName,
+  personLabel,
   personalPostLimitApplies,
   LIMIT_CHECK_FAILED_CODE,
   LIMIT_CHECK_FAILED_MESSAGE,
@@ -623,7 +623,7 @@ export async function ownersPersonalUsage(workspaceId: string, now: Date, viewer
   return Promise.all(
     who.owners.map(async (owner) => ({
       userId: owner.userId,
-      name: limitHolderName(owner.user, readerIsOwner),
+      name: personLabel(owner.user, readerIsOwner),
       isViewer: viewerUserId === owner.userId,
       used: await ownerCountOnDay(owner.userId, now, []),
       ...ownerDailyPostLimit(owner.user, now),
@@ -819,7 +819,7 @@ async function refusalFor(
         const holder = {
           // R13-security L1 and R14-pages L2: a member never reads an owner's full
           // address; an owner reads the label Settings, Usage shows them.
-          name: limitHolderName(owner.user, who.owners.some((o) => o.userId === input.viewerUserId)),
+          name: personLabel(owner.user, who.owners.some((o) => o.userId === input.viewerUserId)),
           coOwned: who.owners.length > 1,
           isViewer: input.viewerUserId === owner.userId,
         };

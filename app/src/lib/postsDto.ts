@@ -178,8 +178,9 @@ export interface PostJobDTO {
   } | null;
   /**
    * Team Workspaces (Task 4) — display name of the job's creator, always
-   * included by the API. `name` falls back to the email local-part when the
-   * user has no display name set; NEVER the full email (SEC-1). `null` only
+   * included by the API, by the one person label (personLabel): with no
+   * display name, an owner reader gets the full email (as on the Team card),
+   * anyone else the email local-part, never the address (SEC-1). `null` only
    * when the creator relation is missing. The UI decides when to render this
    * (design doc §7 — only in workspaces with >1 member; see
    * `PostsResponse.workspaceMemberCount`).
