@@ -49,8 +49,9 @@ export function billingOnLastUpdated(
  * The privacy policy's own text date (F7, 2026-11-14: it now names every
  * number the app reads back, what clients send through links and what goes to
  * the AI provider). The Terms did not change, so they keep the shared date.
+ * 2026-11-15 (R9-pages L3): it says how long the limits' post counts are kept.
  */
-export const PRIVACY_LAST_UPDATED = "November 14, 2026";
+export const PRIVACY_LAST_UPDATED = "November 15, 2026";
 
 /**
  * The privacy policy's "Last updated": the latest of its own date, the shared
