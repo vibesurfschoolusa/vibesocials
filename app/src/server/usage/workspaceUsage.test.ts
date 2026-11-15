@@ -469,7 +469,7 @@ describe("checkXMonthlyLimit", () => {
     await expect(checkXMonthlyLimit("ws-1", NOW)).resolves.toEqual({
       errorCode: "X_MONTHLY_LIMIT",
       errorMessage:
-        "This X account has used its 30 X posts for November, counted across every workspace it posts from. X posts start again on 1 December.",
+        "This X account has used its 30 X posts for November, counted across every workspace it posts from. X posts start again on December 1, 2026.",
       notifyOwners: expect.any(Function),
     });
   });

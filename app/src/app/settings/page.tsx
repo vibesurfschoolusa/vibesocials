@@ -426,6 +426,7 @@ export default async function SettingsPage({
                 growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}
                 noPlanYet={planNoPlanYet(context.role, planWorkspace, new Date())}
                 personalPostNote={personalPostNote}
+                timeZone={context.user.timeZone ?? null}
               />
             </section>
           ) : null}
@@ -449,7 +450,9 @@ export default async function SettingsPage({
               {/* R1 L4: with billing on and a plan action on offer, a higher limit
                   is another plan: the owner changes it under Plan; a member asks
                   the owner. Otherwise (billing off, an exempt workspace, payments
-                  not set up): write in, as before. */}
+                  not set up): write in, as before. R9-pages L5: only this
+                  workspace's own limits; the per-person number is the same
+                  for everyone and its rows say so. */}
               <p className="mt-1 text-sm text-muted-foreground">
                 What this workspace has used of its limits.{" "}
                 {usagePlanChange && context.role === "member" ? (
@@ -460,11 +463,12 @@ export default async function SettingsPage({
                     <a href="#plan" className="underline underline-offset-2 hover:text-foreground">Plan</a>.
                   </>
                 ) : (
-                  <>For a higher limit, write to {SUPPORT_EMAIL}.</>
+                  <>For a higher limit on this workspace, write to {SUPPORT_EMAIL}.</>
                 )}
               </p>
             </div>
-            <UsageSection usage={usage} />
+            {/* R9-pages L7: the first-day note in the viewer's own time. */}
+            <UsageSection usage={usage} timeZone={context.user.timeZone ?? null} />
           </section>
 
           <section>

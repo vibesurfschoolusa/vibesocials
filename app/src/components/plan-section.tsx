@@ -1,23 +1,36 @@
 import { PlanActions, type PlanOfferView } from "@/components/plan-actions";
 import { Card } from "@/components/ui/card";
+import { billingEnabled } from "@/lib/billing";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { GROWTH_ADDS_LINE, planIncludesLine } from "@/lib/plans";
-import { formatStorageGb, OWNER_DAILY_POST_LIMIT } from "@/lib/usageLimits";
+import { firstDayEndsLocal, formatStorageGb, OWNER_DAILY_POST_LIMIT, type ReducedNoteTime } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
 import { NO_PLAN_CANCEL_LATER_LINE, type PersonalPostNote } from "./planSectionView";
 
 export const PLAN_SWITCH_LINE = "To switch plans, use Manage plan, card and invoices.";
 
-/** R8-new-customer L1: the viewer's own number beside the workspace's, with its reason when lower. */
-function personalPostNoteText(note: PersonalPostNote): string {
+/**
+ * R8-new-customer L1: the viewer's own number beside the workspace's, with
+ * its reason when lower. R9-pages L1: both reasons on an unconfirmed
+ * account's first day. R9-pages L4: with billing on only free workspaces
+ * count. The first day's end is given in the viewer's own time when known.
+ */
+function personalPostNoteText(note: PersonalPostNote, time: ReducedNoteTime): string {
+  const free = billingEnabled();
+  const yours = free ? "your free workspaces" : "all your workspaces";
+  const local = firstDayEndsLocal(time);
+  const fromMidnight = `from 00:00 UTC${local ? ` (${local})` : ""}`;
   if (note.reduced === "unconfirmed") {
-    return `(up to ${note.limit} a day for you across all your workspaces until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`;
+    return `(up to ${note.limit} a day for you across ${yours} until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`;
   }
   if (note.reduced === "first_day") {
-    return `(up to ${note.limit} a day for you across all your workspaces on your account's first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`;
+    return `(up to ${note.limit} a day for you across ${yours} on your account's first day, then ${OWNER_DAILY_POST_LIMIT} ${fromMidnight})`;
   }
-  return `(each person can send up to ${note.limit} a day across all their workspaces)`;
+  if (note.reduced === "first_day_unconfirmed") {
+    return `(up to ${note.limit} a day for you today: your account is new and your email isn't confirmed yet. ${OWNER_DAILY_POST_LIMIT} ${fromMidnight} once you confirm it.)`;
+  }
+  return `(each person can send up to ${note.limit} a day across ${free ? "their free workspaces" : "all their workspaces"})`;
 }
 
 /**
@@ -40,6 +53,7 @@ export function PlanSection({
   growthAdds = false,
   noPlanYet = false,
   personalPostNote = null,
+  timeZone = null,
 }: {
   /** The workspace this page was rendered for; the plan buttons send it (F3). */
   workspaceId: string;
@@ -61,6 +75,8 @@ export function PlanSection({
   noPlanYet?: boolean;
   /** R8-new-customer L1: the viewer's own number, where the per-person limit applies (planPersonalPostNote). */
   personalPostNote?: PersonalPostNote | null;
+  /** R9-pages L1: the viewer's own zone (User.timeZone), for when the first day ends. */
+  timeZone?: string | null;
 }) {
   return (
     <Card className="flex flex-col gap-3 p-6">
@@ -72,7 +88,10 @@ export function PlanSection({
           <div className="flex justify-between gap-2 sm:block">
             <dt className="text-muted-foreground">Posts per day</dt>
             <dd>
-              {personalPostNote ? `${usage.postsToday.limit} ${personalPostNoteText(personalPostNote)}` : usage.postsToday.limit}
+              {personalPostNote
+                ? // The first day ends when today's count starts again (00:00 UTC).
+                  `${usage.postsToday.limit} ${personalPostNoteText(personalPostNote, { firstDayEnds: usage.postsToday.resetsAt ?? undefined, timeZone })}`
+                : usage.postsToday.limit}
             </dd>
           </div>
           <div className="flex justify-between gap-2 sm:block">
