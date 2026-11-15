@@ -30,6 +30,13 @@ interface AccountSectionProps {
 
 const GOOGLE_ONLY = "You sign in with Google, so this account has no password to change.";
 const PASSWORD_CHANGED = "Password changed. Sign in again with your new password.";
+const GOOGLE_ONLY_EMAIL =
+  "You sign in with Google, so your sign-in email is your Google account's address. To use another address, set a password with Forgot password on the sign-in page, then change it here.";
+
+/** R5 new-customer L4: nothing changes until the link sent to the new address is followed. */
+export function emailChangeSentMessage(newEmail: string, currentEmail: string): string {
+  return `If no other account uses ${newEmail}, we sent a link to it. Open that email within 24 hours to finish the change. Until then, you sign in with ${currentEmail}.`;
+}
 
 function scheduledNote(count: number): string {
   if (count === 0) return "no scheduled posts";
@@ -41,13 +48,18 @@ async function errorFrom(response: Response, fallback: string): Promise<string> 
   return data?.error ?? fallback;
 }
 
-/** Settings → Account: sign-in email, change password, delete account. */
+/** Settings → Account: sign-in email (and changing it), change password, delete account. */
 export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan = false }: AccountSectionProps) {
   return (
     <Card className="flex flex-col gap-8 p-6">
-      <div>
+      <div className="flex flex-col gap-2">
         <h3 className="text-sm font-medium text-foreground">Sign-in email</h3>
-        <p className="mt-1 text-sm text-muted-foreground">{email}</p>
+        <p className="text-sm text-muted-foreground">{email}</p>
+        {hasPassword ? (
+          <ChangeEmailForm email={email} />
+        ) : (
+          <p className="text-sm text-muted-foreground">{GOOGLE_ONLY_EMAIL}</p>
+        )}
       </div>
 
       <div className="flex flex-col gap-2 border-t border-border pt-6">
@@ -67,6 +79,101 @@ export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan =
         <DeleteAccount hasPassword={hasPassword} deletion={deletion} cancelsPaidPlan={cancelsPaidPlan} />
       </div>
     </Card>
+  );
+}
+
+/**
+ * R5 new-customer L4: asks for a link to the new address
+ * (api/auth/change-email). `startOpen` shows the form at once (tests).
+ */
+export function ChangeEmailForm({ email, startOpen = false }: { email: string; startOpen?: boolean }) {
+  const [open, setOpen] = useState(startOpen);
+  const [newEmail, setNewEmail] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/auth/change-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newEmail, currentPassword }),
+      });
+      if (!response.ok) {
+        setError(
+          await errorFrom(response, "We couldn't start the change. Your email is unchanged. Please try again in a minute."),
+        );
+        return;
+      }
+      setSentTo(newEmail.trim());
+      setCurrentPassword("");
+    } catch {
+      setError("We couldn't reach Vibe Socials, so your email is unchanged. Check your internet connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (sentTo) {
+    return <Alert variant="success">{emailChangeSentMessage(sentTo, email)}</Alert>;
+  }
+
+  if (!open) {
+    return (
+      <div>
+        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+          Change email
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="new-email">New email</Label>
+        <Input
+          id="new-email"
+          type="email"
+          autoComplete="email"
+          required
+          value={newEmail}
+          onChange={(event) => setNewEmail(event.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          We send a link to this address. The change is made when you open it, and every device is signed out.
+        </p>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="change-email-password">Current password</Label>
+        <Input
+          id="change-email-password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={currentPassword}
+          onChange={(event) => setCurrentPassword(event.target.value)}
+        />
+      </div>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
+          Send confirmation link
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 

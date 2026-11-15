@@ -24,6 +24,8 @@ vi.mock("@/lib/logger", () => ({
 
 import {
   buildAccountDeletedEmail,
+  buildEmailChangeEmail,
+  buildEmailChangedNoticeEmail,
   buildPasswordChangedEmail,
   buildPasswordResetEmail,
   buildVerifyEmail,
@@ -109,6 +111,44 @@ describe("buildPasswordChangedEmail", () => {
   });
 });
 
+// R5 new-customer L4.
+describe("buildEmailChangeEmail", () => {
+  it("asks the new address to confirm, with the token only in a link fragment", () => {
+    const { subject, html, text } = buildEmailChangeEmail({
+      to: "new@example.com",
+      rawToken: RAW_TOKEN,
+      baseUrl: `${BASE_URL}/`,
+    });
+    const link = `${BASE_URL}/verify-email/new-address#${RAW_TOKEN}`;
+
+    expect(subject).toBe("Confirm your new Vibe Socials email");
+    expect(html).toContain(link);
+    expect(text).toContain(link);
+    expect(countOccurrences(html, RAW_TOKEN)).toBe(1);
+    expect(countOccurrences(text, RAW_TOKEN)).toBe(1);
+    expect(text).toContain("expires in 24 hours");
+    expect(text).toContain("ignore this email");
+  });
+});
+
+describe("buildEmailChangedNoticeEmail", () => {
+  it("tells the old address where the account went and what to do if it was not them", () => {
+    const { subject, html, text } = buildEmailChangedNoticeEmail({ newEmail: "new@example.com" });
+
+    expect(subject).toBe("Your Vibe Socials sign-in email was changed");
+    for (const body of [html, text]) {
+      expect(body).toContain("new@example.com");
+      expect(body).toContain("signed out");
+      expect(body).toContain(SUPPORT_EMAIL);
+    }
+  });
+
+  it("escapes the address it names", () => {
+    const { html } = buildEmailChangedNoticeEmail({ newEmail: "a<b>@example.com" });
+    expect(html).not.toContain("<b>");
+  });
+});
+
 describe("buildAccountDeletedEmail", () => {
   it("confirms the deletion and names the support address", () => {
     const { subject, html, text } = buildAccountDeletedEmail();
@@ -181,7 +221,10 @@ describe("deliverAccountEmail", () => {
 
     await expect(deliverAccountEmail("user@example.com", email)).resolves.toBe(false);
 
-    expect(consoleSpy).toHaveBeenCalled();
+    // R5 pages L1: the failure is logged without the recipient's address.
+    const logged = JSON.stringify([consoleSpy.mock.calls, loggerErrorMock.mock.calls]);
+    expect(logged).toContain("Failed to send account email");
+    expect(logged).not.toContain("user@example.com");
   });
 
   // Resend 6.x does NOT throw on an API rejection (bad key, invalid sender,

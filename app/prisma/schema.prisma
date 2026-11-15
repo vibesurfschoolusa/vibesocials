@@ -166,6 +166,7 @@ model User {
   postJobs             PostJob[]
   postMetrics          PostMetric[]
   accountTokens        AccountToken[]
+  emailChangeRequests  EmailChangeRequest[]
 }
 
 // Short-lived server-side store for OAuth handshakes that cannot put secrets
@@ -332,6 +333,25 @@ model AccountToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, type])
+}
+
+// R5 new-customer L4: a signed-in person's request to change their sign-in
+// email, confirmed by a link sent to the new address. Stored like
+// AccountToken (only the sha256 of the raw token), with the address it would
+// set. Its own table so AccountToken and its type list stay as they are.
+model EmailChangeRequest {
+  id        String    @id @default(cuid())
+  userId    String
+  // normalizeEmail() form, like User.email.
+  newEmail  String
+  tokenHash String    @unique // sha256 hex of the raw token
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model SocialConnection {

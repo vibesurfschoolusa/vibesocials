@@ -115,6 +115,44 @@ export function buildVerifyEmail(opts: BuildAccountEmailOptions): AccountEmail {
 }
 
 /**
+ * R5 new-customer L4: sent to the NEW address when a signed-in person asks to
+ * change their sign-in email. Following the link makes the change.
+ */
+export function buildEmailChangeEmail(opts: BuildAccountEmailOptions): AccountEmail {
+  const subject = "Confirm your new Vibe Socials email";
+  const { html, text } = renderAccountEmail(opts.rawToken, opts.baseUrl, {
+    heading: "Confirm your new email address",
+    intro:
+      "Someone signed in to Vibe Socials asked to use this address to sign in from now on. Use the link below to confirm it, and the change is made.",
+    actionLabel: "Use this email address",
+    path: "/verify-email/new-address",
+    expiryNote:
+      "This link expires in 24 hours. If you didn't ask for this, ignore this email: nothing changes.",
+  });
+  return { subject, html, text };
+}
+
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+/**
+ * R5 new-customer L4: sent to the OLD address once the change is made, so the
+ * owner of that mailbox learns of it. The new address is the person's own
+ * input, so the HTML escapes it.
+ */
+export function buildEmailChangedNoticeEmail(opts: { newEmail: string }): AccountEmail {
+  const subject = "Your Vibe Socials sign-in email was changed";
+  const heading = "Your sign-in email was changed";
+  const paragraphs = (address: string) => [
+    `Your Vibe Socials account now signs in with ${address}, and every device was signed out. If you did this, there is nothing else to do.`,
+    `If it was not you, write to ${SUPPORT_EMAIL} right away so we can give the account back.`,
+  ];
+  const escaped = opts.newEmail.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+  const html = ["<div>", `<h1>${heading}</h1>`, ...paragraphs(escaped).map((p) => `<p>${p}</p>`), "</div>"].join("");
+  const text = [heading, "", ...paragraphs(opts.newEmail).flatMap((p) => [p, ""]), "— Vibe Socials"].join("\n");
+  return { subject, html, text };
+}
+
+/**
  * Renders a short notice with no link token. `paragraphs` are fixed copy plus
  * our own origin and support address, none of which hold HTML-special
  * characters, so no escaping is needed.
@@ -191,10 +229,10 @@ export async function deliverAccountEmail(to: string, email: AccountEmail): Prom
   } catch (error) {
     // Best-effort: swallow + log. Never throw — an auth route must complete
     // (and return its uniform response) regardless of email delivery.
-    console.error("[Account] Failed to send account email", {
-      to,
+    // R5 pages L1: never the recipient's address, which is personal data.
+    logger.error("[Account] Failed to send account email", {
       subject: email.subject,
-      error,
+      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
     });
     return false;
   }
