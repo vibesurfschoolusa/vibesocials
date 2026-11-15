@@ -1155,17 +1155,24 @@ describe("a reconnect keeps the same account", () => {
         : json({ access_token: "gbp-access", token_type: "Bearer" });
   }
 
-  it.each([403, 404])("google_business_profile: the new account can't read the chosen location (%i): unchanged, refused", async (code) => {
-    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
-    fetchMock.mockImplementation(gbpProvider(code));
-    findUniqueMock.mockResolvedValue(GBP_STORED);
+  // R6 third review: never refused as another account; the location is cleared for the chooser.
+  it.each([403, 404])(
+    "google_business_profile: the new account can't use the chosen location (%i): saved, location cleared, chooser asked",
+    async (code) => {
+      getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+      fetchMock.mockImplementation(gbpProvider(code));
+      findUniqueMock.mockResolvedValue(GBP_STORED);
 
-    const loc = location(await gbpGET(callbackRequest("google_business_profile", signedState())));
+      const loc = location(await gbpGET(callbackRequest("google_business_profile", signedState())));
 
-    expect(loc.searchParams.get("error")).toBe("google_business_profile_different_account");
-    expect(loc.searchParams.get("signed_in_as")).toBe("a different Google Business Profile account");
-    expectNoConnectionWrites();
-  });
+      expect(loc.pathname).toBe("/settings");
+      expect(loc.searchParams.get("success")).toBe("google_business_profile_connected");
+      expect(loc.searchParams.get("location_cleared")).toBe("Surf Co Dania");
+      expect(loc.searchParams.get("error")).toBeNull();
+      const update = updateManyMock.mock.calls[0][0] as { data: { metadata: Record<string, unknown> } };
+      expect(update.data.metadata).toMatchObject({ locationName: null, locationTitle: null });
+    },
+  );
 
   it("google_business_profile: the location couldn't be read (500): unchanged, try again", async () => {
     getCurrentUserMock.mockResolvedValue({ id: STATE_USER });

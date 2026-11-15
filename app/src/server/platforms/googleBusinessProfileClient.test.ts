@@ -1023,3 +1023,21 @@ describe("googleBusinessProfileClient.publishText - a post without a photo", () 
     expect(buildLocalPostBody("hi", null)).toEqual({ languageCode: "en-US", topicType: "STANDARD", summary: "hi" });
   });
 });
+
+// R6 third review: a reconnect with another Google account clears the location
+// until the owner chooses one; a post due meanwhile fails with the sentence
+// that says to set it, and nothing is sent to Google.
+describe("googleBusinessProfileClient: no location chosen", () => {
+  it("a scheduled post fails with the existing choose-a-location sentence", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const context = makeContext();
+    context.socialConnection = { ...context.socialConnection, metadata: { locationName: null, locationTitle: null } } as SocialConnection;
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(context));
+
+    expect(error?.code).toBe("GBP_NO_LOCATION_NAME");
+    expect(error?.message).toBe("Google Business Profile location is not configured. Set it from the Connections page.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

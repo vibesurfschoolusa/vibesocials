@@ -10,7 +10,6 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
-import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -72,10 +71,15 @@ export function connectionAccountKey(row: { platform: Platform; accountIdentifie
 }
 
 export type SaveConnectionResult =
-  | { ok: true }
+  /**
+   * Saved. `locationCleared` (Business Profile only): the chosen location
+   * isn't available to the account signed in to, so it was cleared and the
+   * owner chooses again; its title, for the sentence ("" when it had none).
+   */
+  | { ok: true; locationCleared?: string }
   /** A connection with another account is there; nothing was written. */
   | { ok: false; reason: "different_account"; connectedName: string; signedInName: string }
-  /** Google Business Profile: whether the new account manages the chosen location couldn't be checked. */
+  /** Google Business Profile: the chosen location couldn't be checked with the new sign-in; nothing was written. */
   | { ok: false; reason: "check_failed"; connectedName: string };
 
 type StoredConnection = {
@@ -96,36 +100,62 @@ function locationIdOf(resourceName: string): string | null {
   return match ? match[1] : null;
 }
 
+const ACCOUNT_MANAGEMENT_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
+
+/** What the new sign-in can do with the Business Profile location the connection posts to. */
+type GbpLocationCheck = "kept" | "unavailable" | "check_failed";
+
+async function gbpGet(url: string | URL, accessToken: string): Promise<Response> {
+  return fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
+}
+
 /**
- * R6 second review 1: whether the Google account just signed in to manages the
- * location this Business Profile connection posts to, read with the NEW token
- * (one Business Information call, readMask=name). 200: the same account;
- * 403/404: another one; anything else (429, 5xx, network): it couldn't be
- * told. A connection with no location chosen yet has nothing to compare.
+ * A store code is found only among the locations the signed-in account
+ * manages: exactly one match keeps it; none, or more than one, makes it
+ * unavailable. Any failed list (an account's 5xx included) is check_failed,
+ * never "not found" (the shared resolver skips such an account).
  */
-async function gbpVerdict(existing: StoredConnection, accessToken: unknown): Promise<"same" | "different" | "check_failed"> {
+async function checkGbpStoreCode(storeCode: string, accessToken: string): Promise<GbpLocationCheck> {
+  const accountsResponse = await gbpGet(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, accessToken);
+  if (!accountsResponse.ok) return "check_failed";
+  const accounts = ((await accountsResponse.json()) as { accounts?: { name?: string }[] }).accounts ?? [];
+  let matches = 0;
+  for (const account of accounts) {
+    if (!account.name) continue;
+    const url = new URL(`${BUSINESS_INFO_BASE}/${account.name}/locations`);
+    url.searchParams.set("readMask", "name,storeCode");
+    url.searchParams.set("filter", `storeCode="${storeCode}"`);
+    const response = await gbpGet(url, accessToken);
+    if (!response.ok) return "check_failed";
+    const locations = ((await response.json()) as { locations?: { name?: string; storeCode?: string }[] }).locations ?? [];
+    matches += locations.filter((location) => location.name && location.storeCode === storeCode).length;
+  }
+  return matches === 1 ? "kept" : "unavailable";
+}
+
+/**
+ * R6 third review: whether the location this Business Profile connection
+ * posts to can be used by the Google account just signed in to, read with the
+ * NEW token (one Business Information call, readMask=name). 200: kept;
+ * 403/404 (another account, or the location deleted on Google): unavailable,
+ * and the location is cleared so the chooser asks again; anything else (429,
+ * 5xx, network): it couldn't be told, and nothing is written. No location
+ * chosen yet: nothing to check.
+ */
+async function checkGbpLocation(existing: StoredConnection, accessToken: unknown): Promise<GbpLocationCheck> {
   const metadata = (existing.metadata ?? {}) as Record<string, unknown>;
   const locationName = typeof metadata.locationName === "string" ? metadata.locationName.trim() : "";
-  if (!locationName) return "same";
+  if (!locationName) return "kept";
   if (typeof accessToken !== "string" || !accessToken) return "check_failed";
   try {
-    let locationId = locationIdOf(locationName);
-    if (!locationId) {
-      // A store code: found only among the locations this account manages.
-      try {
-        locationId = locationIdOf(await resolveGbpLocationName(accessToken, locationName));
-      } catch (error) {
-        return (error as { code?: unknown } | null)?.code === "GBP_STORE_CODE_NOT_FOUND" ? "different" : "check_failed";
-      }
-      if (!locationId) return "check_failed";
-    }
-    const response = await fetchWithTimeout(
+    const locationId = locationIdOf(locationName);
+    if (!locationId) return await checkGbpStoreCode(locationName, accessToken);
+    const response = await gbpGet(
       `${BUSINESS_INFO_BASE}/locations/${encodeURIComponent(locationId)}?readMask=name`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-      GBP_CHECK_TIMEOUT_MS,
+      accessToken,
     );
-    if (response.ok) return "same";
-    if (response.status === 403 || response.status === 404) return "different";
+    if (response.ok) return "kept";
+    if (response.status === 403 || response.status === 404) return "unavailable";
     logger.warn("[GBP] Couldn't check the location with the new sign-in", { connectionId: existing.id, status: response.status });
     return "check_failed";
   } catch (error) {
@@ -137,12 +167,11 @@ async function gbpVerdict(existing: StoredConnection, accessToken: unknown): Pro
   }
 }
 
-/** Is the stored connection for the same account as the sign-in? */
-async function sameAccountVerdict(
+/** Is the stored connection for the same account as the sign-in? (Not Business Profile: see checkGbpLocation.) */
+function sameAccount(
   existing: StoredConnection,
-  incoming: { platform: Platform; accountIdentifier: string; metadata: unknown; accessToken: unknown },
-): Promise<"same" | "different" | "check_failed"> {
-  if (incoming.platform === Platform.google_business_profile) return gbpVerdict(existing, incoming.accessToken);
+  incoming: { platform: Platform; accountIdentifier: string; metadata: unknown },
+): boolean {
   let stored = connectionAccountKey(existing);
   let signedIn = connectionAccountKey(incoming);
   // A Pinterest row from before the account id was kept: compare usernames.
@@ -151,7 +180,7 @@ async function sameAccountVerdict(
     signedIn = incoming.accountIdentifier || null;
   }
   if (stored === null || signedIn === null) stored = signedIn = null;
-  return stored === signedIn ? "same" : "different";
+  return stored === signedIn;
 }
 
 const SAVE_ATTEMPTS = 3;
@@ -206,10 +235,23 @@ export async function saveSocialConnection({
       }
     }
 
-    const verdict = await sameAccountVerdict(existing, incoming);
     const connectedName = connectedAccountName(toConnectionSummary(existing));
-    if (verdict === "check_failed") return { ok: false, reason: "check_failed", connectedName };
-    if (verdict === "different") {
+    let data = update;
+    let locationCleared: string | undefined;
+    if (platform === Platform.google_business_profile) {
+      // R6 third review: never refused as another account. The new token is
+      // saved in place; a location it can't use is cleared for the chooser.
+      const location = await checkGbpLocation(existing, create.accessToken);
+      if (location === "check_failed") return { ok: false, reason: "check_failed", connectedName };
+      if (location === "unavailable") {
+        const metadata = (existing.metadata ?? {}) as Record<string, unknown>;
+        locationCleared = typeof metadata.locationTitle === "string" ? metadata.locationTitle : "";
+        data = {
+          ...update,
+          metadata: { ...metadata, locationName: null, locationTitle: null } as Prisma.InputJsonValue,
+        };
+      }
+    } else if (!sameAccount(existing, incoming)) {
       return {
         ok: false,
         reason: "different_account",
@@ -219,9 +261,9 @@ export async function saveSocialConnection({
     }
     const { count } = await prisma.socialConnection.updateMany({
       where: { id: existing.id, updatedAt: existing.updatedAt },
-      data: update,
+      data,
     });
-    if (count === 1) return { ok: true };
+    if (count === 1) return locationCleared === undefined ? { ok: true } : { ok: true, locationCleared };
     // The row changed after it was compared: read it again.
   }
   throw new Error("The connection kept changing while it was being saved.");

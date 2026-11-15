@@ -10,6 +10,8 @@ import {
 } from "@/lib/connectLink";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
 import {
+  LOCATION_CLEARED_LINK_MESSAGE,
+  LOCATION_CLEARED_PARAM,
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
@@ -89,8 +91,13 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const differentFrom = differentPlatform ? byPlatform.get(differentPlatform) : undefined;
   const uncheckedPlatform = accountCheckFailedPlatform(outcome.get("error"));
   const uncheckedFrom = uncheckedPlatform ? byPlatform.get(uncheckedPlatform) : undefined;
-  const result =
-    differentPlatform && differentFrom
+  // R6 third review: a Business Profile reconnect whose location this Google
+  // account can't use was saved with it cleared; the owner chooses it.
+  const locationCleared =
+    outcome.get("success") === "google_business_profile_connected" && first(query[LOCATION_CLEARED_PARAM]) !== null;
+  const result = locationCleared
+    ? { variant: "success" as const, message: LOCATION_CLEARED_LINK_MESSAGE }
+    : differentPlatform && differentFrom
       ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }

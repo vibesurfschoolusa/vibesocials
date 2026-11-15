@@ -87,3 +87,18 @@ export function refusedSaveSettingsUrl(base: string | URL, platform: Platform, r
   url.searchParams.set(SIGNED_IN_AS_PARAM, refusal.signedInName.slice(0, NAME_MAX_CHARS));
   return url;
 }
+
+/**
+ * R6 third review: Google Business Profile is never refused as another
+ * account. When the chosen location isn't available to the Google account
+ * signed in to, the reconnect is saved with the location cleared, and this
+ * parameter carries the old location's title ("" when it had none).
+ */
+export const LOCATION_CLEARED_PARAM = "location_cleared";
+
+export function locationClearedSettingsMessage(oldTitle: string | null | undefined): string {
+  const title = oldTitle?.trim().slice(0, 200) || "The location you chose";
+  return `Reconnected. Choose the location to post to; ${title} isn't available to this Google account.`;
+}
+
+export const LOCATION_CLEARED_LINK_MESSAGE = "Connected. The workspace owner will choose the location.";

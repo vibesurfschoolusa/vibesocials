@@ -33,11 +33,13 @@ import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
 import {
+  LOCATION_CLEARED_PARAM,
   SIGNED_IN_AS_PARAM,
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
   differentAccountPlatform,
+  locationClearedSettingsMessage,
   settingsDifferentAccountMessage,
   signedInNameFromQuery,
 } from "@/lib/differentAccount";
@@ -62,7 +64,13 @@ export const metadata: Metadata = {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; success?: string; billing?: string; signed_in_as?: string }>;
+  searchParams: Promise<{
+    error?: string;
+    success?: string;
+    billing?: string;
+    signed_in_as?: string;
+    location_cleared?: string;
+  }>;
 }) {
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
   // (null when unauthenticated, same as a bare getCurrentUser() check) and
@@ -123,6 +131,13 @@ export default async function SettingsPage({
   // changed; the sentence names both, the connected one from this workspace.
   const differentPlatform = differentAccountPlatform(params.error);
   const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
+  if (params.success === "google_business_profile_connected" && params[LOCATION_CLEARED_PARAM] !== undefined) {
+    oauthResult = {
+      variant: "success",
+      platform: "google_business_profile",
+      message: locationClearedSettingsMessage(params[LOCATION_CLEARED_PARAM]),
+    };
+  }
   const uncheckedPlatform = accountCheckFailedPlatform(params.error);
   const uncheckedFrom = uncheckedPlatform && connections.find((c) => c.platform === uncheckedPlatform);
   if (uncheckedPlatform && uncheckedFrom) {

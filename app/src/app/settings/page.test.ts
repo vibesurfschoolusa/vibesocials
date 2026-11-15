@@ -464,3 +464,26 @@ describe("SettingsPage — a Business Profile reconnect that couldn't be checked
     expect(html).toContain("We couldn&#x27;t check that this Google account manages Surf Co Dania. Try again in a minute.");
   });
 });
+
+// R6 third review: a Business Profile reconnect whose location this Google account can't use.
+describe("SettingsPage — a Business Profile reconnect that cleared the location", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  it("says it reconnected, names the location that isn't available, and asks for one", async () => {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "google_business_profile", accountIdentifier: "google_business_profile", metadata: { locationName: null }, needsReconnect: false, expiresAt: null, refreshToken: "sealed" },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = renderToStaticMarkup(
+      (await SettingsPage({
+        searchParams: Promise.resolve({ success: "google_business_profile_connected", location_cleared: "Surf Co Dania" }),
+      })) as ReactElement,
+    );
+
+    expect(html).toContain("Reconnected. Choose the location to post to; Surf Co Dania isn&#x27;t available to this Google account.");
+  });
+});

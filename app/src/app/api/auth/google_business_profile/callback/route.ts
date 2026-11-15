@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { saveSocialConnection } from "@/server/connections/saveConnection";
-import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
+import { LOCATION_CLEARED_PARAM, refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -152,6 +152,11 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     }
 
     settingsUrl.searchParams.set("success", "google_business_profile_connected");
+    if (saved.locationCleared !== undefined) {
+      // R6 third review: this Google account can't use the chosen location, so
+      // it was cleared; Settings asks for one (the chooser), naming the old one.
+      settingsUrl.searchParams.set(LOCATION_CLEARED_PARAM, saved.locationCleared.slice(0, 200));
+    }
     return NextResponse.redirect(settingsUrl);
   } catch (error) {
     return oauthCallbackFailed({

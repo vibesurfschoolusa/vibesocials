@@ -185,56 +185,109 @@ describe("saveSocialConnection: Pinterest", () => {
   });
 });
 
-// R6 second review 1: the Business Profile token carries no account id; the
-// chosen location, read with the NEW token, tells whether it is the same account.
+// R6 third review: for Google Business Profile a reconnect is never refused as
+// another account. The new token is saved in place; the chosen location, read
+// with it, is kept when it can be read and cleared (so the location chooser
+// asks again) when this Google account can't use it.
 describe("saveSocialConnection: Google Business Profile", () => {
+  const LOCATION_METADATA = {
+    locationName: "accounts/1/locations/555",
+    locationTitle: "Surf Co Dania",
+    reviewsLinkedAt: "2026-11-01T00:00:00.000Z",
+  };
   const withLocation = row({
     platform: "google_business_profile",
     accountIdentifier: "google_business_profile",
-    metadata: { locationName: "accounts/1/locations/555", locationTitle: "Surf Co Dania" },
+    metadata: LOCATION_METADATA,
   });
-  const status = (code: number) => new Response(code === 200 ? JSON.stringify({ name: "locations/555" }) : "{}", { status: code });
+  const withStoreCode = row({
+    platform: "google_business_profile",
+    accountIdentifier: "google_business_profile",
+    metadata: { locationName: "STORE-7", locationTitle: "Surf Co Dania" },
+  });
+  const answer = (code: number, body: unknown = {}) => new Response(JSON.stringify(body), { status: code });
+  const CLEARED = { ...LOCATION_METADATA, locationName: null, locationTitle: null };
 
-  it("the new token can read the chosen location (200): same account, updated in place, location kept", async () => {
+  it("the same account (the location reads, 200): the token is saved in place and the location kept", async () => {
     h.findUnique.mockResolvedValue(withLocation);
-    h.fetch.mockResolvedValue(status(200));
+    h.fetch.mockResolvedValue(answer(200, { name: "locations/555" }));
 
     await expect(saveGbp()).resolves.toEqual({ ok: true });
     const [url, init] = h.fetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://mybusinessbusinessinformation.googleapis.com/v1/locations/555?readMask=name");
     expect(init.headers).toEqual({ Authorization: "Bearer new-gbp-token" });
-    // The update leaves the metadata (the chosen location) alone.
     expect(h.updateMany.mock.calls[0][0].data).toEqual({ accountIdentifier: "google_business_profile", accessToken: "new-gbp-token" });
   });
 
-  it.each([403, 404])("%i: another Google account; refused, named by the location, nothing written", async (code) => {
+  it.each([
+    [403, "another Google account"],
+    [404, "the location was deleted on Google"],
+  ])("%i (%s): saved in place with the location cleared, and its title answered for the chooser", async (code) => {
     h.findUnique.mockResolvedValue(withLocation);
-    h.fetch.mockResolvedValue(status(code));
+    h.fetch.mockResolvedValue(answer(code));
 
-    await expect(saveGbp()).resolves.toEqual({
-      ok: false,
-      reason: "different_account",
-      connectedName: "Surf Co Dania",
-      signedInName: "a different Google Business Profile account",
+    await expect(saveGbp()).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+    expect(h.updateMany).toHaveBeenCalledWith({
+      where: { id: "conn-1", updatedAt: READ_AT },
+      data: { accountIdentifier: "google_business_profile", accessToken: "new-gbp-token", metadata: CLEARED },
     });
-    expect(h.updateMany).not.toHaveBeenCalled();
   });
 
-  it.each([429, 500, 503])("%i: couldn't check; nothing written, and the location is named", async (code) => {
-    h.findUnique.mockResolvedValue(withLocation);
-    h.fetch.mockResolvedValue(status(code));
+  it("a store code this account manages exactly once: kept", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] }))
+      .mockResolvedValueOnce(answer(200, { locations: [{ name: "locations/555", storeCode: "STORE-7" }] }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true });
+    expect(h.updateMany.mock.calls[0][0].data).not.toHaveProperty("metadata");
+  });
+
+  it.each([
+    ["not found", []],
+    [
+      "on more than one location",
+      [
+        { name: "locations/555", storeCode: "STORE-7" },
+        { name: "locations/556", storeCode: "STORE-7" },
+      ],
+    ],
+  ])("a store code %s: the location is cleared for the chooser", async (_case, locations) => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] }))
+      .mockResolvedValueOnce(answer(200, { locations }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+    expect(h.updateMany.mock.calls[0][0].data.metadata).toEqual({ locationName: null, locationTitle: null });
+  });
+
+  it("a store-code search where one account's list fails (503): couldn't check, never 'not found'", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+      .mockResolvedValueOnce(answer(503))
+      .mockResolvedValueOnce(answer(200, { locations: [] }));
+
     await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 
-  it("a network failure: couldn't check; nothing written", async () => {
+  it.each([429, 500, 503])("Google %i on the location: nothing written, try again", async (code) => {
+    h.findUnique.mockResolvedValue(withLocation);
+    h.fetch.mockResolvedValue(answer(code));
+    await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("a network failure: nothing written, try again", async () => {
     h.findUnique.mockResolvedValue(withLocation);
     h.fetch.mockRejectedValue(new TypeError("fetch failed"));
     await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 
-  it("no location chosen yet: updated as before, without a check", async () => {
+  it("no location chosen yet: saved in place as before, without a check", async () => {
     h.findUnique.mockResolvedValue(row({ platform: "google_business_profile", accountIdentifier: "google_business_profile", metadata: { locationName: null } }));
     await expect(saveGbp()).resolves.toEqual({ ok: true });
     expect(h.fetch).not.toHaveBeenCalled();
