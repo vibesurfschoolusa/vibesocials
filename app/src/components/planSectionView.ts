@@ -23,6 +23,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** R7-new-customer M1: a workspace with no plan and no trial that is not flagged exempt. */
 export const NO_PLAN_YET_LABEL = "This workspace has no plan yet. The free limits apply until it has one.";
 
+/**
+ * R8-new-customer L4: such a workspace posts on the free limits now, but once
+ * a plan it bought ends it stops posting (planState "ended"), so it is told
+ * before checkout, beside the plan buttons.
+ */
+export const NO_PLAN_CANCEL_LATER_LINE = "If you cancel the plan later, this workspace stops posting until it has a plan again.";
+
+/** Whether the Plan section shows {@link NO_PLAN_CANCEL_LATER_LINE}: no plan yet, and the plan buttons are there. */
+export function noPlanCancelLaterShown(label: string, planButtons: boolean): boolean {
+  return label === NO_PLAN_YET_LABEL && planButtons;
+}
+
 /** Unflagged and never on a trial or a plan: made while billing was off, and free to buy one. */
 function withoutPlanOrTrial(workspace: BillingFields, now: Date): boolean {
   return !workspace.billingExempt && planState(workspace, now) === "exempt";

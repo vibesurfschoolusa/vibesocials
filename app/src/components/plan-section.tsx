@@ -2,8 +2,10 @@ import { PlanActions, type PlanOfferView } from "@/components/plan-actions";
 import { Card } from "@/components/ui/card";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { GROWTH_ADDS_LINE, planIncludesLine } from "@/lib/plans";
-import { formatStorageGb } from "@/lib/usageLimits";
+import { formatStorageGb, OWNER_DAILY_POST_LIMIT } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
+
+import { NO_PLAN_CANCEL_LATER_LINE, noPlanCancelLaterShown } from "./planSectionView";
 
 export const PLAN_SWITCH_LINE = "To switch plans, use Manage plan, card and invoices.";
 
@@ -52,7 +54,11 @@ export function PlanSection({
         <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
           <div className="flex justify-between gap-2 sm:block">
             <dt className="text-muted-foreground">Posts per day</dt>
-            <dd>{usage.postsToday.limit}</dd>
+            {/* R8-new-customer L1: the per-person number binds first while free (lib/usageLimits.ts). */}
+            <dd>
+              {usage.postsToday.limit} (up to {OWNER_DAILY_POST_LIMIT} a day per person across all your workspaces while
+              free)
+            </dd>
           </div>
           <div className="flex justify-between gap-2 sm:block">
             <dt className="text-muted-foreground">X posts per month</dt>
@@ -83,6 +89,9 @@ export function PlanSection({
       {growthAdds ? <p className="text-sm text-muted-foreground">{GROWTH_ADDS_LINE}</p> : null}
       {/* Q1: an owner on a plan switches in the Stripe portal, which lists every price. */}
       {growthAdds && manage ? <p className="text-sm text-muted-foreground">{PLAN_SWITCH_LINE}</p> : null}
+      {noPlanCancelLaterShown(label, offers.length > 0 || yearlyOffers.length > 0) ? (
+        <p className="text-sm text-muted-foreground">{NO_PLAN_CANCEL_LATER_LINE}</p>
+      ) : null}
       {offers.length > 0 || yearlyOffers.length > 0 || manage ? (
         <PlanActions workspaceId={workspaceId} offers={offers} manage={manage} yearlyOffers={yearlyOffers} />
       ) : null}

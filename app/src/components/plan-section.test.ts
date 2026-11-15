@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/components/plan-actions", () => ({ PlanActions: () => null }));
 
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
+import { OWNER_DAILY_POST_LIMIT } from "@/lib/usageLimits";
+
+import { NO_PLAN_YET_LABEL } from "./planSectionView";
 
 import { PlanSection } from "./plan-section";
 
@@ -94,5 +97,42 @@ describe("PlanSection: how to switch plans", () => {
       }),
     );
     expect(html).not.toContain(SWITCH);
+  });
+});
+
+const USAGE = {
+  postsToday: { used: 0, limit: 20, resetsAt: null },
+  xPostsThisMonth: { used: 0, limit: 100, resetsAt: null },
+  youtubeUploadsToday: { used: 0, limit: 5, resetsAt: null },
+  storage: { used: 0, limit: 1024 ** 3, resetsAt: null },
+};
+
+// R8-new-customer L1: the workspace's daily number is not the only one; a free person's own number is shown beside it.
+describe("PlanSection: posts per day", () => {
+  it("adds the per-person number while free, from the shared constant", () => {
+    const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE }));
+    expect(html).toContain(
+      `20 (up to ${OWNER_DAILY_POST_LIMIT} a day per person across all your workspaces while free)`,
+    );
+  });
+});
+
+// R8-new-customer L4: a workspace made while billing was off keeps posting on the free limits only until it buys a plan.
+describe("PlanSection: before the first plan", () => {
+  const offers = [{ plan: "starter" as const, name: "Starter", price: "$19 a month" }];
+
+  it("no plan and no trial, with the plan buttons: says what cancelling later means", () => {
+    const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: NO_PLAN_YET_LABEL, usage: USAGE, offers }));
+    expect(html).toContain("If you cancel the plan later, this workspace stops posting until it has a plan again.");
+  });
+
+  it("a trial, or no plan buttons: no such line", () => {
+    for (const props of [
+      { label: "Free trial until November 21, 2026", offers },
+      { label: NO_PLAN_YET_LABEL, offers: [] },
+    ]) {
+      const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", usage: USAGE, ...props }));
+      expect(html).not.toContain("If you cancel the plan later");
+    }
   });
 });
