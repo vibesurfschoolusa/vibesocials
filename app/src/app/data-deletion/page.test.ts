@@ -49,3 +49,14 @@ describe("Data deletion: landmarks", () => {
     expect(renderToStaticMarkup(DataDeletionPage() as ReactElement)).toMatch(/<main[ >]/);
   });
 });
+
+// R6-pages L9: the standard public footer, as on the other public pages.
+describe("Data deletion: footer", () => {
+  it("ends with the site links every public page has", () => {
+    const html = renderToStaticMarkup(DataDeletionPage() as ReactElement);
+    expect(html).toContain('<nav aria-label="Site"');
+    for (const href of ["/about", "/help", "/about#contact", "/privacy", "/terms", "/data-deletion"]) {
+      expect(html).toContain(`href="${href}"`);
+    }
+  });
+});

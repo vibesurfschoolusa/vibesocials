@@ -365,6 +365,10 @@ model EmailChangeRequest {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  // R6-security M1: is this address held by an open undo window?
+  @@index([previousEmail])
+  // R6-pages L6: the passed windows the daily sweep clears.
+  @@index([undoExpiresAt])
 }
 
 model SocialConnection {

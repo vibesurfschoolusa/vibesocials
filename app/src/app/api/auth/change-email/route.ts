@@ -5,10 +5,12 @@ import { buildEmailChangeEmail, deliverAccountEmail } from "@/lib/accountEmails"
 import { generateAccountToken } from "@/lib/accountToken";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { emailChangeLockedSentence } from "@/lib/displayDate";
 import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { accountUndoWindowUntil, addressHeldUntil, clearPassedUndoWindows } from "@/server/auth/undoWindow";
 
 /** How long the confirmation link works. */
 const EMAIL_CHANGE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -26,6 +28,11 @@ const RATE_LIMIT = { route: "auth/change-email", limit: 5, windowMs: 60 * 60 * 1
  * No email-existence oracle, like registration: when another account already
  * uses the address the answer is the same 200 and no email is sent. The
  * screen says so ("if no other account uses it").
+ *
+ * While the previous address can still undo the last change (./undo), a new
+ * change is refused, and an address another account's undo may put back
+ * counts as taken (R6-security M1, server/auth/undoWindow.ts): either would
+ * leave the undo nothing to put back.
  *
  * The limiter fails closed: it guards a password check.
  */
@@ -82,7 +89,20 @@ export async function POST(request: Request) {
   }
 
   try {
-    const taken = await prisma.user.findUnique({ where: { email: newEmail }, select: { id: true } });
+    const now = new Date();
+    await clearPassedUndoWindows(prisma, now);
+    const lockedUntil = await accountUndoWindowUntil(prisma, user.id, now);
+    if (lockedUntil) {
+      // `until` lets the form write the date in the viewer's time zone.
+      return NextResponse.json(
+        { error: emailChangeLockedSentence(lockedUntil), until: lockedUntil.toISOString() },
+        { status: 409 },
+      );
+    }
+
+    const taken =
+      (await prisma.user.findUnique({ where: { email: newEmail }, select: { id: true } })) ||
+      (await addressHeldUntil(prisma, newEmail, now));
     if (taken) {
       return NextResponse.json({ ok: true }, { status: 200 });
     }
@@ -96,7 +116,7 @@ export async function POST(request: Request) {
           userId: user.id,
           newEmail,
           tokenHash: hash,
-          expiresAt: new Date(Date.now() + EMAIL_CHANGE_TTL_MS),
+          expiresAt: new Date(now.getTime() + EMAIL_CHANGE_TTL_MS),
         },
       });
     });

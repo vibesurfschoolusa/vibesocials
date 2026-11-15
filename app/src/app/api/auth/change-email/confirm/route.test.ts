@@ -14,7 +14,11 @@ const {
   getCurrentUserMock,
   followMock,
   afterMock,
+  accountUndoWindowUntilMock,
+  addressHeldUntilMock,
 } = vi.hoisted(() => ({
+  accountUndoWindowUntilMock: vi.fn(),
+  addressHeldUntilMock: vi.fn(),
   afterMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
   followMock: vi.fn(),
@@ -34,6 +38,10 @@ vi.mock("next/server", async (importOriginal) => ({
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 vi.mock("@/server/billing/customerEmail", () => ({ followEmailChangeInStripe: followMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("@/server/auth/undoWindow", () => ({
+  accountUndoWindowUntil: accountUndoWindowUntilMock,
+  addressHeldUntil: addressHeldUntilMock,
+}));
 vi.mock("@/lib/db", () => {
   const tx = {
     emailChangeRequest: { updateMany: claimMock, deleteMany: requestDeleteManyMock },
@@ -77,6 +85,7 @@ function record(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const USED = "This link was already used. If you just confirmed it, your email has changed.";
 const DEAD = "This link has expired or was already used. Your email is unchanged. To change it, ask again in Settings, Account.";
 
 beforeEach(() => {
@@ -91,9 +100,13 @@ beforeEach(() => {
     getCurrentUserMock,
     followMock,
     afterMock,
+    accountUndoWindowUntilMock,
+    addressHeldUntilMock,
   ]) {
     mock.mockReset();
   }
+  accountUndoWindowUntilMock.mockResolvedValue(null);
+  addressHeldUntilMock.mockResolvedValue(null);
   afterMock.mockImplementation(() => undefined);
   getCurrentUserMock.mockResolvedValue(null);
   followMock.mockResolvedValue(undefined);
@@ -116,11 +129,10 @@ describe("POST /api/auth/change-email/confirm", () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
-  it("answers a plain 400 for a missing, unknown, used or expired link and changes nothing", async () => {
+  it("answers a plain 400 for a missing, unknown or expired link and changes nothing", async () => {
     const cases: Array<[unknown, unknown]> = [
       [{}, record()],
       [{ token: "raw-token" }, null],
-      [{ token: "raw-token" }, record({ usedAt: new Date(NOW - 1000) })],
       [{ token: "raw-token" }, record({ expiresAt: new Date(NOW - 1000) })],
     ];
     for (const [body, found] of cases) {
@@ -219,10 +231,20 @@ describe("POST /api/auth/change-email/confirm", () => {
     });
   });
 
-  it("changes nothing when the link was used in the meantime", async () => {
+  // R6-pages L1: a used link opened again answers about the link, not "unchanged".
+  it("says a used link was already used, and that the email has changed if this person used it", async () => {
+    findUniqueMock.mockResolvedValue(record({ usedAt: new Date(NOW - 1000) }));
+    const response = await POST(request({ token: "raw-token" }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: USED, used: true });
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing when the link was used in the meantime, and says it was used", async () => {
     claimMock.mockResolvedValue({ count: 0 });
     const response = await POST(request({ token: "raw-token" }));
     expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: USED, used: true });
     expect(userUpdateMock).not.toHaveBeenCalled();
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
   });
@@ -235,6 +257,38 @@ describe("POST /api/auth/change-email/confirm", () => {
       error: "Another Vibe Socials account now signs in with this address, so your email is unchanged.",
     });
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
+  // R6-security M1: an open undo window keeps the previous address free for it.
+  it("refuses an address another account's undo may still put back, and changes nothing", async () => {
+    addressHeldUntilMock.mockResolvedValue(new Date("2026-11-17T12:00:00.000Z"));
+    const response = await POST(request({ token: "raw-token" }));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until November 17, 2026, so your email is unchanged. After that, ask for the change again in Settings, Account.",
+      reason: "held",
+      until: "2026-11-17T12:00:00.000Z",
+    });
+    expect(addressHeldUntilMock).toHaveBeenCalledWith(expect.anything(), "new@example.com", expect.any(Date));
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
+    expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses while this account's last change can still be undone, and changes nothing", async () => {
+    const until = new Date("2026-11-17T12:00:00.000Z");
+    accountUndoWindowUntilMock.mockResolvedValue(until);
+    const response = await POST(request({ token: "raw-token" }));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "You changed your email recently; you can change it again after November 17, 2026.",
+      reason: "locked",
+      until: until.toISOString(),
+    });
+    expect(accountUndoWindowUntilMock).toHaveBeenCalledWith(expect.anything(), "user-1", expect.any(Date));
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
   });
 
   it("answers 400 Invalid JSON body for a body that isn't an object", async () => {

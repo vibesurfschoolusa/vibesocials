@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { SiteLinks } from "@/components/legal-page";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 /**
@@ -148,6 +149,7 @@ export default function DataDeletionPage() {
             </p>
           </section>
         </div>
+        <SiteLinks />
       </div>
     </main>
   );

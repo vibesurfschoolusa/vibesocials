@@ -13,7 +13,9 @@ const {
   deleteManyTokenMock,
   updateUserMock,
   transactionMock,
+  changeRequestDeleteManyMock,
 } = vi.hoisted(() => ({
+  changeRequestDeleteManyMock: vi.fn(),
   bcryptHashMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueTokenMock: vi.fn(),
@@ -70,6 +72,8 @@ beforeEach(() => {
   deleteManyTokenMock.mockReset();
   updateUserMock.mockReset();
   transactionMock.mockReset();
+  changeRequestDeleteManyMock.mockReset();
+  changeRequestDeleteManyMock.mockResolvedValue({ count: 0 });
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   bcryptHashMock.mockResolvedValue("new-hashed-password");
@@ -81,6 +85,7 @@ beforeEach(() => {
     cb({
       accountToken: { updateMany: updateManyTokenMock, deleteMany: deleteManyTokenMock },
       user: { update: updateUserMock },
+      emailChangeRequest: { deleteMany: changeRequestDeleteManyMock },
     }),
   );
 });
@@ -216,6 +221,20 @@ describe("POST /api/auth/reset-password", () => {
     expect(updateManyTokenMock.mock.invocationCallOrder[0]).toBeLessThan(
       updateUserMock.mock.invocationCallOrder[0],
     );
+  });
+
+  // R6-security L2: a pending email change may have been asked for by whoever
+  // the reset locks out, so its link stops working too.
+  it("deletes unused email-change requests (and so their links) in the same transaction", async () => {
+    const response = await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }));
+    expect(response.status).toBe(200);
+    expect(changeRequestDeleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1", usedAt: null } });
+  });
+
+  it("deletes no email-change request when the claim loses (count 0)", async () => {
+    updateManyTokenMock.mockResolvedValue({ count: 0 });
+    await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }));
+    expect(changeRequestDeleteManyMock).not.toHaveBeenCalled();
   });
 
   it("does NOT touch emailVerifiedAt when the account is already verified", async () => {

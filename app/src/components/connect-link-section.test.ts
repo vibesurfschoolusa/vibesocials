@@ -105,6 +105,21 @@ describe("the Client connect link group in Settings", () => {
     expect(html).toMatch(/Last used [^<]*2026/);
   });
 
+  // R6-pages L8: the same date format as Account and Team.
+  it("writes its dates as the rest of Settings does", () => {
+    const html = view({
+      link: {
+        url: "https://vibesocials.example/c/abc",
+        platforms: ["tiktok"],
+        expiresAt: "2026-11-25T12:00:00.000Z",
+        lastUsedAt: "2026-11-12T12:00:00.000Z",
+        createdAt: "2026-11-11T12:00:00.000Z",
+      },
+    });
+    expect(html).toContain("Expires on November 25, 2026");
+    expect(html).toContain("Last used November 12, 2026");
+  });
+
   it("with nothing configured on this site, says so instead of offering boxes", () => {
     const html = view({ available: [], selected: [] });
     expect(html).not.toContain('type="checkbox"');

@@ -9,6 +9,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
+import { addressHeldUntil } from "@/server/auth/undoWindow";
 
 const REGISTER_RATE_LIMIT = {
   route: "auth/register",
@@ -107,7 +108,10 @@ export async function POST(request: Request) {
       name: nameValue,
     });
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    // R6-security M1: an address an email change replaced stays free for that
+    // change's undo while it is open, so it answers as if the account existed.
+    const existing =
+      (await prisma.user.findUnique({ where: { email } })) || (await addressHeldUntil(prisma, email, new Date()));
     if (existing) {
       return NextResponse.json(registerOkBody(email, displayName), { status: 201 });
     }

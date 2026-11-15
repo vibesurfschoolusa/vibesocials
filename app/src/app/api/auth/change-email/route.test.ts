@@ -9,7 +9,13 @@ const {
   requestDeleteManyMock,
   requestCreateMock,
   deliverAccountEmailMock,
+  accountUndoWindowUntilMock,
+  addressHeldUntilMock,
+  clearPassedUndoWindowsMock,
 } = vi.hoisted(() => ({
+  accountUndoWindowUntilMock: vi.fn(),
+  addressHeldUntilMock: vi.fn(),
+  clearPassedUndoWindowsMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   userFindUniqueMock: vi.fn(),
@@ -28,6 +34,11 @@ vi.mock("@/lib/db", () => {
   };
   return { prisma };
 });
+vi.mock("@/server/auth/undoWindow", () => ({
+  accountUndoWindowUntil: accountUndoWindowUntilMock,
+  addressHeldUntil: addressHeldUntilMock,
+  clearPassedUndoWindows: clearPassedUndoWindowsMock,
+}));
 vi.mock("@/lib/accountEmails", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/accountEmails")>()),
   deliverAccountEmail: deliverAccountEmailMock,
@@ -64,9 +75,15 @@ beforeEach(() => {
     requestDeleteManyMock,
     requestCreateMock,
     deliverAccountEmailMock,
+    accountUndoWindowUntilMock,
+    addressHeldUntilMock,
+    clearPassedUndoWindowsMock,
   ]) {
     mock.mockReset();
   }
+  accountUndoWindowUntilMock.mockResolvedValue(null);
+  addressHeldUntilMock.mockResolvedValue(null);
+  clearPassedUndoWindowsMock.mockResolvedValue(undefined);
   getCurrentUserMock.mockResolvedValue(user());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   userFindUniqueMock.mockResolvedValue(null);
@@ -155,6 +172,40 @@ describe("POST /api/auth/change-email", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
     expect(requestCreateMock).not.toHaveBeenCalled();
     expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
+  // R6-security M1: while the previous address can undo the last change, the
+  // account can't move on to a third address (the undo would then fail).
+  it("refuses a new change while the last one can still be undone, and stores and sends nothing", async () => {
+    const until = new Date("2026-11-17T12:00:00.000Z");
+    accountUndoWindowUntilMock.mockResolvedValue(until);
+    const response = await POST(request(GOOD));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "You changed your email recently; you can change it again after November 17, 2026.",
+      until: until.toISOString(),
+    });
+    expect(accountUndoWindowUntilMock).toHaveBeenCalledWith(expect.anything(), "user-1", expect.any(Date));
+    expect(requestDeleteManyMock).not.toHaveBeenCalled();
+    expect(requestCreateMock).not.toHaveBeenCalled();
+    expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
+  // R6-security M1: another account's undo may still put this address back.
+  it("answers the same when another account's undo may still take the address back, and sends nothing", async () => {
+    addressHeldUntilMock.mockResolvedValue(new Date("2026-11-17T12:00:00.000Z"));
+    const response = await POST(request(GOOD));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(addressHeldUntilMock).toHaveBeenCalledWith(expect.anything(), "new@example.com", expect.any(Date));
+    expect(requestCreateMock).not.toHaveBeenCalled();
+    expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
+  // R6-pages L6: previous addresses whose undo window has passed are cleared.
+  it("clears the undo windows that have passed", async () => {
+    await POST(request(GOOD));
+    expect(clearPassedUndoWindowsMock).toHaveBeenCalledWith(expect.anything(), expect.any(Date));
   });
 
   it("answers 502 when the email could not be sent", async () => {

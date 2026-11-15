@@ -42,8 +42,21 @@ export const JOIN_FAILED_MESSAGE = "You weren't added to the workspace. Please p
 export const JOIN_OFFLINE_MESSAGE =
   "We couldn't reach Vibe Socials, so you weren't added. Check your internet connection and press Join workspace again.";
 
-/** Client-rendered join flow. The parent server component gates sign-in. */
-export function JoinView({ token }: { token: string }) {
+/**
+ * R6-pages L4: what joining lets a member do. Invites add members, and a
+ * member's posts wait for an owner when the workspace asks for approval.
+ */
+export function joinPromise(requiresApproval: boolean): string {
+  return requiresApproval
+    ? "You'll be able to create posts for this workspace's connected accounts. An owner approves each post before it goes out."
+    : "You'll be able to publish to this workspace's connected accounts.";
+}
+
+/**
+ * Client-rendered join flow. The parent server component gates sign-in and
+ * reads whether the workspace asks for approval.
+ */
+export function JoinView({ token, requiresApproval = false }: { token: string; requiresApproval?: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const [load, setLoad] = useState<InviteLoad | null>(null);
@@ -156,9 +169,7 @@ export function JoinView({ token }: { token: string }) {
     <div className="mx-auto max-w-md px-4 py-16">
       <Card className="flex flex-col items-center gap-3 p-6 text-center">
         <h1 className="text-lg font-semibold text-foreground">Join {preview.workspaceName}?</h1>
-        <p className="text-sm text-muted-foreground">
-          You&apos;ll be able to publish to this workspace&apos;s connected accounts.
-        </p>
+        <p className="text-sm text-muted-foreground">{joinPromise(requiresApproval)}</p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <Button onClick={handleJoin} loading={joining}>
             {joining ? "Joining…" : "Join workspace"}

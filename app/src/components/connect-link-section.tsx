@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
 /**
@@ -27,10 +28,6 @@ export type ConnectLinkDto = {
   lastUsedAt: string | null;
   createdAt: string;
 };
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-}
 
 export interface ConnectLinkViewProps {
   available: Platform[];
@@ -97,9 +94,9 @@ export function ConnectLinkSectionView({
             <p className="text-sm text-muted-foreground">
               Offers: {link.platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ")}
             </p>
-            <p className="text-sm text-muted-foreground">Expires on {formatDate(link.expiresAt)}</p>
+            <p className="text-sm text-muted-foreground">Expires on {formatDisplayDate(link.expiresAt)}</p>
             <p className="text-sm text-muted-foreground">
-              {link.lastUsedAt ? `Last used ${formatDate(link.lastUsedAt)}` : "Not used yet"}
+              {link.lastUsedAt ? `Last used ${formatDisplayDate(link.lastUsedAt)}` : "Not used yet"}
             </p>
             <div className="flex flex-wrap gap-2">
               {pausedByPlan ? null : (

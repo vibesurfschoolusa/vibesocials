@@ -3,9 +3,9 @@
  * L3, pages L7). The verify route answers one uniform 400 for every dead
  * link (no oracle, api/auth/verify-email), so the page tells the cases apart
  * from what it can know itself: the answer's status and whether the request
- * got through at all. A dead link may be another account's, so it is never
- * answered about the signed-in account; that account's own state decides
- * only whether a new link is offered.
+ * got through at all. A dead link may be another account's, so the answer
+ * about it stays about the link; the signed-in account's own state adds a new
+ * link to an unverified one, and "already verified" for a verified one.
  */
 
 export type VerifyAttempt = "ok" | "invalid" | "rate_limited" | "server" | "network";
@@ -90,7 +90,16 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
   }
   // A dead link. It may belong to another account than the one signed in, so
   // the answer is about the link; a new link is offered only to a signed-in
-  // account that itself still needs verifying.
+  // account that itself still needs verifying. R6-new-customer L6: a
+  // verified account is also told it has nothing left to do.
+  if (account === "verified") {
+    return {
+      ...base,
+      title: "Your email is already verified",
+      message:
+        "This link has expired or was already used, but the account you're signed in to is already verified, so there's nothing more to do. If the link is for another account, sign in to that account first.",
+    };
+  }
   return {
     ...base,
     offerResend: account === "unverified",

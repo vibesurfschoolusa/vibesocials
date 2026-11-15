@@ -77,6 +77,9 @@ export async function POST(request: Request) {
         where: { id: user.id },
         data: { passwordHash, sessionVersion: { increment: 1 } },
       });
+      // R6-security L2: an email-change link asked for before now may be the
+      // work of whoever the new password locks out.
+      await tx.emailChangeRequest.deleteMany({ where: { userId: user.id, usedAt: null } });
     });
   } catch (error) {
     logger.error("[POST /api/auth/change-password] Unexpected error", { error });
