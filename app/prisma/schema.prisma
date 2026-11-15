@@ -357,6 +357,15 @@ model SocialConnection {
   needsReconnect       Boolean   @default(false)
   lastRefreshErrorCode String?
   refreshFailedAt      DateTime?
+  // R5-publishing M1 (server/jobs/connectionNotices.ts): each connection notice
+  // goes out once. `reconnectEmailedAt`: when the owners were emailed about the
+  // current flag (due while `refreshFailedAt`, the flag's time, is newer).
+  // `expiryWarnedFor`: the `expiresAt` the pre-expiry warning was sent for, for a
+  // sign-in that cannot be renewed (LinkedIn). Neither is ever cleared: a
+  // reconnect writes a new flag time or expiry. Nullable: the previous deployment
+  // neither reads nor writes them.
+  reconnectEmailedAt   DateTime?
+  expiryWarnedFor      DateTime?
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Team Workspaces. Tenant owner of this connection; userId above stays as

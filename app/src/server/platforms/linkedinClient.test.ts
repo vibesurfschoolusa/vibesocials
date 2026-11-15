@@ -77,6 +77,8 @@ function makeConnection(
     needsReconnect: false,
     lastRefreshErrorCode: null,
     refreshFailedAt: null,
+    reconnectEmailedAt: null,
+    expiryWarnedFor: null,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
     ...overrides,
@@ -118,6 +120,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+// R5-publishing L1: the health sweep refreshes only connections that hold a
+// refresh token, through the client's refreshToken. LinkedIn had none, so a
+// partner-issued refresh token was never used and the token lapsed anyway.
+describe("linkedinClient.refreshToken (the health sweep's refresher)", () => {
+  it("renews a connection that holds a refresh token, with the step deadline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(tokenResponse({ access_token: "new-access-token", expires_in: 5_184_000 })),
+    );
+    const deadline = Date.now() + 200_000;
+
+    const refreshed = await linkedinClient.refreshToken!(makeConnection({ id: "conn-r" }), { deadline });
+
+    expect(refreshed.accessToken).toBe("new-access-token");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock.mock.calls[0][0].where).toEqual({ id: "conn-r" });
+  });
+
+  it("returns a connection without a refresh token unchanged, touching nothing", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const connection = makeConnection({ refreshToken: null });
+
+    expect(await linkedinClient.refreshToken!(connection)).toBe(connection);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("refreshLinkedInToken", () => {

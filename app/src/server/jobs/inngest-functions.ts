@@ -48,7 +48,7 @@ import {
   staleCutoff,
 } from "@/server/jobs/stalePostJobs";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
-import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
+import { notifyOwnersToReconnect, sendConnectionNotices } from "@/server/jobs/connectionNotices";
 import { collectProblemDigests, sendProblemDigests } from "@/server/jobs/problemDigest";
 import { runMonthlyReportEmails } from "@/server/jobs/monthlyReportEmail";
 import {
@@ -58,13 +58,11 @@ import {
 } from "@/server/jobs/reviewAlerts";
 import { syncListingMetrics } from "@/server/jobs/listingMetrics";
 import { syncSocialPostMetrics } from "@/server/jobs/socialMetricsSync";
-import { sendEmail } from "@/server/notifications/email";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
   isProactiveRefreshEligible,
   proactiveRefreshWhere,
 } from "@/server/jobs/connectionHealthSweep";
-import { platformLabel } from "@/lib/platforms";
 import { billingFieldsSelect, paymentsConfigured } from "@/lib/billing";
 import { needsMediaMessage } from "@/lib/postTargets";
 import { runBillingReminders } from "@/server/billing/reminders";
@@ -2261,7 +2259,10 @@ export const stalePostJobSweep = inngest.createFunction(
  *
  * Email exactly-once: eligibility requires `needsReconnect === false`, so a
  * connection that flips is skipped by every later sweep; a transient failure
- * leaves the flag false, sends nothing, and is simply retried tomorrow. Cron slot
+ * leaves the flag false, sends nothing, and is simply retried tomorrow. A
+ * connection flagged anywhere else (a failed post) gets its email from the last
+ * step, `connection-notices`, which also warns before a sign-in that cannot be
+ * renewed (LinkedIn) ends (R5-publishing M1, connectionNotices.ts). Cron slot
  * 04:45 UTC - cadence map: media-retention hourly :15, scheduled-scanner every
  * minute, youtube-metrics hourly :00, stale-post-sweep hourly :30.
  *
@@ -2344,6 +2345,14 @@ export const connectionHealthSweep = inngest.createFunction(
       gbpReconnectEmails += notified.emailed;
     }
 
+    // R5-publishing M1: the warning a week before a sign-in that cannot be renewed
+    // ends, the flag once it has, and the reconnect email for every flag that has
+    // not had one (a failed post flags without it). Last, so a failing send never
+    // holds back the steps above (connectionNotices.ts).
+    const connectionNotices = await step.run("connection-notices", () =>
+      sendConnectionNotices(startedAt, day),
+    );
+
     const summary = {
       pages,
       connections,
@@ -2355,6 +2364,7 @@ export const connectionHealthSweep = inngest.createFunction(
         flagged: gbpBackfill.flagged.length,
         reconnectEmails: gbpReconnectEmails,
       },
+      connectionNotices,
     };
     logger.info("[Inngest] Connection health sweep fanned out", summary);
     return summary;
@@ -2380,8 +2390,9 @@ export type ConnectionRefreshOutcome =
 async function refreshOneConnection(socialConnectionId: string): Promise<ConnectionRefreshOutcome> {
   const connection = await prisma.socialConnection.findUnique({ where: { id: socialConnectionId } });
   if (!connection) return "gone";
-  // Flagged since the cron paged it (a failed post, an earlier sweep): its owner
-  // is already notified, and re-refreshing a dead grant would only re-fail.
+  // Flagged since the cron paged it (a failed post, an earlier sweep): re-refreshing
+  // a dead grant would only re-fail. Its owners hear from the sweep's
+  // connection-notices step if nobody has told them yet (R5-publishing M1).
   if (connection.needsReconnect) return "already_flagged";
   // The rule is re-checked now: the event may have waited in the queue while a
   // publish or the metrics sync refreshed the connection.
@@ -2418,67 +2429,6 @@ async function refreshOneConnection(socialConnectionId: string): Promise<Connect
     });
     return "transient_error";
   }
-}
-
-/**
- * Email every owner of the connection's workspace that it needs reconnecting
- * (the body of the `notify-owners` step). Re-checks the flag so an owner who
- * reconnected between the two steps is not told to. Returns a COUNT only.
- *
- * 2026-11-01 scale audit (jobs, notifications): a retryable Resend failure now
- * throws out of the step (the function's `retries` re-run it) instead of being
- * dropped; the per-owner idempotency key keeps the owners already emailed from
- * being emailed again on that retry.
- *
- * 2026-11-02 scale audit (jobs, notifications): the UTC day in that key is an
- * argument (the memoized `notify-day` step), not read from the clock here: a
- * retry after midnight UTC would otherwise build a new key and email the owners
- * already emailed before midnight a second time.
- */
-async function notifyOwnersToReconnect(
-  socialConnectionId: string,
-  utcDay: string,
-): Promise<{ emailed: number }> {
-  const connection = await prisma.socialConnection.findUnique({
-    where: { id: socialConnectionId },
-    select: { platform: true, workspaceId: true, needsReconnect: true },
-  });
-  if (!connection?.needsReconnect) return { emailed: 0 };
-
-  const [workspace, owners] = await Promise.all([
-    prisma.workspace.findUnique({
-      where: { id: connection.workspaceId },
-      select: { name: true },
-    }),
-    prisma.workspaceMember.findMany({
-      where: { workspaceId: connection.workspaceId, role: "owner" },
-      select: { user: { select: { id: true, email: true } } },
-    }),
-  ]);
-  const email = buildReconnectEmail({
-    platformLabel: platformLabel(connection.platform),
-    workspaceId: connection.workspaceId,
-    workspaceName: workspace?.name ?? "your workspace",
-    appBaseUrl: process.env.NEXTAUTH_URL || null,
-  });
-  // One reconnect email per owner per connection per UTC day. A retry of this step
-  // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
-  // owners already emailed (V18). `utcDay` is the memoized output of the `notify-day`
-  // step, so a retry that crosses UTC midnight still builds the same key.
-  let emailed = 0;
-  for (const owner of owners) {
-    // A retryable failure (Resend 429 / 5xx / network) throws, failing the step so
-    // Inngest retries it; every other failure is logged and dropped.
-    await sendEmail(
-      { to: owner.user.email, ...email },
-      {
-        idempotencyKey: `reconnect/${socialConnectionId}/${utcDay}/${owner.user.id}`,
-        throwOnRetryable: true,
-      },
-    );
-    emailed++;
-  }
-  return { emailed };
 }
 
 /**

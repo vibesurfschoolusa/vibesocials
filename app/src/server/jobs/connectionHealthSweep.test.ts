@@ -2,9 +2,13 @@ import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
 import {
+  EXPIRY_WARNING_LEAD_MS,
   GOOGLE_IDLE_REFRESH_MS,
   HEALTH_SWEEP_PAGE_SIZE,
   REFRESH_HORIZON_MS,
+  expiryNoticeDue,
+  expiryNoticeWhere,
+  hasUnrenewableExpiry,
   isProactiveRefreshEligible,
   proactiveRefreshWhere,
 } from "./connectionHealthSweep";
@@ -14,12 +18,18 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
 function conn(
-  overrides: Partial<{ platform: Platform; needsReconnect: boolean; expiresAt: Date | null }> = {},
+  overrides: Partial<{
+    platform: Platform;
+    needsReconnect: boolean;
+    expiresAt: Date | null;
+    refreshToken: string | null;
+  }> = {},
 ) {
   return {
     platform: "tiktok" as Platform,
     needsReconnect: false,
     expiresAt: new Date("2026-04-01T00:00:00Z"),
+    refreshToken: "refresh-token" as string | null,
     ...overrides,
   };
 }
@@ -62,6 +72,7 @@ describe("isProactiveRefreshEligible", () => {
           platform: "tiktok",
           needsReconnect: false,
           expiresAt: "2026-04-01T00:00:00.000Z" as unknown as Date,
+          refreshToken: "refresh-token",
         },
         NOW,
       ),
@@ -79,13 +90,23 @@ describe("isProactiveRefreshEligible", () => {
       expect(isProactiveRefreshEligible(conn({ platform: "tiktok", expiresAt }), NOW)).toBe(false);
     });
 
-    it.each(["linkedin", "instagram", "facebook_page"] as const)(
-      "%s expiring in 23 h -> eligible (other platforms keep the 24 h horizon)",
+    it.each(["linkedin", "pinterest"] as const)(
+      "%s with a refresh token expiring in 23 h -> eligible (other platforms keep the 24 h horizon)",
       (platform) => {
         const expiresAt = new Date(NOW.getTime() + 23 * HOUR);
         expect(isProactiveRefreshEligible(conn({ platform, expiresAt }), NOW)).toBe(true);
       },
     );
+  });
+
+  // R5-publishing L1: a refresh that can do nothing cost two executions a day per
+  // connection, forever. Facebook and Instagram hold Page tokens with no refresh
+  // token, and LinkedIn issues none to this app; the pre-expiry warning covers them.
+  describe("a connection with no refresh token is never refreshed", () => {
+    it.each(["facebook_page", "instagram", "linkedin", "tiktok", "youtube"] as const)("%s", (platform) => {
+      const expiresAt = new Date(NOW.getTime() - 30 * DAY);
+      expect(isProactiveRefreshEligible(conn({ platform, expiresAt, refreshToken: null }), NOW)).toBe(false);
+    });
   });
 
   // 2026-11-01 scale audit (jobs, token refresh): a Google access token lives 1 h,
@@ -144,6 +165,10 @@ describe("proactiveRefreshWhere", () => {
     expect(where.needsReconnect).toBe(false);
   });
 
+  it("excludes connections with no refresh token (nothing to refresh)", () => {
+    expect(where.refreshToken).toEqual({ not: null });
+  });
+
   it("is a two-branch OR: Google idle-only, every other platform on the 24 h horizon", () => {
     expect(where.OR).toEqual([
       {
@@ -171,6 +196,7 @@ describe("proactiveRefreshWhere", () => {
     };
     const matches = (c: ReturnType<typeof conn>) =>
       c.needsReconnect === false &&
+      c.refreshToken !== null &&
       (where.OR as Branch[]).some((branch) => {
         if (c.expiresAt === null) return false;
         const platformOk = branch.platform.in
@@ -187,21 +213,117 @@ describe("proactiveRefreshWhere", () => {
       "instagram",
       "google_business_profile",
       "facebook_page",
+      "pinterest",
     ];
     const offsets = [-30 * DAY, -8 * DAY, -6 * DAY, -HOUR, 0, 23 * HOUR, 25 * HOUR, 40 * DAY, null];
     for (const platform of platforms) {
       for (const offset of offsets) {
         for (const needsReconnect of [false, true]) {
-          const c = conn({
-            platform,
-            needsReconnect,
-            expiresAt: offset === null ? null : new Date(NOW.getTime() + offset),
-          });
-          expect(matches(c), `${platform} ${offset} ${needsReconnect}`).toBe(
-            isProactiveRefreshEligible(c, NOW),
-          );
+          for (const refreshToken of ["refresh-token", null]) {
+            const c = conn({
+              platform,
+              needsReconnect,
+              refreshToken,
+              expiresAt: offset === null ? null : new Date(NOW.getTime() + offset),
+            });
+            expect(matches(c), `${platform} ${offset} ${needsReconnect} ${refreshToken}`).toBe(
+              isProactiveRefreshEligible(c, NOW),
+            );
+          }
         }
       }
     }
+  });
+});
+
+// R5-publishing M1: a token that cannot be renewed (LinkedIn gives this app no
+// refresh token) used to die on its expiry date without a word to anyone.
+describe("hasUnrenewableExpiry", () => {
+  it("is true for a LinkedIn (or any other) connection with an expiry and no refresh token", () => {
+    expect(hasUnrenewableExpiry(conn({ platform: "linkedin", refreshToken: null }))).toBe(true);
+    expect(hasUnrenewableExpiry(conn({ platform: "tiktok", refreshToken: null }))).toBe(true);
+  });
+
+  it("is false when a refresh token can renew it", () => {
+    expect(hasUnrenewableExpiry(conn({ platform: "linkedin" }))).toBe(false);
+  });
+
+  it("is false with no expiry (X OAuth 1.0a)", () => {
+    expect(hasUnrenewableExpiry(conn({ platform: "x", expiresAt: null, refreshToken: null }))).toBe(false);
+  });
+
+  // Their stored expiresAt is the user token's 60 days, not the Page token's,
+  // which does not expire on a clock: only a Graph 190 / 401 says it is dead.
+  it.each(["facebook_page", "instagram"] as const)("is false for %s (a Page token)", (platform) => {
+    expect(hasUnrenewableExpiry(conn({ platform, refreshToken: null }))).toBe(false);
+  });
+});
+
+describe("expiryNoticeDue", () => {
+  const linkedin = (
+    expiresIn: number,
+    more: Partial<{ expiryWarnedFor: Date | null; needsReconnect: boolean }> = {},
+  ) => ({
+    ...conn({ platform: "linkedin", refreshToken: null, expiresAt: new Date(NOW.getTime() + expiresIn) }),
+    expiryWarnedFor: null as Date | null,
+    ...more,
+  });
+
+  it("pins the lead time at 7 days", () => {
+    expect(EXPIRY_WARNING_LEAD_MS).toBe(7 * DAY);
+  });
+
+  it("nothing while more than 7 days are left", () => {
+    expect(expiryNoticeDue(linkedin(7 * DAY + HOUR), NOW)).toBeNull();
+  });
+
+  it("a warning once 7 days or fewer are left", () => {
+    expect(expiryNoticeDue(linkedin(7 * DAY), NOW)).toBe("warning");
+    expect(expiryNoticeDue(linkedin(HOUR), NOW)).toBe("warning");
+  });
+
+  it("no second warning for the same expiry", () => {
+    const row = linkedin(3 * DAY);
+    expect(expiryNoticeDue({ ...row, expiryWarnedFor: row.expiresAt }, NOW)).toBeNull();
+  });
+
+  it("a warning sent for an earlier expiry does not count (reconnected since)", () => {
+    const row = linkedin(3 * DAY, { expiryWarnedFor: new Date(NOW.getTime() - 50 * DAY) });
+    expect(expiryNoticeDue(row, NOW)).toBe("warning");
+  });
+
+  it("'lapsed' once the expiry has passed, warned or not", () => {
+    const row = linkedin(-HOUR);
+    expect(expiryNoticeDue(row, NOW)).toBe("lapsed");
+    expect(expiryNoticeDue({ ...row, expiryWarnedFor: row.expiresAt }, NOW)).toBe("lapsed");
+    expect(expiryNoticeDue(linkedin(0), NOW)).toBe("lapsed");
+  });
+
+  it("nothing for a flagged connection (the reconnect email covers it)", () => {
+    expect(expiryNoticeDue(linkedin(-HOUR, { needsReconnect: true }), NOW)).toBeNull();
+    expect(expiryNoticeDue(linkedin(DAY, { needsReconnect: true }), NOW)).toBeNull();
+  });
+
+  it("nothing for a renewable or Page-token connection", () => {
+    expect(expiryNoticeDue({ ...linkedin(DAY), refreshToken: "refresh-token" }, NOW)).toBeNull();
+    expect(expiryNoticeDue({ ...linkedin(-DAY), platform: "instagram" as Platform }, NOW)).toBeNull();
+    expect(expiryNoticeDue({ ...linkedin(-DAY), platform: "facebook_page" as Platform }, NOW)).toBeNull();
+  });
+
+  it("accepts ISO strings (step output)", () => {
+    const row = linkedin(DAY);
+    const iso = row.expiresAt!.toISOString() as unknown as Date;
+    expect(expiryNoticeDue({ ...row, expiresAt: iso, expiryWarnedFor: iso }, NOW)).toBeNull();
+  });
+});
+
+describe("expiryNoticeWhere", () => {
+  it("selects unflagged connections with no refresh token that expire within 7 days (or have), Page tokens left out", () => {
+    expect(expiryNoticeWhere(NOW)).toEqual({
+      needsReconnect: false,
+      refreshToken: null,
+      platform: { notIn: ["facebook_page", "instagram"] },
+      expiresAt: { not: null, lte: new Date(NOW.getTime() + 7 * DAY) },
+    });
   });
 });

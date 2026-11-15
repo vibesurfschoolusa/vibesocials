@@ -1,0 +1,211 @@
+import { prisma } from "@/lib/db";
+import { platformLabel } from "@/lib/platforms";
+import { sendEmail } from "@/server/notifications/email";
+import { buildExpiryWarningEmail, buildReconnectEmail } from "@/server/notifications/reconnectEmail";
+import { expiryNoticeDue, expiryNoticeWhere } from "./connectionHealthSweep";
+
+/**
+ * Connection notices (R5-publishing M1: no connection may die unannounced).
+ *
+ * Two columns make each notice go out once without anything ever being cleared:
+ *  - `reconnectEmailedAt`: when the owners were emailed about the current flag.
+ *    The flag's own time is `refreshFailedAt` (written with every flag,
+ *    connectionHealth.ts), so the email is due while the flag is newer than
+ *    the last email. A reconnect clears the flag; the next flag is newer again.
+ *  - `expiryWarnedFor`: the `expiresAt` the last pre-expiry warning was about. A
+ *    reconnect writes a new `expiresAt`, so its expiry is warned about again.
+ */
+
+/**
+ * The `lastRefreshErrorCode` the sweep flags with when a sign-in that cannot be
+ * renewed reaches its end date (diagnostic, and it picks the email's wording).
+ */
+export const CONNECTION_EXPIRED_CODE = "CONNECTION_SIGN_IN_EXPIRED";
+
+/**
+ * Connections each pass of {@link sendConnectionNotices} handles per day; the
+ * rest wait for tomorrow. At two owners and a sequential send of a few hundred
+ * ms, 100 + 100 stays well inside one step's time and Resend's 10 requests/s.
+ */
+export const CONNECTION_NOTICES_BATCH = 100;
+
+type Stamp = Date | string | null;
+
+/** Was the reconnect email already sent for the connection's current flag? */
+function reconnectAlreadyEmailed(connection: { refreshFailedAt: Stamp; reconnectEmailedAt: Stamp }): boolean {
+  if (connection.reconnectEmailedAt === null) return false;
+  if (connection.refreshFailedAt === null) return true;
+  return new Date(connection.reconnectEmailedAt).getTime() >= new Date(connection.refreshFailedAt).getTime();
+}
+
+/**
+ * Email every owner of the connection's workspace that it needs reconnecting,
+ * once per flag, then record it (`reconnectEmailedAt`). Re-checks the flag so an
+ * owner who reconnected meanwhile is not told to. Returns a COUNT only.
+ *
+ * 2026-11-01 scale audit (jobs, notifications): a retryable Resend failure throws
+ * out of the step (the function's `retries` re-run it) instead of being dropped;
+ * nothing is recorded then, and the per-owner idempotency key keeps the owners
+ * already emailed from being emailed again on that retry.
+ *
+ * 2026-11-02 scale audit (jobs, notifications): the UTC day in that key is an
+ * argument (a memoized step output), not read from the clock here: a retry after
+ * midnight UTC would otherwise build a new key and email the owners a second time.
+ */
+export async function notifyOwnersToReconnect(
+  socialConnectionId: string,
+  utcDay: string,
+): Promise<{ emailed: number }> {
+  const connection = await prisma.socialConnection.findUnique({
+    where: { id: socialConnectionId },
+    select: {
+      platform: true,
+      workspaceId: true,
+      needsReconnect: true,
+      lastRefreshErrorCode: true,
+      refreshFailedAt: true,
+      reconnectEmailedAt: true,
+    },
+  });
+  if (!connection?.needsReconnect || reconnectAlreadyEmailed(connection)) return { emailed: 0 };
+
+  const [workspace, owners] = await Promise.all([
+    prisma.workspace.findUnique({
+      where: { id: connection.workspaceId },
+      select: { name: true },
+    }),
+    prisma.workspaceMember.findMany({
+      where: { workspaceId: connection.workspaceId, role: "owner" },
+      select: { user: { select: { id: true, email: true } } },
+    }),
+  ]);
+  const email = buildReconnectEmail({
+    platformLabel: platformLabel(connection.platform),
+    workspaceId: connection.workspaceId,
+    workspaceName: workspace?.name ?? "your workspace",
+    appBaseUrl: process.env.NEXTAUTH_URL || null,
+    reason: connection.lastRefreshErrorCode === CONNECTION_EXPIRED_CODE ? "expired" : "rejected",
+  });
+  // One reconnect email per owner per connection per UTC day: a retry of the step
+  // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
+  // owners already emailed (V18).
+  let emailed = 0;
+  for (const owner of owners) {
+    await sendEmail(
+      { to: owner.user.email, ...email },
+      {
+        idempotencyKey: `reconnect/${socialConnectionId}/${utcDay}/${owner.user.id}`,
+        throwOnRetryable: true,
+      },
+    );
+    emailed++;
+  }
+  await prisma.socialConnection.updateMany({
+    where: { id: socialConnectionId, needsReconnect: true },
+    data: { reconnectEmailedAt: new Date() },
+  });
+  return { emailed };
+}
+
+/** Warn each owner, in their own time zone, that the sign-in ends on `expiresAt`. */
+async function warnOwnersOfExpiry(connection: {
+  id: string;
+  platform: Parameters<typeof platformLabel>[0];
+  workspaceId: string;
+  expiresAt: Date;
+}): Promise<void> {
+  const [workspace, owners] = await Promise.all([
+    prisma.workspace.findUnique({ where: { id: connection.workspaceId }, select: { name: true } }),
+    prisma.workspaceMember.findMany({
+      where: { workspaceId: connection.workspaceId, role: "owner" },
+      select: { user: { select: { id: true, email: true, timeZone: true } } },
+    }),
+  ]);
+  const expiry = connection.expiresAt.toISOString();
+  for (const owner of owners) {
+    const email = buildExpiryWarningEmail({
+      platformLabel: platformLabel(connection.platform),
+      workspaceId: connection.workspaceId,
+      workspaceName: workspace?.name ?? "your workspace",
+      expiresAt: connection.expiresAt,
+      timeZone: owner.user.timeZone,
+      appBaseUrl: process.env.NEXTAUTH_URL || null,
+    });
+    await sendEmail(
+      { to: owner.user.email, ...email },
+      { idempotencyKey: `expiry-warning/${connection.id}/${expiry}/${owner.user.id}`, throwOnRetryable: true },
+    );
+  }
+  // Only while the expiry is the one warned about: a reconnect meanwhile has its own.
+  await prisma.socialConnection.updateMany({
+    where: { id: connection.id, expiresAt: connection.expiresAt },
+    data: { expiryWarnedFor: connection.expiresAt },
+  });
+}
+
+/**
+ * The daily sweep's notices (one step, connectionHealthSweep in
+ * inngest-functions.ts), in order:
+ *  1. a sign-in that cannot be renewed and ends within EXPIRY_WARNING_LEAD_MS:
+ *     its owners are warned once ("LinkedIn needs reconnecting by <date>");
+ *  2. one that has ended: the connection is flagged, only while it is the row
+ *     that was read (same `expiresAt`: a reconnect writes a new one), so posts
+ *     stop being sent with a dead token and Settings says to reconnect;
+ *  3. every flagged connection whose flag has not had its email (step 2's, a
+ *     failed post's, a backlog from before this existed): the reconnect email.
+ * The cron runs at 04:45 UTC, the evening before in the US, so the lapse email
+ * goes out on the day the sign-in ended there, or within the next day.
+ *
+ * Throws only a retryable send failure (the step is retried; what was recorded
+ * is skipped). Returns counts only.
+ */
+export async function sendConnectionNotices(
+  nowIso: string,
+  utcDay: string,
+): Promise<{ warned: number; lapsed: number; reconnectEmails: number }> {
+  const now = new Date(nowIso);
+  let warned = 0;
+  let lapsed = 0;
+
+  const candidates = await prisma.socialConnection.findMany({
+    where: expiryNoticeWhere(now),
+    select: { id: true, platform: true, workspaceId: true, expiresAt: true, expiryWarnedFor: true },
+    orderBy: { expiresAt: "asc" },
+    take: CONNECTION_NOTICES_BATCH,
+  });
+  for (const candidate of candidates) {
+    if (!candidate.expiresAt) continue;
+    // The WHERE already holds these two; the rule is checked whole.
+    const due = expiryNoticeDue({ ...candidate, refreshToken: null, needsReconnect: false }, now);
+    if (due === "warning") {
+      await warnOwnersOfExpiry({ ...candidate, expiresAt: candidate.expiresAt });
+      warned++;
+    } else if (due === "lapsed") {
+      // Flag fields only, never a token (connectionHealth.ts invariant).
+      const flagged = await prisma.socialConnection.updateMany({
+        where: { id: candidate.id, needsReconnect: false, refreshToken: null, expiresAt: candidate.expiresAt },
+        data: { needsReconnect: true, lastRefreshErrorCode: CONNECTION_EXPIRED_CODE, refreshFailedAt: now },
+      });
+      lapsed += flagged.count;
+    }
+  }
+
+  const unannounced = await prisma.socialConnection.findMany({
+    where: {
+      needsReconnect: true,
+      OR: [
+        { reconnectEmailedAt: null },
+        { reconnectEmailedAt: { lt: prisma.socialConnection.fields.refreshFailedAt } },
+      ],
+    },
+    select: { id: true },
+    orderBy: { id: "asc" },
+    take: CONNECTION_NOTICES_BATCH,
+  });
+  let reconnectEmails = 0;
+  for (const { id } of unannounced) {
+    reconnectEmails += (await notifyOwnersToReconnect(id, utcDay)).emailed;
+  }
+
+  return { warned, lapsed, reconnectEmails };
+}

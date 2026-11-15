@@ -27,6 +27,8 @@ function connection(): SocialConnection {
     needsReconnect: false,
     lastRefreshErrorCode: null,
     refreshFailedAt: null,
+    reconnectEmailedAt: null,
+    expiryWarnedFor: null,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
   } as SocialConnection;

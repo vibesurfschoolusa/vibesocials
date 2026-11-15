@@ -58,6 +58,8 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
     needsReconnect: false,
     lastRefreshErrorCode: null,
     refreshFailedAt: null,
+    reconnectEmailedAt: null,
+    expiryWarnedFor: null,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
     ...overrides,

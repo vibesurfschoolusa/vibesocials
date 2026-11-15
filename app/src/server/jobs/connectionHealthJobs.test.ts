@@ -17,6 +17,8 @@ const {
   sendEmailMock,
   syncPageMock,
   backfillGbpLocationTitlesMock,
+  sendConnectionNoticesMock,
+  updateManyMock,
 } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
   findUniqueMock: vi.fn(),
@@ -27,11 +29,13 @@ const {
   sendEmailMock: vi.fn(),
   syncPageMock: vi.fn(),
   backfillGbpLocationTitlesMock: vi.fn(),
+  sendConnectionNoticesMock: vi.fn(),
+  updateManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    socialConnection: { findMany: findManyMock, findUnique: findUniqueMock },
+    socialConnection: { findMany: findManyMock, findUnique: findUniqueMock, updateMany: updateManyMock },
     workspace: { findUnique: workspaceFindUniqueMock },
     workspaceMember: { findMany: membersFindManyMock },
     // 2026-11-09: the sweep's last step deletes YouTube statistics older than
@@ -49,6 +53,13 @@ vi.mock("@/server/connections/linkedinData", () => ({
 // (server/connections/gbpLocationTitle.ts, its own suite); none here.
 vi.mock("@/server/connections/gbpLocationTitle", () => ({
   backfillGbpLocationTitles: backfillGbpLocationTitlesMock,
+}));
+// R5-publishing M1: the sweep's last step sends the connection notices
+// (connectionNotices.ts, its own suite). Only that function is replaced:
+// notifyOwnersToReconnect, which refresh-connection uses, stays real.
+vi.mock("@/server/jobs/connectionNotices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/connectionNotices")>()),
+  sendConnectionNotices: sendConnectionNoticesMock,
 }));
 // The lock helper has its own suite (connectionRefresh.test.ts); only the
 // function is replaced, its error codes stay real.
@@ -136,6 +147,7 @@ function registeredConfig(fn: unknown, id: string) {
 }
 
 const NOW = new Date("2026-11-01T04:45:00.000Z");
+const NO_NOTICES = { warned: 0, lapsed: 0, reconnectEmails: 0 };
 
 beforeEach(() => {
   for (const mock of [
@@ -161,6 +173,10 @@ beforeEach(() => {
   sendEmailMock.mockResolvedValue(undefined);
   backfillGbpLocationTitlesMock.mockReset();
   backfillGbpLocationTitlesMock.mockResolvedValue({ named: 0, failed: 0, flagged: [] });
+  sendConnectionNoticesMock.mockReset();
+  sendConnectionNoticesMock.mockResolvedValue(NO_NOTICES);
+  updateManyMock.mockReset();
+  updateManyMock.mockResolvedValue({ count: 1 });
 });
 
 afterEach(() => {
@@ -219,7 +235,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     expect(step.sendEvent).toHaveBeenCalledTimes(2);
     expect(eventsOf(step, 0)).toHaveLength(1000);
     expect(eventsOf(step, 1)).toHaveLength(3);
-    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
+    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
   });
 
   it("sends one event per connection with the id refresh-<id>-<UTC date> (a same-day re-run dedupes)", async () => {
@@ -251,6 +267,9 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       platform: "google_business_profile",
       workspaceId: "ws-1",
       needsReconnect: true,
+      lastRefreshErrorCode: "GOOGLE_TOKEN_REFRESH_FAILED",
+      refreshFailedAt: NOW,
+      reconnectEmailedAt: null,
     });
     workspaceFindUniqueMock.mockResolvedValue({ name: "Acme" });
     membersFindManyMock.mockResolvedValue([{ user: { id: "user-a", email: "owner-a@example.com" } }]);
@@ -258,13 +277,21 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
 
     const summary = await runCron(step);
 
-    expect(step.order.slice(-2)).toEqual([
+    expect(step.order.slice(-3)).toEqual([
       "run:backfill-gbp-location-titles",
       "run:notify-gbp-reconnect-0",
+      "run:connection-notices",
     ]);
     expect(findUniqueMock).toHaveBeenCalledWith({
       where: { id: "conn-9" },
-      select: { platform: true, workspaceId: true, needsReconnect: true },
+      select: {
+        platform: true,
+        workspaceId: true,
+        needsReconnect: true,
+        lastRefreshErrorCode: true,
+        refreshFailedAt: true,
+        reconnectEmailedAt: true,
+      },
     });
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0][0].to).toBe("owner-a@example.com");
@@ -278,6 +305,25 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       failed: 1,
       flagged: 1,
       reconnectEmails: 1,
+    });
+  });
+
+  // R5-publishing M1: warnings before an unrenewable sign-in ends, the flag when it
+  // has, and the reconnect email for every flag that has not had one. One step,
+  // last, so a failing send never holds back the steps before it.
+  it("ends with one connection-notices step, given the memoized start time and its UTC day", async () => {
+    findManyMock.mockResolvedValueOnce([]);
+    sendConnectionNoticesMock.mockResolvedValue({ warned: 2, lapsed: 1, reconnectEmails: 3 });
+    const step = fakeStep();
+
+    const summary = await runCron(step);
+
+    expect(step.order[step.order.length - 1]).toBe("run:connection-notices");
+    expect(sendConnectionNoticesMock).toHaveBeenCalledWith(NOW.toISOString(), "2026-11-01");
+    expect((summary as unknown as { connectionNotices: unknown }).connectionNotices).toEqual({
+      warned: 2,
+      lapsed: 1,
+      reconnectEmails: 3,
     });
   });
 
@@ -298,6 +344,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       "run:purge-stale-youtube-metrics",
       "run:refresh-linkedin-organization-profiles",
       "run:backfill-gbp-location-titles",
+      "run:connection-notices",
     ]);
     expect(step.outputs.start).toBe(NOW.toISOString());
   });
@@ -368,7 +415,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       expect(sent).toHaveLength(2500);
       expect(sent[0]).toBe(`refresh-${pad(0)}-2026-11-01`);
       expect(sent[sent.length - 1]).toBe(`refresh-${pad(2499)}-2026-11-01`);
-      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
+      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
     });
 
     it("rows added while the sweep runs are picked up when they sort after the current page", async () => {
@@ -392,7 +439,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     const summary = await runCron(step);
 
     expect(step.sendEvent).toHaveBeenCalledTimes(1);
-    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
+    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
   });
 
   it("no eligible connection: one page query, no event", async () => {
@@ -403,7 +450,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
 
     expect(findManyMock).toHaveBeenCalledTimes(1);
     expect(step.sendEvent).not.toHaveBeenCalled();
-    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
+    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
   });
 
   it("never loads token columns, and its step outputs hold only ids", async () => {
@@ -483,6 +530,9 @@ describe("refreshConnection — one connection", () => {
     refreshToken: "secret-refresh-token",
     expiresAt: new Date("2026-10-31T00:00:00.000Z"),
     needsReconnect: false,
+    lastRefreshErrorCode: null,
+    refreshFailedAt: null,
+    reconnectEmailedAt: null,
     ...overrides,
   });
 
@@ -552,6 +602,11 @@ describe("refreshConnection — one connection", () => {
     expect(membersFindManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", role: "owner" },
       select: { user: { select: { id: true, email: true } } },
+    });
+    // Recorded, so the sweep's notices step does not send it again.
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "conn-1", needsReconnect: true },
+      data: { reconnectEmailedAt: NOW },
     });
   });
 
@@ -669,7 +724,9 @@ describe("refreshConnection — one connection", () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
-  it("ALREADY FLAGGED: no refresher call and no email", async () => {
+  // R5-publishing M1: a connection flagged by a failed post is never refreshed;
+  // its reconnect email comes from the sweep's connection-notices step instead.
+  it("ALREADY FLAGGED: no refresher call and no email (the notices step sends it)", async () => {
     row = connectionRow({ needsReconnect: true });
     const refresher = vi.fn();
     clientWith(refresher);
