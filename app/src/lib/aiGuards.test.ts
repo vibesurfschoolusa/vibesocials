@@ -1,16 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 2026-11-01 scale audit (W6): the three AI routes cap their prompt fields,
 // share a per-workspace daily quota and time out the provider call. These are
 // the shared pieces. `checkRateLimit` is mocked so the real limiter (and with
 // it Prisma / DATABASE_URL) is never loaded.
-const { checkRateLimitMock, memberFindManyMock } = vi.hoisted(() => ({
+const { checkRateLimitMock, memberFindManyMock, entryFindManyMock } = vi.hoisted(() => ({
   checkRateLimitMock: vi.fn(),
   memberFindManyMock: vi.fn(),
+  entryFindManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
-vi.mock("@/lib/db", () => ({ prisma: { workspaceMember: { findMany: memberFindManyMock } } }));
+vi.mock("@/lib/db", () => ({
+  prisma: { workspaceMember: { findMany: memberFindManyMock }, rateLimitEntry: { findMany: entryFindManyMock } },
+}));
 
 import {
   AI_LIMITS,
@@ -27,6 +30,8 @@ beforeEach(() => {
   checkRateLimitMock.mockReset();
   memberFindManyMock.mockReset();
   memberFindManyMock.mockResolvedValue([]);
+  entryFindManyMock.mockReset();
+  entryFindManyMock.mockResolvedValue([]);
   vi.unstubAllEnvs();
 });
 
@@ -114,6 +119,7 @@ describe("checkWorkspaceAiQuota", () => {
     await expect(checkWorkspaceAiQuota("ws-1")).resolves.toEqual({
       allowed: false,
       retryAfterSeconds: 4321,
+      budget: "workspace",
     });
   });
 
@@ -161,14 +167,86 @@ describe("checkWorkspaceAiQuota", () => {
       userId.startsWith("ai:owner:") ? { allowed: false, retryAfterSeconds: 99 } : { allowed: true },
     );
 
-    await expect(checkWorkspaceAiQuota("ws-new")).resolves.toEqual({ allowed: false, retryAfterSeconds: 99 });
+    await expect(checkWorkspaceAiQuota("ws-new")).resolves.toEqual({
+      allowed: false,
+      retryAfterSeconds: 99,
+      budget: "owner",
+    });
   });
 
-  it("does not count an owner when the workspace's own budget already refused", async () => {
+  it("does not count an owner when the workspace's own budget refuses as it is spent", async () => {
+    memberFindManyMock.mockResolvedValue([{ userId: "owner-1", user: { email: "one@example.com", emailVerifiedAt: null } }]);
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5 });
-    await checkWorkspaceAiQuota("ws-1");
-    expect(memberFindManyMock).not.toHaveBeenCalled();
+    await expect(checkWorkspaceAiQuota("ws-1")).resolves.toEqual({
+      allowed: false,
+      retryAfterSeconds: 5,
+      budget: "workspace",
+    });
     expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+  });
+
+  // R6-security L3: every budget is read before any is spent, so a refused
+  // call spends none of them.
+  describe("reads every budget before spending any", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const NOW = new Date("2026-11-14T15:00:00.000Z");
+    const bucket = Math.floor(NOW.getTime() / DAY);
+    const workspaceKey = `ai:workspace:ws-1:ai/workspace-daily:${bucket}`;
+    const ownerKey = (id: string) => `ai:owner:${id}:ai/owner-daily:${bucket}`;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      memberFindManyMock.mockResolvedValue([
+        { userId: "owner-1", user: { email: "one@example.com", emailVerifiedAt: null } },
+        { userId: "owner-2", user: { email: "two@example.com", emailVerifiedAt: null } },
+      ]);
+      checkRateLimitMock.mockResolvedValue({ allowed: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("reads the counters of the workspace and of each owner, by the limiter's own keys", async () => {
+      await checkWorkspaceAiQuota("ws-1");
+      expect(entryFindManyMock).toHaveBeenCalledWith({
+        where: { key: { in: [workspaceKey, ownerKey("owner-1"), ownerKey("owner-2")] } },
+        select: { key: true, count: true },
+      });
+    });
+
+    it("a spent owner budget refuses before the workspace's or the other owner's is spent, and says it is the owner's", async () => {
+      entryFindManyMock.mockResolvedValue([
+        { key: workspaceKey, count: 10 },
+        { key: ownerKey("owner-2"), count: 400 },
+      ]);
+      const quota = await checkWorkspaceAiQuota("ws-1");
+      expect(quota).toEqual({
+        allowed: false,
+        retryAfterSeconds: Math.ceil(((bucket + 1) * DAY - NOW.getTime()) / 1000),
+        budget: "owner",
+      });
+      expect(checkRateLimitMock).not.toHaveBeenCalled();
+    });
+
+    it("a spent workspace budget refuses before any owner's is spent", async () => {
+      entryFindManyMock.mockResolvedValue([{ key: workspaceKey, count: 200 }]);
+      expect((await checkWorkspaceAiQuota("ws-1")).budget).toBe("workspace");
+      expect(checkRateLimitMock).not.toHaveBeenCalled();
+    });
+
+    it("below every budget, spends each one", async () => {
+      entryFindManyMock.mockResolvedValue([{ key: ownerKey("owner-1"), count: 399 }]);
+      await expect(checkWorkspaceAiQuota("ws-1")).resolves.toEqual({ allowed: true });
+      expect(checkRateLimitMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("when the counters cannot be read, spending (which fails closed) still decides", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      entryFindManyMock.mockRejectedValue(new Error("db down"));
+      checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
+      expect(await checkWorkspaceAiQuota("ws-1")).toEqual({ allowed: false, retryAfterSeconds: 60, budget: "workspace" });
+    });
   });
 
   it("never limits the operator's workspaces by the owner budget", async () => {
@@ -202,6 +280,18 @@ describe("aiWorkspaceLimitResponse", () => {
       code: "AI_WORKSPACE_DAILY_LIMIT",
       error: "Your workspace has reached today's AI limit. Try again tomorrow.",
       retryAfterSeconds: 777,
+    });
+  });
+
+  // R6-security L3: the sentence names the budget that is spent.
+  it("names the owner's budget when that is the one spent", async () => {
+    const response = aiWorkspaceLimitResponse(60, "owner");
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      code: "AI_WORKSPACE_DAILY_LIMIT",
+      error:
+        "This workspace's owner has reached today's AI limit across all the workspaces they own. Try again tomorrow.",
+      retryAfterSeconds: 60,
     });
   });
 });
