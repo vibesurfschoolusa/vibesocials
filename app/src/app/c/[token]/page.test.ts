@@ -79,6 +79,8 @@ describe("the connect link page", () => {
     h.findLink.mockResolvedValue(null);
     const html = await render({ success: "tiktok_connected" });
     expect(html).toContain(CONNECT_LINK_INACTIVE_MESSAGE);
+    // R11-pages L5: the page still has an h1.
+    expect(html).toMatch(/<h1[^>]*>Vibe Socials<\/h1>/);
     expect(html).not.toContain("<form");
     expect(html).not.toContain("is connected");
     expect(h.listConnections).not.toHaveBeenCalled();

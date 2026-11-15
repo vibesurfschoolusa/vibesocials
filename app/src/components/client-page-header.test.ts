@@ -28,12 +28,19 @@ describe("ClientPageShell", () => {
     expect(html).toContain(">SC<");
   });
 
-  it("with no workspace (inactive link) shows the mark and product name only", () => {
+  // R11-pages L5: the inactive /c, /u, /v and /v/report pages have an h1 too.
+  it("with no workspace (inactive link) shows the mark and product name only, the name as the page's h1", () => {
     const html = render({ workspace: null });
-    expect(html).toContain("Vibe Socials");
+    expect(html).toMatch(/<h1[^>]*>Vibe Socials<\/h1>/);
     expect(html).not.toContain("Sent with");
-    expect(html).not.toContain("<h1");
     expect(html).toContain("body");
+  });
+
+  it("with no workspace and a title, the title is the page's h1 under the product name", () => {
+    const html = render({ workspace: null, title: "This link is not active" });
+    expect(html).toMatch(/<h1[^>]*>This link is not active<\/h1>/);
+    expect(html.match(/<h1/g)).toHaveLength(1);
+    expect(html).toContain("Vibe Socials");
   });
 
   it("keeps the page inside a phone: no fixed widths, long names wrap", () => {

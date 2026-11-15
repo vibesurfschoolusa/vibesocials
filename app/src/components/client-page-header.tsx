@@ -58,7 +58,15 @@ export function ClientPageShell({
           ) : (
             <>
               <BrandMark />
-              <p className="text-base font-semibold">Vibe Socials</p>
+              {/* R11-pages L5: an inactive link's page still has an h1: its title, else the product name. */}
+              {title ? (
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-muted-foreground">Vibe Socials</p>
+                  <h1 className="break-words text-xl font-bold leading-tight tracking-tight sm:text-2xl">{title}</h1>
+                </div>
+              ) : (
+                <h1 className="text-base font-semibold">Vibe Socials</h1>
+              )}
             </>
           )}
         </header>
