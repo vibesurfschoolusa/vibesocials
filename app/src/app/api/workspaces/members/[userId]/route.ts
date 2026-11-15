@@ -6,6 +6,8 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
+import { noticeOwnersOfFormerOwner } from "../formerOwnerNotice";
+
 interface MemberRouteContext {
   params: Promise<{ userId: string }>;
 }
@@ -192,23 +194,36 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
 
   // Demote owner -> member. This CAN remove the last owner, so serialize on the
   // shared ws-owners advisory lock and re-read the owner count INSIDE it.
-  return prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-owners:${workspaceId}`}))`;
 
     const ownerCount = await tx.workspaceMember.count({
       where: { workspaceId, role: "owner" },
     });
     if (ownerCount < 2) {
-      return NextResponse.json({ error: "Promote another owner first." }, { status: 400 });
+      return "last_owner" as const;
     }
 
     const { count } = await tx.workspaceMember.updateMany({
       where: { workspaceId, userId: targetUserId, role: "owner" },
       data: { role: "member" },
     });
-    if (count === 0) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-    return NextResponse.json({ ok: true, role }, { status: 200 });
+    return count === 0 ? ("not_found" as const) : ("demoted" as const);
   });
+  if (outcome === "last_owner") {
+    return NextResponse.json({ error: "Promote another owner first." }, { status: 400 });
+  }
+  if (outcome === "not_found") {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // R5-security L1: as an owner they could copy the client links, which keep
+  // working. After the commit; never throws.
+  const { clientLinksToReplace } = await noticeOwnersOfFormerOwner({
+    workspaceId,
+    workspaceName: context.workspace.name,
+    formerOwnerId: targetUserId,
+    at: new Date(),
+  });
+  return NextResponse.json({ ok: true, role, clientLinksToReplace }, { status: 200 });
 }

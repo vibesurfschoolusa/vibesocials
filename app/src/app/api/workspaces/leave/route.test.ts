@@ -18,7 +18,9 @@ const {
   cookieSetMock,
   cookiesMock,
   payerRefusalMock,
+  noticeMock,
 } = vi.hoisted(() => ({
+  noticeMock: vi.fn(),
   payerRefusalMock: vi.fn(),
   deleteManyMock: vi.fn(),
   countMock: vi.fn(),
@@ -64,6 +66,8 @@ vi.mock("next/headers", () => ({
 }));
 // R5-security L2: the Stripe side is tested in server/billing/payerRefusal.test.ts.
 vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: payerRefusalMock }));
+// R5-security L1: the email itself is tested in ../members/formerOwnerNotice.test.ts.
+vi.mock("../members/formerOwnerNotice", () => ({ noticeOwnersOfFormerOwner: noticeMock }));
 
 import { POST } from "./route";
 
@@ -112,6 +116,34 @@ beforeEach(() => {
   cookiesMock.mockResolvedValue({ set: cookieSetMock });
   payerRefusalMock.mockReset();
   payerRefusalMock.mockResolvedValue(null);
+  noticeMock.mockReset();
+  noticeMock.mockResolvedValue({ clientLinksToReplace: true });
+});
+
+// R5-security L1: an owner who leaves could copy the client links, which keep working.
+describe("POST /api/workspaces/leave tells the remaining owners about the client links", () => {
+  it("after an owner leaves, once the row is gone", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(leaveReq());
+
+    expect(response.status).toBe(200);
+    expect(noticeMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      workspaceName: "Acme",
+      formerOwnerId: "user-1",
+      at: expect.any(Date),
+    });
+    expect(deleteMock.mock.invocationCallOrder[0]).toBeLessThan(noticeMock.mock.invocationCallOrder[0]);
+  });
+
+  it("not for a member who leaves, nor for a sole owner who is refused", async () => {
+    await POST(leaveReq());
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    countMock.mockResolvedValue(0);
+    await POST(leaveReq());
+    expect(noticeMock).not.toHaveBeenCalled();
+  });
 });
 
 // R5-security L2: a person whose card pays for this workspace's plan must hand

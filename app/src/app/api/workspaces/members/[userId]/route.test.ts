@@ -18,7 +18,9 @@ const {
   executeRawMock,
   requireOwnerContextMock,
   checkRateLimitMock,
+  noticeMock,
 } = vi.hoisted(() => ({
+  noticeMock: vi.fn(),
   findFirstMock: vi.fn(),
   deleteManyMock: vi.fn(),
   updateManyMock: vi.fn(),
@@ -61,6 +63,8 @@ vi.mock("@/lib/workspace", () => ({
 vi.mock("@/lib/rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
 }));
+// R5-security L1: the email itself is tested in ../formerOwnerNotice.test.ts.
+vi.mock("../formerOwnerNotice", () => ({ noticeOwnersOfFormerOwner: noticeMock }));
 
 import { DELETE, PATCH } from "./route";
 
@@ -112,6 +116,8 @@ beforeEach(() => {
   countMock.mockResolvedValue(2);
   executeRawMock.mockResolvedValue(1);
   inviteUpdateManyMock.mockResolvedValue({ count: 1 });
+  noticeMock.mockReset();
+  noticeMock.mockResolvedValue({ clientLinksToReplace: false });
 });
 
 describe("DELETE /api/workspaces/members/[userId]", () => {
@@ -446,11 +452,40 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-2"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
+    // R5-security L1: no client link is on in this test, so nothing to replace.
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", clientLinksToReplace: false });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-2", role: "owner" },
       data: { role: "member" },
     });
+  });
+
+  // R5-security L1: a demoted owner could copy the client links, which keep working.
+  it("after a demotion, tells the other owners and offers new client links", async () => {
+    findFirstMock.mockResolvedValue({ role: "owner" });
+    noticeMock.mockResolvedValue({ clientLinksToReplace: true });
+
+    const response = await PATCH(patchReq("member"), ctx("user-2"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", clientLinksToReplace: true });
+    expect(noticeMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      workspaceName: "Acme",
+      formerOwnerId: "user-2",
+      at: expect.any(Date),
+    });
+  });
+
+  it("sends no notice for a promotion, a refused demotion or a raced one", async () => {
+    await PATCH(patchReq("owner"), ctx("user-2"));
+    findFirstMock.mockResolvedValue({ role: "owner" });
+    countMock.mockResolvedValue(1);
+    await PATCH(patchReq("member"), ctx("user-2"));
+    countMock.mockResolvedValue(2);
+    updateManyMock.mockResolvedValue({ count: 0 });
+    await PATCH(patchReq("member"), ctx("user-2"));
+    expect(noticeMock).not.toHaveBeenCalled();
   });
 
   it("allows self-demotion through the same last-owner guard when another owner exists", async () => {
@@ -462,7 +497,8 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-1"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
+    // R5-security L1: no client link is on in this test, so nothing to replace.
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", clientLinksToReplace: false });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-1", role: "owner" },
       data: { role: "member" },

@@ -8,6 +8,8 @@ import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 
+import { noticeOwnersOfFormerOwner } from "../members/formerOwnerNotice";
+
 /**
  * POST /api/workspaces/leave
  *
@@ -77,7 +79,7 @@ export async function POST(request: Request) {
     // and re-read the OTHER-owner count INSIDE it: a co-owner may leave, a sole
     // owner may not. The caller's own row is then deleted BY ID — the fast
     // path's `role: "member"` guarded deleteMany would never match an owner row.
-    return prisma.$transaction(async (tx) => {
+    const outcome = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-owners:${context.workspace.id}`}))`;
 
       const otherOwnerCount = await tx.workspaceMember.count({
@@ -88,10 +90,7 @@ export async function POST(request: Request) {
         },
       });
       if (otherOwnerCount === 0) {
-        return NextResponse.json(
-          { error: "Transfer ownership before removing yourself." },
-          { status: 400 },
-        );
+        return "sole_owner" as const;
       }
 
       const own = await tx.workspaceMember.findFirst({
@@ -99,21 +98,36 @@ export async function POST(request: Request) {
         select: { id: true },
       });
       if (!own) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return "not_found" as const;
       }
       await tx.workspaceMember.delete({ where: { id: own.id } });
-
-      const cookieStore = await cookies();
-      cookieStore.set(ACTIVE_WORKSPACE_COOKIE, "", {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
-        path: "/",
-        maxAge: 0,
-      });
-
-      return NextResponse.json({ left: true }, { status: 200 });
+      return "left" as const;
     });
+    if (outcome === "sole_owner") {
+      return NextResponse.json({ error: "Transfer ownership before removing yourself." }, { status: 400 });
+    }
+    if (outcome === "not_found") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const cookieStore = await cookies();
+    cookieStore.set(ACTIVE_WORKSPACE_COOKIE, "", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 0,
+    });
+
+    // R5-security L1: as an owner they could copy the client links, which keep
+    // working; the owners who remain are told. After the commit; never throws.
+    await noticeOwnersOfFormerOwner({
+      workspaceId: context.workspace.id,
+      workspaceName: context.workspace.name,
+      formerOwnerId: context.user.id,
+      at: new Date(),
+    });
+    return NextResponse.json({ left: true }, { status: 200 });
   }
 
   const { count } = await prisma.workspaceMember.deleteMany({
