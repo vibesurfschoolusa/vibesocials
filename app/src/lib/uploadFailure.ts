@@ -7,6 +7,8 @@
  * so the user reads that sentence instead of the generic failure.
  */
 
+import { SIGNED_OUT_ERROR } from "./signedOutMessage";
+
 /** An upload refused for a reason the user can act on; `message` is the sentence to show. */
 export class UploadRefusedError extends Error {
   constructor(message: string) {
@@ -40,6 +42,10 @@ export async function explainUploadFailure(
     : original;
   try {
     const response = await fetchImpl("/api/upload", { method: "GET" });
+    // R20 new-customer L2: the session ended (another tab, a new password).
+    // That is why the upload failed, whatever the blob client threw; the
+    // route's own sentence says so.
+    if (response.status === 401) return new UploadRefusedError(await signedOutText(response));
     if (!response.ok) return otherwise;
     // `refused`: the route remembered why it refused this person's token (an
     // out-of-date page, the day's 20 GB), app/api/upload/uploadRefusal.ts.
@@ -51,4 +57,15 @@ export async function explainUploadFailure(
     // The question is best-effort: the original error still says something.
   }
   return otherwise;
+}
+
+/** The 401's `error`, or the shared sentence when the body cannot be read. */
+async function signedOutText(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown } | null;
+    if (typeof body?.error === "string" && body.error) return body.error;
+  } catch {
+    // Fall through to the shared sentence.
+  }
+  return SIGNED_OUT_ERROR;
 }

@@ -5,8 +5,8 @@ import { explainUploadFailure, UPLOAD_REFUSED_MESSAGE, UploadRefusedError } from
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
 
-function jsonResponse(body: unknown, ok = true) {
-  return { ok, json: async () => body } as unknown as Response;
+function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 500) {
+  return { ok, status, json: async () => body } as unknown as Response;
 }
 
 describe("explainUploadFailure", () => {
@@ -85,5 +85,43 @@ describe("explainUploadFailure", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: true, error: FULL }));
     const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
     expect(explained.message).toBe(FULL);
+  });
+  // R20 new-customer L2: an upload from a tab whose session ended. The blob
+  // client drops the 401's body, and the status question answers 401 too; the
+  // person reads the route's signed-out sentence, not "The upload was refused".
+  describe("signed out", () => {
+    const SIGNED_OUT = "You were signed out. Sign in again.";
+    const TOKEN_ERROR = new Error("Vercel Blob: Failed to  retrieve the client token");
+
+    it("a 401 answer shows the route's sentence", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: SIGNED_OUT }, false, 401));
+      const explained = await explainUploadFailure(TOKEN_ERROR, fetchMock);
+      expect(explained).toBeInstanceOf(UploadRefusedError);
+      expect(explained.message).toBe(SIGNED_OUT);
+    });
+
+    it("whatever the upload threw (a 401 is about the person, not the file)", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: SIGNED_OUT }, false, 401));
+      const explained = await explainUploadFailure(new Error("network down"), fetchMock);
+      expect(explained).toBeInstanceOf(UploadRefusedError);
+      expect(explained.message).toBe(SIGNED_OUT);
+    });
+
+    it("a 401 whose body cannot be read still says signed out", async () => {
+      const unreadable = { ok: false, status: 401, json: async () => Promise.reject(new SyntaxError("x")) } as unknown as Response;
+      const explained = await explainUploadFailure(TOKEN_ERROR, vi.fn().mockResolvedValue(unreadable));
+      expect(explained.message).toBe(SIGNED_OUT);
+      const empty = jsonResponse({}, false, 401);
+      expect((await explainUploadFailure(TOKEN_ERROR, vi.fn().mockResolvedValue(empty))).message).toBe(SIGNED_OUT);
+    });
+
+    it("any other refused answer keeps today's text", async () => {
+      for (const status of [403, 429, 500, 503]) {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "Something" }, false, status));
+        expect((await explainUploadFailure(TOKEN_ERROR, fetchMock)).message, String(status)).toBe(UPLOAD_REFUSED_MESSAGE);
+        const original = new Error("network down");
+        await expect(explainUploadFailure(original, fetchMock)).resolves.toBe(original);
+      }
+    });
   });
 });

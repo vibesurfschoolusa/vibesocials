@@ -417,6 +417,13 @@ describe("a refused upload's sentence reaches the person", () => {
     await expect(shown()).resolves.toBe("File is too large (max 512 MB).");
   });
 
+  // R20 new-customer L2: a tab whose session ended, on Create, Add many or Media.
+  it("signed out: the route's signed-out sentence, not the refusal one", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(401);
+    await expect(shown()).resolves.toBe("You were signed out. Sign in again.");
+  });
+
   it("a full workspace keeps its storage sentence", async () => {
     checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(403);
