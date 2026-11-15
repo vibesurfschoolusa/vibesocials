@@ -254,6 +254,9 @@ const OUTCOME_JOB_SELECT = {
   updatedAt: true,
   // The publish attempt the email is about (a Retry sets it): its key.
   retriedAt: true,
+  // R6-publishing L2: the email this job's outcome already went out in.
+  outcomeEmailAttempt: true,
+  outcomeEmailKey: true,
   results: {
     // Only what the email renders or keys on — externalPostId was selected but
     // never read (review Minor #3), so it's dropped.
@@ -377,6 +380,66 @@ function pairIdempotencyKey(feed: OutcomeJob, story: OutcomeJob): string {
   return `post-outcome-pair/${feed.id}/${attemptOf(feed)}/${attemptOf(story)}`;
 }
 
+/**
+ * R6-publishing L2: the key of the email this job's outcome went out in for
+ * its current attempt, or null. A Retry is a new attempt, so its outcome is
+ * not yet in any email.
+ */
+function emailedThisAttempt(job: OutcomeJob): string | null {
+  return job.outcomeEmailAttempt === attemptOf(job) ? job.outcomeEmailKey : null;
+}
+
+/**
+ * Records, before sending, that `job`'s outcome for its current attempt goes
+ * out under `key`. Refused (false) when it already went out under another key
+ * for that attempt; the same key is allowed again, so a replay or a lost ack
+ * sends again under it and Resend delivers once. One conditional UPDATE, so of
+ * two halves deciding at once only one can record a different email.
+ * `force` overwrites: only for this job's own claim that its partner refused.
+ */
+async function claimOutcomeEmail(job: OutcomeJob, key: string, force = false): Promise<boolean> {
+  const attempt = attemptOf(job);
+  const { count } = await prisma.postJob.updateMany({
+    where: force
+      ? { id: job.id }
+      : {
+          id: job.id,
+          OR: [{ outcomeEmailAttempt: null }, { outcomeEmailAttempt: { not: attempt } }, { outcomeEmailKey: key }],
+        },
+    data: { outcomeEmailAttempt: attempt, outcomeEmailKey: key },
+  });
+  return count === 1;
+}
+
+/**
+ * Which email this job's delivery sends, recorded on the job(s) it covers:
+ * the pair's one email (`partner` given) only when neither half went out in
+ * another for its attempt, else its own. Null when its outcome already went
+ * out in the pair's email, so there is nothing left to send.
+ */
+async function claimEmail(
+  job: OutcomeJob,
+  partner: OutcomeJob | null,
+): Promise<{ feed: OutcomeJob; story: OutcomeJob | null; key: string } | null> {
+  if (partner) {
+    const [feed, story] = job.storyOfPostJobId ? [partner, job] : [job, partner];
+    const key = pairIdempotencyKey(feed, story);
+    const free = (half: OutcomeJob) => [null, key].includes(emailedThisAttempt(half));
+    if (free(job) && free(partner)) {
+      const mine = await claimOutcomeEmail(job, key);
+      if (mine && (await claimOutcomeEmail(partner, key))) return { feed, story, key };
+      // The partner went out in another email after it was read: this half's own.
+      if (mine) {
+        const own = outcomeIdempotencyKey(job.id, job);
+        await claimOutcomeEmail(job, own, true);
+        return { feed: job, story: null, key: own };
+      }
+    }
+  }
+  const own = outcomeIdempotencyKey(job.id, job);
+  return (await claimOutcomeEmail(job, own)) ? { feed: job, story: null, key: own } : null;
+}
+
 export interface DeliverPostOutcomeNotificationParams {
   userId: string;
   postJobId: string;
@@ -444,6 +507,17 @@ export async function deliverPostOutcomeNotification({
       return undefined;
     }
 
+    // R6-publishing L1: only a member of the post's workspace hears about its
+    // posts. An author who was removed or left gets nothing, and nobody is
+    // emailed in their place (the owners see the outcome in Activity).
+    const membership = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId: postJob.workspaceId, userId } },
+      select: { id: true },
+    });
+    if (!membership) {
+      return undefined;
+    }
+
     // R5-client-journey L3: a Feed and Story pair that finishes within
     // PAIR_EMAIL_WAIT_MS sends one email for both; see pairDecision.
     const partner = await pairPartnerOf(postJob);
@@ -451,12 +525,12 @@ export async function deliverPostOutcomeNotification({
     if (decision.send === "wait") {
       return { waitUntil: new Date(decision.until).toISOString() };
     }
-    const together = decision.send === "together" ? partner : null;
-    const [feed, story] = together
-      ? postJob.storyOfPostJobId
-        ? [together, postJob]
-        : [postJob, together]
-      : [postJob, null];
+    // R6-publishing L2: and only when neither half went out in another email.
+    const claimed = await claimEmail(postJob, decision.send === "together" ? partner : null);
+    if (!claimed) {
+      return undefined;
+    }
+    const { feed, story } = claimed;
     const rows = [...summaryRows(feed), ...(story ? summaryRows(story) : [])];
 
     // Pause (2026-11-10): a paused workspace's due posts are all failed with this
@@ -486,10 +560,7 @@ export async function deliverPostOutcomeNotification({
       // Keyed on the outcome, not on who asked: a replay, a lost ack, or a second
       // notice of the same attempt (or the other half of the pair) is a no-op at
       // Resend, so no outcome is emailed twice; a Retry is a new attempt.
-      {
-        idempotencyKey: story ? pairIdempotencyKey(feed, story) : outcomeIdempotencyKey(postJobId, postJob),
-        throwOnRetryable: true,
-      },
+      { idempotencyKey: claimed.key, throwOnRetryable: true },
     );
   } catch (error) {
     if (isRetryableEmailError(error)) throw error;

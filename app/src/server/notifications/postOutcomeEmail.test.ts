@@ -4,10 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // connectionHealth.test.ts / settings route.test.ts). deliverPostOutcomeNotification
 // imports both `@/lib/db` and `@/server/notifications/email` at module scope, so
 // both must be mocked before postOutcomeEmail.ts is imported below.
-const { findUniqueUserMock, findUniquePostJobMock, findFirstPostJobMock, sendEmailMock } = vi.hoisted(() => ({
+const {
+  findUniqueUserMock,
+  findUniquePostJobMock,
+  findFirstPostJobMock,
+  updateManyPostJobMock,
+  findUniqueMemberMock,
+  sendEmailMock,
+} = vi.hoisted(() => ({
   findUniqueUserMock: vi.fn(),
   findUniquePostJobMock: vi.fn(),
   findFirstPostJobMock: vi.fn(),
+  updateManyPostJobMock: vi.fn(),
+  findUniqueMemberMock: vi.fn(),
   sendEmailMock: vi.fn(),
 }));
 
@@ -15,7 +24,9 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     user: { findUnique: findUniqueUserMock },
     // findFirst: the Story job of a feed job (R5-client-journey L3).
-    postJob: { findUnique: findUniquePostJobMock, findFirst: findFirstPostJobMock },
+    postJob: { findUnique: findUniquePostJobMock, findFirst: findFirstPostJobMock, updateMany: updateManyPostJobMock },
+    // R6-publishing L1: the author must still be a member of the post's workspace.
+    workspaceMember: { findUnique: findUniqueMemberMock },
   },
 }));
 
@@ -43,7 +54,7 @@ const WS = { workspaceId: "ws_1", workspaceName: "Surf Co", caption: "Dawn patro
 
 /** A PostJob row as deliverPostOutcomeNotification selects it. */
 function jobRow<T extends object>(fields: T) {
-  return { workspaceId: "ws_1", baseCaption: "Dawn patrol tomorrow at 6", mediaItem: null, workspace: { name: "Surf Co" }, ...fields };
+  return { id: "job-1", workspaceId: "ws_1", baseCaption: "Dawn patrol tomorrow at 6", mediaItem: null, workspace: { name: "Surf Co" }, ...fields };
 }
 
 beforeEach(() => {
@@ -51,6 +62,10 @@ beforeEach(() => {
   findUniquePostJobMock.mockReset();
   findFirstPostJobMock.mockReset();
   findFirstPostJobMock.mockResolvedValue(null);
+  updateManyPostJobMock.mockReset();
+  updateManyPostJobMock.mockResolvedValue({ count: 1 });
+  findUniqueMemberMock.mockReset();
+  findUniqueMemberMock.mockResolvedValue({ id: "member-row" });
   sendEmailMock.mockReset();
   sendEmailMock.mockResolvedValue(undefined);
 });
@@ -290,6 +305,27 @@ describe("deliverPostOutcomeNotification", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const arg = sendEmailMock.mock.calls[0][0] as { to: string };
     expect(arg.to).toBe("member@example.com");
+  });
+
+  // R6-publishing L1: someone removed from the workspace (or who left) is no
+  // longer told about its posts; nobody else is emailed in their place.
+  it("emails nobody when the author is no longer a member of the post's workspace", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "gone@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue(jobRow({
+      status: "completed",
+      results: [{ platform: "tiktok", status: "success", errorMessage: null }],
+    }));
+    findUniqueMemberMock.mockResolvedValue(null);
+
+    await deliverPostOutcomeNotification({ userId: "member-1", postJobId: "job-1" });
+
+    expect(findUniqueMemberMock).toHaveBeenCalledWith({
+      where: { workspaceId_userId: { workspaceId: "ws_1", userId: "member-1" } },
+      select: { id: true },
+    });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(updateManyPostJobMock).not.toHaveBeenCalled();
   });
 
   // Task 9: end-to-end check that the DB `select` actually carries
@@ -957,6 +993,127 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     expect(keyOf(0)).toBe("post-outcome-pair/job-feed/first/first");
     expect(keyOf(1)).toBe(keyOf(0));
     expect(sent(0).subject).toBe("Surf Co: your post and Story failed to publish");
+  });
+
+  // R6-publishing L2: the pair's one email is sent only when neither half has
+  // emailed for its current attempt; each job records the email its outcome
+  // went out in. These run against rows that keep what is written to them.
+  describe("each half's outcome goes out in one email only", () => {
+    type Row = Record<string, unknown> & { id: string };
+    let rows: Map<string, Row>;
+    type UpdateArgs = { where: { id: string; OR?: Array<Record<string, unknown>> }; data: Record<string, unknown> };
+
+    function applyUpdate(args: UpdateArgs) {
+      const row = rows.get(args.where.id);
+      if (!row) return { count: 0 };
+      const matches =
+        !args.where.OR ||
+        args.where.OR.some((condition) => {
+          const [[column, value]] = Object.entries(condition);
+          if (value === null) return row[column] === null;
+          if (typeof value === "object" && value !== null && "not" in value) {
+            return row[column] !== null && row[column] !== (value as { not: unknown }).not;
+          }
+          return row[column] === value;
+        });
+      if (!matches) return { count: 0 };
+      Object.assign(row, args.data);
+      return { count: 1 };
+    }
+
+    function stored(feed: Record<string, unknown>, story: Record<string, unknown>) {
+      rows = new Map<string, Row>([
+        [FEED_ID, { outcomeEmailAttempt: null, outcomeEmailKey: null, ...feed, id: FEED_ID }],
+        [STORY_ID, { outcomeEmailAttempt: null, outcomeEmailKey: null, ...story, id: STORY_ID }],
+      ]);
+      findUniquePostJobMock.mockImplementation(async (args: { where: { id: string } }) => {
+        const row = rows.get(args.where.id);
+        return row ? { ...row } : null;
+      });
+      findFirstPostJobMock.mockImplementation(async (args: { where: { storyOfPostJobId?: string } }) =>
+        args.where.storyOfPostJobId === FEED_ID ? { ...rows.get(STORY_ID)! } : null,
+      );
+      updateManyPostJobMock.mockImplementation(async (args: UpdateArgs) => applyUpdate(args));
+    }
+
+    it("THE REPEAT: the feed emailed alone (its Story was not sending yet); the Story finishing soon after sends alone, without the feed's rows", async () => {
+      stored(feedJob(), storyJob({ status: "scheduled" }));
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+      expect(keyOf(0)).toBe("post-outcome/job-feed/first");
+      expect(rows.get(FEED_ID)).toMatchObject({ outcomeEmailAttempt: "first", outcomeEmailKey: "post-outcome/job-feed/first" });
+
+      // The Story is published and finishes 5 minutes after the feed.
+      Object.assign(rows.get(STORY_ID)!, { status: "completed" });
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
+      expect(keyOf(1)).toBe("post-outcome/job-story/first");
+      expect(sent(1).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
+      expect(sent(1).html).not.toContain("<li>Instagram: Succeeded</li>");
+    });
+
+    it("NORMAL PAIR: both halves record the pair's email, so both deliveries send it under one key", async () => {
+      stored(feedJob(), storyJob());
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+      vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, afterPairWait: true });
+
+      const pairKey = "post-outcome-pair/job-feed/first/first";
+      expect([keyOf(0), keyOf(1)]).toEqual([pairKey, pairKey]);
+      for (const id of [FEED_ID, STORY_ID]) {
+        expect(rows.get(id)).toMatchObject({ outcomeEmailAttempt: "first", outcomeEmailKey: pairKey });
+      }
+    });
+
+    it("a retry of the Story after the pair's email sends the Story alone: the feed's rows went out already", async () => {
+      stored(feedJob(), storyJob());
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+      const retried = storyResults(NOW);
+      Object.assign(rows.get(STORY_ID)!, {
+        retriedAt: NOW,
+        results: [retried[0], { ...retried[1], status: "success", claimRunId: "run-c" }],
+      });
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+      expect(keyOf(1)).toBe(`post-outcome/job-story/${NOW.getTime()}`);
+      expect(sent(1).subject).toBe("Surf Co: your Story published successfully to all 2 platforms");
+    });
+
+    it("RACE: the partner emailed alone after this half read it: this half sends alone and records that", async () => {
+      stored(feedJob(), storyJob());
+      // The feed's own delivery writes its alone email between this half's read and its claim.
+      let first = true;
+      updateManyPostJobMock.mockImplementation(async (args: UpdateArgs) => {
+        if (first) {
+          first = false;
+          Object.assign(rows.get(FEED_ID)!, { outcomeEmailAttempt: "first", outcomeEmailKey: "post-outcome/job-feed/first" });
+        }
+        return applyUpdate(args);
+      });
+
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(keyOf(0)).toBe("post-outcome/job-story/first");
+      expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
+      expect(rows.get(STORY_ID)).toMatchObject({ outcomeEmailKey: "post-outcome/job-story/first" });
+      expect(rows.get(FEED_ID)).toMatchObject({ outcomeEmailKey: "post-outcome/job-feed/first" });
+    });
+
+    it("a half whose outcome already went out in the pair's email never sends it again alone", async () => {
+      const pairKey = "post-outcome-pair/job-feed/first/first";
+      // Both halves are recorded in the pair's email; the feed is now told
+      // alone (its partner reads as cancelled).
+      stored(
+        feedJob({ outcomeEmailAttempt: "first", outcomeEmailKey: pairKey }),
+        storyJob({ status: "cancelled", outcomeEmailAttempt: "first", outcomeEmailKey: pairKey }),
+      );
+
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+
+      expect(sendEmailMock).not.toHaveBeenCalled();
+    });
   });
 
   it("a Story-only post (no pair) labels its rows too", async () => {

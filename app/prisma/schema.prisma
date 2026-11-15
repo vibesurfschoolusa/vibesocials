@@ -573,6 +573,14 @@ model PostJob {
   // every reader treats as no pair. Nullable: the previous deployment neither
   // reads nor writes it.
   storyOfPostJobId        String?
+  // R6-publishing L2 (2026-11-14): which post-finished email this job's outcome
+  // went out in, and for which publish attempt ("first", or the Retry's
+  // retriedAt in ms): the Resend key, written just before that email is sent
+  // (server/notifications/postOutcomeEmail.ts). A Feed and Story pair shares one
+  // email only when neither half has gone out in another for its attempt.
+  // Nullable: the previous deployment neither reads nor writes them.
+  outcomeEmailAttempt     String?
+  outcomeEmailKey         String?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
