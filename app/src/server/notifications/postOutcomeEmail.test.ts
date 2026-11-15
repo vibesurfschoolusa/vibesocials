@@ -32,9 +32,11 @@ import { EmailRetryableError } from "@/server/notifications/email";
 import {
   buildPostOutcomeEmail,
   deliverPostOutcomeNotification,
+  PAIR_EMAIL_WAIT_MS,
   shouldSendPostOutcomeEmail,
   type PostOutcomeResultSummary,
 } from "@/server/notifications/postOutcomeEmail";
+import { STUCK_IN_PROGRESS_MS } from "@/server/jobs/scheduledScanner";
 
 /** The workspace and caption every built email in these tests is for (F4). */
 const WS = { workspaceId: "ws_1", workspaceName: "Surf Co", caption: "Dawn patrol tomorrow at 6" };
@@ -333,6 +335,8 @@ describe("deliverPostOutcomeNotification", () => {
       errorCode: true,
       errorMessage: true,
       claimRunId: true,
+      updatedAt: true,
+      deferredUntil: true,
     });
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
@@ -608,44 +612,65 @@ describe("deliverPostOutcomeNotification - workspace and caption (F4)", () => {
   });
 });
 
+
 // R5-client-journey L3: a "Feed and Story" post is two jobs (the Story job names
 // its feed job in storyOfPostJobId). Each sent its own email, and the Story's
-// did not say Story. Now the half that finishes last sends one email for both,
-// with the Story rows labelled.
+// did not say Story. Now one email covers both when they finish within
+// PAIR_EMAIL_WAIT_MS of each other; a half whose partner is still publishing
+// waits that long (sendNotification sleeps), then sends alone, its rows
+// labelled. A pair never ends without an email.
 describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
   const FEED_ID = "job-feed";
   const STORY_ID = "job-story";
-  const feedJob = (fields: Record<string, unknown> = {}) =>
+  const NOW = new Date("2026-11-14T12:00:00.000Z");
+  /** When the feed half finished in these tests. */
+  const T0 = new Date(NOW.getTime() - 5 * 60_000);
+  const at = (ms: number) => new Date(T0.getTime() + ms);
+  const HOUR = 3_600_000;
+
+  const feedJob = (fields: Record<string, unknown> = {}, finishedAt: Date = T0) =>
     jobRow({
       id: FEED_ID,
       status: "completed",
       storyOfPostJobId: null,
+      updatedAt: finishedAt,
       publishMetadata: { instagram: { placement: "feed" } },
       results: [
-        { id: "r1", platform: "instagram", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-a" },
-        { id: "r2", platform: "facebook_page", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-a" },
+        { id: "r1", platform: "instagram", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-a", updatedAt: finishedAt, deferredUntil: null },
+        { id: "r2", platform: "facebook_page", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-a", updatedAt: finishedAt, deferredUntil: null },
       ],
       ...fields,
     });
-  const storyJob = (fields: Record<string, unknown> = {}) =>
+  const storyResults = (finishedAt: Date) => [
+    { id: "r3", platform: "instagram", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-b", updatedAt: finishedAt, deferredUntil: null },
+    {
+      id: "r4",
+      platform: "facebook_page",
+      status: "failed",
+      errorCode: "X",
+      errorMessage: "Facebook refused the video.",
+      claimRunId: "run-b",
+      updatedAt: finishedAt,
+      deferredUntil: null,
+    },
+  ];
+  const storyJob = (fields: Record<string, unknown> = {}, finishedAt: Date = NOW) =>
     jobRow({
       id: STORY_ID,
       status: "completed",
       storyOfPostJobId: FEED_ID,
+      updatedAt: finishedAt,
       baseCaption: "Dawn patrol tomorrow at 6",
       publishMetadata: { instagram: { placement: "story" }, facebook: { placement: "story" } },
-      results: [
-        { id: "r3", platform: "instagram", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-b" },
-        {
-          id: "r4",
-          platform: "facebook_page",
-          status: "failed",
-          errorCode: "X",
-          errorMessage: "Facebook refused the video.",
-          claimRunId: "run-b",
-        },
-      ],
+      results: storyResults(finishedAt),
       ...fields,
+    });
+  /** The Story half still publishing: its results pending, maybe waiting out a platform limit. */
+  const storyPublishing = (deferredUntil: Date | null = null) =>
+    storyJob({
+      status: "in_progress",
+      updatedAt: T0,
+      results: storyResults(T0).map((r) => ({ ...r, status: "pending", errorCode: null, errorMessage: null, deferredUntil })),
     });
 
   /** The two jobs as the database holds them: findUnique by id, findFirst by storyOfPostJobId. */
@@ -657,60 +682,165 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       args.where.storyOfPostJobId === FEED_ID ? story : null,
     );
   }
+  const sent = (index: number) => sendEmailMock.mock.calls[index][0] as { subject: string; html: string };
+  const keyOf = (index: number) => (sendEmailMock.mock.calls[index][1] as { idempotencyKey: string }).idempotencyKey;
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
   });
 
-  it("the first half to finish sends nothing while the other is still publishing", async () => {
-    pair(feedJob(), storyJob({ status: "in_progress" }));
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    pair(feedJob({ status: "pending" }), storyJob());
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+  it("waits longer than the stuck-run reconciler takes to close a dead run", () => {
+    expect(PAIR_EMAIL_WAIT_MS).toBe(3 * HOUR);
+    expect(PAIR_EMAIL_WAIT_MS).toBeGreaterThan(STUCK_IN_PROGRESS_MS + 30 * 60_000);
+  });
 
+  it("the first half to finish sends nothing and asks to wait until it finished + PAIR_EMAIL_WAIT_MS", async () => {
+    pair(feedJob(), storyPublishing());
+
+    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+
+    expect(out).toEqual({ waitUntil: at(PAIR_EMAIL_WAIT_MS).toISOString() });
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
-  it("the last half sends ONE email for both, the Story rows labelled, about the feed post", async () => {
+  it("NORMAL PAIR: the last half sends ONE email for both, the Story rows labelled, about the feed post", async () => {
     pair(feedJob(), storyJob());
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
-    const sent = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
-    expect(sent.subject).toBe("Surf Co: your post and Story finished: 3 of 4 succeeded");
-    expect(sent.html).toContain(
+    expect(sent(0).subject).toBe("Surf Co: your post and Story finished: 3 of 4 succeeded");
+    expect(sent(0).html).toContain(
       "<ul><li>Instagram: Succeeded</li><li>Facebook Page: Succeeded</li><li>Instagram Story: Succeeded</li><li>Facebook Page Story: Failed — Facebook refused the video.</li></ul>",
     );
-    expect(sent.html).toContain("<p>Caption: Dawn patrol tomorrow at 6</p>");
+    expect(sent(0).html).toContain("<p>Caption: Dawn patrol tomorrow at 6</p>");
   });
 
-  it("both halves seeing the pair finished send it under one key, so Resend delivers it once", async () => {
+  it("NORMAL PAIR, replayed: the first half's delivery after its wait sends under the pair's key too, so Resend delivers it once", async () => {
     pair(feedJob(), storyJob());
-
-    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+    vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
+    await deliverPostOutcomeNotification({
+      userId: "user-1",
+      postJobId: FEED_ID,
+      idempotencyKey: "post-outcome/run-1",
+      afterPairWait: true,
+    });
+    // And a replay of the same step.
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
 
-    const keys = sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey as string);
-    expect(keys).toHaveLength(2);
-    expect(keys[0]).toBe(keys[1]);
-    expect(keys[0]).toMatch(/^post-outcome-pair\/job-feed\/[0-9a-f]{64}$/);
+    expect(sendEmailMock).toHaveBeenCalledTimes(3);
+    expect(new Set([keyOf(0), keyOf(1), keyOf(2)]).size).toBe(1);
+    expect(keyOf(0)).toMatch(/^post-outcome-pair\/job-feed\/[0-9a-f]{64}$/);
+    expect(sent(1).subject).toBe(sent(0).subject);
   });
 
   it("a retry with a new outcome is a new email (a different key)", async () => {
     pair(feedJob(), storyJob());
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
-    const retried = storyJob().results as Array<Record<string, unknown>>;
+    const retried = storyResults(NOW);
     pair(feedJob(), storyJob({ results: [retried[0], { ...retried[1], status: "success", claimRunId: "run-c" }] }));
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
-    const keys = sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey as string);
-    expect(keys[0]).not.toBe(keys[1]);
-    expect((sendEmailMock.mock.calls[1][0] as { subject: string }).subject).toBe(
-      "Surf Co: your post and Story published successfully",
+    expect(keyOf(0)).not.toBe(keyOf(1));
+    expect(sent(1).subject).toBe("Surf Co: your post and Story published successfully");
+  });
+
+  // The Story's run died: nothing finishes it until the reconciler closes it
+  // about 2 h later and sends its notification (scheduledScanner.ts).
+  it("STORY RUN DIES: the reconciler's notification sends one email with both halves; the feed's after-wait sends the same", async () => {
+    const closedAt = at(2 * HOUR + 5 * 60_000);
+    const closed = storyJob(
+      {
+        status: "failed",
+        results: storyResults(closedAt).map((r) => ({
+          ...r,
+          status: "failed",
+          errorCode: "PUBLISH_UNCONFIRMED",
+          errorMessage: "We could not confirm this post.",
+        })),
+      },
+      closedAt,
     );
+    pair(feedJob(), closed);
+    vi.setSystemTime(closedAt);
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-r" });
+    vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
+    await deliverPostOutcomeNotification({
+      userId: "user-1",
+      postJobId: FEED_ID,
+      idempotencyKey: "post-outcome/run-1",
+      afterPairWait: true,
+    });
+
+    expect(sent(0).subject).toBe("Surf Co: your post and Story finished: 2 of 4 succeeded");
+    expect(sent(0).html).toContain("<li>Instagram Story: Failed — We could not confirm this post.</li>");
+    expect(keyOf(0)).toBe(keyOf(1));
+  });
+
+  it("after the wait, a partner still publishing is not waited for again: this half sends alone with its own key", async () => {
+    pair(feedJob(), storyPublishing());
+    vi.setSystemTime(at(PAIR_EMAIL_WAIT_MS));
+
+    const out = await deliverPostOutcomeNotification({
+      userId: "user-1",
+      postJobId: FEED_ID,
+      idempotencyKey: "post-outcome/run-1",
+      afterPairWait: true,
+    });
+
+    expect(out).toBeUndefined();
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sent(0).subject).toBe("Surf Co: your post published successfully to all 2 platforms");
+    expect(sent(0).html).not.toContain("Story");
+    expect(keyOf(0)).toBe("post-outcome/run-1");
+  });
+
+  it("DEFERRED FOR HOURS: a partner waiting out a platform limit past the wait: this half sends alone at once", async () => {
+    pair(feedJob(), storyPublishing(at(20 * HOUR)));
+
+    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+
+    expect(out).toBeUndefined();
+    expect(sent(0).subject).toBe("Surf Co: your post published successfully to all 2 platforms");
+    expect(keyOf(0)).toBe("post-outcome/run-1");
+  });
+
+  it("DEFERRED FOR HOURS, then finished: the late half sends alone too (its partner already had its email)", async () => {
+    const finishedAt = at(20 * HOUR + 60_000);
+    pair(feedJob(), storyJob({}, finishedAt));
+    vi.setSystemTime(finishedAt);
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+
+    expect(sent(0).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
+    expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
+    expect(keyOf(0)).toBe("post-outcome/run-2");
+  });
+
+  it("a short deferral (inside the wait) is waited for", async () => {
+    pair(feedJob(), storyPublishing(at(HOUR)));
+
+    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+
+    expect(out).toEqual({ waitUntil: at(PAIR_EMAIL_WAIT_MS).toISOString() });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("a job that is publishing again (a retry took it) sends nothing: that run notifies", async () => {
+    pair(feedJob({ status: "in_progress" }), storyJob());
+
+    const out = await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, afterPairWait: true });
+
+    expect(out).toBeUndefined();
+    expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
   it.each(["draft", "scheduled", "cancelled"] as const)(
@@ -721,11 +851,10 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
 
       expect(sendEmailMock).toHaveBeenCalledTimes(1);
-      const [sent, opts] = sendEmailMock.mock.calls[0] as [{ subject: string; html: string }, { idempotencyKey: string }];
-      expect(sent.subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
-      expect(sent.html).toContain("<li>Instagram Story: Succeeded</li>");
-      expect(sent.html).not.toContain("<li>Instagram: Succeeded</li>");
-      expect(opts.idempotencyKey).toBe("post-outcome/run-2");
+      expect(sent(0).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
+      expect(sent(0).html).toContain("<li>Instagram Story: Succeeded</li>");
+      expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
+      expect(keyOf(0)).toBe("post-outcome/run-2");
     },
   );
 
@@ -736,18 +865,17 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(2);
-    for (const call of sendEmailMock.mock.calls) {
-      expect((call[0] as { subject: string }).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
+    for (const index of [0, 1]) {
+      expect(sent(index).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
     }
   });
 
   it("a Story-only post (no pair) labels its rows too", async () => {
-    pair(null, storyJob({ storyOfPostJobId: null, results: [(storyJob().results as unknown[])[0]] }));
+    pair(null, storyJob({ storyOfPostJobId: null, results: [storyResults(NOW)[0]] }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
 
-    const sent = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
-    expect(sent.subject).toBe("Surf Co: your Story published successfully");
-    expect(sent.html).toContain("<li>Instagram Story: Succeeded</li>");
+    expect(sent(0).subject).toBe("Surf Co: your Story published successfully");
+    expect(sent(0).html).toContain("<li>Instagram Story: Succeeded</li>");
   });
 });

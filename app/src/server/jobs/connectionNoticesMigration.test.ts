@@ -38,13 +38,13 @@ function unrenewableClauses(): string[] {
 }
 
 describe("20261114530000_connection_notices", () => {
-  it("sets the lock timeout first, adds the two nullable columns, then three UPDATEs and nothing else", () => {
+  it("sets the lock timeout first, adds the two nullable columns, then two UPDATEs and nothing else", () => {
     expect(statements[0]).toBe("SET lock_timeout = '5s'");
     expect(statements.slice(1, 3)).toEqual([
       'ALTER TABLE "SocialConnection" ADD COLUMN "reconnectEmailedAt" TIMESTAMP(3)',
       'ALTER TABLE "SocialConnection" ADD COLUMN "expiryWarnedFor" TIMESTAMP(3)',
     ]);
-    expect(statements).toHaveLength(6);
+    expect(statements).toHaveLength(5);
     for (const statement of statements.slice(3)) expect(statement).toMatch(/^UPDATE "SocialConnection" SET /);
     expect(code).not.toMatch(/\b(DROP|DELETE|TRUNCATE|RENAME|CREATE|INSERT)\b/i);
     expect(code).not.toMatch(/NOT NULL DEFAULT|SET NOT NULL/i);
@@ -67,10 +67,9 @@ describe("20261114530000_connection_notices", () => {
     expect(where(statements[4])).toContain(`"expiresAt" <= NOW()`);
   });
 
-  it("marks a sign-in already inside its warning window at release as warned", () => {
+  // Review: a sign-in still running at release gets the real warning.
+  it("marks no warning as sent: a sign-in ending within the week at release is warned by the sweep", () => {
+    expect(code).not.toContain('"expiryWarnedFor" =');
     expect(EXPIRY_WARNING_LEAD_MS).toBe(7 * 24 * 60 * 60 * 1000);
-    expect(statements[5].split(" WHERE ")[0]).toBe('UPDATE "SocialConnection" SET "expiryWarnedFor" = "expiresAt"');
-    for (const clause of unrenewableClauses()) expect(where(statements[5])).toContain(clause);
-    expect(where(statements[5])).toContain(`"expiresAt" <= NOW() + INTERVAL '7 days'`);
   });
 });

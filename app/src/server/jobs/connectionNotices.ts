@@ -160,7 +160,7 @@ async function warnOwnersOfExpiry(connection: {
  *     that was read (same `expiresAt`: a reconnect writes a new one), so posts
  *     stop being sent with a dead token and Settings says to reconnect;
  *  3. every flagged connection whose flag has not had its email (step 2's, or a
- *     failed post's): the reconnect email. What was flagged or due at release
+ *     failed post's): the reconnect email. What was flagged, or had lapsed, at release
  *     was marked told by the migration (20261114530000_connection_notices), so
  *     old and test connections send nothing.
  * The cron runs at 04:45 UTC, the evening before in the US, so the lapse email

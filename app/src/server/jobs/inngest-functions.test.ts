@@ -4368,6 +4368,42 @@ describe("sendNotification - throttle, retries and idempotent delivery", () => {
       EmailRetryableError,
     );
   });
+
+  // R5-client-journey L3 review: half of a Feed and Story pair whose other half
+  // is still publishing waits (a durable sleep) and then delivers again, so the
+  // pair never ends without an email.
+  it("waits for the other half of a pair until the time deliver names, then delivers once more with the same key", async () => {
+    deliverNotificationMock
+      .mockResolvedValueOnce({ waitUntil: "2026-11-14T15:00:00.000Z" })
+      .mockResolvedValueOnce({});
+    const step = fakeStep();
+
+    await handlerOf(sendNotification)({ event, step });
+
+    expect(step.order).toEqual([
+      "run:deliver-notification",
+      "sleepUntil:wait-for-pair",
+      "run:deliver-after-pair-wait",
+    ]);
+    expect(step.sleepUntil).toHaveBeenCalledWith("wait-for-pair", "2026-11-14T15:00:00.000Z");
+    expect(deliverNotificationMock.mock.calls.map((call) => call[0])).toEqual([
+      { userId: "user-1", postJobId: "job-1", idempotencyKey: "post-outcome/run-1" },
+      { userId: "user-1", postJobId: "job-1", idempotencyKey: "post-outcome/run-1", afterPairWait: true },
+    ]);
+  });
+
+  it("waits at most once, even if the second delivery asks again", async () => {
+    deliverNotificationMock.mockResolvedValue({ waitUntil: "2026-11-14T15:00:00.000Z" });
+    const step = fakeStep();
+
+    await handlerOf(sendNotification)({ event, step });
+
+    expect(step.order).toEqual([
+      "run:deliver-notification",
+      "sleepUntil:wait-for-pair",
+      "run:deliver-after-pair-wait",
+    ]);
+  });
 });
 
 describe("usage limits - the workspace's X and YouTube limits in the platform step", () => {

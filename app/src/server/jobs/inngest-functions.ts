@@ -1881,7 +1881,11 @@ export const scheduledPostScanner = inngest.createFunction(
       // A reconcile failure is only logged; recovery must never stop publishing,
       // and the next tick tries again.
       try {
-        const reconciled = await reconcileStuckInProgressJobs(new Date());
+        // R5-client-journey L3 review: the jobs it closes are announced like a
+        // finished run, so a Feed and Story pair whose run died still gets its email.
+        const reconciled = await reconcileStuckInProgressJobs(new Date(), undefined, undefined, {
+          notify: (events) => inngest.send(events),
+        });
         if (reconciled.reconciled > 0) {
           logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
         }
@@ -2034,13 +2038,30 @@ export const sendNotification = inngest.createFunction(
 
     // At-least-once: if the email sends but Inngest loses the step ack, the retry
     // re-runs this step, and Resend dedupes the repeat by this key (no second email).
-    await step.run("deliver-notification", async () => {
-      await deliverPostOutcomeNotification({
+    const delivered = await step.run("deliver-notification", () =>
+      deliverPostOutcomeNotification({
         userId,
         postJobId,
         idempotencyKey: `post-outcome/${runId}`,
-      });
-    });
+      }),
+    );
+
+    // R5-client-journey L3 review: half of a Feed and Story pair whose other half
+    // is still publishing waits for it (a durable sleep holds no slot), then
+    // delivers once more: one email for both if the other half finished, else
+    // this half's own. Once only, and only for a pair, so a single post still
+    // costs one step.
+    if (delivered?.waitUntil) {
+      await step.sleepUntil("wait-for-pair", delivered.waitUntil);
+      await step.run("deliver-after-pair-wait", () =>
+        deliverPostOutcomeNotification({
+          userId,
+          postJobId,
+          idempotencyKey: `post-outcome/${runId}`,
+          afterPairWait: true,
+        }),
+      );
+    }
 
     return { postJobId };
   },

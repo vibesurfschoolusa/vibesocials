@@ -1,8 +1,8 @@
 -- R5-publishing M1: each connection notice (the reconnect email, the warning a
 -- week before a sign-in that cannot be renewed ends) goes out once.
--- Two nullable columns, then the release backlog: what is already there now is
--- marked as told, so the first sweep emails nobody about old or test
--- connections; only what is flagged, or comes due, after the release sends
+-- Two nullable columns, then the release backlog: what is flagged, or has
+-- lapsed, now is marked as told, so the first sweep emails nobody about old or
+-- test connections; what is flagged, or comes due, after the release sends
 -- (server/jobs/connectionNotices.ts; connectionNoticesMigration.test.ts checks
 -- these rules against the sweep's).
 SET lock_timeout = '5s';
@@ -28,11 +28,8 @@ WHERE "needsReconnect" = false
   AND "platform" NOT IN ('facebook_page', 'instagram')
   AND "expiresAt" <= NOW();
 
--- One already inside its 7-day warning window: warned.
-UPDATE "SocialConnection"
-SET "expiryWarnedFor" = "expiresAt"
-WHERE "needsReconnect" = false
-  AND "refreshToken" IS NULL
-  AND "expiresAt" IS NOT NULL
-  AND "platform" NOT IN ('facebook_page', 'instagram')
-  AND "expiresAt" <= NOW() + INTERVAL '7 days';
+-- A sign-in still running (one ending within the week too) is left alone: its
+-- owners get the real warning from the sweep.
+-- Instagram connections the old code flagged only because of the stored 60-day
+-- date are left flagged: that guard wrote the same INSTAGRAM_RECONNECT_REQUIRED
+-- as a real Graph 190 / 401, so the two cannot be told apart here.

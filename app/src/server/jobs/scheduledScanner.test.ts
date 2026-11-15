@@ -375,6 +375,64 @@ describe("reconcileStuckInProgressJobs", () => {
     });
   });
 
+  // R5-client-journey L3 review: a job the reconciler closes sends the
+  // notification its dead run would have, so a Feed and Story pair whose Story
+  // run died still gets one email covering both halves.
+  describe("announcing the jobs it closes", () => {
+    const STALE = new Date("2026-07-10T09:00:00.000Z");
+    const closing = (count = 1) => {
+      findManyMock.mockResolvedValue([{ id: "stuck-6", userId: "user-6", updatedAt: STALE }]);
+      resultFindManyMock
+        .mockResolvedValueOnce([{ id: "r1", status: "pending", claimRunId: "run-dead" }])
+        .mockResolvedValueOnce([{ status: "failed" }]);
+      resultUpdateManyMock.mockResolvedValue({ count: 1 });
+      updateManyMock.mockResolvedValue({ count });
+    };
+
+    it("sends notification.requested for a closed job with results, its id stable for that stuck run", async () => {
+      closing();
+      const notify = vi.fn().mockResolvedValue(undefined);
+
+      await reconcileStuckInProgressJobs(NOW, undefined, undefined, { notify });
+
+      expect(findManyMock.mock.calls[0][0].select).toEqual({ id: true, userId: true, updatedAt: true });
+      expect(notify).toHaveBeenCalledWith([
+        {
+          id: `notify-reconciled-stuck-6-${STALE.getTime()}`,
+          name: "notification.requested",
+          data: { userId: "user-6", postJobId: "stuck-6" },
+        },
+      ]);
+    });
+
+    it("sends nothing when another writer moved the job first, or nothing was closed", async () => {
+      closing(0);
+      const notify = vi.fn();
+      await reconcileStuckInProgressJobs(NOW, undefined, undefined, { notify });
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("a job with no results (the zero-result branch) is not announced here", async () => {
+      findManyMock.mockResolvedValue([{ id: "stuck-7", userId: "user-7", updatedAt: STALE }]);
+      resultFindManyMock.mockResolvedValue([]);
+      updateManyMock.mockResolvedValue({ count: 1 });
+      const notify = vi.fn();
+
+      await reconcileStuckInProgressJobs(NOW, undefined, undefined, { notify });
+
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("a failed send is logged, not thrown: the jobs stay closed and the count is returned", async () => {
+      closing();
+      const notify = vi.fn().mockRejectedValue(new Error("send failed"));
+
+      await expect(reconcileStuckInProgressJobs(NOW, undefined, undefined, { notify })).resolves.toMatchObject({
+        reconciled: 1,
+      });
+    });
+  });
+
   it("skips the write for a kind that has no pending rows", async () => {
     findManyMock.mockResolvedValue([{ id: "stuck-4" }]);
     resultFindManyMock

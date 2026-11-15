@@ -244,6 +244,8 @@ const OUTCOME_JOB_SELECT = {
   // R5-client-journey L3: the pair (F6) and which platforms went as a Story.
   storyOfPostJobId: true,
   publishMetadata: true,
+  // When the job finished, for a job without results (see finishedAt).
+  updatedAt: true,
   results: {
     // Only what the email renders or keys on — externalPostId was selected but
     // never read (review Minor #3), so it's dropped.
@@ -256,6 +258,9 @@ const OUTCOME_JOB_SELECT = {
       errorMessage: true,
       // The run that last published the result: a pair's key changes with a retry.
       claimRunId: true,
+      // When the result finished, and a platform limit the other half waits out.
+      updatedAt: true,
+      deferredUntil: true,
     },
   },
 } as const;
@@ -264,10 +269,58 @@ type OutcomeJob = NonNullable<
   Awaited<ReturnType<typeof prisma.postJob.findUnique<{ where: { id: string }; select: typeof OUTCOME_JOB_SELECT }>>>
 >;
 
-/** The other half is still sending: wait for its notification. */
+/** Still sending: a pair half in this state may still finish, so it is waited for. */
 const PUBLISHING_STATUSES: readonly PostJobStatus[] = ["pending", "in_progress"];
-/** The other half is done: one email for both. Any other state (held, scheduled, cancelled) is not waited for. */
+/** Done: may share one email. Any other state (held, scheduled, cancelled) is not waited for. */
 const FINISHED_STATUSES: readonly PostJobStatus[] = ["completed", "failed"];
+
+/**
+ * R5-client-journey L3 review: the two halves of a Feed and Story pair share one
+ * email when they finish within this long of each other; otherwise each sends
+ * its own. A half whose partner is still publishing waits this long
+ * (sendNotification sleeps), so the pair never ends without an email. Longer
+ * than the stuck-run reconciler takes (STUCK_IN_PROGRESS_MS, 2 h, plus a scanner
+ * tick; it notifies the half it closes), so a half whose run died still shares
+ * the email. A partner waiting out a platform limit beyond it is not waited for.
+ * Both halves apply the same rule to the same two finish times, so they agree.
+ */
+export const PAIR_EMAIL_WAIT_MS = 3 * 60 * 60 * 1000;
+
+/** When a job finished: its last result's write, or the job's own for none. */
+function finishedAt(job: OutcomeJob): number {
+  const times = job.results.map((result) => new Date(result.updatedAt).getTime());
+  return times.length > 0 ? Math.max(...times) : new Date(job.updatedAt).getTime();
+}
+
+/** The latest platform-limit wait among the job's pending results, or 0. */
+function deferredUntil(job: OutcomeJob): number {
+  const times = job.results
+    .filter((result) => result.status === "pending" && result.deferredUntil)
+    .map((result) => new Date(result.deferredUntil!).getTime());
+  return times.length > 0 ? Math.max(...times) : 0;
+}
+
+/**
+ * Which email this half sends: "wait" (until `until`), "alone", or "together"
+ * (one email for the pair).
+ */
+function pairDecision(
+  job: OutcomeJob,
+  partner: OutcomeJob | null,
+  now: number,
+  afterPairWait: boolean,
+): { send: "alone" | "together" } | { send: "wait"; until: number } {
+  if (!partner) return { send: "alone" };
+  const mine = finishedAt(job);
+  if (PUBLISHING_STATUSES.includes(partner.status)) {
+    const deadline = mine + PAIR_EMAIL_WAIT_MS;
+    // It will finish after the deadline whatever happens: its own email then.
+    if (afterPairWait || now >= deadline || deferredUntil(partner) > deadline) return { send: "alone" };
+    return { send: "wait", until: deadline };
+  }
+  if (!FINISHED_STATUSES.includes(partner.status)) return { send: "alone" };
+  return Math.abs(finishedAt(partner) - mine) < PAIR_EMAIL_WAIT_MS ? { send: "together" } : { send: "alone" };
+}
 
 /**
  * The other half of a Feed and Story pair (F6: the Story job names its feed job
@@ -304,6 +357,13 @@ export interface DeliverPostOutcomeNotificationParams {
    * after a lost ack is a no-op instead of a second email.
    */
   idempotencyKey?: string;
+  /** The second delivery, after the pair wait: never asks to wait again. */
+  afterPairWait?: boolean;
+}
+
+/** Only when this half of a pair waits for the other: deliver again at `waitUntil` (ISO). */
+export interface DeliverPostOutcomeNotificationResult {
+  waitUntil?: string;
 }
 
 /**
@@ -325,7 +385,8 @@ export async function deliverPostOutcomeNotification({
   userId,
   postJobId,
   idempotencyKey,
-}: DeliverPostOutcomeNotificationParams): Promise<void> {
+  afterPairWait = false,
+}: DeliverPostOutcomeNotificationParams): Promise<DeliverPostOutcomeNotificationResult | undefined> {
   try {
     const hasApiKey = Boolean(process.env.RESEND_API_KEY);
 
@@ -335,7 +396,7 @@ export async function deliverPostOutcomeNotification({
     // retry) hits this function, so skipping the two queries below also
     // keeps the feature's cost at zero for installs that haven't opted in.
     if (!hasApiKey) {
-      return;
+      return undefined;
     }
 
     const [user, postJob] = await Promise.all([
@@ -353,17 +414,22 @@ export async function deliverPostOutcomeNotification({
     });
 
     if (!shouldSend || !user || !postJob) {
-      return;
+      return undefined;
+    }
+    // Publishing again (a retry took it, e.g. while this waited for its pair):
+    // that run notifies when it finishes.
+    if (PUBLISHING_STATUSES.includes(postJob.status)) {
+      return undefined;
     }
 
-    // R5-client-journey L3: a Feed and Story pair sends one email, from the half
-    // that finishes last. While the other half is still publishing this one sends
-    // nothing: that half's own notification sends the email for both.
+    // R5-client-journey L3: a Feed and Story pair that finishes within
+    // PAIR_EMAIL_WAIT_MS sends one email for both; see pairDecision.
     const partner = await pairPartnerOf(postJob);
-    if (partner && PUBLISHING_STATUSES.includes(partner.status)) {
-      return;
+    const decision = pairDecision(postJob, partner, Date.now(), afterPairWait);
+    if (decision.send === "wait") {
+      return { waitUntil: new Date(decision.until).toISOString() };
     }
-    const together = partner && FINISHED_STATUSES.includes(partner.status) ? partner : null;
+    const together = decision.send === "together" ? partner : null;
     const [feed, story] = together
       ? postJob.storyOfPostJobId
         ? [together, postJob]
@@ -380,7 +446,7 @@ export async function deliverPostOutcomeNotification({
     const allPaused =
       rows.length > 0 && rows.every((result) => result.status === "failed" && result.errorCode === WORKSPACE_PAUSED_CODE);
     if (allPaused) {
-      return;
+      return undefined;
     }
 
     const { subject, html } = buildPostOutcomeEmail({
@@ -408,4 +474,5 @@ export async function deliverPostOutcomeNotification({
       error,
     });
   }
+  return undefined;
 }
