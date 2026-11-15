@@ -398,12 +398,13 @@ export async function materializeAndDispatchChunk(
   }
 
   // One per workspace, recipient and reason in this chunk; the daily key does the rest.
+  // R9-publishing L1: a pair half left for its pair's email tells nobody, so it
+  // does not count, and another post of the chunk still tells that recipient.
   const told = new Set<string>();
   for (const notice of noConnections) {
     const key = `${notice.workspaceId}:${notice.userId}:${notice.reason}`;
     if (told.has(key)) continue;
-    told.add(key);
-    await notifyNotSentAtScan(notice);
+    if (await notifyNotSentAtScan(notice)) told.add(key);
   }
 
   return { dispatched, dispatchErrors, noConnections, notFound, errorIds };

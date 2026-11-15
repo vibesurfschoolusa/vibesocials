@@ -31,15 +31,27 @@ export function scanNoticeKey(notice: ScanNotice, now: Date): string {
  * Never throws: the scan carries on whatever happens to the email. When the
  * send fails (deliverPostOutcomeNotification throws only a failure a retry
  * can fix), the day's key is let go, so the next scan's notice tries again.
+ *
+ * Answers whether the notice was dealt with (sent, already sent today, or
+ * tried): false only when it was left for the pair (or that check failed), so
+ * the scanner may still tell this recipient about another post of the chunk.
  */
-export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Date()): Promise<void> {
+export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Date()): Promise<boolean> {
   const key = scanNoticeKey(notice, now);
+  try {
+    if (await pairPartnerStillToSend(notice.postJobId, now)) return false;
+  } catch (error) {
+    logger.error("[scanner] Couldn't check a post's pair before telling its owner (another post may tell them)", {
+      error,
+      postJobId: notice.postJobId,
+    });
+    return false;
+  }
   let claimed = false;
   try {
-    if (await pairPartnerStillToSend(notice.postJobId, now)) return;
     // Fail closed: a store error sends nothing rather than one email per post.
     claimed = (await consumeFixedWindow({ key, limit: 1, resetAt: utcDayRange(now).end, failClosed: true })).allowed;
-    if (!claimed) return;
+    if (!claimed) return true;
     // Any other half is done or not due yet (checked above), so none is waited for.
     await deliverPostOutcomeNotification({
       userId: notice.userId,
@@ -55,4 +67,5 @@ export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Da
     });
     if (claimed) await releaseOnceADayKey(key);
   }
+  return true;
 }

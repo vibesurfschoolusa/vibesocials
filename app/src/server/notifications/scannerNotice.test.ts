@@ -64,12 +64,12 @@ describe("notifyNotSentAtScan", () => {
   // Review of T1, item 3: a failed send lets the key go, so the next scan tries again.
   it("a send that fails lets the day's key go, and never throws", async () => {
     deliverMock.mockRejectedValue(new Error("resend 429"));
-    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBeUndefined();
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
     expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
 
     releaseMock.mockClear();
     consumeMock.mockRejectedValue(new Error("db down"));
-    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBeUndefined();
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
@@ -78,7 +78,8 @@ describe("notifyNotSentAtScan", () => {
   // partner's run then sends the pair's one email.
   it("a half whose partner is still to be sent sends nothing and leaves the day's key unused", async () => {
     partnerMock.mockResolvedValue(true);
-    await notifyNotSentAtScan(NOTICE, NOW);
+    // Not handled: the scanner may still tell the recipient about another post.
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(false);
     expect(partnerMock).toHaveBeenCalledWith("post-1", NOW);
     expect(consumeMock).not.toHaveBeenCalled();
     expect(deliverMock).not.toHaveBeenCalled();
@@ -87,14 +88,18 @@ describe("notifyNotSentAtScan", () => {
 
   it("a lone post, or a half whose partner is done, is told about as before", async () => {
     partnerMock.mockResolvedValue(false);
-    await notifyNotSentAtScan(NOTICE, NOW);
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
     expect(consumeMock).toHaveBeenCalledTimes(1);
+    expect(deliverMock).toHaveBeenCalledTimes(1);
+    // Already told today: dealt with too.
+    consumeMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
     expect(deliverMock).toHaveBeenCalledTimes(1);
   });
 
   it("a failed partner check sends nothing, uses no key, and never throws", async () => {
     partnerMock.mockRejectedValue(new Error("db down"));
-    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBeUndefined();
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(false);
     expect(consumeMock).not.toHaveBeenCalled();
     expect(deliverMock).not.toHaveBeenCalled();
   });

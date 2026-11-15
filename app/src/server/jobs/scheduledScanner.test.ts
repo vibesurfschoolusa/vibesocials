@@ -15,9 +15,11 @@ const {
   mediaUpdateManyMock,
   withdrawSendMock,
   deliverMock,
+  partnerStillToSendMock,
   windows,
 } = vi.hoisted(() => ({
   deliverMock: vi.fn(),
+  partnerStillToSendMock: vi.fn(),
   /** The fixed-window counters (RateLimitEntry) by key: the once-a-day notices. */
   windows: new Map<string, number>(),
   executeRawMock: vi.fn(),
@@ -38,10 +40,10 @@ vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
 
 // R8-security L1: the scanner's notices go from its own step (scannerNotice.ts runs for
 // real); the outcome email itself and the counter store are stand-ins.
-// R9-publishing L1: none of these posts is half of a pair still being sent.
+// R9-publishing L1: whether a post is half of a pair still being sent (by default none is).
 vi.mock("@/server/notifications/postOutcomeEmail", () => ({
   deliverPostOutcomeNotification: deliverMock,
-  pairPartnerStillToSend: async () => false,
+  pairPartnerStillToSend: partnerStillToSendMock,
 }));
 vi.mock("@/lib/rateLimit", () => ({
   consumeFixedWindow: async ({ key, limit }: { key: string; limit: number }) => {
@@ -119,6 +121,8 @@ beforeEach(() => {
   withdrawSendMock.mockResolvedValue(undefined);
   deliverMock.mockReset();
   deliverMock.mockResolvedValue(undefined);
+  partnerStillToSendMock.mockReset();
+  partnerStillToSendMock.mockResolvedValue(false);
   windows.clear();
 });
 
@@ -1209,6 +1213,19 @@ describe("materializeAndDispatchChunk", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // R9-publishing L1 (lead's follow-up): a half left quiet for its pair does
+    // not count as the chunk's notice for that recipient and reason.
+    it("a skipped pair half and a lone post, same recipient and reason, one chunk: the lone post's notice goes", async () => {
+      prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+      findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
+      partnerStillToSendMock.mockImplementation(async (id: string) => id === "half");
+
+      await materializeAndDispatchChunk(["half", "lone"], { send, sleep });
+
+      expect(deliverMock).toHaveBeenCalledTimes(1);
+      expect(deliverMock.mock.calls[0][0]).toMatchObject({ postJobId: "lone" });
     });
 
     // Review of T1, item 3: one per recipient, so a second author hears about their own post.
