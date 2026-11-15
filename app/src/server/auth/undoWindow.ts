@@ -36,20 +36,24 @@ export async function addressHeldUntil(db: Db, email: string, now: Date): Promis
 
 /**
  * R6-pages L6: the previous address is kept only while it can undo. Cleared
- * lazily, for every account at once, by the account routes that read these
- * rows (Settings, Account reads the undo line on every visit), so no
- * scheduled job is spent on it. Never throws: it must not fail that request.
+ * for every account at once by the existing daily sweep
+ * (jobs/orphanBlobSweep.ts), which keeps the privacy page's 72 hours true,
+ * and also by the account routes that read these rows, so a passed window
+ * is usually gone sooner. Returns how many rows it cleared; never throws, so
+ * it can't fail the request or the sweep it runs in (0 on a failure).
  */
-export async function clearPassedUndoWindows(db: Db, now: Date): Promise<void> {
+export async function clearPassedUndoWindows(db: Db, now: Date): Promise<number> {
   try {
-    await db.emailChangeRequest.updateMany({
+    const { count } = await db.emailChangeRequest.updateMany({
       where: {
         undoExpiresAt: { lte: now },
         OR: [{ previousEmail: { not: null } }, { undoTokenHash: { not: null } }],
       },
       data: { previousEmail: null, undoTokenHash: null },
     });
+    return count;
   } catch (error) {
     logger.warn("[undoWindow] clearing passed undo windows failed", { error });
+    return 0;
   }
 }

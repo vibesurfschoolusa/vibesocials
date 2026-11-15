@@ -267,6 +267,8 @@ describe("POST /api/auth/change-email/confirm", () => {
     await expect(response.json()).resolves.toEqual({
       error:
         "This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until November 17, 2026, so your email is unchanged. After that, ask for the change again in Settings, Account.",
+      reason: "held",
+      until: "2026-11-17T12:00:00.000Z",
     });
     expect(addressHeldUntilMock).toHaveBeenCalledWith(expect.anything(), "new@example.com", expect.any(Date));
     expect(claimMock).not.toHaveBeenCalled();
@@ -281,6 +283,7 @@ describe("POST /api/auth/change-email/confirm", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
       error: "You changed your email recently; you can change it again after November 17, 2026.",
+      reason: "locked",
       until: until.toISOString(),
     });
     expect(accountUndoWindowUntilMock).toHaveBeenCalledWith(expect.anything(), "user-1", expect.any(Date));

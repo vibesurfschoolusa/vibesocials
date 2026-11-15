@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { emailChangeLockedSentence, formatDisplayDate } from "./displayDate";
+import { addressHeldSentence, emailChangeLockedSentence, formatDisplayDate } from "./displayDate";
 
 // R6-pages L8: one date format across Settings (account, team, connect link).
 describe("formatDisplayDate", () => {
@@ -40,5 +40,15 @@ describe("one date format across Settings", () => {
     const team = source("team-section.tsx");
     expect(team).toMatch(/function formatDate\(iso: string\): string \{[^}]*return formatDisplayDate\(date\);/);
     expect(team).not.toContain("toLocaleDateString");
+  });
+});
+
+// R6-security M1: the confirm page's refusal when another account's undo may
+// still take the address back.
+describe("addressHeldSentence", () => {
+  it("says why the email is unchanged and from when to ask again", () => {
+    expect(addressHeldSentence("2026-11-17T12:00:00.000Z")).toBe(
+      "This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until November 17, 2026, so your email is unchanged. After that, ask for the change again in Settings, Account.",
+    );
   });
 });

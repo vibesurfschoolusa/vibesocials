@@ -17,3 +17,11 @@ export function formatDisplayDate(value: string | Date): string {
 export function emailChangeLockedSentence(until: string | Date): string {
   return `You changed your email recently; you can change it again after ${formatDisplayDate(until)}.`;
 }
+
+/**
+ * R6-security M1: why a confirm link can't move this account to an address
+ * another account's undo may still take back. Shared like the one above.
+ */
+export function addressHeldSentence(until: string | Date): string {
+  return `This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until ${formatDisplayDate(until)}, so your email is unchanged. After that, ask for the change again in Settings, Account.`;
+}

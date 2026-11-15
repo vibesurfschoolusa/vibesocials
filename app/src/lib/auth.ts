@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 import { normalizeEmail } from "./email";
 import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
-import { GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
+import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 import { checkRateLimit } from "./rateLimit";
 
 // Login throttles (all fail-closed). Keyed per (email, IP) rather than per
@@ -185,9 +185,9 @@ export const authOptions: NextAuthOptions = {
         emailVerified: oidc?.email_verified,
       });
       if (!result.ok) {
-        return result.reason === "password_account"
-          ? `/login?error=${GOOGLE_PASSWORD_ACCOUNT_ERROR}`
-          : false;
+        if (result.reason === "password_account") return `/login?error=${GOOGLE_PASSWORD_ACCOUNT_ERROR}`;
+        if (result.reason === "address_held") return `/login?error=${GOOGLE_ADDRESS_HELD_ERROR}`;
+        return false;
       }
       const mutable = user as { id?: string; sessionVersion?: number };
       mutable.id = result.user.id;

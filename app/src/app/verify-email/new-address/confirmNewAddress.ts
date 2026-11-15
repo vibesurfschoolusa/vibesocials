@@ -1,3 +1,5 @@
+import { addressHeldSentence, emailChangeLockedSentence } from "@/lib/displayDate";
+
 /**
  * What /verify-email/new-address says after the person presses its button
  * and the token is posted (R5 new-customer L4). The route's refusals are
@@ -23,7 +25,14 @@ export type NewAddressView = {
 const SETTINGS = { href: "/settings", label: "Go to Settings" };
 const LOG_IN = { href: "/login", label: "Log in" };
 
-type ConfirmAnswer = { viewer?: string; email?: string; error?: string; used?: boolean };
+type ConfirmAnswer = {
+  viewer?: string;
+  email?: string;
+  error?: string;
+  used?: boolean;
+  reason?: string;
+  until?: string;
+};
 
 export async function confirmNewAddress(fetchImpl: typeof fetch, token: string): Promise<NewAddressView> {
   const notChanged = { changed: false, signOutHere: false, next: SETTINGS, offerRetry: false };
@@ -78,6 +87,12 @@ export async function confirmNewAddress(fetchImpl: typeof fetch, token: string):
   // title doesn't say the email is unchanged.
   if (data?.used === true && data.error) {
     return { ...notChanged, title: "This link was already used", message: data.error };
+  }
+  // R6-security M1: the undo-window refusals, written again from `until` so
+  // the date is in the viewer's time zone rather than the server's.
+  if (typeof data?.until === "string" && (data.reason === "locked" || data.reason === "held")) {
+    const sentence = data.reason === "locked" ? emailChangeLockedSentence : addressHeldSentence;
+    return { ...notChanged, title: "Your email wasn't changed", message: sentence(data.until) };
   }
   const serverFailed = response.status >= 500;
   return {

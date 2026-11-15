@@ -51,7 +51,8 @@ describe("addressHeldUntil", () => {
 describe("clearPassedUndoWindows", () => {
   it("clears the previous address and the undo link of every window that has passed", async () => {
     const fake = db();
-    await clearPassedUndoWindows(fake, NOW);
+    fake.updateMany.mockResolvedValue({ count: 4 });
+    await expect(clearPassedUndoWindows(fake, NOW)).resolves.toBe(4);
     expect(fake.updateMany).toHaveBeenCalledWith({
       where: {
         undoExpiresAt: { lte: NOW },
@@ -64,6 +65,6 @@ describe("clearPassedUndoWindows", () => {
   it("never throws: the clean-up is lazy and must not fail the request it rides on", async () => {
     const fake = db();
     fake.updateMany.mockRejectedValue(new Error("db down"));
-    await expect(clearPassedUndoWindows(fake, NOW)).resolves.toBeUndefined();
+    await expect(clearPassedUndoWindows(fake, NOW)).resolves.toBe(0);
   });
 });

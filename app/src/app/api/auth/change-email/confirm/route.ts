@@ -4,7 +4,7 @@ import { buildEmailChangedNoticeEmail, deliverAccountEmail } from "@/lib/account
 import { generateAccountToken, hashAccountToken } from "@/lib/accountToken";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
+import { addressHeldSentence, emailChangeLockedSentence } from "@/lib/displayDate";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -139,17 +139,12 @@ export async function POST(request: Request) {
     if (outcome.kind === "used") {
       return usedLinkResponse();
     }
-    if (outcome.kind === "locked") {
+    // `reason` and `until` let the page write the sentence again with the
+    // date in the viewer's time zone (verify-email/new-address).
+    if (outcome.kind === "locked" || outcome.kind === "held") {
+      const sentence = outcome.kind === "locked" ? emailChangeLockedSentence : addressHeldSentence;
       return NextResponse.json(
-        { error: emailChangeLockedSentence(outcome.until), until: outcome.until.toISOString() },
-        { status: 409 },
-      );
-    }
-    if (outcome.kind === "held") {
-      return NextResponse.json(
-        {
-          error: `This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until ${formatDisplayDate(outcome.until)}, so your email is unchanged. After that, ask for the change again in Settings, Account.`,
-        },
+        { error: sentence(outcome.until), reason: outcome.kind, until: outcome.until.toISOString() },
         { status: 409 },
       );
     }
