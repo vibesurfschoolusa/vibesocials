@@ -15,7 +15,8 @@ function view(overrides: Partial<ConnectLinkViewProps> = {}): string {
     onToggle: () => {},
     onCreate: () => {},
     onCopy: () => {},
-    onRevoke: () => {},
+    onReplace: () => {},
+    onTurnOff: () => {},
     ...overrides,
   };
   return renderToStaticMarkup(createElement(ConnectLinkSectionView, props));
@@ -35,7 +36,7 @@ describe("the Client connect link group in Settings", () => {
     );
   });
 
-  it("with a link: the address with Copy, the expiry, the last use and Revoke", () => {
+  it("with a link: the address with Copy, the expiry, the last use, Replace link and Turn off", () => {
     const html = view({
       link: {
         url: "https://vibesocials.example/c/abc",
@@ -49,8 +50,46 @@ describe("the Client connect link group in Settings", () => {
     expect(html).toContain("Copy");
     expect(html).toMatch(/Expires on [^<]*2026/);
     expect(html).toContain("Not used yet");
-    expect(html).toContain("Revoke");
+    expect(html).toContain("Replace link");
+    expect(html).toContain("Turn off");
+    expect(html).not.toContain("Revoke");
     expect(html).toContain("Offers: TikTok");
+  });
+
+  // R5-pages L4: as the review and upload link panels.
+  it("says, as the other link panels, that a link can't be shown again and how to get a new one", () => {
+    const html = view({
+      link: {
+        url: null,
+        platforms: ["tiktok"],
+        expiresAt: "2026-11-25T08:00:00.000Z",
+        lastUsedAt: null,
+        createdAt: "2026-11-11T08:00:00.000Z",
+      },
+    });
+    expect(html).toContain("This link can&#x27;t be shown again. Replace it to get a new one.");
+    expect(html).toContain("Replace link");
+    expect(html).toContain("Turn off");
+  });
+
+  it("offers no Replace link while the plan pauses the link, only Turn off", () => {
+    const html = view({
+      pausedByPlan: true,
+      link: {
+        url: "https://vibesocials.example/c/abc",
+        platforms: ["tiktok"],
+        expiresAt: "2026-11-25T08:00:00.000Z",
+        lastUsedAt: null,
+        createdAt: "2026-11-11T08:00:00.000Z",
+      },
+    });
+    expect(html).not.toContain("Replace link");
+    expect(html).toContain("Turn off");
+  });
+
+  it("renders the confirm dialog it is given inside the card", () => {
+    const html = view({ dialog: createElement("div", { id: "confirm-slot" }) });
+    expect(html).toContain('id="confirm-slot"');
   });
 
   it("names the last use when there was one", () => {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 
+import { withoutPairedStories } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -18,27 +19,29 @@ const CLIENT_CHANGE_REQUESTED: Prisma.PostJobWhereInput = {
 };
 
 /**
- * Posts matching `where`, a Feed and Story pair counted once: it is one post to
- * the owner, as the Queue's one card shows it. Every matching Story job whose
- * feed job matches too (in this workspace) is taken off the count. Only the
- * matching Story jobs are read, a handful at most. R2-client-journey L1 (client
- * changes), R3-client-journey L1 (posts that did not fully go out) and M1 (held
- * posts) all count this way.
+ * Posts matching `where`, a Feed and Story pair counted once by the shared rule
+ * (lib/countOnce.ts): it is one post to the owner, as the Queue's one card
+ * shows it. Only the matching Story jobs and the feed jobs they name are read,
+ * a handful at most. R2-client-journey L1 (client changes), R3-client-journey
+ * L1 (posts that did not fully go out) and M1 (held posts) all count this way.
  */
 async function countPostsOnce(workspaceId: string, where: Prisma.PostJobWhereInput): Promise<number> {
+  const pairSelect = { id: true, storyOfPostJobId: true } as const;
   const [matching, stories] = await Promise.all([
     prisma.postJob.count({ where: { workspaceId, ...where } }),
     prisma.postJob.findMany({
       where: { workspaceId, ...where, storyOfPostJobId: { not: null } },
-      select: { storyOfPostJobId: true },
+      select: pairSelect,
     }),
   ]);
   const feedIds = [...new Set(stories.map((story) => story.storyOfPostJobId).filter((id): id is string => id !== null))];
   if (feedIds.length === 0) return matching;
-  const matchingFeeds = await prisma.postJob.count({
+  const feeds = await prisma.postJob.findMany({
     where: { workspaceId, ...where, id: { in: feedIds } },
+    select: pairSelect,
   });
-  return matching - matchingFeeds;
+  const pairRows = [...feeds, ...stories];
+  return matching - (pairRows.length - withoutPairedStories(pairRows).length);
 }
 
 /**

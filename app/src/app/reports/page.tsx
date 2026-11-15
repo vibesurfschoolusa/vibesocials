@@ -34,9 +34,15 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
 
   const now = new Date();
   const { month } = await searchParams;
-  const parsed = parseReportMonth(month, now);
-  const months = reportMonths(now);
   const workspaceId = context.workspace.id;
+  // R5-new-customer L9: with no month asked for, a workspace made this month
+  // opens on this month, not on an empty last month.
+  const createdAt = month
+    ? null
+    : ((await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { createdAt: true } }))
+        ?.createdAt ?? null);
+  const parsed = parseReportMonth(month, now, createdAt);
+  const months = reportMonths(now);
 
   const report = parsed.ok ? await buildMonthlyReport(workspaceId, parsed.month, now) : null;
   // Owners only: whether a client link is on. The token is never read here.

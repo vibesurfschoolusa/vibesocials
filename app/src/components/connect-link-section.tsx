@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Copy } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
@@ -14,8 +15,9 @@ import { PLATFORM_LABELS } from "@/lib/platforms";
 /**
  * The Client connect link group in Settings (2026-11-11), for owners. One link
  * per workspace (api/workspaces/connect-link): the owner ticks what it offers,
- * creates it, copies the address for the client, and can revoke it. Members
- * never see it; the routes refuse them as well.
+ * creates it, copies the address for the client, and can replace it or turn
+ * it off, each behind a confirm, as the review and upload link panels (R5-pages
+ * L4). Members never see it; the routes refuse them as well.
  */
 
 export type ConnectLinkDto = {
@@ -38,7 +40,10 @@ export interface ConnectLinkViewProps {
   onToggle: (platform: Platform) => void;
   onCreate: () => void;
   onCopy: () => void;
-  onRevoke: () => void;
+  onReplace: () => void;
+  onTurnOff: () => void;
+  /** The confirm dialog, rendered inside the card. */
+  dialog?: ReactNode;
   /** P1: the owner GET's pausedByPlan: the plan does not include client links. */
   pausedByPlan?: boolean;
 }
@@ -51,7 +56,9 @@ export function ConnectLinkSectionView({
   onToggle,
   onCreate,
   onCopy,
-  onRevoke,
+  onReplace,
+  onTurnOff,
+  dialog = null,
   pausedByPlan = false,
 }: ConnectLinkViewProps) {
   return (
@@ -84,7 +91,7 @@ export function ConnectLinkSectionView({
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                This link can&apos;t be shown again. Revoke it and create a new one.
+                This link can&apos;t be shown again. Replace it to get a new one.
               </p>
             )}
             <p className="text-sm text-muted-foreground">
@@ -94,9 +101,16 @@ export function ConnectLinkSectionView({
             <p className="text-sm text-muted-foreground">
               {link.lastUsedAt ? `Last used ${formatDate(link.lastUsedAt)}` : "Not used yet"}
             </p>
-            <Button type="button" variant="outline" size="sm" loading={busy} onClick={onRevoke}>
-              Revoke
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {pausedByPlan ? null : (
+                <Button type="button" variant="outline" size="sm" onClick={onReplace}>
+                  Replace link
+                </Button>
+              )}
+              <Button type="button" variant="ghost" size="sm" onClick={onTurnOff}>
+                Turn off
+              </Button>
+            </div>
           </>
         ) : pausedByPlan ? (
           <ClientLinkPlanNotice paused={false} />
@@ -127,6 +141,7 @@ export function ConnectLinkSectionView({
           platform has approved this app.
         </p>
       </CardContent>
+      {dialog}
     </Card>
   );
 }
@@ -139,6 +154,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [pausedByPlan, setPausedByPlan] = useState(false);
   const [selected, setSelected] = useState<Platform[]>([]);
   const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -172,46 +188,58 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     );
   }, []);
 
-  async function onCreate() {
-    setBusy(true);
-    try {
-      const response = await fetch("/api/workspaces/connect-link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId, platforms: selected }),
-      });
+  /** The link route, with a network failure said in a toast (and thrown, so a confirm stays open). */
+  const send = useCallback(
+    async (method: "POST" | "DELETE", body: object) => {
+      try {
+        return await fetch("/api/workspaces/connect-link", {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch (error) {
+        toast.error("Couldn't reach Vibe Socials. Check your connection and try again.");
+        throw error;
+      }
+    },
+    [toast],
+  );
+
+  // Create and Replace are the same call: the server revokes any old link.
+  // Replace keeps the platforms the old link offered. Throws on failure, so the
+  // confirm dialog stays open; the toast says why.
+  const makeLink = useCallback(
+    async (platforms: Platform[]) => {
+      const response = await send("POST", { workspaceId, platforms });
       const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto; error?: string } | null;
       if (!response.ok || !data?.link) {
         toast.error(data?.error ?? "Couldn't make the link. Try again.");
-        return;
+        throw new Error("CREATE_FAILED");
       }
       setLink(data.link);
       toast.success("New link ready. Copy it and send it to your client.");
-    } catch {
-      toast.error("Couldn't make the link. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
+    },
+    [send, toast, workspaceId],
+  );
 
-  async function onRevoke() {
+  const turnOff = useCallback(async () => {
+    const response = await send("DELETE", { workspaceId });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
+      throw new Error("REVOKE_FAILED");
+    }
+    setLink(null);
+    setSelected([]);
+    toast.success("The link is off. It no longer works.");
+  }, [send, toast, workspaceId]);
+
+  async function onCreate() {
     setBusy(true);
     try {
-      const response = await fetch("/api/workspaces/connect-link", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId }),
-      });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        toast.error(data?.error ?? "Couldn't revoke the link. Try again.");
-        return;
-      }
-      setLink(null);
-      setSelected([]);
-      toast.success("The link is revoked. It no longer works.");
+      await makeLink(selected);
     } catch {
-      toast.error("Couldn't revoke the link. Try again.");
+      // Already shown as a toast.
     } finally {
       setBusy(false);
     }
@@ -237,8 +265,26 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       onToggle={onToggle}
       onCreate={onCreate}
       onCopy={onCopy}
-      onRevoke={onRevoke}
+      onReplace={() => setConfirm("replace")}
+      onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
+      dialog={
+        <ConfirmDialog
+          open={confirm !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfirm(null);
+          }}
+          title={confirm === "replace" ? "Replace the client connect link?" : "Turn off the client connect link?"}
+          description={
+            confirm === "replace"
+              ? "The old link stops working. Your client will need the new one."
+              : "The old link stops working. Accounts your client already connected stay connected."
+          }
+          confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
+          destructive
+          onConfirm={confirm === "replace" ? () => makeLink(link?.platforms ?? []) : turnOff}
+        />
+      }
     />
   );
 }

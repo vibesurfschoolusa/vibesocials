@@ -2,18 +2,25 @@ import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, buildMonthlyReportMock, linkFindFirstMock, redirectMock } = vi.hoisted(() => ({
-  getWorkspaceContextMock: vi.fn(),
-  buildMonthlyReportMock: vi.fn(),
-  linkFindFirstMock: vi.fn(),
-  redirectMock: vi.fn((url: string) => {
-    throw new Error(`REDIRECT ${url}`);
-  }),
-}));
+const { getWorkspaceContextMock, buildMonthlyReportMock, linkFindFirstMock, workspaceFindUniqueMock, redirectMock } =
+  vi.hoisted(() => ({
+    getWorkspaceContextMock: vi.fn(),
+    workspaceFindUniqueMock: vi.fn(),
+    buildMonthlyReportMock: vi.fn(),
+    linkFindFirstMock: vi.fn(),
+    redirectMock: vi.fn((url: string) => {
+      throw new Error(`REDIRECT ${url}`);
+    }),
+  }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/server/reports/monthlyReport", () => ({ buildMonthlyReport: buildMonthlyReportMock }));
-vi.mock("@/lib/db", () => ({ prisma: { workspaceReviewLink: { findFirst: linkFindFirstMock } } }));
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    workspaceReviewLink: { findFirst: linkFindFirstMock },
+    workspace: { findUnique: workspaceFindUniqueMock },
+  },
+}));
 vi.mock("next/navigation", () => ({ redirect: redirectMock }));
 
 import { REPORT_MONTH_INVALID_MESSAGE } from "@/lib/monthlyReport";
@@ -52,6 +59,8 @@ beforeEach(() => {
   getWorkspaceContextMock.mockResolvedValue(context());
   buildMonthlyReportMock.mockResolvedValue(REPORT);
   linkFindFirstMock.mockResolvedValue(null);
+  workspaceFindUniqueMock.mockReset();
+  workspaceFindUniqueMock.mockResolvedValue({ createdAt: new Date("2026-01-15T00:00:00Z") });
 });
 
 afterEach(() => {
@@ -83,6 +92,18 @@ describe("the Reports page", () => {
     expect(html).toMatch(/<h2[^>]*>Surf Co: October 2026<\/h2>/);
     expect(html).toMatch(/<div[^>]*data-report-noprint[^>]*class="[^"]*print:hidden/);
     expect(html.indexOf(">Reports</h1>")).toBeLessThan(html.indexOf('name="month"'));
+  });
+
+  it("opens on the month in progress for a workspace made this month (R5-new-customer L9)", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ createdAt: new Date("2026-11-03T09:00:00Z") });
+    await render();
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: { createdAt: true } });
+    expect(buildMonthlyReportMock).toHaveBeenCalledWith("ws-1", "2026-11", expect.any(Date));
+  });
+
+  it("reads no workspace date when the address names the month", async () => {
+    await render({ month: "2026-10" });
+    expect(workspaceFindUniqueMock).not.toHaveBeenCalled();
   });
 
   it("takes the month from the address and the workspace only from the signed-in context", async () => {

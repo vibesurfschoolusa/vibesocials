@@ -58,6 +58,14 @@ describe("ReviewPostCard", () => {
     expect(html).not.toContain("Looks good");
   });
 
+  // R5-pages L6: a change request takes the post out of the schedule.
+  it("shows a post whose change was requested as not scheduled, not at its old time", () => {
+    const html = render(post({ state: "change_requested", note: "Use the other photo" }));
+    expect(html).toContain("Not scheduled: waiting for your changes");
+    expect(html).not.toContain("<time");
+    expect(html).not.toContain("No time set");
+  });
+
   it("says when no time is set", () => {
     expect(render(post({ scheduledFor: null }))).toContain("No time set");
   });

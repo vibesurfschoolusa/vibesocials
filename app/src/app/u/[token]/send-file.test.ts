@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UPLOAD_LINK_STORAGE_FULL_MESSAGE } from "@/lib/uploadLink";
 
-import { sendClientFile, type SendFileDeps } from "./send-file";
+import { ClientFileError, sendClientFile, type SendFileDeps } from "./send-file";
 
 const TOKEN = "T".repeat(43);
 
@@ -100,5 +100,51 @@ describe("sendClientFile", () => {
     deps.prepare.mockRejectedValue(new Error("We couldn't convert this iPhone (HEIC) photo."));
     await expect(sendClientFile(input(), deps)).rejects.toThrow("We couldn't convert");
     expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
+  // The form decides its summary from the kind, never from the sentence's words.
+  describe("the kind of each failure", () => {
+    async function failure(): Promise<ClientFileError> {
+      const error = await sendClientFile(input(), deps).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ClientFileError);
+      return error as ClientFileError;
+    }
+
+    it("network when the token request cannot reach the server", async () => {
+      deps.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      expect(await failure()).toMatchObject({
+        kind: "network",
+        message: "The upload didn't finish. Check your connection and try again.",
+      });
+    });
+
+    it("network when the upload to storage fails", async () => {
+      deps.put.mockRejectedValue(new Error("network"));
+      expect((await failure()).kind).toBe("network");
+    });
+
+    it("network when registering cannot reach the server", async () => {
+      deps.fetch
+        .mockResolvedValueOnce(jsonResponse(200, { clientToken: "ct", pathname: "ul/link-1/a.jpg" }))
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      expect((await failure()).kind).toBe("network");
+    });
+
+    it("refused, with the server's sentence, when the token is refused", async () => {
+      deps.fetch.mockResolvedValueOnce(jsonResponse(403, { error: UPLOAD_LINK_STORAGE_FULL_MESSAGE }));
+      expect(await failure()).toMatchObject({ kind: "refused", message: UPLOAD_LINK_STORAGE_FULL_MESSAGE });
+    });
+
+    it("refused, with the server's sentence, when registering is refused", async () => {
+      deps.fetch
+        .mockResolvedValueOnce(jsonResponse(200, { clientToken: "ct", pathname: "ul/link-1/a.jpg" }))
+        .mockResolvedValueOnce(jsonResponse(429, { error: "limit sentence" }));
+      expect(await failure()).toMatchObject({ kind: "refused", message: "limit sentence" });
+    });
+
+    it("refused when the file cannot be prepared", async () => {
+      deps.prepare.mockRejectedValue(new Error("We couldn't convert this iPhone (HEIC) photo."));
+      expect(await failure()).toMatchObject({ kind: "refused", message: "We couldn't convert this iPhone (HEIC) photo." });
+    });
   });
 });

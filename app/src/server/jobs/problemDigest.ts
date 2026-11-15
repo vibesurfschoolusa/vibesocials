@@ -1,6 +1,8 @@
 import type { Platform } from "@prisma/client";
 import { RetryAfterError } from "inngest";
 
+import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
+import { countPostsOnce, type PairableJob } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { utcDayKey } from "@/lib/usageLimits";
@@ -73,7 +75,7 @@ function emptyProblems(workspaceId: string): Omit<ProblemDigestWorkspace, "name"
  * One digest per owner who wants the email and owns at least one workspace with
  * a problem: a result that failed in the 24 hours before `now` (and is still
  * failed, so a retry that succeeded does not count), a connection that needs
- * reconnecting, or a post waiting for approval. Ordered by user id, so a re-run
+ * reconnecting, or a post waiting for approval (draft or scheduled, as Needs you). Ordered by user id, so a re-run
  * that hits the cap picks the same owners.
  */
 export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]> {
@@ -87,25 +89,26 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
         updatedAt: { gte: since, lte: now },
         workspaceId: { not: null },
       },
-      select: { workspaceId: true, postJobId: true, platform: true },
+      // The job's pair link, for the count-once rule (lib/countOnce.ts).
+      select: { workspaceId: true, postJobId: true, platform: true, postJob: { select: { storyOfPostJobId: true } } },
     }),
     // A post that failed with no result at all was never sent (F1 H3: the 2 h
     // give-up, or no connection could take it): a failed post with no platform.
     prisma.postJob.findMany({
       where: { status: "failed", updatedAt: { gte: since, lte: now }, results: { none: {} } },
-      select: { id: true, workspaceId: true },
+      select: { id: true, workspaceId: true, storyOfPostJobId: true },
     }),
     prisma.socialConnection.findMany({
       where: { needsReconnect: true },
       select: { workspaceId: true, platform: true },
     }),
-    // Held for approval: a draft submitted and not yet decided. The status
-    // filter is what keeps a rejected (cancelled) post out, as in
-    // deriveApprovalState / isHeldForApproval (lib/approval.ts).
-    prisma.postJob.groupBy({
-      by: ["workspaceId"],
-      where: { status: "draft", submittedForApprovalAt: { not: null }, approvedAt: null },
-      _count: { _all: true },
+    // Held for approval, exactly as Needs you counts it: a draft or scheduled
+    // post submitted and not yet decided. The status list keeps a rejected
+    // (cancelled) post out (lib/approval.ts). Rows, not a
+    // grouped count, so a Feed and Story pair counts once; few posts wait.
+    prisma.postJob.findMany({
+      where: { status: { in: [...APPROVAL_DECIDABLE_STATUSES] }, submittedForApprovalAt: { not: null }, approvedAt: null },
+      select: { id: true, workspaceId: true, storyOfPostJobId: true },
     }),
   ]);
 
@@ -119,31 +122,38 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
     return entry;
   };
 
-  // A post that failed on two platforms is one failed post.
-  const failures = new Map<string, { posts: Set<string>; platforms: Set<Platform> }>();
+  // A post that failed on two platforms is one failed post, and so is a Feed
+  // and Story pair (R5-client-journey L2).
+  const failures = new Map<string, { posts: PairableJob[]; platforms: Set<Platform> }>();
+  const failureOf = (workspaceId: string) => {
+    const failure = failures.get(workspaceId) ?? { posts: [], platforms: new Set<Platform>() };
+    failures.set(workspaceId, failure);
+    return failure;
+  };
   for (const result of failedResults) {
     if (!result.workspaceId) continue;
-    const failure = failures.get(result.workspaceId) ?? { posts: new Set(), platforms: new Set() };
-    failure.posts.add(result.postJobId);
+    const failure = failureOf(result.workspaceId);
+    failure.posts.push({ id: result.postJobId, storyOfPostJobId: result.postJob?.storyOfPostJobId ?? null });
     failure.platforms.add(result.platform);
-    failures.set(result.workspaceId, failure);
   }
   for (const post of unsentPosts) {
-    const failure = failures.get(post.workspaceId) ?? { posts: new Set(), platforms: new Set() };
-    failure.posts.add(post.id);
-    failures.set(post.workspaceId, failure);
+    failureOf(post.workspaceId).posts.push({ id: post.id, storyOfPostJobId: post.storyOfPostJobId ?? null });
   }
   for (const [workspaceId, failure] of failures) {
     const entry = problemsOf(workspaceId);
-    entry.failedPosts = failure.posts.size;
+    entry.failedPosts = countPostsOnce(failure.posts);
     entry.failedPlatforms = [...failure.platforms].sort();
   }
   for (const connection of reconnects) {
     problemsOf(connection.workspaceId).needsReconnect.push(connection.platform);
   }
   for (const entry of problems.values()) entry.needsReconnect.sort();
-  for (const group of approvals) {
-    if (group._count._all > 0) problemsOf(group.workspaceId).waitingForApproval = group._count._all;
+  const approvalsByWorkspace = new Map<string, PairableJob[]>();
+  for (const post of approvals) {
+    approvalsByWorkspace.set(post.workspaceId, [...(approvalsByWorkspace.get(post.workspaceId) ?? []), post]);
+  }
+  for (const [workspaceId, posts] of approvalsByWorkspace) {
+    problemsOf(workspaceId).waitingForApproval = countPostsOnce(posts);
   }
 
   if (problems.size === 0) return [];

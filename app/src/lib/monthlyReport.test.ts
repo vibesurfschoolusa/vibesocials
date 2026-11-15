@@ -49,6 +49,25 @@ describe("reportMonths and defaultReportMonth", () => {
     expect(defaultReportMonth(new Date("2026-01-01T00:00:00Z"))).toBe("2025-12");
   });
 
+  it("opens on the month in progress for a workspace made this month (R5-new-customer L9)", () => {
+    expect(defaultReportMonth(NOW, new Date("2026-11-01T00:00:00Z"))).toBe("2026-11");
+    expect(defaultReportMonth(NOW, new Date("2026-11-09T08:00:00Z"))).toBe("2026-11");
+    // Made last month (even on its last moment): last month has its posts.
+    expect(defaultReportMonth(NOW, new Date("2026-10-31T23:59:59Z"))).toBe("2026-10");
+    expect(defaultReportMonth(NOW, null)).toBe("2026-10");
+    expect(parseReportMonth(undefined, NOW, new Date("2026-11-05T00:00:00Z"))).toEqual({
+      ok: true,
+      month: "2026-11",
+      inProgress: true,
+    });
+    // A month asked for is kept.
+    expect(parseReportMonth("2026-10", NOW, new Date("2026-11-05T00:00:00Z"))).toEqual({
+      ok: true,
+      month: "2026-10",
+      inProgress: false,
+    });
+  });
+
   it("counts the month in UTC: late on the 31st in UTC is still that month", () => {
     expect(reportMonths(new Date("2026-10-31T23:59:59Z"))[0]).toBe("2026-10");
     expect(reportMonths(new Date("2026-11-01T00:00:00Z"))[0]).toBe("2026-11");
