@@ -72,7 +72,8 @@ export async function GET(_request: Request, { params }: InviteRouteContext) {
   });
 
   return NextResponse.json(
-    { workspaceName: invite.workspace.name, alreadyMember: Boolean(membership) },
+    // R13-client-journey L1: the id, so an existing member's Go to dashboard opens this workspace.
+    { workspaceId: invite.workspace.id, workspaceName: invite.workspace.name, alreadyMember: Boolean(membership) },
     { status: 200 },
   );
 }

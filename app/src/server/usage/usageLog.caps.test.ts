@@ -508,7 +508,7 @@ describe("the per-person number", () => {
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", viewerUserId: "a-member" }))?.error,
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once owner-1@example.com confirms their email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once owner-1 confirms their email address.",
     );
   });
 

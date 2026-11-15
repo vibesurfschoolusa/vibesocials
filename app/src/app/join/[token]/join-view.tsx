@@ -10,11 +10,13 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { workspaceLink } from "@/server/notifications/links";
 
 import { JOIN_FAILED_MESSAGE } from "./joinMessages";
 
 /** GET /api/invites/[token] preview shape. 404 (invalid/expired/revoked) is handled separately. */
 interface InvitePreview {
+  workspaceId: string;
   workspaceName: string;
   alreadyMember: boolean;
 }
@@ -117,6 +119,25 @@ export function JoinUnreachable({ onRetry }: { onRetry: () => void }) {
         description="The link may be fine. Check your internet connection, then press Try again."
         action={<Button onClick={onRetry}>Try again</Button>}
       />
+    </div>
+  );
+}
+
+/**
+ * R13-client-journey L1: the invite's workspace may not be the active one (a
+ * member of A and B opening B's invite while A is active), so Go to dashboard
+ * goes through /go, which checks the membership and makes it the active one.
+ */
+export function JoinAlreadyMember({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+  return (
+    <div className="mx-auto max-w-md px-4 py-16">
+      <Card className="flex flex-col items-center gap-3 p-6 text-center">
+        <h1 className="text-lg font-semibold text-foreground">You&apos;re already in {workspaceName}</h1>
+        <p className="text-sm text-muted-foreground">You&apos;re already a member of this workspace.</p>
+        <Link href={workspaceLink(workspaceId, "/", null)} className={buttonVariants({ variant: "primary", className: "mt-2" })}>
+          Go to dashboard
+        </Link>
+      </Card>
     </div>
   );
 }
@@ -233,21 +254,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
   }
 
   if (preview.alreadyMember) {
-    return (
-      <div className="mx-auto max-w-md px-4 py-16">
-        <Card className="flex flex-col items-center gap-3 p-6 text-center">
-          <h1 className="text-lg font-semibold text-foreground">
-            You&apos;re already in {preview.workspaceName}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            You&apos;re already a member of this workspace.
-          </p>
-          <Link href="/" className={buttonVariants({ variant: "primary", className: "mt-2" })}>
-            Go to dashboard
-          </Link>
-        </Card>
-      </div>
-    );
+    return <JoinAlreadyMember workspaceId={preview.workspaceId} workspaceName={preview.workspaceName} />;
   }
 
   return (

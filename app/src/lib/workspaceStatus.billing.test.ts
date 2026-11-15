@@ -224,11 +224,20 @@ describe("with billing on", () => {
 
     it("tells owners in the last 3 days of a trial", () => {
       expect(trialEndingNotice(inTrial(3 * DAY), "owner", NOW)).toBe(
-        "Your free trial ends on December 13, 2026. Choose a plan in Settings.",
+        "Your free trial ends on December 13, 2026 (UTC). Choose a plan in Settings.",
       );
       expect(trialEndingNotice(inTrial(60 * 1000), "owner", NOW)).toBe(
-        "Your free trial ends on December 10, 2026. Choose a plan in Settings.",
+        "Your free trial ends on December 10, 2026 (UTC). Choose a plan in Settings.",
       );
+    });
+
+    // R13-new-customer L1: in the owner's own zone, as the trial email; UTC labelled without one.
+    it("names the owner's own day and time", () => {
+      const ends = { ...ENDED_TRIAL, trialEndsAt: new Date("2026-12-11T01:30:00Z") };
+      expect(trialEndingNotice(ends, "owner", NOW, "America/New_York")).toBe(
+        "Your free trial ends on December 10, 2026, 8:30 PM EST. Choose a plan in Settings.",
+      );
+      expect(trialEndingNotice(ends, "owner", NOW)).toBe("Your free trial ends on December 11, 2026 (UTC). Choose a plan in Settings.");
     });
 
     it("says nothing earlier, to members, or outside a trial", () => {

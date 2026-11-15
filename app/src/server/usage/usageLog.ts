@@ -815,7 +815,8 @@ async function refusalFor(
         // In a co-owned workspace the owner holding it is named, unless they
         // are the one reading it (R8-pages L3).
         const holder = {
-          name: owner.user.name?.trim() || owner.user.email,
+          // R13-security L1: never a reader's view of an owner's full address (the roster rule).
+          name: owner.user.name?.trim() || owner.user.email.split("@")[0],
           coOwned: who.owners.length > 1,
           isViewer: input.viewerUserId === owner.userId,
         };

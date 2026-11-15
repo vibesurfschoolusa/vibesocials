@@ -30,7 +30,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const block = accessBlock(context);
-  const trialNotice = block ? null : trialEndingNotice(context.workspace, context.role);
+  const trialNotice = block ? null : trialEndingNotice(context.workspace, context.role, new Date(), context.user.timeZone ?? null);
   const trialDaysLeft = block || trialNotice ? null : trialDaysLeftNotice(context.workspace, context.role);
   const planLink = block?.code === PLAN_ENDED_CODE && context.role === "owner";
   return NextResponse.json(

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { buildTrialEndingEmail } from "@/server/billing/billingEmails";
+
 import { planGrowthAddsShown, planNoPlanYet, planPersonalPostNote, planSectionActions, planSectionLabel } from "./planSectionView";
 
 /** 21a: what Settings → Plan says, and when it is there at all. */
@@ -35,6 +37,32 @@ describe("planSectionActions for a workspace made while billing was off", () => 
 });
 
 describe("planSectionLabel", () => {
+  // R13-new-customer L1: a Florida sign-up at 8:30 PM EST is 01:30 UTC the next day;
+  // the page names the viewer's own day and time, as the trial email does.
+  it("writes plan dates in the viewer's zone, and labels UTC when the zone is unknown", () => {
+    const trial = { ...NEW, trialEndsAt: new Date("2026-11-25T01:30:00Z") };
+    const before = new Date("2026-11-20T12:00:00Z");
+    const local = planSectionLabel("owner", trial, before, ON, "America/New_York");
+    expect(local).toBe("Free trial until November 24, 2026, 8:30 PM EST");
+    expect(planSectionLabel("owner", trial, before, ON)).toBe("Free trial until November 25, 2026 (UTC)");
+    expect(planSectionLabel("owner", trial, before, ON, "Not/AZone")).toBe("Free trial until November 25, 2026 (UTC)");
+    const email = buildTrialEndingEmail({ workspaceId: "ws-1", workspaceName: "Surf Co", trialEndsAt: trial.trialEndsAt, timeZone: "America/New_York" });
+    expect(email.html).toContain("Nov 24, 2026, 8:30 PM EST");
+
+    const zone = "America/New_York";
+    const at = new Date("2026-12-24T01:30:00Z");
+    const pastDue = { ...NEW, plan: "pro", planStatus: "past_due", currentPeriodEnd: new Date("2026-12-17T01:30:00Z") };
+    expect(planSectionLabel("owner", pastDue, NOW, ON, zone)).toBe(
+      "Pro plan. The last payment did not go through; posting stops on December 23, 2026, 8:30 PM EST.",
+    );
+    const growth = { ...NEW, plan: "growth", planStatus: "active", currentPeriodEnd: at };
+    expect(planSectionLabel("owner", growth, NOW, ON, zone)).toBe("Growth plan, renews December 23, 2026, 8:30 PM EST");
+    expect(planSectionLabel("owner", { ...growth, planEndsAt: at }, NOW, ON, zone)).toBe("Growth plan, ends on December 23, 2026, 8:30 PM EST");
+    expect(planSectionLabel("owner", { ...growth, planStatus: "trialing" }, NOW, ON, zone)).toBe(
+      "Growth plan, first payment on December 23, 2026, 8:30 PM EST",
+    );
+  });
+
   it("is absent with billing off, whatever the workspace", () => {
     for (const env of [{}, { BILLING_ENABLED: "TRUE" }, { ...ON, BILLING_ENABLED: "false" }]) {
       expect(planSectionLabel("owner", { ...NEW, trialEndsAt: new Date("2026-12-24T00:00:00Z") }, NOW, env)).toBeNull();
@@ -50,15 +78,15 @@ describe("planSectionLabel", () => {
   // R7-pages L5: the dates read like every other Settings date (displayDate.ts).
   it("a trial", () => {
     expect(planSectionLabel("owner", { ...NEW, trialEndsAt: new Date("2026-12-24T12:00:00Z") }, NOW, ON)).toBe(
-      "Free trial until December 24, 2026",
+      "Free trial until December 24, 2026 (UTC)",
     );
   });
 
   it("an active plan, with and without a renewal date", () => {
     const growth = { ...NEW, plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2027-01-03T12:00:00Z") };
-    expect(planSectionLabel("owner", growth, NOW, ON)).toBe("Growth plan, renews January 3, 2027");
+    expect(planSectionLabel("owner", growth, NOW, ON)).toBe("Growth plan, renews January 3, 2027 (UTC)");
     expect(planSectionLabel("owner", { ...growth, currentPeriodEnd: null }, NOW, ON)).toBe("Growth plan");
-    expect(planSectionLabel("owner", { ...growth, plan: "custom" }, NOW, ON)).toBe("Your plan, renews January 3, 2027");
+    expect(planSectionLabel("owner", { ...growth, plan: "custom" }, NOW, ON)).toBe("Your plan, renews January 3, 2027 (UTC)");
   });
 
   // Live billing test 2026-11-13: a plan chosen during the free trial is "trialing"
@@ -66,25 +94,25 @@ describe("planSectionLabel", () => {
   // period end is the first payment, not a renewal.
   it("a plan still in Stripe's trial: the period end is the first payment", () => {
     const trialing = { ...NEW, plan: "starter", planStatus: "trialing", currentPeriodEnd: new Date("2026-12-24T12:00:00Z") };
-    expect(planSectionLabel("owner", trialing, NOW, ON)).toBe("Starter plan, first payment on December 24, 2026");
+    expect(planSectionLabel("owner", trialing, NOW, ON)).toBe("Starter plan, first payment on December 24, 2026 (UTC)");
     expect(planSectionLabel("owner", { ...trialing, plan: "custom" }, NOW, ON)).toBe(
-      "Your plan, first payment on December 24, 2026",
+      "Your plan, first payment on December 24, 2026 (UTC)",
     );
     // Cancelled during the trial: it ends then and is never charged.
     expect(planSectionLabel("owner", { ...trialing, planEndsAt: new Date("2026-12-24T12:00:00Z") }, NOW, ON)).toBe(
-      "Starter plan, ends on December 24, 2026",
+      "Starter plan, ends on December 24, 2026 (UTC)",
     );
     expect(planSectionLabel("owner", { ...trialing, currentPeriodEnd: null }, NOW, ON)).toBe("Starter plan");
     // Once Stripe has charged it, the same plan renews as before.
     expect(planSectionLabel("owner", { ...trialing, planStatus: "active" }, NOW, ON)).toBe(
-      "Starter plan, renews December 24, 2026",
+      "Starter plan, renews December 24, 2026 (UTC)",
     );
   });
 
   it("a plan whose payment failed, still in its week", () => {
     const pastDue = { ...NEW, plan: "pro", planStatus: "past_due", currentPeriodEnd: new Date("2026-12-08T12:00:00Z") };
     expect(planSectionLabel("owner", pastDue, NOW, ON)).toBe(
-      "Pro plan. The last payment did not go through; posting stops on December 15, 2026.",
+      "Pro plan. The last payment did not go through; posting stops on December 15, 2026 (UTC).",
     );
   });
 

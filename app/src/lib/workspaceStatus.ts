@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { billingEnabled, planState, type BillingFields } from "./billing";
-import { formatDisplayDate } from "./displayDate";
 import { SUPPORT_EMAIL } from "./siteInfo";
+import { usableTimeZone } from "@/server/notifications/emailTime";
 
 /**
  * Whether a workspace may create or move work (2026-11-10). Two causes: the
@@ -124,20 +124,36 @@ export function splitWorkspaceStatus<T extends WorkspaceStatusFields>(
 const TRIAL_NOTICE_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
+ * R13-new-customer L1: a trial or plan date as the viewer's own day and time
+ * ("November 24, 2026, 8:30 PM EST"), as the billing emails write it
+ * (emailTime.ts). These are built on the server, whose zone is UTC, so
+ * without a known zone the day is labelled "(UTC)" rather than passed off as
+ * the viewer's.
+ */
+export function planDateText(date: Date, timeZone: string | null | undefined): string {
+  const zone = usableTimeZone(timeZone);
+  const day = date.toLocaleDateString("en-US", { timeZone: zone ?? "UTC", month: "long", day: "numeric", year: "numeric" });
+  if (!zone) return `${day} (UTC)`;
+  const time = date.toLocaleTimeString("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  return `${day}, ${time}`;
+}
+
+/**
  * The quieter line owners see in the last 3 days of a free trial, or null.
- * Only with billing on; members never see it.
+ * Only with billing on; members never see it. `timeZone`: the owner's
+ * User.timeZone (planDateText).
  */
 export function trialEndingNotice(
   workspace: WorkspaceStatusFields,
   role: "owner" | "member",
   now: Date = new Date(),
+  timeZone: string | null = null,
 ): string | null {
   if (role !== "owner" || !billingEnabled() || planState(workspace, now) !== "trial") return null;
   // planState is "trial" only with a valid trialEndsAt.
   const endsAt = new Date(workspace.trialEndsAt as Date | string);
   if (endsAt.getTime() - now.getTime() > TRIAL_NOTICE_MS) return null;
-  // R7-pages L5: written like every other Settings date (displayDate.ts).
-  return `Your free trial ends on ${formatDisplayDate(endsAt)}. Choose a plan in Settings.`;
+  return `Your free trial ends on ${planDateText(endsAt, timeZone)}. Choose a plan in Settings.`;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

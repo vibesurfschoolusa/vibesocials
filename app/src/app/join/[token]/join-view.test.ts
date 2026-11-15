@@ -21,6 +21,7 @@ import {
   JOIN_FAILED_MESSAGE,
   JOIN_OFFLINE_MESSAGE,
   JOIN_SIGNED_OUT_MESSAGE,
+  JoinAlreadyMember,
   JoinDeadLink,
   JoinSignedOut,
   JoinUnreachable,
@@ -209,6 +210,15 @@ describe("join states", () => {
     expect(page).toMatch(/<h1[^>]*>This invite link isn&#x27;t valid anymore\.<\/h1>/);
     expect(page).toContain(INVALID_INVITE_DESCRIPTION);
     expect(page).not.toContain("<h3");
+  });
+
+  // R13-client-journey L1: a member of A (active) and B opening B's invite lands on B's
+  // dashboard: /go checks the membership and makes B the active workspace.
+  it("already a member: Go to dashboard opens that workspace through /go", () => {
+    const page = html(createElement(JoinAlreadyMember, { workspaceId: "ws-b", workspaceName: "Client B" }));
+    expect(page).toMatch(/<h1[^>]*>You&#x27;re already in Client B<\/h1>/);
+    expect(page).toContain(`href="/go?w=ws-b&amp;to=${encodeURIComponent("/")}"`);
+    expect(page).toContain(">Go to dashboard<");
   });
 
   it("the unreachable invite has its title as the page's h1", () => {
