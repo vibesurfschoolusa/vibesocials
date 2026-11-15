@@ -171,7 +171,9 @@ describe("listReviewPosts", () => {
       scheduledFor: { gte: NOW, lte: new Date(NOW.getTime() + 60 * DAY) },
     });
     expect(scheduledQuery.orderBy).toEqual([{ scheduledFor: "asc" }, { id: "asc" }]);
-    expect(scheduledQuery.take).toBe(100);
+    // R7-client-journey L5: the 100 counts cards, and a feed card may fold its
+    // Story in, so up to two rows a card plus one to tell there are more.
+    expect(scheduledQuery.take).toBe(201);
   });
 
   it("asks for the drafts the client asked to change in the last 30 days, and nothing else", async () => {
@@ -183,7 +185,7 @@ describe("listReviewPosts", () => {
       status: "draft",
       clientChangeRequestedAt: { gte: new Date(NOW.getTime() - 30 * DAY) },
     });
-    expect(changedQuery.take).toBe(100);
+    expect(changedQuery.take).toBe(201);
     // Neither query can return a published, failed or cancelled post, or another workspace's.
     for (const [query] of postFindManyMock.mock.calls) {
       expect(query.where.workspaceId).toBe("ws-1");
@@ -698,6 +700,38 @@ describe("listReviewPosts - a Feed and Story pair", () => {
 
     expect(posts.map((p) => p.id).sort()).toEqual(["feed-1", "story-1"]);
     expect(posts.find((p) => p.id === "feed-1")).not.toHaveProperty("alsoStory");
+  });
+});
+
+// R7-client-journey L5: the cap counts cards after pairs are folded, so a
+// feed card never loses its "Also as a Story" line at the cut; one card more
+// than the page shows tells it there are more (review-link-view.tsx).
+describe("listReviewPosts - the 100 cards", () => {
+  const at = (i: number) => new Date(NOW.getTime() + (i + 1) * 60 * 60 * 1000);
+  const pair = (i: number) => [
+    postRow({ id: `feed-${String(i).padStart(3, "0")}`, storyOfPostJobId: null, scheduledFor: at(i) }),
+    postRow({
+      id: `story-${String(i).padStart(3, "0")}`,
+      storyOfPostJobId: `feed-${String(i).padStart(3, "0")}`,
+      scheduledFor: at(i),
+      publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+    }),
+  ];
+
+  it("folds the pairs first, then keeps 100 cards and one more, earliest first, each feed card with its Story line", async () => {
+    postFindManyMock.mockResolvedValueOnce(Array.from({ length: 120 }, (_, i) => pair(i)).flat()).mockResolvedValueOnce([]);
+    const posts = await listReviewPosts("ws-1", NOW);
+    expect(posts).toHaveLength(101);
+    expect(posts[0].id).toBe("feed-000");
+    expect(posts[100].id).toBe("feed-100");
+    expect(posts.every((post) => post.id.startsWith("feed-") && post.alsoStory)).toBe(true);
+    // Only the kept cards' photos are counted.
+    expect(groupByMock.mock.calls[0][0].where.postJobId.in).toHaveLength(101);
+  });
+
+  it("keeps every card when there are 100 or fewer", async () => {
+    postFindManyMock.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => pair(i)).flat()).mockResolvedValueOnce([]);
+    expect(await listReviewPosts("ws-1", NOW)).toHaveLength(100);
   });
 });
 

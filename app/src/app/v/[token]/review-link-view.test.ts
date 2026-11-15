@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { ReviewPostCard, changeNoteHint } from "./review-link-view";
+import { REVIEW_MORE_SENTENCE, ReviewPostCard, changeNoteHint, reviewListPage } from "./review-link-view";
 
 type ReviewPostDTO = ReviewCardDTO;
 
@@ -87,5 +87,25 @@ describe("ReviewPostCard - a Feed and Story pair", () => {
       "This post and its Story will not go out until they are scheduled again.",
     );
     expect(changeNoteHint(post())).toBe("This post will not go out until it is scheduled again.");
+  });
+});
+
+// R7-client-journey L5: the page shows at most 100 cards and says when there
+// are more (the server sends one card more than it shows to tell).
+describe("reviewListPage", () => {
+  const many = (count: number) => Array.from({ length: count }, (_, i) => post({ id: `p${i}` }));
+
+  it("shows the first 100 cards and says more appear when the server sent more", () => {
+    const page = reviewListPage(many(101));
+    expect(page.shown).toHaveLength(100);
+    expect(page.shown[99].id).toBe("p99");
+    expect(page.more).toBe(true);
+    expect(REVIEW_MORE_SENTENCE).toBe("Showing the next 100 posts; more appear as these go out.");
+  });
+
+  it("shows every card and no sentence at 100 or fewer", () => {
+    expect(reviewListPage(many(100))).toMatchObject({ more: false });
+    expect(reviewListPage(many(100)).shown).toHaveLength(100);
+    expect(reviewListPage(many(3)).shown).toHaveLength(3);
   });
 });

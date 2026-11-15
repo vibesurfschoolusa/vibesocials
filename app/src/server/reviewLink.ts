@@ -161,9 +161,23 @@ function alsoStoryLine(story: ReviewPostRow): string {
 }
 
 /**
+ * Rows each query reads: a card may hold two (a feed post and its folded
+ * Story), and one card more than the page shows tells it there are more.
+ */
+const REVIEW_ROWS_TAKE = 2 * REVIEW_LIST_MAX + 1;
+
+/** The order the page lists cards in: by time, the ones without a time last. */
+function cardOrder(a: { scheduledFor: string | null; id: string }, b: { scheduledFor: string | null; id: string }): number {
+  return (a.scheduledFor ?? "￿").localeCompare(b.scheduledFor ?? "￿") || a.id.localeCompare(b.id);
+}
+
+/**
  * What the public page lists for a workspace: its scheduled posts in the next
- * 60 days (at most 100, earliest first) and the drafts its client asked to
- * change in the last 30 days, merged in time order. Only drafts and scheduled
+ * 60 days and the drafts its client asked to change in the last 30 days,
+ * merged in time order, at most 100 cards (R7-client-journey L5: counted
+ * after a Story is folded into its feed post's card, so the cut never parts a
+ * pair) plus one more when there are more, so the page can say so
+ * (review-link-view.tsx shows the 100). Only drafts and scheduled
  * posts are ever asked for, so a published, failed or cancelled post cannot
  * appear. A change request is cleared when the post is scheduled again, so a
  * draft that still carries one was not.
@@ -176,7 +190,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       scheduledFor: { gte: now, lte: reviewWindowEnd(now) },
     },
     orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
-    take: REVIEW_LIST_MAX,
+    take: REVIEW_ROWS_TAKE,
     select: REVIEW_POST_SELECT,
   });
   const changed = await prisma.postJob.findMany({
@@ -186,7 +200,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       clientChangeRequestedAt: { gte: new Date(now.getTime() - REVIEW_CHANGE_SHOWN_DAYS * DAY_MS) },
     },
     orderBy: [{ clientChangeRequestedAt: "desc" }, { id: "asc" }],
-    take: REVIEW_LIST_MAX,
+    take: REVIEW_ROWS_TAKE,
     select: REVIEW_POST_SELECT,
   });
   const listed: ReviewPostRow[] = [...scheduled, ...changed];
@@ -194,7 +208,10 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
   // F6: a Story folded into its feed post's card has no card of its own.
   const storyOf = foldStoryPairs(listed);
   const folded = new Set(Array.from(storyOf.values(), (row) => row.id));
-  const rows = listed.filter((row) => !folded.has(row.id));
+  const rows = listed
+    .filter((row) => !folded.has(row.id))
+    .sort((a, b) => cardOrder(cardKey(a), cardKey(b)))
+    .slice(0, REVIEW_LIST_MAX + 1);
 
   // As GET /api/posts: one grouped count for the posts with several photos.
   const photoCounts = await prisma.postJobMedia.groupBy({
@@ -267,10 +284,11 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     };
   });
 
-  return posts.sort(
-    (a, b) =>
-      (a.scheduledFor ?? "￿").localeCompare(b.scheduledFor ?? "￿") || a.id.localeCompare(b.id),
-  );
+  return posts.sort(cardOrder);
+}
+
+function cardKey(row: ReviewPostRow): { scheduledFor: string | null; id: string } {
+  return { scheduledFor: row.scheduledFor?.toISOString() ?? null, id: row.id };
 }
 
 /** How long the owners' email may run before the caller carries on (as uploadLink.ts). */

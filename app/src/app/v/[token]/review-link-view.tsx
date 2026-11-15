@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  REVIEW_LIST_MAX,
   REVIEW_NOTE_MAX,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
@@ -16,6 +17,18 @@ import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
 /** Shown when the first load failed. */
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
+
+/** R7-client-journey L5: under the list when it holds the first 100 of more. */
+export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} posts; more appear as these go out.`;
+
+/**
+ * The cards the page shows: the first 100. The server sends one card more
+ * when there are more (server/reviewLink.ts listReviewPosts), which is how
+ * the page knows to say so; that card is never shown.
+ */
+export function reviewListPage(posts: ReviewPostDTO[]): { shown: ReviewPostDTO[]; more: boolean } {
+  return { shown: posts.slice(0, REVIEW_LIST_MAX), more: posts.length > REVIEW_LIST_MAX };
+}
 
 /**
  * The client's side of a review link (2026-11-10): the upcoming posts, each
@@ -335,7 +348,7 @@ export function ReviewLinkView({ token }: { token: string }) {
         <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
       ) : (
         <ul className="space-y-4">
-          {posts.map((post) => (
+          {reviewListPage(posts).shown.map((post) => (
             // Keyed on the id only, so a card keeps its sentence across a reload.
             <ReviewPostCard
               key={post.id}
@@ -347,6 +360,7 @@ export function ReviewLinkView({ token }: { token: string }) {
           ))}
         </ul>
       )}
+      {reviewListPage(posts).more ? <p className="text-sm text-muted-foreground">{REVIEW_MORE_SENTENCE}</p> : null}
     </div>
   );
 }

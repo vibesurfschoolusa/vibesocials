@@ -27,6 +27,7 @@ import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 
+import { FormError } from "./account-section";
 import { announceClientLinksReplaced, subscribeClientLinksReplaced } from "./client-links-refresh";
 
 /** GET /api/workspaces/members list item — owner-only route (SEC-1: never fetched for a member). */
@@ -1053,8 +1054,9 @@ function plural(count: number, one: string, many: string): string {
  * Owner-only "Delete this workspace". The confirm button is replaced by the
  * server's refusal sentence when one applies; otherwise the owner must type
  * the workspace name exactly, as DELETE /api/workspaces/active requires.
+ * R7-pages L6: its error is announced (FormError, role="alert").
  */
-function DeleteWorkspace({
+export function DeleteWorkspace({
   workspaceId,
   workspaceName,
   deletion,
@@ -1133,7 +1135,7 @@ function DeleteWorkspace({
               />
             </div>
           )}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <FormError message={error} /> : null}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
