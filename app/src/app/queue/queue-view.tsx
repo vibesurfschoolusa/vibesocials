@@ -45,6 +45,7 @@ import {
 } from "./pairActions";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
+import { truncateGraphemes } from "@/lib/truncate";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { queueOverridesToSend, type PlatformOverrides } from "@/lib/platformOverrides";
@@ -230,6 +231,20 @@ interface QueueCardProps {
   deciding: boolean;
 }
 
+/** Longest caption start a button's name carries, in characters. */
+const LABEL_NAME_MAX = 40;
+
+/**
+ * The caption in a card button's accessible name (R5-pages L12): one line, at
+ * most 40 characters, never cutting inside an emoji, so a screen reader says
+ * "Edit "Sunday session at the pier…"" rather than the whole caption.
+ */
+export function labelName(caption: string | null | undefined): string {
+  const line = (caption ?? "").replace(/\s+/g, " ").trim();
+  if (!line) return "Untitled post";
+  return truncateGraphemes(line, LABEL_NAME_MAX, { ellipsis: "…" });
+}
+
 function QueueCard({
   job,
   showAttribution,
@@ -246,6 +261,7 @@ function QueueCard({
   const actions = getQueueCardActions(job, viewer);
   const badge = queueStatusBadge(job);
   const title = job.caption?.trim() || "Untitled post";
+  const name = labelName(job.caption);
   // 2026-11-01 audit (M1): the per-platform texts that REPLACE the base caption
   // on publish. Shown on every card that has them, most importantly to the owner
   // deciding on a pending post - approving means approving these too.
@@ -352,7 +368,7 @@ function QueueCard({
               <Button
                 size="sm"
                 loading={deciding}
-                aria-label={`Approve "${title}"`}
+                aria-label={`Approve "${name}"`}
                 onClick={() => onDecide(job, "approve")}
               >
                 Approve
@@ -362,7 +378,7 @@ function QueueCard({
                 variant="ghost"
                 className="text-muted-foreground hover:text-destructive"
                 disabled={deciding}
-                aria-label={`Reject "${title}"`}
+                aria-label={`Reject "${name}"`}
                 onClick={() => onDecide(job, "reject")}
               >
                 Reject
@@ -380,7 +396,7 @@ function QueueCard({
       ) : (
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {actions.edit ? (
-          <Button size="sm" variant="outline" aria-label={`Edit "${title}"`} onClick={() => onEdit(job)}>
+          <Button size="sm" variant="outline" aria-label={`Edit "${name}"`} onClick={() => onEdit(job)}>
             Edit
           </Button>
         ) : null}
@@ -390,8 +406,8 @@ function QueueCard({
             variant="outline"
             aria-label={
               actions.primary.kind === "submit"
-                ? `Submit "${title}" for approval`
-                : `Publish "${title}" now`
+                ? `Submit "${name}" for approval`
+                : `Publish "${name}" now`
             }
             onClick={() => onPublish(job)}
           >
@@ -399,7 +415,7 @@ function QueueCard({
           </Button>
         ) : null}
         {actions.secondary === "cancel" ? (
-          <Button size="sm" variant="ghost" aria-label={`Cancel "${title}"`} onClick={() => onCancel(job)}>
+          <Button size="sm" variant="ghost" aria-label={`Cancel "${name}"`} onClick={() => onCancel(job)}>
             Cancel
           </Button>
         ) : (
@@ -407,7 +423,7 @@ function QueueCard({
             size="sm"
             variant="ghost"
             className="text-muted-foreground hover:text-destructive"
-            aria-label={`Delete "${title}"`}
+            aria-label={`Delete "${name}"`}
             onClick={() => onDelete(job)}
           >
             Delete

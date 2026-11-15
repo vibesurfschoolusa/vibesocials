@@ -60,12 +60,36 @@ function job(overrides: Record<string, unknown> = {}) {
   };
 }
 
+type ResultRows = Record<string, unknown>[];
+let recentRows: ResultRows = [];
+let failedRows: ResultRows = [];
+/** The month's successes, newest first (the listed posts). */
+function serveRecent(rows: ResultRows) {
+  recentRows = rows;
+}
+/** The month's failed results, with their jobs' pair link. */
+function serveFailed(rows: ResultRows) {
+  failedRows = rows;
+}
+function recentCall() {
+  const call = m.resultFindMany.mock.calls.find(([args]) => args.where.status === "success");
+  if (!call) throw new Error("no successes query");
+  return call[0];
+}
+function failedResult(platform: string, postJobId: string, storyOfPostJobId: string | null = null) {
+  return { platform, postJobId, postJob: { storyOfPostJobId } };
+}
+
 beforeEach(() => {
   for (const fn of Object.values(m)) fn.mockReset();
+  m.resultFindMany.mockImplementation(async (args: { where: { status: string } }) =>
+    args.where.status === "failed" ? failedRows : recentRows,
+  );
+  serveFailed([]);
   m.workspaceFindUnique.mockResolvedValue({ name: "Surf Co", logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png" });
   m.resultGroupBy.mockResolvedValue([{ platform: "instagram", status: "success", _count: { _all: 1 } }]);
   m.postCount.mockResolvedValue(1);
-  m.resultFindMany.mockResolvedValue([{ postJobId: "post-1" }]);
+  serveRecent([{ postJobId: "post-1" }]);
   m.postFindMany.mockResolvedValue([job()]);
   m.mediaGroupBy.mockResolvedValue([]);
   m.metricFindMany.mockResolvedValue([]);
@@ -108,12 +132,12 @@ describe("buildMonthlyReport", () => {
     expect(m.workspaceFindUnique.mock.calls[0][0].where).toEqual({ id: WS });
     const grouped = m.resultGroupBy.mock.calls[0][0].where;
     // The result's own (denormalised) workspace id: no join over PostJob.
-    expect(grouped).toEqual({ workspaceId: WS, status: { in: ["success", "failed"] }, updatedAt: OCT });
+    expect(grouped).toEqual({ workspaceId: WS, status: "success", updatedAt: OCT });
     expect(m.postCount.mock.calls[0][0].where).toEqual({
       workspaceId: WS,
       results: { some: { workspaceId: WS, status: "success", updatedAt: OCT } },
     });
-    const recent = m.resultFindMany.mock.calls[0][0];
+    const recent = recentCall();
     expect(recent.where).toEqual({
       workspaceId: WS,
       status: "success",
@@ -125,13 +149,18 @@ describe("buildMonthlyReport", () => {
 
   it("asks only for results that succeeded or failed in the month (no drafts or scheduled posts)", async () => {
     await buildMonthlyReport(WS, "2026-10", NOW);
-    expect(m.resultGroupBy.mock.calls[0][0].where.status).toEqual({ in: ["success", "failed"] });
-    expect(m.resultFindMany.mock.calls[0][0].where.status).toBe("success");
+    expect(m.resultGroupBy.mock.calls[0][0].where.status).toBe("success");
+    expect(recentCall().where.status).toBe("success");
+    const failed = m.resultFindMany.mock.calls.find(([args]) => args.where.status === "failed");
+    expect(failed?.[0]).toEqual({
+      where: { workspaceId: WS, status: "failed", updatedAt: OCT },
+      select: { platform: true, postJobId: true, postJob: { select: { storyOfPostJobId: true } } },
+    });
   });
 
   it("drops a post row of another workspace even if one came back", async () => {
     m.postFindMany.mockResolvedValue([job(), job({ id: "post-2", workspaceId: "ws-2" })]);
-    m.resultFindMany.mockResolvedValue([{ postJobId: "post-1" }, { postJobId: "post-2" }]);
+    serveRecent([{ postJobId: "post-1" }, { postJobId: "post-2" }]);
     const report = await buildMonthlyReport(WS, "2026-10", NOW);
     expect(report.posts).toHaveLength(1);
   });
@@ -165,7 +194,7 @@ describe("buildMonthlyReport", () => {
   it("orders posts newest first and lists at most 200 distinct posts", async () => {
     const ids = Array.from({ length: 250 }, (_, i) => `post-${i}`);
     // Two results per post, newest first, as the query orders them.
-    m.resultFindMany.mockResolvedValue(ids.flatMap((id) => [{ postJobId: id }, { postJobId: id }]));
+    serveRecent(ids.flatMap((id) => [{ postJobId: id }, { postJobId: id }]));
     m.postCount.mockResolvedValue(250);
     m.postFindMany.mockImplementation(async (args: { where: { id?: { in: string[] } } }) =>
       (args.where.id?.in ?? []).map((id) => {
@@ -240,7 +269,7 @@ describe("buildMonthlyReport", () => {
       }),
       job({ id: "post-2", results: [result({ platform: "instagram", externalPostId: "ig-2" })] }),
     ]);
-    m.resultFindMany.mockResolvedValue([{ postJobId: "post-1" }, { postJobId: "post-2" }]);
+    serveRecent([{ postJobId: "post-1" }, { postJobId: "post-2" }]);
     m.metricFindMany.mockResolvedValue([
       { workspaceId: WS, platform: "instagram", externalPostId: "ig-1", views: 100, likes: 10, comments: null, shares: null, clicks: null, saves: null },
       { workspaceId: WS, platform: "linkedin", externalPostId: "urn:li:share:1", views: null, likes: 3, comments: 0, shares: null, clicks: 7, saves: null },
@@ -266,24 +295,42 @@ describe("buildMonthlyReport", () => {
     ]);
   });
 
-  it("counts results per platform and failures per platform, with no detail", async () => {
+  it("counts results per platform and failed posts per platform, with no detail", async () => {
     m.resultGroupBy.mockResolvedValue([
       { platform: "instagram", status: "success", _count: { _all: 3 } },
       { platform: "facebook_page", status: "success", _count: { _all: 2 } },
-      { platform: "instagram", status: "failed", _count: { _all: 2 } },
     ]);
+    serveFailed([failedResult("instagram", "p1"), failedResult("instagram", "p2"), failedResult("x", "p2")]);
     const report = await buildMonthlyReport(WS, "2026-10", NOW);
     expect(report.totals.resultsByPlatform).toEqual([
       { platform: "Instagram", count: 3 },
       { platform: "Facebook Page", count: 2 },
     ]);
-    expect(report.failed).toEqual([{ platform: "Instagram", count: 2 }]);
+    expect(report.failed).toEqual([
+      { platform: "Instagram", count: 2 },
+      { platform: "X", count: 1 },
+    ]);
     expect(m.resultGroupBy.mock.calls[0][0].by).toEqual(["platform", "status"]);
+  });
+
+  it("counts a Feed and Story post that failed on Instagram as one post that did not publish there (R5-client-journey L2)", async () => {
+    serveFailed([
+      failedResult("instagram", "feed-1"),
+      failedResult("instagram", "story-1", "feed-1"),
+      failedResult("facebook_page", "story-1", "feed-1"),
+      // A Story whose feed post went out: it did not publish, on its own.
+      failedResult("instagram", "story-2", "feed-2"),
+    ]);
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+    expect(report.failed).toEqual([
+      { platform: "Instagram", count: 2 },
+      { platform: "Facebook Page", count: 1 },
+    ]);
   });
 
   it("skips the post queries when nothing succeeded in the month", async () => {
     m.postCount.mockResolvedValue(0);
-    m.resultFindMany.mockResolvedValue([]);
+    serveRecent([]);
     const report = await buildMonthlyReport(WS, "2026-10", NOW);
     expect(report.posts).toEqual([]);
     expect(m.postFindMany).not.toHaveBeenCalled();
@@ -416,7 +463,7 @@ describe("buildMonthlyReport - a Feed and Story pair", () => {
 
   beforeEach(() => {
     m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 1 : 2));
-    m.resultFindMany.mockResolvedValue([{ postJobId: "story-1" }, { postJobId: "feed-1" }]);
+    serveRecent([{ postJobId: "story-1" }, { postJobId: "feed-1" }]);
     m.postFindMany.mockImplementation(async (args: { where: { id?: { in: string[] }; storyOfPostJobId?: unknown } }) =>
       args.where.storyOfPostJobId ? [{ storyOfPostJobId: "feed-1" }] : [storyJob(), feedJob()],
     );
@@ -490,7 +537,7 @@ describe("buildMonthlyReport - a Feed and Story pair", () => {
 
   it("a Story that failed everywhere leaves the feed post alone, untagged", async () => {
     m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 0 : 1));
-    m.resultFindMany.mockResolvedValue([{ postJobId: "feed-1" }]);
+    serveRecent([{ postJobId: "feed-1" }]);
     m.postFindMany.mockImplementation(async (args: { where: { storyOfPostJobId?: unknown } }) =>
       // No Story job published in the month, so none is named.
       args.where.storyOfPostJobId ? [] : [feedJob()],
@@ -513,7 +560,7 @@ describe("buildMonthlyReport - a Feed and Story pair", () => {
 
   it("lists a Story whose feed post is gone, or did not publish this month, on its own", async () => {
     m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 0 : 1));
-    m.resultFindMany.mockResolvedValue([{ postJobId: "story-1" }]);
+    serveRecent([{ postJobId: "story-1" }]);
     m.postFindMany.mockImplementation(async (args: { where: { storyOfPostJobId?: unknown } }) =>
       args.where.storyOfPostJobId ? [{ storyOfPostJobId: "feed-1" }] : [storyJob()],
     );

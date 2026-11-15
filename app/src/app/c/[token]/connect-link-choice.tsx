@@ -14,14 +14,14 @@ import { Button } from "@/components/ui/button";
 
 type Candidate = { id: string; name: string; detail?: string };
 
-type State =
+export type ConnectLinkChoiceState =
   | { status: "loading" }
   | { status: "ready"; platform: string; candidates: Candidate[] }
   | { status: "gone"; message: string };
 
 export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {
   const router = useRouter();
-  const [state, setState] = useState<State>({ status: "loading" });
+  const [state, setState] = useState<ConnectLinkChoiceState>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const base = `/api/connect-link/${encodeURIComponent(token)}/pending/${encodeURIComponent(pendingId)}`;
@@ -66,7 +66,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
       }
       setError(data?.error ?? "Couldn't connect that account. Try again.");
     } catch {
-      setError("Couldn't connect that account. Try again.");
+      setError("Couldn't reach Vibe Socials. Check your connection and try again.");
     }
     setBusy(null);
   }
@@ -81,8 +81,39 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     router.push(`${page}?error=${encodeURIComponent(`${platform}_cancelled`)}`);
   }
 
-  if (state.status === "loading") return <p className="text-sm text-muted-foreground">Loading the accounts…</p>;
-  if (state.status === "gone") return <p className="text-sm">{state.message}</p>;
+  return (
+    <ConnectLinkChoiceView state={state} busy={busy} error={error} onChoose={choose} onCancel={cancel} />
+  );
+}
+
+export interface ConnectLinkChoiceViewProps {
+  state: ConnectLinkChoiceState;
+  /** The account being connected, "cancel", or null. */
+  busy: string | null;
+  error: string | null;
+  onChoose: (candidateId: string) => void;
+  onCancel: (platform: string) => void;
+}
+
+/**
+ * The choice as it renders. R5-pages L9: what a press or the load answers comes
+ * later, so it is announced (role="alert"), as is the loading line (status).
+ */
+export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel }: ConnectLinkChoiceViewProps) {
+  if (state.status === "loading") {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading the accounts…
+      </p>
+    );
+  }
+  if (state.status === "gone") {
+    return (
+      <p role="alert" className="text-sm">
+        {state.message}
+      </p>
+    );
+  }
 
   return (
     <section className="rounded-[var(--radius)] border p-4">
@@ -101,15 +132,26 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
               size="sm"
               loading={busy === candidate.id}
               disabled={busy !== null}
-              onClick={() => choose(candidate.id)}
+              onClick={() => onChoose(candidate.id)}
             >
               Connect
             </Button>
           </li>
         ))}
       </ul>
-      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-      <Button type="button" variant="outline" size="sm" className="mt-4" disabled={busy !== null} onClick={() => cancel(state.platform)}>
+      {error ? (
+        <p role="alert" className="mt-3 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="mt-4"
+        disabled={busy !== null}
+        onClick={() => onCancel(state.platform)}
+      >
         Cancel
       </Button>
     </section>
