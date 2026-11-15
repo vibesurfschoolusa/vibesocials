@@ -9,9 +9,14 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: {} }));
-vi.mock("@/lib/workspace", () => ({ requireOwnerContext: m.requireOwnerContext }));
+vi.mock("@/lib/workspace", () => ({
+  requireOwnerContext: m.requireOwnerContext,
+  getWorkspaceContext: async () => ({ user: { id: "user-9" }, workspace: { id: "ws_1" }, role: "member" }),
+}));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: m.checkRateLimit }));
 vi.mock("@/server/billing/checkout", () => ({ startCheckout: m.startCheckout, openPortal: m.openPortal }));
+// Review of R5-security L2: a member is asked about only as a payer, and here is none.
+vi.mock("@/server/billing/payerRefusal", () => ({ isWorkspacePayer: async () => false }));
 
 import * as checkout from "./checkout/route";
 import * as portal from "./portal/route";

@@ -4,9 +4,10 @@ import { stripeReachable } from "@/lib/billing";
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { requireOwnerContext } from "@/lib/workspace";
+import { getWorkspaceContext, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { openPortal } from "@/server/billing/checkout";
+import { isWorkspacePayer } from "@/server/billing/payerRefusal";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +22,15 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   if (!stripeReachable()) return adminNotFoundResponse();
 
-  const contextOrError = await requireOwnerContext();
-  if (contextOrError instanceof NextResponse) return contextOrError;
+  let contextOrError = await requireOwnerContext();
+  if (contextOrError instanceof NextResponse) {
+    // Review of R5-security L2: the person whose card pays may manage it (and
+    // cancel) after being made a member, so leaving has a way out.
+    if (contextOrError.status !== 403) return contextOrError;
+    const member = await getWorkspaceContext();
+    if (!member || !(await isWorkspacePayer(member.workspace.id, member.user.id))) return contextOrError;
+    contextOrError = member;
+  }
   const context = contextOrError;
 
   const rateLimit = await checkRateLimit({

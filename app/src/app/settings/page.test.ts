@@ -2,8 +2,9 @@ import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  isPayerMock: vi.fn(async () => false),
   // What the Plan section offers (planSectionActions); null: no plan action.
   planActionsMock: vi.fn<(role: string) => { choose: string[]; manage: boolean } | null>(() => null),
   // The props each section that writes was given, by section name.
@@ -71,6 +72,15 @@ vi.mock("@/components/account-section", () => ({ AccountSection: () => null }));
 vi.mock("@/components/usage-section", () => ({ UsageSection: () => null }));
 vi.mock("@/components/workspace-logo-control", () => ({ WorkspaceLogoControl: () => null }));
 vi.mock("@/components/plan-section", () => ({ PlanSection: planSectionMock }));
+vi.mock("@/server/billing/payerRefusal", () => ({ isWorkspacePayer: isPayerMock }));
+// With the Stripe key set (the payer tests), no paid plan is in the way.
+vi.mock("./paidPlans", () => ({
+  accountDeletionCancelsPaidPlan: async () => false,
+  workspacesHavePaidPlan: async () => false,
+}));
+vi.mock("@/components/plan-actions", () => ({
+  PlanActions: (props: { manageLabel?: string; workspaceId: string }) => `[PlanActions ${props.manageLabel} ${props.workspaceId}]`,
+}));
 
 import SettingsPage, { metadata } from "./page";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -299,6 +309,39 @@ describe("SettingsPage — Usage words", () => {
 
 // F3 (R1 security H1): every section that saves sends the workspace its page
 // was rendered for, so a tab left open on one workspace cannot change another.
+// Review of R5-security L2: the person whose card pays, once made a member,
+// still reaches the portal to cancel or change the card.
+describe("SettingsPage — the payer who is not an owner", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    isPayerMock.mockReset();
+    isPayerMock.mockResolvedValue(false);
+  });
+
+  it("shows a member who pays a Manage your payment entry", async () => {
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_placeholder");
+    isPayerMock.mockResolvedValue(true);
+    const html = await render("member");
+    expect(html).toContain("Your payment");
+    expect(html).toContain("You pay for this workspace&#x27;s plan.");
+    expect(html).toContain("[PlanActions Manage your payment ws-1]");
+  });
+
+  it("shows nothing for a member who does not pay, nor without the Stripe key", async () => {
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_placeholder");
+    expect(await render("member")).not.toContain("Manage your payment");
+    vi.stubEnv("STRIPE_SECRET_KEY", "");
+    isPayerMock.mockResolvedValue(true);
+    expect(await render("member")).not.toContain("Manage your payment");
+  });
+
+  it("never asks for an owner, who has the Plan section", async () => {
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_placeholder");
+    await render("owner");
+    expect(isPayerMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("SettingsPage — the rendered workspace", () => {
   it.each(["owner", "member"] as const)("gives each section that saves the page's workspace id, for an %s", async (role) => {
     for (const key of Object.keys(sectionProps)) delete sectionProps[key];

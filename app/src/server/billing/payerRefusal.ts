@@ -14,9 +14,27 @@ import { isLiveSubscriptionStatus } from "./subscriptionSync";
  * (planEndsAt) is not charged again, so it holds nobody back.
  */
 
-export function payerLeavingMessage(workspaceName: string): string {
-  // No hand-over flow exists, so the way out is cancelling; another owner then starts their own plan.
-  return `You pay for ${workspaceName}'s plan. Cancel it under Settings, Plan first (it stays active until the end of the period); another owner can then start their own plan.`;
+/**
+ * No hand-over flow exists, so the way out is cancelling; another owner then
+ * starts their own plan. An owner cancels under Settings, Plan; a payer who is
+ * no longer an owner has only "Manage your payment" (review).
+ */
+export function payerLeavingMessage(workspaceName: string, isOwner = true): string {
+  const where = isOwner ? "under Settings, Plan" : "with Manage your payment in Settings";
+  return `You pay for ${workspaceName}'s plan. Cancel it ${where} first (it stays active until the end of the period); another owner can then start their own plan.`;
+}
+
+/**
+ * Whether `userId` is the recorded payer of the workspace's plan, with a
+ * Stripe customer to manage (review of L2): such a person may open the
+ * customer portal even when no longer an owner, to cancel or change the card.
+ */
+export async function isWorkspacePayer(workspaceId: string, userId: string): Promise<boolean> {
+  const row = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { billingUserId: true, stripeCustomerId: true },
+  });
+  return Boolean(row?.stripeCustomerId) && row?.billingUserId === userId;
 }
 
 export type PayerRefusal = { status: 409; error: string };
@@ -35,8 +53,15 @@ export async function payerRefusal(
       stripeSubscriptionId: { not: null },
       planEndsAt: null,
     },
-    select: { id: true, name: true, planStatus: true, billingUserId: true },
+    select: {
+      id: true,
+      name: true,
+      planStatus: true,
+      billingUserId: true,
+      members: { where: { userId: input.userId }, select: { role: true } },
+    },
   });
   const running = paying.find((workspace) => isLiveSubscriptionStatus(workspace.planStatus));
-  return running ? { status: 409, error: payerLeavingMessage(running.name) } : null;
+  if (!running) return null;
+  return { status: 409, error: payerLeavingMessage(running.name, running.members[0]?.role === "owner") };
 }

@@ -39,6 +39,7 @@ export function PlanActions({
   offers,
   manage,
   yearlyOffers = [],
+  manageLabel = "Manage plan, card and invoices",
 }: {
   /** The workspace this page was rendered for; the billing routes refuse any other (F3). */
   workspaceId: string;
@@ -46,6 +47,8 @@ export function PlanActions({
   manage: boolean;
   /** P1: the plans with a yearly price; Q1: their buttons show under Yearly. */
   yearlyOffers?: PlanOfferView[];
+  /** Review of R5-security L2: "Manage your payment" for a payer who is not an owner. */
+  manageLabel?: string;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +117,7 @@ export function PlanActions({
       {manage ? (
         <div>
           <Button variant="outline" disabled={busy !== null} onClick={() => run("portal", "/api/billing/portal")}>
-            Manage plan, card and invoices
+            {manageLabel}
           </Button>
         </div>
       ) : null}

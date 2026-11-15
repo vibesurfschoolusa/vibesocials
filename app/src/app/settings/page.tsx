@@ -16,6 +16,8 @@ import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
 import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
 import { PlanSection } from "@/components/plan-section";
+import { PlanActions } from "@/components/plan-actions";
+import { isWorkspacePayer } from "@/server/billing/payerRefusal";
 import {
   PLAN_PORTAL_ONLY_LABEL,
   planGrowthAddsShown,
@@ -129,6 +131,10 @@ export default async function SettingsPage({
         })
       : null;
   const planWorkspace = { ...context.workspace, ...(stripeRow ?? {}) };
+  // Review of R5-security L2: a member whose card still pays (made a member
+  // after buying) reaches the Stripe portal to cancel or change the card.
+  const payerEntry =
+    context.role !== "owner" && stripeReachable() && (await isWorkspacePayer(context.workspace.id, context.user.id));
   // 21b: the plan buttons (payments configured) and the portal (the Stripe key
   // and a plan or customer, billing on or off); null: no buttons.
   const planActions = planSectionActions(context.role, planWorkspace, new Date());
@@ -316,6 +322,19 @@ export default async function SettingsPage({
                 workspaceNote={workspacePlanNoteShown(planWorkspace, new Date())}
                 growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}
               />
+            </section>
+          ) : null}
+
+          {payerEntry ? (
+            <section>
+              <div className="mb-4">
+                <h2 className="text-lg font-semibold tracking-tight text-foreground">Your payment</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  You pay for this workspace&apos;s plan. Change the card, read invoices or cancel the plan in
+                  Stripe&apos;s portal.
+                </p>
+              </div>
+              <PlanActions workspaceId={context.workspace.id} offers={[]} manage manageLabel="Manage your payment" />
             </section>
           ) : null}
 

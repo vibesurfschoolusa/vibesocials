@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const m = vi.hoisted(() => ({ findMany: vi.fn() }));
+const m = vi.hoisted(() => ({ findMany: vi.fn(), findUnique: vi.fn() }));
 
-vi.mock("@/lib/db", () => ({ prisma: { workspace: { findMany: m.findMany } } }));
+vi.mock("@/lib/db", () => ({ prisma: { workspace: { findMany: m.findMany, findUnique: m.findUnique } } }));
 
-import { payerRefusal } from "./payerRefusal";
+import { isWorkspacePayer, payerRefusal } from "./payerRefusal";
 
 /**
  * R5-security L2: leaving a workspace, or deleting the account, must not leave
@@ -19,12 +19,35 @@ const running = (id: string, overrides: Record<string, unknown> = {}) => ({
   name: `Name of ${id}`,
   planStatus: "active",
   billingUserId: "user-1",
+  members: [{ role: "owner" }],
   ...overrides,
 });
 
 beforeEach(() => {
   m.findMany.mockReset();
   m.findMany.mockResolvedValue([running("ws_1")]);
+});
+
+describe("isWorkspacePayer", () => {
+  it("is true for the person recorded as paying, while the workspace has a Stripe customer", async () => {
+    m.findUnique.mockResolvedValue({ billingUserId: "user-1", stripeCustomerId: "cus_1" });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(true);
+    expect(m.findUnique).toHaveBeenCalledWith({
+      where: { id: "ws_1" },
+      select: { billingUserId: true, stripeCustomerId: true },
+    });
+  });
+
+  it("is false for anyone else, with no payer recorded, or with no customer", async () => {
+    m.findUnique.mockResolvedValue({ billingUserId: "user-1", stripeCustomerId: "cus_1" });
+    await expect(isWorkspacePayer("ws_1", "user-2")).resolves.toBe(false);
+    m.findUnique.mockResolvedValue({ billingUserId: null, stripeCustomerId: "cus_1" });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
+    m.findUnique.mockResolvedValue({ billingUserId: "user-1", stripeCustomerId: null });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
+    m.findUnique.mockResolvedValue(null);
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
+  });
 });
 
 describe("payerRefusal", () => {
@@ -44,8 +67,34 @@ describe("payerRefusal", () => {
         stripeSubscriptionId: { not: null },
         planEndsAt: null,
       },
-      select: { id: true, name: true, planStatus: true, billingUserId: true },
+      select: {
+        id: true,
+        name: true,
+        planStatus: true,
+        billingUserId: true,
+        members: { where: { userId: "user-1" }, select: { role: true } },
+      },
     });
+  });
+
+  // Review: a payer who was made a member has no Plan section, only "Manage your payment".
+  it("tells a payer who is no longer an owner to use Manage your payment", async () => {
+    m.findMany.mockResolvedValue([running("ws_1", { members: [{ role: "member" }] })]);
+    await expect(payerRefusal({ userId: "user-1", workspaceIds: ["ws_1"] }, ENV)).resolves.toEqual({
+      status: 409,
+      error:
+        "You pay for Name of ws_1's plan. Cancel it with Manage your payment in Settings first (it stays active until the end of the period); another owner can then start their own plan.",
+    });
+  });
+
+  // Review case: payer made a member -> cancels in the portal -> may leave.
+  // Cancelling sets planEndsAt (Stripe's webhook), which the query leaves out.
+  it("a member payer is refused until the plan is set to end, then may go", async () => {
+    m.findMany.mockResolvedValueOnce([running("ws_1", { members: [{ role: "member" }] })]);
+    expect((await payerRefusal({ userId: "user-1", workspaceIds: ["ws_1"] }, ENV))?.status).toBe(409);
+    m.findMany.mockResolvedValueOnce([]);
+    await expect(payerRefusal({ userId: "user-1", workspaceIds: ["ws_1"] }, ENV)).resolves.toBeNull();
+    expect(m.findMany.mock.calls[1][0].where.planEndsAt).toBeNull();
   });
 
   it("lets someone else go, and skips a workspace whose payer was never recorded", async () => {
