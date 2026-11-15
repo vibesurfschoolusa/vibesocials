@@ -343,6 +343,19 @@ describe("PostJobCard - what a member reads", () => {
     }
   });
 
+  // FF2 review: Instagram failures saved before R20 show the plain sentence too.
+  it("an Instagram answer without a container id, saved in the old words, reads plainly", () => {
+    const plain = "Instagram didn't answer as expected, so nothing was posted. Try again.";
+    const failed = result({
+      platform: "instagram",
+      status: "failed",
+      externalPostId: null,
+      errorMessage: "Instagram container creation failed (no container id in the answer)",
+    });
+    expect(failureSentence(failed, "owner")).toBe(plain);
+    expect(failureSentence(failed, "member")).toBe(plain);
+  });
+
   it("the reconnect step: a Settings link for an owner, the owner's step and no link for a member", () => {
     const owner = renderToStaticMarkup(createElement(ReconnectStep, { platform: "instagram", role: "owner" })).replace(/<!-- -->/g, "");
     expect(owner).toContain("Reconnect Instagram in");

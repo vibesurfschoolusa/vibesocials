@@ -138,3 +138,15 @@ describe("Privacy: usage counts for the limits", () => {
     expect(text()).toContain("A count of posts per person and per X account, and of workspaces each person created, used for the daily and monthly limits, is kept for 62 days, also after a workspace or account is deleted.");
   });
 });
+
+// FF2 review: the Location field and its place search were removed (YouTube's
+// location fields are deprecated, no other platform used one), so the notice no
+// longer names place search or Google Maps Platform as a processor.
+describe("Privacy: no place search", () => {
+  it("names no place search and no Google Maps Platform", () => {
+    const page = text();
+    expect(page).not.toContain("suggest places");
+    expect(page).not.toContain("Google Maps");
+    expect(page).not.toContain("add a location to a post");
+  });
+});

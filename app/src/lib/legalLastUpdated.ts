@@ -50,6 +50,7 @@ export function billingOnLastUpdated(
  * number the app reads back, what clients send through links and what goes to
  * the AI provider). The Terms did not change, so they keep the shared date.
  * 2026-11-15 (R9-pages L3): it says how long the limits' post counts are kept.
+ * 2026-11-15 (FF2 review): place search and Google Maps Platform are gone with the Location field.
  */
 export const PRIVACY_LAST_UPDATED = "November 15, 2026";
 

@@ -100,8 +100,7 @@ export default function PrivacyPage() {
           <li>to publish or schedule the posts you create, to the platforms you choose, when you choose;</li>
           <li>to show you where each post went, keep your connections working, and email you when a post finishes (you can turn these emails off in Settings);</li>
           <li>to show you how your posts and your Google listing are doing: the post and listing numbers show in the app, in monthly reports, in emails and on the client review link;</li>
-          <li>to suggest captions with AI, automatically when you add a photo or video or when you ask, to describe photos for screen readers, and to suggest review replies when you ask;</li>
-          <li>to suggest places when you add a location to a post.</li>
+          <li>to suggest captions with AI, automatically when you add a photo or video or when you ask, to describe photos for screen readers, and to suggest review replies when you ask.</li>
         </ul>
         <p className="mt-2">
           What goes to our AI provider: the photos and still frames of videos it is asked to caption or
@@ -214,8 +213,7 @@ export default function PrivacyPage() {
           <li>Neon (database);</li>
           <li>Inngest (running scheduled and background publishing jobs);</li>
           <li>Resend (account and notification emails);</li>
-          <li>xAI or OpenAI (AI caption and reply suggestions, for the media and text involved);</li>
-          <li>Google Maps Platform (place search, when you add a location to a post).</li>
+          <li>xAI or OpenAI (AI caption and reply suggestions, for the media and text involved).</li>
         </ul>
         {/* Billing on only (src/lib/billingTerms.ts); with it off nothing renders here. */}
         {billing ? <p className="mt-2">{PRIVACY_PAYMENTS}</p> : null}

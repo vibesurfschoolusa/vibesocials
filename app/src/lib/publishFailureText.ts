@@ -76,6 +76,8 @@ const SUPERSEDED: ReadonlyMap<string, string> = new Map([
   ],
   // R19 publishing L6: "Connections page" named no page a member (or anyone) can find.
   ["Google Business Profile location is not configured. Set it from the Connections page.", GBP_NO_LOCATION],
+  // R20 publishing L2: Meta's 2xx without a container id, in the words used before R20.
+  ["Instagram container creation failed (no container id in the answer)", "Instagram didn't answer as expected, so nothing was posted. Try again."],
 ]);
 
 /** The clients' "Your <Platform> connection has expired / is no longer valid" sentences. */
