@@ -72,7 +72,8 @@ const connect = (link: typeof connectLink | null, pausedByPlan?: boolean) =>
       onToggle: noop,
       onCreate: noop,
       onCopy: noop,
-      onRevoke: noop,
+      onReplace: noop,
+      onTurnOff: noop,
       pausedByPlan,
     }),
   );
@@ -80,7 +81,7 @@ const connect = (link: typeof connectLink | null, pausedByPlan?: boolean) =>
 const PANELS = [
   ["upload", () => upload(uploadLink), () => upload(null), () => upload(uploadLink, true), () => upload(null, true), "Turn off"],
   ["review", () => review(reviewLink), () => review(null), () => review(reviewLink, true), () => review(null, true), "Turn off"],
-  ["connect", () => connect(connectLink), () => connect(null), () => connect(connectLink, true), () => connect(null, true), "Revoke"],
+  ["connect", () => connect(connectLink), () => connect(null), () => connect(connectLink, true), () => connect(null, true), "Turn off"],
 ] as const;
 
 describe.each(PANELS)("the %s link panel", (_name, withLink, withoutLink, pausedLink, pausedNone, revokeLabel) => {
