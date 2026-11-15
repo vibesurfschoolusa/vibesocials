@@ -46,6 +46,20 @@ import {
 const NOW = new Date("2026-11-10T12:00:00.000Z");
 const DAY_AGO = new Date("2026-11-09T12:00:00.000Z");
 
+type JobRow = { id: string; workspaceId: string; storyOfPostJobId: string | null };
+
+/** The two postJob reads: posts that failed unsent (they filter on results) and posts waiting for approval. */
+function servePostJobs({ unsent = [], approvals = [] }: { unsent?: JobRow[]; approvals?: JobRow[] }) {
+  db.postJobFindMany.mockImplementation(async (args: { where: Record<string, unknown> }) =>
+    "results" in args.where ? unsent : approvals,
+  );
+}
+
+/** A failed result row as the result query returns it. */
+function failedResult(workspaceId: string, postJobId: string, platform: string, storyOfPostJobId: string | null = null) {
+  return { workspaceId, postJobId, platform, postJob: { storyOfPostJobId } };
+}
+
 /** An owner row as the membership query returns it. */
 function owner(userId: string, workspaceId: string, name: string) {
   return { userId, workspaceId, workspace: { name } };
@@ -89,17 +103,19 @@ describe("collectProblemDigests", () => {
   // sent: the 2 h give-up, or no connection could take it) is a failed post too.
   it("counts a post that failed in the window with no results as a failed post", async () => {
     db.resultFindMany.mockResolvedValue([{ workspaceId: "ws-a", postJobId: "job-1", platform: "x" }]);
-    db.postJobFindMany.mockResolvedValue([
-      { id: "job-2", workspaceId: "ws-a" },
-      { id: "job-3", workspaceId: "ws-b" },
-    ]);
+    servePostJobs({
+      unsent: [
+        { id: "job-2", workspaceId: "ws-a", storyOfPostJobId: null },
+        { id: "job-3", workspaceId: "ws-b", storyOfPostJobId: null },
+      ],
+    });
     db.memberFindMany.mockResolvedValue([owner("u1", "ws-a", "Alpha"), owner("u1", "ws-b", "Beta")]);
 
     const digests = await collectProblemDigests(NOW);
 
     expect(db.postJobFindMany).toHaveBeenCalledWith({
       where: { status: "failed", updatedAt: { gte: DAY_AGO, lte: NOW }, results: { none: {} } },
-      select: { id: true, workspaceId: true },
+      select: { id: true, workspaceId: true, storyOfPostJobId: true },
     });
     expect(digests).toEqual([
       {
@@ -115,10 +131,66 @@ describe("collectProblemDigests", () => {
   it("matches a post waiting for approval the way deriveApprovalState does, for drafts", async () => {
     await collectProblemDigests(NOW);
 
-    expect(db.postJobGroupBy.mock.calls[0][0].where).toEqual({
-      status: "draft",
-      submittedForApprovalAt: { not: null },
-      approvedAt: null,
+    const call = db.postJobFindMany.mock.calls.find(([args]) => !("results" in args.where));
+    expect(call?.[0]).toEqual({
+      where: { status: "draft", submittedForApprovalAt: { not: null }, approvedAt: null },
+      select: { id: true, workspaceId: true, storyOfPostJobId: true },
+    });
+  });
+
+  describe("a Feed and Story post counts once (R5-client-journey L2)", () => {
+    beforeEach(() => {
+      db.memberFindMany.mockResolvedValue([owner("u1", "ws-a", "Alpha")]);
+    });
+
+    it("as one failed post when both halves failed", async () => {
+      db.resultFindMany.mockResolvedValue([
+        failedResult("ws-a", "feed-1", "instagram"),
+        failedResult("ws-a", "story-1", "instagram", "feed-1"),
+        failedResult("ws-a", "story-1", "facebook_page", "feed-1"),
+      ]);
+
+      const [digest] = await collectProblemDigests(NOW);
+
+      expect(digest.workspaces[0].failedPosts).toBe(1);
+      expect(digest.workspaces[0].failedPlatforms).toEqual(["facebook_page", "instagram"]);
+      expect(db.resultFindMany.mock.calls[0][0].select).toEqual({
+        workspaceId: true,
+        postJobId: true,
+        platform: true,
+        postJob: { select: { storyOfPostJobId: true } },
+      });
+    });
+
+    it("as one failed post when one half failed sending and the other never went out", async () => {
+      db.resultFindMany.mockResolvedValue([failedResult("ws-a", "feed-1", "instagram")]);
+      servePostJobs({ unsent: [{ id: "story-1", workspaceId: "ws-a", storyOfPostJobId: "feed-1" }] });
+
+      const [digest] = await collectProblemDigests(NOW);
+
+      expect(digest.workspaces[0].failedPosts).toBe(1);
+    });
+
+    it("keeps a Story that failed alone", async () => {
+      db.resultFindMany.mockResolvedValue([failedResult("ws-a", "story-1", "instagram", "feed-1")]);
+
+      const [digest] = await collectProblemDigests(NOW);
+
+      expect(digest.workspaces[0].failedPosts).toBe(1);
+    });
+
+    it("as one post waiting for approval", async () => {
+      servePostJobs({
+        approvals: [
+          { id: "feed-1", workspaceId: "ws-a", storyOfPostJobId: null },
+          { id: "story-1", workspaceId: "ws-a", storyOfPostJobId: "feed-1" },
+          { id: "p2", workspaceId: "ws-a", storyOfPostJobId: null },
+        ],
+      });
+
+      const [digest] = await collectProblemDigests(NOW);
+
+      expect(digest.workspaces[0].waitingForApproval).toBe(2);
     });
   });
 
@@ -135,7 +207,12 @@ describe("collectProblemDigests", () => {
       { workspaceId: "ws-a", postJobId: "p2", platform: "x" },
     ]);
     db.connectionFindMany.mockResolvedValue([{ workspaceId: "ws-b", platform: "linkedin" }]);
-    db.postJobGroupBy.mockResolvedValue([{ workspaceId: "ws-b", _count: { _all: 2 } }]);
+    servePostJobs({
+      approvals: [
+        { id: "a1", workspaceId: "ws-b", storyOfPostJobId: null },
+        { id: "a2", workspaceId: "ws-b", storyOfPostJobId: null },
+      ],
+    });
     db.memberFindMany.mockResolvedValue([
       owner("user-1", "ws-b", "Beach Club"),
       owner("user-1", "ws-a", "Alpha Surf"),
