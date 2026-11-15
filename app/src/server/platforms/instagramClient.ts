@@ -907,6 +907,38 @@ const PHOTO_ERRORS: Record<string, { code: string; message: string }> = {
   },
 };
 
+/**
+ * R17-publishing addendum L1: a Reel's and a video Story's container messages say
+ * nothing was posted and what to try, with the limits from Instagram's
+ * content-publishing docs (checked 2026-11-15): Reels "Container: MOV or MP4",
+ * "15 mins maximum, 3 seconds minimum", "300MB maximum"; video Stories MOV or
+ * MP4, "60 seconds maximum, 3 seconds minimum", "100MB maximum". Codes kept, so
+ * retrying and the outcome stay exactly as before.
+ */
+const REEL_ERRORS: Record<string, { code: string; message: string }> = {
+  INSTAGRAM_VIDEO_TIMEOUT: {
+    code: "INSTAGRAM_VIDEO_TIMEOUT",
+    message: "Instagram was still processing the video, so nothing was posted. Try again in a few minutes.",
+  },
+  INSTAGRAM_VIDEO_PROCESSING_ERROR: {
+    code: "INSTAGRAM_VIDEO_PROCESSING_ERROR",
+    message:
+      "Instagram could not process this video, so nothing was posted. Try an MP4 or MOV between 3 seconds and 15 minutes long and under 300 MB.",
+  },
+};
+
+const STORY_VIDEO_ERRORS: Record<string, { code: string; message: string }> = {
+  INSTAGRAM_VIDEO_TIMEOUT: {
+    code: "INSTAGRAM_VIDEO_TIMEOUT",
+    message: "Instagram was still processing the Story video, so nothing was posted. Try again in a few minutes.",
+  },
+  INSTAGRAM_VIDEO_PROCESSING_ERROR: {
+    code: "INSTAGRAM_VIDEO_PROCESSING_ERROR",
+    message:
+      "Instagram could not process this video for your Story, so nothing was posted. Try an MP4 or MOV between 3 and 60 seconds long and under 100 MB.",
+  },
+};
+
 function withMediaWording(error: unknown, errors: Record<string, { code: string; message: string }>): unknown {
   const code = (error as { code?: unknown } | null)?.code;
   const mapped = typeof code === "string" ? errors[code] : undefined;
@@ -1250,7 +1282,7 @@ export const instagramClient: PlatformClient = {
       return withNotes(published, coverRefused ? INSTAGRAM_COVER_REFUSED_NOTE : undefined, tagsNote, mentionsNote);
     } catch (error: unknown) {
       console.error("[Instagram] Publish error", error);
-      throw error;
+      throw isVideo ? withMediaWording(error, story ? STORY_VIDEO_ERRORS : REEL_ERRORS) : error;
     }
   },
 

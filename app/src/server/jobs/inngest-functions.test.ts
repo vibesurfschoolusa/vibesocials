@@ -3702,7 +3702,12 @@ describe("chunked uploads - continuation steps (jobs)", () => {
         expect.objectContaining({ status: "failed", errorCode: "INSTAGRAM_VIDEO_TIMEOUT", ...CLEARS_STATE }),
       ]);
       expect(out.results).toEqual([
-        { platform: "instagram", status: "failed", error: "Instagram video processing timeout" },
+        {
+          platform: "instagram",
+          status: "failed",
+          // R17 CC2: says nothing was posted and when to try again.
+          error: "Instagram was still processing the video, so nothing was posted. Try again in a few minutes.",
+        },
       ]);
     });
 

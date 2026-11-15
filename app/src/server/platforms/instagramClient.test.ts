@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { publishErrorMessage } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   computeInstagramCaption,
@@ -2909,5 +2910,145 @@ describe("instagramClient.publishVideo — hashtag and mention limits", () => {
       externalPostId: "media-1",
       note: "Instagram allows 30 hashtags in a post, so these were left out: #t31 #t32.",
     });
+  });
+});
+
+// R17-publishing addendum L1: a Reel or video Story that Instagram cannot
+// process, or is still processing, said only "Instagram video processing
+// failed" / "... timeout" beside a Retry that fails the same way. Limits from
+// Instagram's content-publishing docs (checked by the lead 2026-11-15).
+describe("instagramClient.publishVideo — video failure wording (R17)", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+  const NOW = Date.parse("2026-11-02T10:00:00Z");
+  const KIND = "instagram_container";
+  const status = (code: string) => new Response(JSON.stringify({ status_code: code }), { status: 200 });
+
+  function storeWith(checks: number) {
+    const kept = new Map<string, UploadSnapshot<unknown, unknown>>([
+      [KIND, { data: { containerId: "container-1", createdAt: new Date(NOW - 60_000).toISOString(), checks } }],
+    ]);
+    return {
+      load: vi.fn(async (kind: string) => kept.get(kind) ?? null),
+      save: vi.fn(async (kind: string, snapshot: UploadSnapshot<unknown, unknown>) => {
+        kept.set(kind, snapshot);
+      }),
+      clear: vi.fn(async () => kept.clear()),
+    } as unknown as UploadStateStore;
+  }
+
+  function ctx(story: boolean, store: UploadStateStore | undefined) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems(): MediaItem[] { return [this.mediaItem]; },
+      mediaItem: { mimeType: "video/mp4", storageLocation: "https://blob.example.com/m", metadata: null } as unknown as MediaItem,
+      caption: "hello",
+      uploadState: store,
+      ...(story ? { instagramMetadata: { placement: "story" as const } } : {}),
+    };
+  }
+
+  function stubStatus(code: string) {
+    const publish = vi.fn(() => new Response(JSON.stringify({ id: "media-1" }), { status: 200 }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) return Promise.resolve(publish());
+        if (url.includes("/ig-account-1/media")) return Promise.resolve(new Response(JSON.stringify({ id: "container-1" })));
+        if (url.includes("fields=status_code")) return Promise.resolve(status(code));
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+    return publish;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
+    vi.stubEnv("NEXTAUTH_SECRET", "test-secret");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const REEL_FAILED =
+    "Instagram could not process this video, so nothing was posted. Try an MP4 or MOV between 3 seconds and 15 minutes long and under 300 MB.";
+  const STORY_FAILED =
+    "Instagram could not process this video for your Story, so nothing was posted. Try an MP4 or MOV between 3 and 60 seconds long and under 100 MB.";
+  const REEL_TIMEOUT = "Instagram was still processing the video, so nothing was posted. Try again in a few minutes.";
+  const STORY_TIMEOUT =
+    "Instagram was still processing the Story video, so nothing was posted. Try again in a few minutes.";
+
+  it.each([
+    ["Reel", false, REEL_FAILED],
+    ["video Story", true, STORY_FAILED],
+  ])("a %s Instagram could not process keeps INSTAGRAM_VIDEO_PROCESSING_ERROR and says what to try", async (_l, story, text) => {
+    const publish = stubStatus("ERROR");
+
+    const error = await failure(instagramClient.publishVideo(ctx(story, storeWith(1))));
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_PROCESSING_ERROR");
+    expect(error?.message).toBe(text);
+    expect(publishErrorMessage("instagram", error!)).toBe(text);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Reel", false, REEL_TIMEOUT],
+    ["video Story", true, STORY_TIMEOUT],
+  ])("a %s still processing at the last check keeps INSTAGRAM_VIDEO_TIMEOUT and says to try again later", async (_l, story, text) => {
+    const publish = stubStatus("IN_PROGRESS");
+
+    const error = await failure(instagramClient.publishVideo(ctx(story, storeWith(INSTAGRAM_STATUS_MAX_CHECKS - 1))));
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+    expect(error?.message).toBe(text);
+    expect(publishErrorMessage("instagram", error!)).toBe(text);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("the in-step poll (no store) words a Reel's processing error the same way", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    stubStatus("ERROR");
+
+    const promise = failure(instagramClient.publishVideo(ctx(false, undefined)));
+    await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS);
+    const error = await promise;
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_PROCESSING_ERROR");
+    expect(error?.message).toBe(REEL_FAILED);
+  });
+
+  it("a photo keeps its own wording", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/ig-account-1/media")) return Promise.resolve(new Response(JSON.stringify({ id: "container-1" })));
+        if (url.includes("fields=status_code")) return Promise.resolve(status("ERROR"));
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+    const base = ctx(false, undefined);
+
+    const error = await failure(
+      instagramClient.publishVideo({ ...base, mediaItem: { ...base.mediaItem, mimeType: "image/jpeg" } as MediaItem }),
+    );
+
+    expect(error?.code).toBe("INSTAGRAM_PHOTO_PROCESSING_ERROR");
   });
 });

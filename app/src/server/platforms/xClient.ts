@@ -478,10 +478,14 @@ function xProcessingTimeoutError(): Error & { code: string } {
   return error;
 }
 
-/** X reported the media processing as failed. */
+/**
+ * X reported the media processing as failed; no tweet was created. X's media
+ * best practices (checked 2026-11-15): H.264 video, AAC-LC audio, YUV 4:2:0,
+ * progressive scan, which is what a phone or editor's MP4 export gives.
+ */
 function xProcessingFailedError(): Error & { code: string } {
   const error = new Error(
-    "X reported an error while processing the uploaded video",
+    "X could not process this video, so nothing was posted. Export it again as an MP4 with H.264 video and AAC audio, then retry.",
   ) as Error & { code: string };
   error.code = "X_VIDEO_PROCESSING_FAILED";
   return error;

@@ -794,10 +794,12 @@ export async function pollTikTokPublishStatus(
     const decision = decidePollOutcome(publishStatus);
     if (decision === "complete") return;
     if (decision === "failed") {
+      // R17-publishing addendum L1: say nothing was posted and what to try;
+      // TikTok's own reason (a sanitized enum) follows for support.
+      const text =
+        "TikTok could not process this video, so nothing was posted. Export it again as an MP4, or try a shorter, smaller file, then retry.";
       const error = new Error(
-        failReason
-          ? `TikTok failed to process the video: ${failReason}`
-          : "TikTok failed to process the video",
+        failReason ? `${text} TikTok's reason: ${failReason}.` : text,
       ) as Error & { code: string };
       error.code = "TIKTOK_PUBLISH_FAILED";
       throw error;

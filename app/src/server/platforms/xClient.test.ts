@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { publishErrorMessage } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
@@ -279,6 +280,19 @@ describe("xClient.publishVideo — media-processing poll + step budget", () => {
 
     expect(error?.code).toBe("X_VIDEO_PROCESSING_FAILED");
     expect(tweetCalls(fetchMock)).toHaveLength(0);
+  });
+
+  // R17-publishing addendum L1: the failure says nothing was posted and what to
+  // try, and reaches the Activity card unchanged.
+  it("says nothing was posted and which video X takes when processing fails", async () => {
+    stubX({ status: now(() => json({ processing_info: { state: "failed" } })) });
+
+    const { error } = await run(ctx());
+
+    const text =
+      "X could not process this video, so nothing was posted. Export it again as an MP4 with H.264 video and AAC audio, then retry.";
+    expect(error?.message).toBe(text);
+    expect(publishErrorMessage("x", error!)).toBe(text);
   });
 });
 

@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { publishErrorMessage } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
@@ -312,6 +313,8 @@ describe("decidePollOutcome", () => {
 });
 
 describe("pollTikTokPublishStatus", () => {
+  const TIKTOK_FAILED_TEXT =
+    "TikTok could not process this video, so nothing was posted. Export it again as an MP4, or try a shorter, smaller file, then retry.";
   const noSleep = () => Promise.resolve();
   const pollConnection = { id: "conn-1", accessToken: "access-token", refreshToken: "refresh-1" };
 
@@ -386,7 +389,17 @@ describe("pollTikTokPublishStatus", () => {
     const error = await caught(poll());
 
     expect(error?.code).toBe("TIKTOK_PUBLISH_FAILED");
-    expect(error?.message).toBe("TikTok failed to process the video");
+    // R17-publishing addendum L1: says nothing was posted and what to try.
+    expect(error?.message).toBe(TIKTOK_FAILED_TEXT);
+    expect(publishErrorMessage("tiktok", error!)).toBe(TIKTOK_FAILED_TEXT);
+  });
+
+  it("puts TikTok's fail_reason after the plain sentence", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED", "file_format_check_failed")));
+
+    const error = await caught(poll());
+
+    expect(error?.message).toBe(`${TIKTOK_FAILED_TEXT} TikTok's reason: file_format_check_failed.`);
   });
 
   it("does not echo an arbitrary (non-enum-looking) fail_reason into the user-facing message", async () => {
