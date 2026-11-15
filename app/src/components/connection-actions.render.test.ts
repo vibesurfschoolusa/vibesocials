@@ -36,6 +36,7 @@ function row(
     needsReconnect?: boolean;
     reconnectSoon?: boolean;
     endedAt?: string | null;
+    sameEndAt?: string | null;
     readOnly?: boolean;
   } = {},
 ): string {
@@ -87,6 +88,16 @@ describe("Settings connection row", () => {
     expect(html).toMatch(RECONNECT_BUTTON);
     expect(reconnectDialogProps()).toMatchObject({ mode: "reconnect" });
     expect(html).not.toContain("Ends soon");
+  });
+
+  // R8-pages L5: just reconnected, and LinkedIn kept the end date: said, without asking for another Reconnect.
+  it("same end date after a reconnect: Ends <date>. LinkedIn kept this end date.", () => {
+    const html = row({ reconnectSoon: true, sameEndAt: "2026-11-16T12:00:00.000Z" });
+    expect(html).toMatch(/<span class="[^"]*basis-full[^"]*">Ends November 16, 2026. LinkedIn kept this end date.<\/span>/);
+    expect(html).not.toContain("Ends soon");
+    expect(html).not.toContain("Reconnect to keep posting");
+    // Still there for after the date, or a sign-out and a new sign-in.
+    expect(html).toMatch(RECONNECT_BUTTON);
   });
 
   it("flagged LinkedIn: the danger Reconnect opens the steps too", () => {

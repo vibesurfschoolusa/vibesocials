@@ -28,7 +28,8 @@ import { workspaceLink } from "@/server/notifications/links";
  * so with nothing else on there is nothing to say.
  *
  * R7-security L4: leaving also turns off the invite links the person made
- * (../../leave); the email says how many.
+ * (../../leave); the email says how many. R8-client-journey L1: so does a
+ * demotion ([userId]/route.ts), and the email says when.
  */
 
 /** The client connect link at the moment someone stopped being an owner. */
@@ -60,13 +61,15 @@ export function buildFormerOwnerEmail(input: {
   connectLink?: FormerOwnerConnectLink;
   /** False when the workspace's plan doesn't include client links (they are paused). */
   clientLinksIncluded?: boolean;
-  /** How many invite links the person made were turned off as they left. */
+  /** How many invite links the person made were turned off as they left or were demoted. */
   joinLinksRevoked?: number;
+  /** The person was made a member rather than leaving. */
+  demoted?: boolean;
   appBaseUrl: string | null | undefined;
 }): { subject: string; html: string; text: string } {
   const { workspaceName, formerOwnerName } = input;
   const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
-  const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0);
+  const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0, input.demoted ?? false);
   if (input.clientLinksIncluded === false) {
     return pausedLinksEmail({ ...input, href, invites });
   }
@@ -104,11 +107,12 @@ export function buildFormerOwnerEmail(input: {
   };
 }
 
-function inviteLinksLine(formerOwnerName: string, workspaceName: string, count: number): string | null {
+function inviteLinksLine(formerOwnerName: string, workspaceName: string, count: number, demoted: boolean): string | null {
   if (count <= 0) return null;
+  const when = `when ${formerOwnerName} ${demoted ? "stopped being an owner" : "left"}`;
   return count === 1
-    ? `The invite link ${formerOwnerName} made was turned off when ${formerOwnerName} left, so it can't be used to join ${workspaceName} again.`
-    : `The ${count} invite links ${formerOwnerName} made were turned off when ${formerOwnerName} left, so they can't be used to join ${workspaceName} again.`;
+    ? `The invite link ${formerOwnerName} made was turned off ${when}, so it can't be used to join ${workspaceName} again.`
+    : `The ${count} invite links ${formerOwnerName} made were turned off ${when}, so they can't be used to join ${workspaceName} again.`;
 }
 
 /** The plan doesn't include client links: the working ones are paused, and can be turned off. */
@@ -153,8 +157,10 @@ export async function noticeOwnersOfFormerOwner(input: {
   /** Given when the person is being deleted, so their row cannot be read. */
   formerOwnerName?: string;
   at: Date;
-  /** Given by a leave: how many of the person's invite links it turned off. */
+  /** Given by a leave or a demotion: how many of the person's invite links it turned off. */
   joinLinksRevoked?: number;
+  /** Given by a demotion: the person is still a member. */
+  demoted?: boolean;
 }): Promise<{ clientLinksToReplace: boolean }> {
   const { workspaceId, formerOwnerId } = input;
   let links: { uploadLink: boolean; reviewLink: boolean; connectLink: FormerOwnerConnectLink };
@@ -210,6 +216,7 @@ export async function noticeOwnersOfFormerOwner(input: {
       ...links,
       clientLinksIncluded,
       joinLinksRevoked: input.joinLinksRevoked ?? 0,
+      demoted: input.demoted ?? false,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
     });
     for (const owner of owners) {

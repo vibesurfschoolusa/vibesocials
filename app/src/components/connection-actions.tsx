@@ -54,6 +54,12 @@ interface Props {
   readOnly?: boolean;
   /** The connected account's name: LinkedIn's Reconnect says to sign in to it. */
   accountName?: string;
+  /**
+   * R8-pages L5: with reconnectSoon, the end date (ISO) a reconnect just
+   * kept (Settings' same-end warning applies): the row says so instead of
+   * "Ends soon".
+   */
+  sameEndAt?: string | null;
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
@@ -170,6 +176,7 @@ export function ConnectionActions({
   endedAt = null,
   readOnly = false,
   accountName,
+  sameEndAt = null,
 }: Props) {
   const router = useRouter();
   const toast = useToast();
@@ -293,7 +300,7 @@ export function ConnectionActions({
 
   // R7-pages M2: LinkedIn's Reconnect opens the sign-out steps first (the
   // dialog then starts the same sign-in); other platforms go straight to it.
-  function reconnectButton(variant: "destructive" | "primary") {
+  function reconnectButton(variant: "destructive" | "primary" | "outline") {
     return isLinkedIn ? (
       <Button size="sm" variant={variant} onClick={() => setReconnectOpen(true)}>
         Reconnect
@@ -321,10 +328,15 @@ export function ConnectionActions({
               <span className="basis-full text-sm text-muted-foreground">
                 Ended {formatDisplayDate(endedAt)}. Reconnect to keep posting.
               </span>
+            ) : sameEndAt ? (
+              // R8-pages L5: Settings' warning says what to do; no call to reconnect here.
+              <span className="basis-full text-sm text-muted-foreground">
+                Ends {formatDisplayDate(sameEndAt)}. LinkedIn kept this end date.
+              </span>
             ) : (
               <Badge variant="warning">Ends soon</Badge>
             )}
-            {reconnectButton("primary")}
+            {reconnectButton(sameEndAt && !endedAt ? "outline" : "primary")}
           </>
         ) : (
           <Badge variant="success">Connected</Badge>

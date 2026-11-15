@@ -39,18 +39,22 @@ describe("LinkedIn Reconnect dialog", () => {
     );
   }
 
-  it("says to sign out first, then sign in to the connected account", () => {
+  // R8-client-journey L2: the name is the company page, which nobody signs in to.
+  it("says to sign out first, then sign in with an account that manages the page", () => {
     const html = render("Surf Co page");
     expect(html).toContain("Reconnect LinkedIn");
     expect(html).toContain("Open LinkedIn sign-out");
-    expect(html).toContain("Come back here and click Continue. LinkedIn asks you to sign in: sign in to Surf Co page.");
-    expect(html).toContain("Already signed in to LinkedIn as Surf Co page? Just click Continue.");
+    expect(html).toContain(
+      "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that manages Surf Co page.",
+    );
+    expect(html).toContain("Already signed in to LinkedIn with an account that manages Surf Co page? Just click Continue.");
+    expect(html).not.toContain("sign in to Surf Co page");
     expect(html).toContain(">Continue<");
     expect(html).not.toContain("post numbers");
   });
 
-  it("without a name: the account connected now", () => {
-    expect(render()).toContain("sign in to the LinkedIn account connected now.");
+  it("without a name: the connected LinkedIn page", () => {
+    expect(render()).toContain("sign in with a LinkedIn account that manages the connected LinkedIn page.");
   });
 
   it("Connect and Switch account keep their own words", () => {

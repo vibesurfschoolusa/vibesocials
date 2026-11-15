@@ -168,6 +168,20 @@ describe("WorkspacesPage: connections that end", () => {
     expect(html).toContain("Ended:</span> X. Reconnect it in Settings, Connections.");
   });
 
+  // R8-client-journey L4 / pages L4: a member can't reconnect, and several are "them".
+  it("several: them; a member is told the owner can reconnect", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([
+      entry({ endsSoon: ["linkedin", "x"], needsAttention: true }),
+      entry({ workspaceId: "ws-2", role: "member", endsSoon: ["linkedin"], ended: ["x", "youtube"], needsAttention: true }),
+    ]);
+
+    const html = await render();
+
+    expect(html).toContain("Ends soon:</span> LinkedIn, X. Reconnect them in Settings, Connections.");
+    expect(html).toContain("Ends soon:</span> LinkedIn. The workspace owner can reconnect it.");
+    expect(html).toContain("Ended:</span> X, YouTube. The workspace owner can reconnect them.");
+  });
+
   it("healthy: no such line", async () => {
     getWorkspacesOverviewMock.mockResolvedValue([entry()]);
     const html = await render();

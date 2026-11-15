@@ -11,6 +11,7 @@ import {
   choiceDifferentAccountMessage,
   connectedAmongCandidates,
   linkChoiceDifferentAccountMessage,
+  linkedInReconnectSignInStep,
   locationClearedSettingsMessage,
   reconnectDifferentAccountMessage,
   settingsDifferentAccountMessage,
@@ -33,8 +34,15 @@ describe("different account on reconnect", () => {
   });
 
   it("Settings: names both accounts and both ways forward", () => {
-    expect(settingsDifferentAccountMessage("Other Co", "Surf Co page")).toBe(
+    expect(settingsDifferentAccountMessage("pinterest", "Other Co", "Surf Co page")).toBe(
       "You signed in to Other Co, not Surf Co page. Sign in to Surf Co page to reconnect it, or use Switch account to change to Other Co.",
+    );
+  });
+
+  // R8-pages L1: a Facebook Page is not signed in to; an account that manages it is.
+  it("Settings, a Facebook Page not offered in the list: sign in with an account that manages it", () => {
+    expect(settingsDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School")).toBe(
+      "You chose Client Cafe, not My Surf School, and My Surf School wasn't in the list. Sign in with a Facebook account that manages My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
     );
   });
 
@@ -46,9 +54,16 @@ describe("different account on reconnect", () => {
   });
 
   // R7-pages M2: LinkedIn reuses the browser's signed-in account, so signing in to the right one needs a sign-out first.
-  it("Settings, LinkedIn: names the sign-out step before the sign-in", () => {
+  // R8-client-journey L2: the stored name is the company page, which nobody signs in to.
+  it("Settings, LinkedIn: names the sign-out step, then an account that manages the page", () => {
     expect(reconnectDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
-      "You signed in to a different LinkedIn account than Surf Co page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. To use the other account instead, use Switch account.",
+      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. To use the other page instead, use Switch account.",
+    );
+  });
+
+  it("Settings, Facebook Page: an account that manages the Page", () => {
+    expect(reconnectDifferentAccountMessage("facebook_page", "Surf Co Page")).toBe(
+      "Facebook connected a different page than Surf Co Page, so nothing changed. Sign in with a Facebook account that manages Surf Co Page to reconnect it, or use Switch account to change pages.",
     );
   });
 
@@ -59,14 +74,39 @@ describe("different account on reconnect", () => {
     );
   });
 
-  it("the client's page, LinkedIn: also names the sign-out step for the one who owns it", () => {
+  it("the client's page, LinkedIn: also names the sign-out step for the one who manages the page", () => {
     expect(linkDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
-      "This connection belongs to Surf Co page. If that is your account, sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+    );
+  });
+
+  it("no sentence tells anyone to sign in to a LinkedIn page", () => {
+    for (const sentence of [
+      reconnectDifferentAccountMessage("linkedin", "Surf Co page"),
+      linkDifferentAccountMessage("linkedin", "Surf Co page"),
+      choiceDifferentAccountMessage("linkedin", "Client Cafe", "Surf Co page", false),
+      linkedInReconnectSignInStep("Surf Co page"),
+    ]) {
+      expect(sentence).not.toMatch(/sign in to Surf Co page/i);
+    }
+  });
+
+  it("the Reconnect steps' sign-in line names an account that manages the page", () => {
+    expect(linkedInReconnectSignInStep("Surf Co page")).toBe(
+      "Come back here and click Continue. LinkedIn asks you to sign in: sign in with a LinkedIn account that manages Surf Co page.",
     );
   });
 
   it("names a connection by what Settings shows, with a plain fallback", () => {
     expect(connectedAccountName({ platform: "linkedin", username: "Surf Co page", accountIdentifier: "sub" })).toBe("Surf Co page");
+    // R8-client-journey L2: a LinkedIn identifier is the member's opaque profile id, never shown.
+    expect(connectedAccountName({ platform: "linkedin", username: null, accountIdentifier: "aB3xYz9q" })).toBe(
+      "the connected LinkedIn page",
+    );
+    // R8 review: a Facebook Page's identifier is its numeric id, never shown either.
+    expect(connectedAccountName({ platform: "facebook_page", username: null, accountIdentifier: "102938475610" })).toBe(
+      "the connected Facebook Page",
+    );
     expect(connectedAccountName({ platform: "x", username: null, accountIdentifier: "12345" })).toBe("12345");
     expect(connectedAccountName({ platform: "google_business_profile", username: null, accountIdentifier: "" })).toBe(
       "the connected Google Business Profile account",
@@ -136,7 +176,7 @@ describe("a refused choice from a list", () => {
 
   it("Settings, another platform, not offered: as before", () => {
     expect(choiceDifferentAccountMessage("pinterest", "Team photos", "My Surf School", false)).toBe(
-      settingsDifferentAccountMessage("Team photos", "My Surf School"),
+      settingsDifferentAccountMessage("pinterest", "Team photos", "My Surf School"),
     );
   });
 
@@ -150,5 +190,13 @@ describe("a refused choice from a list", () => {
     expect(linkChoiceDifferentAccountMessage("linkedin", "My Surf School", false)).toBe(
       linkDifferentAccountMessage("linkedin", "My Surf School"),
     );
+  });
+});
+
+
+// R8-pages L5: the row reads the kept end date from a prop, never from the address.
+describe("no address reading for the same-end row", () => {
+  it("has no sameEndAddress", () => {
+    expect("sameEndAddress" in differentAccount).toBe(false);
   });
 });

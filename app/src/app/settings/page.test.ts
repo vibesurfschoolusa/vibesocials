@@ -3,8 +3,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock, findConnectionsMock } = vi.hoisted(() => ({
+const {
+  getWorkspaceContextMock,
+  planSectionMock,
+  billing,
+  planActionsMock,
+  sectionProps,
+  isPayerMock,
+  findConnectionsMock,
+  noPlanYetMock,
+  personalNoteMock,
+  findOwnersMock,
+} = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  noPlanYetMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
+  personalNoteMock: vi.fn<(...args: unknown[]) => { limit: number; reduced: string | null } | null>(() => null),
+  findOwnersMock: vi.fn<(args?: unknown) => Promise<unknown[]>>(async () => []),
   findConnectionsMock: vi.fn<(args?: unknown) => Promise<unknown[]>>(async () => []),
   isPayerMock: vi.fn(async () => false),
   // What the Plan section offers (planSectionActions); null: no plan action.
@@ -13,7 +27,9 @@ const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sect
   sectionProps: {} as Record<string, Record<string, unknown>>,
   // Stands in for billing on/off: with it off, planSectionLabel shows no plan.
   billing: { on: true },
-  planSectionMock: vi.fn<(props: { workspaceNote?: boolean; workspaceId?: string }) => null>(() => null),
+  planSectionMock: vi.fn<
+    (props: { workspaceNote?: boolean; workspaceId?: string; noPlanYet?: boolean; personalPostNote?: unknown }) => null
+  >(() => null),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -29,6 +45,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: { findMany: findConnectionsMock },
     workspace: { findUnique: async () => null },
+    workspaceMember: { findMany: findOwnersMock },
     postJob: { count: async () => 0 },
   },
 }));
@@ -42,6 +59,8 @@ vi.mock("@/components/planSectionView", () => ({
   planGrowthAddsShown: () => false,
   planReturnNotice: () => null,
   planSectionActions: (role: string) => planActionsMock(role),
+  planNoPlanYet: (...args: unknown[]) => noPlanYetMock(...args),
+  planPersonalPostNote: (...args: unknown[]) => personalNoteMock(...args),
   planSectionLabel: (role: string) => (role === "owner" && billing.on ? "Studio plan" : null),
 }));
 // The sections' own contents are tested beside them; here only the page's frame.
@@ -92,6 +111,8 @@ function context(role: "owner" | "member") {
     user: {
       id: "user-1",
       email: "owner@example.test",
+      emailVerifiedAt: new Date("2026-11-01T09:00:00Z"),
+      createdAt: new Date("2026-11-01T08:00:00Z"),
       passwordHash: null,
       notifyOnPostComplete: true,
       notifyDailyDigest: true,
@@ -434,7 +455,7 @@ describe("SettingsPage — a reconnect with a different account", () => {
     );
 
     expect(html).toContain(
-      "You signed in to a different LinkedIn account than Surf Co page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. To use the other account instead, use Switch account.",
+      "LinkedIn connected a different page than Surf Co page, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. To use the other page instead, use Switch account.",
     );
     expect(html).not.toContain("evil.example");
   });
@@ -550,19 +571,97 @@ describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
   it("same date: says LinkedIn gave the same end date, with the stored date", async () => {
     const expiresAt = new Date(Date.now() + 3 * DAY);
     const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
-    expect(html).toContain(`LinkedIn gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`);
+    // R8-pages L5: what to do next.
+    expect(html).toContain(
+      `LinkedIn kept the end date ${formatDisplayDate(expiresAt)}. Reconnect again after that date, or sign out of LinkedIn and reconnect to get a new 60-day sign-in.`,
+    );
     // R7 review 2: a warning, as on /c.
     expect(html).toMatch(/<div role="alert" class="[^"]*border-warning\/25[^"]*"/);
   });
 
   it("renewed: the usual message, even with a crafted flag", async () => {
     const html = await renderWith(new Date(Date.now() + 60 * DAY), { success: "linkedin_connected", same_end: "1" });
-    expect(html).not.toContain("same end date");
+    expect(html).not.toContain("kept the end date");
     expect(html).toContain("LinkedIn");
   });
 
   it("no flag: the usual message", async () => {
     const html = await renderWith(new Date(Date.now() + 3 * DAY), { success: "linkedin_connected" });
-    expect(html).not.toContain("same end date");
+    expect(html).not.toContain("kept the end date");
+  });
+});
+
+// R8-new-customer L1 / L4 (lead's follow-up): the page decides both Plan section facts from the workspace and the viewer.
+describe("SettingsPage — the Plan section's per-person note and no-plan flag", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    noPlanYetMock.mockReset();
+    noPlanYetMock.mockReturnValue(false);
+    personalNoteMock.mockReset();
+    personalNoteMock.mockReturnValue(null);
+    findOwnersMock.mockReset();
+    findOwnersMock.mockResolvedValue([]);
+  });
+
+  it("passes the no-plan flag as a prop", async () => {
+    noPlanYetMock.mockReturnValue(true);
+    planSectionMock.mockClear();
+    await render("owner");
+    expect(noPlanYetMock).toHaveBeenCalledWith("owner", expect.objectContaining({ id: "ws-1" }), expect.any(Date));
+    expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ noPlanYet: true });
+  });
+
+  it("passes the viewer's per-person note, read for the viewer", async () => {
+    personalNoteMock.mockReturnValue({ limit: 5, reduced: "unconfirmed" });
+    planSectionMock.mockClear();
+    await render("owner");
+    const [, viewer, operatorOwned] = personalNoteMock.mock.calls.at(-1) ?? [];
+    expect(viewer).toMatchObject({ id: "user-1", createdAt: new Date("2026-11-01T08:00:00Z") });
+    expect(operatorOwned).toBe(false);
+    expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ personalPostNote: { limit: 5, reduced: "unconfirmed" } });
+  });
+
+  it("an operator among the owners: the note is asked for as operator-owned", async () => {
+    vi.stubEnv("ADMIN_EMAILS", "ops@example.test");
+    findOwnersMock.mockResolvedValue([
+      { user: { email: "owner@example.test", emailVerifiedAt: new Date("2026-11-01T09:00:00Z") } },
+      { user: { email: "ops@example.test", emailVerifiedAt: new Date("2026-11-01T09:00:00Z") } },
+    ]);
+    await render("owner");
+    expect(findOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: "ws-1", role: "owner" } }),
+    );
+    expect(personalNoteMock.mock.calls.at(-1)?.[2]).toBe(true);
+  });
+});
+
+// R8-pages L5 (lead's follow-up): the kept end date goes down to the row as a prop.
+describe("SettingsPage — the same-end row", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  const DAY = 24 * 60 * 60 * 1000;
+  async function rowProps(expiresAt: Date, query: Record<string, string>) {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "linkedin", accountIdentifier: "member-1", metadata: { username: "Surf Co page" }, needsReconnect: false, expiresAt, refreshToken: null },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+    renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve(query) })) as ReactElement);
+    return sectionProps.ConnectionsSection;
+  }
+
+  it("with the flag and the date still inside the window: sameEndAt for LinkedIn", async () => {
+    const expiresAt = new Date(Date.now() + 3 * DAY);
+    const props = await rowProps(expiresAt, { success: "linkedin_connected", same_end: "1" });
+    expect(props.sameEndAt).toEqual({ linkedin: expiresAt.toISOString() });
+  });
+
+  it("no flag, or a renewed sign-in: none", async () => {
+    expect((await rowProps(new Date(Date.now() + 3 * DAY), { success: "linkedin_connected" })).sameEndAt).toEqual({});
+    expect(
+      (await rowProps(new Date(Date.now() + 60 * DAY), { success: "linkedin_connected", same_end: "1" })).sameEndAt,
+    ).toEqual({});
   });
 });

@@ -134,10 +134,13 @@ export async function POST(request: Request, context: RouteContext) {
     }
     if (!result.ok && result.reason === "different_account") {
       // R6 review low 1: the connection stays as it was, and so does the choice.
-      // R7-client-journey L4: the owners are told (once per connection per day; never throws).
-      await notifyOwnersOfRefusedConnect({ workspaceId: link.workspaceId, platform: pending.platform });
       // R7 review 3: when the connected one was on the list, choosing it is the way.
       const offered = await connectedWasOffered(pending, link.workspaceId);
+      // R7-client-journey L4: the owners are told (once per connection per day;
+      // never throws). R8-client-journey L3: only when the client signed in to
+      // another account; a wrong pick from a list that had the right one is not
+      // news, and the email's "disconnect it" would remove the right account.
+      if (!offered) await notifyOwnersOfRefusedConnect({ workspaceId: link.workspaceId, platform: pending.platform });
       return NextResponse.json(
         { error: linkChoiceDifferentAccountMessage(pending.platform, result.connectedName, offered) },
         { status: 409 },

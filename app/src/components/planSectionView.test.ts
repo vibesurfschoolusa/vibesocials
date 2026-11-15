@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { planGrowthAddsShown, planSectionActions, planSectionLabel } from "./planSectionView";
+import { planGrowthAddsShown, planNoPlanYet, planPersonalPostNote, planSectionActions, planSectionLabel } from "./planSectionView";
 
 /** 21a: what Settings → Plan says, and when it is there at all. */
 
@@ -140,5 +140,57 @@ describe("planGrowthAddsShown asks the rule", () => {
 
   it("not on Pro", () => {
     expect(planGrowthAddsShown("owner", { plan: "pro", planStatus: "active", currentPeriodEnd: LATER }, NOW, ON)).toBe(false);
+  });
+});
+
+// R8-new-customer L4 (lead's follow-up): a real flag for "no plan and no trial", not a label match.
+describe("planNoPlanYet", () => {
+  it("true for an owner's workspace with no plan, no trial and no exempt flag", () => {
+    expect(planNoPlanYet("owner", NEW, NOW)).toBe(true);
+  });
+
+  it("false on a trial, on a plan, for an exempt one, or for a member", () => {
+    expect(planNoPlanYet("owner", { ...NEW, trialEndsAt: new Date("2026-12-24T00:00:00Z") }, NOW)).toBe(false);
+    expect(planNoPlanYet("owner", { ...NEW, plan: "starter", planStatus: "active" }, NOW)).toBe(false);
+    expect(planNoPlanYet("owner", { ...NEW, billingExempt: true }, NOW)).toBe(false);
+    expect(planNoPlanYet("member", NEW, NOW)).toBe(false);
+  });
+});
+
+// R8-new-customer L1 (lead's follow-up): the viewer's own number, only where the per-person limit applies.
+describe("planPersonalPostNote", () => {
+  const TRIAL = { ...NEW, trialEndsAt: new Date("2026-12-24T00:00:00Z") };
+  const CONFIRMED = { emailVerifiedAt: new Date("2026-11-01T09:00:00Z"), createdAt: new Date("2026-11-01T08:00:00Z") };
+
+  it("free (a trial), confirmed and past the first day: 15", () => {
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, false, NOW, ON)).toEqual({ limit: 15, reduced: null });
+  });
+
+  it("unconfirmed: 5, with its reason", () => {
+    expect(planPersonalPostNote(TRIAL, { ...CONFIRMED, emailVerifiedAt: null }, false, NOW, ON)).toEqual({
+      limit: 5,
+      reduced: "unconfirmed",
+    });
+  });
+
+  it("the account's first UTC day: 5, with its reason", () => {
+    const today = { emailVerifiedAt: new Date("2026-12-10T08:30:00Z"), createdAt: new Date("2026-12-10T08:00:00Z") };
+    expect(planPersonalPostNote(NEW, today, false, NOW, ON)).toEqual({ limit: 5, reduced: "first_day" });
+  });
+
+  // R8 review: with billing off every workspace counts toward its owners' number.
+  it("billing off: the note shows, even for a workspace with a plan", () => {
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, false, NOW, {})).toEqual({ limit: 15, reduced: null });
+    expect(planPersonalPostNote({ ...NEW, plan: "starter", planStatus: "active" }, CONFIRMED, false, NOW, {})).toEqual({
+      limit: 15,
+      reduced: null,
+    });
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, true, NOW, {})).toBeNull();
+  });
+
+  it("a paying workspace, an exempt one or an operator's: no note", () => {
+    expect(planPersonalPostNote({ ...NEW, plan: "starter", planStatus: "active" }, CONFIRMED, false, NOW, ON)).toBeNull();
+    expect(planPersonalPostNote({ ...NEW, billingExempt: true }, CONFIRMED, false, NOW, ON)).toBeNull();
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, true, NOW, ON)).toBeNull();
   });
 });

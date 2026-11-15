@@ -1,6 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { verifyEmailBannerShown } from "./verify-email-banner";
+import { VerifyEmailNotice, verifyEmailBannerShown } from "./verify-email-banner";
 import { confirmEmailBannerShown, readWorkspaceStatus } from "./workspace-paused-banner";
 
 /**
@@ -35,5 +37,26 @@ describe("confirmEmailBannerShown", () => {
     ]) {
       expect(confirmEmailBannerShown(readWorkspaceStatus(data))).toBe(false);
     }
+  });
+});
+
+// R8-new-customer L3: with billing off this nudge is the only one, so it names
+// the address and where to fix a mistyped one (as the workspace banner does).
+describe("VerifyEmailNotice", () => {
+  const render = (email: string | null) =>
+    renderToStaticMarkup(createElement(VerifyEmailNotice, { email, sending: false, onResend: () => {} }));
+
+  it("names the address, offers Resend, and links Settings, Account for a wrong one", () => {
+    const html = render("maria@gmial.com");
+    expect(html).toContain("Verify your email: we sent a link to maria@gmial.com.");
+    expect(html).toContain("Resend email");
+    expect(html).toContain("Wrong address?");
+    expect(html).toMatch(/<a[^>]*href="\/settings#account"[^>]*>Change it in Settings, Account<\/a>/);
+  });
+
+  it("without an address in the session: the sentence without one", () => {
+    const html = render(null);
+    expect(html).toContain("Verify your email: we sent you a link.");
+    expect(html).toContain("Change it in Settings, Account");
   });
 });

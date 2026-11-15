@@ -31,21 +31,44 @@ const BASE = "https://app.example.com";
 describe("buildRefusedConnectEmail", () => {
   it("says what happened, that nothing changed, and both ways forward, linking to Settings, Connections", () => {
     const email = buildRefusedConnectEmail({
-      platform: "facebook_page",
+      platform: "youtube",
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      connectedName: "Surf Co channel",
+      appBaseUrl: BASE,
+    });
+
+    expect(email.subject).toBe("Surf Co: your client signed in to a different YouTube account");
+    expect(email.html).toContain(
+      "<p>Your client used your connect link for <strong>Surf Co</strong> and signed in to a different YouTube account than the one connected (<strong>Surf Co channel</strong>). Nothing was changed.</p>",
+    );
+    expect(email.html).toContain(
+      "<p>If your client should post from their own account, disconnect Surf Co channel in Settings, Connections; then they can connect theirs through the link. If Surf Co channel is the right account, it has to be signed in to: use Reconnect in Settings, Connections, or ask your client to sign in to Surf Co channel.</p>",
+    );
+    expect(email.html).toContain(`href="${BASE}/go?w=ws_1&amp;to=%2Fsettings%23connections"`);
+  });
+
+  // R8-client-journey L2 / pages L1: a page is not signed in to; an account that manages it is.
+  it.each([
+    ["linkedin", "LinkedIn"],
+    ["facebook_page", "Facebook"],
+  ] as const)("%s: a page, managed by an account", (platform, account) => {
+    const email = buildRefusedConnectEmail({
+      platform,
       workspaceId: "ws_1",
       workspaceName: "Surf Co",
       connectedName: "Surf Co Page",
       appBaseUrl: BASE,
     });
 
-    expect(email.subject).toBe("Surf Co: your client signed in to a different Facebook Page account");
+    expect(email.subject).toBe(`Surf Co: your client signed in to ${account} for a different page`);
     expect(email.html).toContain(
-      "<p>Your client used your connect link for <strong>Surf Co</strong> and signed in to a different Facebook Page account than the one connected (<strong>Surf Co Page</strong>). Nothing was changed.</p>",
+      `<p>Your client used your connect link for <strong>Surf Co</strong> and signed in with a ${account} account for a different page than the one connected (<strong>Surf Co Page</strong>). Nothing was changed.</p>`,
     );
     expect(email.html).toContain(
-      "<p>If your client should post from their own account, disconnect Surf Co Page in Settings, Connections; then they can connect theirs through the link. If Surf Co Page is the right account, it has to be signed in to: use Reconnect in Settings, Connections, or ask your client to sign in to Surf Co Page.</p>",
+      `<p>If your client should post to their own page, disconnect Surf Co Page in Settings, Connections; then they can connect theirs through the link. If Surf Co Page is the right page, use Reconnect in Settings, Connections, or ask your client to sign in with a ${account} account that manages Surf Co Page.</p>`,
     );
-    expect(email.html).toContain(`href="${BASE}/go?w=ws_1&amp;to=%2Fsettings%23connections"`);
+    expect(email.html).not.toContain("sign in to Surf Co Page");
   });
 
   it("escapes the names it shows", () => {
@@ -106,6 +129,20 @@ describe("notifyOwnersOfRefusedConnect", () => {
     );
     expect(h.sendEmail.mock.calls.map(([params]) => params.to)).toEqual(["owner-a@example.com", "owner-b@example.com"]);
     expect(h.sendEmail.mock.calls[0][0].html).toContain("Surf Co Page");
+  });
+
+  it("LinkedIn without the page's name: the connected LinkedIn page, never the profile id", async () => {
+    h.connectionFindUnique.mockResolvedValue({
+      id: "conn-2",
+      platform: "linkedin",
+      accountIdentifier: "aB3xYz9q",
+      metadata: { username: null },
+      needsReconnect: false,
+    });
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "linkedin" });
+    const html = h.sendEmail.mock.calls[0][0].html as string;
+    expect(html).toContain("the connected LinkedIn page");
+    expect(html).not.toContain("aB3xYz9q");
   });
 
   it("a second attempt the same day: no email", async () => {

@@ -12,6 +12,7 @@ import {
 import { formatDisplayDate } from "@/lib/displayDate";
 import { PLAN_FEATURES, planIncludes } from "@/lib/planFeatures";
 import { isPlanKey, PLANS, type PlanKey } from "@/lib/plans";
+import { ownerDailyPostLimit, personalPostLimitApplies, type ReducedReason } from "@/lib/usageLimits";
 
 /**
  * What Settings → Plan says (21a): the workspace's plan state in words. Null
@@ -23,9 +24,42 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** R7-new-customer M1: a workspace with no plan and no trial that is not flagged exempt. */
 export const NO_PLAN_YET_LABEL = "This workspace has no plan yet. The free limits apply until it has one.";
 
+/**
+ * R8-new-customer L4: such a workspace posts on the free limits now, but once
+ * a plan it bought ends it stops posting (planState "ended"), so it is told
+ * before checkout, beside the plan buttons.
+ */
+export const NO_PLAN_CANCEL_LATER_LINE = "If you cancel the plan later, this workspace stops posting until it has a plan again.";
+
+
 /** Unflagged and never on a trial or a plan: made while billing was off, and free to buy one. */
 function withoutPlanOrTrial(workspace: BillingFields, now: Date): boolean {
   return !workspace.billingExempt && planState(workspace, now) === "exempt";
+}
+
+/** An owner's workspace with no plan and no trial (made while billing was off): {@link NO_PLAN_CANCEL_LATER_LINE}. */
+export function planNoPlanYet(role: "owner" | "member", workspace: BillingFields, now: Date): boolean {
+  return role === "owner" && withoutPlanOrTrial(workspace, now);
+}
+
+/** The viewer's own daily number across their workspaces, and why it is the lower one when it is. */
+export type PersonalPostNote = { limit: number; reduced: ReducedReason | null };
+
+/**
+ * R8-new-customer L1: the Plan section's per-person note. Only where the
+ * per-person limit counts this workspace's posts (not paying, not exempt,
+ * not an operator's; lib/usageLimits.ts personalPostLimitApplies), with the
+ * viewer's own number from the same rule the limit uses (ownerDailyPostLimit).
+ */
+export function planPersonalPostNote(
+  workspace: BillingFields,
+  viewer: { emailVerifiedAt: Date | null; createdAt: Date },
+  operatorOwned: boolean,
+  now: Date,
+  env: BillingEnv = process.env,
+): PersonalPostNote | null {
+  if (operatorOwned || !personalPostLimitApplies(workspace, env, now)) return null;
+  return ownerDailyPostLimit(viewer, now);
 }
 
 export function planSectionLabel(

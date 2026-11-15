@@ -69,11 +69,21 @@ export function connectionExpiryState(
  * Unconfirmed (R7 client-journey): a reconnect saved, yet the connection is
  * still inside its warning window, so the platform gave the same end date
  * (a fresh LinkedIn sign-in lasts 60 days). Said rather than looking as if
- * nothing happened.
+ * nothing happened. R8-pages L5: and what to do, since another Reconnect with
+ * the same sign-in changes nothing. Only LinkedIn can't be renewed.
  */
-
 export function sameEndDateMessage(platform: Platform, expiresAt: Date | string): string {
-  return `${platformLabel(platform)} gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`;
+  const label = platformLabel(platform);
+  return `${label} kept the end date ${formatDisplayDate(expiresAt)}. Reconnect again after that date, or sign out of ${label} and reconnect to get a new 60-day sign-in.`;
+}
+
+/**
+ * R8-client-journey L4 / pages L4: the Workspaces page's next step after its
+ * Ended / Ends soon lines. Only an owner can reconnect (connection-actions.tsx).
+ */
+export function connectionEndNextStep(role: "owner" | "member", count: number): string {
+  const which = count > 1 ? "them" : "it";
+  return role === "owner" ? `Reconnect ${which} in Settings, Connections.` : `The workspace owner can reconnect ${which}.`;
 }
 
 /**

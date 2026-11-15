@@ -246,6 +246,28 @@ describe("buildFormerOwnerEmail: invite links turned off", () => {
     );
   });
 
+  // R8-client-journey L1 / security L2: a demotion turns them off too.
+  it("after a demotion: turned off when they stopped being an owner", () => {
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 1, demoted: true }).text).toContain(
+      "The invite link Sam made was turned off when Sam stopped being an owner, so it can't be used to join Surf Co again.",
+    );
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 3, demoted: true }).text).toContain(
+      "The 3 invite links Sam made were turned off when Sam stopped being an owner, so they can't be used to join Surf Co again.",
+    );
+  });
+
+  it("the notice passes a demotion on", async () => {
+    await noticeOwnersOfFormerOwner({
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      formerOwnerId: "user-2",
+      at: new Date(),
+      joinLinksRevoked: 1,
+      demoted: true,
+    });
+    expect(m.sendEmail.mock.calls[0][0].text).toContain("The invite link Sam made was turned off when Sam stopped being an owner");
+  });
+
   it("says nothing about invite links when none was turned off", () => {
     expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 0 }).text).not.toContain("invite link");
     expect(buildFormerOwnerEmail(base).text).not.toContain("invite link");

@@ -20,7 +20,9 @@ import {
   connectedAccountName,
   differentAccountPlatform,
   linkDifferentAccountMessage,
+  linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
@@ -92,8 +94,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   // Unconfirmed (R7 client-journey): the callback flagged a sign-in that ends
   // inside the warning window; said, with the stored date, only when the
   // connection really is in it, instead of no sentence at all.
+  // Only LinkedIn's sign-in can't be renewed, as on Settings: a typed flag on another platform adds nothing.
   const sameEnd =
-    success &&
+    succeeded === "linkedin" &&
     first(query[SAME_END_PARAM]) !== null &&
     working &&
     !working.needsReconnect &&
@@ -126,6 +129,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
         : describeConnectLinkResult(outcome);
+  const sameEndOn = sameEnd?.expiresAt && working ? { platform: working.platform, expiresAt: sameEnd.expiresAt } : null;
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 
@@ -164,7 +168,10 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           {platforms.map((platform) => {
             const connection = byPlatform.get(platform);
             const working = connection && !connection.needsReconnect;
-            const name = connection?.username || connection?.accountIdentifier || null;
+            // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, a
+            // Facebook Page's a numeric id; neither is shown.
+            const idShown = platform !== "linkedin" && platform !== "facebook_page";
+            const name = connection?.username || (idShown ? connection?.accountIdentifier : null) || null;
             const connected = name ? `Connected: ${name}` : "Connected";
             const form = (label: string) => (
               <form action={action} method="post">
@@ -195,10 +202,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                         and sign out in the new tab. If that tab shows a sign-in page instead, you&apos;re already
                         signed out: close it.
                       </li>
-                      <li>
-                        Come back here and click Continue. LinkedIn asks you to sign in: sign in to{" "}
-                        {connectedAccountName(connection)}.
-                      </li>
+                      <li>{linkedInReconnectSignInStep(connectedAccountName(connection))}</li>
                     </ol>
                     <div className="mt-3 flex justify-end">{form("Continue")}</div>
                   </div>
@@ -216,7 +220,10 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                     <span className="text-right text-sm text-muted-foreground">
                       {connection.ended
                         ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
-                        : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
+                        : // R8-pages L5: just reconnected with the same end date; the warning says what to do.
+                          sameEndOn?.platform === platform
+                          ? `${connected}. Ends ${formatDisplayDate(sameEndOn.expiresAt)}. LinkedIn kept this end date.`
+                          : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
                     </span>
                     {button}
                   </div>

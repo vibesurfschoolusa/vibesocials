@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/components/plan-actions", () => ({ PlanActions: () => null }));
 
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
+import { OWNER_DAILY_POST_LIMIT } from "@/lib/usageLimits";
+
+import { NO_PLAN_YET_LABEL } from "./planSectionView";
 
 import { PlanSection } from "./plan-section";
 
@@ -94,5 +97,67 @@ describe("PlanSection: how to switch plans", () => {
       }),
     );
     expect(html).not.toContain(SWITCH);
+  });
+});
+
+const USAGE = {
+  postsToday: { used: 0, limit: 20, resetsAt: null },
+  xPostsThisMonth: { used: 0, limit: 100, resetsAt: null },
+  youtubeUploadsToday: { used: 0, limit: 5, resetsAt: null },
+  storage: { used: 0, limit: 1024 ** 3, resetsAt: null },
+};
+
+// R8-new-customer L1: beside the workspace's number, the viewer's own one where it applies.
+describe("PlanSection: posts per day", () => {
+  const render = (personalPostNote: { limit: number; reduced: "unconfirmed" | "first_day" | null } | null) =>
+    renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE, personalPostNote }));
+
+  // R8 review: no "while free"; the note shows only where the limit applies.
+  it("15: each person can send up to 15 a day across all their workspaces", () => {
+    const html = render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null });
+    expect(html).toContain(`20 (each person can send up to ${OWNER_DAILY_POST_LIMIT} a day across all their workspaces)`);
+    expect(html).not.toContain("while free");
+  });
+
+  it("5 until the email is confirmed, with the reason", () => {
+    expect(render({ limit: 5, reduced: "unconfirmed" })).toContain(
+      `20 (up to 5 a day for you across all your workspaces until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`,
+    );
+  });
+
+  it("5 on the account's first UTC day, with the reason", () => {
+    expect(render({ limit: 5, reduced: "first_day" })).toContain(
+      `20 (up to 5 a day for you across all your workspaces on your account&#x27;s first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`,
+    );
+  });
+
+  it("no note (a paying workspace): the workspace's number alone", () => {
+    const html = render(null);
+    expect(html).toMatch(/<dd>20<\/dd>/);
+    expect(html).not.toContain("a day per person");
+    expect(html).not.toContain("for you");
+  });
+});
+
+// R8-new-customer L4: a workspace made while billing was off keeps posting on the free limits only until it buys a plan.
+describe("PlanSection: before the first plan", () => {
+  const offers = [{ plan: "starter" as const, name: "Starter", price: "$19 a month" }];
+  const LINE = "If you cancel the plan later, this workspace stops posting until it has a plan again.";
+
+  it("no plan and no trial, with the plan buttons: says what cancelling later means", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlanSection, { workspaceId: "ws-1", label: "Any label", usage: USAGE, offers, noPlanYet: true }),
+    );
+    expect(html).toContain(LINE);
+  });
+
+  it("not flagged, or no plan buttons: no such line, whatever the label", () => {
+    for (const props of [
+      { label: NO_PLAN_YET_LABEL, offers, noPlanYet: false },
+      { label: NO_PLAN_YET_LABEL, offers: [], noPlanYet: true },
+    ]) {
+      const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", usage: USAGE, ...props }));
+      expect(html).not.toContain(LINE);
+    }
   });
 });

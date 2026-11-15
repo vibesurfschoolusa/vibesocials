@@ -216,7 +216,15 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
       where: { workspaceId, userId: targetUserId, role: "owner" },
       data: { role: "member" },
     });
-    return count === 0 ? ("not_found" as const) : ("demoted" as const);
+    if (count === 0) return "not_found" as const;
+    // R8-client-journey L1 / security L2: as on leave, the invite links they
+    // made as an owner stop working with their ownership (same transaction),
+    // so a copy they kept can't add anyone.
+    const revoked = await tx.workspaceInvite.updateMany({
+      where: { workspaceId, createdById: targetUserId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return { joinLinksRevoked: revoked.count };
   });
   if (outcome === "last_owner") {
     return NextResponse.json({ error: "Promote another owner first." }, { status: 400 });
@@ -233,6 +241,8 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     workspaceName: context.workspace.name,
     formerOwnerId: targetUserId,
     at: new Date(),
+    joinLinksRevoked: outcome.joinLinksRevoked,
+    demoted: true,
   });
   return NextResponse.json({ ok: true, role }, { status: 200 });
 }

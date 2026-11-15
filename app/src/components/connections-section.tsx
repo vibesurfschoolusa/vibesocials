@@ -137,6 +137,8 @@ interface ConnectionsSectionProps {
   reconnectSoon?: readonly Platform[];
   /** Of those, the ones whose end date has passed: platform -> end date (ISO). */
   endedAt?: Partial<Record<Platform, string>>;
+  /** R8-pages L5: of those, one a reconnect just left with the same end date: platform -> end date (ISO). */
+  sameEndAt?: Partial<Record<Platform, string>>;
 }
 
 export function ConnectionsSection({
@@ -146,6 +148,7 @@ export function ConnectionsSection({
   unavailablePlatforms = [],
   reconnectSoon = [],
   endedAt = {},
+  sameEndAt = {},
 }: ConnectionsSectionProps) {
   return (
     <>
@@ -238,6 +241,7 @@ export function ConnectionsSection({
                       needsReconnect={connection.needsReconnect}
                       reconnectSoon={reconnectSoon.includes(key)}
                       endedAt={endedAt[key] ?? null}
+                      sameEndAt={sameEndAt[key] ?? null}
                       readOnly={readOnly}
                       accountName={username ?? undefined}
                     />
