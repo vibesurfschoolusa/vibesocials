@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
-import { googleRefusedBody, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
+import { GOOGLE_REFUSED_MESSAGE, reviewsErrorBody } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
 
@@ -15,15 +15,12 @@ const REVIEWS_FAILED_MESSAGE = "Couldn't load your Google reviews. Try again in 
  * errors are plain sentences (reviewsErrorBody).
  */
 export async function GET(request: Request) {
-  // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
-  let role: ReviewsReader = "member";
   try {
     const context = await getWorkspaceContext();
 
     if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    role = context.role;
 
     // Get location from query params
     const { searchParams } = new URL(request.url);
@@ -54,7 +51,10 @@ export async function GET(request: Request) {
     }
 
     if (!accessToken) {
-      return NextResponse.json(googleRefusedBody(role), { status: 500 });
+      return NextResponse.json(
+        { error: GOOGLE_REFUSED_MESSAGE, reconnect: true },
+        { status: 500 }
+      );
     }
 
     // Get location name from query param or metadata
@@ -78,6 +78,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ reviews, truncated });
   } catch (error: unknown) {
     console.error("[Reviews API] Error:", error);
-    return NextResponse.json(reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE, role), { status: 500 });
+    return NextResponse.json(reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE), { status: 500 });
   }
 }

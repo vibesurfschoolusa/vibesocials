@@ -5,7 +5,6 @@ import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { noConnectionsMessage } from "@/lib/ownerStepAnswers";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import { parseCoverField, withStoredCoverFacts } from "@/lib/videoCoverField";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
@@ -1619,7 +1618,10 @@ export async function POST(request: Request) {
           error: "No connected platforms",
           code: "NO_CONNECTIONS",
           // R11-publishing L1: only the owner can connect one.
-          message: noConnectionsMessage("create", context.role),
+          message:
+            context.role === "member"
+              ? "The workspace owner can connect a platform for this workspace."
+              : "Connect at least one platform before creating a post.",
         },
         { status: 400 },
       );

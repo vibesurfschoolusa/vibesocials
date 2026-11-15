@@ -18,7 +18,7 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   refreshAccessToken: vi.fn(),
 }));
 
-import { GOOGLE_REFUSED_MEMBER_MESSAGE, GOOGLE_REFUSED_MESSAGE } from "@/server/googleReviews";
+import { GOOGLE_REFUSED_MESSAGE } from "@/server/googleReviews";
 
 import { POST } from "./route";
 
@@ -73,7 +73,6 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   it("asks for a reconnect when Google refuses the reply", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
@@ -142,23 +141,11 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   it("asks for a reconnect when Google refuses the listing", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     listGbpLocationsMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
     expect(replyToReviewMock).not.toHaveBeenCalled();
-  });
-});
-
-// R12 L1: a member may reply, but only an owner can reconnect.
-describe("POST /api/reviews/[reviewId]/reply for a member", () => {
-  it("Google refuses: who can reconnect, no Settings link", async () => {
-    replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
-
-    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
-
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
   });
 });

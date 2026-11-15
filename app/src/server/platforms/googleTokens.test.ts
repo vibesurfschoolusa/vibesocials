@@ -300,7 +300,7 @@ describe("refreshGoogleToken — failure classification", () => {
     const error = await refreshError();
 
     expect(error).toMatchObject({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status, oauthError });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual(
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual(
       shown === "reconnect"
         ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true }
         : { error: REVIEWS_UNAVAILABLE_MESSAGE },

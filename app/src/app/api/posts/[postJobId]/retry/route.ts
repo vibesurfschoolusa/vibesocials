@@ -7,12 +7,11 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
-import { PLATFORM_ORDER } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
 import { leftOutSentence, retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { retryReconnectMessage } from "@/lib/ownerStepAnswers";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
@@ -58,6 +57,12 @@ export function parseRetryBody(body: unknown): RetryTarget | { error: string } {
   }
 
   return { error: "Provide `platform` (one) or `retryAllFailed: true`." };
+}
+
+/** "X", "X and YouTube", "X, YouTube and Instagram". */
+function platformList(platforms: Platform[]): string {
+  const labels = platforms.map(platformLabel);
+  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 /** Whether `platform` has no connection in the workspace, or one that needs reconnecting. */
@@ -252,7 +257,10 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     return NextResponse.json(
       {
         // R10-client-journey L1: only an owner can reconnect.
-        error: retryReconnectMessage(dead, workspaceContext.role),
+        error:
+          workspaceContext.role === "member"
+            ? `The workspace owner can reconnect ${platformList(dead)}; then retry.`
+            : `Reconnect ${platformList(dead)} in Settings before retrying.`,
         code: "RECONNECT_REQUIRED",
         platform: dead[0],
       },

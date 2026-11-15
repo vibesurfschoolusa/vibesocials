@@ -11,7 +11,6 @@ vi.mock("./platforms/connectionRefresh", () => ({ refreshConnectionToken: vi.fn(
 vi.mock("./platforms/googleTokens", () => ({ refreshGoogleToken: vi.fn() }));
 
 import {
-  GOOGLE_REFUSED_MEMBER_MESSAGE,
   GOOGLE_REFUSED_MESSAGE,
   REVIEWS_SHOWN_MAX,
   REVIEWS_UNAVAILABLE_MESSAGE,
@@ -19,7 +18,6 @@ import {
   fetchNewReviewUri,
   fetchReviews,
   listGbpLocations,
-  reviewLinkReason,
   reviewLocationName,
   reviewsErrorBody,
 } from "./googleReviews";
@@ -209,7 +207,7 @@ describe("reviewsErrorBody", () => {
     ["a connection removed meanwhile", coded({ code: "CONNECTION_GONE" })],
     ["a refused token refresh", coded({ status: 400, code: "GOOGLE_TOKEN_REFRESH_FAILED" })],
   ])("asks for a reconnect after %s", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
   });
 
   it("says the reconnect sentence the brief asks for", () => {
@@ -226,58 +224,7 @@ describe("reviewsErrorBody", () => {
     ["a JSON parse error", new SyntaxError("Unexpected token < in JSON at position 0")],
     ["something that is not an error", "boom"],
   ])("gives the plain fallback for %s, never the raw message", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: "Fallback." });
-  });
-
-  // R12 L1: a member may read and reply, but only an owner can reconnect, so a
-  // member reads who can, without the flag that makes the page link to Settings.
-  it("words a refusal for a member: who can reconnect, no reconnect flag", () => {
-    expect(reviewsErrorBody(coded({ status: 403 }), "Fallback.", "member")).toEqual({
-      error: GOOGLE_REFUSED_MEMBER_MESSAGE,
-    });
-    expect(GOOGLE_REFUSED_MEMBER_MESSAGE).toBe(
-      "Google refused the request. The workspace owner can reconnect Google Business Profile.",
-    );
-  });
-
-  it("gives a member the same sentence as an owner where no reconnect is asked", () => {
-    expect(reviewsErrorBody(coded({ status: 500 }), "Fallback.", "member")).toEqual({ error: "Fallback." });
-    expect(reviewsErrorBody(coded({ code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" }), "Fallback.", "member")).toEqual({
-      error: REVIEWS_UNAVAILABLE_MESSAGE,
-    });
-  });
-});
-
-// R12 L1: the "Get more reviews" panel's reasons, for whoever reads them.
-describe("reviewLinkReason", () => {
-  it("an owner: the step in Settings, Connections, as before", () => {
-    expect(reviewLinkReason("not_connected", "owner")).toBe(
-      "Connect Google Business Profile in Settings, Connections to get your review link.",
-    );
-    expect(reviewLinkReason("no_location", "owner")).toBe(
-      "Choose your Maps location for Google Business Profile in Settings, Connections to get your review link.",
-    );
-    expect(reviewLinkReason("needs_reconnect", "owner")).toBe(
-      "Reconnect Google Business Profile in Settings, Connections to get your review link.",
-    );
-    expect(reviewLinkReason("google_has_none", "owner")).toBe(
-      "Google has no review link for this location yet. Check that the listing is verified in Google Business Profile, then reload this page.",
-    );
-  });
-
-  it("a member: who can take the step", () => {
-    expect(reviewLinkReason("not_connected", "member")).toBe(
-      "The workspace owner can connect Google Business Profile; then the review link shows here.",
-    );
-    expect(reviewLinkReason("no_location", "member")).toBe(
-      "The workspace owner can choose the Maps location for Google Business Profile; then the review link shows here.",
-    );
-    expect(reviewLinkReason("needs_reconnect", "member")).toBe(
-      "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
-    );
-    expect(reviewLinkReason("google_has_none", "member")).toBe(
-      "Google has no review link for this location yet. The workspace owner can check that the listing is verified in Google Business Profile.",
-    );
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual({ error: "Fallback." });
   });
 });
 
@@ -363,7 +310,7 @@ describe("reviewsErrorBody: token refresh failures", () => {
     });
 
   it("asks for a reconnect when Google refused the grant (invalid_grant)", () => {
-    expect(reviewsErrorBody(refresh(400, "invalid_grant"), "Fallback.", "owner")).toEqual({
+    expect(reviewsErrorBody(refresh(400, "invalid_grant"), "Fallback.")).toEqual({
       error: GOOGLE_REFUSED_MESSAGE,
       reconnect: true,
     });
@@ -371,7 +318,7 @@ describe("reviewsErrorBody: token refresh failures", () => {
 
   it("asks for a reconnect when there is no refresh token to use", () => {
     const error = Object.assign(new Error("No refresh token"), { code: "GOOGLE_NO_REFRESH_TOKEN" });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
   });
 
   it.each([
@@ -381,11 +328,11 @@ describe("reviewsErrorBody: token refresh failures", () => {
     ["a 401 with no OAuth code", refresh(401)],
     ["missing OAuth credentials", Object.assign(new Error("Missing"), { code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" })],
   ])("gives the not-available sentence for %s, never a reconnect", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: REVIEWS_UNAVAILABLE_MESSAGE });
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual({ error: REVIEWS_UNAVAILABLE_MESSAGE });
     expect(REVIEWS_UNAVAILABLE_MESSAGE).toBe("Google Reviews are not available right now. Try again later.");
   });
 
   it("a 400 whose OAuth code was not passed on still reads as a refused grant (the common case)", () => {
-    expect(reviewsErrorBody(refresh(400), "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    expect(reviewsErrorBody(refresh(400), "Fallback.")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
   });
 });

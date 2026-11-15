@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const linkedInDialogProps: Record<string, unknown>[] = [];
 vi.mock("./linkedin-account-dialog", () => ({
@@ -84,7 +84,7 @@ describe("Settings connection row", () => {
   // R6 review low 3: the end date has passed but the sweep has not flagged it yet.
   it("ended, not flagged yet: says when it ended on its own line, with Reconnect, not Ends soon", () => {
     const html = row({ reconnectSoon: true, endedAt: "2026-11-12T12:00:00.000Z" });
-    expect(html).toMatch(/<span class="[^"]*basis-full[^"]*">Ended November 12, 2026, 12:00 UTC. Reconnect to keep posting.<\/span>/);
+    expect(html).toMatch(/<span class="[^"]*basis-full[^"]*">Ended November 12, 2026. Reconnect to keep posting.<\/span>/);
     expect(html).toMatch(RECONNECT_BUTTON);
     expect(reconnectDialogProps()).toMatchObject({ mode: "reconnect" });
     expect(html).not.toContain("Ends soon");
@@ -149,7 +149,7 @@ describe("Settings connection row", () => {
 
   it("a member: ended, not flagged yet -> Ended with the date, not Connected", () => {
     const html = row({ readOnly: true, reconnectSoon: true, endedAt: "2026-11-12T12:00:00.000Z" });
-    expect(html).toContain("Ended November 12, 2026, 12:00 UTC. The workspace owner can reconnect it.");
+    expect(html).toContain("Ended November 12, 2026. The workspace owner can reconnect it.");
     expect(html).not.toContain(">Connected<");
     expect(html).not.toContain("Ends soon");
     expect(html).not.toContain("<button");
@@ -158,36 +158,4 @@ describe("Settings connection row", () => {
   it("a member: healthy -> Connected as before", () => {
     expect(row({ readOnly: true })).toContain(">Connected<");
   });
-
-  // R12-pages L3: a flagged row says who can reconnect it, after the badge.
-  it("a member: needs reconnecting -> the badge, then who can reconnect it", () => {
-    const html = row({ readOnly: true, needsReconnect: true, platform: "instagram" });
-    expect(html).toContain("Needs reconnect");
-    expect(html).toContain("The workspace owner can reconnect it.");
-    expect(html).not.toContain("<button");
-    expect(html).not.toContain("<a ");
-  });
-});
-
-// R12-pages L4: "Ended" is written in UTC like the Ends line (endsAtText), so the
-// server and a browser in another zone render the same text.
-describe("Settings connection row, Ended in UTC", () => {
-  const ORIGINAL_TZ = process.env.TZ;
-  afterEach(() => {
-    if (ORIGINAL_TZ === undefined) delete process.env.TZ;
-    else process.env.TZ = ORIGINAL_TZ;
-  });
-
-  for (const timeZone of ["UTC", "America/Chicago", "Asia/Tokyo"]) {
-    it(`an end at 01:00 UTC reads the same in ${timeZone}, for an owner and a member`, () => {
-      process.env.TZ = timeZone;
-      const endedAt = "2026-11-21T01:00:00.000Z";
-      expect(row({ reconnectSoon: true, endedAt })).toContain(
-        "Ended November 21, 2026, 01:00 UTC. Reconnect to keep posting.",
-      );
-      expect(row({ reconnectSoon: true, endedAt, readOnly: true })).toContain(
-        "Ended November 21, 2026, 01:00 UTC. The workspace owner can reconnect it.",
-      );
-    });
-  }
 });

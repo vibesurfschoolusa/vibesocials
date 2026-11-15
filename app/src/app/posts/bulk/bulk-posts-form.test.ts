@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -132,39 +130,5 @@ describe("NoPlatformConnectedLine", () => {
     const html = renderToString(createElement(NoPlatformConnectedLine, { isMember: true }));
     expect(html).toContain("No platform here is connected yet. The workspace owner can connect accounts for this workspace.");
     expect(html).not.toContain("<a");
-  });
-
-  // R12-new-customer L3: TikTok is never offered here, so with only TikTok
-  // connected "no platform is connected" was untrue.
-  it("owner, only TikTok connected: says TikTok is left out, then connect one in Settings", () => {
-    const html = renderToString(createElement(NoPlatformConnectedLine, { isMember: false, onlyTikTok: true })).replace(
-      /<!-- -->/g,
-      "",
-    );
-    expect(html).toContain("Add many posts to every platform except TikTok, and none of those is connected yet.");
-    expect(html).not.toContain("No platform here is connected yet.");
-    expect(html).toContain('href="/settings#connections"');
-  });
-
-  it("member, only TikTok connected: says TikTok is left out and who can connect", () => {
-    const html = renderToString(createElement(NoPlatformConnectedLine, { isMember: true, onlyTikTok: true }));
-    expect(html).toContain(
-      "Add many posts to every platform except TikTok, and none of those is connected yet. The workspace owner can connect accounts for this workspace.",
-    );
-    expect(html).not.toContain("<a");
-  });
-});
-
-describe("Add many, which line it shows with nothing to offer", () => {
-  it("passes whether a connected TikTok is the only reason the list is empty", () => {
-    const source = readFileSync(path.join(__dirname, "bulk-posts-form.tsx"), "utf8");
-    expect(source).toContain("<NoPlatformConnectedLine isMember={isMember} onlyTikTok={tiktokConnected} />");
-    expect(source).toMatch(/const tiktokConnected = [^;]*c\.platform === "tiktok" && c\.connected/);
-  });
-
-  it("uses the shared posting-times prompt, which knows a member", () => {
-    const source = readFileSync(path.join(__dirname, "bulk-posts-form.tsx"), "utf8");
-    expect(source).toContain("<SetPostingTimesPrompt isMember={isMember} />");
-    expect(source).not.toContain("Set your posting times");
   });
 });

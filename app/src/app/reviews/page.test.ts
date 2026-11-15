@@ -42,14 +42,6 @@ describe("ReviewsPage", () => {
     expect(((await ReviewsPage()) as Element).props.savedLocation).toBeNull();
   });
 
-  // R12 L1: the view offers connect steps only to an owner; the role is the server's.
-  it("tells the view whether the viewer is a member, from the workspace context", async () => {
-    findFirstMock.mockResolvedValue(null);
-    expect(((await ReviewsPage()) as unknown as { props: { isMember: boolean } }).props.isMember).toBe(false);
-    getWorkspaceContextMock.mockResolvedValue({ user: { id: "u1" }, workspace: { id: "ws-1" }, role: "member" });
-    expect(((await ReviewsPage()) as unknown as { props: { isMember: boolean } }).props.isMember).toBe(true);
-  });
-
   it("still sends a signed-out visitor to login", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
     await expect(ReviewsPage()).rejects.toThrow("REDIRECT /login?callbackUrl=%2Freviews");

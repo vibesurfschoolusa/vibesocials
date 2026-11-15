@@ -155,7 +155,6 @@ describe("GET /api/reviews/link", () => {
   });
 
   it("says why there is no link: not connected", async () => {
-    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(null);
 
     const body = await (await GET()).json();
@@ -165,20 +164,16 @@ describe("GET /api/reviews/link", () => {
   });
 
   it("says why there is no link: no location chosen, without calling Google", async () => {
-    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(connection({ metadata: {} }));
 
     const body = await (await GET()).json();
 
     expect(body.url).toBeNull();
-    expect(body.reason).toBe(
-      "Choose your Maps location for Google Business Profile in Settings, Connections to get your review link.",
-    );
+    expect(body.reason).toMatch(/location/);
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });
 
   it("says why there is no link: the connection needs reconnecting", async () => {
-    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(connection({ needsReconnect: true }));
 
     const body = await (await GET()).json();
@@ -189,7 +184,6 @@ describe("GET /api/reviews/link", () => {
   });
 
   it("says why there is no link: Google returned none, and saves nothing", async () => {
-    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(connection());
     mocks.fetchNewReviewUri.mockResolvedValue(null);
 
@@ -227,47 +221,5 @@ describe("GET /api/reviews/link", () => {
       platform: "google_business_profile",
     });
     expect(body.url).toBeNull();
-  });
-});
-
-// R12 L1: only an owner can connect, choose the location or reconnect, so a
-// member (who may read the panel) reads who can, never a step in Settings.
-describe("GET /api/reviews/link for a member", () => {
-  const ask = async () => (await (await GET()).json()) as { url: string | null; reason?: string };
-
-  it("not connected", async () => {
-    mocks.findFirst.mockResolvedValue(null);
-    expect(await ask()).toEqual({
-      url: null,
-      reason: "The workspace owner can connect Google Business Profile; then the review link shows here.",
-    });
-  });
-
-  it("no location chosen", async () => {
-    mocks.findFirst.mockResolvedValue(connection({ metadata: {} }));
-    expect(await ask()).toEqual({
-      url: null,
-      reason: "The workspace owner can choose the Maps location for Google Business Profile; then the review link shows here.",
-    });
-  });
-
-  it("needs reconnecting, flagged or found when Google refuses", async () => {
-    const reason = "The workspace owner can reconnect Google Business Profile; then the review link shows here.";
-    mocks.findFirst.mockResolvedValue(connection({ needsReconnect: true }));
-    expect(await ask()).toEqual({ url: null, reason });
-
-    mocks.findFirst.mockResolvedValue(connection());
-    mocks.fetchNewReviewUri.mockRejectedValue(Object.assign(new Error("401"), { code: "RECONNECT_REQUIRED" }));
-    expect(await ask()).toEqual({ url: null, reason });
-  });
-
-  it("Google has none", async () => {
-    mocks.findFirst.mockResolvedValue(connection());
-    mocks.fetchNewReviewUri.mockResolvedValue(null);
-    expect(await ask()).toEqual({
-      url: null,
-      reason:
-        "Google has no review link for this location yet. The workspace owner can check that the listing is verified in Google Business Profile.",
-    });
   });
 });

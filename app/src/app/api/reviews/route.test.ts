@@ -16,7 +16,7 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   refreshAccessToken: vi.fn(),
 }));
 
-import { GOOGLE_REFUSED_MEMBER_MESSAGE, GOOGLE_REFUSED_MESSAGE } from "@/server/googleReviews";
+import { GOOGLE_REFUSED_MESSAGE } from "@/server/googleReviews";
 
 import { GET } from "./route";
 
@@ -50,7 +50,6 @@ describe("GET /api/reviews", () => {
   });
 
   it("asks for a reconnect when Google refuses", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed to fetch Google Business Profile reviews (status 403)"), { status: 403 }),
     );
@@ -72,30 +71,10 @@ describe("GET /api/reviews", () => {
   });
 
   it("asks for a reconnect when the connection holds no token", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     findFirstMock.mockResolvedValue({ id: "c1", accessToken: null, expiresAt: null, metadata: {} });
 
     const body = (await (await get()).json()) as { error: string; reconnect?: boolean };
 
     expect(body).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
-  });
-});
-
-// R12 L1: only an owner can reconnect, so a member reads who can, without the
-// reconnect flag that makes the page link to Settings.
-describe("GET /api/reviews for a member", () => {
-  it("Google refuses: who can reconnect, no Settings link", async () => {
-    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("403"), { status: 403 }));
-
-    const response = await get();
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
-  });
-
-  it("no token: the same", async () => {
-    findFirstMock.mockResolvedValue({ id: "c1", accessToken: null, expiresAt: null, metadata: {} });
-
-    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
   });
 });

@@ -51,35 +51,14 @@ export function workspacePausedMessage(reason: string | null | undefined): strin
 // Until payments exist (21b) there is nothing to click, so both name who to contact.
 export const TRIAL_ENDED_MESSAGE = `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
 export const PLAN_ENDED_MESSAGE = `Your plan has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
-// R12-publishing L1: only an owner has Settings, Plan, so a member reads who chooses.
-export const MEMBER_TRIAL_ENDED_MESSAGE = `This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`;
-export const MEMBER_PLAN_ENDED_MESSAGE = `This workspace's plan has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`;
 
-export type WorkspaceViewerRole = "owner" | "member";
-
-/**
- * Null when the workspace may work; otherwise why not, in words `role` reads.
- * The pause wins. Shown to a person only through accessBlock, which always
- * passes the workspace context's role; the jobs read only the code.
- */
-export function workspaceBlock(
-  workspace: WorkspaceStatusFields,
-  now: Date = new Date(),
-  role: WorkspaceViewerRole = "owner",
-): WorkspaceBlock | null {
+/** Null when the workspace may work; otherwise why not, in words its members read. The pause wins. */
+export function workspaceBlock(workspace: WorkspaceStatusFields, now: Date = new Date()): WorkspaceBlock | null {
   if (workspace.pausedAt) {
     return { code: WORKSPACE_PAUSED_CODE, message: workspacePausedMessage(workspace.pausedReason) };
   }
   if (!billingEnabled() || planState(workspace, now) !== "ended") return null;
-  const member = role === "member";
-  const message = workspace.plan
-    ? member
-      ? MEMBER_PLAN_ENDED_MESSAGE
-      : PLAN_ENDED_MESSAGE
-    : member
-      ? MEMBER_TRIAL_ENDED_MESSAGE
-      : TRIAL_ENDED_MESSAGE;
-  return { code: PLAN_ENDED_CODE, message };
+  return { code: PLAN_ENDED_CODE, message: workspace.plan ? PLAN_ENDED_MESSAGE : TRIAL_ENDED_MESSAGE };
 }
 
 /**
@@ -186,13 +165,6 @@ export type AccessBlock = { code: WorkspaceBlockCode | typeof EMAIL_UNCONFIRMED_
 /** The person's side of the check: the signed-in user's own row. */
 export type AccessUser = { email: string; emailVerifiedAt: Date | null; googleLinkedAt: Date | null };
 
-/**
- * What the check reads: a route passes its whole workspace context, so the
- * refusal is worded for the role the server gave (required, so no caller can
- * leave a member reading an owner's step).
- */
-export type AccessContext = { user: AccessUser; workspace: WorkspaceStatusFields; role: WorkspaceViewerRole };
-
 export function emailUnconfirmedMessage(email: string): string {
   return `Confirm your email address to start posting. We sent a link to ${email}.`;
 }
@@ -218,10 +190,10 @@ export function emailVerificationAvailable(env: Record<string, string | undefine
  * - in an exempt workspace, or for a Google sign-in, which proves the mailbox.
  */
 export function accessBlock(
-  context: AccessContext,
+  context: { user: AccessUser; workspace: WorkspaceStatusFields },
   now: Date = new Date(),
 ): AccessBlock | null {
-  const block = workspaceBlock(context.workspace, now, context.role);
+  const block = workspaceBlock(context.workspace, now);
   if (block) return block;
   const { user } = context;
   if (!billingEnabled() || user.emailVerifiedAt || user.googleLinkedAt) return null;
@@ -231,7 +203,7 @@ export function accessBlock(
 
 /** For a route that creates or moves work: the 403 to return as-is, or null to carry on. */
 export function accessBlockResponse(
-  context: AccessContext,
+  context: { user: AccessUser; workspace: WorkspaceStatusFields },
   now: Date = new Date(),
 ): NextResponse | null {
   const block = accessBlock(context, now);

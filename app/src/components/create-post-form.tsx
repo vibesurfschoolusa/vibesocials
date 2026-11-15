@@ -29,7 +29,6 @@ import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
 import { StoryPlacementSettings } from "./story-placement";
-import { SetPostingTimesPrompt } from "./posting-times-prompt";
 import { VideoCoverPicker } from "./video-cover-picker";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
@@ -2746,7 +2745,12 @@ function CreatePostFormInner({
                       Next free slot
                     </Button>
                   ) : (
-                    <SetPostingTimesPrompt isMember={isMember} />
+                    <Link
+                      href="/settings#posting-times"
+                      className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      Set your posting times
+                    </Link>
                   )
                 ) : null}
               </div>

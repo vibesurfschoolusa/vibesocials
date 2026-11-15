@@ -69,7 +69,6 @@ import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
-import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
 import { BulkPostRow, captionFailedText } from "./bulk-post-row";
 import { MediaPickerDialog } from "./media-picker-dialog";
 import { BatchSettingsFieldset } from "./batch-settings";
@@ -192,22 +191,15 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/**
- * R11-client-journey L2: only the owner can connect, so a member reads who can.
- * R12-new-customer L3: TikTok is never offered here, so with only TikTok
- * connected (`onlyTikTok`) "no platform is connected" would be untrue.
- */
-export function NoPlatformConnectedLine({ isMember, onlyTikTok = false }: { isMember: boolean; onlyTikTok?: boolean }) {
-  const state = onlyTikTok
-    ? "Add many posts to every platform except TikTok, and none of those is connected yet."
-    : "No platform here is connected yet.";
+/** R11-client-journey L2: only the owner can connect, so a member reads who can. */
+export function NoPlatformConnectedLine({ isMember }: { isMember: boolean }) {
   return isMember ? (
     <p className="text-sm text-muted-foreground">
-      {`${state} The workspace owner can connect accounts for this workspace.`}
+      No platform here is connected yet. The workspace owner can connect accounts for this workspace.
     </p>
   ) : (
     <p className="text-sm text-muted-foreground">
-      {state}{" "}
+      No platform here is connected yet.{" "}
       <Link href={SETTINGS_CONNECTIONS_HREF} className="text-primary underline-offset-4 hover:underline">
         Connect one in Settings
       </Link>
@@ -330,7 +322,6 @@ export function BulkPostsForm({
       ),
     [connections],
   );
-  const tiktokConnected = connections?.some((c) => c.platform === "tiktok" && c.connected) ?? false;
   const [deselected, setDeselected] = useState<Set<Platform>>(new Set());
   const selectedPlatforms = offeredPlatforms.filter((platform) => !deselected.has(platform));
 
@@ -940,7 +931,7 @@ export function BulkPostsForm({
               </Button>
             </Alert>
           ) : offeredPlatforms.length === 0 ? (
-            <NoPlatformConnectedLine isMember={isMember} onlyTikTok={tiktokConnected} />
+            <NoPlatformConnectedLine isMember={isMember} />
           ) : (
             <div className="flex flex-wrap gap-2">
               {offeredPlatforms.map((platform) => (
@@ -1127,7 +1118,12 @@ export function BulkPostsForm({
                 Use my posting times: each post gets the next free one, in order
               </label>
             ) : (
-              <SetPostingTimesPrompt isMember={isMember} />
+              <Link
+                href="/settings#posting-times"
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Set your posting times
+              </Link>
             )
           ) : null}
           <p className="text-sm text-muted-foreground">
