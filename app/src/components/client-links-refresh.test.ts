@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   announceClientLinksReplaced,
   CLIENT_LINKS_REPLACED_EVENT,
+  remountsConnectLinkCard,
   RemountOnClientLinksReplaced,
   subscribeClientLinksReplaced,
 } from "./client-links-refresh";
@@ -47,5 +48,22 @@ describe("client links replaced event", () => {
     expect(renderToStaticMarkup(createElement(RemountOnClientLinksReplaced, null, createElement("p", null, "link")))).toBe(
       "<p>link</p>",
     );
+  });
+});
+
+// R6 review low 2: the connect link card announces its own changes too, so the
+// Team card follows them; the card is not remounted for its own change.
+describe("who changed the client links", () => {
+  it("each announce says where it came from", () => {
+    const listener = vi.fn();
+    subscribeClientLinksReplaced(listener);
+    announceClientLinksReplaced("connect-link");
+    announceClientLinksReplaced();
+    expect(listener.mock.calls).toEqual([["connect-link"], ["team"]]);
+  });
+
+  it("the connect link card is remounted for the Team card's replace, not for its own change", () => {
+    expect(remountsConnectLinkCard("team")).toBe(true);
+    expect(remountsConnectLinkCard("connect-link")).toBe(false);
   });
 });

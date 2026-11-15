@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
+import { announceClientLinksReplaced } from "@/components/client-links-refresh";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
@@ -28,6 +29,30 @@ export type ConnectLinkDto = {
   lastUsedAt: string | null;
   createdAt: string;
 };
+
+/**
+ * Makes, replaces (POST) or turns off (DELETE) the link. On success it is
+ * announced (R6 review low 2), so the Team card's "Make new client links"
+ * shows or hides without a reload. A network failure throws.
+ */
+export async function changeConnectLink(
+  fetchImpl: typeof fetch,
+  method: "POST" | "DELETE",
+  body: object,
+  announce: () => void = () => announceClientLinksReplaced("connect-link"),
+): Promise<{ ok: true; link: ConnectLinkDto | null } | { ok: false; error: string | null }> {
+  const response = await fetchImpl("/api/workspaces/connect-link", {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto; error?: string } | null;
+  if (!response.ok || (method === "POST" && !data?.link)) {
+    return { ok: false, error: typeof data?.error === "string" ? data.error : null };
+  }
+  announce();
+  return { ok: true, link: method === "POST" ? data!.link! : null };
+}
 
 export interface ConnectLinkViewProps {
   available: Platform[];
@@ -189,11 +214,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const send = useCallback(
     async (method: "POST" | "DELETE", body: object) => {
       try {
-        return await fetch("/api/workspaces/connect-link", {
-          method,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        return await changeConnectLink(fetch, method, body);
       } catch (error) {
         toast.error("Couldn't reach Vibe Socials. Check your connection and try again.");
         throw error;
@@ -207,23 +228,21 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   // confirm dialog stays open; the toast says why.
   const makeLink = useCallback(
     async (platforms: Platform[]) => {
-      const response = await send("POST", { workspaceId, platforms });
-      const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto; error?: string } | null;
-      if (!response.ok || !data?.link) {
-        toast.error(data?.error ?? "Couldn't make the link. Try again.");
+      const result = await send("POST", { workspaceId, platforms });
+      if (!result.ok || !result.link) {
+        toast.error((!result.ok && result.error) || "Couldn't make the link. Try again.");
         throw new Error("CREATE_FAILED");
       }
-      setLink(data.link);
+      setLink(result.link);
       toast.success("New link ready. Copy it and send it to your client.");
     },
     [send, toast, workspaceId],
   );
 
   const turnOff = useCallback(async () => {
-    const response = await send("DELETE", { workspaceId });
-    if (!response.ok) {
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
+    const result = await send("DELETE", { workspaceId });
+    if (!result.ok) {
+      toast.error(result.error ?? "Couldn't turn the link off. Try again.");
       throw new Error("REVOKE_FAILED");
     }
     setLink(null);

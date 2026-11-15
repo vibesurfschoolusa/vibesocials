@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { ConnectLinkSection, ConnectLinkSectionView, type ConnectLinkViewProps } from "./connect-link-section";
+import { changeConnectLink, ConnectLinkSection, ConnectLinkSectionView, type ConnectLinkViewProps } from "./connect-link-section";
 
 function view(overrides: Partial<ConnectLinkViewProps> = {}): string {
   const props: ConnectLinkViewProps = {
@@ -134,5 +134,51 @@ describe("the Client connect link group in Settings", () => {
   // wrapper (settings/page.tsx), not here, so it is never duplicated.
   it("carries no connect-link anchor of its own", () => {
     expect(view()).not.toContain('id="connect-link"');
+  });
+});
+
+// R6 review low 2: a link made, replaced or turned off here is announced, so
+// the Team card's "Make new client links" follows it without a reload.
+describe("changeConnectLink", () => {
+  const LINK_DTO = {
+    url: "https://app.example.com/c/NEW",
+    platforms: ["tiktok"],
+    expiresAt: "2026-11-28T10:00:00.000Z",
+    lastUsedAt: null,
+    createdAt: "2026-11-14T10:00:00.000Z",
+  };
+
+  it("made (or replaced): answers the link and announces it", async () => {
+    const announce = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ link: LINK_DTO }), { status: 200 }));
+    await expect(
+      changeConnectLink(fetchImpl as unknown as typeof fetch, "POST", { workspaceId: "ws-1", platforms: ["tiktok"] }, announce),
+    ).resolves.toEqual({ ok: true, link: LINK_DTO });
+    expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces/connect-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId: "ws-1", platforms: ["tiktok"] }),
+    });
+    expect(announce).toHaveBeenCalledTimes(1);
+  });
+
+  it("turned off: announces it", async () => {
+    const announce = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await expect(changeConnectLink(fetchImpl as unknown as typeof fetch, "DELETE", { workspaceId: "ws-1" }, announce)).resolves.toEqual({
+      ok: true,
+      link: null,
+    });
+    expect(announce).toHaveBeenCalledTimes(1);
+  });
+
+  it("refused: the route's sentence, and nothing announced", async () => {
+    const announce = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "Pick a platform." }), { status: 400 }));
+    await expect(changeConnectLink(fetchImpl as unknown as typeof fetch, "POST", { workspaceId: "ws-1" }, announce)).resolves.toEqual({
+      ok: false,
+      error: "Pick a platform.",
+    });
+    expect(announce).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const confirmProps: Record<string, unknown>[] = [];
 vi.mock("@/components/ui/dialog", () => {
@@ -26,6 +26,7 @@ import {
   CLIENT_LINKS_REPLACED_EVENT,
   clientLinksButtonShown,
   requestClientLinksReplace,
+  watchClientLinks,
   ClientLinksPanel,
   clientLinksReplacedMessage,
   demotedMessage,
@@ -173,3 +174,49 @@ describe("Make new client links", () => {
     expect(demotedMessage({ ...ON, on: { upload: true, review: true, connect: true } }, true)).toBe("Role updated.");
   });
 });
+
+// R6 review low 2: the button follows the connect link card on the same page.
+describe("Make new client links follows the client links on the page", () => {
+  const OFF = { included: true, on: { upload: false, review: false, connect: false }, connectStopped: false };
+  const CONNECT_ON = { ...OFF, on: { ...OFF.on, connect: true } };
+
+  beforeEach(() => {
+    vi.stubGlobal("window", new EventTarget());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("first connect link turned on: the state is read again and the button appears; last link off: it hides", async () => {
+    const answers = [CONNECT_ON, OFF];
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(answers.shift()), { status: 200 }));
+    const states: unknown[] = [];
+    const stop = watchClientLinks("ws-1", (state) => states.push(state), fetchImpl as unknown as typeof fetch);
+
+    announce("connect-link");
+    await vi.waitFor(() => expect(states).toHaveLength(1));
+    expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces/client-links?workspaceId=ws-1");
+    expect(clientLinksButtonShown(states[0] as typeof OFF)).toBe(true);
+
+    announce("connect-link");
+    await vi.waitFor(() => expect(states).toHaveLength(2));
+    expect(clientLinksButtonShown(states[1] as typeof OFF)).toBe(false);
+
+    stop();
+    announce("connect-link");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("its own replace is not read again (the card already has the answer)", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(OFF), { status: 200 }));
+    watchClientLinks("ws-1", () => {}, fetchImpl as unknown as typeof fetch);
+    announce("team");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+function announce(source: "team" | "connect-link") {
+  window.dispatchEvent(new CustomEvent(CLIENT_LINKS_REPLACED_EVENT, { detail: { source } }));
+}

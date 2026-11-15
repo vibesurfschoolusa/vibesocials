@@ -27,7 +27,7 @@ import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 
-import { announceClientLinksReplaced } from "./client-links-refresh";
+import { announceClientLinksReplaced, subscribeClientLinksReplaced } from "./client-links-refresh";
 
 /** GET /api/workspaces/members list item — owner-only route (SEC-1: never fetched for a member). */
 interface Member {
@@ -187,9 +187,9 @@ export function clientLinksButtonShown(state: ClientLinksState | null): boolean 
 }
 
 /** The links' state, or null when it can't be read (no button then). */
-async function fetchClientLinks(workspaceId: string): Promise<ClientLinksState | null> {
+async function fetchClientLinks(workspaceId: string, fetchImpl: typeof fetch = fetch): Promise<ClientLinksState | null> {
   try {
-    const response = await fetch(`/api/workspaces/client-links?workspaceId=${encodeURIComponent(workspaceId)}`);
+    const response = await fetchImpl(`/api/workspaces/client-links?workspaceId=${encodeURIComponent(workspaceId)}`);
     const data = (await response.json().catch(() => null)) as ClientLinksState | null;
     return response.ok && data?.on ? data : null;
   } catch {
@@ -198,6 +198,23 @@ async function fetchClientLinks(workspaceId: string): Promise<ClientLinksState |
 }
 
 export { CLIENT_LINKS_REPLACED_EVENT } from "./client-links-refresh";
+
+/**
+ * R6 review low 2: reads the links' state again each time the connect link
+ * card on this page makes, replaces or turns off its link, so the button shows
+ * or hides without a reload. Its own replace is not read again: the answer
+ * already says what is on. Answers the unsubscribe.
+ */
+export function watchClientLinks(
+  workspaceId: string,
+  onState: (state: ClientLinksState | null) => void,
+  fetchImpl: typeof fetch = fetch,
+): () => void {
+  return subscribeClientLinksReplaced((source) => {
+    if (source !== "connect-link") return;
+    void fetchClientLinks(workspaceId, fetchImpl).then(onState);
+  });
+}
 
 /**
  * POST /api/workspaces/client-links. Answers the route's answer, after
@@ -546,11 +563,14 @@ function OwnerView({
   // can't be read there is no button; each link's own Replace still works.
   useEffect(() => {
     let cancelled = false;
-    void fetchClientLinks(workspaceId).then((state) => {
+    const show = (state: ClientLinksState | null) => {
       if (!cancelled) setClientLinks(state);
-    });
+    };
+    void fetchClientLinks(workspaceId).then(show);
+    const stop = watchClientLinks(workspaceId, show);
     return () => {
       cancelled = true;
+      stop();
     };
   }, [workspaceId]);
 
