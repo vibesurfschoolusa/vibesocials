@@ -266,8 +266,9 @@ export default function PrivacyPage() {
             listing numbers, and what clients sent through its links.
           </li>
           <li>
-            A count of posts per person and per X account, used for the daily and monthly limits, is
-            kept for 62 days, also after a workspace or account is deleted.
+            A count of posts per person and per X account, and of workspaces each person created, used
+            for the daily and monthly limits, is kept for 62 days, also after a workspace or account is
+            deleted.
           </li>
           <li>Server logs are kept for a short time, typically days.</li>
         </ul>

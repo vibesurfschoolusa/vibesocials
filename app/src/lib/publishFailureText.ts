@@ -52,19 +52,32 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
 }
 
 /**
+ * A step only an owner can take: connect or reconnect (with or without
+ * "Settings"), or anything in Settings. Choices on the post itself ("Choose
+ * Feed", TikTok privacy) are the member's own and don't match.
+ */
+const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b/i;
+
+/**
  * A stored result sentence as its reader should see it (R9-client-journey L4).
  * Only an owner can connect or reconnect, so a member gets the member variant
- * of any sentence that sends them to Settings: the exact one above, or, for a
- * sentence nobody wrote one for, the reconnect sentence. Owners, and sentences
- * that don't name Settings, read it as stored.
+ * of any sentence that asks for such a step ({@link OWNER_STEP}): the exact one
+ * above, LinkedIn's no-company-page help, or, for a sentence nobody wrote one
+ * for, the reconnect sentence. Owners, and every other sentence, read it as stored.
  */
 export function sentenceForRecipient(
   message: string | null,
   platform: Platform,
   role: "owner" | "member",
 ): string | null {
-  if (role !== "member" || message === null || !/\bSettings\b/.test(message)) return message;
-  return memberVariants(platform).get(message.trim()) ?? memberReconnectMessage(platform);
+  if (role !== "member" || message === null || !OWNER_STEP.test(message)) return message;
+  const exact = memberVariants(platform).get(message.trim());
+  if (exact) return exact;
+  // linkedinClient's no-organization help is several lines; its reason is kept.
+  if (message.startsWith("No LinkedIn company pages configured")) {
+    return "The connected LinkedIn account manages no company page. The workspace owner can reconnect with an account that manages one; then retry.";
+  }
+  return memberReconnectMessage(platform);
 }
 
 /** A chosen platform with no connection at all when the post is sent (H1). */

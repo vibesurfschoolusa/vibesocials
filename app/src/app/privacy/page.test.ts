@@ -135,6 +135,6 @@ describe("Privacy: a previous sign-in email", () => {
 // R9-pages L3: the usage records the limits read outlive a deletion for 62 days.
 describe("Privacy: usage counts for the limits", () => {
   it("says what is kept, why and for how long, also after a deletion", () => {
-    expect(text()).toContain("A count of posts per person and per X account, used for the daily and monthly limits, is kept for 62 days, also after a workspace or account is deleted.");
+    expect(text()).toContain("A count of posts per person and per X account, and of workspaces each person created, used for the daily and monthly limits, is kept for 62 days, also after a workspace or account is deleted.");
   });
 });

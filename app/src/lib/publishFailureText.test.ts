@@ -311,8 +311,10 @@ describe("sentenceForRecipient", () => {
   });
 
   // The sentences the publish run and the clients write themselves: every string
-  // literal under src/server/jobs and src/server/platforms that names Settings.
-  it("covers every Settings sentence the publish code writes, so none is missed", () => {
+  // literal under src/server/jobs and src/server/platforms (log lines aside)
+  // that tells its reader to connect, reconnect or choose, with or without
+  // "Settings". Only the choices a member makes on the post itself stay.
+  it("covers every connect, reconnect or choose sentence the publish code writes, so none is missed", () => {
     const roots = ["src/server/jobs", "src/server/platforms"].map((dir) => join(process.cwd(), dir));
     const files = roots.flatMap((root) =>
       (readdirSync(root, { recursive: true }) as string[])
@@ -320,16 +322,42 @@ describe("sentenceForRecipient", () => {
         .map((name) => join(root, name)),
     );
     const literals = files.flatMap((file) =>
-      [...readFileSync(file, "utf8").matchAll(/"((?:[^"\\\n]|\\.)*Settings(?:[^"\\\n]|\\.)*)"|`([^`]*Settings[^`]*)`/g)].map(
-        (match) => (match[1] ?? match[2]).replace(/\\n/g, "\n"),
-      ),
+      readFileSync(file, "utf8")
+        .split("\n")
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .flatMap((line) => [...line.matchAll(/"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)].map((m) => m[1] ?? m[2]))
+        .filter((text) => /\s/.test(text) && !text.startsWith("["))
+        .filter((text) => /\b(?:re)?connect\b|\bchoose\b|\bSettings\b/i.test(text)),
     );
-    expect(literals.length).toBeGreaterThan(5);
+    // A member chooses these on the post itself (Create), so they stay as written.
+    const onThePost = [
+      /^A Story takes one photo or video\. Choose Feed for /,
+      /^The TikTok privacy setting chosen for this post is no longer available/,
+      /^No TikTok privacy setting was chosen for this post\./,
+    ];
+    expect(literals).toContain("This platform connection was removed. Reconnect and retry.");
+    expect(literals.length).toBeGreaterThan(10);
     for (const owner of literals) {
       const member = sentenceForRecipient(owner, "linkedin", "member")!;
+      if (onThePost.some((pattern) => pattern.test(owner))) {
+        expect(member, owner).toBe(owner);
+        continue;
+      }
       expect(member, owner).not.toContain("Settings");
       expect(member, owner).toContain("workspace owner can");
+      expect(sentenceForRecipient(owner, "linkedin", "owner")).toBe(owner);
     }
+  });
+
+  it("a removed connection, and LinkedIn with no company page, keep their reason for a member", () => {
+    expect(sentenceForRecipient("This platform connection was removed. Reconnect and retry.", "x", "member")).toBe(
+      "The workspace owner can reconnect X; then retry.",
+    );
+    const noOrganization =
+      "No LinkedIn company pages configured. This app only posts to company pages, not personal profiles.\n\nTo fix this:\n2. Go to Settings → Connections\n";
+    expect(sentenceForRecipient(noOrganization, "linkedin", "member")).toBe(
+      "The connected LinkedIn account manages no company page. The workspace owner can reconnect with an account that manages one; then retry.",
+    );
   });
 
   it("keeps what the client sentences say beside the step", () => {
