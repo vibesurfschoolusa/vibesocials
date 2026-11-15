@@ -152,6 +152,14 @@ export function WorkspaceStatusAlert({
             <Button size="sm" variant="outline" loading={sending} onClick={onResend}>
               Send the link again
             </Button>
+            {/* R6-new-customer L4: a mistyped address can only be fixed there. */}
+            <span className="text-foreground">
+              Wrong address?{" "}
+              <Link href="/settings#account" className="font-medium text-primary underline-offset-4 hover:underline">
+                Change it in Settings, Account
+              </Link>
+              .
+            </span>
           </div>
         </Alert>
       </div>

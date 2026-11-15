@@ -40,10 +40,17 @@ describe("WorkspaceStatusAlert", () => {
     expect(html).toMatch(/<button[^>]*>.*Send the link again.*<\/button>/);
   });
 
+  // R6-new-customer L4: a mistyped address can only be fixed in Settings.
+  it("says where to fix a wrong address, with a link to Settings, Account", () => {
+    const html = render({ blockedMessage: SENTENCE, emailUnconfirmed: true });
+    expect(html).toMatch(/Wrong address\? <a [^>]*href="\/settings#account"[^>]*>Change it in Settings, Account<\/a>\./);
+  });
+
   it("shows a pause or an ended plan without the button", () => {
     const html = render({ blockedMessage: "This workspace is paused. Contact us." });
     expect(html).toContain("This workspace is paused. Contact us.");
     expect(html).not.toContain("<button");
+    expect(html).not.toContain("Wrong address?");
   });
 
   it("shows the trial notice without the button, and nothing when there is nothing to say", () => {

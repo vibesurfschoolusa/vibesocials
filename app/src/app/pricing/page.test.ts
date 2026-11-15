@@ -2,8 +2,9 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getPlanOffersMock, getYearlyPlanOffersMock, notFoundMock, getCurrentUserMock } = vi.hoisted(() => ({
+const { getPlanOffersMock, getYearlyPlanOffersMock, notFoundMock, getCurrentUserMock, getWorkspaceContextMock } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
   getPlanOffersMock: vi.fn(),
   getYearlyPlanOffersMock: vi.fn(),
   notFoundMock: vi.fn(() => {
@@ -18,6 +19,7 @@ vi.mock("@/server/billing/planPrices", () => ({
 }));
 vi.mock("next/navigation", () => ({ notFound: notFoundMock }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
+vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 
 import PricingPage, { generateMetadata } from "./page";
 
@@ -49,6 +51,8 @@ function configurePayments() {
 beforeEach(() => {
   getCurrentUserMock.mockReset();
   getCurrentUserMock.mockResolvedValue(null);
+  getWorkspaceContextMock.mockReset();
+  getWorkspaceContextMock.mockResolvedValue(null);
   getPlanOffersMock.mockReset();
   getYearlyPlanOffersMock.mockReset();
   notFoundMock.mockClear();
@@ -146,12 +150,33 @@ describe("/pricing with payments configured", () => {
 
   // R5-new-customer L7: a signed-in person already has an account; the trial
   // button would send them to the sign-up form.
-  it("sends a signed-in person to Settings, Plan instead of the sign-up form", async () => {
+  it("sends a signed-in owner to Settings, Plan instead of the sign-up form", async () => {
     getCurrentUserMock.mockResolvedValue({ id: "user-1", email: "owner@example.com" });
+    getWorkspaceContextMock.mockResolvedValue({ role: "owner" });
     const html = await render();
     expect(html).not.toContain('href="/register"');
     const buttons = html.match(/<a [^>]*href="\/settings#plan"[^>]*>Choose a plan in Settings<\/a>/g) ?? [];
     expect(buttons).toHaveLength(2);
+  });
+
+  // R6-pages L7 / new-customer L7: a member has no Plan section in Settings,
+  // so the button would lead nowhere; the page says who chooses instead.
+  it("tells a signed-in member that an owner chooses the plan, with no dead link and no sign-up", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-2", email: "member@example.com" });
+    getWorkspaceContextMock.mockResolvedValue({ role: "member" });
+    const html = await render();
+    expect(html).not.toContain('href="/settings#plan"');
+    expect(html).not.toContain('href="/register"');
+    const page = text(html);
+    expect(page.match(/An owner of your workspace chooses its plan in Settings, Plan\./g) ?? []).toHaveLength(2);
+  });
+
+  it("says the same when the workspace cannot be read for a signed-in person", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-2", email: "member@example.com" });
+    getWorkspaceContextMock.mockRejectedValue(new Error("db down"));
+    const html = await render();
+    expect(html).not.toContain('href="/settings#plan"');
+    expect(text(html)).toContain("An owner of your workspace chooses its plan in Settings, Plan.");
   });
 
   it("still offers the trial when the session cannot be read", async () => {
