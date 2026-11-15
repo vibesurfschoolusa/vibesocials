@@ -273,6 +273,16 @@ describe("the success sentence is checked against the connection", () => {
     );
   });
 
+  // R14-client-journey L2: a reconnect that kept its saved location needs no choosing.
+  it("Google Business Profile reconnected with its location kept: connected, nothing more", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "google_business_profile", accountIdentifier: "", username: null, locationName: "Surf Co Dania", needsReconnect: false },
+    ]);
+    const html = await render({ success: "google_business_profile_connected" });
+    expect(html).toContain("Google Business Profile is connected.");
+    expect(html).not.toContain("will choose the business location");
+  });
+
   it("a success naming no known platform: no sentence", async () => {
     h.listConnections.mockResolvedValue([youtube(false)]);
     const html = await render({ success: "myspace_connected" });

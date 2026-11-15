@@ -204,3 +204,23 @@ describe("WorkspacesPage: connections that need reconnecting", () => {
     expect(html).toContain("Needs reconnecting:</span> Facebook Page, X. The workspace owner can reconnect them.");
   });
 });
+
+// R14-pages L1: Settings opens the active workspace, so on another workspace's card an
+// owner is told to open that workspace first.
+describe("WorkspacesPage: an owner's reconnect step on a workspace that isn't open", () => {
+  it("says to open the workspace first; the active card and members keep their wording", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([
+      entry({ needsReconnect: ["x"], needsAttention: true }),
+      entry({ workspaceId: "ws-2", name: "Other Co", needsReconnect: ["facebook_page"], endsSoon: ["linkedin", "x"], ended: ["youtube"], needsAttention: true }),
+      entry({ workspaceId: "ws-3", name: "Their Co", role: "member", needsReconnect: ["pinterest"], needsAttention: true }),
+    ]);
+
+    const html = await render();
+
+    expect(html).toContain("Needs reconnecting:</span> X. Reconnect it in Settings, Connections.");
+    expect(html).toContain("Needs reconnecting:</span> Facebook Page. Open the workspace, then reconnect it in Settings, Connections.");
+    expect(html).toContain("Ends soon:</span> LinkedIn, X. Open the workspace, then reconnect them in Settings, Connections.");
+    expect(html).toContain("Ended:</span> YouTube. Open the workspace, then reconnect it in Settings, Connections.");
+    expect(html).toContain("Needs reconnecting:</span> Pinterest. The workspace owner can reconnect it.");
+  });
+});

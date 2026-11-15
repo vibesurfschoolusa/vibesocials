@@ -90,6 +90,16 @@ describe("the sentence the visitor reads after a flow", () => {
     );
   });
 
+  // R14-client-journey L2: a Business Profile reconnect keeps its saved location.
+  it("Business Profile connected with a location already saved: only that it is connected", () => {
+    expect(
+      describeConnectLinkResult(new URLSearchParams({ success: "google_business_profile_connected" }), { locationKept: true }),
+    ).toEqual({ variant: "success", message: "Google Business Profile is connected." });
+    expect(describeConnectLinkResult(new URLSearchParams({ success: "instagram_connected" }), { locationKept: true })?.message).toBe(
+      "Instagram is connected.",
+    );
+  });
+
   it("said no on the platform's screen: only the wrapper's <platform>_cancelled", () => {
     for (const error of ["x_cancelled", "linkedin_cancelled", "google_business_profile_cancelled"]) {
       expect(describe_({ error })?.message, error).toBe("You cancelled. Nothing was connected.");

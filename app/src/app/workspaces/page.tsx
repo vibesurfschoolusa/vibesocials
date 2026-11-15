@@ -19,6 +19,16 @@ function platformList(platforms: Platform[]): string {
   return platforms.map(platformLabel).join(", ");
 }
 
+/**
+ * R14-pages L1: Settings opens the active workspace, so on another
+ * workspace's card an owner is told to open it first; members and the active
+ * card keep connectionEndNextStep's wording.
+ */
+function reconnectStep(role: "owner" | "member", count: number, isActive: boolean): string {
+  if (role !== "owner" || isActive) return connectionEndNextStep(role, count);
+  return `Open the workspace, then reconnect ${count > 1 ? "them" : "it"} in Settings, Connections.`;
+}
+
 function Stat({ label, value, alert = false }: { label: string; value: number; alert?: boolean }) {
   return (
     <div className="min-w-0">
@@ -91,7 +101,7 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
               <span className="font-medium text-foreground">Needs reconnecting:</span>{" "}
               {platformList(entry.needsReconnect)}.{" "}
               {/* R13-pages L3: who fixes it, as on the Ended and Ends soon lines. */}
-              {connectionEndNextStep(entry.role, entry.needsReconnect.length)}
+              {reconnectStep(entry.role, entry.needsReconnect.length, isActive)}
             </p>
           ) : null}
           {/* R7-pages L4: can't be renewed, so it needs a Reconnect too; R8
@@ -99,13 +109,13 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
           {entry.ended.length > 0 ? (
             <p className="text-muted-foreground">
               <span className="font-medium text-foreground">Ended:</span> {platformList(entry.ended)}.{" "}
-              {connectionEndNextStep(entry.role, entry.ended.length)}
+              {reconnectStep(entry.role, entry.ended.length, isActive)}
             </p>
           ) : null}
           {entry.endsSoon.length > 0 ? (
             <p className="text-muted-foreground">
               <span className="font-medium text-foreground">Ends soon:</span> {platformList(entry.endsSoon)}.{" "}
-              {connectionEndNextStep(entry.role, entry.endsSoon.length)}
+              {reconnectStep(entry.role, entry.endsSoon.length, isActive)}
             </p>
           ) : null}
         </div>

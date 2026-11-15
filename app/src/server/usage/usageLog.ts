@@ -17,6 +17,7 @@ import {
   OWNER_DAILY_POST_LIMIT_CODE,
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
+  limitHolderName,
   personalPostLimitApplies,
   LIMIT_CHECK_FAILED_CODE,
   LIMIT_CHECK_FAILED_MESSAGE,
@@ -618,10 +619,11 @@ export type PersonalUsage = {
 export async function ownersPersonalUsage(workspaceId: string, now: Date, viewerUserId?: string): Promise<PersonalUsage[]> {
   const who = await runAttribution(workspaceId, now);
   if (who.operator || !personalPostLimitApplies(await ownBillingFields(workspaceId), process.env, now)) return [];
+  const readerIsOwner = who.owners.some((owner) => owner.userId === viewerUserId);
   return Promise.all(
     who.owners.map(async (owner) => ({
       userId: owner.userId,
-      name: owner.user.name?.trim() || owner.user.email,
+      name: limitHolderName(owner.user, readerIsOwner),
       isViewer: viewerUserId === owner.userId,
       used: await ownerCountOnDay(owner.userId, now, []),
       ...ownerDailyPostLimit(owner.user, now),
@@ -815,8 +817,9 @@ async function refusalFor(
         // In a co-owned workspace the owner holding it is named, unless they
         // are the one reading it (R8-pages L3).
         const holder = {
-          // R13-security L1: never a reader's view of an owner's full address (the roster rule).
-          name: owner.user.name?.trim() || owner.user.email.split("@")[0],
+          // R13-security L1 and R14-pages L2: a member never reads an owner's full
+          // address; an owner reads the label Settings, Usage shows them.
+          name: limitHolderName(owner.user, who.owners.some((o) => o.userId === input.viewerUserId)),
           coOwned: who.owners.length > 1,
           isViewer: input.viewerUserId === owner.userId,
         };

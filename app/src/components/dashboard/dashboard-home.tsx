@@ -113,9 +113,14 @@ function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
           beat of nothing. */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         {headerLoading ? (
-          <div className="space-y-2" aria-hidden>
-            <Skeleton className="h-8 w-64" />
-            <Skeleton className="h-4 w-80 max-w-full" />
+          <div>
+            {/* R14-pages L3: the page keeps its h1 while loading, under the
+                neutral heading dashboardHeading gives before anything is known. */}
+            <h1 className="sr-only">Dashboard</h1>
+            <div className="space-y-2" aria-hidden>
+              <Skeleton className="h-8 w-64" />
+              <Skeleton className="h-4 w-80 max-w-full" />
+            </div>
           </div>
         ) : (
           <div>

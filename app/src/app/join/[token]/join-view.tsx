@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { UserPlus } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -127,6 +126,9 @@ export function JoinUnreachable({ onRetry }: { onRetry: () => void }) {
  * R13-client-journey L1: the invite's workspace may not be the active one (a
  * member of A and B opening B's invite while A is active), so Go to dashboard
  * goes through /go, which checks the membership and makes it the active one.
+ * R14-client-journey L1: a plain <a>, never next/link, which prefetches a
+ * visible link in production and so ran /go (switching the workspace) before
+ * any press; a full load also gives the account menu the new workspace.
  */
 export function JoinAlreadyMember({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
   return (
@@ -134,9 +136,9 @@ export function JoinAlreadyMember({ workspaceId, workspaceName }: { workspaceId:
       <Card className="flex flex-col items-center gap-3 p-6 text-center">
         <h1 className="text-lg font-semibold text-foreground">You&apos;re already in {workspaceName}</h1>
         <p className="text-sm text-muted-foreground">You&apos;re already a member of this workspace.</p>
-        <Link href={workspaceLink(workspaceId, "/", null)} className={buttonVariants({ variant: "primary", className: "mt-2" })}>
+        <a href={workspaceLink(workspaceId, "/", null)} className={buttonVariants({ variant: "primary", className: "mt-2" })}>
           Go to dashboard
-        </Link>
+        </a>
       </Card>
     </div>
   );
@@ -187,7 +189,6 @@ export function JoinSignedOut({ token }: { token: string }) {
  * reads whether the workspace asks for approval.
  */
 export function JoinView({ token, requiresApproval = false }: { token: string; requiresApproval?: boolean }) {
-  const router = useRouter();
   const toast = useToast();
   const [load, setLoad] = useState<InviteLoad | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -223,12 +224,21 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
       return;
     }
     toast.success(`Joined ${preview?.workspaceName ?? "the workspace"}.`);
-    router.push("/");
+    // R14-client-journey L1: a full load, as the account menu's switch does: the
+    // menu reads its workspaces once per page load, so a client navigation left
+    // it naming the previous workspace.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- see above
+    window.location.assign("/");
   }
 
+  // R14-pages L3: the page's h1 and a spoken status while the preview loads.
   if (!load) {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
+        <h1 className="mb-4 text-center text-lg font-semibold text-foreground">Join a workspace</h1>
+        <p role="status" className="sr-only">
+          Loading the invite…
+        </p>
         <Skeleton className="h-56 w-full" />
       </div>
     );

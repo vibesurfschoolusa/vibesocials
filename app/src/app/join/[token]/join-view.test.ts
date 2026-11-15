@@ -8,6 +8,7 @@ const { getCurrentUserMock, inviteFindUniqueMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), redirect: vi.fn() }));
+vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 vi.mock("@/lib/db", () => ({ prisma: { workspaceInvite: { findUnique: inviteFindUniqueMock } } }));
 
@@ -233,5 +234,12 @@ describe("join states", () => {
     expect(page).toContain("You were signed out. Sign in again, then open this invite link again.");
     expect(page).toContain(`href="/login?callbackUrl=${encodeURIComponent("/join/tok")}"`);
     expect(page).toContain(">Sign in<");
+  });
+
+  // R14-pages L3: while the preview loads the page has its h1 and says what it is doing.
+  it("loading: the page's h1 and a hidden status line", () => {
+    const page = html(createElement(JoinView, { token: "tok" }));
+    expect(page).toMatch(/<h1[^>]*>Join a workspace<\/h1>/);
+    expect(page).toMatch(/<p role="status" class="sr-only">Loading the invite…<\/p>/);
   });
 });

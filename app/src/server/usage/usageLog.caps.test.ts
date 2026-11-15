@@ -536,6 +536,25 @@ describe("the per-person number", () => {
     );
   });
 
+  // R14-pages L2: a nameless co-owner has one label per reader: the full address for an
+  // owner (as Settings, Usage), the part before the @ for a member.
+  it("a nameless co-owner: the full address to an owner, as Usage says it; the part before the @ to a member", async () => {
+    workspace("ws-team", {}, [owner("lead", { name: "Lead" }), owner("bob", { email: "bob@agency.example", emailVerifiedAt: null })]);
+    scheduled("ws-team", 5, NOW);
+    const refusal = (viewerUserId: string) =>
+      crossWorkspacePostRefusal({ workspaceId: "ws-team", workspace: {}, day: NOW, mode: "now", viewerUserId });
+    expect((await refusal("lead"))?.error).toBe(
+      "bob@agency.example, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once bob@agency.example confirms their email address.",
+    );
+    expect((await refusal("member-1"))?.error).toBe(
+      "bob, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once bob confirms their email address.",
+    );
+    const usage = await ownersPersonalUsage("ws-team", NOW, "lead");
+    expect(usage.find((person) => person.userId === "bob")?.name).toBe("bob@agency.example");
+    // Read without an owner as the reader, the short form.
+    expect((await ownersPersonalUsage("ws-team", NOW)).find((person) => person.userId === "bob")?.name).toBe("bob");
+  });
+
   it("a workspace held to 5 by a new or unconfirmed co-owner names that owner", async () => {
     workspace("ws-team", {}, [owner("lead"), owner("maria", { name: "Maria", createdAt: new Date(NOW.getTime() - 3_600_000), emailVerifiedAt: NOW })]);
     scheduled("ws-team", 5, NOW);

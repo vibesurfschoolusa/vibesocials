@@ -169,8 +169,13 @@ export type ConnectLinkResult = { variant: "success" | "danger"; message: string
  * code. A waiting choice (`choose=`) is shown by the page itself. The one to
  * ask is "the person who sent you this link": the workspace is named after the
  * client's own business, so its name would point the visitor at themselves.
+ * `locationKept`: the connection already has its Business Profile location
+ * (a reconnect keeps it), so nobody has one to choose (R14-client-journey L2).
  */
-export function describeConnectLinkResult(query: URLSearchParams): ConnectLinkResult | null {
+export function describeConnectLinkResult(
+  query: URLSearchParams,
+  { locationKept = false }: { locationKept?: boolean } = {},
+): ConnectLinkResult | null {
   const error = query.get("error");
   const success = query.get("success");
 
@@ -207,7 +212,7 @@ export function describeConnectLinkResult(query: URLSearchParams): ConnectLinkRe
     return {
       variant: "success",
       message:
-        platform === "google_business_profile"
+        platform === "google_business_profile" && !locationKept
           ? `${connected} The person who sent you this link will choose the business location.`
           : connected,
     };

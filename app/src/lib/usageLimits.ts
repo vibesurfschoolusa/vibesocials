@@ -404,6 +404,17 @@ export function ownerDailyPostLimit(
 export type LimitHolder = { name: string; coOwned: boolean; isViewer: boolean };
 
 /**
+ * R14-pages L2: the one label for an owner in the limit sentences and in
+ * Settings, Usage, so a reader sees each person called one thing: their name,
+ * else their full address to another owner (owners see the roster's
+ * addresses), else, to anyone else, only the part before the @ (R13-security
+ * L1, the roster rule).
+ */
+export function limitHolderName(user: { name?: string | null; email: string }, readerIsOwner: boolean): string {
+  return user.name?.trim() || (readerIsOwner ? user.email : user.email.split("@")[0]);
+}
+
+/**
  * When the first day ends, for the sentence: 00:00 UTC, and the same moment
  * in the reader's own zone when it is known (R8-new-customer L2).
  */

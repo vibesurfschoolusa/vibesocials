@@ -128,7 +128,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
       ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
-        : describeConnectLinkResult(outcome);
+        : describeConnectLinkResult(outcome, { locationKept: Boolean(working?.locationName) });
   const sameEndOn = sameEnd?.expiresAt && working ? { platform: working.platform, expiresAt: sameEnd.expiresAt } : null;
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;

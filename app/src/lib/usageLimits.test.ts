@@ -4,6 +4,7 @@ import {
   DEFAULT_WORKSPACE_LIMITS,
   dailyPostLimitMessage,
   formatStorageGb,
+  limitHolderName,
   FREE_RUNS_DAILY_CEILING,
   GUARANTEED_RUNS_PER_PERSON,
   NEW_ACCOUNT_DAILY_POST_LIMIT,
@@ -612,5 +613,20 @@ describe("limits across workspaces", () => {
   it("utcDisplayDateTime: the date and a 24-hour time in UTC, labelled", () => {
     expect(utcDisplayDateTime(new Date("2026-11-21T01:00:00Z"))).toBe("November 21, 2026, 01:00 UTC");
     expect(utcDisplayDateTime(new Date("2026-11-21T23:05:59Z"))).toBe("November 21, 2026, 23:05 UTC");
+  });
+});
+
+// R14-pages L2: one label per person for each reader. Owners see a co-owner's
+// full address wherever there is no name (as Settings, Usage shows it);
+// anyone else only the part before the @ (the roster rule, R13-security L1).
+describe("limitHolderName", () => {
+  it("the name when there is one, for every reader", () => {
+    expect(limitHolderName({ name: " Maria ", email: "maria@agency.example" }, true)).toBe("Maria");
+    expect(limitHolderName({ name: "Maria", email: "maria@agency.example" }, false)).toBe("Maria");
+  });
+
+  it("no name: the full address to an owner, the part before the @ to anyone else", () => {
+    expect(limitHolderName({ name: null, email: "bob@agency.example" }, true)).toBe("bob@agency.example");
+    expect(limitHolderName({ name: "  ", email: "bob@agency.example" }, false)).toBe("bob");
   });
 });

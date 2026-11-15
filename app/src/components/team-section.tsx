@@ -1084,7 +1084,6 @@ export function DeleteWorkspace({
   workspaceName: string;
   deletion: WorkspaceDeletionInfo;
 }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1105,10 +1104,13 @@ export function DeleteWorkspace({
         setBusy(false);
         return;
       }
-      // The route cleared the active-workspace cookie; refresh so the server
-      // components (and the workspace switcher) re-resolve it.
-      router.push("/");
-      router.refresh();
+      // The route cleared the active-workspace cookie. R14-client-journey L1: a
+      // full load, so the server and the account menu (which reads its
+      // workspaces once per page load) re-resolve it; a client navigation left
+      // the menu naming the deleted workspace. `busy` stays set while the page
+      // unloads.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- see above
+      window.location.assign("/");
     } catch {
       setError("Could not delete this workspace. Try again.");
       setBusy(false);
