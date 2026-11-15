@@ -14,7 +14,7 @@ import { getAdminWorkspaceDetail } from "@/server/admin/queries";
 import { periodEndLabel, stripeLinkFlags } from "@/server/billing/adminStripeLinks";
 
 import { AdminBillingControls, AdminLimitsForm, AdminPauseControls, type LimitFieldView } from "./admin-controls";
-import { adminBillingLines } from "./billingSentence";
+import { adminBillingLines, adminPaidInvoiceValue } from "./billingSentence";
 
 // No metadata on purpose: a page title would show on the 404 a non-operator gets.
 export const dynamic = "force-dynamic";
@@ -213,6 +213,10 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
             <div>
               <dt className="text-xs text-muted-foreground">{periodEndLabel(detail.billing.planStatus)}</dt>
               <dd>{detail.billing.currentPeriodEnd ? dateTimeLabel(detail.billing.currentPeriodEnd) : "None"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Paid invoice recorded</dt>
+              <dd>{adminPaidInvoiceValue(detail.billing.planPaidAt)}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Has a Stripe customer</dt>

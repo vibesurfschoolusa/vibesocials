@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BillingFields } from "@/lib/billing";
 
-import { adminBillingLines } from "./billingSentence";
+import { adminBillingLines, adminPaidInvoiceValue } from "./billingSentence";
 
 /** Fix round 1: the admin page's billing sentences, true for every state. */
 
@@ -49,5 +49,18 @@ describe("adminBillingLines", () => {
       "Ended: with billing on it cannot upload, create, schedule or publish, like a paused workspace. Posts that come due are marked failed and can be retried once a plan is active. Nothing is charged or deleted.";
     expect(lines({ trialEndsAt: new Date("2026-11-01T00:00:00Z") }).state).toBe(ended);
     expect(lines({ plan: "pro", planStatus: "canceled" }).state).toBe(ended);
+  });
+});
+
+// R10 review, low 1: the operator sees whether Stripe's invoice.paid has been recorded.
+describe("adminPaidInvoiceValue", () => {
+  it("the date of the paid invoice recorded, in UTC", () => {
+    expect(adminPaidInvoiceValue(new Date("2026-11-10T01:05:00Z"))).toBe("2026-11-10 01:05 UTC");
+    expect(adminPaidInvoiceValue("2026-11-10T01:05:00.000Z")).toBe("2026-11-10 01:05 UTC");
+  });
+
+  it("none yet: never paid, or not since the subscription changed", () => {
+    expect(adminPaidInvoiceValue(null)).toBe("None yet");
+    expect(adminPaidInvoiceValue(undefined)).toBe("None yet");
   });
 });

@@ -55,6 +55,8 @@ const BILLING_SELECT = {
   planStatus: true,
   trialEndsAt: true,
   currentPeriodEnd: true,
+  // R10 review: so a missing invoice.paid webhook event shows on the admin page.
+  planPaidAt: true,
 } satisfies Prisma.WorkspaceSelect;
 
 type BillingColumns = Prisma.WorkspaceGetPayload<{ select: typeof BILLING_SELECT }>;
@@ -256,6 +258,7 @@ export async function getAdminWorkspaceDetail(id: string, now: Date): Promise<Ad
     planStatus: workspace.planStatus,
     trialEndsAt: workspace.trialEndsAt,
     currentPeriodEnd: workspace.currentPeriodEnd,
+    planPaidAt: workspace.planPaidAt,
   };
   // The limits resolve with the plan only with billing on, exactly as enforced.
 

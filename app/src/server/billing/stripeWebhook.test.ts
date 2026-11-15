@@ -485,6 +485,39 @@ describe("when Stripe's list cannot be read", () => {
     expect(m.events.has("evt_c")).toBe(true);
   });
 
+  // R10 review, low 3: only Stripe's list may say another subscription is the workspace's current one.
+  it("fails with a late event for an old ended subscription: 500, nothing recorded, the stored live one and planPaidAt kept", async () => {
+    const paidAt = new Date((PERIOD_START + 3600) * 1000);
+    m.workspaces.set(
+      "ws_a",
+      row({
+        stripeSubscriptionId: "sub_1",
+        plan: "starter",
+        planStatus: "active",
+        currentPeriodEnd: new Date(PERIOD_END * 1000),
+        planPaidAt: paidAt,
+      }),
+    );
+    const before = { ...ws() };
+    stripeHas(sub(), sub({ id: "sub_0", status: "canceled", created: T - 60 * DAY, ended_at: T - 30 * DAY, canceled_at: T - 30 * DAY }));
+    m.listFails = new Error("Stripe answered 500");
+    expect(await handleStripeEvent(subscriptionEvent("evt_old", "customer.subscription.deleted", "sub_0"), ENV)).toBe(500);
+    expect(m.events.has("evt_old")).toBe(false);
+    expect(ws()).toEqual(before);
+    // Stripe sends it again; with the list readable it changes nothing about sub_1.
+    m.listFails = null;
+    expect(await handleStripeEvent(subscriptionEvent("evt_old", "customer.subscription.deleted", "sub_0"), ENV)).toBe(200);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "active", planPaidAt: paidAt });
+  });
+
+  it("fails with an ended subscription and none stored yet: 500, nothing written, so the retry lists", async () => {
+    const before = { ...ws() };
+    stripeHas(sub({ status: "canceled", ended_at: T + DAY }));
+    m.listFails = new Error("Stripe answered 500");
+    expect(await handleStripeEvent(subscriptionEvent("evt_n", "customer.subscription.deleted"), ENV)).toBe(500);
+    expect(ws()).toEqual(before);
+  });
+
   it("fails with a live event subscription: 500, nothing recorded, nothing written", async () => {
     const before = { ...ws() };
     stripeHas(sub());
@@ -738,6 +771,28 @@ describe("invoice.paid and planPaidAt", () => {
     await update("evt_2", { status: "active", trial_end: PERIOD_START });
     await handleStripeEvent(invoicePaid("evt_zero2", "sub_1", 0), ENV);
     expect(paid()).toBe(false);
+  });
+
+  // R10 review, low 4: a real price covered by a coupon or the customer's credit is paid for.
+  it("a 100% coupon or a credit balance covering a real price counts as paid; the trial's zero invoice does not", async () => {
+    const zeroPaid = (id: string, fields: Record<string, unknown>, subscriptionId = "sub_1") => {
+      const event = invoicePaid(id, subscriptionId, 0);
+      Object.assign(event.data.object, fields);
+      return event;
+    };
+    await update("evt_1", { status: "trialing", trial_end: PERIOD_START });
+    await handleStripeEvent(zeroPaid("evt_trial", { subtotal: 0, total: 0, amount_due: 0 }), ENV);
+    expect(paid()).toBe(false);
+    await update("evt_2", { status: "active", trial_end: PERIOD_START });
+    await handleStripeEvent(zeroPaid("evt_coupon", { subtotal: 4900, total: 0, amount_due: 0 }), ENV);
+    expect(paid()).toBe(true);
+
+    stripeHas(sub({ id: "sub_b", customer: "cus_b", metadata: { workspaceId: "ws_b" } }));
+    await handleStripeEvent(
+      zeroPaid("evt_credit", { customer: "cus_b", subtotal: 4900, total: 4900, amount_due: 0, starting_balance: -4900 }, "sub_b"),
+      ENV,
+    );
+    expect(paysForPlan(ws("ws_b"), INSIDE)).toBe(true);
   });
 
   it("an invoice for no subscription (a one-off) is recorded and ignored", async () => {

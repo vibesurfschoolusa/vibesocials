@@ -358,8 +358,20 @@ describe("a paid invoice", () => {
       expect(paidInvoiceOf(invoice({ status_transitions: {} }), NOW)?.paidAt).toEqual(NOW);
     });
 
+    // R10 review, low 4: a real price (subtotal over zero) covered by a coupon or credit is paid for.
+    it("nothing charged because a 100% coupon or the customer's credit covered a real price: paid", () => {
+      const paid = { subscriptionId: "sub_1", paidAt: new Date(PAID_AT * 1000) };
+      expect(paidInvoiceOf(invoice({ amount_paid: 0, subtotal: 4900, total: 0, amount_due: 0 }), NOW)).toEqual(paid);
+      expect(
+        paidInvoiceOf(invoice({ amount_paid: 0, subtotal: 4900, total: 4900, amount_due: 0, starting_balance: -4900 }), NOW),
+      ).toEqual(paid);
+    });
+
     it("a zero-amount invoice (the trial's) does not count as paid", () => {
+      expect(paidInvoiceOf(invoice({ amount_paid: 0, subtotal: 0, total: 0 }), NOW)).toBeNull();
       expect(paidInvoiceOf(invoice({ amount_paid: 0 }), NOW)).toBeNull();
+      expect(paidInvoiceOf(invoice({ amount_paid: 0, subtotal: -500 }), NOW)).toBeNull();
+      expect(paidInvoiceOf(invoice({ amount_paid: 0, subtotal: "4900" }), NOW)).toBeNull();
       expect(paidInvoiceOf(invoice({ amount_paid: undefined }), NOW)).toBeNull();
       expect(paidInvoiceOf(invoice({ amount_paid: "4900" }), NOW)).toBeNull();
     });

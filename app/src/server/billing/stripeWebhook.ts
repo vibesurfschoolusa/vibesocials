@@ -169,7 +169,11 @@ async function syncSubscription(
           // An ended subscription's cancel must not be lost to a failed list:
           // it is written from that subscription alone. One in use needs the
           // list (another could rank ahead of it), so the event comes back.
-          if (isInUse(subscription.status)) throw error;
+          // R10 review: so does an ended one that is not the stored one (a late
+          // event for an old subscription, or none stored yet): only the list
+          // may say it is the workspace's current one, so the stored
+          // subscription and planPaidAt are never replaced on its word.
+          if (isInUse(subscription.status) || subscription.id !== workspace?.stripeSubscriptionId) throw error;
           logger.warn("[stripe webhook] Could not list the customer's subscriptions; syncing the ended one alone", {
             eventId: event.id,
             error: errorFields(error),

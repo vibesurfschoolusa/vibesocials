@@ -145,6 +145,7 @@ describe("listAdminWorkspaces", () => {
       planStatus: true,
       trialEndsAt: true,
       currentPeriodEnd: true,
+      planPaidAt: true,
       members: {
         where: { role: "owner" },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -259,6 +260,7 @@ describe("getAdminWorkspaceDetail", () => {
         planStatus: true,
         trialEndsAt: true,
         currentPeriodEnd: true,
+        planPaidAt: true,
         members: {
           where: { role: "owner" },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -310,6 +312,7 @@ describe("getAdminWorkspaceDetail billing", () => {
       planStatus: null,
       trialEndsAt: null,
       currentPeriodEnd: null,
+      planPaidAt: null,
       ...extra,
     });
     stubCounts();
@@ -334,8 +337,17 @@ describe("getAdminWorkspaceDetail billing", () => {
       planStatus: null,
       trialEndsAt,
       currentPeriodEnd: null,
+      planPaidAt: null,
     });
     expect(detail!.workspace.planState).toBe("trial");
+  });
+
+  // R10 review, low 1: whether Stripe's invoice.paid has been recorded, so a missing webhook event shows.
+  it("carries when a paid invoice was recorded", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    const planPaidAt = new Date("2026-11-01T01:00:00Z");
+    stubDetail({ plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2026-12-01T00:00:00Z"), planPaidAt });
+    expect((await getAdminWorkspaceDetail("ws-a", NOW))!.billing).toMatchObject({ planPaidAt });
   });
 
   it("with billing on, a workspace never offered a trial is exempt and its limits are today's", async () => {

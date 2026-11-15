@@ -562,7 +562,7 @@ describe("limits across workspaces", () => {
     it("the Usage label and note", () => {
       expect(personalUsageText({ name: "Jane", isViewer: true, reduced: null }, false, {}, ON)).toEqual({
         label: "Your posts today (UTC), your workspaces not yet paid for",
-        note: "Retries count too. The per-person number is the same for everyone while free.",
+        note: "Retries count too. The per-person number is the same for everyone until a workspace is paid for.",
       });
       expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, true, {}, ON).label).toBe(
         "Jane's posts today (UTC), their workspaces not yet paid for",

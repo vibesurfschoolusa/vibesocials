@@ -16,6 +16,16 @@ export function adminBillingLines(
   return { enforcement, state: stateSentence(billing, now) };
 }
 
+/**
+ * R10 review: when Stripe's paid invoice for the current subscription was
+ * recorded (planPaidAt), or "None yet". A plan that stays "None yet" after its
+ * first charge means the webhook is not receiving invoice.paid.
+ */
+export function adminPaidInvoiceValue(planPaidAt: Date | string | null | undefined): string {
+  const paidAt = toBillingDate(planPaidAt);
+  return paidAt ? `${paidAt.toISOString().slice(0, 16).replace("T", " ")} UTC` : "None yet";
+}
+
 function stateSentence(billing: BillingFields, now: Date): string {
   const state = planState(billing, now);
   if (state === "exempt") {

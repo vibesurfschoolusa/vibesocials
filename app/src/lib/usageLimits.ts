@@ -509,7 +509,7 @@ export function personalUsageText(
           ? ` ${low} on the account's first day (UTC), ${full} ${firstDayEndsText(time)} once ${confirms}.`
           : "";
   const same = billing
-    ? "The per-person number is the same for everyone while free."
+    ? "The per-person number is the same for everyone until a workspace is paid for."
     : "The per-person number is the same for everyone.";
   return { label, note: `Retries count too.${why} ${same}` };
 }

@@ -66,7 +66,8 @@ describe("UsageSection", () => {
     vi.stubEnv("BILLING_ENABLED", "true");
     const html = render(usage([{ userId: "u-1", name: "Jane", isViewer: true, used: 1, limit: 15, reduced: null }]));
     expect(html).toContain("Your posts today (UTC), your workspaces not yet paid for");
-    expect(html).toContain("The per-person number is the same for everyone while free.");
+    expect(html).toContain("The per-person number is the same for everyone until a workspace is paid for.");
+    expect(html).not.toContain("while free");
     expect(html).not.toContain("all your workspaces");
     const member = render({ ...usage(undefined), stillToday: { remaining: 3, decidedBy: "owner", coOwned: false } });
     expect(member).toContain("The daily limit of its owner, counted across their workspaces not yet paid for (retries too), leaves 3 posts.");

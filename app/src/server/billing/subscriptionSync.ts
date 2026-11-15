@@ -204,17 +204,19 @@ export type PaidInvoice = { subscriptionId: string; paidAt: Date };
 
 /**
  * What an invoice.paid payload says about a plan: its subscription and when
- * it was paid (else `now`). Null when it says nothing: an amount of zero (the
- * trial's invoice, or one a coupon covers) does not count as paid, and an
- * invoice with no subscription (a one-off) is not about a plan. The payload
+ * it was paid (else `now`). Paid: an amount was charged, or (R10 review) none
+ * was because a coupon or the customer's credit covered a real price
+ * (subtotal over zero). Null when it says nothing: the trial's invoice
+ * (subtotal zero) does not count as paid, and an invoice with no subscription
+ * (a one-off) is not about a plan. The payload
  * is read because a paid invoice stays paid, so an old or repeated event
  * cannot say something no longer true. The subscription is under
  * parent.subscription_details in the pinned API version; a webhook endpoint
  * renders events in its own version, so the older top-level field is read too.
  */
 export function paidInvoiceOf(invoice: Record<string, unknown>, now: Date): PaidInvoice | null {
-  const amount = invoice.amount_paid;
-  if (typeof amount !== "number" || !(amount > 0)) return null;
+  const positive = (value: unknown) => typeof value === "number" && value > 0;
+  if (!positive(invoice.amount_paid) && !positive(invoice.subtotal)) return null;
   const parent = invoice.parent as { subscription_details?: { subscription?: StripeId | null } | null } | null | undefined;
   const subscriptionId =
     stripeIdOf(parent?.subscription_details?.subscription) ?? stripeIdOf(invoice.subscription as StripeId | null | undefined);
