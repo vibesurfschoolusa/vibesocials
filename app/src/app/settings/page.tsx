@@ -131,7 +131,14 @@ export default async function SettingsPage({
   // changed; the sentence names both, the connected one from this workspace.
   const differentPlatform = differentAccountPlatform(params.error);
   const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
-  if (params.success === "google_business_profile_connected" && params[LOCATION_CLEARED_PARAM] !== undefined) {
+  // Anyone can type the parameter: the sentence only for a Business Profile
+  // connection that really has no location chosen (R6 fourth review 1).
+  const gbpWithoutLocation = connections.some((c) => c.platform === "google_business_profile" && !c.locationName);
+  if (
+    params.success === "google_business_profile_connected" &&
+    params[LOCATION_CLEARED_PARAM] !== undefined &&
+    gbpWithoutLocation
+  ) {
     oauthResult = {
       variant: "success",
       platform: "google_business_profile",

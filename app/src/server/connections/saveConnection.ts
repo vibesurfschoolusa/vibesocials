@@ -109,25 +109,48 @@ async function gbpGet(url: string | URL, accessToken: string): Promise<Response>
   return fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
 }
 
+/** Pages read of one list (the accounts, or one account's locations) before giving up. */
+const GBP_LIST_PAGE_CAP = 10;
+
+/**
+ * Every item of a paged Google list (R6 fourth review 2), following
+ * nextPageToken. Null when a page fails or the list is longer than the cap:
+ * then it couldn't be told, which is never read as "not found".
+ */
+async function gbpListAll<T>(baseUrl: string | URL, key: string, accessToken: string): Promise<T[] | null> {
+  const items: T[] = [];
+  let pageToken: string | null = null;
+  for (let page = 0; page < GBP_LIST_PAGE_CAP; page++) {
+    const url = new URL(baseUrl);
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const response = await gbpGet(url, accessToken);
+    if (!response.ok) return null;
+    const body = (await response.json()) as Record<string, unknown>;
+    const found = body[key];
+    if (Array.isArray(found)) items.push(...(found as T[]));
+    pageToken = typeof body.nextPageToken === "string" && body.nextPageToken ? body.nextPageToken : null;
+    if (!pageToken) return items;
+  }
+  return null;
+}
+
 /**
  * A store code is found only among the locations the signed-in account
  * manages: exactly one match keeps it; none, or more than one, makes it
- * unavailable. Any failed list (an account's 5xx included) is check_failed,
- * never "not found" (the shared resolver skips such an account).
+ * unavailable. Any failed or over-long list (an account's 5xx included) is
+ * check_failed, never "not found" (the shared resolver skips such an account).
  */
 async function checkGbpStoreCode(storeCode: string, accessToken: string): Promise<GbpLocationCheck> {
-  const accountsResponse = await gbpGet(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, accessToken);
-  if (!accountsResponse.ok) return "check_failed";
-  const accounts = ((await accountsResponse.json()) as { accounts?: { name?: string }[] }).accounts ?? [];
+  const accounts = await gbpListAll<{ name?: string }>(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, "accounts", accessToken);
+  if (!accounts) return "check_failed";
   let matches = 0;
   for (const account of accounts) {
     if (!account.name) continue;
     const url = new URL(`${BUSINESS_INFO_BASE}/${account.name}/locations`);
     url.searchParams.set("readMask", "name,storeCode");
     url.searchParams.set("filter", `storeCode="${storeCode}"`);
-    const response = await gbpGet(url, accessToken);
-    if (!response.ok) return "check_failed";
-    const locations = ((await response.json()) as { locations?: { name?: string; storeCode?: string }[] }).locations ?? [];
+    const locations = await gbpListAll<{ name?: string; storeCode?: string }>(url, "locations", accessToken);
+    if (!locations) return "check_failed";
     matches += locations.filter((location) => location.name && location.storeCode === storeCode).length;
   }
   return matches === 1 ? "kept" : "unavailable";

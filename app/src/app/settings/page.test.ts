@@ -486,4 +486,25 @@ describe("SettingsPage — a Business Profile reconnect that cleared the locatio
 
     expect(html).toContain("Reconnected. Choose the location to post to; Surf Co Dania isn&#x27;t available to this Google account.");
   });
+
+  // R6 fourth review 1: anyone can type the parameter; only a real cleared reconnect shows it.
+  it.each([
+    [
+      "the connection has a location chosen",
+      [{ platform: "google_business_profile", accountIdentifier: "google_business_profile", metadata: { locationName: "accounts/1/locations/555", locationTitle: "Surf Co Dania" }, needsReconnect: false, expiresAt: null, refreshToken: "sealed" }],
+    ],
+    ["there is no Business Profile connection", []],
+  ])("a crafted link where %s: no such sentence", async (_case, rows) => {
+    findConnectionsMock.mockResolvedValue(rows);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = renderToStaticMarkup(
+      (await SettingsPage({
+        searchParams: Promise.resolve({ success: "google_business_profile_connected", location_cleared: "Somewhere Else" }),
+      })) as ReactElement,
+    );
+
+    expect(html).not.toContain("Reconnected. Choose the location");
+    expect(html).not.toContain("Somewhere Else");
+  });
 });

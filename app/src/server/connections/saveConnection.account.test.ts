@@ -273,6 +273,51 @@ describe("saveSocialConnection: Google Business Profile", () => {
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 
+  // R6 fourth review 2: the account and location lists are paged.
+  it("a store code on page 2 of an account's locations: kept", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] }))
+      .mockResolvedValueOnce(answer(200, { locations: [], nextPageToken: "loc-p2" }))
+      .mockResolvedValueOnce(answer(200, { locations: [{ name: "locations/555", storeCode: "STORE-7" }] }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true });
+    expect(String(h.fetch.mock.calls[2][0])).toContain("pageToken=loc-p2");
+    expect(h.updateMany.mock.calls[0][0].data).not.toHaveProperty("metadata");
+  });
+
+  it("no match on any page, the accounts on two pages: cleared for the chooser", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }], nextPageToken: "acc-p2" }))
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/2" }] }))
+      .mockResolvedValueOnce(answer(200, { locations: [] }))
+      .mockResolvedValueOnce(answer(200, { locations: [{ name: "locations/9", storeCode: "OTHER" }] }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+    expect(String(h.fetch.mock.calls[1][0])).toContain("pageToken=acc-p2");
+    expect(h.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("past the page cap: couldn't check; nothing written", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch.mockImplementation(async () => answer(200, { accounts: [], nextPageToken: "more" }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
+    expect(h.fetch).toHaveBeenCalledTimes(10);
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("a failed later page: couldn't check; nothing written", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }], nextPageToken: "acc-p2" }))
+      .mockResolvedValueOnce(answer(503));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
   it.each([429, 500, 503])("Google %i on the location: nothing written, try again", async (code) => {
     h.findUnique.mockResolvedValue(withLocation);
     h.fetch.mockResolvedValue(answer(code));
