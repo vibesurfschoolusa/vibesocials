@@ -7,12 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { ForgotPasswordForm } from "./forgot-password-form";
 
 export const metadata: Metadata = {
-  title: "Reset your password",
+  title: "Reset your password | Vibe Socials",
 };
 
 export default function ForgotPasswordPage() {
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-primary/5 via-background to-background"
@@ -57,6 +57,6 @@ export default function ForgotPasswordPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </main>
   );
 }

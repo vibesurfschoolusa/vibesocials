@@ -56,6 +56,11 @@ type LoadState =
 
 const noSubscription = () => () => {};
 
+/** R5 pages L8: what the dialog says when Connect didn't work. */
+export const PENDING_CONNECT_FAILED = "That account wasn't connected. Please press Connect again in a minute.";
+export const PENDING_CONNECT_OFFLINE =
+  "We couldn't reach Vibe Socials, so nothing was connected. Check your internet connection and press Connect again.";
+
 /**
  * Opens when Settings has `?choose=<id>`: a Facebook, Instagram or LinkedIn
  * connect found several accounts and connected none of them. The user picks
@@ -139,7 +144,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
         return;
       }
       if (!response.ok || !data?.platform) {
-        setConnectError(data?.error ?? "Couldn't connect that account. Please try again.");
+        setConnectError(data?.error ?? PENDING_CONNECT_FAILED);
         setBusy(null);
         return;
       }
@@ -148,7 +153,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
       // (lib/oauthResult.ts), over a freshly rendered connections list.
       router.replace(`/settings?success=${encodeURIComponent(`${data.platform}_connected`)}`);
     } catch {
-      setConnectError("Unexpected error while connecting. Please try again.");
+      setConnectError(PENDING_CONNECT_OFFLINE);
       setBusy(null);
     }
   }
