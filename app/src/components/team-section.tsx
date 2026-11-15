@@ -1128,8 +1128,10 @@ export function DeleteWorkspace({
         </DialogHeader>
         <DialogBody className="flex flex-col gap-4">
           <p>
-            This removes the workspace for all {plural(deletion.memberCount, "member", "members")},
-            with its connections, media, posts and stats.{" "}
+            {/* memberCount includes the owner, so 1 means nobody else is affected. */}
+            {deletion.memberCount > 1
+              ? `This removes the workspace for all ${deletion.memberCount} members, with its connections, media, posts and stats.`
+              : "This removes the workspace with its connections, media, posts and stats."}{" "}
             {deletion.scheduledCount === 0
               ? "It has no scheduled posts."
               : `${plural(deletion.scheduledCount, "scheduled post", "scheduled posts")} will not go out.`}
