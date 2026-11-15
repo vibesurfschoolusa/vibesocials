@@ -720,7 +720,7 @@ describe("materializeClaimedJobs", () => {
   // owner is told, like a post with nothing connected.
   it("asks prepare to check the service's cap now, and tells the owner of a post it refused", async () => {
     prepareDeferredMock.mockImplementation(async (id: string) =>
-      id === "full" ? { ok: false, reason: "LIMIT_REACHED" } : okFor(id),
+      id === "full" ? { ok: false, reason: "LIMIT_REACHED", noticeFor: "full" } : okFor(id),
     );
     findUniqueMock.mockResolvedValue({ userId: "owner-1" });
 
@@ -730,6 +730,37 @@ describe("materializeClaimedJobs", () => {
     expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
     expect(out.noConnections).toEqual([{ postJobId: "full", userId: "owner-1" }]);
     expect(out.notFound).toEqual([]);
+  });
+
+  // Review of K2, point 3: a pair refused together gets one notice, the feed's.
+  it("a pair refused at send: both halves are refused and one notice goes out, for the feed", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "feed" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["feed", "story"], sleep);
+
+    expect(out.publishEvents).toEqual([]);
+    expect(out.noConnections).toEqual([{ postJobId: "feed", userId: "owner-1" }]);
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "feed" }, select: { userId: true } });
+  });
+
+  // Point 4: results written, the recompute threw; the inline retry finds them
+  // refused, so no publish event goes out (no publish-finished email) and the
+  // scanner's notice is sent once.
+  it("a refusal whose first attempt threw publishes nothing and is noticed once", async () => {
+    prepareDeferredMock
+      .mockRejectedValueOnce(new Error("lock timeout"))
+      .mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "full" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["full"], sleep);
+
+    expect(out).toEqual({
+      publishEvents: [],
+      noConnections: [{ postJobId: "full", userId: "owner-1" }],
+      notFound: [],
+      errorIds: [],
+    });
   });
 
   it("puts a NOT_FOUND job in notFound and sends nothing for it", async () => {

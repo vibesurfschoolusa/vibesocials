@@ -356,9 +356,9 @@ describe("limits across workspaces", () => {
     );
   });
 
-  it("the per-post retry sentence", () => {
-    expect(postRetryLimitMessage(3)).toBe(
-      "This post has been retried 3 times today, the most for one day. Retry it again tomorrow.",
+  it("the per-platform retry sentence names the platform", () => {
+    expect(postRetryLimitMessage(3, "Instagram")).toBe(
+      "Instagram on this post has been retried 3 times today, the most for one day. Try again tomorrow.",
     );
   });
 

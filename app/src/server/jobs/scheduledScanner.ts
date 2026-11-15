@@ -238,12 +238,16 @@ export async function materializeClaimedJobs(
             batch.publishEvents.push(buildPublishEvent(prep.event, { immediate: false }));
           } else if (prep.reason === "NO_CONNECTIONS" || prep.reason === "LIMIT_REACHED") {
             // The job is already marked failed, its results saying why; look up whom to tell.
+            // A pair refused at send is told about once, as its feed (the
+            // notice id is the post's, so a re-run sends it once too).
+            const noticeFor = prep.reason === "LIMIT_REACHED" ? prep.noticeFor : postJobId;
+            if (batch.noConnections.some((notice) => notice.postJobId === noticeFor)) return;
             const owner = await prisma.postJob.findUnique({
-              where: { id: postJobId },
+              where: { id: noticeFor },
               select: { userId: true },
             });
             if (owner) {
-              batch.noConnections.push({ postJobId, userId: owner.userId });
+              batch.noConnections.push({ postJobId: noticeFor, userId: owner.userId });
             } else {
               batch.notFound.push(postJobId);
             }

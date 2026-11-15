@@ -12,6 +12,9 @@ const {
   recomputeMock,
   finishMock,
   serviceCapMock,
+  recordSendMock,
+  postJobFindFirstMock,
+  resultFindManyMock,
 } = vi.hoisted(() => ({
   postJobFindUniqueMock: vi.fn(),
   postJobUpdateMock: vi.fn(),
@@ -21,13 +24,16 @@ const {
   recomputeMock: vi.fn(),
   finishMock: vi.fn(),
   serviceCapMock: vi.fn(),
+  recordSendMock: vi.fn(),
+  postJobFindFirstMock: vi.fn(),
+  resultFindManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    postJob: { findUnique: postJobFindUniqueMock, update: postJobUpdateMock },
+    postJob: { findUnique: postJobFindUniqueMock, findFirst: postJobFindFirstMock, update: postJobUpdateMock },
     socialConnection: { findMany: connectionFindManyMock },
-    postJobResult: { count: resultCountMock, createMany: resultCreateManyMock },
+    postJobResult: { count: resultCountMock, createMany: resultCreateManyMock, findMany: resultFindManyMock },
   },
 }));
 
@@ -39,7 +45,7 @@ vi.mock("./failPendingResults", async (importOriginal) => ({
 }));
 
 // R6-security M2: the service's cap at send has its own suite (usageLog.test.ts).
-vi.mock("@/server/usage/usageLog", () => ({ serviceCapRefusalAtSend: serviceCapMock }));
+vi.mock("@/server/usage/usageLog", () => ({ serviceCapRefusalAtSend: serviceCapMock, recordSend: recordSendMock }));
 
 import { prepareDeferredPostJobDispatch } from "./posting";
 
@@ -72,6 +78,12 @@ beforeEach(() => {
   resultCreateManyMock.mockResolvedValue({ count: 0 });
   serviceCapMock.mockReset();
   serviceCapMock.mockResolvedValue(null);
+  recordSendMock.mockReset();
+  recordSendMock.mockResolvedValue(undefined);
+  postJobFindFirstMock.mockReset();
+  postJobFindFirstMock.mockResolvedValue(null);
+  resultFindManyMock.mockReset();
+  resultFindManyMock.mockResolvedValue([]);
 });
 
 describe("prepareDeferredPostJobDispatch", () => {
@@ -582,18 +594,26 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
     errorMessage: "Reconnect Instagram in Settings, then retry.",
   };
 
-  it("sends below the cap, having asked about this post in its workspace", async () => {
-    postJobFindUniqueMock.mockResolvedValue(makeJob());
+  /** The job, and the other half of its pair when there is one (looked up by id). */
+  function jobs(rows: Record<string, Record<string, unknown>>) {
+    postJobFindUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      rows[where.id] ? makeJob({ id: where.id, ...rows[where.id] }) : null,
+    );
+  }
+
+  it("sends below the cap, alone, and records the send before the next post is checked", async () => {
+    jobs({ "job-1": {} });
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
 
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobId: "job-1", now: NOW });
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW });
+    expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: NOW });
     expect(result.ok).toBe(true);
   });
 
-  it("at the cap, every platform gets a failed result that says why, and nothing is sent", async () => {
-    postJobFindUniqueMock.mockResolvedValue(makeJob({ publishMetadata: { targetPlatforms: ["x", "instagram"] } }));
+  it("at the cap, every platform gets a failed result that says why, nothing is sent or recorded", async () => {
+    jobs({ "job-1": { publishMetadata: { targetPlatforms: ["x", "instagram"] } } });
     connectionFindManyMock.mockResolvedValue([
       { id: "c-x", platform: "x", needsReconnect: false },
       { id: "c-ig", platform: "instagram", needsReconnect: true },
@@ -609,27 +629,131 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       ],
     });
     expect(recomputeMock).toHaveBeenCalledWith("job-1");
-    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED" });
+    expect(recordSendMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
   });
 
-  it("a re-run whose results were made already is not checked again", async () => {
-    postJobFindUniqueMock.mockResolvedValue(makeJob());
-    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
-    resultCountMock.mockResolvedValue(1);
-    serviceCapMock.mockResolvedValue(FULL);
+  // Point 3: a Feed and Story pair passes or fails the cap together.
+  describe("a Feed and Story pair due together", () => {
+    beforeEach(() => {
+      connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: false }]);
+    });
 
-    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+    it("checks both halves as one unit and reserves both sends when they fit", async () => {
+      jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
+      postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "in_progress", _count: { results: 0 } });
 
-    expect(serviceCapMock).not.toHaveBeenCalled();
-    expect(result.ok).toBe(true);
+      const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+      expect(postJobFindFirstMock).toHaveBeenCalledWith({
+        where: { storyOfPostJobId: "job-1" },
+        select: { id: true, status: true, _count: { select: { results: true } } },
+      });
+      expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], now: NOW });
+      expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], at: NOW });
+      expect(result.ok).toBe(true);
+    });
+
+    it("when they do not fit, fails both halves with the at-send sentence and asks for one notice, the feed's", async () => {
+      jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
+      postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "in_progress", _count: { results: 0 } });
+      serviceCapMock.mockResolvedValue(FULL);
+
+      const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+      const failedFor = resultCreateManyMock.mock.calls.map(([args]) => args.data[0].postJobId);
+      expect(failedFor).toEqual(["job-1", "story-1"]);
+      for (const [args] of resultCreateManyMock.mock.calls) {
+        expect(args.data.every((row: { status: string; errorCode: string }) => row.status === "failed" && row.errorCode === FULL.errorCode)).toBe(true);
+      }
+      expect(recomputeMock.mock.calls.map(([id]) => id)).toEqual(["job-1", "story-1"]);
+      // Checked once, for the pair.
+      expect(serviceCapMock).toHaveBeenCalledTimes(1);
+      expect(recordSendMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+    });
+
+    it("from the story half, the unit is the same and the notice is the feed's", async () => {
+      jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
+      postJobFindUniqueMock.mockImplementation(async ({ where, select }: { where: { id: string }; select?: unknown }) =>
+        select
+          ? { id: "job-1", status: "in_progress", _count: { results: 0 } }
+          : makeJob({ id: where.id, ...(where.id === "story-1" ? { storyOfPostJobId: "job-1" } : {}) }),
+      );
+      serviceCapMock.mockResolvedValue(FULL);
+
+      const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
+
+      expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW });
+      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+    });
+
+    it("the partner already sent or cancelled: the remaining half is checked alone", async () => {
+      jobs({ "job-1": {} });
+      postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "completed", _count: { results: 1 } });
+      await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW });
+
+      postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "cancelled", _count: { results: 0 } });
+      await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW });
+    });
   });
 
-  it("Post now and approvals (no option) are not checked here: their routes checked before the claim", async () => {
-    postJobFindUniqueMock.mockResolvedValue(makeJob());
+  // Point 4: a re-run after a refusal must not publish.
+  describe("a re-run after a refusal", () => {
+    it("results already failed with the cap: refused again, status recomputed, no publish event, no new rows", async () => {
+      jobs({ "job-1": {} });
+      connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+      resultCountMock.mockResolvedValue(1);
+      resultFindManyMock.mockResolvedValue([{ status: "failed", errorCode: "SERVICE_DAILY_POST_LIMIT" }]);
+
+      const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+      expect(resultCreateManyMock).not.toHaveBeenCalled();
+      expect(serviceCapMock).not.toHaveBeenCalled();
+      expect(recomputeMock).toHaveBeenCalledWith("job-1");
+    });
+
+    it("results written, the recompute threw, the re-run: refused, failed, no publish event", async () => {
+      jobs({ "job-1": {} });
+      connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+      serviceCapMock.mockResolvedValue(FULL);
+      recomputeMock.mockRejectedValueOnce(new Error("lock timeout"));
+
+      await expect(prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW })).rejects.toThrow("lock timeout");
+
+      resultCountMock.mockResolvedValue(1);
+      resultFindManyMock.mockResolvedValue([{ status: "failed", errorCode: "SERVICE_DAILY_POST_LIMIT" }]);
+      const again = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+      expect(again).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+      expect(resultCreateManyMock).toHaveBeenCalledTimes(1);
+      expect(recomputeMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("a re-run whose results are pending (made before a crash) sends, without a second check", async () => {
+      jobs({ "job-1": {} });
+      connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+      resultCountMock.mockResolvedValue(1);
+      resultFindManyMock.mockResolvedValue([{ status: "pending", errorCode: null }]);
+      serviceCapMock.mockResolvedValue(FULL);
+
+      const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+      expect(serviceCapMock).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  it("Post now and approvals (no option) are not checked here, but their send is recorded", async () => {
+    jobs({ "job-1": {} });
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
     serviceCapMock.mockResolvedValue(FULL);
 
     expect((await prepareDeferredPostJobDispatch("job-1")).ok).toBe(true);
     expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: expect.any(Date) });
   });
 });

@@ -14,7 +14,8 @@ import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLim
 import { connectionGoneMessage, reconnectRequiredMessage } from "@/lib/publishFailureText";
 import { finishPostJob, recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
-import { serviceCapRefusalAtSend } from "@/server/usage/usageLog";
+import { SERVICE_DAILY_POST_LIMIT_CODE } from "@/lib/usageLimits";
+import { recordSend, serviceCapRefusalAtSend } from "@/server/usage/usageLog";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -404,6 +405,23 @@ function immediateJobStatus(intent: PostJobIntent, rows: readonly FanOutResultRo
   return { status: recomputePostJobStatus(rows.map((row) => ({ status: row.status ?? "pending" }))) };
 }
 
+/**
+ * R6 review of K2: a post going out now records its send for the day (the
+ * daily caps count those), each job that has something to publish. After the
+ * commit and never throwing (recordSend logs), so it cannot undo a post.
+ */
+async function recordImmediateSends(
+  workspaceId: string,
+  intent: PostJobIntent,
+  jobs: Array<[string | undefined, readonly FanOutResultRow[]]>,
+): Promise<void> {
+  if (intent !== "immediate") return;
+  const sending = jobs
+    .filter(([id, rows]) => id && rows.some((row) => (row.status ?? "pending") === "pending"))
+    .map(([id]) => id as string);
+  if (sending.length > 0) await recordSend({ workspaceId, postJobIds: sending, at: new Date() });
+}
+
 export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
 ): Promise<PostJobCreated> {
@@ -579,6 +597,10 @@ export async function createPostJobOnly(
       return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results, storyJob };
     },
   );
+  await recordImmediateSends(workspaceId, intent, [
+    [postJob.id, fanOut.rows],
+    [storyJob?.id, fanOut.storyRows],
+  ]);
 
   return {
     postJobId: postJob.id,
@@ -875,6 +897,10 @@ export async function createPostJobForExistingMedia(
 
     return { postJob: job, postJobs: jobs, resultRecords: results, storyJob };
   });
+  await recordImmediateSends(workspaceId, intent, [
+    [postJob.id, fanOut.rows],
+    [storyJob?.id, fanOut.storyRows],
+  ]);
 
   return {
     postJobId: postJob.id,
@@ -1065,7 +1091,25 @@ export function buildRetryEvent(
 /** Outcome of preparing a deferred (scheduled/draft) job for publishing. */
 export type DeferredDispatchResult =
   | { ok: true; event: PublishRequestedEventData }
-  | { ok: false; reason: "NOT_FOUND" | "NO_CONNECTIONS" | "LIMIT_REACHED" };
+  | { ok: false; reason: "NOT_FOUND" | "NO_CONNECTIONS" }
+  // `noticeFor`: the post whose owner is told, the feed of a pair, so a pair
+  // refused together gets one notice.
+  | { ok: false; reason: "LIMIT_REACHED"; noticeFor: string };
+
+type SendRefusal = { errorCode: string; errorMessage: string };
+
+/**
+ * The other half of a Feed and Story pair when it is due with this one:
+ * claimed by the same scan and not given its results yet. One already sent,
+ * cancelled or failed is not, and this half is then checked alone.
+ */
+async function unsentPairHalf(job: { id: string; storyOfPostJobId: string | null }): Promise<string | null> {
+  const select = { id: true, status: true, _count: { select: { results: true } } } as const;
+  const other = job.storyOfPostJobId
+    ? await prisma.postJob.findUnique({ where: { id: job.storyOfPostJobId }, select })
+    : await prisma.postJob.findFirst({ where: { storyOfPostJobId: job.id }, select });
+  return other && other.status === "in_progress" && other._count.results === 0 ? other.id : null;
+}
 
 /**
  * Roadmap Phase 5 — the review's KEY correctness fix (§6.3): materialize a
@@ -1104,14 +1148,22 @@ export type DeferredDispatchResult =
  * "private" stays private, not silently escalated to the client-default unlisted).
  *
  * R6-security M2: `serviceCapAt` (the scanner, as a scheduled post falls due)
- * checks the service's daily cap before the results are made. At the cap,
- * every platform that would have published gets a failed result that says
- * why (Retry is there from tomorrow) and the caller gets LIMIT_REACHED. Post
- * now and approvals pass none: their routes checked the cap before the claim.
+ * checks the service's daily cap before the results are made, for the post
+ * and, when the other half of its Feed and Story pair is due with it, for
+ * both as one unit (the review of K2: both go or neither). At the cap, every
+ * platform that would have published gets a failed result that says why
+ * (Retry is there from tomorrow), both halves of a pair, and the caller gets
+ * LIMIT_REACHED. Post now and approvals pass none: their routes checked the
+ * cap before the claim. Every post that goes out records its send for the
+ * day (the caps count those), a pair's two at once.
+ *
+ * A re-run that finds the results already failed by the cap (a step retried
+ * after the rows were written) is refused again: nothing is published, and
+ * the status and the notice are redone, both idempotent.
  */
 export async function prepareDeferredPostJobDispatch(
   postJobId: string,
-  options: { serviceCapAt?: Date } = {},
+  options: { serviceCapAt?: Date; unitRefusal?: SendRefusal } = {},
 ): Promise<DeferredDispatchResult> {
   const job = await prisma.postJob.findUnique({
     where: { id: postJobId },
@@ -1172,20 +1224,36 @@ export async function prepareDeferredPostJobDispatch(
   // Idempotent: only create the fan-out if it hasn't been created yet, so a
   // retried caller step never duplicates result rows.
   const existingResults = await prisma.postJobResult.count({ where: { postJobId } });
+  const noticeFor = job.storyOfPostJobId ?? postJobId;
 
+  if (existingResults > 0) {
+    const stored = await prisma.postJobResult.findMany({ where: { postJobId }, select: { status: true, errorCode: true } });
+    const refusedAtSend =
+      stored.some((result) => result.errorCode === SERVICE_DAILY_POST_LIMIT_CODE) &&
+      !stored.some((result) => result.status === "pending" || result.status === "success");
+    if (refusedAtSend) {
+      await recomputeAndStorePostJobStatus(postJobId);
+      return { ok: false, reason: "LIMIT_REACHED", noticeFor };
+    }
+  }
+
+  // The posts whose sends this one records: itself, or both halves of a pair.
+  let sending = [postJobId];
   // A re-run that finds its results made has been past this check already.
-  if (options.serviceCapAt && existingResults === 0 && rows.some((row) => row.status === "pending")) {
-    const refusal = await serviceCapRefusalAtSend({
-      workspaceId: job.workspaceId,
-      postJobId,
-      now: options.serviceCapAt,
-    });
+  if ((options.serviceCapAt || options.unitRefusal) && existingResults === 0 && rows.some((row) => row.status === "pending")) {
+    const partner = options.unitRefusal ? null : await unsentPairHalf(job);
+    if (partner) sending = [postJobId, partner];
+    const refusal =
+      options.unitRefusal ??
+      (await serviceCapRefusalAtSend({ workspaceId: job.workspaceId, postJobIds: sending, now: options.serviceCapAt! }));
     if (refusal) {
       await prisma.postJobResult.createMany({
         data: rows.map((row) => (row.status === "pending" ? { ...row, status: "failed" as const, ...refusal } : row)),
       });
       await recomputeAndStorePostJobStatus(postJobId);
-      return { ok: false, reason: "LIMIT_REACHED" };
+      // Its other half is refused with it; that half's own turn then finds it refused.
+      if (partner) await prepareDeferredPostJobDispatch(partner, { unitRefusal: refusal });
+      return { ok: false, reason: "LIMIT_REACHED", noticeFor };
     }
   }
 
@@ -1199,6 +1267,9 @@ export async function prepareDeferredPostJobDispatch(
     await recomputeAndStorePostJobStatus(postJobId);
     return { ok: false, reason: "NO_CONNECTIONS" };
   }
+
+  // R6 review of K2: the send the caps count, before the next post is checked.
+  await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: options.serviceCapAt ?? new Date() });
 
   const captionSource = resolvePostCaptionSource(job, job.mediaItem);
 

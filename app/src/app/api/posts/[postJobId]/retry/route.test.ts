@@ -773,7 +773,7 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
   it("refuses with the budget's sentence before claiming anything", async () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
     retryRefusalMock.mockResolvedValue({
-      error: "This post has been retried 3 times today, the most for one day. Retry it again tomorrow.",
+      error: "TikTok on this post has been retried 3 times today, the most for one day. Try again tomorrow.",
       code: "POST_RETRY_LIMIT",
     });
 
@@ -781,10 +781,15 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
 
     expect(res.status).toBe(429);
     expect(await res.json()).toEqual({
-      error: "This post has been retried 3 times today, the most for one day. Retry it again tomorrow.",
+      error: "TikTok on this post has been retried 3 times today, the most for one day. Try again tomorrow.",
       code: "POST_RETRY_LIMIT",
     });
-    expect(retryRefusalMock).toHaveBeenCalledWith({ workspaceId: "ws-1", postJobId: "job-1", now: expect.any(Date) });
+    expect(retryRefusalMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      postJobId: "job-1",
+      platforms: ["tiktok"],
+      now: expect.any(Date),
+    });
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();
     expect(recordRetryMock).not.toHaveBeenCalled();
@@ -801,9 +806,35 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
     expect(recordRetryMock).toHaveBeenCalledWith({
       workspaceId: "ws-1",
       postJobId: "job-1",
+      platforms: ["tiktok"],
       requestId: id.replace(/^retry-job-1-/, ""),
       at: expect.any(Date),
     });
+  });
+
+  // Review of K2, point 2: an {all} retry counts one for each platform it includes.
+  it("an all-failed retry asks about every failed platform and records each one it claimed", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([
+        { platform: "x", status: "failed" },
+        { platform: "facebook_page", status: "failed" },
+        { platform: "instagram", status: "failed" },
+        { platform: "linkedin", status: "failed" },
+        { platform: "youtube", status: "success" },
+      ]),
+    );
+    resultUpdateManyMock
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(retryRefusalMock.mock.calls[0][0].platforms).toEqual(["x", "facebook_page", "instagram", "linkedin"]);
+    // Instagram was claimed by a concurrent retry: not counted here.
+    expect(recordRetryMock.mock.calls[0][0].platforms).toEqual(["x", "facebook_page", "linkedin"]);
   });
 
   it("records nothing when the retry could not be started", async () => {

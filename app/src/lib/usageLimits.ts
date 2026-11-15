@@ -235,9 +235,10 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  * plan ended. The operator's workspaces and paying ones are never counted or
  * refused here; their posts are sized in below instead (R6-security M2).
  *
- * It counts a post on the day it is SENT, checked when it goes out (Post now,
- * and the scanner when a scheduled post is due), so scheduling far ahead
- * reserves nothing.
+ * It counts the sends written as each post goes out (Post now, the scanner
+ * when a scheduled post is due, a retry), one per post per UTC day of the
+ * send, and is checked at that moment, so scheduling far ahead reserves
+ * nothing (src/server/usage/usageLog.ts).
  *
  * Sizing against the Inngest plan's 50,000 executions a month. About 28,000
  * are used already (CLAUDE.md: idle work, the scanners, sweeps and syncs, and
@@ -268,7 +269,7 @@ export const OWNER_DAILY_POST_LIMIT = 30;
 export const NEW_ACCOUNT_DAILY_POST_LIMIT = 5;
 export const NEW_ACCOUNT_HOURS = 24;
 
-/** R6-security M3: how often one post may be retried in one UTC day. */
+/** R6-security M3: how often each platform of one post may be retried in one UTC day. */
 export const RETRIES_PER_POST_PER_DAY = 3;
 
 /** Workspaces one person may create in WORKSPACES_CREATED_WINDOW_DAYS, deleted ones included. */
@@ -338,8 +339,8 @@ export function serviceDailyPostLimitAtSendMessage(): string {
   return `Not sent: ${PRODUCT_NAME} had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.`;
 }
 
-export function postRetryLimitMessage(limit: number): string {
-  return `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Retry it again tomorrow.`;
+export function postRetryLimitMessage(limit: number, platform: string): string {
+  return `${platform} on this post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow.`;
 }
 
 /** `openAt`: when the oldest creation in the window leaves it. */

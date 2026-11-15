@@ -236,10 +236,15 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  // R6-security M3: a retry costs background runs like a post, so it counts
-  // with the posts: a few per post a day, within the per-person and service
-  // caps. Checked before anything is claimed.
-  const budget = await retryRefusal({ workspaceId: workspaceContext.workspace.id, postJobId, now: new Date() });
+  // R6-security M3: a retry costs background runs like a post: each platform
+  // a few times a day, and the post counts once a day toward the per-person
+  // and service caps. Checked before anything is claimed.
+  const budget = await retryRefusal({
+    workspaceId: workspaceContext.workspace.id,
+    postJobId,
+    platforms: candidates,
+    now: new Date(),
+  });
   if (budget) {
     return NextResponse.json({ error: budget.error, code: budget.code }, { status: 429 });
   }
@@ -359,7 +364,13 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   }
 
   // Counted once the run has it; never throws (recordRetry logs a failure).
-  await recordRetry({ workspaceId: workspaceContext.workspace.id, postJobId, requestId, at: new Date() });
+  await recordRetry({
+    workspaceId: workspaceContext.workspace.id,
+    postJobId,
+    platforms: eligible,
+    requestId,
+    at: new Date(),
+  });
 
   return NextResponse.json({ ok: true, retrying: eligible }, { status: 202 });
 }
