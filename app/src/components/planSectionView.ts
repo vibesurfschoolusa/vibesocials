@@ -42,14 +42,26 @@ export function planNoPlanYet(role: "owner" | "member", workspace: BillingFields
   return role === "owner" && withoutPlanOrTrial(workspace, now);
 }
 
-/** The viewer's own daily number across their workspaces, and why it is the lower one when it is. */
-export type PersonalPostNote = { limit: number; reduced: ReducedReason | null };
+/**
+ * The viewer's own daily number across their workspaces, and why it is the
+ * lower one when it is. R10-pages M1: untilFirstPayment, a plan not yet paid
+ * for (in its card trial, or with no paid invoice recorded).
+ */
+export type PersonalPostNote = { limit: number; reduced: ReducedReason | null; untilFirstPayment?: boolean };
+
+/** R10-pages M1: the Plan section's line for a plan not yet paid for, with the viewer's own number. */
+export function planUntilFirstPaymentLine(limit: number): string {
+  return `Until the first payment, posts here count toward your ${limit} a day.`;
+}
 
 /**
  * R8-new-customer L1: the Plan section's per-person note. Only where the
  * per-person limit counts this workspace's posts (not paying, not exempt,
  * not an operator's; lib/usageLimits.ts personalPostLimitApplies), with the
  * viewer's own number from the same rule the limit uses (ownerDailyPostLimit).
+ * R10-pages M1: with billing on, a plan in use (planState "active") that the
+ * limit still counts is one not yet paid for (paysForPlan), so the note says
+ * it counts until the first payment.
  */
 export function planPersonalPostNote(
   workspace: BillingFields,
@@ -59,7 +71,8 @@ export function planPersonalPostNote(
   env: BillingEnv = process.env,
 ): PersonalPostNote | null {
   if (operatorOwned || !personalPostLimitApplies(workspace, env, now)) return null;
-  return ownerDailyPostLimit(viewer, now);
+  const note = ownerDailyPostLimit(viewer, now);
+  return billingEnabled(env) && planState(workspace, now) === "active" ? { ...note, untilFirstPayment: true } : note;
 }
 
 export function planSectionLabel(

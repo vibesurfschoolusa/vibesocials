@@ -62,7 +62,7 @@ function matches(row: Row, where: Row | undefined): boolean {
   return true;
 }
 
-const BILLING_KEYS = ["billingExempt", "plan", "planStatus", "trialEndsAt", "currentPeriodEnd"];
+const BILLING_KEYS = ["billingExempt", "plan", "planStatus", "trialEndsAt", "currentPeriodEnd", "planPaidAt"];
 const billing = (workspace: Row) => Object.fromEntries(BILLING_KEYS.filter((k) => k in workspace).map((k) => [k, workspace[k]]));
 
 vi.mock("@/lib/db", () => {
@@ -208,6 +208,7 @@ import {
   withdrawRetry,
   withdrawSend,
 } from "./usageLog";
+import { personalUsageText, stillTodayText } from "@/lib/usageLimits";
 
 const DAY_1 = new Date("2026-11-13T12:00:00.000Z");
 const NOW = new Date("2026-11-14T15:00:00.000Z");
@@ -221,7 +222,13 @@ const owner = (userId: string, overrides: Partial<Owner["user"]> = {}): Owner =>
 /** Signed up an hour ago (14:00 UTC on the 14th) and confirmed: still a new account. */
 const fresh = (userId: string) => owner(userId, { createdAt: new Date(NOW.getTime() - 3_600_000), emailVerifiedAt: NOW });
 const OPS = owner("ops", { email: "ops@example.com" });
-const PAID = { billingExempt: false, plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2026-12-10T00:00:00Z") };
+const PAID = {
+  billingExempt: false,
+  plan: "growth",
+  planStatus: "active",
+  currentPeriodEnd: new Date("2026-12-10T00:00:00Z"),
+  planPaidAt: new Date("2026-11-10T01:00:00Z"),
+};
 
 function workspace(id: string, fields: Row = {}, owners: Owner[] = [owner(`owner-of-${id}`)]): Workspace {
   const row = { id, billingExempt: false, ...fields, owners };
@@ -1208,7 +1215,8 @@ describe("the per-person usage for Settings", () => {
   });
 });
 
-// R9-security M1: paying only once Stripe has been paid; a card trial keeps its features but is counted.
+// R9-security M1 and R10-security M1: paying only once Stripe has recorded a
+// paid invoice (planPaidAt); a card trial keeps its features but is counted.
 describe("a plan in its card trial counts like a free workspace", () => {
   const TRIAL_END = new Date("2026-11-26T00:00:00Z");
   const TRIALING_PRO = { billingExempt: false, plan: "pro", planStatus: "trialing", trialEndsAt: TRIAL_END, currentPeriodEnd: TRIAL_END };
@@ -1219,9 +1227,10 @@ describe("a plan in its card trial counts like a free workspace", () => {
     planStatus: "past_due",
     trialEndsAt: new Date("2026-10-10T00:00:00Z"),
     currentPeriodEnd: new Date("2026-11-10T00:00:00Z"),
+    planPaidAt: new Date("2026-10-10T01:00:00Z"),
   };
   /** The first charge at the trial's end on 10 Nov failed: never paid. */
-  const PAST_DUE_UNPAID = { ...PAST_DUE_PAID, trialEndsAt: new Date("2026-11-10T00:00:00Z") };
+  const PAST_DUE_UNPAID = { ...PAST_DUE_PAID, trialEndsAt: new Date("2026-11-10T00:00:00Z"), planPaidAt: null };
   const reserveNow = (workspaceId: string, postJobIds: string[]) => reserveFreeRuns({ workspaceId, postJobIds, at: NOW, check: "now" });
   const freeRuns = () => store.events.filter((event) => event.kind === "send" && (event.pool === "main" || event.pool === "new")).length;
 
@@ -1263,7 +1272,11 @@ describe("a plan in its card trial counts like a free workspace", () => {
 
   it("an active paid plan at the ceiling is never refused and takes no lock", async () => {
     await fillToCeiling();
-    workspace("ws-paid", { ...TRIALING_PRO, planStatus: "active", currentPeriodEnd: new Date("2026-12-26T00:00:00Z") }, [owner("payer")]);
+    workspace(
+      "ws-paid",
+      { ...TRIALING_PRO, planStatus: "active", currentPeriodEnd: new Date("2026-12-26T00:00:00Z"), planPaidAt: TRIAL_END },
+      [owner("payer")],
+    );
     store.locks = [];
     await expect(reserveNow("ws-paid", ["paid-1"])).resolves.toEqual({ ok: true, written: ["paid-1"] });
     await expect(due("ws-paid", "paid-2")).resolves.toBeNull();
@@ -1279,6 +1292,47 @@ describe("a plan in its card trial counts like a free workspace", () => {
     await expect(due("ws-late", "late-1")).resolves.toBeNull();
     expect(store.locks).toEqual([]);
     expect(sendsOf("late-1")[0]).toMatchObject({ pool: "none", ownerIds: [] });
+  });
+
+  // R10-security M1: Stripe calls a plan active about an hour before it charges the first invoice.
+  it("active with no paid invoice recorded (the trial just ended) is counted, and refused at the ceiling", async () => {
+    const ACTIVE_UNPAID = { ...TRIALING_PRO, planStatus: "active", currentPeriodEnd: new Date("2026-12-26T00:00:00Z") };
+    workspace("ws-draft", ACTIVE_UNPAID, [owner("first-invoice-draft")]);
+    await expect(due("ws-draft", "draft-1")).resolves.toBeNull();
+    expect(sendsOf("draft-1")[0]).toMatchObject({ pool: "main", ownerIds: ["first-invoice-draft"] });
+    await fillToCeiling();
+    await expect(due("ws-draft", "draft-2")).resolves.toBe(FULL_AT_SEND);
+  });
+
+  // R10-pages M1: what the owner and a member read, with billing on, for a plan not yet paid for.
+  for (const [name, fields] of [
+    ["trialing", TRIALING_PRO],
+    ["active with no paid invoice", { ...TRIALING_PRO, planStatus: "active", currentPeriodEnd: new Date("2026-12-26T00:00:00Z") }],
+  ] as const) {
+    it(`${name}: the refusal, the Usage row and the member line say "not yet paid for"`, async () => {
+      for (let w = 1; w <= 16; w += 1) workspace(`ws-u-${w}`, fields, [owner("unpaid-owner")]);
+      for (let w = 1; w <= 15; w += 1) expect((await reserveNow(`ws-u-${w}`, [`u-${w}`])).ok).toBe(true);
+      const refused = await reserveNow("ws-u-16", ["u-16"]);
+      expect(refused.ok).toBe(false);
+      expect(!refused.ok && refused.refusal.error).toBe(
+        "This workspace's owner has reached the limit of 15 posts a day across their workspaces not yet paid for, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+      );
+      const [mine] = await ownersPersonalUsage("ws-u-1", NOW, "unpaid-owner");
+      expect(mine).toMatchObject({ isViewer: true, used: 15, limit: 15 });
+      expect(personalUsageText(mine, false).label).toBe("Your posts today (UTC), your workspaces not yet paid for");
+      const forMember = await ownersPersonalUsage("ws-u-1", NOW);
+      expect(forMember).toHaveLength(1);
+      expect(stillTodayText({ remaining: 0, decidedBy: "owner", coOwned: false }).note).toBe(
+        "The daily limit of its owner, counted across their workspaces not yet paid for (retries too), leaves 0 posts.",
+      );
+    });
+  }
+
+  it("once the invoice is paid: not counted, no Usage row", async () => {
+    workspace("ws-now-paid", { ...TRIALING_PRO, planStatus: "active", planPaidAt: NOW }, [owner("now-paid")]);
+    await expect(ownersPersonalUsage("ws-now-paid", NOW, "now-paid")).resolves.toEqual([]);
+    await expect(due("ws-now-paid", "now-paid-1")).resolves.toBeNull();
+    expect(sendsOf("now-paid-1")[0]).toMatchObject({ pool: "none", ownerIds: [] });
   });
 
   it("past_due with no paid period is counted, and refused at the ceiling", async () => {

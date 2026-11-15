@@ -189,8 +189,34 @@ describe("planPersonalPostNote", () => {
   });
 
   it("a paying workspace, an exempt one or an operator's: no note", () => {
-    expect(planPersonalPostNote({ ...NEW, plan: "starter", planStatus: "active" }, CONFIRMED, false, NOW, ON)).toBeNull();
+    const paid = { ...NEW, plan: "starter", planStatus: "active", planPaidAt: new Date("2026-12-01T01:00:00Z") };
+    expect(planPersonalPostNote(paid, CONFIRMED, false, NOW, ON)).toBeNull();
     expect(planPersonalPostNote({ ...NEW, billingExempt: true }, CONFIRMED, false, NOW, ON)).toBeNull();
     expect(planPersonalPostNote(TRIAL, CONFIRMED, true, NOW, ON)).toBeNull();
+  });
+
+  // R10-pages M1: a plan not yet paid for (in its card trial, or active before
+  // the first invoice is paid) counts toward the owner's number, and Plan says so.
+  it("a plan in its card trial, or active with no paid invoice: the note, and until the first payment", () => {
+    const end = new Date("2026-12-24T00:00:00Z");
+    const trialing = { ...NEW, plan: "pro", planStatus: "trialing", trialEndsAt: end, currentPeriodEnd: end };
+    const activeUnpaid = { ...trialing, planStatus: "active", trialEndsAt: new Date("2026-12-10T00:00:00Z") };
+    for (const workspace of [trialing, activeUnpaid]) {
+      expect(planPersonalPostNote(workspace, CONFIRMED, false, NOW, ON), workspace.planStatus).toEqual({
+        limit: 15,
+        reduced: null,
+        untilFirstPayment: true,
+      });
+    }
+    // A new account's own number.
+    expect(planPersonalPostNote(trialing, { ...CONFIRMED, emailVerifiedAt: null }, false, NOW, ON)).toEqual({
+      limit: 5,
+      reduced: "unconfirmed",
+      untilFirstPayment: true,
+    });
+    // Not a plan (a trial with none), billing off, or an operator's: no such line.
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, false, NOW, ON)).not.toHaveProperty("untilFirstPayment");
+    expect(planPersonalPostNote(activeUnpaid, CONFIRMED, false, NOW, {})).toEqual({ limit: 15, reduced: null });
+    expect(planPersonalPostNote(activeUnpaid, CONFIRMED, true, NOW, ON)).toBeNull();
   });
 });

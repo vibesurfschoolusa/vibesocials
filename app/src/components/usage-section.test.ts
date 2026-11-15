@@ -61,15 +61,15 @@ describe("UsageSection", () => {
     expect(html).toContain("Retries count too. The per-person number is the same for everyone.");
   });
 
-  // R9-pages L4: with billing on paid workspaces are not counted.
-  it("with billing on: your free workspaces, in the label and the member line", () => {
+  // R9-pages L4 and R10-pages M1: with billing on paid workspaces are not counted; trials and unpaid plans are.
+  it("with billing on: your workspaces not yet paid for, in the label and the member line", () => {
     vi.stubEnv("BILLING_ENABLED", "true");
     const html = render(usage([{ userId: "u-1", name: "Jane", isViewer: true, used: 1, limit: 15, reduced: null }]));
-    expect(html).toContain("Your posts today (UTC), your free workspaces");
+    expect(html).toContain("Your posts today (UTC), your workspaces not yet paid for");
     expect(html).toContain("The per-person number is the same for everyone while free.");
     expect(html).not.toContain("all your workspaces");
     const member = render({ ...usage(undefined), stillToday: { remaining: 3, decidedBy: "owner", coOwned: false } });
-    expect(member).toContain("The daily limit of its owner, counted across the free workspaces they own (retries too), leaves 3 posts.");
+    expect(member).toContain("The daily limit of its owner, counted across their workspaces not yet paid for (retries too), leaves 3 posts.");
   });
 
   it("names each owner of a co-owned workspace", () => {

@@ -28,6 +28,8 @@ export type BillingFields = {
   planStatus?: string | null;
   trialEndsAt?: Date | string | null;
   currentPeriodEnd?: Date | string | null;
+  /** R10-security M1: when Stripe last recorded a paid invoice for the current subscription. */
+  planPaidAt?: Date | string | null;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -84,25 +86,19 @@ export function planState(workspace: BillingFields, now: Date): PlanState {
 }
 
 /**
- * R9-security M1: whether Stripe has been paid for this workspace's plan, the
- * one rule for what the free limits leave out (the ceiling, the pools and the
- * per-person number). A plan in its card trial is "active" for its features
- * (planState) but has cost nothing yet, so its runs count like a free
- * workspace's. True for an active plan, and for one past_due after a paid
- * period, within the grace. A past_due subscription's currentPeriodEnd holds
- * the start of the unpaid period (subscriptionSync.ts): when that is the
- * trial's end, the first charge failed and nothing was ever paid. A day's
- * margin: a paid period is at least a month. No trial date: bought without a
- * trial, so the first period was paid at checkout.
+ * R9-security M1 and R10-security M1: whether Stripe has been paid for this
+ * workspace's plan, the one rule for what the free limits leave out (the
+ * ceiling, the pools and the per-person number). True only for a plan in use
+ * (planState "active", which keeps the past_due grace) with a paid invoice
+ * recorded for its current subscription (planPaidAt, written by the webhook's
+ * invoice.paid). A plan in its card trial, one just out of it whose first
+ * invoice is still a draft (Stripe calls it active about an hour before it
+ * charges), one whose first charge failed, and a new subscription before its
+ * first invoice is paid all keep their features (planState) but count like a
+ * free workspace.
  */
 export function paysForPlan(workspace: BillingFields, now: Date): boolean {
-  if (planState(workspace, now) !== "active") return false;
-  if (workspace.planStatus === "active") return true;
-  if (workspace.planStatus !== "past_due") return false;
-  const trialEndsAt = toBillingDate(workspace.trialEndsAt);
-  const unpaidFrom = toBillingDate(workspace.currentPeriodEnd);
-  if (!trialEndsAt) return true;
-  return unpaidFrom !== null && unpaidFrom.getTime() > trialEndsAt.getTime() + DAY_MS;
+  return planState(workspace, now) === "active" && toBillingDate(workspace.planPaidAt) !== null;
 }
 
 /** BILLING_TRIAL_DAYS: a whole number, 14 when unset or invalid, kept within 1 to 90. */
@@ -118,6 +114,7 @@ export const BILLING_FIELDS_SELECT = {
   planStatus: true,
   trialEndsAt: true,
   currentPeriodEnd: true,
+  planPaidAt: true,
 } as const;
 
 /**

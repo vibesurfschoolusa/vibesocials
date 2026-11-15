@@ -260,6 +260,12 @@ model Workspace {
   trialEndedEmailSentAt DateTime?
   // When a plan set to cancel stops (null while it renews).
   planEndsAt            DateTime?
+  // R10-security M1 (2026-11-15): when Stripe last recorded a paid invoice
+  // (amount over zero) for stripeSubscriptionId, written by the webhook's
+  // invoice.paid; cleared when the subscription id changes or the plan ends.
+  // paysForPlan (src/lib/billing.ts) needs it: until then the free limits
+  // count the workspace. Null: never paid, or not since the last change.
+  planPaidAt            DateTime?
   // R5-security L2 (2026-11-14): the person who pays, recorded as they start
   // checkout (src/server/billing/checkout.ts): starting one expires every other
   // open session and none starts while a plan is live, so the last starter is

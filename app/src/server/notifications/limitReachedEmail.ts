@@ -1,5 +1,5 @@
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
-import { formatStorageGb, utcDayMonthLabel, type UsageLimitKind } from "@/lib/usageLimits";
+import { formatStorageGb, utcDisplayDate, type UsageLimitKind } from "@/lib/usageLimits";
 import { countWord } from "@/lib/plural";
 import { emailDateTime } from "@/server/notifications/emailTime";
 import { workspaceLink } from "@/server/notifications/links";
@@ -32,9 +32,10 @@ function limitLines(
     case "postsPerDay":
       // The full day can be a future one (a post scheduled into it), which does
       // not "open again": name the day and say only what is true. The limit
-      // counts a UTC day, so the day is named as one (R2-pages L4).
+      // counts a UTC day, so the day is named as one (R2-pages L4), written
+      // as the app writes its dates (R10-pages L2).
       return [
-        `reached its limit of ${limit} ${countWord(limit, "post", "posts")} for ${day ? `${utcDayMonthLabel(day)} (UTC)` : "that day"}. Posts on other days are not affected.`,
+        `reached its limit of ${limit} ${countWord(limit, "post", "posts")} for ${day ? `${utcDisplayDate(day)} (UTC)` : "that day"}. Posts on other days are not affected.`,
       ];
     case "xPostsPerMonth":
       return [

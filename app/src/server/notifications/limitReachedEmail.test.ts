@@ -31,10 +31,25 @@ describe("buildLimitReachedEmail", () => {
       resetsAt: null,
     });
     expect(html).toContain(
-      "<p><strong>Surf Co</strong> reached its limit of 20 posts for 12 November (UTC). Posts on other days are not affected.</p>",
+      "<p><strong>Surf Co</strong> reached its limit of 20 posts for November 12, 2026 (UTC). Posts on other days are not affected.</p>",
     );
     expect(html).not.toContain("possible again");
     expect(html).toContain(`write to ${SUPPORT_EMAIL}`);
+  });
+
+  // R10-pages L2: the day as the app writes its dates (utcDisplayDate), still the UTC date late in it.
+  it("posts per day: the UTC date in the app's date style, also just before midnight UTC", () => {
+    const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
+      kind: "postsPerDay",
+      limit: 20,
+      day: new Date("2026-11-15T23:59:00Z"),
+      resetsAt: null,
+    });
+    expect(html).toContain("reached its limit of 20 posts for November 15, 2026 (UTC).");
   });
 
   it("X per month names the first of the next month", () => {
@@ -132,7 +147,7 @@ describe("buildLimitReachedEmail counts agree with their number", () => {
     [2, "posts"],
     [10, "posts"],
   ])("posts per day: %i %s", (n, word) => {
-    expect(html("postsPerDay", n)).toContain(`reached its limit of ${n} ${word} for 12 November (UTC).`);
+    expect(html("postsPerDay", n)).toContain(`reached its limit of ${n} ${word} for November 12, 2026 (UTC).`);
   });
 
   it.each([

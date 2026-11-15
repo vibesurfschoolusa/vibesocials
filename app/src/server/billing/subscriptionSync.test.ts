@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import { planState } from "@/lib/billing";
 
 import type { StripeSubscription } from "./stripeApi";
-import { isLiveSubscriptionStatus, syncFromCustomerList, type SyncWorkspace } from "./subscriptionSync";
+import {
+  isLiveSubscriptionStatus,
+  paidInvoiceOf,
+  planPaidAtWrite,
+  syncFromCustomerList,
+  type PlanWrite,
+  type SyncWorkspace,
+} from "./subscriptionSync";
 
 /**
  * What the webhook writes, from the customer's list of subscriptions (fix
@@ -317,5 +324,90 @@ describe("a yearly subscription", () => {
   it("an unknown price still changes nothing", () => {
     const s = sub(priced("price_test_unknown_year"));
     expect(yearly(s).ok).toBe(false);
+  });
+});
+
+// R10-security M1: what an invoice.paid payload says, and when planPaidAt is written or cleared.
+describe("a paid invoice", () => {
+  const NOW = new Date("2026-12-01T01:05:00Z");
+  const PAID_AT = 1796000000;
+  const invoice = (overrides: Record<string, unknown> = {}) => ({
+    id: "in_1",
+    object: "invoice",
+    amount_paid: 4900,
+    status: "paid",
+    status_transitions: { paid_at: PAID_AT },
+    parent: { type: "subscription_details", subscription_details: { subscription: "sub_1" } },
+    ...overrides,
+  });
+
+  describe("paidInvoiceOf", () => {
+    it("reads the subscription from the invoice's parent and when it was paid", () => {
+      expect(paidInvoiceOf(invoice(), NOW)).toEqual({ subscriptionId: "sub_1", paidAt: new Date(PAID_AT * 1000) });
+    });
+
+    it("also reads the subscription where older API versions put it, as an id or an object", () => {
+      expect(paidInvoiceOf(invoice({ parent: null, subscription: "sub_2" }), NOW)?.subscriptionId).toBe("sub_2");
+      expect(paidInvoiceOf(invoice({ parent: null, subscription: { id: "sub_3" } }), NOW)?.subscriptionId).toBe("sub_3");
+      expect(
+        paidInvoiceOf(invoice({ parent: { subscription_details: { subscription: { id: "sub_4" } } } }), NOW)?.subscriptionId,
+      ).toBe("sub_4");
+    });
+
+    it("with no paid time, now", () => {
+      expect(paidInvoiceOf(invoice({ status_transitions: {} }), NOW)?.paidAt).toEqual(NOW);
+    });
+
+    it("a zero-amount invoice (the trial's) does not count as paid", () => {
+      expect(paidInvoiceOf(invoice({ amount_paid: 0 }), NOW)).toBeNull();
+      expect(paidInvoiceOf(invoice({ amount_paid: undefined }), NOW)).toBeNull();
+      expect(paidInvoiceOf(invoice({ amount_paid: "4900" }), NOW)).toBeNull();
+    });
+
+    it("an invoice for no subscription (a one-off) is not about a plan", () => {
+      expect(paidInvoiceOf(invoice({ parent: null }), NOW)).toBeNull();
+      expect(paidInvoiceOf(invoice({ parent: { type: "quote_details" } }), NOW)).toBeNull();
+    });
+  });
+
+  describe("planPaidAtWrite", () => {
+    const write = (overrides: Partial<PlanWrite> = {}): PlanWrite => ({
+      plan: "growth",
+      planStatus: "active",
+      currentPeriodEnd: new Date(PERIOD_END * 1000),
+      planEndsAt: null,
+      stripeSubscriptionId: "sub_1",
+      ...overrides,
+    });
+    const paid = { subscriptionId: "sub_1", paidAt: new Date(PAID_AT * 1000) };
+
+    it("the same subscription, still in use, with no invoice: planPaidAt is left as it is", () => {
+      for (const planStatus of ["active", "trialing", "past_due"]) {
+        expect(planPaidAtWrite("sub_1", write({ planStatus }), null), planStatus).toEqual({});
+      }
+    });
+
+    it("a paid invoice for the subscription being written sets it", () => {
+      expect(planPaidAtWrite("sub_1", write(), paid)).toEqual({ planPaidAt: paid.paidAt });
+      // First written by this very event (invoice.paid before the checkout's events).
+      expect(planPaidAtWrite(null, write(), paid)).toEqual({ planPaidAt: paid.paidAt });
+      // Read while Stripe still calls it incomplete: the invoice is paid, so it is kept.
+      expect(planPaidAtWrite("sub_1", write({ planStatus: "incomplete" }), paid)).toEqual({ planPaidAt: paid.paidAt });
+    });
+
+    it("a paid invoice for another subscription (an older one) sets nothing", () => {
+      expect(planPaidAtWrite("sub_1", write(), { ...paid, subscriptionId: "sub_0" })).toEqual({});
+      expect(planPaidAtWrite("sub_0", write(), { ...paid, subscriptionId: "sub_0" })).toEqual({ planPaidAt: null });
+    });
+
+    it("a different subscription id (a new checkout) clears it", () => {
+      expect(planPaidAtWrite("sub_0", write(), null)).toEqual({ planPaidAt: null });
+    });
+
+    it("the plan has ended (canceled, unpaid, paused, incomplete_expired) clears it", () => {
+      for (const planStatus of ["canceled", "unpaid", "paused", "incomplete_expired"]) {
+        expect(planPaidAtWrite("sub_1", write({ planStatus }), null), planStatus).toEqual({ planPaidAt: null });
+      }
+    });
   });
 });

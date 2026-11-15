@@ -5257,6 +5257,7 @@ describe("publishToAllPlatforms and retryPlatforms — plan ended (billing on)",
     planStatus: true,
     trialEndsAt: true,
     currentPeriodEnd: true,
+    planPaidAt: true,
   };
 
   function setUp(workspace: Record<string, unknown>) {

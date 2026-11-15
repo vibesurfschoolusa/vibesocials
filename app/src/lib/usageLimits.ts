@@ -166,11 +166,6 @@ function utcMonthName(at: Date): string {
   return MONTH_NAMES[at.getUTCMonth()];
 }
 
-/** "12 November" for the UTC date of `at`. */
-export function utcDayMonthLabel(at: Date): string {
-  return `${at.getUTCDate()} ${utcMonthName(at)}`;
-}
-
 /** "11 November 2026" for the UTC date of `at`. */
 export function utcDateLabel(at: Date): string {
   return `${at.getUTCDate()} ${utcMonthName(at)} ${at.getUTCFullYear()}`;
@@ -242,8 +237,8 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
 
 /**
  * The runs the free workspaces of confirmed, day-old accounts send in one UTC
- * day, together (the main pool): those on a trial (a plan still in its card
- * trial too, R9-security M1), on no plan, or whose plan ended. A run is one hand-over to the background: a post going out (Post
+ * day, together (the main pool): those on a trial (a plan not yet paid for
+ * too, R9 and R10-security M1), on no plan, or whose plan ended. A run is one hand-over to the background: a post going out (Post
  * now, or the scanner when a scheduled one is due) or one retry request,
  * however many platforms it has. The operator's workspaces and paying ones are
  * never counted or refused here (R7-security L1).
@@ -260,11 +255,14 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  * - Idle work, each scheduled run with nothing to do (1 for the run, 1 per
  *   step): the scanner every 10 minutes (144 x 2 = 288), media retention
  *   hourly (24 x 3 = 72), YouTube numbers hourly (24 x 2 = 48), the
- *   stale-post sweep hourly (24 x 3 = 72), the connection sweep (8) and the
- *   token refreshes it fans out (about 10 x 2 = 20), and the other daily jobs
- *   (15): 523 a day, call it 525. R9-publishing L2: the least the idle work
- *   costs (each run finding nothing to do); a day with work costs more. The
- *   token refreshes leave out idle free workspaces (connectionHealthSweep.ts).
+ *   stale-post sweep hourly (24 x 3 = 72), the connection sweep (8), the
+ *   token refreshes it fans out (about 1 a day, 1 x 2 = 2: free workspaces'
+ *   refreshes run inline in the sweep's own step, one after another, and
+ *   only paid, operator-owned and grandfathered ones are fanned out; V3,
+ *   round 10), and the other daily jobs (15): 505 a day. 525 is used below,
+ *   which leaves room for a day with more fanned-out refreshes.
+ *   R9-publishing L2: the least the idle work costs (each run finding
+ *   nothing to do); a day with work costs more.
  * - A typical run, a photo or a small video to 6 platforms: the publish run,
  *   its fetch step, a step per platform, finalize and the outcome event (10),
  *   and the outcome email's run and step (2): 12. Not the most a run costs: a
@@ -353,7 +351,8 @@ export type CrossWorkspaceLimitMode = DailyPostLimitMode | "retry";
  * R6-new-customer M1: with billing on, every workspace not on a paid plan,
  * so also one made while billing was off (no plan, no trial) and one whose
  * plan or trial ended: every workspace the service's cap counts.
- * R9-security M1: and one whose plan is still in its card trial (paysForPlan).
+ * R9-security M1 and R10-security M1: and one whose plan is not yet paid
+ * for (paysForPlan: in its card trial, or with no paid invoice recorded).
  */
 export function personalPostLimitApplies(
   workspace: BillingFields,
@@ -422,14 +421,20 @@ function firstDayEndsText(time: ReducedNoteTime): string {
   return local ? `from ${local} (00:00 UTC)` : "from 00:00 UTC tomorrow";
 }
 
+/** R10-pages M1: with billing on, what a person's number counts: free workspaces and plans not yet paid for. */
+const NOT_YET_PAID_FOR = "workspaces not yet paid for";
+
 /**
- * R9-pages L4: the workspaces a person's number counts. With billing on a
- * paid workspace is left out (personalPostLimitApplies), so the sentences
- * say "free"; with it off every workspace counts.
+ * R9-pages L4 and R10-pages M1: the workspaces a person's number counts,
+ * after "across". With billing on a paid workspace is left out
+ * (personalPostLimitApplies) but a plan in its card trial or before its first
+ * payment is not, so the sentences say "not yet paid for" rather than "free";
+ * with it off every workspace counts. `whose`: "they" (the owner in the
+ * sentence) or "owner" (this workspace's owner).
  */
-function ownedWorkspaces(env: Record<string, string | undefined>, all: boolean): string {
-  if (billingEnabled(env)) return "the free workspaces";
-  return all ? "all the workspaces" : "the workspaces";
+function ownedWorkspaces(env: Record<string, string | undefined>, all: boolean, whose: "they" | "owner" = "they"): string {
+  if (billingEnabled(env)) return whose === "they" ? `their ${NOT_YET_PAID_FOR}` : `this workspace's owner's ${NOT_YET_PAID_FOR}`;
+  return `${all ? "all the" : "the"} workspaces ${whose === "they" ? "they own" : "this workspace's owner owns"}`;
 }
 
 /** When the lower number ends, both conditions on the first day: "you" only to the owner themself. */
@@ -462,21 +467,22 @@ export function ownerDailyPostLimitMessage(
   const who = named ? `${holder.name}, an owner of this workspace,` : "This workspace's owner";
   const sentence =
     mode === "now"
-      ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, true)} they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.`
+      ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, true)}, and retries count toward it. Schedule this post for another day, or try again tomorrow.`
       : mode === "retry"
-        ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, false)} they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
+        ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, false)}, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
         : named
-          ? `${who} already has ${posts} that day across ${ownedWorkspaces(env, false)} they own, which is the daily limit for one person (retries count toward it). Pick another day.`
-          : `That day already has ${posts} across ${ownedWorkspaces(env, true)} this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.`;
+          ? `${who} already has ${posts} that day across ${ownedWorkspaces(env, false)}, which is the daily limit for one person (retries count toward it). Pick another day.`
+          : `That day already has ${posts} across ${ownedWorkspaces(env, true, "owner")}, which is the daily limit for one person (retries count toward it). Pick another day.`;
   return reduced ? `${sentence} ${reducedNote(reduced, holder, named, time)}` : sentence;
 }
 
 /**
  * R8-pages M1: Settings, Usage's line for one owner's per-person number, the
  * one that binds a free workspace: whose it is, and why it is the lower one.
- * R9-pages L4: with billing on it counts only the free workspaces, and says
- * so. R9-pages L5: no one can raise it, so the note says it is the same for
- * everyone (Settings' "write to us" is about the workspace's own limits).
+ * R9-pages L4 and R10-pages M1: with billing on it counts only the
+ * workspaces not yet paid for, and says so. R9-pages L5: no one can raise
+ * it, so the note says it is the same for everyone (Settings' "write to us"
+ * is about the workspace's own limits).
  * R9-pages L7: on the first day, `time` gives the reader's own time.
  */
 export function personalUsageText(
@@ -487,8 +493,8 @@ export function personalUsageText(
 ): { label: string; note: string } {
   const billing = billingEnabled(env);
   const label = person.isViewer
-    ? `Your posts today (UTC), ${billing ? "your free workspaces" : "all your workspaces"}`
-    : `${coOwned ? `${person.name}'s` : "The owner's"} posts today (UTC), ${billing ? "their free workspaces" : "all their workspaces"}`;
+    ? `Your posts today (UTC), ${billing ? `your ${NOT_YET_PAID_FOR}` : "all your workspaces"}`
+    : `${coOwned ? `${person.name}'s` : "The owner's"} posts today (UTC), ${billing ? `their ${NOT_YET_PAID_FOR}` : "all their workspaces"}`;
   const confirms = person.isViewer
     ? "you confirm your email address"
     : `${coOwned ? person.name : "the owner"} confirms their email address`;
@@ -526,7 +532,7 @@ export function stillTodayText(
     note:
       still.decidedBy === "workspace"
         ? `This workspace's own daily limit leaves ${posts}.`
-        : `The daily limit of ${still.coOwned ? "one of its owners" : "its owner"}, counted across ${ownedWorkspaces(env, true)} they own (retries too), leaves ${posts}.`,
+        : `The daily limit of ${still.coOwned ? "one of its owners" : "its owner"}, counted across ${ownedWorkspaces(env, true)} (retries too), leaves ${posts}.`,
   };
 }
 

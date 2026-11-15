@@ -71,6 +71,8 @@ export type PlanWrite = {
   trialEndsAt?: Date;
   stripeSubscriptionId: string;
   stripeCustomerId?: string;
+  /** R10-security M1: absent leaves it; see {@link planPaidAtWrite}. */
+  planPaidAt?: Date | null;
 };
 
 /** A candidate in use whose price is none of the three plan prices. */
@@ -195,4 +197,46 @@ export function syncFromCustomerList(
     ? ["the workspace is exempt by its flag, so it keeps the default limits until the operator clears the exemption"]
     : [];
   return { ok: true, data, warnings, liveCandidateIds: ranked.map((s) => s.id), unconfigured };
+}
+
+/** R10-security M1: a paid invoice of a subscription, from an invoice.paid payload. */
+export type PaidInvoice = { subscriptionId: string; paidAt: Date };
+
+/**
+ * What an invoice.paid payload says about a plan: its subscription and when
+ * it was paid (else `now`). Null when it says nothing: an amount of zero (the
+ * trial's invoice, or one a coupon covers) does not count as paid, and an
+ * invoice with no subscription (a one-off) is not about a plan. The payload
+ * is read because a paid invoice stays paid, so an old or repeated event
+ * cannot say something no longer true. The subscription is under
+ * parent.subscription_details in the pinned API version; a webhook endpoint
+ * renders events in its own version, so the older top-level field is read too.
+ */
+export function paidInvoiceOf(invoice: Record<string, unknown>, now: Date): PaidInvoice | null {
+  const amount = invoice.amount_paid;
+  if (typeof amount !== "number" || !(amount > 0)) return null;
+  const parent = invoice.parent as { subscription_details?: { subscription?: StripeId | null } | null } | null | undefined;
+  const subscriptionId =
+    stripeIdOf(parent?.subscription_details?.subscription) ?? stripeIdOf(invoice.subscription as StripeId | null | undefined);
+  if (!subscriptionId) return null;
+  const paidAt = (invoice.status_transitions as { paid_at?: number | null } | null | undefined)?.paid_at;
+  return { subscriptionId, paidAt: fromUnixSeconds(paidAt) ?? now };
+}
+
+/**
+ * R10-security M1: planPaidAt beside a sync's write. A paid invoice of the
+ * subscription being written sets it, whatever Stripe's status reads at that
+ * moment (paysForPlan also needs a plan in use). Otherwise it is cleared when
+ * the subscription changes (a new checkout counts until its own invoice is
+ * paid) or the plan has ended, and left as it is while the same subscription
+ * stays in use.
+ */
+export function planPaidAtWrite(
+  storedSubscriptionId: string | null,
+  data: PlanWrite,
+  paid: PaidInvoice | null,
+): { planPaidAt?: Date | null } {
+  if (paid && paid.subscriptionId === data.stripeSubscriptionId) return { planPaidAt: paid.paidAt };
+  if (storedSubscriptionId !== data.stripeSubscriptionId || !isInUse(data.planStatus)) return { planPaidAt: null };
+  return {};
 }

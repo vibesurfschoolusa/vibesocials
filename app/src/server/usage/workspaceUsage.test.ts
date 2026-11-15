@@ -361,7 +361,7 @@ describe("the limit-reached email", () => {
     );
     const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
     expect(html).toContain(
-      "<strong>Surf Co</strong> reached its limit of 20 posts for 12 November (UTC). Posts on other days are not affected.",
+      "<strong>Surf Co</strong> reached its limit of 20 posts for November 12, 2026 (UTC). Posts on other days are not affected.",
     );
     expect(html).not.toContain("possible again");
   });

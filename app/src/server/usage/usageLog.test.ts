@@ -63,7 +63,13 @@ const DAY = 24 * 60 * 60 * 1000;
 const LONG_AGO = new Date("2026-10-01T00:00:00Z");
 const OWNER = { userId: "owner-1", user: { email: "owner@example.com", emailVerifiedAt: LONG_AGO, createdAt: LONG_AGO } };
 const TRIAL = { billingExempt: false, trialEndsAt: new Date("2026-11-20T00:00:00Z") };
-const PAID = { billingExempt: false, plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2026-12-10T00:00:00Z") };
+const PAID = {
+  billingExempt: false,
+  plan: "growth",
+  planStatus: "active",
+  currentPeriodEnd: new Date("2026-12-10T00:00:00Z"),
+  planPaidAt: new Date("2026-11-10T01:00:00Z"),
+};
 
 beforeEach(() => {
   // Plan states are read at the current time.
@@ -124,14 +130,15 @@ describe("serviceCapApplies: every plan state", () => {
 
   it.each([
     ["trial", { billingExempt: false, trialEndsAt: DAYS(5) }, true],
-    ["active plan", plan({ planStatus: "active", currentPeriodEnd: DAYS(20) }), false],
+    ["active plan, paid", plan({ planStatus: "active", currentPeriodEnd: DAYS(20), planPaidAt: DAYS(-10) }), false],
+    // R10-security M1: active at Stripe before the first invoice is paid (the trial just ended, or no trial yet).
+    ["active plan, no paid invoice recorded", plan({ planStatus: "active", currentPeriodEnd: DAYS(20) }), true],
     // R9-security M1: a card trial keeps its plan's features but is counted until Stripe is paid.
     ["trialing plan", plan({ planStatus: "trialing", currentPeriodEnd: DAYS(20), trialEndsAt: DAYS(20) }), true],
-    ["past_due within the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3) }), false],
-    ["past_due after a paid period", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3), trialEndsAt: DAYS(-34) }), false],
+    ["past_due after a paid period, within the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3), trialEndsAt: DAYS(-34), planPaidAt: DAYS(-34) }), false],
     ["past_due straight after the card trial", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3), trialEndsAt: DAYS(-3) }), true],
     ["past_due after the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-8) }), true],
-    ["set to cancel at the period end, still active", plan({ planStatus: "active", currentPeriodEnd: DAYS(10) }), false],
+    ["set to cancel at the period end, still active", plan({ planStatus: "active", currentPeriodEnd: DAYS(10), planPaidAt: DAYS(-20) }), false],
     ["ended plan", plan({ planStatus: "canceled", currentPeriodEnd: DAYS(-1) }), true],
     ["ended trial", { billingExempt: false, trialEndsAt: DAYS(-1) }, true],
     ["exempt by flag (grandfathered)", { billingExempt: true }, false],
@@ -328,6 +335,7 @@ describe("before a workspace is deleted", () => {
         planStatus: true,
         trialEndsAt: true,
         currentPeriodEnd: true,
+        planPaidAt: true,
         members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
       },
     });

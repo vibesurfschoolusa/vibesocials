@@ -21,6 +21,7 @@ type Row = {
   trialEndsAt: Date | null;
   currentPeriodEnd: Date | null;
   planEndsAt?: Date | null;
+  planPaidAt?: Date | null;
 };
 
 type Sub = import("./stripeApi").StripeSubscription;
@@ -146,6 +147,8 @@ vi.mock("@/lib/db", () => {
   };
   return { prisma };
 });
+
+import { paysForPlan } from "@/lib/billing";
 
 import { handleStripeEvent } from "./stripeWebhook";
 
@@ -608,8 +611,169 @@ describe("payloads", () => {
   });
 });
 
+// R10-security M1: "paid" is a paid invoice recorded for the workspace's current subscription.
+describe("invoice.paid and planPaidAt", () => {
+  const PAID_AT = PERIOD_START + 3600;
+  /** A day into the period: planState is "active" for every plan in use here. */
+  const INSIDE = new Date((PERIOD_START + DAY) * 1000);
+  const paid = () => paysForPlan(ws(), INSIDE);
+  const invoicePaid = (id: string, subscriptionId: string | null = "sub_1", amount = 4900) => ({
+    id,
+    type: "invoice.paid",
+    created: T,
+    data: {
+      object: {
+        id: `in_${id}`,
+        object: "invoice",
+        customer: "cus_a",
+        amount_paid: amount,
+        status: "paid",
+        status_transitions: { paid_at: PAID_AT },
+        parent: subscriptionId ? { type: "subscription_details", subscription_details: { subscription: subscriptionId } } : null,
+      },
+    },
+  });
+  const update = (id: string, state: Partial<Sub>, subscriptionId = "sub_1") => {
+    stripeHas(sub({ id: subscriptionId, ...state }));
+    return handleStripeEvent(subscriptionEvent(id, "customer.subscription.updated", subscriptionId), ENV);
+  };
+
+  it("the card trial ends: Stripe calls it active while the first invoice is a draft, and it is still counted", async () => {
+    await update("evt_1", { status: "trialing", trial_end: PERIOD_START });
+    expect(paid()).toBe(false);
+    await update("evt_2", { status: "active", trial_end: PERIOD_START });
+    expect(ws()).toMatchObject({ planStatus: "active", stripeSubscriptionId: "sub_1" });
+    expect(ws().planPaidAt ?? null).toBeNull();
+    expect(paid()).toBe(false);
+  });
+
+  it("invoice.paid for the workspace's subscription: synced under the lock, then paid", async () => {
+    await update("evt_1", { status: "active", trial_end: PERIOD_START });
+    m.calls = [];
+    expect(await handleStripeEvent(invoicePaid("evt_p"), ENV)).toBe(200);
+    expect(m.calls).toEqual(["retrieve:sub_1", "lock:ws_a", "record:evt_p", "retrieve:sub_1", "list:cus_a", "write:ws_a"]);
+    expect(ws().planPaidAt).toEqual(new Date(PAID_AT * 1000));
+    expect(paid()).toBe(true);
+    // Later events for the same subscription keep it.
+    await update("evt_2", { status: "active", trial_end: PERIOD_START, cancel_at_period_end: true });
+    expect(paid()).toBe(true);
+  });
+
+  it("a checkout with no trial is paid once invoice.paid arrives", async () => {
+    stripeHas(sub());
+    await handleStripeEvent(
+      {
+        id: "evt_c",
+        type: "checkout.session.completed",
+        created: T,
+        data: { object: { id: "cs_1", mode: "subscription", subscription: "sub_1", client_reference_id: "ws_a", customer: "cus_a" } },
+      },
+      ENV,
+    );
+    expect(ws()).toMatchObject({ planStatus: "active", stripeSubscriptionId: "sub_1" });
+    expect(paid()).toBe(false);
+    await handleStripeEvent(invoicePaid("evt_p"), ENV);
+    expect(paid()).toBe(true);
+  });
+
+  it("invoice.paid before any of the checkout's subscription events: the subscription and the payment are written together", async () => {
+    stripeHas(sub());
+    expect(ws().stripeSubscriptionId).toBeNull();
+    expect(await handleStripeEvent(invoicePaid("evt_p"), ENV)).toBe(200);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "active", planPaidAt: new Date(PAID_AT * 1000) });
+    // The subscription's own events, delivered after, change nothing about it.
+    await update("evt_late", { status: "active" });
+    expect(paid()).toBe(true);
+  });
+
+  it("the first charge after the trial fails: past_due, and still counted", async () => {
+    await update("evt_1", { status: "trialing", trial_end: PERIOD_START });
+    await update("evt_2", { status: "past_due", trial_end: PERIOD_START });
+    expect(ws()).toMatchObject({ planStatus: "past_due" });
+    expect(paid()).toBe(false);
+  });
+
+  it("a renewal fails after a paid period: past_due stays paid within the grace", async () => {
+    await update("evt_1", { status: "active" });
+    await handleStripeEvent(invoicePaid("evt_p"), ENV);
+    await update("evt_2", { status: "past_due", ...priced("price_example_starter", PERIOD_END, PERIOD_END + 30 * DAY) });
+    expect(ws().planPaidAt).toEqual(new Date(PAID_AT * 1000));
+    expect(paysForPlan(ws(), new Date((PERIOD_END + DAY) * 1000))).toBe(true);
+    expect(paysForPlan(ws(), new Date((PERIOD_END + 8 * DAY) * 1000))).toBe(false);
+  });
+
+  it("a new checkout on another subscription is counted until its own invoice is paid", async () => {
+    await update("evt_1", { status: "active" });
+    await handleStripeEvent(invoicePaid("evt_p1"), ENV);
+    expect(paid()).toBe(true);
+    // sub_1 ended; the owner checks out again and Stripe makes sub_2.
+    stripeHas(sub({ status: "canceled", ended_at: PERIOD_START + 2 * DAY, canceled_at: PERIOD_START + 2 * DAY }));
+    await update("evt_2", { status: "active", created: T + 5 * DAY }, "sub_2");
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "active" });
+    expect(ws().planPaidAt).toBeNull();
+    expect(paid()).toBe(false);
+    // A late repeat about the old subscription's invoice does not make it paid.
+    await handleStripeEvent(invoicePaid("evt_p1_late", "sub_1"), ENV);
+    expect(paid()).toBe(false);
+    await handleStripeEvent(invoicePaid("evt_p2", "sub_2"), ENV);
+    expect(paid()).toBe(true);
+  });
+
+  it("the plan ends: cleared", async () => {
+    await update("evt_1", { status: "active" });
+    await handleStripeEvent(invoicePaid("evt_p"), ENV);
+    await update("evt_2", { status: "canceled", ended_at: PERIOD_START + 2 * DAY, canceled_at: PERIOD_START + 2 * DAY });
+    expect(ws()).toMatchObject({ planStatus: "canceled", planPaidAt: null });
+  });
+
+  it("a zero-amount invoice (the trial's) does not count as paid: recorded, no Stripe call, nothing written", async () => {
+    await update("evt_1", { status: "trialing", trial_end: PERIOD_START });
+    m.calls = [];
+    const before = { ...ws() };
+    expect(await handleStripeEvent(invoicePaid("evt_zero", "sub_1", 0), ENV)).toBe(200);
+    expect(stripeCalls()).toEqual([]);
+    expect(m.events.has("evt_zero")).toBe(true);
+    expect(ws()).toEqual(before);
+    // Nor once the trial is over.
+    await update("evt_2", { status: "active", trial_end: PERIOD_START });
+    await handleStripeEvent(invoicePaid("evt_zero2", "sub_1", 0), ENV);
+    expect(paid()).toBe(false);
+  });
+
+  it("an invoice for no subscription (a one-off) is recorded and ignored", async () => {
+    expect(await handleStripeEvent(invoicePaid("evt_one", null), ENV)).toBe(200);
+    expect(stripeCalls()).toEqual([]);
+    expect(m.events.has("evt_one")).toBe(true);
+  });
+
+  it("a paid invoice whose subscription is not this customer's writes nothing", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" }));
+    const before = { ...ws() };
+    stripeHas(sub({ customer: "cus_b" }));
+    expect(await handleStripeEvent(invoicePaid("evt_x"), ENV)).toBe(200);
+    expect(ws()).toEqual(before);
+  });
+
+  it("Stripe failing inside the transaction answers 500 and records nothing, so Stripe sends it again", async () => {
+    await update("evt_1", { status: "active" });
+    m.listFails = new Error("Stripe answered 503");
+    expect(await handleStripeEvent(invoicePaid("evt_p"), ENV)).toBe(500);
+    expect(m.events.has("evt_p")).toBe(false);
+    expect(paid()).toBe(false);
+    m.listFails = null;
+    expect(await handleStripeEvent(invoicePaid("evt_p"), ENV)).toBe(200);
+    expect(paid()).toBe(true);
+  });
+
+  it("an invoice.paid with no object id logs that the endpoint must send snapshot payloads", async () => {
+    expect(await handleStripeEvent({ id: "evt_thin3", type: "invoice.paid", data: { object: {} } }, ENV)).toBe(200);
+    expect(stripeCalls()).toEqual([]);
+    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("snapshot"), expect.objectContaining({ eventId: "evt_thin3" }));
+  });
+});
+
 describe("invoice.payment_failed", () => {
-  const failed = (id: string, invoice = "in_1", customer = "cus_a") => ({
+  const failed =(id: string, invoice = "in_1", customer = "cus_a") => ({
     id,
     type: "invoice.payment_failed",
     data: { object: { id: invoice, object: "invoice", customer } },
@@ -673,8 +837,8 @@ describe("invoice.payment_failed", () => {
 
 describe("other events and bad input", () => {
   it("records and ignores any other type", async () => {
-    expect(await handleStripeEvent({ id: "evt_o", type: "invoice.paid", data: { object: {} } }, ENV)).toBe(200);
-    expect(m.events.get("evt_o")).toBe("invoice.paid");
+    expect(await handleStripeEvent({ id: "evt_o", type: "invoice.created", data: { object: {} } }, ENV)).toBe(200);
+    expect(m.events.get("evt_o")).toBe("invoice.created");
     expect(stripeCalls()).toEqual([]);
   });
 

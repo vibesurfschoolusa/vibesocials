@@ -110,7 +110,7 @@ const USAGE = {
 // R8-new-customer L1: beside the workspace's number, the viewer's own one where it applies.
 describe("PlanSection: posts per day", () => {
   type Reduced = "unconfirmed" | "first_day" | "first_day_unconfirmed" | null;
-  const render = (personalPostNote: { limit: number; reduced: Reduced } | null) =>
+  const render = (personalPostNote: { limit: number; reduced: Reduced; untilFirstPayment?: boolean } | null) =>
     renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE, personalPostNote }));
   /** The first day ends at 00:00 UTC on Tuesday 17 November: the Usage counts' reset. */
   const FIRST_DAY_USAGE = { ...USAGE, postsToday: { used: 0, limit: 20, resetsAt: new Date("2026-11-17T00:00:00Z") } };
@@ -140,18 +140,22 @@ describe("PlanSection: posts per day", () => {
     );
   });
 
-  // R9-pages L4: with billing on, paid workspaces are not counted.
-  it("with billing on: your free workspaces, for every reason", () => {
+  // R9-pages L4 and R10-pages M1: with billing on, paid workspaces are not
+  // counted; free ones and plans not yet paid for (card trials) are.
+  it("with billing on: your workspaces not yet paid for, for every reason", () => {
     vi.stubEnv("BILLING_ENABLED", "true");
     expect(render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null })).toContain(
-      `20 (each person can send up to ${OWNER_DAILY_POST_LIMIT} a day across their free workspaces)`,
+      `20 (each person can send up to ${OWNER_DAILY_POST_LIMIT} a day across their workspaces not yet paid for)`,
     );
     expect(render({ limit: 5, reduced: "unconfirmed" })).toContain(
-      `20 (up to 5 a day for you across your free workspaces until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`,
+      `20 (up to 5 a day for you across your workspaces not yet paid for until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`,
     );
     expect(render({ limit: 5, reduced: "first_day" })).toContain(
-      `20 (up to 5 a day for you across your free workspaces on your account&#x27;s first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`,
+      `20 (up to 5 a day for you across your workspaces not yet paid for on your account&#x27;s first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`,
     );
+    for (const reduced of [null, "unconfirmed", "first_day", "first_day_unconfirmed"] as const) {
+      expect(render({ limit: 5, reduced }), String(reduced)).not.toContain("free workspaces");
+    }
     for (const reduced of [null, "unconfirmed", "first_day", "first_day_unconfirmed"] as const) {
       expect(render({ limit: 5, reduced }), String(reduced)).not.toContain("all your workspaces");
       expect(render({ limit: 5, reduced }), String(reduced)).not.toContain("all their workspaces");
@@ -175,6 +179,19 @@ describe("PlanSection: posts per day", () => {
     expect(render({ limit: 5, reduced: "first_day" })).toContain(
       `20 (up to 5 a day for you across all your workspaces on your account&#x27;s first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`,
     );
+  });
+
+  // R10-pages M1: a plan in its card trial, or active before the first invoice is paid.
+  it("a plan not yet paid for: until the first payment, with the viewer's own number", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    const html = render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null, untilFirstPayment: true });
+    expect(html).toContain(`Until the first payment, posts here count toward your ${OWNER_DAILY_POST_LIMIT} a day.`);
+    expect(html).toContain(`across their workspaces not yet paid for)`);
+    expect(render({ limit: 5, reduced: "unconfirmed", untilFirstPayment: true })).toContain(
+      "Until the first payment, posts here count toward your 5 a day.",
+    );
+    expect(render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null })).not.toContain("Until the first payment");
+    expect(render(null)).not.toContain("Until the first payment");
   });
 
   it("no note (a paying workspace): the workspace's number alone", () => {

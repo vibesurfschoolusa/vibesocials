@@ -32,6 +32,7 @@ const WORKSPACE_SELECT_ON = {
   planStatus: true,
   trialEndsAt: true,
   currentPeriodEnd: true,
+  planPaidAt: true,
 };
 
 function workspace(overrides: Record<string, unknown> = {}) {

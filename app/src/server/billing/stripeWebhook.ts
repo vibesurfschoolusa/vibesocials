@@ -12,7 +12,15 @@ import {
   type StripeId,
   type StripeSubscription,
 } from "./stripeApi";
-import { isInUse, stripeIdOf, syncFromCustomerList, type CheckoutClaim } from "./subscriptionSync";
+import {
+  isInUse,
+  paidInvoiceOf,
+  planPaidAtWrite,
+  stripeIdOf,
+  syncFromCustomerList,
+  type CheckoutClaim,
+  type PaidInvoice,
+} from "./subscriptionSync";
 
 /**
  * What POST /api/webhooks/stripe does with an event whose signature has been
@@ -33,6 +41,12 @@ import { isInUse, stripeIdOf, syncFromCustomerList, type CheckoutClaim } from ".
  *      were created or delivered in.
  * A Stripe or database failure inside rolls everything back, records nothing
  * and answers 500, so Stripe sends the event again.
+ *
+ * R10-security M1: invoice.paid of a subscription, for an amount over zero,
+ * is handled the same way, and its write also sets planPaidAt when the
+ * subscription it writes is the invoice's (planPaidAtWrite). Syncing first
+ * means a paid invoice delivered before the checkout's subscription events
+ * still lands on the subscription it paid for.
  */
 
 type StripeEventBody = {
@@ -102,6 +116,7 @@ async function syncSubscription(
   subscriptionId: string,
   claim: CheckoutClaim | null,
   env: BillingEnv,
+  paid: PaidInvoice | null = null,
 ): Promise<200 | 500> {
   reportDuplicatePriceIds("webhook", env);
   // 1. Which workspace: read only to know which row to lock.
@@ -182,7 +197,10 @@ async function syncSubscription(
         });
         return;
       }
-      await tx.workspace.update({ where: { id: workspace!.id }, data: result.data });
+      await tx.workspace.update({
+        where: { id: workspace!.id },
+        data: { ...result.data, ...planPaidAtWrite(workspace!.stripeSubscriptionId, result.data, paid) },
+      });
       if (result.liveCandidateIds.length > 1) {
         logger.error("[stripe webhook] The customer has more than one live subscription; cancel the extra one in Stripe", {
           eventId: event.id,
@@ -283,6 +301,7 @@ export async function handleStripeEvent(body: unknown, env: BillingEnv = process
   const handled =
     event.type === "checkout.session.completed" ||
     event.type.startsWith("customer.subscription.") ||
+    event.type === "invoice.paid" ||
     event.type === "invoice.payment_failed";
   if (handled && typeof object.id !== "string") {
     // A thin payload names the object elsewhere; there is nothing to fetch.
@@ -303,6 +322,11 @@ export async function handleStripeEvent(body: unknown, env: BillingEnv = process
     const subscriptionId = typeof object.id === "string" ? object.id : null;
     if (!subscriptionId) return recordOnly(event);
     return syncSubscription(event, subscriptionId, null, env);
+  }
+  if (event.type === "invoice.paid") {
+    const paid = paidInvoiceOf(object, new Date());
+    if (!paid) return recordOnly(event);
+    return syncSubscription(event, paid.subscriptionId, null, env, paid);
   }
   if (event.type === "invoice.payment_failed") return notifyPaymentFailed(event);
   return recordOnly(event);

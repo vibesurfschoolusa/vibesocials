@@ -66,6 +66,7 @@ describe("getWorkspaceLimits", () => {
         planStatus: true,
         trialEndsAt: true,
         currentPeriodEnd: true,
+        planPaidAt: true,
       },
     });
     expect(limits.postsPerDay).toBe(PLANS.growth.limits.postsPerDay);

@@ -315,9 +315,11 @@ describe("limits across workspaces", () => {
       24 * (1 + 1) + // YouTube numbers, hourly: one page
       24 * (1 + 2) + // stale post sweep, hourly: fail stale, heal
       (1 + 7) + // connection health, daily: start, page, fan-out, purge, LinkedIn, Google, notices
-      10 * (1 + 1) + // the token refreshes it fans out (about 10 connections near expiry)
+      1 * (1 + 1) + // the token refreshes it fans out: paid, operator and grandfathered only; free ones run inline in its step (V3)
       (1 + 2) + (1 + 3) + (1 + 1) + (1 + 1) + (1 + 1) + (1 + 1); // digest, review alerts, listing, social, billing, orphan sweep
-    expect(idle).toBe(523);
+    expect(idle).toBe(505);
+    // The sizing below uses 525: room for a day with more fanned-out refreshes.
+    expect(525).toBeGreaterThanOrEqual(idle);
 
     // A run to 6 platforms: the publish run, its fetch, 6 platform steps,
     // finalize and the outcome event (10), and the outcome email's run and step (2).
@@ -345,18 +347,32 @@ describe("limits across workspaces", () => {
     const off = {};
     const on = { BILLING_ENABLED: "true" };
     const trial = { billingExempt: false, trialEndsAt: new Date("2026-11-20T00:00:00Z") };
-    const paid = { billingExempt: false, plan: "starter", planStatus: "active", currentPeriodEnd: new Date("2026-12-14T00:00:00Z") };
+    const paid = {
+      billingExempt: false,
+      plan: "starter",
+      planStatus: "active",
+      currentPeriodEnd: new Date("2026-12-14T00:00:00Z"),
+      planPaidAt: new Date("2026-11-14T01:00:00Z"),
+    };
     expect(personalPostLimitApplies(paid, off, now)).toBe(true);
     expect(personalPostLimitApplies({ billingExempt: true }, off, now)).toBe(true);
     expect(personalPostLimitApplies(trial, on, now)).toBe(true);
     expect(personalPostLimitApplies(paid, on, now)).toBe(false);
     expect(personalPostLimitApplies({ billingExempt: true }, on, now)).toBe(false);
     // R9-security M1: a plan in its card trial is counted until Stripe has been paid.
-    const trialing = { ...paid, planStatus: "trialing", trialEndsAt: new Date("2026-11-20T00:00:00Z") };
+    const trialing = { ...paid, planStatus: "trialing", trialEndsAt: new Date("2026-11-20T00:00:00Z"), planPaidAt: null };
     expect(personalPostLimitApplies(trialing, on, now)).toBe(true);
-    const neverPaid = { ...paid, planStatus: "past_due", trialEndsAt: new Date("2026-11-12T00:00:00Z"), currentPeriodEnd: new Date("2026-11-12T00:00:00Z") };
+    const neverPaid = {
+      ...paid,
+      planStatus: "past_due",
+      trialEndsAt: new Date("2026-11-12T00:00:00Z"),
+      currentPeriodEnd: new Date("2026-11-12T00:00:00Z"),
+      planPaidAt: null,
+    };
     expect(personalPostLimitApplies(neverPaid, on, now)).toBe(true);
-    expect(personalPostLimitApplies({ ...neverPaid, currentPeriodEnd: new Date("2026-11-13T00:00:00Z"), trialEndsAt: new Date("2026-10-12T00:00:00Z") }, on, now)).toBe(false);
+    expect(personalPostLimitApplies({ ...neverPaid, planPaidAt: new Date("2026-10-12T01:00:00Z") }, on, now)).toBe(false);
+    // R10-security M1: active at Stripe, first invoice not yet paid: counted.
+    expect(personalPostLimitApplies({ ...paid, planPaidAt: null }, on, now)).toBe(true);
     // R6-new-customer M1: made while billing was off (no plan, no trial) and
     // counted by the service's cap, so the per-person total counts it too.
     expect(personalPostLimitApplies({ billingExempt: false }, on, now)).toBe(true);
@@ -537,41 +553,43 @@ describe("limits across workspaces", () => {
     ).toContain("15 from 00:00 UTC tomorrow. ");
   });
 
-  // R9-pages L4: with billing on, paid workspaces are not counted, so every sentence says "free".
-  describe("with billing on: your free workspaces", () => {
+  // R9-pages L4 and R10-pages M1: with billing on, paid workspaces are not
+  // counted; a plan in its card trial or before its first payment is, so the
+  // sentences say "not yet paid for", not "free".
+  describe("with billing on: your workspaces not yet paid for", () => {
     const ON = { BILLING_ENABLED: "true" };
 
     it("the Usage label and note", () => {
       expect(personalUsageText({ name: "Jane", isViewer: true, reduced: null }, false, {}, ON)).toEqual({
-        label: "Your posts today (UTC), your free workspaces",
+        label: "Your posts today (UTC), your workspaces not yet paid for",
         note: "Retries count too. The per-person number is the same for everyone while free.",
       });
       expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, true, {}, ON).label).toBe(
-        "Jane's posts today (UTC), their free workspaces",
+        "Jane's posts today (UTC), their workspaces not yet paid for",
       );
       expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, false, {}, ON).label).toBe(
-        "The owner's posts today (UTC), their free workspaces",
+        "The owner's posts today (UTC), their workspaces not yet paid for",
       );
     });
 
     it("the refusal sentences", () => {
       expect(ownerDailyPostLimitMessage(15, "now", null, null, {}, ON)).toBe(
-        "This workspace's owner has reached the limit of 15 posts a day across the free workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+        "This workspace's owner has reached the limit of 15 posts a day across their workspaces not yet paid for, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
       );
       expect(ownerDailyPostLimitMessage(15, "retry", null, null, {}, ON)).toBe(
-        "This workspace's owner has reached the limit of 15 posts a day across the free workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.",
+        "This workspace's owner has reached the limit of 15 posts a day across their workspaces not yet paid for, and retries count toward it. Retry tomorrow, or schedule the post again for another day.",
       );
       expect(ownerDailyPostLimitMessage(15, "schedule", null, null, {}, ON)).toBe(
-        "That day already has 15 posts across the free workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.",
+        "That day already has 15 posts across this workspace's owner's workspaces not yet paid for, which is the daily limit for one person (retries count toward it). Pick another day.",
       );
       expect(ownerDailyPostLimitMessage(5, "schedule", null, { name: "Maria", coOwned: true, isViewer: false }, {}, ON)).toBe(
-        "Maria, an owner of this workspace, already has 5 posts that day across the free workspaces they own, which is the daily limit for one person (retries count toward it). Pick another day.",
+        "Maria, an owner of this workspace, already has 5 posts that day across their workspaces not yet paid for, which is the daily limit for one person (retries count toward it). Pick another day.",
       );
     });
 
     it("the member line", () => {
       expect(stillTodayText({ remaining: 3, decidedBy: "owner", coOwned: false }, ON).note).toBe(
-        "The daily limit of its owner, counted across the free workspaces they own (retries too), leaves 3 posts.",
+        "The daily limit of its owner, counted across their workspaces not yet paid for (retries too), leaves 3 posts.",
       );
       expect(stillTodayText({ remaining: 3, decidedBy: "owner", coOwned: true }, {}).note).toBe(
         "The daily limit of one of its owners, counted across all the workspaces they own (retries too), leaves 3 posts.",

@@ -6,19 +6,20 @@ import { GROWTH_ADDS_LINE, planIncludesLine } from "@/lib/plans";
 import { firstDayEndsLocal, formatStorageGb, OWNER_DAILY_POST_LIMIT, type ReducedNoteTime } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
-import { NO_PLAN_CANCEL_LATER_LINE, type PersonalPostNote } from "./planSectionView";
+import { NO_PLAN_CANCEL_LATER_LINE, planUntilFirstPaymentLine, type PersonalPostNote } from "./planSectionView";
 
 export const PLAN_SWITCH_LINE = "To switch plans, use Manage plan, card and invoices.";
 
 /**
  * R8-new-customer L1: the viewer's own number beside the workspace's, with
  * its reason when lower. R9-pages L1: both reasons on an unconfirmed
- * account's first day. R9-pages L4: with billing on only free workspaces
- * count. The first day's end is given in the viewer's own time when known.
+ * account's first day. R9-pages L4 and R10-pages M1: with billing on only
+ * the workspaces not yet paid for count (free ones and plans before their
+ * first payment). The first day's end is given in the viewer's own time when known.
  */
 function personalPostNoteText(note: PersonalPostNote, time: ReducedNoteTime): string {
-  const free = billingEnabled();
-  const yours = free ? "your free workspaces" : "all your workspaces";
+  const billing = billingEnabled();
+  const yours = billing ? "your workspaces not yet paid for" : "all your workspaces";
   const local = firstDayEndsLocal(time);
   const fromMidnight = local ? `from ${local} (00:00 UTC)` : "from 00:00 UTC";
   if (note.reduced === "unconfirmed") {
@@ -30,7 +31,7 @@ function personalPostNoteText(note: PersonalPostNote, time: ReducedNoteTime): st
   if (note.reduced === "first_day_unconfirmed") {
     return `(up to ${note.limit} a day for you today: your account is new and your email isn't confirmed yet. ${OWNER_DAILY_POST_LIMIT} ${fromMidnight} once you confirm it.)`;
   }
-  return `(each person can send up to ${note.limit} a day across ${free ? "their free workspaces" : "all their workspaces"})`;
+  return `(each person can send up to ${note.limit} a day across ${billing ? "their workspaces not yet paid for" : "all their workspaces"})`;
 }
 
 /**
@@ -110,6 +111,9 @@ export function PlanSection({
       ) : (
         <p className="text-sm text-muted-foreground">The limits are not available right now. Reload the page to try again.</p>
       )}
+      {personalPostNote?.untilFirstPayment ? (
+        <p className="text-sm text-muted-foreground">{planUntilFirstPaymentLine(personalPostNote.limit)}</p>
+      ) : null}
       {/* P1: what each offered plan includes, as on the pricing cards. */}
       {offers.length > 0 ? (
         <ul className="space-y-1 text-sm text-muted-foreground">
