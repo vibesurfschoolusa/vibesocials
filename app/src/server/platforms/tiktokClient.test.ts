@@ -1243,6 +1243,52 @@ describe("tiktokClient.publishVideo", () => {
     expect(updateCalls()[0].data.needsReconnect).toBe(true);
   });
 
+  // R18 DD2 follow-up: a failed account check reads as plain text with a next step. The cause
+  // (an endpoint name, a timeout's wording) goes to the log only; the code is kept, and so is the
+  // missing status, so retries and publishErrorMessage's choice are as before.
+  describe("a failed creator_info check", () => {
+    const CHECK_FAILED =
+      "TikTok didn't answer the account check it needs before a post, so nothing was posted. Try again in a few minutes.";
+
+    it("an answer with no data: plain text, code kept, shown as written", async () => {
+      stubFetch({ "creator_info/query": () => jsonResponse({ error: { code: "ok" } }) });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("TIKTOK_CREATOR_INFO_FAILED");
+      expect(error?.message).toBe(CHECK_FAILED);
+      expect(publishErrorMessage("tiktok", error!)).toBe(CHECK_FAILED);
+    });
+
+    it("a timeout keeps FETCH_TIMEOUT, and its wording stays out of the text", async () => {
+      stubFetch({
+        "creator_info/query": () => {
+          throw Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" });
+        },
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("FETCH_TIMEOUT");
+      expect(error?.message).toBe(CHECK_FAILED);
+      expect(publishErrorMessage("tiktok", error!)).toBe(CHECK_FAILED);
+    });
+
+    it.each([400, 503])("a %i: no status on the error, as before, and the user never reads creator_info", async (status) => {
+      stubFetch({ "creator_info/query": () => jsonResponse({ error: { code: "x" } }, status) });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("TIKTOK_CREATOR_INFO_FAILED");
+      expect(error?.status).toBeUndefined();
+      const shown = publishErrorMessage("tiktok", error!);
+      expect(shown).not.toMatch(/creator_info|status \d{3}/);
+      expect(shown).toBe(
+        publishErrorMessage("tiktok", { code: "TIKTOK_CREATOR_INFO_FAILED", message: `any (status ${status})` }),
+      );
+    });
+  });
+
   it("maps a 401 from creator_info to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
     stubFetch({
       "creator_info/query": () =>

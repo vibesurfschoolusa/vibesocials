@@ -12,7 +12,9 @@ import { publishErrorMessage } from "@/lib/publishFailureText";
 // in error.status; the text says what happened and what to try.
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-const clients = readdirSync(here).filter((name) => /Client\.ts$/.test(name));
+// Every source file here, not only the clients: helpers such as largeUpload.ts throw texts that reach
+// publishErrorMessage unchanged.
+const sources = readdirSync(here).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"));
 
 const STATUS = /status (?:\$\{[^}]*\}|\d{3})/g;
 
@@ -39,14 +41,22 @@ function midSentenceStatuses(file: string): string[] {
 // shows this text (checked below).
 const NEVER_SHOWN = ["Pinterest did not renew this connection (status ${response.status})"];
 
-describe("platform clients: no HTTP status in the middle of a message", () => {
-  it("finds the clients", () => {
-    expect(clients).toEqual(
-      expect.arrayContaining(["facebookPageClient.ts", "instagramClient.ts", "linkedinClient.ts", "xClient.ts"]),
+describe("platform sources: no HTTP status in the middle of a message", () => {
+  it("finds the clients and their helpers", () => {
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        "facebookPageClient.ts",
+        "instagramClient.ts",
+        "linkedinClient.ts",
+        "xClient.ts",
+        "tiktokClient.ts",
+        "largeUpload.ts",
+      ]),
     );
+    expect(sources.some((name) => name.endsWith(".test.ts"))).toBe(false);
   });
 
-  it.each(clients)("%s puts a status only in a closing (status N), which publishErrorMessage replaces", (file) => {
+  it.each(sources)("%s puts a status only in a closing (status N), which publishErrorMessage replaces", (file) => {
     const found = midSentenceStatuses(file).filter((hit) => !NEVER_SHOWN.some((known) => hit.includes(known)));
     expect(found).toEqual([]);
   });

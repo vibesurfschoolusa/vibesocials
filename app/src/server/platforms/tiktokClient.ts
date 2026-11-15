@@ -979,8 +979,13 @@ async function verifyCreatorInfo(
     if (cause.status === 401) {
       await throwTikTokReconnect(socialConnection, "creator_info/query");
     }
+    // The cause (logged above) may name the endpoint or quote a timeout; the user reads plain
+    // text. The code is kept for retries, and no status is added, as before. An HTTP failure
+    // keeps a closing "(status N)", so publishErrorMessage still answers it with its own sentence.
+    const text =
+      "TikTok didn't answer the account check it needs before a post, so nothing was posted. Try again in a few minutes.";
     const error = new Error(
-      `TikTok creator_info check failed: ${cause.message}`,
+      typeof cause.status === "number" ? `${text} (status ${cause.status})` : text,
     ) as Error & { code: string };
     error.code = cause.code ?? "TIKTOK_CREATOR_INFO_FAILED";
     throw error;

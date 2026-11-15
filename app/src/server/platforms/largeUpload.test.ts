@@ -658,3 +658,68 @@ describe("blobInterruptionDetails", () => {
     expect(blobInterruptionDetails(null)).toEqual({ code: undefined });
   });
 });
+
+// R18 DD2 follow-up: what a person reads when the stored video can't be read. The status stays in
+// error.status; each text says nothing was posted and what to try.
+describe("BLOB_READ_FAILED texts", () => {
+  const READ_AGAIN = "Nothing was posted. Upload it again, then retry.";
+  const TRY_AGAIN = "Nothing was posted. Try again.";
+  const opened = () => openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL });
+  const failureOf = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string; status?: number },
+    );
+
+  it.each([404, 416])("a %i: the stored video couldn't be read, no status in the text", async (status) => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status }));
+
+    const error = await failureOf(opened());
+
+    expect(error).toMatchObject({ code: BLOB_READ_FAILED_CODE, status });
+    expect(error?.message).toBe(`The stored video couldn't be read. ${READ_AGAIN}`);
+  });
+
+  it("an unreadable range answer", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(lazySource({ start: OFFSET, total: TOTAL }).stream, { status: 206, headers: { "Content-Range": "garbage" } }),
+    );
+    expect((await failureOf(opened()))?.message).toBe(`The stored video's range answer was unreadable. ${TRY_AGAIN}`);
+  });
+
+  it("a range other than the one asked for", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(lazySource({ start: OFFSET, total: TOTAL }).stream, {
+        status: 206,
+        headers: { "Content-Range": `bytes 0-${TOTAL - 1}/${TOTAL}` },
+      }),
+    );
+    expect((await failureOf(opened()))?.message).toBe(
+      `The stored video answered a different range than asked for. ${TRY_AGAIN}`,
+    );
+  });
+
+  it("a size that can't be checked", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(lazySource({ start: 0, total: TOTAL }).stream, { status: 200 }));
+    expect((await failureOf(opened()))?.message).toBe(`The stored video's size couldn't be checked. ${TRY_AGAIN}`);
+  });
+
+  it("an answer with no content", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 206, headers: { "Content-Range": `bytes ${OFFSET}-${TOTAL - 1}/${TOTAL}` } }));
+    expect((await failureOf(opened()))?.message).toBe(`The stored video had no content. ${READ_AGAIN}`);
+  });
+
+  it("a body that ends before the recorded size, and a read after close", async () => {
+    const total = 3_000_000;
+    fetchMock.mockResolvedValueOnce(full200(lazySource({ start: 0, total: 2_000_000 }), total));
+    const stream = await openBlobChunkStream(URL, { offset: 0, totalBytes: total });
+    expect((await failureOf(stream.read(total)))?.message).toBe(
+      `The stored video ended before its recorded size. ${READ_AGAIN}`,
+    );
+
+    fetchMock.mockResolvedValueOnce(full200(lazySource({ start: 0, total }), total));
+    const closed = await openBlobChunkStream(URL, { offset: 0, totalBytes: total });
+    await closed.close();
+    expect((await failureOf(closed.read(1)))?.message).toBe(`The stored video's stream was already closed. ${TRY_AGAIN}`);
+  });
+});

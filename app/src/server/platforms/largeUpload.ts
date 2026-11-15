@@ -237,7 +237,7 @@ class BlobBodyStream implements BlobChunkStream {
       throw new RangeError("read() needs a whole, non-negative number of bytes");
     }
     if (this.failure) throw this.failure;
-    if (this.closed) throw blobReadFailed("The stored video's stream was already closed.");
+    if (this.closed) throw blobReadFailed("The stored video's stream was already closed. Nothing was posted. Try again.");
     const want = Math.min(bytes, this.totalBytes - this.position);
     if (want === 0) return Buffer.alloc(0);
 
@@ -289,7 +289,7 @@ class BlobBodyStream implements BlobChunkStream {
   private async pull(): Promise<Buffer> {
     const { done, value } = await this.reader.read();
     if (done) {
-      throw blobReadFailed("The stored video ended before its recorded size. Nothing more was uploaded.");
+      throw blobReadFailed("The stored video ended before its recorded size. Nothing was posted. Upload it again, then retry.");
     }
     return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   }
@@ -350,24 +350,25 @@ export async function openBlobChunkStream(
   try {
     if (response.status === 206) {
       const range = parseContentRange(response.headers.get("Content-Range"));
-      if (!range) throw blobReadFailed("The stored video's range answer was unreadable.", { status: 206 });
+      if (!range) throw blobReadFailed("The stored video's range answer was unreadable. Nothing was posted. Try again.", { status: 206 });
       if (range.total !== totalBytes) throw sizeMismatch();
       if (range.first !== offset || range.last !== totalBytes - 1) {
-        throw blobReadFailed("The stored video answered a different range than asked for.", { status: 206 });
+        throw blobReadFailed("The stored video answered a different range than asked for. Nothing was posted. Try again.", { status: 206 });
       }
     } else if (response.status === 200) {
       const header = response.headers.get("Content-Length");
       const length = header !== null && /^\d+$/.test(header.trim()) ? Number(header) : null;
       if (length === null) {
-        throw blobReadFailed("The stored video's size couldn't be checked.", { status: 200 });
+        throw blobReadFailed("The stored video's size couldn't be checked. Nothing was posted. Try again.", { status: 200 });
       }
       if (length !== totalBytes) throw sizeMismatch();
     } else {
-      throw blobReadFailed(`The stored video couldn't be read (status ${response.status}).`, {
+      // The status stays in error.status, out of the text (R18 DD2 follow-up).
+      throw blobReadFailed("The stored video couldn't be read. Nothing was posted. Upload it again, then retry.", {
         status: response.status,
       });
     }
-    if (!response.body) throw blobReadFailed("The stored video had no content.", { status: response.status });
+    if (!response.body) throw blobReadFailed("The stored video had no content. Nothing was posted. Upload it again, then retry.", { status: response.status });
   } catch (error) {
     await discardBody(response);
     throw error;

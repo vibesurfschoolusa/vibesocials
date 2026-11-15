@@ -232,6 +232,11 @@ const REFRESH_FAILED_CODE = /_TOKEN_REFRESH_FAILED$/;
 const INTERNALS =
   /prisma|database|can't reach|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
 
+/** Would publishErrorMessage hide this text as an internal detail? A client checks before adding a platform's word. */
+export function hasInternalDetail(text: string): boolean {
+  return INTERNALS.test(text);
+}
+
 /**
  * The errorMessage stored for a platform error (L7; review round 2, item 3). In
  * order: a token refresh failure reads the reconnect sentence only when it was

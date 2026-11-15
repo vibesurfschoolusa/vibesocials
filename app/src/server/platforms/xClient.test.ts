@@ -305,6 +305,9 @@ describe("xClient.publishVideo — media-processing poll + step budget", () => {
     [{ code: 1, name: "A".repeat(65) }, X_PROCESSING_FAILED_TEXT],
     [{ code: 1, name: "A".repeat(64) }, `${X_PROCESSING_FAILED_TEXT} X's reason: ${"A".repeat(64)}.`],
     [{ code: 1, message: "InvalidMedia" }, X_PROCESSING_FAILED_TEXT],
+    // A name the internals filter would catch is left off, so the whole sentence still shows.
+    [{ code: 1, name: "localhost" }, X_PROCESSING_FAILED_TEXT],
+    [{ code: 1, name: "DatabaseError" }, X_PROCESSING_FAILED_TEXT],
   ])("processing error %j: the message names only a safe X error name", async (processingError, text) => {
     stubX({ status: now(() => json({ processing_info: { state: "failed", error: processingError } })) });
 
