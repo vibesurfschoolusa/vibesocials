@@ -3,7 +3,7 @@
 import { SessionProvider } from "next-auth/react";
 import { useEffect, type ReactNode } from "react";
 
-import { readServerSession, type ServerSession } from "@/components/signed-in-swap";
+import { readServerSession, useSignedInAccount, type ServerSession } from "@/components/signed-in-swap";
 import { currentSignInGeneration, endStaleSession } from "@/lib/staleSignOut";
 
 /**
@@ -22,9 +22,26 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => watchSignedOutAnswers(window), []);
   return (
     <SessionProvider refetchInterval={0} refetchOnWindowFocus>
+      <SessionPresence />
       {children}
     </SessionProvider>
   );
+}
+
+/**
+ * GG1 review: whether this tab's session names someone, kept where the fetch
+ * wrapper (outside the provider) can ask. Once it names nobody, a marked 401
+ * has nothing left to end, so polling pages send no more reads or sign-outs.
+ */
+let tabNamesSomeone = false;
+
+/** Keeps {@link tabNamesSomeone} in step with the session context; draws nothing. */
+export function SessionPresence(): null {
+  const named = useSignedInAccount() !== null;
+  useEffect(() => {
+    tabNamesSomeone = named;
+  }, [named]);
+  return null;
 }
 
 /** The mark signedOutResponse() puts on its 401 (lib/signedOutResponse.ts, which pins the same name). */
@@ -37,6 +54,7 @@ type Deps = {
   read?: (fetchImpl: typeof fetch) => Promise<ServerSession>;
   end?: (generation: number) => void;
   generation?: () => number;
+  namesSomeone?: () => boolean;
 };
 
 /**
@@ -52,13 +70,18 @@ type Deps = {
 export function watchSignedOutAnswers(win: Window, deps: Deps = {}): () => void {
   const current = win.fetch as typeof fetch & { [WRAPPED]?: true };
   if (current[WRAPPED]) return () => {};
-  const { read = readServerSession, end = endStaleSession, generation = currentSignInGeneration } = deps;
+  const {
+    read = readServerSession,
+    end = endStaleSession,
+    generation = currentSignInGeneration,
+    namesSomeone = () => tabNamesSomeone,
+  } = deps;
   const original = current;
   const plainFetch: typeof fetch = (input, init) => original.call(win, input, init);
   let checking = false;
 
   function check() {
-    if (checking) return;
+    if (checking || !namesSomeone()) return;
     checking = true;
     const asked = generation();
     void read(plainFetch)

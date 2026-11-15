@@ -369,6 +369,8 @@ describe("AppShell: a 401 in the focused tab", () => {
         ended += 1;
       },
       generation: () => 0,
+      // This harness draws the shell without AppSessionProvider's SessionPresence.
+      namesSomeone: () => true,
     });
     await act(async () => {
       await (fakeWindow.fetch as typeof fetch)("/api/posts", { method: "POST" });

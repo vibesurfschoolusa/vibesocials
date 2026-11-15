@@ -18,7 +18,11 @@ function reply(status: number, headers: Record<string, string> = {}): Response {
 }
 
 /** A window whose fetch answers `answer`, with the listener installed. */
-function setup(answer: (input: unknown) => Response, server: ServerSession = { kind: "signedOut" }) {
+function setup(
+  answer: (input: unknown) => Response,
+  server: ServerSession = { kind: "signedOut" },
+  namesSomeone: () => boolean = () => true,
+) {
   const calls: Array<{ input: unknown; self: unknown }> = [];
   const win: { location: { origin: string }; fetch: typeof fetch } = {
     location: { origin: ORIGIN },
@@ -34,7 +38,7 @@ function setup(answer: (input: unknown) => Response, server: ServerSession = { k
   });
   const end = vi.fn();
   const generation = vi.fn(() => 7);
-  const stop = watchSignedOutAnswers(win as unknown as Window, { read, end, generation });
+  const stop = watchSignedOutAnswers(win as unknown as Window, { read, end, generation, namesSomeone });
   return { win, original, read, end, stop, calls, generation };
 }
 
@@ -146,5 +150,33 @@ describe("watchSignedOutAnswers", () => {
     expect(win.fetch).toBe(wrapped);
     stop();
     expect(win.fetch).toBe(original);
+  });
+});
+
+// GG1 review: a visible Activity tab keeps polling after the first 401, and
+// each marked 401 used to send another read and another sign-out (each one
+// telling every other tab to re-read). Once this tab's session names nobody,
+// there is nothing left to end.
+describe("watchSignedOutAnswers once this tab's session names nobody", () => {
+  it("a marked 401 reads nothing and signs nobody out", async () => {
+    const { win, read, end } = setup(SIGNED_OUT_401, { kind: "signedOut" }, () => false);
+    await win.fetch("/api/posts");
+    await settle();
+    expect(read).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it("polling after the sign-out: the first 401 ends the session, the next ones nothing", async () => {
+    let named = true;
+    const { win, read, end } = setup(SIGNED_OUT_401, { kind: "signedOut" }, () => named);
+    end.mockImplementation(() => {
+      named = false;
+    });
+    for (let poll = 0; poll < 4; poll += 1) {
+      await win.fetch("/api/posts");
+      await settle();
+    }
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(end).toHaveBeenCalledTimes(1);
   });
 });
