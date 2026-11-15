@@ -80,15 +80,30 @@ describe("Add many file picker", () => {
 
 // P1 fix 1: every batch control sits inside the one fieldset that sending disables.
 describe("Add many batch card", () => {
-  it("platforms, location and when are inside the batch fieldset; the file picker is not", () => {
+  it("platforms and when are inside the batch fieldset; the file picker is not", () => {
     const html = firstRender("America/Chicago", "2026-11-14T10:00:00Z");
     const start = html.indexOf("data-bulk-batch-settings");
     expect(start).toBeGreaterThan(-1);
     expect(html.indexOf('id="bulk-files"')).toBeLessThan(start);
-    for (const id of ["bulk-location", "bulk-first-day", "bulk-time", "bulk-every"]) {
+    for (const id of ["bulk-first-day", "bulk-time", "bulk-every"]) {
       expect(html.indexOf(`id="${id}"`)).toBeGreaterThan(start);
     }
     expect(html.indexOf("Post every row to")).toBeGreaterThan(start);
+  });
+});
+
+// R20 publishing L1: no platform uses a post's location (YouTube deprecated
+// recordingDetails' location fields; Instagram never sends a location_id).
+describe("Add many: no Location field", () => {
+  it("renders no Location field or place search", async () => {
+    const html = firstRender("America/Chicago", "2026-11-14T10:00:00Z");
+    expect(html).not.toContain('id="bulk-location"');
+    expect(html).not.toContain("Location (optional)");
+    expect(html).not.toContain("Start typing a location");
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(source).not.toContain("LocationAutocomplete");
+    expect(source).not.toMatch(/\bsetLocation\b/);
   });
 });
 

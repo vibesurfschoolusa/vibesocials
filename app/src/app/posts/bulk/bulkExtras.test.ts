@@ -38,7 +38,6 @@ const BASE = {
   deferred: { draft: true },
   workspaceId: "ws_1",
   youtubePrivacy: "unlisted" as const,
-  location: "",
   googleMetadata: { postType: "update" as const, button: { type: "BOOK" as const, url: "https://example.com" } },
   stories: { instagram: false, facebook: false },
   coverFields: {},
@@ -49,15 +48,11 @@ describe("Add many: the body for one row", () => {
     const label = reuse ? "Media reuse body" : "upload body";
     const asRow = (row: BulkBodyRow) => (reuse ? { ...row, mediaItemId: "media_1" } : row);
 
-    it(`${label}: carries the batch location, trimmed, as Create sends it`, () => {
-      const body = buildBulkRowBody({ ...BASE, row: asRow(photoRow()), platforms: ["instagram"], location: " Miami Beach " });
-      expect(body.location).toBe("Miami Beach");
+    // R20 publishing L1: no platform uses a location, so no row sends one.
+    it(`${label}: no location field`, () => {
+      const body = buildBulkRowBody({ ...BASE, row: asRow(photoRow()), platforms: ["instagram", "youtube"] });
+      expect(JSON.parse(JSON.stringify(body))).not.toHaveProperty("location");
       expect(reuse ? "mediaItemId" in body : "blobUrl" in body).toBe(true);
-    });
-
-    it(`${label}: no location field when it is blank`, () => {
-      const body = buildBulkRowBody({ ...BASE, row: asRow(photoRow()), platforms: ["instagram"] });
-      expect(body.location).toBeUndefined();
     });
 
     it(`${label}: googleMetadata only for a photo when Google is chosen`, () => {

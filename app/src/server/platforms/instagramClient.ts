@@ -645,6 +645,13 @@ async function createInstagramContainer(args: {
   return postInstagramContainer({ igAccountId, params: containerParams, connection, deadline });
 }
 
+/**
+ * Meta answered 2xx without a usable container id (R20 publishing L2). Nothing
+ * was posted, and the person reads this on the card and in the email.
+ */
+export const INSTAGRAM_NO_CONTAINER_ID_MESSAGE =
+  "Instagram didn't answer as expected, so nothing was posted. Try again.";
+
 export const INSTAGRAM_COVER_REFUSED_NOTE =
   "Cover not set: Instagram did not accept the chosen cover, so the Reel uses its own.";
 
@@ -652,7 +659,9 @@ export const INSTAGRAM_COVER_REFUSED_NOTE =
  * A Reel's container with its cover (V1). Nothing is published before
  * media_publish, so a container refused with the cover is created once more
  * without it: a cover never fails the post. A throttle or a dead token is not
- * the cover's fault and is thrown as before.
+ * the cover's fault and is thrown as before. An answer without a container id
+ * is not the cover's fault either: it is tried once more without the cover, as
+ * before, but the post's note does not blame the cover.
  */
 async function createContainerWithCover(
   args: Parameters<typeof createInstagramContainer>[0],
@@ -669,11 +678,16 @@ async function createContainerWithCover(
     return { containerId: await createInstagramContainer(args), coverSent: true, coverRefused: false };
   } catch (error) {
     if ((error as { code?: unknown } | null)?.code !== "INSTAGRAM_CONTAINER_FAILED") throw error;
-    console.warn("[Instagram] The container was refused with the cover; creating it without one");
+    const noId = (error as Error).message === INSTAGRAM_NO_CONTAINER_ID_MESSAGE;
+    console.warn(
+      noId
+        ? "[Instagram] The container answer had no id; creating it once more without the cover"
+        : "[Instagram] The container was refused with the cover; creating it without one",
+    );
     return {
       containerId: await createInstagramContainer({ ...args, cover: undefined }),
       coverSent: false,
-      coverRefused: true,
+      coverRefused: !noId,
     };
   }
 }
@@ -735,10 +749,7 @@ async function postInstagramContainer(args: {
     console.error("[Instagram] Container creation answered without a container id", {
       status: containerResponse.status,
     });
-    throw instagramCodedError(
-      "INSTAGRAM_CONTAINER_FAILED",
-      "Instagram container creation failed (no container id in the answer)",
-    );
+    throw instagramCodedError("INSTAGRAM_CONTAINER_FAILED", INSTAGRAM_NO_CONTAINER_ID_MESSAGE);
   }
 
   console.log("[Instagram] Container created", { containerId });

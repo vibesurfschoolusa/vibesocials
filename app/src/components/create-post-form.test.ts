@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,7 +39,6 @@ import {
   pressCountsAsTry,
   repeatCautionNote,
   sharedFileOnItsWay,
-  showLocationField,
   submitButtonLabel,
   submitFirstStep,
   textOnlyNotice,
@@ -221,28 +221,40 @@ describe("platformListAlert", () => {
   });
 });
 
-describe("showLocationField", () => {
-  it("hides Location on a text post, which nothing reads it for, and keeps it with a file", () => {
-    expect(showLocationField({ noFile: true })).toBe(false);
-    expect(showLocationField({ noFile: false })).toBe(true);
-  });
-});
+// R20 publishing L1: no platform uses a post's location. YouTube deprecated
+// recordingDetails' location fields in 2017 and Instagram never sends a
+// location_id, so Create has no Location field to promise otherwise.
+describe("no Location field on Create", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  const source = raw.replace(/\s+/g, " ");
 
-// R18-publishing addendum L4: only YouTube sends the place (youtubeClient recordingDetails);
-// Instagram never sets location_id and TikTok and X never read it.
-describe("the Location help", () => {
-  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
-
-  // R19 publishing L4: only a place picked from the list carries coordinates
-  // (location-autocomplete.tsx); typed text alone is dropped by YouTube.
-  it("says to pick a place from the list, added to YouTube videos only", () => {
-    expect(source).toContain("Pick a place from the list; it is added to YouTube videos only.");
-    expect(source).not.toContain("Type to search for locations.");
+  it("renders no Location field, help or place search", () => {
+    expect(source).not.toContain('id="post-location"');
+    expect(source).not.toContain("LocationAutocomplete");
+    expect(source).not.toContain("Pick a place from the list");
+    expect(source).not.toMatch(/\buploadLocation\b/);
+    expect(source).not.toContain("showLocation");
   });
 
-  it("no longer names Instagram, TikTok or X", () => {
-    expect(source).not.toContain("Will be added to Instagram, TikTok, and X posts.");
-    expect(source).not.toContain("requires manual location setting via Studio");
+  it("sends no location in a post's body", () => {
+    expect(source).not.toMatch(/location: uploadLocation/);
+    expect(raw).not.toMatch(/^\s*location: [^"]/m);
+  });
+
+  // TikTok's audit: the Create page's TikTok parts are frozen. Every line that
+  // names TikTok, and the TikTok settings block, hash as on main 4faccbf.
+  it("leaves every TikTok line byte-identical", () => {
+    const lines = raw.split("\n").filter((line) => /tiktok/i.test(line));
+    expect(lines).toHaveLength(83);
+    expect(createHash("sha256").update(lines.join("\n")).digest("hex")).toBe(
+      "161ae7727b30994cd3f9dbb41d554034e789f948940a2de60249b368d42edcb9",
+    );
+    const start = raw.indexOf("{tiktokSelected && activeMimeType && (");
+    const block = raw.slice(start, raw.indexOf("\n        )}", start) + 11);
+    expect(block).toContain("<TikTokPostSettings");
+    expect(createHash("sha256").update(block).digest("hex")).toBe(
+      "87d50c1ee4da4b36f1dc08a4dda3b33b26caf48da7db578c5cd94a8c3a459c54",
+    );
   });
 });
 
@@ -808,9 +820,9 @@ describe("composerPageState: own captions the person can no longer see", () => {
   });
 });
 
-// F2 fix round 2, item 3: Location and the Repeat caution behave as with a file
-// on the untouched page, and exactly as before on the text-post and file pages.
-describe("composerPageView: Location and the Repeat caution", () => {
+// F2 fix round 2, item 3: the Repeat caution behaves as with a file on the
+// untouched page, and exactly as before on the text-post and file pages.
+describe("composerPageView: the Repeat caution", () => {
   type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
   const connected: Platform[] = ["instagram", "x"];
   const base = {
@@ -842,31 +854,31 @@ describe("composerPageView: Location and the Repeat caution", () => {
     });
   }
 
-  it("untouched: Location shown, and X's note, as with a file", () => {
+  it("untouched: X's note, as with a file, and no Location", () => {
     const v = view({}, true);
-    expect(v.showLocation).toBe(true);
+    expect(v).not.toHaveProperty("showLocation");
     expect(v.repeatNote).toBe(REPEAT_X_NOTE);
   });
 
-  it("text only: Location hidden, and the text-post caution, as now", () => {
+  it("text only: the text-post caution, as now", () => {
     const v = view({ caption: "Open today" }, true);
-    expect(v.showLocation).toBe(false);
+    expect(v).not.toHaveProperty("showLocation");
     expect(v.repeatNote).toBe(TEXT_NOTE);
   });
 
-  it("with a file: Location shown, and X's note, as now", () => {
+  it("with a file: X's note, as now, and no Location", () => {
     const v = view({ caption: "Hi", hasUploadFile: true }, true);
-    expect(v.showLocation).toBe(true);
+    expect(v).not.toHaveProperty("showLocation");
     expect(v.repeatNote).toBe(REPEAT_X_NOTE);
     // X unticked: no note with a file, as now.
     expect(view({ caption: "Hi", hasUploadFile: true, deselected: new Set<Platform>(["x"]) }, true).repeatNote).toBeNull();
   });
 
-  it("text posts switched off: the old page, Location shown and X's note", () => {
+  it("text posts switched off: the old page, X's note", () => {
     textPosts.enabled = false;
     for (const caption of ["", "Hi"]) {
       const v = view({ caption });
-      expect(v.showLocation).toBe(true);
+      expect(v).not.toHaveProperty("showLocation");
       expect(v.repeatNote).toBe(REPEAT_X_NOTE);
     }
   });

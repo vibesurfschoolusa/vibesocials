@@ -148,6 +148,31 @@ describe("instagramClient - a Reel's cover", () => {
     expect(result).toEqual({ externalPostId: "media-1", note: INSTAGRAM_COVER_REFUSED_NOTE });
   });
 
+  // R20 publishing L2: a 2xx without a container id is not the cover's fault.
+  it("a container answer without an id: made once more without the cover, and no note blames the cover", async () => {
+    const calls = stubGraph((url) =>
+      url.searchParams.get("cover_url") ? new Response("{}", { status: 200 }) : containerOk(),
+    );
+
+    const result = await publishAcrossSteps(ctx({ cover: { imageUrl: COVER_URL } }));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1].searchParams.get("cover_url")).toBeNull();
+    expect(result).toEqual({ externalPostId: "media-1" });
+  });
+
+  it("a container answer without an id, with and without the cover: the plain sentence, no note", async () => {
+    const calls = stubGraph(() => new Response("{}", { status: 200 }));
+
+    await expect(
+      instagramClient.publishVideo({ ...ctx({ cover: { timeMs: 900 } }), uploadState: makeStore() }),
+    ).rejects.toMatchObject({
+      code: "INSTAGRAM_CONTAINER_FAILED",
+      message: "Instagram didn't answer as expected, so nothing was posted. Try again.",
+    });
+    expect(calls).toHaveLength(2);
+  });
+
   it("a Story never gets a cover", async () => {
     const calls = stubGraph(containerOk);
     await publishAcrossSteps(

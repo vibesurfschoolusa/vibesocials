@@ -13,7 +13,6 @@ import type { PublishContext } from "./types";
 import {
   buildYouTubeVideoResource,
   computeYouTubeTitle,
-  parseYouTubeLocation,
   YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS,
   YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP,
   YOUTUBE_MAX_SESSION_RESTARTS,
@@ -49,47 +48,6 @@ vi.mock("@/lib/db", () => ({
 vi.mock("./connectionRefresh", () => ({
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
-
-// R5-publishing L3: the location box appends "(lat,lng)" to the place it chose
-// (location-autocomplete.tsx). The first "number, number" in the text could be
-// a street address ("Unit 4, 12 Ocean Dr"), so only the trailing pair counts,
-// as instagramClient.ts reads it.
-describe("parseYouTubeLocation", () => {
-  it("reads the trailing (lat,lng) and keeps the place as the description", () => {
-    expect(parseYouTubeLocation("Dania Beach Pier, FL, USA (26.0523,-80.1158)")).toEqual({
-      latitude: 26.0523,
-      longitude: -80.1158,
-      description: "Dania Beach Pier, FL, USA",
-    });
-  });
-
-  it("is not fooled by numbers in the address before the coordinates", () => {
-    expect(parseYouTubeLocation("Unit 4, 12 Ocean Dr, Miami (25.79,-80.13)")).toEqual({
-      latitude: 25.79,
-      longitude: -80.13,
-      description: "Unit 4, 12 Ocean Dr, Miami",
-    });
-  });
-
-  it("a text with numbers but no trailing pair has no coordinates", () => {
-    expect(parseYouTubeLocation("Unit 4, 12 Ocean Dr")).toBeNull();
-    expect(parseYouTubeLocation("Pier (26.05,-80.11) north end")).toBeNull();
-  });
-
-  it("accepts spaces inside the brackets and plain coordinates on their own", () => {
-    expect(parseYouTubeLocation("Pier ( 26.05 , -80.11 )")).toEqual({
-      latitude: 26.05,
-      longitude: -80.11,
-      description: "Pier",
-    });
-    expect(parseYouTubeLocation("26.05, -80.11")).toEqual({ latitude: 26.05, longitude: -80.11 });
-  });
-
-  it("refuses coordinates out of range", () => {
-    expect(parseYouTubeLocation("Nowhere (95,-80)")).toBeNull();
-    expect(parseYouTubeLocation("Nowhere (45,-190)")).toBeNull();
-  });
-});
 
 // 2026-11-01 audit (Task 4 item 1): the YouTube title is the POST's own base
 // caption (no footer) — the job's snapshot first, the shared MediaItem's only
@@ -939,7 +897,7 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
     });
 
     it("sends the same resource and `part` as the multipart upload does for the same post", async () => {
-      // A location with coordinates makes `part` include recordingDetails, so both are exercised.
+      // An old job's place with coordinates: neither upload sends recordingDetails (R20 publishing L1).
       const post = (uploadState: UploadStateStore | undefined, sizeBytes: number) => {
         const base = bigCtx(uploadState, { caption: "Trip #a" }, sizeBytes);
         const metadata = { location: { description: "Lisbon (38.72, -9.14)" } };
@@ -961,9 +919,9 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       await run(post(store, TOTAL));
       const [startUrl, startInit] = upload.starts()[0] as [string, RequestInit];
 
-      expect(multipartResource.recordingDetails).toBeDefined();
+      expect(multipartResource).not.toHaveProperty("recordingDetails");
       expect(JSON.parse(startInit.body as string)).toEqual(multipartResource);
-      expect(new URL(startUrl).searchParams.get("part")).toBe("snippet,status,recordingDetails");
+      expect(new URL(startUrl).searchParams.get("part")).toBe("snippet,status");
       expect(new URL(startUrl).searchParams.get("part")).toBe(new URL(multipartUrl).searchParams.get("part"));
     });
 
@@ -2317,10 +2275,10 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
   });
 });
 
-// R19 publishing L5: the location is the post's own (ctx.location, from its
-// job's snapshot); the shared Media item's place is read only for a job saved
-// before the snapshot had the key (ctx.location absent).
-describe("buildYouTubeVideoResource — the post's location", () => {
+// R20 publishing L1: YouTube's videos reference marks recordingDetails.locationDescription
+// "deprecated as of June 1, 2017" and recordingDetails.location (latitude, longitude)
+// deprecated, so no insert sends them, whatever place the post or an old job carries.
+describe("buildYouTubeVideoResource — no location", () => {
   const withItemPlace = (overrides: Partial<PublishContext>) =>
     buildYouTubeVideoResource(
       ytCtx({
@@ -2332,22 +2290,16 @@ describe("buildYouTubeVideoResource — the post's location", () => {
       }),
     );
 
-  it("sends the post's own place, not the one stored on the Media item", () => {
-    const { locationData, apiParts } = withItemPlace({ location: "Pompano Beach (26.23, -80.09)" });
-    expect(locationData).toEqual({ latitude: 26.23, longitude: -80.09, description: "Pompano Beach" });
-    expect(apiParts).toContain("recordingDetails");
-  });
-
-  it("a post with no location sends none, even when the Media item has an old one", () => {
-    const { metadata, locationData, apiParts } = withItemPlace({ location: null });
-    expect(locationData).toBeNull();
-    expect(metadata).not.toHaveProperty("recordingDetails");
-    expect(apiParts).not.toContain("recordingDetails");
-  });
-
-  it("an old job without the key reads the Media item's place, as before", () => {
-    const { locationData } = withItemPlace({});
-    expect(locationData).toEqual({ latitude: 26.05, longitude: -80.11, description: "Dania Beach" });
+  it.each([
+    ["a post's own place with coordinates", { location: "Pompano Beach (26.23, -80.09)" }],
+    ["a post with no location", { location: null }],
+    ["an old job without the key (the Media item's place)", {}],
+  ])("%s: no recordingDetails and part snippet,status", (_label, overrides) => {
+    const result = withItemPlace(overrides as Partial<PublishContext>);
+    expect(result.metadata).not.toHaveProperty("recordingDetails");
+    expect(JSON.stringify(result.metadata)).not.toMatch(/location|latitude|longitude/i);
+    expect(result.apiParts).toBe("snippet,status");
+    expect(result).not.toHaveProperty("locationData");
   });
 });
 

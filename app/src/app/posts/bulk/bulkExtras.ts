@@ -16,7 +16,7 @@ import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/p
 
 /**
  * Add many's share of what makes Create pleasant (P1 parity): Improve, the
- * photo description, the video cover, location, Google options and Feed or
+ * photo description, the video cover, Google options and Feed or
  * Story. Each one reuses Create's own request field and helper, so a batch
  * post is the post Create would have made.
  */
@@ -266,7 +266,6 @@ export interface BulkRowBodyInput {
   deferred: DeferredPostFields;
   workspaceId: string;
   youtubePrivacy: YouTubePostMetadata["privacyStatus"];
-  location: string;
   googleMetadata: GoogleBusinessPostMetadata;
   stories: BulkStories;
   /** coverRequestFields for this row's video once its image is uploaded; {} for none. */
@@ -290,7 +289,8 @@ export function buildBulkRowBody(input: BulkRowBodyInput): BulkRowBody {
   const isVideo = row.mimeType.startsWith("video/");
   const common = {
     baseCaption: row.caption,
-    location: input.location,
+    // No platform uses a location (R20 publishing L1); blank sends none.
+    location: "",
     platforms,
     deferred: input.deferred,
     workspaceId: input.workspaceId,

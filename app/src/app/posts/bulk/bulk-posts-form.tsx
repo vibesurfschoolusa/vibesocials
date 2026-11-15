@@ -46,7 +46,6 @@ import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 import { requestPhotoDescription } from "@/components/composer/attached-photos";
-import { LocationAutocomplete } from "@/components/location-autocomplete";
 import { StoryPlacementSettings } from "@/components/story-placement";
 import { captureVideoFrame } from "@/lib/captureVideoFrame";
 import { coverBlobPathname } from "@/lib/coverBlobPath";
@@ -290,7 +289,6 @@ export function BulkPostsForm({
   const [youtubePrivacy, setYoutubePrivacy] =
     useState<YouTubePostMetadata["privacyStatus"]>(BULK_YOUTUBE_PRIVACY_DEFAULT);
   // Batch settings Create has per post, applied to every row.
-  const [location, setLocation] = useState("");
   const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(() =>
     initialBulkGoogleMetadata(googleButtonDefault),
   );
@@ -746,7 +744,6 @@ export function BulkPostsForm({
           deferred: scheduledFor ? { scheduledFor } : { draft: true },
           workspaceId,
           youtubePrivacy,
-          location,
           googleMetadata,
           stories,
           coverFields,
@@ -1057,15 +1054,6 @@ export function BulkPostsForm({
               </p>
             </div>
           ) : null}
-          <div className="flex flex-col gap-1 sm:max-w-md">
-            <Label htmlFor="bulk-location">Location (optional)</Label>
-            <LocationAutocomplete
-              id="bulk-location"
-              value={location}
-              onChange={setLocation}
-              placeholder="Start typing a location..."
-            />
-          </div>
         </fieldset>
 
         <fieldset className="flex flex-col gap-2">

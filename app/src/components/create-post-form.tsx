@@ -25,7 +25,6 @@ import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { GooglePostBox, googleBoxOpensOnSubmit } from "./composer/google-post-box";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { PublishBar, type SubmitControlView } from "./composer/publish-bar";
-import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
 import { StoryPlacementSettings } from "./story-placement";
@@ -252,7 +251,7 @@ export function composerPageView(input: {
   });
   const allDisabled = choices.every((choice) => choice.disabledReason !== null);
   return {
-    /** No file (switch on): the lost-file notice, Location and the rest keep reading this. */
+    /** No file (switch on): the lost-file notice and the rest keep reading this. */
     noFile: input.pageState !== "file",
     untouched: input.pageState === "untouched",
     choices,
@@ -266,8 +265,7 @@ export function composerPageView(input: {
     }),
     textNotice: textOnlyNotice({ noFile: textPage, connected: input.connected, deselected: input.deselected, selected }),
     buttonLabel: submitButtonLabel({ mode: input.mode, noFile: textPage, loading: input.loading }),
-    // Untouched, the page may still get a file: Location and X's note stay as with one.
-    showLocation: showLocationField({ noFile: textPage }),
+    // Untouched, the page may still get a file: X's note stays as with one.
     repeatNote: repeatCautionNote({ noFile: textPage, xSelected: selected.includes("x") }),
   };
 }
@@ -327,11 +325,6 @@ export function platformListAlert(state: {
   if (!state.allDisabled) return "Select at least one platform.";
   if (!state.noFile) return "None of your connected platforms can publish this media.";
   return state.triedSend ? "None of your connected platforms can publish a post without a photo or video." : null;
-}
-
-/** Location is read from a post's file (Instagram, YouTube), so a text post has no use for it. */
-export function showLocationField(state: { noFile: boolean }): boolean {
-  return !state.noFile;
 }
 
 /** "X", "X and LinkedIn", "Facebook Page, X and LinkedIn". */
@@ -737,7 +730,6 @@ function CreatePostFormInner({
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // POST /api/posts rejects - blocks the submit (lib/captionLimits.ts).
   const captionOver = captionCounter(uploadCaption).over;
-  const [uploadLocation, setUploadLocation] = useState("");
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -1755,7 +1747,8 @@ function CreatePostFormInner({
         postData = buildReusePostBody({
           mediaItemId: reuseItem.id,
           baseCaption: uploadCaption,
-          location: uploadLocation,
+          // No platform uses a location (R20 publishing L1); blank sends none.
+          location: "",
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
           deferred,
@@ -1774,7 +1767,7 @@ function CreatePostFormInner({
         postData = buildPhotosPostBody({
           blobs: photoSet.flatMap((photo) => (photo.blob ? [photo.blob] : [])),
           baseCaption: uploadCaption,
-          location: uploadLocation,
+          location: "",
           platforms: selectedPlatforms,
           deferred,
           workspaceId,
@@ -1801,7 +1794,7 @@ function CreatePostFormInner({
         postData = buildUploadPostBody({
           blob,
           baseCaption: uploadCaption,
-          location: uploadLocation,
+          location: "",
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
           deferred,
@@ -1901,7 +1894,6 @@ function CreatePostFormInner({
       setShowSuccess(true);
       setPostsSaved((count) => count + 1);
       setUploadCaption("");
-      setUploadLocation("");
       // A new post has not been tried yet (platformListAlert).
       setTriedSend(false);
       // Nor has it lost a file: an old notice must not show on the next post.
@@ -2547,24 +2539,6 @@ function CreatePostFormInner({
           onChange={setPlatformOverrides}
           footer={footerSettings}
         />
-
-        {pageView.showLocation ? (
-        <div className="space-y-1.5">
-          <Label htmlFor="post-location">
-            Location <span className="font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <LocationAutocomplete
-            id="post-location"
-            value={uploadLocation}
-            onChange={setUploadLocation}
-            placeholder="Start typing a location..."
-            className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
-          />
-          <p className="text-xs text-muted-foreground">
-            Pick a place from the list; it is added to YouTube videos only.
-          </p>
-        </div>
-        ) : null}
 
         {tiktokSelected && activeMimeType && (
           <TikTokPostSettings

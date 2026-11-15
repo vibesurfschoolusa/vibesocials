@@ -36,7 +36,9 @@ import { isNeverConnectedFetchError } from "./transientRetry";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 // Minimal shape of the YouTube `videos.insert` request body we construct.
-// recordingDetails is added conditionally when location data is present.
+// No recordingDetails: YouTube's videos reference marks locationDescription
+// "deprecated as of June 1, 2017" and location (latitude, longitude) deprecated,
+// so a post's place is never sent (R20 publishing L1).
 interface YouTubeVideoResource {
   snippet: {
     title: string;
@@ -47,10 +49,6 @@ interface YouTubeVideoResource {
   status: {
     privacyStatus: string;
     selfDeclaredMadeForKids: boolean;
-  };
-  recordingDetails?: {
-    location: { latitude: number; longitude: number };
-    locationDescription?: string;
   };
 }
 
@@ -253,69 +251,23 @@ function fitYouTubeTags(tags: readonly string[]): string[] {
   return kept;
 }
 
-/** A decimal number as the location box writes it ("26.0523", "-80.1158"). */
-const COORDINATE = String.raw`(-?\d+(?:\.\d+)?)`;
-/** "<place> (lat,lng)" at the very end of the text, as location-autocomplete.tsx appends it. */
-const TRAILING_COORDINATES = new RegExp(String.raw`^(.*?)\s*\(\s*${COORDINATE}\s*,\s*${COORDINATE}\s*\)$`, "s");
-/** Just "lat, lng", typed by hand. */
-const BARE_COORDINATES = new RegExp(String.raw`^${COORDINATE}\s*,\s*${COORDINATE}$`);
-
-/**
- * The coordinates (and the place) in a post's location text, or null without
- * any. R5-publishing L3: only the TRAILING "(lat,lng)" the location box appends
- * counts, as in instagramClient.ts; the first "number, number" in the text used
- * to be read, which an address like "Unit 4, 12 Ocean Dr" sent to the wrong
- * place. A text that is only "lat, lng" is read too.
- */
-export function parseYouTubeLocation(
-  text: string,
-): { latitude: number; longitude: number; description?: string } | null {
-  const trimmed = text.trim();
-  const trailing = TRAILING_COORDINATES.exec(trimmed);
-  const bare = trailing ? null : BARE_COORDINATES.exec(trimmed);
-  const [place, lat, lng] = trailing
-    ? [trailing[1].trim(), trailing[2], trailing[3]]
-    : bare
-      ? ["", bare[1], bare[2]]
-      : [];
-  if (lat === undefined || lng === undefined) return null;
-  const latitude = Number(lat);
-  const longitude = Number(lng);
-  if (!(latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180)) return null;
-  return place ? { latitude, longitude, description: place } : { latitude, longitude };
-}
-
 /**
  * The `videos.insert` request body for this post, and the `part` parameter that
  * names the resources it writes. The multipart upload and the resumable session
  * start send the same resource.
  *
- * Hashtags in the caption become tags; a location with coordinates becomes
- * `recordingDetails`. The title is the post's own base caption (see
+ * Hashtags in the caption become tags. The title is the post's own base caption (see
  * {@link computeYouTubeTitle}), the description the full caption.
  */
 export function buildYouTubeVideoResource(ctx: PublishContext): {
   metadata: YouTubeVideoResource;
   apiParts: string;
-  locationData: { latitude?: number; longitude?: number; description?: string } | null;
 } {
-  const { mediaItem, caption } = ctx;
+  const { caption } = ctx;
 
   // Hashtags in the caption become tags, as many as fit YouTube's 500 characters.
   const hashtagMatches = caption.match(/#[\w]+/g) || [];
   const tags = fitYouTubeTags(hashtagMatches.map((tag) => tag.substring(1))); // Remove # prefix
-
-  // A location with coordinates becomes recordingDetails; YouTube takes none without.
-  // The post's own location; the Media item's only for a job saved before the
-  // snapshot had one (R19 publishing L5).
-  const locationText =
-    ctx.location !== undefined
-      ? ctx.location
-      : (mediaItem.metadata as { location?: { description?: string } } | null)?.location?.description;
-  const locationData = locationText ? parseYouTubeLocation(locationText) : null;
-  if (locationText && !locationData) {
-    console.log("[YouTube] Location text has no coordinates; the video is sent without a location");
-  }
 
   // YouTube video metadata: the post's base caption for the title (no
   // footer), the full caption for the description (with footer).
@@ -336,36 +288,15 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
     },
   };
 
-  // Add location/recording details if available
-  if (locationData?.latitude && locationData?.longitude) {
-    metadata.recordingDetails = {
-      location: {
-        latitude: locationData.latitude,
-        longitude: locationData.longitude,
-      },
-    };
-    if (locationData.description) {
-      metadata.recordingDetails.locationDescription = locationData.description;
-    }
-  }
-
   console.log("[YouTube] Uploading with metadata", {
     title: metadata.snippet.title,
     descriptionLength: description.length,
     tags: tags,
-    location: locationData ? {
-      lat: locationData.latitude,
-      lng: locationData.longitude,
-      description: locationData.description,
-    } : null,
     privacyStatus: metadata.status.privacyStatus,
     madeForKids: false,
   });
 
-  // Upload to YouTube
-  // Include recordingDetails in parts if location is provided
-  const apiParts = locationData ? "snippet,status,recordingDetails" : "snippet,status";
-  return { metadata, apiParts, locationData };
+  return { metadata, apiParts: "snippet,status" };
 }
 
 /**
@@ -1116,7 +1047,7 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
 
   const videoBytes = Buffer.from(await mediaResponse.arrayBuffer());
 
-  const { metadata, apiParts, locationData } = buildYouTubeVideoResource(ctx);
+  const { metadata, apiParts } = buildYouTubeVideoResource(ctx);
 
   // Create multipart upload
   const boundary = "----VibeSocialsYouTubeBoundary";
@@ -1172,16 +1103,6 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
 
   // The insert answered 2xx, so the video may exist (see completedUpload).
   const published = await completedUpload(uploadResponse);
-
-  // Note: YouTube API does not support setting recordingDetails (location) via API
-  // Location can only be set manually via YouTube Studio or mobile apps
-  // We keep the location in our database for other platforms (Instagram, TikTok, X)
-  if (locationData?.latitude && locationData?.longitude) {
-    console.log("[YouTube] Location data available but cannot be set via API", {
-      location: locationData,
-      note: "YouTube requires manual location setting via Studio or mobile app",
-    });
-  }
 
   return published;
 }
