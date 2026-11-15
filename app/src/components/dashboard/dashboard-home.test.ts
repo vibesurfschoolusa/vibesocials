@@ -3,9 +3,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const session = vi.hoisted(() => ({ status: "authenticated" as string }));
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({ status: session.status, data: { user: { name: "Jane Doe" } } }),
-}));
+vi.mock("next-auth/react", async () => {
+  const { createContext } = await import("react");
+  const current = {
+    get status() {
+      return session.status;
+    },
+    data: { user: { name: "Jane Doe" } },
+  };
+  // No provider in these renders: the context's default is the session.
+  return { SessionContext: createContext(current), useSession: () => current };
+});
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 // The cards fetch on their own; only the header is under test.
 vi.mock("@/components/dashboard/recent-activity", () => ({ RecentActivity: () => null }));
 vi.mock("@/components/dashboard/connection-health", () => ({ ConnectionHealth: () => null }));

@@ -13,6 +13,7 @@ import { TimeZoneSync } from "./time-zone-sync";
 import { VerifyEmailBanner } from "./verify-email-banner";
 import { WorkspacePausedBanner } from "./workspace-paused-banner";
 import { isPublicRoute } from "./nav";
+import { SignedOutAlert } from "./signed-out-alert";
 
 /**
  * App-wide chrome. `ToastProvider` wraps everything so toasts work on every
@@ -35,18 +36,23 @@ export function AppShell({ children, pricingPublic }: { children: ReactNode; pri
   // prior behavior (bare while loading/signed-out, shell only once
   // authenticated) since it's excluded from `isAppRoute` and hosts both the
   // signed-out Landing and the signed-in Dashboard.
+  //
+  // R20 new-customer L1: an app route keeps the frame whatever the session says
+  // later. Swapping the tree remounted the page and lost unsent work (a caption,
+  // a file); a session that now names nobody gets one signed-out line instead.
   const isPublic = isPublicRoute(pathname, { pricingPublic });
   const isAppRoute = !isPublic && pathname !== "/";
-  const showShell = signedIn ? !isPublic : isAppRoute && status === "loading";
+  const showShell = isAppRoute || (signedIn && !isPublic);
+  const signedOut = isAppRoute && status !== "loading" && !signedIn;
 
   return (
     <ToastProvider>
-      {showShell ? <AuthenticatedShell>{children}</AuthenticatedShell> : children}
+      {showShell ? <AuthenticatedShell signedOut={signedOut}>{children}</AuthenticatedShell> : children}
     </ToastProvider>
   );
 }
 
-function AuthenticatedShell({ children }: { children: ReactNode }) {
+function AuthenticatedShell({ children, signedOut = false }: { children: ReactNode; signedOut?: boolean }) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerPath, setDrawerPath] = useState(pathname);
@@ -84,6 +90,8 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
               is safe to mount unconditionally inside the authed chrome. */}
           <VerifyEmailBanner suppressed={confirmEmailShown} />
           <WorkspacePausedBanner onConfirmEmailShownChange={setConfirmEmailShown} />
+          {/* Its own slot before the page, so the page keeps its place in the tree. */}
+          {signedOut ? <SignedOutAlert /> : null}
           {children}
         </main>
       </div>

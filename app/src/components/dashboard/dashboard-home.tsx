@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Link2, PenSquare } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
+import { useSignedInAccount } from "@/components/signed-in-swap";
 import { Alert } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,7 +49,20 @@ type DashboardProps = {
 
 export function DashboardHome({ availablePlatforms, setup, notice }: DashboardProps) {
   const { status } = useSession();
-  if (status !== "authenticated") {
+  const signedIn = useSignedInAccount() !== null;
+  const router = useRouter();
+  // R20 new-customer L1: the server rendered this for someone, and the tab's
+  // session now names nobody (signed out elsewhere). Ask the server once; it
+  // renders the Landing. Never sign out from here: the server decides.
+  const nobody = status !== "loading" && !signedIn;
+  const refreshed = useRef(false);
+  useEffect(() => {
+    if (!nobody || refreshed.current) return;
+    refreshed.current = true;
+    router.refresh();
+  }, [nobody, router]);
+
+  if (!signedIn) {
     // R15-pages L2: the server HTML for a signed-in "/" is this branch, so the
     // page's heading and its loading line are here too.
     return (

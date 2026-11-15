@@ -48,9 +48,26 @@ describe("AppShell: who gets the app frame", () => {
     expect(render("/", ENDED)).toMatch(BARE);
   });
 
-  it("a cached session with no user gets no frame on an app route either", () => {
-    expect(render("/queue", ENDED)).toMatch(BARE);
-    expect(render("/queue", { status: "authenticated", data: { user: {}, expires: "2099-01-01T00:00:00Z" } })).toMatch(BARE);
+  // R20 new-customer L1: an app route never loses its frame (that remounted
+  // the page and lost unsent work); it says the person was signed out instead.
+  it("a session naming nobody on an app route keeps the frame and says signed out", () => {
+    for (const session of [
+      ENDED,
+      { status: "authenticated", data: { user: {}, expires: "2099-01-01T00:00:00Z" } },
+      { status: "unauthenticated", data: null },
+    ]) {
+      const html = render("/queue", session);
+      expect(html).toContain("SIDEBAR");
+      expect(html).toContain('<main id="main-content"');
+      expect(html.replace(/<[^>]+>/g, "")).toContain("You were signed out. Sign in again to keep working.");
+      expect(html).toMatch(/role="alert"/);
+      expect(html).toContain('href="/login?callbackUrl=%2Fqueue"');
+    }
+  });
+
+  it("a session naming nobody on a public page: no frame, no line, as today", () => {
+    expect(render("/login", ENDED)).toMatch(BARE);
+    expect(render("/help", { status: "unauthenticated", data: null })).toMatch(BARE);
   });
 
   it("while the session loads on an app route, the frame shows as today", () => {
