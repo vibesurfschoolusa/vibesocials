@@ -29,6 +29,7 @@ import {
   JoinView,
   joinPromise,
   loadInvite,
+  settleJoin,
 } from "./join-view";
 
 function respond(status: number, body: unknown = {}) {
@@ -127,6 +128,56 @@ describe("acceptInvite", () => {
     // The generic 404 body says what the title already says, so the next step stays.
     expect(invalidInviteDescription("This invite link is invalid or has expired.")).toBe(INVALID_INVITE_DESCRIPTION);
     expect(INVALID_INVITE_DESCRIPTION).toBe("Ask the workspace owner for a new link.");
+  });
+});
+
+// R15-pages L3: after a join the page loads in full; until it unloads the
+// button stays busy, so a second press can't send a second Join.
+describe("settleJoin", () => {
+  function ui(workspaceName: string | undefined) {
+    return {
+      setJoining: vi.fn(),
+      setLoad: vi.fn(),
+      setSignedOut: vi.fn(),
+      toast: { success: vi.fn(), error: vi.fn() },
+      workspaceName,
+      load: vi.fn(),
+    };
+  }
+
+  it("joined: says so, loads the dashboard in full and keeps the button busy", () => {
+    const view = ui("Surf Co");
+    settleJoin({ kind: "joined" }, view);
+    expect(view.toast.success).toHaveBeenCalledWith("Joined Surf Co.");
+    expect(view.load).toHaveBeenCalledWith("/");
+    expect(view.setJoining).not.toHaveBeenCalled();
+  });
+
+  it("a refusal: frees the button and says why, with no page load", () => {
+    const view = ui("Surf Co");
+    settleJoin({ kind: "failed", message: JOIN_FAILED_MESSAGE }, view);
+    expect(view.setJoining).toHaveBeenCalledWith(false);
+    expect(view.toast.error).toHaveBeenCalledWith(JOIN_FAILED_MESSAGE);
+    expect(view.load).not.toHaveBeenCalled();
+  });
+
+  it("a dead link or signed out: frees the button and shows that state", () => {
+    const dead = ui("Surf Co");
+    settleJoin({ kind: "invalid", message: "Gone." }, dead);
+    expect(dead.setJoining).toHaveBeenCalledWith(false);
+    expect(dead.setLoad).toHaveBeenCalledWith({ kind: "invalid", message: "Gone." });
+    const out = ui("Surf Co");
+    settleJoin({ kind: "signedOut" }, out);
+    expect(out.setJoining).toHaveBeenCalledWith(false);
+    expect(out.setSignedOut).toHaveBeenCalledWith(true);
+    expect(dead.load).not.toHaveBeenCalled();
+    expect(out.load).not.toHaveBeenCalled();
+  });
+
+  it("names the workspace generically when the preview has no name", () => {
+    const view = ui(undefined);
+    settleJoin({ kind: "joined" }, view);
+    expect(view.toast.success).toHaveBeenCalledWith("Joined the workspace.");
   });
 });
 

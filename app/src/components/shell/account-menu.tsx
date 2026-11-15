@@ -7,6 +7,7 @@ import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Mail, Plu
 import type { WorkspaceRole } from "@prisma/client";
 
 import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accountInitials";
+import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
 import { contactUsHref } from "@/lib/contactUs";
 import { Button } from "@/components/ui/button";
@@ -126,6 +127,8 @@ export function AccountMenu() {
   // The button's second line names the active workspace when there are several,
   // so it needs the list before the menu is first opened: one read per page
   // load. Opening the menu still fetches it fresh; a failure only drops the line.
+  // Every change of workspace ends in a full load (afterWorkspaceChange), so
+  // this read is never older than the last change made on this page.
   useEffect(() => {
     let cancelled = false;
     fetch("/api/workspaces")
@@ -161,11 +164,11 @@ export function AccountMenu() {
       // 2026-11-01 audit: `router.refresh()` only re-renders server components,
       // so every client-fetched view (Queue, Activity, Media, Settings…) kept
       // showing the PREVIOUS workspace's data and acting on it 404'd. A full
-      // navigation to the current URL remounts every client component, which
+      // load of the current page remounts every client component, which
       // refetches under the new active workspace. `switchingId` is left set on
       // purpose: the page is unloading, and the buttons staying disabled stops
       // a second switch from racing the navigation.
-      window.location.assign(window.location.pathname + window.location.search);
+      afterWorkspaceChange();
     } catch {
       toast.error("Couldn't switch workspaces.");
       setSwitchingId(null);
@@ -192,8 +195,7 @@ export function AccountMenu() {
       // The new workspace is now the active one (cookie set by the route). A
       // full navigation remounts every client view under it, like a switch;
       // Settings first, since a new workspace's first job is connecting accounts.
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a full navigation is the point: router.push would keep every client view on the previous workspace's data (see handleSwitch)
-      window.location.assign("/settings");
+      afterWorkspaceChange("/settings");
     } catch {
       toast.error("Couldn't create the workspace.");
       setCreateBusy(false);

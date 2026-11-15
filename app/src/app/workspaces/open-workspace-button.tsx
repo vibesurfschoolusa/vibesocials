@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
+import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 
 /** Makes the workspace active (POST /api/workspaces/switch) and goes to the dashboard. */
 export function OpenWorkspaceButton({ workspaceId, name }: { workspaceId: string; name: string }) {
@@ -28,8 +29,7 @@ export function OpenWorkspaceButton({ workspaceId, name }: { workspaceId: string
       // A full navigation, as the account menu's switch does: router.push would
       // keep client views on the previous workspace's data. `busy` stays set
       // while the page unloads so a second click can't race it.
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- see above
-      window.location.assign("/");
+      afterWorkspaceChange("/");
     } catch {
       toast.error("Couldn't open that workspace. Try again.");
       setBusy(false);

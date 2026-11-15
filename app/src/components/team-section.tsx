@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
@@ -385,7 +386,6 @@ export function TeamSection({ workspaceId, role, workspaceName, deletion }: Team
  * needs no UI check here, only the API's own 400).
  */
 function MemberView({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
-  const router = useRouter();
   const toast = useToast();
   const [leaveOpen, setLeaveOpen] = useState(false);
 
@@ -432,8 +432,10 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
       throw new Error("LEAVE_FAILED");
     }
     toast.success("Left the workspace.");
-    router.refresh();
-  }, [router, toast, workspaceId]);
+    // The route moved the active workspace; R15: a full load of this page, so the
+    // top bar and the banner (read once per page load) follow it.
+    afterWorkspaceChange();
+  }, [toast, workspaceId]);
 
   return (
     <Card className="p-6">
@@ -538,13 +540,14 @@ function OwnerView({
       setSavedName(trimmed);
       setName(trimmed);
       toast.success("Workspace renamed.");
-      router.refresh();
+      // R15: a full load of Settings, so the top bar (read once per page load) shows the new name.
+      afterWorkspaceChange();
     } catch {
       toast.error("Couldn't rename workspace.");
     } finally {
       setSavingName(false);
     }
-  }, [name, savedName, router, toast, workspaceId]);
+  }, [name, savedName, toast, workspaceId]);
 
   // --- Invite link (GET/POST/DELETE /api/workspaces/invites) ---
   const [invite, setInvite] = useState<InviteMeta | null>(null);
@@ -825,8 +828,10 @@ function OwnerView({
       throw new Error("LEAVE_FAILED");
     }
     toast.success("Left the workspace.");
-    router.refresh();
-  }, [router, toast, workspaceId]);
+    // The route moved the active workspace; R15: a full load of this page, so the
+    // top bar and the banner (read once per page load) follow it.
+    afterWorkspaceChange();
+  }, [toast, workspaceId]);
 
   // Derived from the loaded roster each render, so it stays fresh after every
   // local-state role change above. Gates the last-owner demote/leave guards.
@@ -1109,8 +1114,7 @@ export function DeleteWorkspace({
       // workspaces once per page load) re-resolve it; a client navigation left
       // the menu naming the deleted workspace. `busy` stays set while the page
       // unloads.
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- see above
-      window.location.assign("/");
+      afterWorkspaceChange("/");
     } catch {
       setError("Could not delete this workspace. Try again.");
       setBusy(false);

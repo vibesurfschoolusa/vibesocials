@@ -176,28 +176,171 @@ describe("no client-router navigation to a route handler", () => {
 });
 
 /**
- * R14-client-journey L1: the account menu reads its workspaces once per page
- * load, so after Join and after deleting a workspace the page loads in full
- * (as the account menu's switch and the Workspaces page's Open do); a client
- * navigation kept the previous workspace's name in the top bar.
+ * R14-client-journey L1, R15 (all four reports): the account menu reads its
+ * workspaces, and the workspace banner its status, once per page load. So any
+ * action that changes the active workspace, the list of workspaces or a
+ * workspace's name ends with a full page load through afterWorkspaceChange.
+ * router.refresh() re-renders only server components: after Leave and a
+ * rename it left the top bar naming the old workspace, once #165 had fixed
+ * Join and delete.
+ *
+ * Rule: every fetch (or fetchImpl) to one of WORKSPACE_CHANGES is followed by
+ * afterWorkspaceChange before the next such call in the same file. Every route
+ * that sets or clears the active-workspace cookie must be listed, so a new one
+ * is caught; /go is reached only by plain links, which load in full already.
+ * A route held in a variable is not followed.
  */
-describe("a full page load after the active workspace changes", () => {
+const WORKSPACE_CHANGES: Array<{ route: string; methods: string[] }> = [
+  { route: "/api/workspaces", methods: ["POST"] }, // create
+  { route: "/api/workspaces/switch", methods: ["POST"] },
+  { route: "/api/workspaces/leave", methods: ["POST"] },
+  { route: "/api/workspaces/active", methods: ["PATCH", "DELETE"] }, // rename, delete
+  { route: "/api/invites/[token]/accept", methods: ["POST"] }, // join
+];
+
+/** Routes that touch the cookie but are never fetched: each is reached by a full load. */
+const COOKIE_ROUTES_REACHED_BY_FULL_LOAD = ["/go"];
+
+/** Source without its comments, so a comment never counts as a call. */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** Each fetch in a source that changes workspaces: where it is, its route and method. */
+export function workspaceChangeCalls(
+  source: string,
+  patterns = routeHandlerPatterns(),
+): Array<{ index: number; route: string; method: string }> {
+  const out: Array<{ index: number; route: string; method: string }> = [];
+  for (const match of source.matchAll(/\b(?:fetch|fetchImpl)\(/g)) {
+    const open = match.index + match[0].length - 1;
+    const call = balanced(source, open, "(", ")");
+    const first = firstArgument(source, open);
+    const options = call.slice(first.length + 1);
+    const method = (/\bmethod:\s*["'`](\w+)["'`]/.exec(options)?.[1] ?? "GET").toUpperCase();
+    for (const target of literalPaths(first)) {
+      const hit = patterns.find(({ pattern }) => pattern.test(target));
+      const change = hit ? WORKSPACE_CHANGES.find((entry) => entry.route === hit.route) : undefined;
+      if (change && change.methods.includes(method)) out.push({ index: match.index, route: change.route, method });
+    }
+  }
+  return out;
+}
+
+/** The changing calls not followed by afterWorkspaceChange before the next one. */
+export function changesWithoutFullLoad(source: string, patterns = routeHandlerPatterns()): string[] {
+  const code = withoutComments(source);
+  const calls = workspaceChangeCalls(code, patterns);
+  return calls
+    .filter((call, i) => !/\bafterWorkspaceChange\b/.test(code.slice(call.index, calls[i + 1]?.index ?? code.length)))
+    .map((call) => `${call.method} ${call.route}`);
+}
+
+describe("a full page load after the workspaces change", () => {
+  const patterns = routeHandlerPatterns();
   const read = (relative: string) => readFileSync(path.join(SRC, relative), "utf8");
-  const body = (source: string, name: string) => {
-    const at = source.indexOf(`async function ${name}(`);
-    expect(at, name).toBeGreaterThan(-1);
-    return balanced(source, source.indexOf("{", at), "{", "}");
+  /** The bodies of `async function name(` and `const name = useCallback(async () =>`, in file order. */
+  const bodies = (source: string, name: string) => {
+    const out: string[] = [];
+    const start = new RegExp(`async function ${name}\\(|const ${name} = useCallback\\(async \\(\\) =>`, "g");
+    for (const match of source.matchAll(start)) {
+      out.push(balanced(source, source.indexOf("{", match.index + match[0].length - 1), "{", "}"));
+    }
+    expect(out.length, name).toBeGreaterThan(0);
+    return out;
   };
 
-  it("after Join", () => {
-    const join = body(read(path.join("app", "join", "[token]", "join-view.tsx")), "handleJoin");
-    expect(join).toContain('window.location.assign("/")');
-    expect(join).not.toMatch(/router\./);
+  it("each listed change is a route handler with that method", () => {
+    for (const { route, methods } of WORKSPACE_CHANGES) {
+      const source = readFileSync(path.join(APP, ...route.split("/").filter(Boolean), "route.ts"), "utf8");
+      for (const method of methods) {
+        expect(source, `${method} ${route}`).toMatch(new RegExp(`export (?:async function|const) ${method}\\b`));
+      }
+    }
   });
 
-  it("after deleting a workspace", () => {
-    const remove = body(read(path.join("components", "team-section.tsx")), "handleDelete");
-    expect(remove).toContain('window.location.assign("/")');
+  it("every route that sets or clears the active-workspace cookie is listed", () => {
+    const listed = new Set([...WORKSPACE_CHANGES.map((entry) => entry.route), ...COOKIE_ROUTES_REACHED_BY_FULL_LOAD]);
+    const cookieRoutes = files(APP, (name) => /^route\.tsx?$/.test(name))
+      .filter((file) => readFileSync(file, "utf8").includes("ACTIVE_WORKSPACE_COOKIE"))
+      .map((file) => `/${path.relative(APP, path.dirname(file)).split(path.sep).join("/")}`);
+    expect(cookieRoutes.length).toBeGreaterThan(0);
+    expect(cookieRoutes.filter((route) => !listed.has(route))).toEqual([]);
+  });
+
+  it("the scan finds each shape and wants a full load after each call", () => {
+    const shapes: Array<[string, string[]]> = [
+      ['await fetch("/api/workspaces/leave", { method: "POST" }); router.refresh();', ["POST /api/workspaces/leave"]],
+      ['await fetch("/api/workspaces/active", {\n  method: "PATCH",\n});\nafterWorkspaceChange();', []],
+      ['await fetchImpl(`/api/invites/${token}/accept`, { method: "POST" });', ["POST /api/invites/[token]/accept"]],
+      // The menu's reads change nothing.
+      ['await fetch("/api/workspaces"); await fetch("/api/workspaces/status");', []],
+      // One full load after the second of two calls covers only the second.
+      [
+        'await fetch("/api/workspaces/switch", { method: "POST" });\nawait fetch("/api/workspaces", { method: "POST" });\nafterWorkspaceChange("/");',
+        ["POST /api/workspaces/switch"],
+      ],
+      // A comment is not a call.
+      ['await fetch("/api/workspaces/active", { method: "DELETE" });\n// afterWorkspaceChange("/");', ["DELETE /api/workspaces/active"]],
+    ];
+    for (const [shape, missing] of shapes) {
+      expect(changesWithoutFullLoad(shape, patterns), shape).toEqual(missing);
+    }
+  });
+
+  it("no file under src changes workspaces without a full load after it", () => {
+    const covered: string[] = [];
+    const offenders: string[] = [];
+    for (const file of files(SRC, (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.endsWith(".d.ts"))) {
+      const source = readFileSync(file, "utf8");
+      const relative = path.relative(SRC, file).split(path.sep).join("/");
+      for (const call of workspaceChangeCalls(withoutComments(source), patterns)) {
+        covered.push(`${relative}: ${call.method} ${call.route}`);
+      }
+      for (const missing of changesWithoutFullLoad(source, patterns)) offenders.push(`${relative}: ${missing}`);
+    }
+    expect(offenders).toEqual([]);
+    // What the rule covers today; a new caller shows up here for review.
+    expect(covered.sort()).toEqual(
+      [
+        "app/join/[token]/join-view.tsx: POST /api/invites/[token]/accept",
+        "app/workspaces/open-workspace-button.tsx: POST /api/workspaces/switch",
+        "components/shell/account-menu.tsx: POST /api/workspaces",
+        "components/shell/account-menu.tsx: POST /api/workspaces/switch",
+        "components/team-section.tsx: DELETE /api/workspaces/active",
+        "components/team-section.tsx: PATCH /api/workspaces/active",
+        "components/team-section.tsx: POST /api/workspaces/leave",
+        "components/team-section.tsx: POST /api/workspaces/leave",
+      ].sort(),
+    );
+  });
+
+  it("Join, delete and Open land on the dashboard, a new workspace on Settings", () => {
+    const join = read(path.join("app", "join", "[token]", "join-view.tsx"));
+    expect(bodies(join, "handleJoin")[0]).toContain("load: afterWorkspaceChange");
+    expect(bodies(join, "handleJoin")[0]).not.toMatch(/router\./);
+    expect(join).toContain('ui.load("/")');
+    const remove = bodies(read(path.join("components", "team-section.tsx")), "handleDelete")[0];
+    expect(remove).toContain('afterWorkspaceChange("/")');
     expect(remove).not.toMatch(/router\./);
+    const menu = read(path.join("components", "shell", "account-menu.tsx"));
+    expect(bodies(menu, "handleCreateWorkspace")[0]).toContain('afterWorkspaceChange("/settings")');
+    expect(bodies(read(path.join("app", "workspaces", "open-workspace-button.tsx")), "handleOpen")[0]).toContain(
+      'afterWorkspaceChange("/")',
+    );
+  });
+
+  // R15: a member of A and B leaves B -> the page loads again and the menu,
+  // reading its list afresh, names A; an owner renames "Surf Co" -> the new
+  // name; a paused workspace left -> the banner's fresh status has no banner.
+  it("Leave (member and owner views), rename and the menu's switch load the page they were on", () => {
+    const team = read(path.join("components", "team-section.tsx"));
+    const leaves = bodies(team, "handleLeave");
+    expect(leaves).toHaveLength(2);
+    const handlers = [...leaves, ...bodies(team, "handleSaveName"), ...bodies(read(path.join("components", "shell", "account-menu.tsx")), "handleSwitch")];
+    for (const handler of handlers.map(withoutComments)) {
+      expect(handler).toContain("afterWorkspaceChange()");
+      expect(handler).not.toMatch(/router\./);
+    }
   });
 });

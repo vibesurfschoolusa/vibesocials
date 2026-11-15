@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { workspaceLink } from "@/server/notifications/links";
 
 import { JOIN_FAILED_MESSAGE } from "./joinMessages";
@@ -95,6 +96,34 @@ export async function acceptInvite(fetchImpl: typeof fetch, token: string): Prom
   } catch {
     return { kind: "failed", message: JOIN_OFFLINE_MESSAGE };
   }
+}
+
+/**
+ * What the page does with Join's answer. A join ends with a full load of the
+ * dashboard (R14-client-journey L1: the account menu reads its workspaces once
+ * per page load). R15-pages L3: `joining` stays set while the page unloads,
+ * so a second press can't send a second Join and a second "Joined" toast.
+ */
+export function settleJoin(
+  outcome: AcceptOutcome,
+  ui: {
+    setJoining: (joining: boolean) => void;
+    setLoad: (load: InviteLoad) => void;
+    setSignedOut: (signedOut: boolean) => void;
+    toast: { success: (message: string) => void; error: (message: string) => void };
+    workspaceName: string | undefined;
+    load: (to: string) => void;
+  },
+): void {
+  if (outcome.kind === "joined") {
+    ui.toast.success(`Joined ${ui.workspaceName ?? "the workspace"}.`);
+    ui.load("/");
+    return;
+  }
+  ui.setJoining(false);
+  if (outcome.kind === "invalid") ui.setLoad(outcome);
+  else if (outcome.kind === "signedOut") ui.setSignedOut(true);
+  else ui.toast.error(outcome.message);
 }
 
 /**
@@ -210,25 +239,14 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
   async function handleJoin() {
     setJoining(true);
     const outcome = await acceptInvite(fetch, token);
-    setJoining(false);
-    if (outcome.kind === "invalid") {
-      setLoad(outcome);
-      return;
-    }
-    if (outcome.kind === "signedOut") {
-      setSignedOut(true);
-      return;
-    }
-    if (outcome.kind === "failed") {
-      toast.error(outcome.message);
-      return;
-    }
-    toast.success(`Joined ${preview?.workspaceName ?? "the workspace"}.`);
-    // R14-client-journey L1: a full load, as the account menu's switch does: the
-    // menu reads its workspaces once per page load, so a client navigation left
-    // it naming the previous workspace.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- see above
-    window.location.assign("/");
+    settleJoin(outcome, {
+      setJoining,
+      setLoad,
+      setSignedOut,
+      toast,
+      workspaceName: preview?.workspaceName,
+      load: afterWorkspaceChange,
+    });
   }
 
   // R14-pages L3: the page's h1 and a spoken status while the preview loads.
