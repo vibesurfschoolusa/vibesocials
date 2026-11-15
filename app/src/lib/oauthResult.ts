@@ -27,10 +27,20 @@ function labelFromCode(code: string): string | null {
  * Error wins when both are present. `platform` is the platform the code names
  * (null when it names none), so Settings can link to that platform's guide.
  */
+/**
+ * The banner Settings shows after a connect. R7 review 2: `warning` for a
+ * reconnect that worked but changed less than expected (the same end date).
+ */
+export interface OAuthResult {
+  variant: "success" | "warning" | "danger";
+  message: string;
+  platform: Platform | null;
+}
+
 export function describeOAuthResult(params: {
   error: string | null;
   success: string | null;
-}): { variant: "success" | "danger"; message: string; platform: Platform | null } | null {
+}): OAuthResult | null {
   // `||`, not `??`: describeCode skips an empty error, so this must too.
   const code = params.error || params.success;
   const described = describeCode(params);

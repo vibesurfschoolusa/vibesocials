@@ -71,14 +71,24 @@ export function connectionExpiryState(
  * (a fresh LinkedIn sign-in lasts 60 days). Said rather than looking as if
  * nothing happened.
  */
-/**
- * The flag an owner's or a client's LinkedIn callback adds to its success
- * redirect when the new sign-in itself ends inside the warning window. A flag
- * only, never a name or a date: the pages read the date from the stored
- * connection and show the sentence only when it really is in that window.
- */
-export const SAME_END_PARAM = "same_end";
 
 export function sameEndDateMessage(platform: Platform, expiresAt: Date | string): string {
   return `${platformLabel(platform)} gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`;
 }
+
+/**
+ * Does a new sign-in already end inside the warning window (LinkedIn answered
+ * a reconnect with the same end date)? The callback and both choice routes
+ * use it to add {@link SAME_END_PARAM}.
+ */
+export function signInEndsSoon(
+  platform: Platform,
+  expiresAt: Date | string | null,
+  refreshToken: string | null,
+  now: Date = new Date(),
+): boolean {
+  return inExpiryWarningWindow({ platform, expiresAt, refreshToken, needsReconnect: false }, now);
+}
+
+// Client-safe (lib/differentAccount.ts); re-exported for the server callers.
+export { SAME_END_PARAM, connectedSuccessQuery } from "@/lib/differentAccount";

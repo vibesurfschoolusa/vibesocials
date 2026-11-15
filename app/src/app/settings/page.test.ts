@@ -551,6 +551,8 @@ describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
     const expiresAt = new Date(Date.now() + 3 * DAY);
     const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
     expect(html).toContain(`LinkedIn gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`);
+    // R7 review 2: a warning, as on /c.
+    expect(html).toMatch(/<div role="alert" class="[^"]*border-warning\/25[^"]*"/);
   });
 
   it("renewed: the usual message, even with a crafted flag", async () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -59,9 +60,10 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId }),
       });
-      const data = (await response.json().catch(() => null)) as { ok?: boolean; platform?: string; error?: string } | null;
+      const data = (await response.json().catch(() => null)) as { ok?: boolean; platform?: string; error?: string; sameEnd?: boolean } | null;
       if (response.ok && data?.ok && data.platform) {
-        router.push(`${page}?success=${encodeURIComponent(`${data.platform}_connected`)}`);
+        // R7 review 4: with same_end when the saved LinkedIn sign-in still ends within a week.
+        router.push(`${page}?${connectedSuccessQuery(data.platform, data.sameEnd === true)}`);
         return;
       }
       setError(data?.error ?? "Couldn't connect that account. Try again.");

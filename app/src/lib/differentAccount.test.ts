@@ -8,6 +8,9 @@ import {
   differentAccountPlatform,
   linkDifferentAccountMessage,
   refusedSaveSettingsUrl,
+  choiceDifferentAccountMessage,
+  connectedAmongCandidates,
+  linkChoiceDifferentAccountMessage,
   locationClearedSettingsMessage,
   reconnectDifferentAccountMessage,
   settingsDifferentAccountMessage,
@@ -103,6 +106,49 @@ describe("a Business Profile reconnect that cleared the location", () => {
   it("one fixed sentence", () => {
     expect(locationClearedSettingsMessage()).toBe(
       "Reconnected. Choose the location to post to; the one chosen before isn't available to this Google account.",
+    );
+  });
+});
+
+// R7 review 3: a choice from a list (Pages, Instagram accounts, LinkedIn
+// pages, boards) that included the connected one: the way forward is to choose it.
+describe("a refused choice from a list", () => {
+  it("knows whether the connected account was on the list", () => {
+    expect(connectedAmongCandidates([{ id: "page-1" }, { id: "page-2" }], "page-1")).toBe(true);
+    expect(connectedAmongCandidates([{ id: "page-2" }], "page-1")).toBe(false);
+    expect(connectedAmongCandidates([{ id: "page-2" }], null)).toBe(false);
+  });
+
+  it("Settings, the connected one was offered: choose it", () => {
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", true)).toBe(
+      "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    );
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", true)).toBe(
+      "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    );
+  });
+
+  it("Settings, LinkedIn, not offered (another member signed in): the sign-out step", () => {
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", false)).toBe(
+      reconnectDifferentAccountMessage("linkedin", "My Surf School"),
+    );
+  });
+
+  it("Settings, another platform, not offered: as before", () => {
+    expect(choiceDifferentAccountMessage("pinterest", "Team photos", "My Surf School", false)).toBe(
+      settingsDifferentAccountMessage("Team photos", "My Surf School"),
+    );
+  });
+
+  it("the client's page, offered: choose it from the list", () => {
+    expect(linkChoiceDifferentAccountMessage("facebook_page", "My Surf School", true)).toBe(
+      "Choose My Surf School from the list, or ask the workspace owner to disconnect it first.",
+    );
+  });
+
+  it("the client's page, not offered: the different-account sentence", () => {
+    expect(linkChoiceDifferentAccountMessage("linkedin", "My Surf School", false)).toBe(
+      linkDifferentAccountMessage("linkedin", "My Surf School"),
     );
   });
 });

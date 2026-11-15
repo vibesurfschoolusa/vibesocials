@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { accountCheckFailedMessage, linkDifferentAccountMessage } from "@/lib/differentAccount";
+import { accountCheckFailedMessage, linkChoiceDifferentAccountMessage } from "@/lib/differentAccount";
+import { connectedWasOffered, pendingSignInEndsSoon } from "@/server/connections/choiceOutcome";
 import { notifyOwnersOfRefusedConnect } from "@/server/notifications/refusedConnectEmail";
 import {
   CONNECT_LINK_CHOICES_PER_HOUR,
@@ -135,8 +136,10 @@ export async function POST(request: Request, context: RouteContext) {
       // R6 review low 1: the connection stays as it was, and so does the choice.
       // R7-client-journey L4: the owners are told (once per connection per day; never throws).
       await notifyOwnersOfRefusedConnect({ workspaceId: link.workspaceId, platform: pending.platform });
+      // R7 review 3: when the connected one was on the list, choosing it is the way.
+      const offered = await connectedWasOffered(pending, link.workspaceId);
       return NextResponse.json(
-        { error: linkDifferentAccountMessage(pending.platform, result.connectedName) },
+        { error: linkChoiceDifferentAccountMessage(pending.platform, result.connectedName, offered) },
         { status: 409 },
       );
     }
@@ -162,7 +165,12 @@ export async function POST(request: Request, context: RouteContext) {
     // The choice is deleted above, so a second submit is a 404 and sends nothing.
     await notifyOwnersOfClientConnect({ workspaceId: link.workspaceId, platform: pending.platform });
 
-    const response = NextResponse.json({ ok: true, platform: pending.platform });
+    // R7 review 4: /c adds same_end to the success address, as the callback does.
+    const response = NextResponse.json(
+      pendingSignInEndsSoon(pending)
+        ? { ok: true, platform: pending.platform, sameEnd: true }
+        : { ok: true, platform: pending.platform },
+    );
     clearConnectCookie(response);
     return response;
   } catch (error) {

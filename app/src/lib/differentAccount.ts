@@ -75,6 +75,42 @@ export function linkDifferentAccountMessage(platform: Platform, connectedName: s
 }
 
 /**
+ * R7 review 3: a refused choice from a list (Pages, Instagram accounts,
+ * LinkedIn pages, boards). Whether the connected account was one of the
+ * candidates: `connectedKey` is its key as the save compares it
+ * (saveConnection.ts connectionAccountKey), null when it can't be told.
+ */
+export function connectedAmongCandidates(candidates: readonly { id: string }[], connectedKey: string | null): boolean {
+  return connectedKey !== null && candidates.some((candidate) => candidate.id === connectedKey);
+}
+
+/**
+ * Settings' choice. Offered: choosing it is the way forward. Not offered: the
+ * person signed in to another account (for LinkedIn another member, so the
+ * sign-out step); other platforms as before.
+ */
+export function choiceDifferentAccountMessage(
+  platform: Platform,
+  chosenName: string,
+  connectedName: string,
+  connectedOffered: boolean,
+): string {
+  if (connectedOffered) {
+    return `You chose ${chosenName}, not ${connectedName}. Choose ${connectedName} to reconnect it, or use Switch account to change to ${chosenName}.`;
+  }
+  return platform === "linkedin"
+    ? reconnectDifferentAccountMessage(platform, connectedName)
+    : settingsDifferentAccountMessage(chosenName, connectedName);
+}
+
+/** The client's choice on /c, by the same rule. */
+export function linkChoiceDifferentAccountMessage(platform: Platform, connectedName: string, connectedOffered: boolean): string {
+  return connectedOffered
+    ? `Choose ${connectedName} from the list, or ask the workspace owner to disconnect it first.`
+    : linkDifferentAccountMessage(platform, connectedName);
+}
+
+/**
  * R6 second review 1: Google Business Profile only. Whether the new Google
  * account manages the chosen location couldn't be read (a 429, 5xx or network
  * failure); nothing changed.
@@ -118,3 +154,19 @@ export function locationClearedSettingsMessage(): string {
 }
 
 export const LOCATION_CLEARED_LINK_MESSAGE = "Connected. The workspace owner will choose the location.";
+
+/**
+ * The flag the LinkedIn callback (and, through their dialogs, the two choice
+ * routes) adds to the success address when the new sign-in itself ends
+ * inside the warning window (lib/connectionExpiry.ts signInEndsSoon). A flag
+ * only, never a name or a date: the pages read the date from the stored
+ * connection and show the sentence only when it really is in that window.
+ */
+export const SAME_END_PARAM = "same_end";
+
+/** The query a choice dialog sends the person back with, as the callback would. */
+export function connectedSuccessQuery(platform: string, sameEnd: boolean): string {
+  const query = new URLSearchParams({ success: `${platform}_connected` });
+  if (sameEnd) query.set(SAME_END_PARAM, "1");
+  return query.toString();
+}

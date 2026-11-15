@@ -10,6 +10,7 @@ const {
   requireOwnerContextMock,
   checkRateLimitMock,
   findUniqueMock,
+  connectionFindUniqueMock,
   deleteManyMock,
   saveFacebookPageConnectionMock,
   saveInstagramConnectionMock,
@@ -20,6 +21,7 @@ const {
   requireOwnerContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueMock: vi.fn(),
+  connectionFindUniqueMock: vi.fn(),
   deleteManyMock: vi.fn(),
   saveFacebookPageConnectionMock: vi.fn(),
   saveInstagramConnectionMock: vi.fn(),
@@ -42,10 +44,13 @@ vi.mock("@/lib/db", () => ({
       findUnique: findUniqueMock,
       deleteMany: deleteManyMock,
     },
+    socialConnection: { findUnique: connectionFindUniqueMock },
   },
 }));
 
-vi.mock("@/server/connections/saveConnection", () => ({
+vi.mock("@/server/connections/saveConnection", async (importOriginal) => ({
+  // The real key rule: whether the connected account was on the list.
+  connectionAccountKey: (await importOriginal<typeof import("@/server/connections/saveConnection")>()).connectionAccountKey,
   saveFacebookPageConnection: saveFacebookPageConnectionMock,
   saveInstagramConnection: saveInstagramConnectionMock,
   saveLinkedInConnection: saveLinkedInConnectionMock,
@@ -535,6 +540,8 @@ describe("POST /api/connections/pending/[id]", () => {
   // R6 review low 1: a reconnect only ever replaces the same account.
   it("409s with both names when the chosen account is not the one connected, keeping the choice and the connection", async () => {
     findUniqueMock.mockResolvedValue(row(FACEBOOK));
+    // The connected Page is not on this list.
+    connectionFindUniqueMock.mockResolvedValue({ platform: "facebook_page", accountIdentifier: "page-9", metadata: {} });
     saveFacebookPageConnectionMock.mockResolvedValue({
       ok: false,
       reason: "different_account",
@@ -620,5 +627,110 @@ describe("pending/[id] and the rendered workspace", () => {
 
     expect(response.status).toBe(status);
     expect(deleteManyMock).not.toHaveBeenCalled();
+  });
+});
+
+// R7 review 3: the list included the connected account, so the way forward is to choose it.
+describe("POST: a refused choice, by whether the connected one was on the list", () => {
+  beforeEach(() => {
+    requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+
+  it("the list contains the connected Page: choose it", async () => {
+    findUniqueMock.mockResolvedValue(row(FACEBOOK));
+    connectionFindUniqueMock.mockResolvedValue({ platform: "facebook_page", accountIdentifier: "page-1", metadata: {} });
+    saveFacebookPageConnectionMock.mockResolvedValue({
+      ok: false,
+      reason: "different_account",
+      connectedName: "My Surf School",
+      signedInName: "Client Cafe",
+    });
+
+    const response = await POST(postReq({ candidateId: "page-2" }), ctx());
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    });
+    expect(connectionFindUniqueMock).toHaveBeenCalledWith({
+      where: { workspaceId_platform: { workspaceId: "ws-1", platform: "facebook_page" } },
+      select: { platform: true, accountIdentifier: true, metadata: true },
+    });
+  });
+
+  it("LinkedIn, the connected page not on the list (another member signed in): the sign-out step", async () => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN));
+    connectionFindUniqueMock.mockResolvedValue({
+      platform: "linkedin",
+      accountIdentifier: "member-9",
+      metadata: { organizations: [{ id: "999", name: "Old Page" }] },
+    });
+    saveLinkedInConnectionMock.mockResolvedValue({
+      ok: false,
+      reason: "different_account",
+      connectedName: "Old Page",
+      signedInName: "Client Cafe",
+    });
+
+    const response = await POST(postReq({ candidateId: "222" }), ctx());
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toBe(
+      "You signed in to a different LinkedIn account than Old Page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Old Page. To use the other account instead, use Switch account.",
+    );
+  });
+
+  it("LinkedIn, the connected page on the list: choose it", async () => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN));
+    connectionFindUniqueMock.mockResolvedValue({
+      platform: "linkedin",
+      accountIdentifier: "member-1",
+      metadata: { organizations: [{ id: "111", name: "My Surf School" }] },
+    });
+    saveLinkedInConnectionMock.mockResolvedValue({
+      ok: false,
+      reason: "different_account",
+      connectedName: "My Surf School",
+      signedInName: "Client Cafe",
+    });
+
+    const response = await POST(postReq({ candidateId: "222" }), ctx());
+
+    expect((await response.json()).error).toBe(
+      "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    );
+  });
+});
+
+// R7 review 4: a LinkedIn choice whose sign-in still ends within a week says so in Settings.
+describe("POST: the same-end flag on a LinkedIn choice", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  function linkedInEnding(inDays: number): PendingConnectionPayload {
+    const payload = LINKEDIN as unknown as { token: Record<string, unknown> };
+    return {
+      ...payload,
+      token: { ...payload.token, refreshToken: null, expiresAt: new Date(Date.now() + inDays * DAY).toISOString() },
+    } as unknown as PendingConnectionPayload;
+  }
+
+  beforeEach(() => {
+    requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+    saveLinkedInConnectionMock.mockResolvedValue({ ok: true });
+    deleteManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  it("renewed (60 days): the usual answer", async () => {
+    findUniqueMock.mockResolvedValue(row(linkedInEnding(60)));
+    const response = await POST(postReq({ candidateId: "111" }), ctx());
+    await expect(response.json()).resolves.toEqual({ ok: true, platform: "linkedin" });
+  });
+
+  it("same end (3 days): sameEnd, for the success address", async () => {
+    findUniqueMock.mockResolvedValue(row(linkedInEnding(3)));
+    const response = await POST(postReq({ candidateId: "111" }), ctx());
+    await expect(response.json()).resolves.toEqual({ ok: true, platform: "linkedin", sameEnd: true });
   });
 });

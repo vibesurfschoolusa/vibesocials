@@ -31,7 +31,7 @@ import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
-import { describeOAuthResult } from "@/lib/oauthResult";
+import { describeOAuthResult, type OAuthResult } from "@/lib/oauthResult";
 import {
   LOCATION_CLEARED_PARAM,
   accountCheckFailedMessage,
@@ -89,7 +89,7 @@ export default async function SettingsPage({
   }
 
   const params = await searchParams;
-  let oauthResult = describeOAuthResult({
+  let oauthResult: OAuthResult | null = describeOAuthResult({
     error: params.error ?? null,
     success: params.success ?? null,
   });
@@ -175,9 +175,9 @@ export default async function SettingsPage({
       ? rows.find((row) => row.platform === "linkedin" && inExpiryWarningWindow(row, now) && !expiryEnded(row, now))
       : undefined;
   if (sameEndRow) {
-    // The reconnect itself worked; OAuthResult has no warning variant.
+    // R7 review 2: a warning, as on /c: it worked, but it still ends then.
     oauthResult = {
-      variant: "success",
+      variant: "warning",
       platform: "linkedin",
       message: sameEndDateMessage("linkedin", sameEndRow.expiresAt!),
     };

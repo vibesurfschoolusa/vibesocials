@@ -7,7 +7,9 @@ import {
   connectionExpiryState,
   expiryEnded,
   inExpiryWarningWindow,
+  connectedSuccessQuery,
   sameEndDateMessage,
+  signInEndsSoon,
 } from "./connectionExpiry";
 
 /**
@@ -109,5 +111,24 @@ describe("sameEndDateMessage", () => {
     expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe(
       "LinkedIn gave the same end date (November 16, 2026); it still ends then.",
     );
+  });
+});
+
+// R7 review 4: a new sign-in (callback or a choice from a list) that already ends within the warning window.
+describe("signInEndsSoon", () => {
+  it("LinkedIn, no refresh token, ends in 3 days: true; in 60 days: false", () => {
+    expect(signInEndsSoon("linkedin", new Date(NOW.getTime() + 3 * DAY), null, NOW)).toBe(true);
+    expect(signInEndsSoon("linkedin", new Date(NOW.getTime() + 60 * DAY).toISOString(), null, NOW)).toBe(false);
+  });
+
+  it("with a refresh token it renews: false", () => {
+    expect(signInEndsSoon("linkedin", new Date(NOW.getTime() + 3 * DAY), "refresh", NOW)).toBe(false);
+  });
+});
+
+describe("connectedSuccessQuery", () => {
+  it("the success code, with the same-end flag only when asked", () => {
+    expect(connectedSuccessQuery("linkedin", false)).toBe("success=linkedin_connected");
+    expect(connectedSuccessQuery("linkedin", true)).toBe("success=linkedin_connected&same_end=1");
   });
 });

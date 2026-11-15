@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
-import { SAME_END_PARAM, inExpiryWarningWindow } from "@/lib/connectionExpiry";
+import { SAME_END_PARAM, signInEndsSoon } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
@@ -333,7 +333,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     // Unconfirmed (R7 client-journey): LinkedIn may answer a reconnect with the
     // same end date; then the new sign-in already ends inside the warning
     // window, and Settings (or /c) says so instead of nothing.
-    if (inExpiryWarningWindow({ platform: Platform.linkedin, expiresAt, refreshToken, needsReconnect: false })) {
+    if (signInEndsSoon(Platform.linkedin, expiresAt, refreshToken)) {
       settingsUrl.searchParams.set(SAME_END_PARAM, "1");
     }
     return NextResponse.redirect(settingsUrl);

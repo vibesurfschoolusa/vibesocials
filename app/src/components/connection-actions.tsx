@@ -307,7 +307,8 @@ export function ConnectionActions({
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
+      {/* R7 review 1: wraps, the Ended sentence on its own line (basis-full). */}
+      <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
         {needsReconnect ? (
           // Roadmap Phase 4: destructive button to this platform's OAuth
           // start (a plain anchor: /api/auth/* is a redirect handler, not a
