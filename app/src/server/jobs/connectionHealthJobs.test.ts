@@ -782,8 +782,10 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
   });
 
   // Coordinator's review: failing connections keep their old expiresAt, so by
-  // expiry alone they would come first every day.
-  it("3 connections whose last refresh failed and 100 healthy ones due: the 100 healthy today, the 3 after them", async () => {
+  // expiry alone they would come first every day; they run after the healthy
+  // ones. R11-publishing L2: but they keep places in the cap, so more healthy
+  // ones due than the cap never leave them out for good.
+  it("3 connections whose last refresh failed and 100 healthy ones due: 97 healthy, then the 3", async () => {
     for (let i = 0; i < 3; i++) {
       add(`bad-${i}`, { expiresAt: new Date(NOW.getTime() - 30 * 86_400_000), refreshFailedAt: new Date(NOW.getTime() - 86_400_000) });
     }
@@ -792,7 +794,8 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
     const { summary } = await runCron();
 
     expect(refreshedIds()).toHaveLength(100);
-    expect(refreshedIds().every((id) => id.startsWith("ok-"))).toBe(true);
+    expect(refreshedIds().slice(0, 97).every((id) => id.startsWith("ok-"))).toBe(true);
+    expect(refreshedIds().slice(97)).toEqual(["bad-0", "bad-1", "bad-2"]);
     expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 103, refreshed: 100, leftForTomorrow: 3 });
   });
 

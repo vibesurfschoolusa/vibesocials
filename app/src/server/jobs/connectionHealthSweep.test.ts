@@ -325,9 +325,9 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
         { id: "failed-new", expiresAt: at(-DAY), failed: true },
         { id: "healthy-early", expiresAt: at(-2 * HOUR), failed: false },
       ],
-      3,
     );
-    expect(queue).toEqual({ ids: ["healthy-early", "healthy-late", "failed-old"], leftForTomorrow: 1 });
+    // In the run they come last (R11-publishing L2: their places are kept, below).
+    expect(queue).toEqual({ ids: ["healthy-early", "healthy-late", "failed-old", "failed-new"], leftForTomorrow: 0 });
   });
 
   it("150 due: the 100 soonest today, 50 left", () => {
@@ -339,6 +339,32 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
 
   it("nothing due: nothing to do", () => {
     expect(inlineRefreshQueue([])).toEqual({ ids: [], leftForTomorrow: 0 });
+  });
+
+  // R11-publishing L2: with more healthy ones due than the cap, a failed one
+  // sorted after all of them was never reached. 10 of the places are kept for
+  // failed ones, still after the healthy ones in the run.
+  it("150 healthy due every day + 1 failed: the failed one is refreshed today, not never", () => {
+    const healthy = Array.from({ length: 150 }, (_, i) => ({ id: `h-${String(i).padStart(3, "0")}`, expiresAt: at(-(150 - i) * HOUR) }));
+    const failed = { id: "yt-failed", expiresAt: at(-30 * DAY), failed: true };
+    const queue = inlineRefreshQueue([...healthy, failed]);
+    expect(queue.ids).toHaveLength(100);
+    expect(queue.ids.at(-1)).toBe("yt-failed");
+    expect(queue.ids.slice(0, 99)).toEqual(healthy.slice(0, 99).map((row) => row.id));
+    expect(queue.leftForTomorrow).toBe(51);
+  });
+
+  it("at most 10 places go to failed ones while healthy ones wait; unused places go to the other kind", () => {
+    const healthy = Array.from({ length: 150 }, (_, i) => ({ id: `h-${String(i).padStart(3, "0")}`, expiresAt: at(-HOUR) }));
+    const failed = Array.from({ length: 30 }, (_, i) => ({ id: `f-${String(i).padStart(2, "0")}`, expiresAt: at(-DAY), failed: true }));
+    const crowded = inlineRefreshQueue([...failed, ...healthy]);
+    expect(crowded.ids.filter((id) => id.startsWith("f-"))).toEqual(failed.slice(0, 10).map((row) => row.id));
+    expect(crowded.ids.filter((id) => id.startsWith("h-"))).toHaveLength(90);
+
+    // Few healthy ones: the failed ones fill the rest of the cap.
+    const fewHealthy = inlineRefreshQueue([...failed, ...healthy.slice(0, 5)]);
+    expect(fewHealthy.ids).toHaveLength(35);
+    expect(fewHealthy.ids.slice(0, 5)).toEqual(healthy.slice(0, 5).map((row) => row.id));
   });
 });
 

@@ -165,11 +165,21 @@ export function refreshesInline(workspace: SweepWorkspace, now: Date, env: Billi
 export type InlineRefreshCandidate = { id: string; expiresAt: string; failed?: boolean };
 
 /**
- * The free connections to refresh today: those whose last refresh failed after
- * the healthy ones, each soonest-expiring first (ties by id), at most `cap`;
- * the count left is reported. A failing connection keeps its old expiresAt, so
- * by expiry alone a few failing or hanging ones would come first every day and
- * push healthy ones to the next.
+ * R11-publishing L2: of the cap's places, this many are kept for connections
+ * whose last refresh failed, so a failed one is not left out for good once
+ * more healthy ones than the cap are due every day.
+ */
+export const FAILED_INLINE_REFRESH_PLACES = 10;
+
+/**
+ * The free connections to refresh today, at most `cap`: the healthy ones,
+ * then those whose last refresh failed, each soonest-expiring first (ties by
+ * id); the count left is reported. A failing connection keeps its old
+ * expiresAt, so by expiry alone a few failing or hanging ones would come first
+ * every day and push healthy ones to the next; they run last, and up to
+ * {@link FAILED_INLINE_REFRESH_PLACES} of the places are theirs whatever is
+ * due, so they are never crowded out. A place one kind leaves unused goes to
+ * the other.
  */
 export function inlineRefreshQueue(
   candidates: readonly InlineRefreshCandidate[],
@@ -177,11 +187,14 @@ export function inlineRefreshQueue(
 ): { ids: string[]; leftForTomorrow: number } {
   const ordered = [...candidates].sort(
     (a, b) =>
-      Number(a.failed === true) - Number(b.failed === true) ||
       new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime() ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
-  const ids = ordered.slice(0, cap).map((candidate) => candidate.id);
+  const healthy = ordered.filter((candidate) => candidate.failed !== true);
+  const failed = ordered.filter((candidate) => candidate.failed === true);
+  const healthyTaken = Math.min(healthy.length, cap - Math.min(failed.length, FAILED_INLINE_REFRESH_PLACES, cap));
+  const failedTaken = Math.min(failed.length, cap - healthyTaken);
+  const ids = [...healthy.slice(0, healthyTaken), ...failed.slice(0, failedTaken)].map((candidate) => candidate.id);
   return { ids, leftForTomorrow: candidates.length - ids.length };
 }
 
