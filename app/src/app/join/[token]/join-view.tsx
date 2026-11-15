@@ -32,8 +32,12 @@ async function invalidFrom(response: Response): Promise<{ kind: "invalid"; messa
 /** What the dead-link page says under its title. */
 export const INVALID_INVITE_DESCRIPTION = "Ask the workspace owner for a new link.";
 
+/** The preview's and Join's 404 body for any dead link: the page title already says it. */
+const GENERIC_INVALID_BODY = "This invite link is invalid or has expired.";
+
+/** The server's sentence when it says more than the title (a maker's link), else the next step. */
 export function invalidInviteDescription(message: string | undefined): string {
-  return message ?? INVALID_INVITE_DESCRIPTION;
+  return message && message !== GENERIC_INVALID_BODY ? message : INVALID_INVITE_DESCRIPTION;
 }
 
 /**

@@ -94,6 +94,8 @@ describe("acceptInvite", () => {
       "This invite link is no longer active. Ask an owner for a new one.",
     );
     expect(invalidInviteDescription(undefined)).toBe(INVALID_INVITE_DESCRIPTION);
+    // The generic 404 body says what the title already says, so the next step stays.
+    expect(invalidInviteDescription("This invite link is invalid or has expired.")).toBe(INVALID_INVITE_DESCRIPTION);
     expect(INVALID_INVITE_DESCRIPTION).toBe("Ask the workspace owner for a new link.");
   });
 });
