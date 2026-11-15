@@ -141,8 +141,11 @@ export const LINKEDIN_URL_EXPIRY_SAFETY_MS = 300_000;
  */
 export const LINKEDIN_MAX_UPLOAD_RESTARTS = 2;
 
+// R11-pages L1: Super admin only. Reconnecting lists only the pages the account
+// is a Super admin (ADMINISTRATOR) of (linkedinOrganizations.ts), so a Content
+// admin could not pick the page again.
 export const LINKEDIN_NOT_PAGE_ADMIN_MESSAGE =
-  "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+  "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
 
 /**
  * LinkedIn's answer when the member may not post as the organization: 403 with
