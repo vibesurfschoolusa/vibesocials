@@ -2,6 +2,7 @@ import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { YOUTUBE_UPLOAD_STATE_KIND, type UploadStateStore } from "@/server/jobs/uploadState";
 
 import { LARGE_UPLOAD_CHUNK_WINDOW_MS, LARGE_VIDEO_THRESHOLD_BYTES } from "./largeUpload";
@@ -2347,5 +2348,40 @@ describe("buildYouTubeVideoResource — the post's location", () => {
   it("an old job without the key reads the Media item's place, as before", () => {
     const { locationData } = withItemPlace({});
     expect(locationData).toEqual({ latitude: 26.05, longitude: -80.11, description: "Dania Beach" });
+  });
+});
+
+// R19 publishing L2: our storage failing is not YouTube refusing the post.
+describe("youtubeClient.publishVideo — a video storage can't give back", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("says so, code and status kept, and sends nothing to YouTube", async () => {
+    const fetchMock = vi.fn<typeof fetch>((input) => {
+      if (String(input).includes("blob.example.com")) return Promise.resolve(new Response(null, { status: 404 }));
+      throw new Error(`Unexpected fetch in test: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = (await youtubeClient.publishVideo(ytCtx()).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string; status?: number },
+    ))!;
+
+    expect(error.code).toBe("YOUTUBE_FETCH_MEDIA_FAILED");
+    expect(error.status).toBe(404);
+    const sentence =
+      "The video couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the video.";
+    expect(error.message).toBe(sentence);
+    expect(publishErrorMessage("youtube", error)).toBe(sentence);
+    expect(sentenceForRecipient(publishErrorMessage("youtube", error), "youtube", "member")).toBe(sentence);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

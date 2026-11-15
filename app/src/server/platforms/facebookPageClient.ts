@@ -373,11 +373,12 @@ async function publishStory(
     const startLimited = await classifyRateLimit("facebook_page", start);
     if (startLimited) throw startLimited;
     if (!start.ok) {
+      // R19 publishing L1: the start call sends no video, so the text gives no file advice.
       await throwRejected(
         start,
         socialConnection,
         "Video Story start failed",
-        "Facebook Page could not start the video Story. No Story was made. Try again; if it fails again, use another video.",
+        "Facebook Page could not start the video Story. No Story was made. Try again later.",
         start.status,
       );
     }

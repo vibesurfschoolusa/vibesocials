@@ -32,7 +32,7 @@ import {
 } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
-import { publishErrorMessage } from "@/lib/publishFailureText";
+import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above imports,
 // and refreshLinkedInToken resolves prisma via `await import("@/lib/db")` at
@@ -1379,6 +1379,28 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
 
     stub({ videoInit: () => json({ message: "Not enough permissions" }, 403) });
     expect((await failure(linkedinClient.publishVideo(ctx("video/mp4"))))?.code).toBe("LINKEDIN_VIDEO_REGISTRATION_FAILED");
+  });
+
+  // R19 publishing L2: a file our storage can't give back is not LinkedIn refusing the post.
+  it.each([
+    ["photo", "image/jpeg", "LINKEDIN_IMAGE_DOWNLOAD_FAILED"],
+    ["video", "video/mp4", "LINKEDIN_VIDEO_DOWNLOAD_FAILED"],
+  ] as const)("a single %s that can't be read from storage says so, code and status kept", async (kind, mimeType, code) => {
+    const li = stub();
+    const answer = li.fetchMock.getMockImplementation()!;
+    li.fetchMock.mockImplementation(async (input: string | URL, init?: RequestInit) =>
+      String(input).includes("blob.example.com") ? new Response(null, { status: 404 }) : answer(input, init),
+    );
+
+    const error = await failure(linkedinClient.publishVideo(ctx(mimeType)));
+
+    expect(error?.code).toBe(code);
+    expect(error?.status).toBe(404);
+    const sentence = `The ${kind} couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the ${kind}.`;
+    expect(error?.message).toBe(sentence);
+    expect(publishErrorMessage("linkedin", error!)).toBe(sentence);
+    expect(sentenceForRecipient(publishErrorMessage("linkedin", error!), "linkedin", "member")).toBe(sentence);
+    expect(li.calls().some(([url]) => url === `${REST}/posts`)).toBe(false);
   });
 
   it("the post fails after a finished upload without being re-sent: one upload, one post, PUBLISH_UNCONFIRMED", async () => {
@@ -4156,16 +4178,26 @@ describe("linkedinClient — several photos in one post", () => {
     expect(li.urls()).toEqual([...photoCalls(1), ...photoCalls(2)]);
   });
 
-  it("the second photo's registration is refused: the same photo text, the code kept, no status in it", async () => {
+  // R19 publishing L1: the registration (initializeUpload) carries only the owner,
+  // never the photo, so replacing the photo can't help: no file advice.
+  it("the second photo's registration is refused: nothing posted, try again later, no file advice, code kept", async () => {
     stub({ init: (n) => (n === 2 ? new Response("{}", { status: 400 }) : undefined) });
 
     const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
 
     expect(error?.code).toBe("LINKEDIN_IMAGE_REGISTRATION_FAILED");
     expect(error?.status).toBe(400);
-    expect(error?.message).toBe(
-      "LinkedIn couldn't upload photo 2 of 3. Nothing was posted. Try again; if it fails again, replace photo 2.",
-    );
+    expect(error?.message).toBe("LinkedIn couldn't start the upload of photo 2 of 3. Nothing was posted. Try again later.");
+    expect(publishErrorMessage("linkedin", error!)).toBe(error?.message);
+  });
+
+  it("the second photo's registration answers no usable upload: the same text, no file advice", async () => {
+    stub({ init: (n) => (n === 2 ? new Response(JSON.stringify({ value: {} }), { status: 200 }) : undefined) });
+
+    const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
+
+    expect(error?.code).toBe("LINKEDIN_IMAGE_REGISTRATION_FAILED");
+    expect(error?.message).toBe("LinkedIn couldn't start the upload of photo 2 of 3. Nothing was posted. Try again later.");
   });
 
   // DD2 review: the registration's status is kept, so a LinkedIn outage reads as

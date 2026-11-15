@@ -1,7 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { publishErrorMessage } from "@/lib/publishFailureText";
+import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
@@ -31,7 +31,7 @@ import {
 
 // X media best practices (docs.x.com, checked 2026-11-15).
 const X_PROCESSING_FAILED_TEXT =
-  "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry.";
+  "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry. If the video is long, try a shorter version.";
 
 // Roadmap Phase 7 (spec §7.1) — this locks computeTweetText (extracted from
 // publishVideo when it was refactored to read its limit/ellipsis from
@@ -2543,6 +2543,22 @@ describe("xClient.publishVideo — several photos in one post (07b)", () => {
       "X could not upload photo 2 of 3, so no post was created. Try again; if it fails again, replace photo 2.",
     );
     expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE"]);
+    expect(x.tweets()).toHaveLength(0);
+  });
+
+  // R19 publishing L2: our storage failing is not X refusing the post.
+  it("a single photo that can't be read from storage says so, code and status kept", async () => {
+    const x = stubX({ blob: { 1: () => new Response(null, { status: 404 }) } });
+
+    const error = await failure(photosCtx(photos(1)));
+
+    expect(error?.code).toBe("X_MEDIA_DOWNLOAD_FAILED");
+    expect(error?.status).toBe(404);
+    const sentence =
+      "The photo couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the photo.";
+    expect(error?.message).toBe(sentence);
+    expect(publishErrorMessage("x", error!)).toBe(sentence);
+    expect(sentenceForRecipient(publishErrorMessage("x", error!), "x", "member")).toBe(sentence);
     expect(x.tweets()).toHaveLength(0);
   });
 

@@ -2,6 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { fitTitle, truncateUnits } from "@/lib/truncate";
 import {
@@ -1109,6 +1110,8 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
   await assertOk(mediaResponse, {
     code: "YOUTUBE_FETCH_MEDIA_FAILED",
     prefix: "Failed to fetch media from storage",
+  }).catch((error: unknown) => {
+    throw asStorageReadFailure(error, "video");
   });
 
   const videoBytes = Buffer.from(await mediaResponse.arrayBuffer());

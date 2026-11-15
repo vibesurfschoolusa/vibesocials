@@ -192,6 +192,24 @@ export function platformRefusedMessage(platform: Platform): string {
   return `${label} did not accept the post. Try again; if it fails again, check the post meets ${label}'s rules.`;
 }
 
+/**
+ * A single photo or video our storage did not give back (R19 publishing L2):
+ * nothing reached the platform, so its rules are not the cause. The words of
+ * the several-photos sentence ("Photo 2 of 3 couldn't be read from storage").
+ */
+export function storageReadFailedMessage(kind: "photo" | "video"): string {
+  return `The ${kind} couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the ${kind}.`;
+}
+
+/**
+ * assertOk's storage-download error with {@link storageReadFailedMessage} as
+ * its text; the code and the status (retry classification) stay as they are.
+ */
+export function asStorageReadFailure(error: unknown, kind: "photo" | "video"): unknown {
+  if (error instanceof Error) error.message = storageReadFailedMessage(kind);
+  return error;
+}
+
 /** The platform answered 5xx, still after the in-step retries (review round 2, item 3). */
 export function platformDownMessage(platform: Platform): string {
   return `${platformLabel(platform)} had a problem on its side. Try again later.`;

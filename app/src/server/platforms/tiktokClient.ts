@@ -3,6 +3,7 @@ import type { Prisma, SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
@@ -1524,6 +1525,8 @@ export const tiktokClient: PlatformClient = {
     await assertOk(videoResponse, {
       code: "TIKTOK_FETCH_VIDEO_FAILED",
       prefix: "Failed to fetch video from storage",
+    }).catch((error: unknown) => {
+      throw asStorageReadFailure(error, "video");
     });
 
     const fileBytes = Buffer.from(await videoResponse.arrayBuffer());

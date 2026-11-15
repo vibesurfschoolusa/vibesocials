@@ -52,7 +52,7 @@ export const LARGE_UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
  */
 export const LARGE_UPLOAD_MAX_PART_BYTES = 67_108_864;
 
-/** The blob's size is not the size recorded for the media. Nothing was uploaded. */
+/** The blob's size is not the size recorded for the media. Nothing was posted. */
 export const MEDIA_SIZE_MISMATCH_CODE = "MEDIA_SIZE_MISMATCH";
 
 /**
@@ -196,7 +196,7 @@ function blobReadFailed(message: string, extra: { status?: number; cause?: unkno
 function sizeMismatch(): CodedError {
   return codedError(
     MEDIA_SIZE_MISMATCH_CODE,
-    "The stored video's size doesn't match the size recorded for it. Nothing was uploaded.",
+    "The stored video's size doesn't match the size recorded for it. Nothing was posted. Create the post again with the video.",
   );
 }
 

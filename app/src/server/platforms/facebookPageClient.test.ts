@@ -968,9 +968,8 @@ describe("facebookPageClient.publishVideo — Story", () => {
     fetchMock.mockImplementationOnce(async () => response(400, { error: { code: 100 } }));
     const started = await failure(videoStory());
     expect(started).toMatchObject({ code: "FACEBOOK_PAGE_PUBLISH_FAILED", status: 400 });
-    expect(started?.message).toBe(
-      "Facebook Page could not start the video Story. No Story was made. Try again; if it fails again, use another video.",
-    );
+    // R19 publishing L1: the start call carries no video, so no file advice.
+    expect(started?.message).toBe("Facebook Page could not start the video Story. No Story was made. Try again later.");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     fetchMock.mockReset();

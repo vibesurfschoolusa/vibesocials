@@ -190,7 +190,11 @@ describe("openBlobChunkStream", () => {
 
       await expect(
         openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL }),
-      ).rejects.toMatchObject({ code: MEDIA_SIZE_MISMATCH_CODE });
+      ).rejects.toMatchObject({
+        code: MEDIA_SIZE_MISMATCH_CODE,
+        // R19 publishing L3: a later step may have sent parts already; say what is true and what to do.
+        message: "The stored video's size doesn't match the size recorded for it. Nothing was posted. Create the post again with the video.",
+      });
       expect(source.pulled()).toBe(0);
       expect(source.cancelled()).toBe(true);
     });

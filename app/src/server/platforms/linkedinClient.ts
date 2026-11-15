@@ -5,6 +5,7 @@ import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
 import { truncateKeepingLinks } from "@/lib/truncate";
 import type { PostCover } from "@/lib/videoCover";
@@ -494,6 +495,8 @@ async function uploadImage(
   await assertOk(imageResponse, {
     code: "LINKEDIN_IMAGE_DOWNLOAD_FAILED",
     prefix: "Failed to download image from storage",
+  }).catch((error: unknown) => {
+    throw asStorageReadFailure(error, "photo");
   });
   const imageBuffer = await imageResponse.arrayBuffer();
 
@@ -638,6 +641,8 @@ async function uploadVideo(
   await assertOk(videoResponse, {
     code: "LINKEDIN_VIDEO_DOWNLOAD_FAILED",
     prefix: "Failed to download video from storage",
+  }).catch((error: unknown) => {
+    throw asStorageReadFailure(error, "video");
   });
   const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
   const videoSize = videoBuffer.length;
@@ -1837,7 +1842,10 @@ function photoFailed(error: unknown, index: number, count: number): unknown {
     code,
     code === "LINKEDIN_IMAGE_DOWNLOAD_FAILED"
       ? `Photo ${photo} of ${count} couldn't be read from storage. Nothing was posted. Try again; if it fails again, create the post again with that photo.`
-      : `LinkedIn couldn't upload photo ${photo} of ${count}. Nothing was posted. Try again; if it fails again, replace photo ${photo}.`,
+      : code === "LINKEDIN_IMAGE_REGISTRATION_FAILED"
+        ? // R19 publishing L1: initializeUpload sends only the owner, never the photo, so no file advice.
+          `LinkedIn couldn't start the upload of photo ${photo} of ${count}. Nothing was posted. Try again later.`
+        : `LinkedIn couldn't upload photo ${photo} of ${count}. Nothing was posted. Try again; if it fails again, replace photo ${photo}.`,
     (error as { status?: unknown }).status as number | undefined,
   );
   failed.cause = error;

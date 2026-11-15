@@ -7,7 +7,7 @@ import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { hasInternalDetail } from "@/lib/publishFailureText";
+import { asStorageReadFailure, hasInternalDetail } from "@/lib/publishFailureText";
 import { X_MAX_PHOTOS } from "@/lib/postMedia";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted } from "@/lib/xWeightedLength";
@@ -229,6 +229,8 @@ async function uploadMedia(
   await assertOk(mediaResponse, {
     code: "X_MEDIA_DOWNLOAD_FAILED",
     prefix: "Failed to fetch media from storage",
+  }).catch((error: unknown) => {
+    throw asStorageReadFailure(error, mimeType.startsWith("video/") ? "video" : "photo");
   });
 
   const mediaBuffer = Buffer.from(await mediaResponse.arrayBuffer());
@@ -495,7 +497,7 @@ function sanitizeProcessingErrorName(name: unknown): string | null {
  */
 function xProcessingFailedError(processingError?: { name?: unknown }): Error & { code: string } {
   const text =
-    "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry.";
+    "X could not process this video, so nothing was posted. X takes a video from 0.5 seconds to 20 minutes long (longer with X Premium), at most 60 frames per second, with an aspect ratio between 1:3 and 3:1, in H.264 with AAC-LC audio. Export it within those limits, then retry. If the video is long, try a shorter version.";
   // A name publishErrorMessage would hide as an internal detail is left off, so the sentence still shows.
   const sanitized = sanitizeProcessingErrorName(processingError?.name);
   const name = sanitized !== null && !hasInternalDetail(sanitized) ? sanitized : null;

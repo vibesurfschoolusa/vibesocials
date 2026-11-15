@@ -1,7 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { publishErrorMessage } from "@/lib/publishFailureText";
+import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
@@ -1184,6 +1184,28 @@ describe("tiktokClient.publishVideo", () => {
       error: { code: "ok" },
     });
   const uploadOk = () => new Response("", { status: 201 });
+
+  // R19 publishing L2: our storage failing is not TikTok refusing the post.
+  it("a video that can't be read from storage says so, code and status kept, nothing sent to TikTok", async () => {
+    const fetchMock = stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": () => new Response(null, { status: 404 }),
+    });
+
+    const error = (await tiktokClient.publishVideo(makeCtx()).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string; status?: number },
+    ))!;
+
+    expect(error.code).toBe("TIKTOK_FETCH_VIDEO_FAILED");
+    expect(error.status).toBe(404);
+    const sentence =
+      "The video couldn't be read from storage, so nothing was posted. Try again; if it fails again, create the post again with the video.";
+    expect(error.message).toBe(sentence);
+    expect(publishErrorMessage("tiktok", error)).toBe(sentence);
+    expect(sentenceForRecipient(publishErrorMessage("tiktok", error), "tiktok", "member")).toBe(sentence);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("video/init"))).toBe(false);
+  });
 
   it("completes (no timeout failure) when TikTok reports the real uppercase PUBLISH_COMPLETE", async () => {
     vi.useFakeTimers();
