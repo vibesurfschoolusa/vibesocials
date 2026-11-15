@@ -35,6 +35,46 @@ const REVIEWS_FAILED = "Couldn't load your Google reviews. Try again in a minute
 const REPLY_FAILED = "Couldn't post your reply. Try again in a minute.";
 const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
 
+const HEADING_CLASS = "text-2xl font-bold tracking-tight text-foreground outline-none";
+
+/** R13-pages L1: skeletons are hidden, so loading is said in words (as Activity and Queue). */
+export function ReviewsLoadingList() {
+  return (
+    <>
+      <p role="status" className="sr-only">Loading reviews…</p>
+      <div className="space-y-4" aria-hidden>
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    </>
+  );
+}
+
+/** R13-pages L1: a failed locations load (an expired Google grant can last) keeps the page's h1. */
+export function ReviewsLoadFailedPage({
+  error,
+  isMember,
+  onRetry,
+}: {
+  error: { message: string; settingsLink: boolean };
+  isMember: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className={APP_PAGE_CLASS}>
+      <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
+      <ErrorState
+        title="Couldn't load reviews"
+        message={error.message}
+        settingsLink={error.settingsLink}
+        isMember={isMember}
+        onRetry={onRetry}
+      />
+    </div>
+  );
+}
+
 /**
  * Client-rendered reviews view. The parent server component gates access.
  * `savedLocation`: the Google location Settings saved for posts; the view
@@ -291,27 +331,14 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   if (loadingLocations) {
     return (
       <div className={APP_PAGE_CLASS}>
-        <div className="space-y-4" aria-hidden>
-          <Skeleton className="h-40 w-full" />
-          <Skeleton className="h-40 w-full" />
-          <Skeleton className="h-40 w-full" />
-        </div>
+        <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
+        <ReviewsLoadingList />
       </div>
     );
   }
 
   if (locationsError) {
-    return (
-      <div className={APP_PAGE_CLASS}>
-        <ErrorState
-          title="Couldn't load reviews"
-          message={locationsError.message}
-          settingsLink={locationsError.settingsLink}
-          isMember={isMember}
-          onRetry={loadLocations}
-        />
-      </div>
-    );
+    return <ReviewsLoadFailedPage error={locationsError} isMember={isMember} onRetry={loadLocations} />;
   }
 
   return (
@@ -321,7 +348,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
         <h1
           ref={headingRef}
           tabIndex={-1}
-          className="text-2xl font-bold tracking-tight text-foreground outline-none"
+          className={HEADING_CLASS}
         >
           Google Reviews
         </h1>
@@ -393,11 +420,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
           onRetry={loadReviews}
         />
       ) : loading ? (
-        <div className="space-y-4" aria-hidden>
-          <Skeleton className="h-40 w-full" />
-          <Skeleton className="h-40 w-full" />
-          <Skeleton className="h-40 w-full" />
-        </div>
+        <ReviewsLoadingList />
       ) : tab === "needs_reply" ? (
         needsReplyReviews.length === 0 ? (
           <Card className="flex flex-col items-center gap-3 border-success/30 bg-success/5 px-6 py-12 text-center">

@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { qrSvg } from "@/lib/qrSvg";
 
 import { PrintButton } from "./print-button";
@@ -17,10 +19,15 @@ const PRINT_CSS = `@media print {
 export function PrintCard({ businessName, url }: { businessName: string; url: string | null }) {
   if (!url) {
     return (
+      // R13-pages L1: a heading and a real link back, as every page has.
       <div className="mx-auto max-w-xl px-4 py-8">
-        <p className="text-sm text-muted-foreground">
-          There is no review link to print yet. Open the Reviews page to get your Google review link, then
-          print the card from there.
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Review card</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          There is no review link to print yet.{" "}
+          <Link href="/reviews" className="font-medium text-primary underline-offset-4 hover:underline">
+            Open the Reviews page
+          </Link>{" "}
+          to get your Google review link, then print the card from there.
         </p>
       </div>
     );

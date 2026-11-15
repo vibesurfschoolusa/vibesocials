@@ -53,7 +53,9 @@ export function ClientReportView({ token, month }: { token: string; month: strin
     return (
       <div className="space-y-3">
         <ReportPendingTitle />
-        <p className="text-sm">{error || LOAD_FAILED_MESSAGE}</p>
+        <p role="alert" className="text-sm">
+          {error || LOAD_FAILED_MESSAGE}
+        </p>
         <Button type="button" variant="outline" size="sm" data-report-noprint onClick={() => void load()}>
           Try again
         </Button>

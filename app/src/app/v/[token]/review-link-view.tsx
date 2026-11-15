@@ -271,6 +271,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    // R13-pages L2: Try again shows Loading (no posts yet) instead of the same failure.
+    setError(null);
     try {
       const response = await fetch(`/api/review-link/${encodeURIComponent(token)}`, {
         cache: "no-store",
@@ -282,7 +284,6 @@ export function ReviewLinkView({ token }: { token: string }) {
         setError(data?.error ?? "");
         return;
       }
-      setError(null);
       setPosts(data.posts);
       setMore(data.more === true);
     } catch {
@@ -312,7 +313,9 @@ export function ReviewLinkView({ token }: { token: string }) {
   if (error !== null && posts === null) {
     return (
       <div className="space-y-3">
-        <p className="text-sm">{error || LOAD_FAILED_MESSAGE}</p>
+        <p role="alert" className="text-sm">
+          {error || LOAD_FAILED_MESSAGE}
+        </p>
         <Button type="button" variant="outline" size="md" onClick={() => void load()}>
           Try again
         </Button>

@@ -25,3 +25,13 @@ describe("PrintCard", () => {
     expect(html).toContain("Open the Reviews page");
   });
 });
+
+// R13-pages L1: without a link the page still has a heading and a way back to Reviews.
+describe("PrintCard without a saved review link", () => {
+  it("has an h1 and links to /reviews", () => {
+    const html = renderToStaticMarkup(createElement(PrintCard, { businessName: "Surf Co", url: null }));
+
+    expect(html).toMatch(/<h1[^>]*>[^<]+<\/h1>/);
+    expect(html).toMatch(/<a [^>]*href="\/reviews"[^>]*>Open the Reviews page<\/a>/);
+  });
+});

@@ -42,4 +42,10 @@ describe("ClientReportView", () => {
     expect(html).toContain("Couldn&#x27;t load the report.");
     expect(html).toMatch(/<h1[^>]*>Monthly report<\/h1>/);
   });
+
+  // R13-pages L2: announced, as /u and /c announce theirs.
+  it("says a failed load in an alert", () => {
+    forced.error = "";
+    expect(view()).toMatch(/<p role="alert"[^>]*>Couldn&#x27;t load the report./);
+  });
 });
