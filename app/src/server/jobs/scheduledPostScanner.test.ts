@@ -38,6 +38,9 @@ vi.mock("@/server/jobs/posting", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
   prepareDeferredPostJobDispatch: prepareDeferredMock,
 }));
+const scanNoticeMock = vi.hoisted(() => vi.fn());
+vi.mock("@/server/notifications/scannerNotice", () => ({ notifyNotSentAtScan: scanNoticeMock }));
+
 
 import { scheduledPostScanner } from "./inngest-functions";
 import { DUE_SCAN_BATCH, MATERIALIZE_CHUNK_SIZE, MAX_DISPATCH_BYTES } from "./scheduledScanner";
@@ -54,8 +57,8 @@ type SentPayload = Array<{ id: string; name: string; data: Record<string, unknow
 /**
  * Stand-in for Inngest's `step`: runs each step inline and JSON-round-trips its
  * output the way Inngest's memoization does, so a step that leaks a
- * non-serializable value shows up here. `sendEvent` is used only for the
- * no-connections notifications.
+ * non-serializable value shows up here. The scanner sends no event through
+ * `sendEvent` (R8-security L1); it is here so a test can say so.
  */
 function fakeStep(sendEvent?: (id: string, payload: SentPayload) => Promise<unknown>) {
   return {
@@ -94,9 +97,6 @@ function okFor(id: string, baseCaption = "scheduled") {
 }
 
 const stepIds = (step: ReturnType<typeof fakeStep>) => step.run.mock.calls.map(([id]) => id);
-const notifyIds = (step: ReturnType<typeof fakeStep>) => step.sendEvent.mock.calls.map(([id]) => id);
-const notifyPayload = (step: ReturnType<typeof fakeStep>, call: number) =>
-  step.sendEvent.mock.calls[call]?.[1] as unknown as SentPayload;
 /** The events of each `inngest.send` call, in call order. */
 const dispatches = () => sendMock.mock.calls.map(([events]) => events as SentPayload);
 
@@ -108,6 +108,8 @@ beforeEach(() => {
   prepareDeferredMock.mockReset();
   ownerFindUniqueMock.mockReset();
   sendMock.mockReset();
+  scanNoticeMock.mockReset();
+  scanNoticeMock.mockResolvedValue(undefined);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -464,33 +466,28 @@ describe("scheduledPostScanner - stuck-job reconcile", () => {
   });
 });
 
-describe("scheduledPostScanner - jobs with no connections", () => {
-  it("notifies the owners of NO_CONNECTIONS jobs in one batched send, with a stable id per notification", async () => {
+// R8-security L1: a post the scanner did not send costs no Inngest execution:
+// no notification event and no extra step; the chunk step tells the owners.
+describe("scheduledPostScanner - posts it did not send", () => {
+  it("sends no notification event and runs no extra step; the chunk step tells each owner", async () => {
     claimDueMock.mockResolvedValue(["job-a", "job-n1", "job-n2"]);
     prepareDeferredMock.mockImplementation(async (id: string) =>
       id.startsWith("job-n") ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
     );
     ownerFindUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) => ({
       userId: `owner-of-${where.id}`,
+      workspaceId: `ws-of-${where.id}`,
     }));
     const step = fakeStep();
 
     const summary = await runScanner(step);
 
     expect(stepIds(step)).toEqual(["claim-due-jobs", "materialize-dispatch-batch-0"]);
+    expect(step.sendEvent).not.toHaveBeenCalled();
     expect(dispatches().map((events) => events.map((e) => e.id))).toEqual([["publish-job-a"]]);
-    expect(notifyIds(step)).toEqual(["notify-noconn-batch-0"]);
-    expect(notifyPayload(step, 0)).toEqual([
-      {
-        id: "notify-noconn-job-n1",
-        name: "notification.requested",
-        data: { userId: "owner-of-job-n1", postJobId: "job-n1" },
-      },
-      {
-        id: "notify-noconn-job-n2",
-        name: "notification.requested",
-        data: { userId: "owner-of-job-n2", postJobId: "job-n2" },
-      },
+    expect(scanNoticeMock.mock.calls.map(([notice]) => notice)).toEqual([
+      { postJobId: "job-n1", userId: "owner-of-job-n1", workspaceId: "ws-of-job-n1", reason: "NO_CONNECTIONS" },
+      { postJobId: "job-n2", userId: "owner-of-job-n2", workspaceId: "ws-of-job-n2", reason: "NO_CONNECTIONS" },
     ]);
     expect(summary).toEqual({
       claimed: 3,
@@ -500,37 +497,19 @@ describe("scheduledPostScanner - jobs with no connections", () => {
     });
   });
 
-  it("sends only the notification batch when every job in the chunk lacks connections", async () => {
-    claimDueMock.mockResolvedValue(["job-n1"]);
-    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
-    ownerFindUniqueMock.mockResolvedValue({ userId: "owner-1" });
+  it("a chunk where nothing could be sent sends nothing to Inngest at all", async () => {
+    claimDueMock.mockResolvedValue(["job-n1", "job-full"]);
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "job-n1" ? { ok: false, reason: "NO_CONNECTIONS" } : { ok: false, reason: "LIMIT_REACHED", noticeFor: id },
+    );
+    ownerFindUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
     const step = fakeStep();
 
     const summary = await runScanner(step);
 
     expect(sendMock).not.toHaveBeenCalled();
-    expect(notifyIds(step)).toEqual(["notify-noconn-batch-0"]);
-    expect(summary).toMatchObject({ dispatched: 0, failedNoConnections: 1, dispatchErrors: 0 });
-  });
-
-  it("a failed notification send is counted and does not undo the dispatch", async () => {
-    claimDueMock.mockResolvedValue(["job-a", "job-n1"]);
-    prepareDeferredMock.mockImplementation(async (id: string) =>
-      id === "job-n1" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
-    );
-    ownerFindUniqueMock.mockResolvedValue({ userId: "owner-1" });
-    const step = fakeStep(async (id) => {
-      if (id === "notify-noconn-batch-0") throw new Error("inngest unavailable");
-      return { ids: [] };
-    });
-
-    const summary = await runScanner(step);
-
-    expect(summary).toEqual({
-      claimed: 2,
-      dispatched: 1,
-      failedNoConnections: 1,
-      dispatchErrors: 1,
-    });
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(scanNoticeMock).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({ dispatched: 0, failedNoConnections: 2, dispatchErrors: 0 });
   });
 });

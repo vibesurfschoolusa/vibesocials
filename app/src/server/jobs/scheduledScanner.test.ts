@@ -14,7 +14,12 @@ const {
   stampMediaMock,
   mediaUpdateManyMock,
   withdrawSendMock,
+  deliverMock,
+  windows,
 } = vi.hoisted(() => ({
+  deliverMock: vi.fn(),
+  /** The fixed-window counters (RateLimitEntry) by key: the once-a-day notices. */
+  windows: new Map<string, number>(),
   executeRawMock: vi.fn(),
   queryRawMock: vi.fn(),
   findManyMock: vi.fn(),
@@ -30,6 +35,17 @@ const {
 
 // Second review of K2: a send not handed to publishing is taken back (usageLog.caps.test.ts).
 vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
+
+// R8-security L1: the scanner's notices go from its own step (scannerNotice.ts runs for
+// real); the outcome email itself and the counter store are stand-ins.
+vi.mock("@/server/notifications/postOutcomeEmail", () => ({ deliverPostOutcomeNotification: deliverMock }));
+vi.mock("@/lib/rateLimit", () => ({
+  consumeFixedWindow: async ({ key, limit }: { key: string; limit: number }) => {
+    const count = (windows.get(key) ?? 0) + 1;
+    windows.set(key, count);
+    return count > limit ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true };
+  },
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -97,6 +113,9 @@ beforeEach(() => {
   executeRawMock.mockResolvedValue(0);
   withdrawSendMock.mockReset();
   withdrawSendMock.mockResolvedValue(undefined);
+  deliverMock.mockReset();
+  deliverMock.mockResolvedValue(undefined);
+  windows.clear();
 });
 
 // 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
@@ -709,16 +728,16 @@ describe("materializeClaimedJobs", () => {
     prepareDeferredMock.mockImplementation(async (id: string) =>
       id === "n" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
     );
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     const out = await materializeClaimedJobs(["a", "n"], sleep);
 
-    expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1" }]);
+    expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1", workspaceId: "ws-1", reason: "NO_CONNECTIONS" }]);
     expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
     expect(findUniqueMock).toHaveBeenCalledTimes(1);
     expect(findUniqueMock).toHaveBeenCalledWith({
       where: { id: "n" },
-      select: { userId: true },
+      select: { userId: true, workspaceId: true },
     });
   });
 
@@ -729,13 +748,13 @@ describe("materializeClaimedJobs", () => {
     prepareDeferredMock.mockImplementation(async (id: string) =>
       id === "full" ? { ok: false, reason: "LIMIT_REACHED", noticeFor: "full" } : okFor(id),
     );
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     const out = await materializeClaimedJobs(["a", "full"], sleep);
 
     expect(prepareDeferredMock).toHaveBeenCalledWith("a", { serviceCapAt: expect.any(Date) });
     expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
-    expect(out.noConnections).toEqual([{ postJobId: "full", userId: "owner-1" }]);
+    expect(out.noConnections).toEqual([{ postJobId: "full", userId: "owner-1", workspaceId: "ws-1", reason: "LIMIT_REACHED" }]);
     expect(out.notFound).toEqual([]);
   });
 
@@ -761,13 +780,13 @@ describe("materializeClaimedJobs", () => {
   // Review of K2, point 3: a pair refused together gets one notice, the feed's.
   it("a pair refused at send: both halves are refused and one notice goes out, for the feed", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "feed" });
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     const out = await materializeClaimedJobs(["feed", "story"], sleep);
 
     expect(out.publishEvents).toEqual([]);
-    expect(out.noConnections).toEqual([{ postJobId: "feed", userId: "owner-1" }]);
-    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "feed" }, select: { userId: true } });
+    expect(out.noConnections).toEqual([{ postJobId: "feed", userId: "owner-1", workspaceId: "ws-1", reason: "LIMIT_REACHED" }]);
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "feed" }, select: { userId: true, workspaceId: true } });
   });
 
   // Point 4: results written, the recompute threw; the inline retry finds them
@@ -777,13 +796,13 @@ describe("materializeClaimedJobs", () => {
     prepareDeferredMock
       .mockRejectedValueOnce(new Error("lock timeout"))
       .mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "full" });
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     const out = await materializeClaimedJobs(["full"], sleep);
 
     expect(out).toEqual({
       publishEvents: [],
-      noConnections: [{ postJobId: "full", userId: "owner-1" }],
+      noConnections: [{ postJobId: "full", userId: "owner-1", workspaceId: "ws-1", reason: "LIMIT_REACHED" }],
       notFound: [],
       errorIds: [],
     });
@@ -865,11 +884,11 @@ describe("materializeClaimedJobs", () => {
       prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
       findUniqueMock
         .mockRejectedValueOnce(new Error("pool timeout"))
-        .mockResolvedValueOnce({ userId: "owner-1" });
+        .mockResolvedValueOnce({ userId: "owner-1", workspaceId: "ws-1" });
 
       const out = await materializeClaimedJobs(["n"], sleep);
 
-      expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1" }]);
+      expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1", workspaceId: "ws-1", reason: "NO_CONNECTIONS" }]);
       expect(out.errorIds).toEqual([]);
     });
 
@@ -1016,7 +1035,7 @@ describe("materializeAndDispatchChunk", () => {
         ? { ok: false, reason: "NO_CONNECTIONS" }
         : { ...okFor(id), sendsWritten: { postJobIds: ["feed", "story"], day: SEND_DAY } },
     );
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     await materializeAndDispatchChunk(["feed", "story"], { send, sleep });
 
@@ -1026,7 +1045,7 @@ describe("materializeAndDispatchChunk", () => {
 
   it("a post with nothing to send whose send this attempt did not write takes nothing back", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
     await materializeAndDispatchChunk(["lonely"], { send, sleep });
     expect(withdrawSendMock).not.toHaveBeenCalled();
   });
@@ -1106,22 +1125,105 @@ describe("materializeAndDispatchChunk", () => {
     prepareDeferredMock.mockImplementation(async (id: string) =>
       id === "job-1" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
     );
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     const out = await materializeAndDispatchChunk(ids(3), { send, sleep });
 
-    expect(out.noConnections).toEqual([{ postJobId: "job-1", userId: "owner-1" }]);
+    expect(out.noConnections).toEqual([{ postJobId: "job-1", userId: "owner-1", workspaceId: "ws-1", reason: "NO_CONNECTIONS" }]);
     expect(out.dispatched).toBe(2);
   });
 
+  // R8-security L1: a post the scanner could not send costs no Inngest execution:
+  // its owner is told from this step, at most once per workspace per reason per UTC day.
+  describe("telling owners about posts it did not send", () => {
+    it("tells the owner from the step itself: no event is sent for it", async () => {
+      prepareDeferredMock.mockImplementation(async (id: string) =>
+        id === "job-1" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
+      );
+      findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
+
+      await materializeAndDispatchChunk(ids(3), { send, sleep });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(sentIds(0)).toEqual(["publish-job-0", "publish-job-2"]);
+      expect(deliverMock).toHaveBeenCalledWith({ userId: "owner-1", postJobId: "job-1", afterPairWait: true });
+    });
+
+    it("600 due posts with nothing to send across 120 workspaces: no event at all, at most 120 emails", async () => {
+      const all = Array.from({ length: 600 }, (_, i) => `due-${i}`);
+      // Five posts in each workspace; half the workspaces have nothing connected,
+      // the other half are refused by the day's limit.
+      const workspaceOf = (id: string) => `ws-${Number(id.slice(4)) % 120}`;
+      prepareDeferredMock.mockImplementation(async (id: string) =>
+        Number(workspaceOf(id).slice(3)) % 2 === 0
+          ? { ok: false, reason: "NO_CONNECTIONS" }
+          : { ok: false, reason: "LIMIT_REACHED", noticeFor: id },
+      );
+      findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+        userId: `owner-${workspaceOf(where.id)}`,
+        workspaceId: workspaceOf(where.id),
+      }));
+
+      for (let chunk = 0; chunk < all.length / MATERIALIZE_CHUNK_SIZE; chunk += 1) {
+        const out = await materializeAndDispatchChunk(
+          all.slice(chunk * MATERIALIZE_CHUNK_SIZE, (chunk + 1) * MATERIALIZE_CHUNK_SIZE),
+          { send, sleep },
+        );
+        expect(out.dispatched).toBe(0);
+      }
+
+      expect(send).not.toHaveBeenCalled();
+      expect(deliverMock).toHaveBeenCalledTimes(120);
+      expect(new Set(deliverMock.mock.calls.map(([args]) => workspaceOf(args.postJobId))).size).toBe(120);
+    });
+
+    it("the same workspace twice in a day, in one scan or the next: one email; a new UTC day: another", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2026-11-14T10:00:00Z"));
+        prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+        findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
+
+        await materializeAndDispatchChunk(["a", "b"], { send, sleep });
+        vi.setSystemTime(new Date("2026-11-14T10:10:00Z"));
+        await materializeAndDispatchChunk(["c"], { send, sleep });
+        expect(deliverMock).toHaveBeenCalledTimes(1);
+
+        // Another reason is told on its own.
+        prepareDeferredMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "d" });
+        await materializeAndDispatchChunk(["d"], { send, sleep });
+        expect(deliverMock).toHaveBeenCalledTimes(2);
+
+        vi.setSystemTime(new Date("2026-11-15T00:10:00Z"));
+        await materializeAndDispatchChunk(["e"], { send, sleep });
+        expect(deliverMock).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an email that throws changes nothing: the chunk's result and its events stand", async () => {
+      prepareDeferredMock.mockImplementation(async (id: string) =>
+        id === "job-1" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
+      );
+      findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
+      deliverMock.mockRejectedValue(new Error("resend 503"));
+
+      const out = await materializeAndDispatchChunk(ids(3), { send, sleep });
+
+      expect(out).toMatchObject({ dispatched: 2, dispatchErrors: 0, errorIds: [] });
+    });
+  });
+
   // The result is the step's memoized output. It must stay small however big the
+
   // captions are: Inngest caps a step output at 4 MiB and a run's state at 32 MiB.
   it("returns only counts and ids: no caption, baseCaption or perPlatformOverrides, however large the events", async () => {
     prepareDeferredMock.mockImplementation(async (id: string) =>
       okFor(id, `SECRET-CAPTION-TEXT ${"y".repeat(100_000)}`),
     );
     prepareDeferredMock.mockImplementationOnce(async () => ({ ok: false, reason: "NO_CONNECTIONS" }));
-    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1", workspaceId: "ws-1" });
 
     const out = await materializeAndDispatchChunk(ids(50), { send, sleep });
 

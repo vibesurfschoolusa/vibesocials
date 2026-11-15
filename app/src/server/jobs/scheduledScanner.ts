@@ -10,6 +10,7 @@ import {
   prepareDeferredPostJobDispatch,
   type PublishEvent,
 } from "@/server/jobs/posting";
+import { notifyNotSentAtScan, type ScanNotice } from "@/server/notifications/scannerNotice";
 import { withdrawSend } from "@/server/usage/usageLog";
 
 /**
@@ -30,7 +31,8 @@ import { withdrawSend } from "@/server/usage/usageLog";
  * (2,002 steps against Inngest's 1,000-step run limit,
  * https://www.inngest.com/docs/usage-limits/inngest); the scanner now materializes
  * and sends in chunks of {@link MATERIALIZE_CHUNK_SIZE}, one step per chunk, so a
- * full tick is 2 + 20 steps plus at most 20 notification sends.
+ * full tick is 2 + 20 steps (the owners of posts it could not send are told
+ * from those steps, R8-security L1).
  */
 export const DUE_SCAN_BATCH = 1000;
 
@@ -39,8 +41,7 @@ export const DUE_SCAN_BATCH = 1000;
  * step. 2026-11-01 scale audit (jobs H6): this bounds the DB work and wall-clock
  * time of one step (50 jobs, a few queries each, plus the inline retries of
  * {@link MATERIALIZE_RETRY_DELAYS_MS}, well inside the route's 300 s) and keeps a
- * full tick of {@link DUE_SCAN_BATCH} at 2 + 20 chunk steps (plus at most 20
- * notification sends) against Inngest's 1,000 steps per run
+ * full tick of {@link DUE_SCAN_BATCH} at 2 + 20 chunk steps against Inngest's 1,000 steps per run
  * (https://www.inngest.com/docs/usage-limits/inngest). It does NOT bound payload
  * size: captions are user text that nothing caps, so that is the job of
  * {@link MAX_DISPATCH_BYTES}, and the step returns only counts and ids.
@@ -158,8 +159,11 @@ export async function claimDueScheduledJobs(
 export interface MaterializedBatch {
   /** `post/publish.requested` events (stable id, `immediate: false`), one per ok job. */
   publishEvents: PublishEvent[];
-  /** Jobs marked `failed` for lack of an eligible connection, with their owner to notify. */
-  noConnections: Array<{ postJobId: string; userId: string }>;
+  /**
+   * Jobs marked `failed` with nothing sent (no eligible connection, or refused
+   * by the day's limits), with whom to tell, their workspace and why.
+   */
+  noConnections: ScanNotice[];
   /** Claimed jobs that no longer exist (deleted between the claim and the materialize). */
   notFound: string[];
   /** Jobs whose materialize threw on every attempt. They stay `in_progress` for the stuck-job reconciler. */
@@ -267,10 +271,15 @@ export async function materializeClaimedJobs(
             if (batch.noConnections.some((notice) => notice.postJobId === noticeFor)) return;
             const owner = await prisma.postJob.findUnique({
               where: { id: noticeFor },
-              select: { userId: true },
+              select: { userId: true, workspaceId: true },
             });
             if (owner) {
-              batch.noConnections.push({ postJobId: noticeFor, userId: owner.userId });
+              batch.noConnections.push({
+                postJobId: noticeFor,
+                userId: owner.userId,
+                workspaceId: owner.workspaceId,
+                reason: prep.reason,
+              });
             } else {
               batch.notFound.push(postJobId);
             }
@@ -326,7 +335,8 @@ export interface ChunkDispatchResult {
   dispatched: number;
   /** Publish events whose sub-batch send was rejected. Their jobs stay `in_progress`. */
   dispatchErrors: number;
-  noConnections: Array<{ postJobId: string; userId: string }>;
+  /** The posts it did not send; their owners were told from this step. */
+  noConnections: ScanNotice[];
   notFound: string[];
   /** Jobs whose materialize threw on every attempt (see {@link MaterializedBatch}). */
   errorIds: string[];
@@ -347,6 +357,12 @@ export interface ChunkDispatchResult {
  * second run. That dedupe covers only events sent by this code: events the
  * pre-phase-2 scanner sent carry no id (hence the scanner pause in the release
  * runbook, docs/STAGING_SETUP.md).
+ *
+ * R8-security L1: the owners of the posts it did not send are told from this
+ * step (`notifyNotSentAtScan`, which never throws), not through an event and
+ * another function's run, so a post that never runs costs no execution. At
+ * most one per workspace per reason per UTC day; a re-run of the step is
+ * deduplicated by the same key.
  */
 export async function materializeAndDispatchChunk(
   postJobIds: string[],
@@ -381,7 +397,17 @@ export async function materializeAndDispatchChunk(
     }
   }
 
+  // One per workspace and reason in this chunk; the daily key does the rest.
+  const told = new Set<string>();
+  for (const notice of noConnections) {
+    const key = `${notice.workspaceId}:${notice.reason}`;
+    if (told.has(key)) continue;
+    told.add(key);
+    await notifyNotSentAtScan(notice);
+  }
+
   return { dispatched, dispatchErrors, noConnections, notFound, errorIds };
+
 }
 
 /** The `notification.requested` the reconciler sends for a job it closed. */

@@ -1891,14 +1891,14 @@ export const retryPlatforms = inngest.createFunction(
  *    events the pre-phase-2 scanner sent carry no id, which is why the release
  *    runbook (docs/STAGING_SETUP.md, "Releasing pipeline changes (Inngest)")
  *    pauses the scanner around deploys.
- *  - `notify-noconn-batch-<i>` is one `step.sendEvent` of the owner notifications
- *    for jobs that had no connection at run time (marked `failed` inside the
- *    chunk step, mirroring the existing no-connections path; reuses the same
- *    `notification.requested` → `sendNotification` →
- *    `deliverPostOutcomeNotification` path every other outcome uses, so the
- *    user's `notifyOnPostComplete` preference gates it identically). Each event
- *    has the id `notify-noconn-<postJobId>`.
- * That is at most 1 + 2 x 20 steps for a full tick of 1000.
+ *  - the owners of jobs it did not send (nothing connected, or refused by the
+ *    day's limits; marked `failed` inside the chunk step) are told from that
+ *    same step with `deliverPostOutcomeNotification`, so the user's
+ *    `notifyOnPostComplete` preference gates it like every other outcome. No
+ *    event and no other run: a post that never runs costs no execution
+ *    (R8-security L1), and at most one email per workspace per reason per UTC
+ *    day goes out (scannerNotice.ts).
+ * That is at most 1 + 20 steps for a full tick of 1000.
  *
  * `singleton: { mode: "skip" }` skips a tick while the previous scan is still
  * running (https://www.inngest.com/docs/guides/singleton). A skipped tick is
@@ -2003,27 +2003,8 @@ export const scheduledPostScanner = inngest.createFunction(
         logger.warn("[Inngest] Claimed scheduled jobs no longer exist", { postJobIds: chunk.notFound });
       }
 
-      if (chunk.noConnections.length > 0) {
-        // Phase-6 gap closed: the unattended "no platforms connected" failure
-        // notifies like every other outcome. Memoized step => exactly-once.
-        try {
-          await step.sendEvent(
-            `notify-noconn-batch-${chunkIndex}`,
-            chunk.noConnections.map(({ postJobId, userId }) => ({
-              id: `notify-noconn-${postJobId}`,
-              name: "notification.requested" as const,
-              data: { userId, postJobId },
-            })),
-          );
-        } catch (error) {
-          logger.error("[Inngest] Scheduled no-connections notification failed", {
-            chunkIndex,
-            events: chunk.noConnections.length,
-            error,
-          });
-          dispatchErrors += chunk.noConnections.length;
-        }
-      }
+      // R8-security L1: the owners of the posts it did not send were told
+      // from the chunk step itself, so those posts cost no execution here.
     }
 
     console.log("[Inngest] Scheduled post scan complete", {

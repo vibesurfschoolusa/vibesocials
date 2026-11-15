@@ -1316,8 +1316,8 @@ export async function prepareDeferredPostJobDispatch(
   if (rows.length === 0) {
     // No chosen list and no connection that could take the post → fail the job
     // (mirrors publishToAllPlatforms' no-connections path). §6.6.
-    // The scheduled scanner emits notification.requested for this failure
-    // (see inngest-functions.ts) and buildPostOutcomeEmail has a dedicated
+    // The scheduled scanner tells the owner from its own step
+    // (scannerNotice.ts) and buildPostOutcomeEmail has a dedicated
     // empty-results-failed subject. finishPostJob stamps the media's last use.
     await finishPostJob(prisma, { where: { id: postJobId }, data: { status: "failed" } });
     return { ok: false, reason: "NO_CONNECTIONS" };
