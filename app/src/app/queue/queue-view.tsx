@@ -77,6 +77,7 @@ import {
   type QueueViewer,
 } from "@/lib/queueActions";
 import { scheduleDraft } from "@/lib/scheduleDraft";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import {
   SCHEDULE_BUFFER_MS,
   localTimeZoneLabel,
@@ -942,6 +943,11 @@ export function ReviewLinkPanelView({
   );
 }
 
+/** What the Queue says when it cannot load; a 401 is the shared signed-out sentence (R21 pages L3). */
+export function queueLoadErrorText(status: number): string {
+  return status === 401 ? SIGNED_OUT_ERROR : "Failed to load your queue.";
+}
+
 /** Client-rendered Queue: scheduled + draft posts with edit/cancel/publish/delete. */
 /**
  * The empty Queue's buttons. R5-new-customer L6: Add many only when the plan
@@ -1029,11 +1035,7 @@ export function QueueView({
       const response = await fetch("/api/posts?status=scheduled,draft&clientChangesFirst=1");
       if (!response.ok) {
         if (!silent) {
-          setError(
-            response.status === 401
-              ? "Please sign in to view your queue."
-              : "Failed to load your queue.",
-          );
+          setError(queueLoadErrorText(response.status));
         }
         return;
       }

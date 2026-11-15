@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import type { PostJobDTO } from "@/lib/postsDto";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 
 import {
   cancelRequest,
@@ -13,6 +14,7 @@ import {
   isTextPost,
   labelName,
   pairLabel,
+  queueLoadErrorText,
   readQueueView,
   saveQueueView,
   seriesLabel,
@@ -247,5 +249,16 @@ describe("Queue card by lines", () => {
     const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
     expect(queueSource.match(/by \{job\.createdBy\.name\}/g) ?? []).toEqual([]);
     expect(queueSource.match(/ · by <ByName name=\{job\.createdBy\.name\} \/>/g) ?? []).toHaveLength(3);
+  });
+});
+
+// R21 pages L3: Queue's 401 says the shared signed-out sentence, as every other 401 does.
+describe("queueLoadErrorText", () => {
+  it("a 401 is the shared signed-out sentence", () => {
+    expect(queueLoadErrorText(401)).toBe(SIGNED_OUT_ERROR);
+  });
+
+  it("any other failure is as before", () => {
+    expect(queueLoadErrorText(500)).toBe("Failed to load your queue.");
   });
 });
