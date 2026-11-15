@@ -17,38 +17,50 @@ interface InvitePreview {
   alreadyMember: boolean;
 }
 
+export type InviteLoad = { kind: "ok"; preview: InvitePreview } | { kind: "invalid" } | { kind: "unreachable" };
+
+/**
+ * Reads the invite preview. Only a 404 means the link is dead (the uniform
+ * shape for invalid, expired or revoked: no oracle beyond validity). No
+ * network, a server failure or too many tries is "unreachable": the link may
+ * be fine, so the page offers Try again instead of calling it invalid
+ * (R5 pages L7).
+ */
+export async function loadInvite(fetchImpl: typeof fetch, token: string): Promise<InviteLoad> {
+  try {
+    const response = await fetchImpl(`/api/invites/${token}`);
+    if (response.status === 404) return { kind: "invalid" };
+    if (!response.ok) return { kind: "unreachable" };
+    return { kind: "ok", preview: (await response.json()) as InvitePreview };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/** R5 pages L8: what the page says when Join didn't work. */
+export const JOIN_FAILED_MESSAGE = "You weren't added to the workspace. Please press Join workspace again in a minute.";
+export const JOIN_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so you weren't added. Check your internet connection and press Join workspace again.";
+
 /** Client-rendered join flow. The parent server component gates sign-in. */
 export function JoinView({ token }: { token: string }) {
   const router = useRouter();
   const toast = useToast();
-  const [preview, setPreview] = useState<InvitePreview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [invalid, setInvalid] = useState(false);
+  const [load, setLoad] = useState<InviteLoad | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [joining, setJoining] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch(`/api/invites/${token}`);
-        if (!response.ok) {
-          // 404 is the uniform shape for invalid/expired/revoked (no oracle
-          // beyond validity) — render the one generic error state either way.
-          if (!cancelled) setInvalid(true);
-          return;
-        }
-        const data: InvitePreview = await response.json();
-        if (!cancelled) setPreview(data);
-      } catch {
-        if (!cancelled) setInvalid(true);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+    void loadInvite(fetch, token).then((result) => {
+      if (!cancelled) setLoad(result);
+    });
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, attempt]);
+
+  const preview = load?.kind === "ok" ? load.preview : null;
 
   async function handleJoin() {
     setJoining(true);
@@ -60,22 +72,22 @@ export function JoinView({ token }: { token: string }) {
         // between the preview load and clicking Join — fall back to the same
         // invalid-link state rather than a dead-end toast.
         if (response.status === 404) {
-          setInvalid(true);
+          setLoad({ kind: "invalid" });
           return;
         }
-        toast.error(data?.error ?? "Couldn't join this workspace.");
+        toast.error(data?.error ?? JOIN_FAILED_MESSAGE);
         return;
       }
       toast.success(`Joined ${preview?.workspaceName ?? "the workspace"}.`);
       router.push("/");
     } catch {
-      toast.error("Couldn't join this workspace.");
+      toast.error(JOIN_OFFLINE_MESSAGE);
     } finally {
       setJoining(false);
     }
   }
 
-  if (loading) {
+  if (!load) {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <Skeleton className="h-56 w-full" />
@@ -83,7 +95,29 @@ export function JoinView({ token }: { token: string }) {
     );
   }
 
-  if (invalid || !preview) {
+  if (load.kind === "unreachable") {
+    return (
+      <div className="mx-auto max-w-md px-4 py-16">
+        <EmptyState
+          icon={<UserPlus />}
+          title="We couldn't load this invite."
+          description="The link may be fine. Check your internet connection, then press Try again."
+          action={
+            <Button
+              onClick={() => {
+                setLoad(null);
+                setAttempt((value) => value + 1);
+              }}
+            >
+              Try again
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (!preview) {
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <EmptyState
