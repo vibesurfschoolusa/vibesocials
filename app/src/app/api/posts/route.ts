@@ -1591,7 +1591,9 @@ export async function POST(request: Request) {
       // Q1: Feed and Story made a second job; `postJob` is the feed one.
       ...(storyPostJobId ? { storyPostJobId } : {}),
       // G1 review: platforms not sent, and whether nothing was sent at all.
-      ...(notSent.length > 0 ? { notSent } : {}),
+      ...(notSent.length > 0
+        ? { notSent, notSentText: notSentSentence(upFront.notSent, upFront.allFailed, context.role) }
+        : {}),
       ...(upFront.allFailed ? { allFailed: true } : {}),
     });
   } catch (error: unknown) {

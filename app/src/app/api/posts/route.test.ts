@@ -3285,6 +3285,7 @@ describe("POST /api/posts - platforms not sent at creation", () => {
       { platform: "x", reason: "RECONNECT_REQUIRED", message: "Reconnect X in Settings, then retry." },
     ]);
     expect(body.message).toBe("Nothing was sent: Reconnect X in Settings, then use Retry in Activity.");
+    expect(body.notSentText).toBe("Nothing was sent: Reconnect X in Settings, then use Retry in Activity.");
   });
 
   // R10-client-journey L1: a member can't reconnect, so their answer names the owner.
@@ -3301,6 +3302,19 @@ describe("POST /api/posts - platforms not sent at creation", () => {
       { platform: "x", reason: "RECONNECT_REQUIRED", message: "The workspace owner can reconnect X; then retry." },
     ]);
     expect(body.message).toBe("Nothing was sent: The workspace owner can reconnect X; then use Retry in Activity.");
+    expect(body.notSentText).toBe("Nothing was sent: The workspace owner can reconnect X; then use Retry in Activity.");
+  });
+
+  it("a member's Post now with one platform dead: the not-sent text names the owner", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: false }));
+    postJobResultFindManyMock.mockResolvedValue([
+      failedRow("job-1", "x", "RECONNECT_REQUIRED", "Reconnect X in Settings, then retry."),
+      pendingRow("job-1", "instagram"),
+    ]);
+
+    const body = (await (await post({ platforms: ["x", "instagram"] })).json()) as Record<string, unknown>;
+
+    expect(body.notSentText).toBe("Not sent to X: The workspace owner can reconnect X; then use Retry in Activity.");
   });
 
   it("one dead, one healthy: names the dead one, not allFailed", async () => {
