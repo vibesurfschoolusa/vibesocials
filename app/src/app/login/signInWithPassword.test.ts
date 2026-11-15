@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn(async () => null) }));
+vi.mock("next-auth/react", () => ({ getSession: getSessionMock, signOut: vi.fn() }));
+
 import { LOGIN_FAILED_MESSAGE, LOGIN_UNREACHABLE_MESSAGE, signInWithPassword } from "./signInWithPassword";
 
 // F7 (R1 L7): a sign-in call that never answers (offline, the server down)
@@ -47,5 +50,17 @@ describe("signInWithPassword", () => {
       ok: false,
       error: LOGIN_FAILED_MESSAGE,
     });
+  });
+
+  // R21 pages L2: the other tabs hear of an accepted sign-in (getSession()
+  // broadcasts by default), so an open page's signed-out line goes.
+  it("an accepted sign-in tells the other tabs once; a refused one does not", async () => {
+    getSessionMock.mockClear();
+    await signInWithPassword(vi.fn(async () => ({ ok: true })), "a@example.test", "secret12");
+    expect(getSessionMock).toHaveBeenCalledTimes(1);
+    expect(getSessionMock).toHaveBeenCalledWith();
+    getSessionMock.mockClear();
+    await signInWithPassword(vi.fn(async () => ({ ok: false })), "a@example.test", "x");
+    expect(getSessionMock).not.toHaveBeenCalled();
   });
 });

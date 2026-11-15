@@ -14,6 +14,7 @@ import {
   shouldPollPostJobs,
 } from "@/lib/postJobPolling";
 import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 
 export interface UsePostJobsResult {
   jobs: PostJobDTO[] | null;
@@ -170,7 +171,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       if (!response.ok) {
         throw new Error(
           response.status === 401
-            ? "Please sign in to view your posts."
+            ? SIGNED_OUT_ERROR
             : "Failed to load posts.",
         );
       }

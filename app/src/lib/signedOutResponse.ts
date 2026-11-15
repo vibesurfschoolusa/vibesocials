@@ -12,5 +12,7 @@ export { SIGNED_OUT_ERROR };
  * has no session.
  */
 export function signedOutResponse(): NextResponse {
-  return NextResponse.json({ error: SIGNED_OUT_ERROR }, { status: 401 });
+  // R21 pages L3: the browser's listener (session-provider.tsx, SIGNED_OUT_HEADER)
+  // sees this mark and re-reads the session, so the page shows the signed-out line.
+  return NextResponse.json({ error: SIGNED_OUT_ERROR }, { status: 401, headers: { "x-signed-out": "1" } });
 }

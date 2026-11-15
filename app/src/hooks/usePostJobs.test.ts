@@ -505,3 +505,15 @@ describe("usePostJobs viewer role", () => {
     expect(latest.workspaceRole).toBe("member");
   });
 });
+
+// R21 pages L3: Activity says what every other page says after a 401.
+describe("usePostJobs signed out", () => {
+  it("a 401 shows the shared signed-out sentence", async () => {
+    fetchMock.mockImplementation(async () => ({ ok: false, status: 401, json: async () => ({}) }));
+    await mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.error).toBe("You were signed out. Sign in again.");
+  });
+});

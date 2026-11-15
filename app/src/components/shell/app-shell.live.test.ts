@@ -99,11 +99,51 @@ async function show(session: unknown) {
   });
 }
 
+/** The tab's visibility and its visibilitychange listeners, on the fake document. */
+let visibility: "visible" | "hidden" = "visible";
+let visibilityListeners: Set<() => void>;
+/** Storage events this tab dispatched to itself (rereadSessionHere). */
+let selfEvents: Array<{ type: string; key: string | null }>;
+
+async function becomeVisible(state: "visible" | "hidden" = "visible") {
+  visibility = state;
+  await act(async () => {
+    for (const listener of [...visibilityListeners]) listener();
+  });
+}
+
+class FakeStorageEvent {
+  type: string;
+  key: string | null;
+  newValue: string | null;
+  constructor(type: string, init: { key?: string; newValue?: string }) {
+    this.type = type;
+    this.key = init.key ?? null;
+    this.newValue = init.newValue ?? null;
+  }
+}
+
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
   fakeWindow = made.doc.defaultView as Record<string, unknown>;
+  visibility = "visible";
+  visibilityListeners = new Set();
+  selfEvents = [];
+  Object.defineProperty(made.doc, "visibilityState", { get: () => visibility, configurable: true });
+  made.doc.addEventListener = (type: string, listener: () => void) => {
+    if (type === "visibilitychange") visibilityListeners.add(listener);
+  };
+  made.doc.removeEventListener = (type: string, listener: () => void) => {
+    if (type === "visibilitychange") visibilityListeners.delete(listener);
+  };
+  fakeWindow.dispatchEvent = (event: { type: string; key: string | null }) => {
+    selfEvents.push(event);
+    return true;
+  };
+  vi.stubGlobal("StorageEvent", FakeStorageEvent);
+  vi.stubGlobal("document", made.doc);
   vi.stubGlobal("window", fakeWindow);
   serverReply = NOBODY_REPLY;
   sessionFetch.mockClear();
@@ -142,8 +182,13 @@ describe("AppShell: the session turns to nobody on an open app page", () => {
         expect(markup).toContain("TOPBAR");
         expect(markup).toContain('<main id="main-content"');
         expect(markup.match(/role="alert"/g)).toHaveLength(1);
-        expect(markup.replace(/<[^>]+>/g, "")).toContain("You were signed out. Sign in again to keep working.");
-        expect(markup).toContain(`href="/login?callbackUrl=${encodeURIComponent(pathname + search)}"`);
+        expect(markup.replace(/<[^>]+>/g, "")).toContain(
+          "You were signed out. Sign in again in a new tab, then come back: this page keeps what you wrote.",
+        );
+        // R21 new-customer L1 (= pages L1): the link opens a new tab, so this page and its work stay.
+        expect(markup).toContain(
+          `<a href="/login?callbackUrl=${encodeURIComponent(pathname + search)}" target="_blank" rel="noopener"`,
+        );
         expect(refresh).not.toHaveBeenCalled();
       });
     }
@@ -231,5 +276,114 @@ describe("AppShell: the session turns to nobody on an open app page", () => {
     expect(mounts).toBe(1);
     expect(markup).toContain('data-caption="kept"');
     expect(markup).not.toContain("You were signed out");
+  });
+});
+
+// R21 security L1: a visitor who never signed in opens a missing /logo.png
+// (the proxy skips image-looking addresses, so no sign-in redirect). The 404
+// is not public, but nobody was ever signed in here: bare page, no line.
+describe("AppShell: a tab whose session never named anyone", () => {
+  it("a missing /logo.png for a visitor who never signed in: frame only while loading, then bare, no line, no read", async () => {
+    at("/logo.png", "");
+    await show({ status: "loading", data: undefined });
+    expect(html(container)).toContain("SIDEBAR");
+    await show(UNAUTHENTICATED);
+    const markup = html(container);
+    expect(markup).not.toContain("SIDEBAR");
+    expect(markup).not.toContain("TOPBAR");
+    expect(markup).not.toContain("You were signed out");
+    expect(markup).toContain("<textarea");
+    expect(sessionFetch).not.toHaveBeenCalled();
+  });
+
+  it("an ended session from the very first read: bare, no line", async () => {
+    at("/logo.png", "");
+    await show(ENDED);
+    const markup = html(container);
+    expect(markup).not.toContain("SIDEBAR");
+    expect(markup).not.toContain("You were signed out");
+  });
+
+  it("once the tab named someone, the frame and the line stay for it", async () => {
+    at("/logo.png", "");
+    await show(SIGNED_IN);
+    await show(UNAUTHENTICATED);
+    const markup = html(container);
+    expect(markup).toContain("SIDEBAR");
+    expect(markup).toContain("You were signed out");
+  });
+});
+
+// R21 pages L2: after a password sign-in in another tab, this tab's null
+// session is never re-read on focus by next-auth (react/index.js:408-412).
+// While the line shows, a return to the tab re-reads it here.
+describe("AppShell: the line re-reads the session when the tab comes back", () => {
+  it("visible while the line shows: one re-read of this tab; the sign-in then clears the line, page kept", async () => {
+    await show(SIGNED_IN);
+    await act(async () => setCaption("kept across tabs"));
+    await show(UNAUTHENTICATED);
+    expect(html(container)).toContain("You were signed out");
+    expect(selfEvents).toEqual([]);
+
+    await becomeVisible("hidden");
+    expect(selfEvents).toEqual([]);
+    await becomeVisible("visible");
+    expect(selfEvents).toHaveLength(1);
+    expect(selfEvents[0]).toMatchObject({ type: "storage", key: "nextauth.message" });
+
+    // next-auth's receiver re-reads the server, which now names the person.
+    await show(SIGNED_IN);
+    const markup = html(container);
+    expect(mounts).toBe(1);
+    expect(markup).toContain('data-caption="kept across tabs"');
+    expect(markup).not.toContain("You were signed out");
+    expect(visibilityListeners.size).toBe(0);
+  });
+
+  it("no line, no listener: a signed-in tab does not re-read on its own", async () => {
+    await show(SIGNED_IN);
+    await becomeVisible("visible");
+    expect(selfEvents).toEqual([]);
+    expect(visibilityListeners.size).toBe(0);
+  });
+});
+
+// R21 pages L3: a 401 in the focused tab. The listener (session-provider.tsx)
+// reads the server and ends the stale session; next-auth then sets this tab's
+// session to null (signOut({ redirect: false }) -> _getSession storage read).
+describe("AppShell: a 401 in the focused tab", () => {
+  it("Schedule gets a marked 401: the line appears, frame and text kept", async () => {
+    const { watchSignedOutAnswers, SIGNED_OUT_HEADER } = await import("@/components/session-provider");
+    await show(SIGNED_IN);
+    await act(async () => setCaption("about to schedule"));
+
+    fakeWindow.location = { pathname: "/posts/new", search: "?draft=1", origin: "https://app.example.test" };
+    let ended = 0;
+    fakeWindow.fetch = async () =>
+      new Response('{"error":"You were signed out. Sign in again."}', {
+        status: 401,
+        headers: { [SIGNED_OUT_HEADER]: "1" },
+      });
+    const stop = watchSignedOutAnswers(fakeWindow as unknown as Window, {
+      read: async () => ({ kind: "signedOut" }),
+      end: () => {
+        ended += 1;
+      },
+      generation: () => 0,
+    });
+    await act(async () => {
+      await (fakeWindow.fetch as typeof fetch)("/api/posts", { method: "POST" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    stop();
+    expect(ended).toBe(1);
+    // What next-auth does after signOut({ redirect: false }): this tab's session becomes null.
+    await show(UNAUTHENTICATED);
+
+    const markup = html(container);
+    expect(mounts).toBe(1);
+    expect(markup).toContain('data-caption="about to schedule"');
+    expect(markup).toContain("SIDEBAR");
+    expect(markup).toContain("You were signed out");
   });
 });

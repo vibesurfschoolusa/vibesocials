@@ -48,19 +48,21 @@ describe("AppShell: who gets the app frame", () => {
     expect(render("/", ENDED)).toMatch(BARE);
   });
 
-  // R20 new-customer L1: an app route never loses its frame (that remounted
-  // the page and lost unsent work). The signed-out line waits for the server's
-  // own answer (app-shell.live.test.ts), so a first render has none.
-  it("a session naming nobody on an app route keeps the frame, with no line before the server answers", () => {
+  // R20 new-customer L1: an app route keeps its frame once this tab's session
+  // named someone (app-shell.live.test.ts). R21 security L1: a tab whose first
+  // session already names nobody (a visitor on a missing /logo.png, which the
+  // proxy does not redirect) keeps the old rule: bare after loading, no line.
+  it("a session naming nobody from the start on an app route: bare, no line", () => {
     for (const session of [
       ENDED,
       { status: "authenticated", data: { user: {}, expires: "2099-01-01T00:00:00Z" } },
       { status: "unauthenticated", data: null },
     ]) {
-      const html = render("/queue", session);
-      expect(html).toContain("SIDEBAR");
-      expect(html).toContain('<main id="main-content"');
-      expect(html).not.toContain("You were signed out");
+      for (const pathname of ["/queue", "/logo.png"]) {
+        const html = render(pathname, session);
+        expect(html).toMatch(BARE);
+        expect(html).not.toContain("You were signed out");
+      }
     }
   });
 

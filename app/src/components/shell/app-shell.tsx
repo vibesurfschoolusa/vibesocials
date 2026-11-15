@@ -40,12 +40,20 @@ export function AppShell({ children, pricingPublic }: { children: ReactNode; pri
   // R20 new-customer L1: an app route keeps the frame whatever the session says
   // later. Swapping the tree remounted the page and lost unsent work (a caption,
   // a file); once the server confirms nobody, one signed-out line shows instead.
+  //
+  // R21 security L1: only for a tab whose session has named someone. The proxy
+  // does not redirect image-looking addresses, so a visitor who never signed in
+  // can reach an app route's 404 (a missing /logo.png); that tab keeps the old
+  // rule (frame only while loading) and is never told "You were signed out".
+  // State, not a ref, so it can be read while rendering; set once, never unset.
+  const [namedSomeone, setNamedSomeone] = useState(false);
+  if (signedIn && !namedSomeone) setNamedSomeone(true);
   const isPublic = isPublicRoute(pathname, { pricingPublic });
   const isAppRoute = !isPublic && pathname !== "/";
-  const showShell = isAppRoute || (signedIn && !isPublic);
+  const showShell = isAppRoute ? status === "loading" || signedIn || namedSomeone : signedIn && !isPublic;
   // FF1 review: the line waits for the server's own "signed out"; a failed
   // session fetch also reads as nobody here.
-  const signedOut = useServerSaysSignedOut(isAppRoute && status !== "loading" && !signedIn);
+  const signedOut = useServerSaysSignedOut(isAppRoute && namedSomeone && status !== "loading" && !signedIn);
 
   return (
     <ToastProvider>

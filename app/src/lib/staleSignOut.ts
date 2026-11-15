@@ -1,4 +1,4 @@
-import { signOut } from "next-auth/react";
+import { getSession, signOut } from "next-auth/react";
 
 // A plain module (not "use client") so Log in's sign-in helper can use it:
 // clientBoundary.guard.test.ts forbids calling a "use client" module's plain
@@ -36,14 +36,44 @@ export function currentSignInGeneration(): number {
 /**
  * Wraps a sign-in on Log in or Register: waits for a stale sign-out already
  * sent, and blocks new ones while it runs and for reads started before it.
+ *
+ * R21 pages L2: in next-auth 4.24.15 a credentials signIn({ redirect: false })
+ * re-reads only this tab's session, without telling the other tabs
+ * (react/index.js:273-275, :399-402), so an open page there kept its
+ * signed-out line. After an accepted sign-in, one getSession() (it broadcasts
+ * by default, :129-136) makes them read it again. A failed broadcast read
+ * never undoes the sign-in.
  */
 export async function beforeSignIn<T>(run: () => Promise<T>): Promise<T> {
   signInGeneration += 1;
   signInsRunning += 1;
   try {
     await staleSignOut;
-    return await run();
+    const result = await run();
+    if ((result as { ok?: unknown } | null | undefined)?.ok === true) {
+      await getSession().catch(() => null);
+    }
+    return result;
   } finally {
     signInsRunning -= 1;
   }
+}
+
+/**
+ * R21 pages L2: re-reads this tab's session and sets its context. In next-auth
+ * 4.24.15 a tab whose session is null is not re-read on focus
+ * (react/index.js:408-412), and update() does nothing without a session
+ * (:492-496). The one path that re-reads and sets it is the receiver for the
+ * other tabs' messages (:443-448 -> _getSession({ event: "storage" })), which
+ * listens for the window's "storage" event (client/_utils.js:88-103); this
+ * hands it one. Nothing is written to storage, so no other tab hears it.
+ */
+export function rereadSessionHere(win: Window = window): void {
+  if (typeof StorageEvent === "undefined") return;
+  win.dispatchEvent(
+    new StorageEvent("storage", {
+      key: "nextauth.message",
+      newValue: JSON.stringify({ event: "session", data: { trigger: "getSession" } }),
+    }),
+  );
 }
