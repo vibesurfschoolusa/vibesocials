@@ -252,6 +252,38 @@ function fitYouTubeTags(tags: readonly string[]): string[] {
   return kept;
 }
 
+/** A decimal number as the location box writes it ("26.0523", "-80.1158"). */
+const COORDINATE = String.raw`(-?\d+(?:\.\d+)?)`;
+/** "<place> (lat,lng)" at the very end of the text, as location-autocomplete.tsx appends it. */
+const TRAILING_COORDINATES = new RegExp(String.raw`^(.*?)\s*\(\s*${COORDINATE}\s*,\s*${COORDINATE}\s*\)$`, "s");
+/** Just "lat, lng", typed by hand. */
+const BARE_COORDINATES = new RegExp(String.raw`^${COORDINATE}\s*,\s*${COORDINATE}$`);
+
+/**
+ * The coordinates (and the place) in a post's location text, or null without
+ * any. R5-publishing L3: only the TRAILING "(lat,lng)" the location box appends
+ * counts, as in instagramClient.ts; the first "number, number" in the text used
+ * to be read, which an address like "Unit 4, 12 Ocean Dr" sent to the wrong
+ * place. A text that is only "lat, lng" is read too.
+ */
+export function parseYouTubeLocation(
+  text: string,
+): { latitude: number; longitude: number; description?: string } | null {
+  const trimmed = text.trim();
+  const trailing = TRAILING_COORDINATES.exec(trimmed);
+  const bare = trailing ? null : BARE_COORDINATES.exec(trimmed);
+  const [place, lat, lng] = trailing
+    ? [trailing[1].trim(), trailing[2], trailing[3]]
+    : bare
+      ? ["", bare[1], bare[2]]
+      : [];
+  if (lat === undefined || lng === undefined) return null;
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!(latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180)) return null;
+  return place ? { latitude, longitude, description: place } : { latitude, longitude };
+}
+
 /**
  * The `videos.insert` request body for this post, and the `part` parameter that
  * names the resources it writes. The multipart upload and the resumable session
@@ -272,51 +304,11 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   const hashtagMatches = caption.match(/#[\w]+/g) || [];
   const tags = fitYouTubeTags(hashtagMatches.map((tag) => tag.substring(1))); // Remove # prefix
 
-  // Parse location from metadata if available
-  // Supports formats: "lat,lng" or "description" or both
+  // A location with coordinates becomes recordingDetails; YouTube takes none without.
   const locationMetadata = (mediaItem.metadata as { location?: { description?: string } } | null)?.location;
-  let locationData: { latitude?: number; longitude?: number; description?: string } | null = null;
-
-  console.log("[YouTube] Raw metadata from mediaItem:", {
-    metadata: mediaItem.metadata,
-    locationMetadata,
-  });
-
-  if (locationMetadata?.description) {
-    const locStr = locationMetadata.description.trim();
-
-    console.log("[YouTube] Parsing location string:", locStr);
-
-    // Try to extract coordinates from the string (format: "lat,lng" or "description (lat,lng)")
-    const coordMatch = locStr.match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
-
-    if (coordMatch) {
-      const lat = parseFloat(coordMatch[1]);
-      const lng = parseFloat(coordMatch[2]);
-
-      console.log("[YouTube] Found coordinates:", { lat, lng, valid: !isNaN(lat) && !isNaN(lng) });
-
-      if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-        locationData = {
-          latitude: lat,
-          longitude: lng,
-        };
-
-        // Extract description if it's not just coordinates
-        const descOnly = locStr.replace(/\s*\(?\s*-?\d+\.?\d*,\s*-?\d+\.?\d*\s*\)?/, '').trim();
-        if (descOnly && descOnly !== locStr) {
-          locationData.description = descOnly;
-        }
-
-        console.log("[YouTube] Parsed location data:", locationData);
-      }
-    } else {
-      // No coordinates found, store as description only for other platforms
-      // YouTube won't get location without coordinates
-      console.log("[YouTube] Location text provided but no coordinates, skipping location for YouTube:", locStr);
-    }
-  } else {
-    console.log("[YouTube] No location metadata found");
+  const locationData = locationMetadata?.description ? parseYouTubeLocation(locationMetadata.description) : null;
+  if (locationMetadata?.description && !locationData) {
+    console.log("[YouTube] Location text has no coordinates; the video is sent without a location");
   }
 
   // YouTube video metadata: the post's base caption for the title (no

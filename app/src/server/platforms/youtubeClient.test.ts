@@ -12,6 +12,7 @@ import type { PublishContext } from "./types";
 import {
   buildYouTubeVideoResource,
   computeYouTubeTitle,
+  parseYouTubeLocation,
   YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS,
   YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP,
   YOUTUBE_MAX_SESSION_RESTARTS,
@@ -47,6 +48,47 @@ vi.mock("@/lib/db", () => ({
 vi.mock("./connectionRefresh", () => ({
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
+
+// R5-publishing L3: the location box appends "(lat,lng)" to the place it chose
+// (location-autocomplete.tsx). The first "number, number" in the text could be
+// a street address ("Unit 4, 12 Ocean Dr"), so only the trailing pair counts,
+// as instagramClient.ts reads it.
+describe("parseYouTubeLocation", () => {
+  it("reads the trailing (lat,lng) and keeps the place as the description", () => {
+    expect(parseYouTubeLocation("Dania Beach Pier, FL, USA (26.0523,-80.1158)")).toEqual({
+      latitude: 26.0523,
+      longitude: -80.1158,
+      description: "Dania Beach Pier, FL, USA",
+    });
+  });
+
+  it("is not fooled by numbers in the address before the coordinates", () => {
+    expect(parseYouTubeLocation("Unit 4, 12 Ocean Dr, Miami (25.79,-80.13)")).toEqual({
+      latitude: 25.79,
+      longitude: -80.13,
+      description: "Unit 4, 12 Ocean Dr, Miami",
+    });
+  });
+
+  it("a text with numbers but no trailing pair has no coordinates", () => {
+    expect(parseYouTubeLocation("Unit 4, 12 Ocean Dr")).toBeNull();
+    expect(parseYouTubeLocation("Pier (26.05,-80.11) north end")).toBeNull();
+  });
+
+  it("accepts spaces inside the brackets and plain coordinates on their own", () => {
+    expect(parseYouTubeLocation("Pier ( 26.05 , -80.11 )")).toEqual({
+      latitude: 26.05,
+      longitude: -80.11,
+      description: "Pier",
+    });
+    expect(parseYouTubeLocation("26.05, -80.11")).toEqual({ latitude: 26.05, longitude: -80.11 });
+  });
+
+  it("refuses coordinates out of range", () => {
+    expect(parseYouTubeLocation("Nowhere (95,-80)")).toBeNull();
+    expect(parseYouTubeLocation("Nowhere (45,-190)")).toBeNull();
+  });
+});
 
 // 2026-11-01 audit (Task 4 item 1): the YouTube title is the POST's own base
 // caption (no footer) — the job's snapshot first, the shared MediaItem's only
