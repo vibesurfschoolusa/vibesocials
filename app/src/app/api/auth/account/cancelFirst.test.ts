@@ -19,6 +19,7 @@ vi.mock("@/lib/db", () => {
   const tx = {
     pendingConnection: { deleteMany: async () => ({ count: 0 }) },
     oAuthHandshake: { deleteMany: async () => ({ count: 0 }) },
+    workspaceInvite: { updateMany: async () => ({ count: 0 }) },
     user: { delete: async () => ({}) },
   };
   return {

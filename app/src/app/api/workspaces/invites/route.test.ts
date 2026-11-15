@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/active/route.test.ts). route.ts imports `@/lib/db`,
@@ -16,7 +16,9 @@ const {
   executeRawMock,
   requireOwnerContextMock,
   generateInviteTokenMock,
+  memberCountMock,
 } = vi.hoisted(() => ({
+  memberCountMock: vi.fn(),
   findFirstMock: vi.fn(),
   updateManyMock: vi.fn(),
   createMock: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock("@/lib/db", () => ({
       updateMany: updateManyMock,
       create: createMock,
     },
+    workspaceMember: { count: memberCountMock },
     $transaction: transactionMock,
   },
 }));
@@ -99,6 +102,8 @@ beforeEach(() => {
   executeRawMock.mockReset();
   requireOwnerContextMock.mockReset();
   generateInviteTokenMock.mockReset();
+  memberCountMock.mockReset();
+  memberCountMock.mockResolvedValue(1);
 
   requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
   generateInviteTokenMock.mockReturnValue({ raw: "RAW_TOKEN_VALUE", hash: "hashed-token-value" });
@@ -119,6 +124,15 @@ beforeEach(() => {
 });
 
 describe("GET /api/workspaces/invites", () => {
+  // The invite rows below are made on 2026-07-12 and expire on 2026-07-19.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-13T00:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns 401 when unauthenticated", async () => {
     requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
@@ -168,6 +182,28 @@ describe("GET /api/workspaces/invites", () => {
       },
     });
     expect(JSON.stringify(body)).not.toContain("hash");
+    // R10-client-journey L3: the same maker rule as Join.
+    expect(memberCountMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", userId: "user-1", role: "owner" },
+    });
+  });
+
+  // R10-client-journey L3: the card offers Create instead of a link that no longer works.
+  it("an expired link: { invite: null }, so the card offers Create", async () => {
+    findFirstMock.mockResolvedValue(makeInviteRow());
+    vi.setSystemTime(new Date("2026-07-19T00:00:00Z"));
+
+    await expect((await GET()).json()).resolves.toEqual({ invite: null });
+  });
+
+  it("a link whose maker is no longer an owner (demoted before #151, or deleted): { invite: null }", async () => {
+    findFirstMock.mockResolvedValue(makeInviteRow({ createdById: "user-old" }));
+    memberCountMock.mockResolvedValue(0);
+
+    await expect((await GET()).json()).resolves.toEqual({ invite: null });
+    expect(memberCountMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", userId: "user-old", role: "owner" },
+    });
   });
 });
 
