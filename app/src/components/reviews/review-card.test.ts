@@ -47,10 +47,11 @@ describe("ReviewCard: the reviewer", () => {
     expect(html).toMatch(/>M<\/div>/);
   });
 
-  // R21 client-journey L3: a name starting with an emoji keeps the whole emoji, not half a surrogate pair.
-  it("a name starting with an emoji shows the whole emoji as its initial", () => {
+  // R21 client-journey L3 + GG2 review: a name starting with an emoji shows its first
+  // letter, never half a surrogate pair (the same rule as the account button).
+  it("a name starting with an emoji shows its first letter as its initial", () => {
     const html = card("\u{1F30A} Kai");
-    expect(html).toContain(">\u{1F30A}</div>");
+    expect(html).toContain(">K</div>");
     expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 });

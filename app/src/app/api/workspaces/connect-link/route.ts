@@ -16,7 +16,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
-import { clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
+import { clientLinkCreateRefusal, clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
@@ -102,6 +102,9 @@ export async function POST(request: Request) {
   const body = (await readJsonObject(request)) ?? {};
   const mismatch = renderedWorkspaceRefusal(body.workspaceId, workspaceId);
   if (mismatch) return mismatch;
+  // GG2 review: no new link while the workspace is blocked (it would answer "not active").
+  const blocked = clientLinkCreateRefusal(context.workspace);
+  if (blocked) return NextResponse.json({ error: blocked, code: "WORKSPACE_BLOCKED" }, { status: 403 });
   const notIncluded = planFeatureResponse(context.workspace, "clientLinks");
   if (notIncluded) return notIncluded;
 

@@ -4,6 +4,7 @@ import { MessageSquare, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { nameInitial } from "@/lib/accountInitials";
 import { cn } from "@/lib/cn";
 import type { GoogleReview } from "./types";
 import { StarRating } from "./star-rating";
@@ -65,8 +66,7 @@ export function ReviewCard({
           />
         ) : (
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground">
-            {/* Array.from so an emoji or other surrogate pair counts as one character (lib/clientPage.ts). */}
-            {Array.from(review.reviewer.displayName)[0]?.toUpperCase()}
+            {nameInitial(review.reviewer.displayName)}
           </div>
         )}
 

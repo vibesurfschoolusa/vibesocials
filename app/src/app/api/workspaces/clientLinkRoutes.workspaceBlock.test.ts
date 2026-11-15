@@ -92,7 +92,11 @@ describe.each(ROUTES)("the %s link's owner GET", (_name, route, url) => {
     vi.stubEnv("BILLING_ENABLED", "true");
     h.requireOwnerContext.mockResolvedValue(ownerContext({ trialEndsAt: new Date(NOW.getTime() - DAY) }));
     const body = await get(route, url);
-    expect(body.workspaceBlocked).toBe(`Client links don't work right now. ${TRIAL_ENDED_MESSAGE}`);
+    // GG2 review: the panel says what brings the links back, not "to keep posting".
+    expect(body.workspaceBlocked).toBe(
+      `Client links don't work right now. Your free trial has ended. Choose a plan in Settings and your client links work again, or contact ${SUPPORT_EMAIL}.`,
+    );
+    expect(body.workspaceBlocked).not.toContain(TRIAL_ENDED_MESSAGE);
   });
 
   it("an active workspace: no block key, as today", async () => {

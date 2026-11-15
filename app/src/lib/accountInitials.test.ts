@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { accountInitials, accountLabel, accountWorkspaceLine, firstName } from "./accountInitials";
+import { accountInitials, accountLabel, accountWorkspaceLine, firstName, nameInitial } from "./accountInitials";
 
 /** The account button's avatar and label (2026-11-14): the person, not the first letter of their email. */
 
@@ -81,5 +81,24 @@ describe("accountWorkspaceLine", () => {
     expect(accountWorkspaceLine([])).toBeNull();
     expect(accountWorkspaceLine([ws("A", false), ws("B", false)])).toBeNull();
     expect(accountWorkspaceLine(null)).toBeNull();
+  });
+});
+
+// GG2 review: the review card took the first code point, so " Kai" gave an
+// empty circle, "🇺🇸 Sam" half a flag and a decomposed "é" a bare "E".
+describe("nameInitial", () => {
+  it.each([
+    ["Kai", "K"],
+    [" Kai", "K"],
+    ["🇺🇸 Sam", "S"],
+    ["👍🏽 Lee", "L"],
+    ["émile", "É"],
+    ["élodie", "É"],
+    ["A Google user", "A"],
+    ["", "?"],
+    ["   ", "?"],
+    ["🌊", "?"],
+  ])("%j -> %j", (name, initial) => {
+    expect(nameInitial(name)).toBe(initial);
   });
 });

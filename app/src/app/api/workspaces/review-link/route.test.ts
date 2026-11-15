@@ -316,3 +316,19 @@ describe("the page's workspace (another tab may have switched it)", () => {
     expect((await DELETE(bodyRequest("DELETE", { workspaceId: "ws-other" }))).status).toBe(403);
   });
 });
+
+// GG2 review: the panel hides Create while the workspace is blocked, and the
+// server refuses too, so a hand-sent request can't make a link that answers
+// "not active" until the block ends.
+describe("POST while the workspace is blocked", () => {
+  it("a paused workspace gets a 403 with the panel's sentence and no link is made", async () => {
+    requireOwnerContextMock.mockResolvedValue({
+      ...OWNER_CONTEXT,
+      workspace: { ...OWNER_CONTEXT.workspace, pausedAt: new Date("2026-11-10T00:00:00Z"), pausedReason: null },
+    });
+    const response = await POST(bodyRequest("POST"));
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toMatch(/^Client links don't work right now\./);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+});

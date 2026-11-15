@@ -29,7 +29,11 @@ describe("clientLinkPanelStatus", () => {
   it("billing on with an ended trial: blocked like paused", () => {
     vi.stubEnv("BILLING_ENABLED", "true");
     const status = clientLinkPanelStatus({ trialEndsAt: new Date(NOW.getTime() - DAY) }, NOW);
-    expect(status.workspaceBlocked).toBe(`Client links don't work right now. ${TRIAL_ENDED_MESSAGE}`);
+    // GG2 review: the shared sentence said "to keep posting", which is off on a link panel.
+    expect(status.workspaceBlocked).toBe(
+      `Client links don't work right now. Your free trial has ended. Choose a plan in Settings and your client links work again, or contact ${SUPPORT_EMAIL}.`,
+    );
+    expect(status.workspaceBlocked).not.toContain(TRIAL_ENDED_MESSAGE);
   });
 
   it("a plan without client links: only the plan flag, as today", () => {

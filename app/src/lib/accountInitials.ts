@@ -5,6 +5,15 @@ function firstLetterOrDigit(text: string): string | null {
 }
 
 /**
+ * One initial for a name shown in a circle (a Google reviewer): its first
+ * letter or digit, composed first so "e" + accent reads "É", else "?". A
+ * leading space, emoji or flag is skipped rather than cut in half (GG2 review).
+ */
+export function nameInitial(name: string): string {
+  return firstLetterOrDigit(name.normalize("NFC"))?.toLocaleUpperCase() ?? "?";
+}
+
+/**
  * The account button's avatar: the first letters of the first and last word of
  * the person's name, else the first letter of their email, else "?". The
  * button used to show the email's first letter, which reads as a stray logo

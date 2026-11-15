@@ -273,3 +273,17 @@ describe("connect-link POST and DELETE and the rendered workspace", () => {
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 });
+
+// GG2 review: the server refuses a new link while the workspace is blocked.
+describe("POST while the workspace is blocked", () => {
+  it("a paused workspace gets a 403 with the panel's sentence and no link is made", async () => {
+    h.requireOwnerContext.mockResolvedValue({
+      ...OWNER,
+      workspace: { ...OWNER.workspace, pausedAt: new Date("2026-11-10T00:00:00Z"), pausedReason: null },
+    });
+    const response = await POST(body("POST", { workspaceId: "ws-1" }));
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toMatch(/^Client links don't work right now\./);
+    expect(h.create).not.toHaveBeenCalled();
+  });
+});
