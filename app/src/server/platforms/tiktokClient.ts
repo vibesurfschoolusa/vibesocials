@@ -692,6 +692,39 @@ function sanitizeFailReason(reason: unknown): string | null {
   return typeof reason === "string" && /^[a-z0-9_]{1,64}$/i.test(reason) ? reason : null;
 }
 
+const TIKTOK_FILE_FAILED_TEXT =
+  "TikTok could not process this video, so nothing was posted. Export it again as an MP4 (or shorten it), then retry.";
+const TIKTOK_PULL_FAILED_TEXT = "TikTok could not download the video, so nothing was posted. Try again.";
+
+/**
+ * R17-publishing addendum L1: what a FAILED publish says, by TikTok's documented
+ * `fail_reason` (content-posting-api-reference-get-video-status, checked
+ * 2026-11-15). File advice only for the file checks; an unknown reason gets
+ * the general sentence with TikTok's reason after it.
+ */
+const TIKTOK_FAIL_REASON_TEXT: Record<string, string> = {
+  file_format_check_failed: TIKTOK_FILE_FAILED_TEXT,
+  duration_check_failed: TIKTOK_FILE_FAILED_TEXT,
+  frame_rate_check_failed: TIKTOK_FILE_FAILED_TEXT,
+  picture_size_check_failed: TIKTOK_FILE_FAILED_TEXT,
+  internal: "TikTok had a problem on its side, so nothing was posted. Try again in a few minutes.",
+  video_pull_failed: TIKTOK_PULL_FAILED_TEXT,
+  photo_pull_failed: TIKTOK_PULL_FAILED_TEXT,
+  publish_cancelled: "The publish was cancelled on TikTok, so nothing was posted.",
+  spam_risk_too_many_posts: `${TIKTOK_CANNOT_POST_MESSAGES.spam_risk_too_many_posts} Nothing was posted; you can post it in the TikTok app.`,
+  spam_risk_user_banned_from_posting: `${TIKTOK_CANNOT_POST_MESSAGES.spam_risk_user_banned_from_posting} Nothing was posted.`,
+  spam_risk_text: "TikTok flagged the caption, so nothing was posted. Change the caption before trying again.",
+  spam_risk: "TikTok stopped this post as risky, so nothing was posted. Post it in the TikTok app instead.",
+};
+
+function tiktokFailedText(failReason: string | null): string {
+  const known = failReason === null ? undefined : TIKTOK_FAIL_REASON_TEXT[failReason];
+  if (known) return known;
+  const text =
+    "TikTok didn't publish this video, so nothing was posted. Try again; if it fails again, post it in the TikTok app.";
+  return failReason ? `${text} TikTok's reason: ${failReason}.` : text;
+}
+
 export interface PollTikTokPublishStatusOptions {
   accessToken: string;
   publishId: string;
@@ -713,7 +746,8 @@ export interface PollTikTokPublishStatusOptions {
 /**
  * Poll TikTok's publish status until the post is confirmed. Resolves ONLY on a
  * complete outcome; every other outcome throws so the job records a failure:
- *  - FAILED -> `TIKTOK_PUBLISH_FAILED` (with TikTok's `fail_reason` when present)
+ *  - FAILED -> `TIKTOK_PUBLISH_FAILED`, worded by TikTok's `fail_reason`; `auth_removed`
+ *    is `TIKTOK_RECONNECT_REQUIRED` (flagged, guarded), as nothing was posted
  *  - 401 -> `PUBLISH_UNCONFIRMED` (connection flagged when its tokens are
  *    unchanged). The poll runs after the final chunk was committed and TikTok may
  *    be posting, so a reconnect-and-retry there could double-post.
@@ -794,13 +828,13 @@ export async function pollTikTokPublishStatus(
     const decision = decidePollOutcome(publishStatus);
     if (decision === "complete") return;
     if (decision === "failed") {
-      // R17-publishing addendum L1: say nothing was posted and what to try;
-      // TikTok's own reason (a sanitized enum) follows for support.
-      const text =
-        "TikTok could not process this video, so nothing was posted. Export it again as an MP4, or try a shorter, smaller file, then retry.";
-      const error = new Error(
-        failReason ? `${text} TikTok's reason: ${failReason}.` : text,
-      ) as Error & { code: string };
+      if (failReason === "auth_removed") {
+        // The account took back Vibe Socials' access: nothing was posted, so
+        // the usual lost-access path applies (flag guarded, reconnect, retry);
+        // the stored text is the shared reconnect sentence (publishErrorMessage).
+        await throwTikTokReconnect(connection, "publish/status/fetch auth_removed");
+      }
+      const error = new Error(tiktokFailedText(failReason)) as Error & { code: string };
       error.code = "TIKTOK_PUBLISH_FAILED";
       throw error;
     }

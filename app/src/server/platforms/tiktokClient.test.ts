@@ -313,8 +313,6 @@ describe("decidePollOutcome", () => {
 });
 
 describe("pollTikTokPublishStatus", () => {
-  const TIKTOK_FAILED_TEXT =
-    "TikTok could not process this video, so nothing was posted. Export it again as an MP4, or try a shorter, smaller file, then retry.";
   const noSleep = () => Promise.resolve();
   const pollConnection = { id: "conn-1", accessToken: "access-token", refreshToken: "refresh-1" };
 
@@ -371,35 +369,64 @@ describe("pollTikTokPublishStatus", () => {
     await expect(poll()).resolves.toBeUndefined();
   });
 
-  it("throws TIKTOK_PUBLISH_FAILED including TikTok's fail_reason", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(statusResponse("FAILED", "file_format_check_failed")),
-    );
+  // R17 CC2 follow-up: the text follows TikTok's documented fail_reason
+  // (content-posting-api-reference-get-video-status, checked by the lead
+  // 2026-11-15). File advice only for the file checks.
+  const FILE_TEXT =
+    "TikTok could not process this video, so nothing was posted. Export it again as an MP4 (or shorten it), then retry.";
+  const GENERIC_TEXT =
+    "TikTok didn't publish this video, so nothing was posted. Try again; if it fails again, post it in the TikTok app.";
+  it.each([
+    ["file_format_check_failed", FILE_TEXT],
+    ["duration_check_failed", FILE_TEXT],
+    ["frame_rate_check_failed", FILE_TEXT],
+    ["picture_size_check_failed", FILE_TEXT],
+    ["internal", "TikTok had a problem on its side, so nothing was posted. Try again in a few minutes."],
+    ["video_pull_failed", "TikTok could not download the video, so nothing was posted. Try again."],
+    ["photo_pull_failed", "TikTok could not download the video, so nothing was posted. Try again."],
+    ["publish_cancelled", "The publish was cancelled on TikTok, so nothing was posted."],
+    [
+      "spam_risk_too_many_posts",
+      "TikTok says this account has reached its posting limit for now. Try again later. Nothing was posted; you can post it in the TikTok app.",
+    ],
+    ["spam_risk_user_banned_from_posting", "TikTok says this account can't post right now. Nothing was posted."],
+    ["spam_risk_text", "TikTok flagged the caption, so nothing was posted. Change the caption before trying again."],
+    ["spam_risk", "TikTok stopped this post as risky, so nothing was posted. Post it in the TikTok app instead."],
+    ["something_new", `${GENERIC_TEXT} TikTok's reason: something_new.`],
+    [undefined, GENERIC_TEXT],
+  ] as const)("fail_reason %s: TIKTOK_PUBLISH_FAILED with its own plain text", async (reason, text) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED", reason)));
 
     const error = await caught(poll());
 
     expect(error?.code).toBe("TIKTOK_PUBLISH_FAILED");
-    expect(error?.message).toContain("file_format_check_failed");
+    expect(error?.message).toBe(text);
+    expect(publishErrorMessage("tiktok", error!)).toBe(text);
+    expect(updateCalls()).toHaveLength(0);
   });
 
-  it("throws TIKTOK_PUBLISH_FAILED without a reason suffix when fail_reason is absent", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED")));
+  it("fail_reason auth_removed: flags the connection and asks to reconnect, like other lost access", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED", "auth_removed")));
+    findUniqueMock.mockResolvedValue({ accessToken: "access-token", refreshToken: "refresh-1" });
 
     const error = await caught(poll());
 
-    expect(error?.code).toBe("TIKTOK_PUBLISH_FAILED");
-    // R17-publishing addendum L1: says nothing was posted and what to try.
-    expect(error?.message).toBe(TIKTOK_FAILED_TEXT);
-    expect(publishErrorMessage("tiktok", error!)).toBe(TIKTOK_FAILED_TEXT);
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(publishErrorMessage("tiktok", error!)).toBe("Reconnect TikTok in Settings, then retry.");
+    expect(isTransientPublishError(error)).toBe(false);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
+    expect(updateCalls()[0].data.lastRefreshErrorCode).toBe(RECONNECT_CODE);
   });
 
-  it("puts TikTok's fail_reason after the plain sentence", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED", "file_format_check_failed")));
+  it("fail_reason auth_removed after the user reconnected: CONNECTION_TOKEN_CHANGED, nothing flagged", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED", "auth_removed")));
+    findUniqueMock.mockResolvedValue({ accessToken: "rotated-access", refreshToken: "refresh-1" });
 
     const error = await caught(poll());
 
-    expect(error?.message).toBe(`${TIKTOK_FAILED_TEXT} TikTok's reason: file_format_check_failed.`);
+    expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+    expect(updateCalls()).toHaveLength(0);
   });
 
   it("does not echo an arbitrary (non-enum-looking) fail_reason into the user-facing message", async () => {
