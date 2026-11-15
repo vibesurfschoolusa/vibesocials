@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
-import { useFreshSignedInAccount } from "@/components/signed-in-swap";
+import { beforeSignIn, useFreshSignedInAccount } from "@/components/signed-in-swap";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 import { FormHeading, SignedInNotice, showSignedInNotice } from "../login/signed-in-notice";
@@ -86,7 +86,8 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
     // created" — it should just fall through to the friendly login
     // handoff below, same as the "signed in but not ok" case.
     try {
-      const result = await signIn("credentials", { redirect: false, email, password });
+      // EE1 review: waits for a stale sign-out this page already sent, so it can't clear the new cookie.
+      const result = await beforeSignIn(() => signIn("credentials", { redirect: false, email, password }));
       if (result?.ok) {
         router.push(callbackUrl);
         return;

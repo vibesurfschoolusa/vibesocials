@@ -1,5 +1,7 @@
 import type { signIn as nextAuthSignIn } from "next-auth/react";
 
+import { beforeSignIn } from "@/components/signed-in-swap";
+
 export const LOGIN_FAILED_MESSAGE = "Invalid email or password.";
 export const LOGIN_UNREACHABLE_MESSAGE =
   "We couldn't reach Vibe Socials. Check your internet connection and try again.";
@@ -20,7 +22,8 @@ export async function signInWithPassword(
   password: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const result = (await signIn("credentials", { redirect: false, email, password })) as
+    // EE1 review: waits for a stale sign-out this page already sent, so it can't clear the new cookie.
+    const result = (await beforeSignIn(() => signIn("credentials", { redirect: false, email, password }))) as
       | { ok?: boolean }
       | undefined
       | null;

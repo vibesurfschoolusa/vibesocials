@@ -10,6 +10,8 @@ vi.mock("next-auth/react", async () => {
 import {
   accountKey,
   endStaleSession,
+  beforeSignIn,
+  currentSignInGeneration,
   readServerSession,
   showAndEndStale,
   shownAccount,
@@ -235,5 +237,49 @@ describe("the signed-out page and a cached session that names someone", () => {
         ),
       ),
     ).toBe("");
+  });
+});
+
+// EE1 review: a stale sign-out must never undo a sign-in made on this page:
+// a slow sign-out already sent is waited for first, none is sent while a
+// sign-in runs, and an answer to a read started before a sign-in is ignored.
+describe("a stale sign-out and a sign-in on the same page", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("a sign-in waits for a stale sign-out already sent", async () => {
+    const order: string[] = [];
+    let finishSignOut!: () => void;
+    signOutMock.mockReset().mockImplementation(
+      () => new Promise<void>((resolve) => (finishSignOut = () => (order.push("signed out"), resolve()))),
+    );
+    endStaleSession(currentSignInGeneration());
+    const signingIn = beforeSignIn(async () => {
+      order.push("signed in");
+      return "ok";
+    });
+    await settle();
+    expect(order).toEqual([]);
+    finishSignOut();
+    await expect(signingIn).resolves.toBe("ok");
+    expect(order).toEqual(["signed out", "signed in"]);
+  });
+
+  it("no stale sign-out is sent while a sign-in runs", async () => {
+    signOutMock.mockReset().mockResolvedValue({ url: "/" });
+    let finishSignIn!: () => void;
+    const signingIn = beforeSignIn(() => new Promise<void>((resolve) => (finishSignIn = resolve)));
+    await settle();
+    endStaleSession(currentSignInGeneration());
+    expect(signOutMock).not.toHaveBeenCalled();
+    finishSignIn();
+    await signingIn;
+  });
+
+  it("an answer to a read started before a sign-in signs nobody out", async () => {
+    signOutMock.mockReset().mockResolvedValue({ url: "/" });
+    const before = currentSignInGeneration();
+    await beforeSignIn(async () => undefined);
+    endStaleSession(before);
+    expect(signOutMock).not.toHaveBeenCalled();
   });
 });
