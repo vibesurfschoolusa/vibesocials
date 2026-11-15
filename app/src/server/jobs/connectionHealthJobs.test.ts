@@ -799,6 +799,34 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
     expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 103, refreshed: 100, leftForTomorrow: 3 });
   });
 
+  // Coordinator, round 11: the sweep's candidates carry failedAt, so within
+  // their 10 places failed ones go oldest failure first and take turns.
+  it("15 failing over two days: the 10 oldest failures on day one, the other 5 first on day two", async () => {
+    // bad-14 failed longest ago, bad-00 most recently; all expired long ago.
+    for (let i = 0; i < 15; i++) {
+      add(`bad-${String(i).padStart(2, "0")}`, {
+        expiresAt: new Date(NOW.getTime() - (30 - i) * 86_400_000),
+        refreshFailedAt: new Date(NOW.getTime() - (i + 1) * 3_600_000),
+      });
+    }
+    for (let i = 0; i < 200; i++) add(`ok-${String(i).padStart(3, "0")}`);
+    const bad = () => refreshedIds().filter((id) => id.startsWith("bad-"));
+
+    await runCron();
+    const dayOne = bad();
+    expect(dayOne).toEqual(["bad-14", "bad-13", "bad-12", "bad-11", "bad-10", "bad-09", "bad-08", "bad-07", "bad-06", "bad-05"]);
+
+    // They fail again: a new failure time, expiry unchanged.
+    for (const id of dayOne) {
+      const row = rows.get(id)!;
+      row.expiresAt = new Date(NOW.getTime() - 30 * 86_400_000);
+      row.refreshFailedAt = new Date(NOW.getTime() + 60_000);
+    }
+    refreshConnectionTokenMock.mockClear();
+    await runCron();
+    expect(bad().slice(0, 5)).toEqual(["bad-04", "bad-03", "bad-02", "bad-01", "bad-00"]);
+  });
+
   it("a refresh that fails without flagging records refreshFailedAt (not the flag), so it goes last next time", async () => {
     add("conn-a");
     refresher.mockImplementation(async () => {

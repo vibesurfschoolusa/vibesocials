@@ -2385,6 +2385,8 @@ export const connectionHealthSweep = inngest.createFunction(
               id: row.id,
               expiresAt: new Date(row.expiresAt).toISOString(),
               failed: row.refreshFailedAt !== null,
+              // R11-publishing L2: failed ones take their places oldest failure first.
+              ...(row.refreshFailedAt ? { failedAt: new Date(row.refreshFailedAt).toISOString() } : {}),
             });
           } else {
             fanOut.push(row.id);
