@@ -2,6 +2,7 @@ import { Prisma, type PostJobResultStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { xPostUsageRow, type XPostUsage } from "@/server/usage/usageLog";
 
 /**
  * 2026-11-01 scale audit (jobs H6): the per-result publish claim.
@@ -118,25 +119,45 @@ export async function finalizeClaimedResult(
   resultId: string,
   runId: string,
   data: FinalResultData,
+  // R5-security M1 (review): an X success's usage, written in the same
+  // transaction (usageLog.ts xPostUsageRow). Ignored for a failure.
+  xUsage?: XPostUsage,
 ): Promise<boolean> {
   const where =
     data.status === "success"
       ? { id: resultId, claimRunId: runId, status: { in: ["pending", "failed"] satisfies PostJobResultStatus[] } }
       : { id: resultId, claimRunId: runId, status: "pending" as const };
+  const usageRow = data.status === "success" && xUsage ? xPostUsageRow(resultId, xUsage, new Date()) : null;
+  const update = {
+    where,
+    data: {
+      ...data,
+      uploadState: Prisma.DbNull,
+      postJob: { update: { updatedAt: new Date() } },
+    },
+  };
 
   try {
-    await prisma.postJobResult.update({
-      where,
-      data: {
-        ...data,
-        uploadState: Prisma.DbNull,
-        postJob: { update: { updatedAt: new Date() } },
-      },
-    });
+    if (usageRow) {
+      await prisma.$transaction(async (tx) => {
+        await tx.postJobResult.update(update);
+        await tx.usageEvent.createMany({ data: [usageRow], skipDuplicates: true });
+      });
+    } else {
+      await prisma.postJobResult.update(update);
+    }
     return true;
   } catch (error) {
     if (isRecordNotFound(error)) {
       if (data.status === "success") {
+        // The post is live, so it still counts for its X account.
+        if (usageRow) {
+          try {
+            await prisma.usageEvent.createMany({ data: [usageRow], skipDuplicates: true });
+          } catch (usageError) {
+            logger.error("[Inngest] Couldn't record a live X post's usage", { resultId, error: usageError });
+          }
+        }
         await logLostSuccess(resultId, runId, data.externalPostId);
       } else {
         logger.warn("[Inngest] Result not written: this run no longer holds its claim", {

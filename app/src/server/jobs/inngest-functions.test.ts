@@ -36,6 +36,8 @@ const db = vi.hoisted(() => ({
   /** F1 H2: the finalize's media last-use stamp (no job row by default: nothing stamped). */
   stampJobFindUnique: vi.fn(),
   mediaItemUpdateMany: vi.fn(),
+  /** R5-security M1: an X success's usage row, written with the result. */
+  usageCreateMany: vi.fn(),
 }));
 const {
   getPlatformClientMock,
@@ -90,12 +92,14 @@ vi.mock("@/lib/db", () => ({
       update: db.resultUpdate,
       updateMany: db.resultUpdateMany,
     },
+    usageEvent: { createMany: db.usageCreateMany },
     // The finalize steps recompute the job's status in a row-locked transaction
     // (failPendingResults.ts); its client reads and writes through the same mocks.
     $transaction: (callback: (tx: unknown) => unknown) =>
       callback({
         $executeRaw: db.executeRaw,
-        postJobResult: { findMany: db.resultFindMany },
+        postJobResult: { findMany: db.resultFindMany, update: db.resultUpdate },
+        usageEvent: { createMany: db.usageCreateMany },
         postJob: { update: db.postJobUpdate, findUnique: db.stampJobFindUnique },
         mediaItem: { updateMany: db.mediaItemUpdateMany },
       }),
@@ -4427,6 +4431,33 @@ describe("usage limits - the workspace's X and YouTube limits in the platform st
       { platform: "x", status: "success" },
       { platform: "youtube", status: "success" },
     ]);
+  });
+
+  // R5-security M1 (review): the X post counts for its X account from the
+  // moment it publishes, so a later disconnect or move cannot lose it.
+  it("an X success writes its usage row with the X account, in the result's transaction", async () => {
+    db.connectionFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+      Promise.resolve({ ...connectionRow(where.id.replace("conn-", "") as Platform), accountIdentifier: "x-account-7" }),
+    );
+
+    await publishRun(["x", "instagram"]);
+
+    expect(db.usageCreateMany).toHaveBeenCalledTimes(1);
+    expect(db.usageCreateMany).toHaveBeenCalledWith({
+      data: [
+        {
+          kind: "x_post",
+          userId: "user-1",
+          workspaceId: WORKSPACE.id,
+          platform: "x",
+          accountId: "x-account-7",
+          sourceId: "result-x",
+          at: expect.any(Date),
+        },
+      ],
+      skipDuplicates: true,
+    });
+    expect(writesFor("result-x")).toEqual([expect.objectContaining({ status: "success", externalPostId: "ext-x" })]);
   });
 
   it("at the X limit the X result fails with X_MONTHLY_LIMIT, the X client is never called, and another platform still publishes", async () => {

@@ -132,6 +132,7 @@ import type {
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
+import type { XPostUsage } from "@/server/usage/usageLog";
 import { checkXMonthlyLimit, checkYoutubeDailyLimit } from "@/server/usage/workspaceUsage";
 import { X_UPLOAD_STATE_KIND } from "@/server/platforms/xClient";
 import { backfillGbpLocationTitles } from "@/server/connections/gbpLocationTitle";
@@ -564,6 +565,10 @@ async function publishToPlatform({
   let publishResult: PublishResult;
   // Set when the refusal below is our own YouTube counter's, not Google's.
   let refusedByOurBudget = false;
+  // R5-security M1 (review): who and which X account an X post publishes from,
+  // recorded with its success so it keeps counting whatever happens to the
+  // connection or the workspace afterwards.
+  let xUsage: XPostUsage | undefined;
   try {
     // Reload inside the step so tokens stay in-process only (db.ts opens seals).
     const connection = await prisma.socialConnection.findUnique({
@@ -605,6 +610,9 @@ async function publishToPlatform({
       connection.platform === "x" &&
       mediaItem?.mimeType?.startsWith("video/") === true &&
       (await uploadState.load(X_UPLOAD_STATE_KIND)) !== null;
+    if (connection.platform === "x") {
+      xUsage = { userId, workspaceId: connection.workspaceId, accountId: connection.accountIdentifier || null };
+    }
     if (connection.platform === "x" && !xUploadBegun) {
       const refusal = await checkXMonthlyLimit(connection.workspaceId);
       if (refusal) {
@@ -798,7 +806,7 @@ async function publishToPlatform({
     ...(publishResult.externalPostUrl ? { externalPostUrl: publishResult.externalPostUrl } : {}),
     // V1: only a client that has something to say (a refused cover) writes one.
     ...(publishResult.note ? { note: publishResult.note } : {}),
-  });
+  }, xUsage);
   return { platform: connectionRef.platform, status: "success" };
 }
 

@@ -263,61 +263,19 @@ describe("the service's daily post cap", () => {
 });
 
 describe("X posts per X account per month", () => {
-  it("copies the workspace's X posts of the month into the log, then counts the account's and the workspace's", async () => {
-    db.resultFindMany.mockResolvedValue([
-      {
-        id: "result-1",
-        updatedAt: new Date("2026-11-03T10:00:00Z"),
-        postJob: { workspaceId: "ws-1", userId: "user-1" },
-        socialConnection: { accountIdentifier: "x-account-7" },
-      },
-      {
-        id: "result-2",
-        updatedAt: new Date("2026-11-04T10:00:00Z"),
-        postJob: { workspaceId: "ws-1", userId: "user-1" },
-        socialConnection: null,
-      },
-    ]);
+  // The rows are written by the publish step with each X success
+  // (resultClaim.usage.test.ts); the check only reads.
+  it("counts the account's logged posts from every workspace and this workspace's, each once, and writes nothing", async () => {
     db.queryRaw.mockResolvedValue([{ count: 31 }]);
 
-    await expect(xPostsThisMonth("ws-1", NOW, { copyToLog: true })).resolves.toBe(31);
+    await expect(xPostsThisMonth("ws-1", NOW)).resolves.toBe(31);
 
     expect(db.connectionFindUnique).toHaveBeenCalledWith({
       where: { workspaceId_platform: { workspaceId: "ws-1", platform: "x" } },
       select: { accountIdentifier: true },
     });
-    expect(db.resultFindMany).toHaveBeenCalledWith({
-      where: { postJob: { workspaceId: { in: ["ws-1"] } }, platform: "x", status: "success", updatedAt: { gte: MONTH_START } },
-      select: {
-        id: true,
-        updatedAt: true,
-        postJob: { select: { workspaceId: true, userId: true } },
-        socialConnection: { select: { accountIdentifier: true } },
-      },
-    });
-    expect(db.eventCreateMany).toHaveBeenCalledWith({
-      data: [
-        {
-          kind: "x_post",
-          userId: "user-1",
-          workspaceId: "ws-1",
-          platform: "x",
-          accountId: "x-account-7",
-          sourceId: "result-1",
-          at: new Date("2026-11-03T10:00:00Z"),
-        },
-        {
-          kind: "x_post",
-          userId: "user-1",
-          workspaceId: "ws-1",
-          platform: "x",
-          accountId: null,
-          sourceId: "result-2",
-          at: new Date("2026-11-04T10:00:00Z"),
-        },
-      ],
-      skipDuplicates: true,
-    });
+    expect(db.resultFindMany).not.toHaveBeenCalled();
+    expect(db.eventCreateMany).not.toHaveBeenCalled();
     // One count of distinct posts: the log (account or workspace) and the live results, by source id.
     const [strings, ...values] = db.queryRaw.mock.calls[0];
     const sql = (strings as string[]).join("?");
@@ -328,16 +286,23 @@ describe("X posts per X account per month", () => {
     expect(values).toEqual([MONTH_START, "ws-1", "x-account-7", MONTH_START, "ws-1", "x-account-7"]);
   });
 
-  it("only counts, writing nothing, when asked for Settings", async () => {
-    db.queryRaw.mockResolvedValue([{ count: BigInt(4) }]);
-    await expect(xPostsThisMonth("ws-1", NOW, { copyToLog: false })).resolves.toBe(4);
-    expect(db.resultFindMany).not.toHaveBeenCalled();
-    expect(db.eventCreateMany).not.toHaveBeenCalled();
+  // Review case: publish in W1, disconnect, connect the same X account in W2.
+  // W1's posts were logged with the account at publish, so W2's count, which
+  // asks the log by account, includes them; the live connection is not needed.
+  it("in a second workspace with the same X account, counts the first workspace's logged posts by account", async () => {
+    db.connectionFindUnique.mockResolvedValue({ accountIdentifier: "x-account-7" });
+    db.queryRaw.mockResolvedValue([{ count: BigInt(30) }]);
+
+    await expect(xPostsThisMonth("ws-2", NOW)).resolves.toBe(30);
+
+    const [strings, ...values] = db.queryRaw.mock.calls[0];
+    expect((strings as string[]).join("?")).toContain('("workspaceId" = ? OR "accountId" = ?)');
+    expect(values.slice(0, 3)).toEqual([MONTH_START, "ws-2", "x-account-7"]);
   });
 
   it("with no X connection, counts the workspace's own posts only", async () => {
     db.connectionFindUnique.mockResolvedValue(null);
-    await xPostsThisMonth("ws-1", NOW, { copyToLog: false });
+    await xPostsThisMonth("ws-1", NOW);
     const [, ...values] = db.queryRaw.mock.calls[0];
     expect(values).toEqual([MONTH_START, "ws-1", null, MONTH_START, "ws-1", null]);
   });

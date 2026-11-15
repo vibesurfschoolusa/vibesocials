@@ -26,11 +26,10 @@ import type { LimitRefusal } from "./workspaceUsage";
 /**
  * R5-security M1 (2026-11-14): the limits that must not multiply with
  * workspaces or start again when one is deleted. A workspace's posts and
- * results cascade with it, so what still counts is copied into UsageEvent
- * (no foreign keys) before it can go: inside the deleting transaction, and,
- * for X posts, at each X publish check, which also keeps an X account's posts
- * after it is disconnected (its results then lose their connection). Counts
- * read the live rows and the log together. The numbers and sentences are in
+ * results cascade with it, so what still counts lives in UsageEvent (no
+ * foreign keys): each X post is written with its success, with the X account
+ * it published from (resultClaim.ts), and today's posts are copied inside the
+ * deleting transaction. Counts read the live rows and the log together. The numbers and sentences are in
  * src/lib/usageLimits.ts.
  */
 
@@ -61,6 +60,27 @@ export function postsOnUtcDayWhere(
       { scheduledFor: { gte: start, lt: end } },
       { scheduledFor: null, createdAt: { gte: start, lt: end } },
     ],
+  };
+}
+
+/** Who published an X post from where, as the publish step writes it with the result. */
+export type XPostUsage = { userId: string; workspaceId: string; accountId: string | null };
+
+/**
+ * The usage row of an X post that published (R5-security M1, review): written
+ * by the publish step in the same transaction as the success, with the X
+ * account it published from, so nothing that happens to the connection or the
+ * workspace afterwards can lose it. `sourceId` is the result: once per result.
+ */
+export function xPostUsageRow(resultId: string, usage: XPostUsage, at: Date) {
+  return {
+    kind: USAGE_KIND.xPost,
+    userId: usage.userId,
+    workspaceId: usage.workspaceId,
+    platform: "x" as const,
+    accountId: usage.accountId,
+    sourceId: resultId,
+    at,
   };
 }
 
@@ -116,7 +136,9 @@ type XCopyClient = {
 /**
  * Copies these workspaces' X posts that published this UTC month into the
  * log, each once (by result id), with the X account that published it when its
- * connection is still there.
+ * connection is still there. The publish step writes each new X post itself;
+ * this keeps, at a deletion, any written before it did (skipDuplicates leaves
+ * the publish step's rows as they are).
  */
 async function copyXPosts(db: XCopyClient, workspaceIds: string[], now: Date): Promise<void> {
   const results = await db.postJobResult.findMany({
@@ -150,22 +172,17 @@ async function copyXPosts(db: XCopyClient, workspaceIds: string[], now: Date): P
 
 /**
  * X posts this UTC month for the workspace's X account: every post that X
- * account published from any workspace (logged, or live on its connection),
- * and every X post of this workspace, each counted once. `copyToLog` (the
- * publish check) first copies this workspace's X posts into the log, so they
- * still count after a disconnect or a deletion; Settings only reads.
+ * account published from any workspace (logged with the account at publish,
+ * or still live on its connection), and every X post of this workspace, each
+ * counted once. Read-only: the publish step writes the rows (resultClaim.ts),
+ * so a disconnect, a deletion or a reconnect elsewhere loses none.
  */
-export async function xPostsThisMonth(
-  workspaceId: string,
-  now: Date,
-  opts: { copyToLog: boolean },
-): Promise<number> {
+export async function xPostsThisMonth(workspaceId: string, now: Date): Promise<number> {
   const connection = await prisma.socialConnection.findUnique({
     where: { workspaceId_platform: { workspaceId, platform: "x" } },
     select: { accountIdentifier: true },
   });
   const accountId = connection?.accountIdentifier || null;
-  if (opts.copyToLog) await copyXPosts(prisma, [workspaceId], now);
 
   const start = utcMonthRange(now).start;
   const rows = await prisma.$queryRaw<{ count: bigint | number }[]>`

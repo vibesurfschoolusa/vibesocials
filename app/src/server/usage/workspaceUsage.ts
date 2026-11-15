@@ -286,7 +286,7 @@ export async function checkXMonthlyLimit(
 ): Promise<ResultLimitRefusal | null> {
   try {
     const { name, limits } = await loadWorkspace(workspaceId);
-    const used = await xPostsThisMonth(workspaceId, now, { copyToLog: true });
+    const used = await xPostsThisMonth(workspaceId, now);
     if (used < limits.xPostsPerMonth) return null;
 
     const { end } = utcMonthRange(now);
@@ -376,7 +376,7 @@ export async function getWorkspaceUsage(workspaceId: string, now: Date): Promise
   const [limits, postsToday, xPosts, youtubeUploads, storage] = await Promise.all([
     getWorkspaceLimits(workspaceId),
     countPostsOnUtcDay(workspaceId, now),
-    xPostsThisMonth(workspaceId, now, { copyToLog: false }),
+    xPostsThisMonth(workspaceId, now),
     countYoutubeUploadsToday(workspaceId, now),
     storageBytesUsed(workspaceId),
   ]);

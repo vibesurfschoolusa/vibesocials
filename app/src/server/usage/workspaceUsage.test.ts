@@ -410,7 +410,7 @@ describe("checkXMonthlyLimit", () => {
     xPostsMock.mockResolvedValue(29);
 
     await expect(checkXMonthlyLimit("ws-1", NOW)).resolves.toBeNull();
-    expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW, { copyToLog: true });
+    expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW);
   });
 
   it("refuses at the workspace's limit with X_MONTHLY_LIMIT and the month sentence", async () => {
@@ -514,7 +514,7 @@ describe("getWorkspaceUsage", () => {
       storage: { used: 5 * MB, limit: 5120 * MB, resetsAt: null },
     });
     // Settings reads the X count the publish check refuses by, without writing.
-    expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW, { copyToLog: false });
+    expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW);
   });
 });
 
