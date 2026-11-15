@@ -5,6 +5,7 @@ const db = vi.hoisted(() => ({
   eventCreateMany: vi.fn(),
   eventCount: vi.fn(),
   eventFindMany: vi.fn(),
+  eventDeleteMany: vi.fn(),
   postJobCount: vi.fn(),
   postJobFindMany: vi.fn(),
   resultFindMany: vi.fn(),
@@ -16,7 +17,13 @@ const db = vi.hoisted(() => ({
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    usageEvent: { create: db.eventCreate, createMany: db.eventCreateMany, count: db.eventCount, findMany: db.eventFindMany },
+    usageEvent: {
+      create: db.eventCreate,
+      createMany: db.eventCreateMany,
+      count: db.eventCount,
+      findMany: db.eventFindMany,
+      deleteMany: db.eventDeleteMany,
+    },
     postJob: { count: db.postJobCount, findMany: db.postJobFindMany },
     postJobResult: { findMany: db.resultFindMany },
     workspaceMember: { findMany: db.memberFindMany },
@@ -31,6 +38,8 @@ import { prisma } from "@/lib/db";
 import {
   copyUsageBeforeDeletion,
   crossWorkspacePostRefusal,
+  pruneUsageEvents,
+  USAGE_EVENT_RETENTION_DAYS,
   recordWorkspaceCreated,
   workspaceCreationRefusal,
   xPostsThisMonth,
@@ -508,5 +517,20 @@ describe("workspaces created per person", () => {
   it("fails open when the log cannot be read", async () => {
     db.eventFindMany.mockRejectedValue(new Error("db down"));
     await expect(workspaceCreationRefusal("user-1", NOW)).resolves.toBeNull();
+  });
+});
+
+// Review: the log keeps only what a limit can still count.
+describe("pruneUsageEvents", () => {
+  it("deletes rows older than the longest window any limit counts, with room (62 days)", async () => {
+    db.eventDeleteMany.mockResolvedValue({ count: 5 });
+    expect(USAGE_EVENT_RETENTION_DAYS).toBe(62);
+    await expect(pruneUsageEvents(NOW)).resolves.toBe(5);
+    expect(db.eventDeleteMany).toHaveBeenCalledWith({ where: { at: { lt: new Date(NOW.getTime() - 62 * DAY) } } });
+  });
+
+  it("never throws: a failure is logged and reported as none pruned", async () => {
+    db.eventDeleteMany.mockRejectedValue(new Error("db down"));
+    await expect(pruneUsageEvents(NOW)).resolves.toBe(0);
   });
 });

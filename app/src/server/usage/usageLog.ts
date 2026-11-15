@@ -374,3 +374,27 @@ export async function crossWorkspacePostRefusal(input: {
   }
   return null;
 }
+
+/**
+ * How long a usage row is kept (review): the longest window any limit counts
+ * is a month (X posts; the creation limit is 30 days), so 62 days keeps two
+ * months with room, and nothing older is ever read.
+ */
+export const USAGE_EVENT_RETENTION_DAYS = 62;
+
+/**
+ * Deletes usage rows no limit can still count. Run inside the daily orphan
+ * blob sweep's one step (no new function or step). Never throws: a failure is
+ * logged and tried again the next day. Answers how many rows went.
+ */
+export async function pruneUsageEvents(now: Date): Promise<number> {
+  try {
+    const { count } = await prisma.usageEvent.deleteMany({
+      where: { at: { lt: new Date(now.getTime() - USAGE_EVENT_RETENTION_DAYS * DAY_MS) } },
+    });
+    return count;
+  } catch (error) {
+    logger.error("[usage] Couldn't prune old usage rows (tried again tomorrow)", { error });
+    return 0;
+  }
+}

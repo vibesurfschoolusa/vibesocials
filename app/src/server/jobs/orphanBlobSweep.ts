@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
+import { pruneUsageEvents } from "@/server/usage/usageLog";
 
 /**
  * Uploads nobody registered (F5, review R1 M3). A browser gets an upload token,
@@ -253,7 +254,12 @@ export const orphanBlobSweep = inngest.createFunction(
   },
   { cron: "25 6 * * *" },
   async ({ step }) => {
-    const summary = await step.run("sweep", () => sweepOrphanBlobs());
+    // Review of R5-security M1: the usage log's old rows go in this same step,
+    // so they cost no new function and no new execution.
+    const summary = await step.run("sweep", async () => {
+      const usageEventsPruned = await pruneUsageEvents(new Date());
+      return { ...(await sweepOrphanBlobs()), usageEventsPruned };
+    });
     logger.info("[Inngest] Unregistered uploads swept", summary);
     return summary;
   },
