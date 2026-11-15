@@ -178,6 +178,16 @@ describe("planPersonalPostNote", () => {
     expect(planPersonalPostNote(NEW, today, false, NOW, ON)).toEqual({ limit: 5, reduced: "first_day" });
   });
 
+  // R8 review: with billing off every workspace counts toward its owners' number.
+  it("billing off: the note shows, even for a workspace with a plan", () => {
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, false, NOW, {})).toEqual({ limit: 15, reduced: null });
+    expect(planPersonalPostNote({ ...NEW, plan: "starter", planStatus: "active" }, CONFIRMED, false, NOW, {})).toEqual({
+      limit: 15,
+      reduced: null,
+    });
+    expect(planPersonalPostNote(TRIAL, CONFIRMED, true, NOW, {})).toBeNull();
+  });
+
   it("a paying workspace, an exempt one or an operator's: no note", () => {
     expect(planPersonalPostNote({ ...NEW, plan: "starter", planStatus: "active" }, CONFIRMED, false, NOW, ON)).toBeNull();
     expect(planPersonalPostNote({ ...NEW, billingExempt: true }, CONFIRMED, false, NOW, ON)).toBeNull();

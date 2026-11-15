@@ -17,7 +17,7 @@ function personalPostNoteText(note: PersonalPostNote): string {
   if (note.reduced === "first_day") {
     return `(up to ${note.limit} a day for you across all your workspaces on your account's first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`;
   }
-  return `(up to ${note.limit} a day per person across all your workspaces while free)`;
+  return `(each person can send up to ${note.limit} a day across all their workspaces)`;
 }
 
 /**

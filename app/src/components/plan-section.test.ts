@@ -112,10 +112,11 @@ describe("PlanSection: posts per day", () => {
   const render = (personalPostNote: { limit: number; reduced: "unconfirmed" | "first_day" | null } | null) =>
     renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE, personalPostNote }));
 
-  it("15: up to 15 a day per person across all your workspaces while free", () => {
-    expect(render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null })).toContain(
-      `20 (up to ${OWNER_DAILY_POST_LIMIT} a day per person across all your workspaces while free)`,
-    );
+  // R8 review: no "while free"; the note shows only where the limit applies.
+  it("15: each person can send up to 15 a day across all their workspaces", () => {
+    const html = render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null });
+    expect(html).toContain(`20 (each person can send up to ${OWNER_DAILY_POST_LIMIT} a day across all their workspaces)`);
+    expect(html).not.toContain("while free");
   });
 
   it("5 until the email is confirmed, with the reason", () => {

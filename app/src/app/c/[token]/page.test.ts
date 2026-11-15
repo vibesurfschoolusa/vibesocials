@@ -387,6 +387,25 @@ describe("LinkedIn on the client's page", () => {
     });
   });
 
+  it("a Facebook Page without its stored name: never the numeric id in its row", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "facebook_page", accountIdentifier: "102938475610", username: null, locationName: null, needsReconnect: false },
+    ]);
+    expect(await render()).not.toContain("102938475610");
+  });
+
+  // R8 review: the flag is LinkedIn's only (as Settings); typed on another platform it adds nothing.
+  it("a typed same_end on another platform: no kept-date banner or row, and no end-date read", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true, ended: false },
+    ]);
+    h.findConnection.mockResolvedValue({ expiresAt: new Date("2026-11-16T12:00:00Z") });
+    const html = await render({ success: "instagram_connected", same_end: "1" });
+    expect(html).not.toContain("kept the end date");
+    expect(html).not.toContain("kept this end date");
+    expect(h.findConnection).not.toHaveBeenCalled();
+  });
+
   it("without the flag: no such sentence and no end-date read", async () => {
     h.listConnections.mockResolvedValue([linkedin()]);
     const html = await render({ success: "linkedin_connected" });

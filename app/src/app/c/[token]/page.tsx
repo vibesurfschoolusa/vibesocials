@@ -94,8 +94,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   // Unconfirmed (R7 client-journey): the callback flagged a sign-in that ends
   // inside the warning window; said, with the stored date, only when the
   // connection really is in it, instead of no sentence at all.
+  // Only LinkedIn's sign-in can't be renewed, as on Settings: a typed flag on another platform adds nothing.
   const sameEnd =
-    success &&
+    succeeded === "linkedin" &&
     first(query[SAME_END_PARAM]) !== null &&
     working &&
     !working.needsReconnect &&
@@ -167,9 +168,10 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           {platforms.map((platform) => {
             const connection = byPlatform.get(platform);
             const working = connection && !connection.needsReconnect;
-            // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, never shown.
-            const name =
-              connection?.username || (platform === "linkedin" ? null : connection?.accountIdentifier) || null;
+            // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, a
+            // Facebook Page's a numeric id; neither is shown.
+            const idShown = platform !== "linkedin" && platform !== "facebook_page";
+            const name = connection?.username || (idShown ? connection?.accountIdentifier : null) || null;
             const connected = name ? `Connected: ${name}` : "Connected";
             const form = (label: string) => (
               <form action={action} method="post">

@@ -42,6 +42,8 @@ export function connectedAccountName(connection: {
   accountIdentifier: string;
 }): string {
   if (connection.platform === "linkedin") return connection.username || "the connected LinkedIn page";
+  // R8 review: a Facebook Page's identifier is its numeric id.
+  if (connection.platform === "facebook_page") return connection.username || "the connected Facebook Page";
   return connection.username || connection.accountIdentifier || `the connected ${platformLabel(connection.platform)} account`;
 }
 

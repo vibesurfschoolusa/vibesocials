@@ -103,6 +103,10 @@ describe("different account on reconnect", () => {
     expect(connectedAccountName({ platform: "linkedin", username: null, accountIdentifier: "aB3xYz9q" })).toBe(
       "the connected LinkedIn page",
     );
+    // R8 review: a Facebook Page's identifier is its numeric id, never shown either.
+    expect(connectedAccountName({ platform: "facebook_page", username: null, accountIdentifier: "102938475610" })).toBe(
+      "the connected Facebook Page",
+    );
     expect(connectedAccountName({ platform: "x", username: null, accountIdentifier: "12345" })).toBe("12345");
     expect(connectedAccountName({ platform: "google_business_profile", username: null, accountIdentifier: "" })).toBe(
       "the connected Google Business Profile account",
