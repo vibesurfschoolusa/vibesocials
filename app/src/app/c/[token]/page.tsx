@@ -65,7 +65,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
 
   if (!link) {
     return (
-      <ClientPageShell workspace={null}>
+      <ClientPageShell workspace={null} title="This link is not active">
         <p className="text-base">{CONNECT_LINK_INACTIVE_MESSAGE}</p>
       </ClientPageShell>
     );

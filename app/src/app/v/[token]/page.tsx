@@ -44,7 +44,7 @@ export default async function ReviewLinkPage({ params }: ReviewLinkPageProps) {
 
   if (!link) {
     return (
-      <ClientPageShell workspace={null} width="2xl">
+      <ClientPageShell workspace={null} title="This link is not active" width="2xl">
         <p className="text-base">{REVIEW_LINK_INACTIVE_MESSAGE}</p>
         <LegalLinks />
       </ClientPageShell>

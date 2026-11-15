@@ -46,6 +46,8 @@ describe("the review link page", () => {
 
     expect(unknown).toBe(revoked);
     expect(unknown).toContain(REVIEW_LINK_INACTIVE_MESSAGE);
+    // R11-pages L5: the h1 says what happened.
+    expect(unknown).toMatch(/<h1[^>]*>This link is not active<\/h1>/);
     expect(unknown).not.toContain("<section");
     expect(unknown).not.toContain("Reports");
     expect(viewPropsMock).not.toHaveBeenCalled();
