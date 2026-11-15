@@ -8,6 +8,7 @@ type Row = {
   currentPeriodEnd: Date | null;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+  billingUserId?: string | null;
 };
 
 const m = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const m = vi.hoisted(() => ({
   listCustomerSubscriptions: vi.fn(),
   listCheckoutSessions: vi.fn(),
   expireCheckoutSession: vi.fn(),
+  updateCustomerEmail: vi.fn(),
   order: [] as string[],
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -33,6 +35,7 @@ vi.mock("./stripeApi", async (importOriginal) => ({
   listCustomerSubscriptions: m.listCustomerSubscriptions,
   listCheckoutSessions: m.listCheckoutSessions,
   expireCheckoutSession: m.expireCheckoutSession,
+  updateCustomerEmail: m.updateCustomerEmail,
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -110,6 +113,11 @@ beforeEach(() => {
     return { id, status: "expired" };
   });
   for (const fn of Object.values(m.logger)) fn.mockReset();
+  m.updateCustomerEmail.mockReset();
+  m.updateCustomerEmail.mockImplementation(async (id: string) => {
+    m.order.push("customer email");
+    return { id };
+  });
 });
 
 describe("startCheckout", () => {
@@ -124,6 +132,55 @@ describe("startCheckout", () => {
     await startCheckout({ ...input(), ownerUserId: "user-1" }, ENV);
     expect(m.payerWrites).toEqual([{ where: { id: "ws_1" }, data: { billingUserId: "user-1" } }]);
     expect(m.order).toEqual(["session", "record payer"]);
+  });
+
+  // R6-new-customer L2: the customer keeps the first payer's email, so
+  // receipts would go to the person who no longer pays.
+  describe("when the payer changes", () => {
+    beforeEach(() => {
+      m.createCheckoutSession.mockImplementation(async () => {
+        m.order.push("session");
+        return { id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" };
+      });
+    });
+
+    it("sets the existing customer's email to the new payer before the session is made", async () => {
+      m.row = trialRow({ stripeCustomerId: "cus_1", billingUserId: "user-old" });
+      await startCheckout({ ...input(), ownerEmail: "second@example.com", ownerUserId: "user-2" }, ENV);
+      expect(m.updateCustomerEmail).toHaveBeenCalledWith(
+        "cus_1",
+        "second@example.com",
+        expect.stringMatching(/^vs-customer-email-cus_1-[0-9a-f]{16}-\d+$/),
+        ENV,
+      );
+      expect(m.order).toEqual(["customer email", "session", "record payer"]);
+    });
+
+    it("also when no payer was recorded before", async () => {
+      m.row = trialRow({ stripeCustomerId: "cus_1", billingUserId: null });
+      await startCheckout({ ...input(), ownerUserId: "user-2" }, ENV);
+      expect(m.updateCustomerEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves it for the same payer, and for a customer made just now with the payer's email", async () => {
+      m.row = trialRow({ stripeCustomerId: "cus_1", billingUserId: "user-1" });
+      await startCheckout({ ...input(), ownerUserId: "user-1" }, ENV);
+      m.row = trialRow({ stripeCustomerId: null });
+      await startCheckout({ ...input(), ownerUserId: "user-2" }, ENV);
+      expect(m.updateCustomerEmail).not.toHaveBeenCalled();
+    });
+
+    it("starts no session when Stripe refuses the new email, so no receipt goes astray", async () => {
+      m.row = trialRow({ stripeCustomerId: "cus_1", billingUserId: "user-old" });
+      m.updateCustomerEmail.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
+      await expect(startCheckout({ ...input(), ownerUserId: "user-2" }, ENV)).resolves.toEqual({
+        ok: false,
+        status: 502,
+        error: CHECKOUT_MESSAGES.stripeDown,
+      });
+      expect(m.createCheckoutSession).not.toHaveBeenCalled();
+      expect(m.payerWrites).toEqual([]);
+    });
   });
 
   it("records no payer when no session is made, or when no user is named", async () => {

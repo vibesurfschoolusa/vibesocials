@@ -113,6 +113,18 @@ describe("payerRefusal", () => {
     expect(m.findMany.mock.calls[1][0].where.planEndsAt).toBeNull();
   });
 
+  // R6-security L1: an owner may not remove the member whose card pays.
+  it("refuses removing the payer, with the leaving sentence told to the person removing them", async () => {
+    m.findMany.mockResolvedValue([running("ws_1", { members: [{ role: "member" }] })]);
+    await expect(
+      payerRefusal({ userId: "user-1", workspaceIds: ["ws_1"], removedByOther: true }, ENV),
+    ).resolves.toEqual({
+      status: 409,
+      error:
+        "This member pays for Name of ws_1's plan. They cancel it with Manage your payment in Settings first (it stays active until the end of the period); you can then remove them, and another owner can start their own plan.",
+    });
+  });
+
   it("lets someone else go, and skips a workspace whose payer was never recorded", async () => {
     m.findMany.mockResolvedValue([]);
     await expect(payerRefusal({ userId: "user-1", workspaceIds: ["ws_1"] }, ENV)).resolves.toBeNull();
