@@ -4,11 +4,17 @@ import {
   DEFAULT_WORKSPACE_LIMITS,
   dailyPostLimitMessage,
   formatStorageGb,
+  NEW_ACCOUNT_DAILY_POST_LIMIT,
   OWNER_DAILY_POST_LIMIT,
+  ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
+  ownerDailySendLimitMessage,
   pacificDayRange,
   personalPostLimitApplies,
+  postRetryLimitMessage,
+  RETRIES_PER_POST_PER_DAY,
   SERVICE_DAILY_POST_LIMIT,
+  serviceDailyPostLimitAtSendMessage,
   serviceDailyPostLimitMessage,
   WORKSPACES_CREATED_LIMIT,
   WORKSPACES_CREATED_WINDOW_DAYS,
@@ -265,40 +271,78 @@ describe("limit messages agree with their number", () => {
 // R5-security M1: the limits that do not multiply with workspaces.
 describe("limits across workspaces", () => {
   it("holds the numbers, sized so the owner's own agency use fits", () => {
-    expect(SERVICE_DAILY_POST_LIMIT).toBe(80);
-    expect(OWNER_DAILY_POST_LIMIT).toBe(60);
+    expect(SERVICE_DAILY_POST_LIMIT).toBe(40);
+    expect(OWNER_DAILY_POST_LIMIT).toBe(30);
+    expect(NEW_ACCOUNT_DAILY_POST_LIMIT).toBe(5);
+    expect(RETRIES_PER_POST_PER_DAY).toBe(3);
     expect(WORKSPACES_CREATED_LIMIT).toBe(30);
     expect(WORKSPACES_CREATED_WINDOW_DAYS).toBe(30);
-    // Several client workspaces at a few posts a day each (8 x 4) fits.
-    expect(8 * 4).toBeLessThan(OWNER_DAILY_POST_LIMIT);
+    // An agency on its trial: several client workspaces at a few posts a day each (7 x 4) fits.
+    expect(7 * 4).toBeLessThan(OWNER_DAILY_POST_LIMIT);
     expect(OWNER_DAILY_POST_LIMIT).toBeLessThan(SERVICE_DAILY_POST_LIMIT);
+    expect(NEW_ACCOUNT_DAILY_POST_LIMIT).toBeLessThan(OWNER_DAILY_POST_LIMIT);
   });
 
-  it("keeps a month at the service cap inside the 50,000 Inngest executions", () => {
-    const idlePerDay = 500;
-    // About 6 per post plus 1 per platform; even every post at 6 platforms.
-    const perPost = 6 + 6;
-    expect((SERVICE_DAILY_POST_LIMIT * perPost + idlePerDay) * 31).toBeLessThan(50_000);
+  // R6-security M2 / new-customer L8: the free cap is sized next to what is
+  // spent already (CLAUDE.md: about 28,000 of the 50,000 a month, idle work
+  // and the operator's own posting) and the paying workspaces' expected posts.
+  it("keeps a month at the free cap, the operator's use and the expected paid posts inside 50,000 executions", () => {
+    const alreadyUsed = 28_000;
+    const paidPostsPerDay = 15; // e.g. five paying workspaces at 3 a day
+    const perPost = 10; // about 6 plus 1 per platform, at 4 platforms
+    const month = alreadyUsed + (SERVICE_DAILY_POST_LIMIT + paidPostsPerDay) * perPost * 31;
+    expect(month).toBe(45_050);
+    // At least 10% left for Reels, posts to more platforms and retries of paid posts.
+    expect(50_000 - month).toBeGreaterThanOrEqual(4_900);
+    // Even with every free and paid post at 6 platforms (12 each), the month stays inside.
+    expect(alreadyUsed + (SERVICE_DAILY_POST_LIMIT + paidPostsPerDay) * 12 * 31).toBeLessThan(50_000);
   });
 
-  it("the per-person posts apply with billing off, and with it on only during a trial", () => {
+  it("the per-person posts apply with billing off, and with it on to every workspace not on a running plan", () => {
     const now = new Date("2026-11-14T12:00:00Z");
     const off = {};
     const on = { BILLING_ENABLED: "true" };
     const trial = { billingExempt: false, trialEndsAt: new Date("2026-11-20T00:00:00Z") };
     const paid = { billingExempt: false, plan: "starter", planStatus: "active", currentPeriodEnd: new Date("2026-12-14T00:00:00Z") };
     expect(personalPostLimitApplies(paid, off, now)).toBe(true);
+    expect(personalPostLimitApplies({ billingExempt: true }, off, now)).toBe(true);
     expect(personalPostLimitApplies(trial, on, now)).toBe(true);
     expect(personalPostLimitApplies(paid, on, now)).toBe(false);
     expect(personalPostLimitApplies({ billingExempt: true }, on, now)).toBe(false);
+    // R6-new-customer M1: made while billing was off (no plan, no trial) and
+    // counted by the service's cap, so the per-person total counts it too.
+    expect(personalPostLimitApplies({ billingExempt: false }, on, now)).toBe(true);
+    expect(personalPostLimitApplies({ billingExempt: false, trialEndsAt: new Date("2026-11-01T00:00:00Z") }, on, now)).toBe(true);
+  });
+
+  // R6-security M2: throwaway accounts get a much smaller share.
+  it("a lower per-person number until the email is confirmed and the account is a day old", () => {
+    const now = new Date("2026-11-14T12:00:00Z");
+    const old = new Date("2026-11-01T00:00:00Z");
+    expect(ownerDailyPostLimit({ emailVerifiedAt: old, createdAt: old }, now)).toEqual({ limit: 30, reduced: false });
+    expect(ownerDailyPostLimit({ emailVerifiedAt: null, createdAt: old }, now)).toEqual({ limit: 5, reduced: true });
+    const lessThanADay = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+    expect(ownerDailyPostLimit({ emailVerifiedAt: now, createdAt: lessThanADay }, now)).toEqual({ limit: 5, reduced: true });
+    const aDay = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    expect(ownerDailyPostLimit({ emailVerifiedAt: now, createdAt: aDay }, now)).toEqual({ limit: 30, reduced: false });
   });
 
   it("the per-person daily post sentences", () => {
-    expect(ownerDailyPostLimitMessage(60, "now")).toBe(
-      "This workspace's owner has reached the limit of 60 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.",
+    expect(ownerDailyPostLimitMessage(30, "now")).toBe(
+      "This workspace's owner has reached the limit of 30 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.",
     );
-    expect(ownerDailyPostLimitMessage(60, "schedule")).toBe(
-      "That day already has 60 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.",
+    expect(ownerDailyPostLimitMessage(30, "schedule")).toBe(
+      "That day already has 30 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.",
+    );
+    // Second review, point 3: a retry counts today's sends, with its own sentence.
+    expect(ownerDailySendLimitMessage(30)).toBe(
+      "This workspace's owner has sent 30 posts today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day.",
+    );
+    expect(ownerDailySendLimitMessage(5, true)).toBe(
+      "This workspace's owner has sent 5 posts today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day. The limit is 30 once the owner has confirmed their email address and the account is a day old.",
+    );
+    expect(ownerDailyPostLimitMessage(5, "now", true)).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 30 once the owner has confirmed their email address and the account is a day old.",
     );
   });
 
@@ -308,6 +352,18 @@ describe("limits across workspaces", () => {
     );
     expect(serviceDailyPostLimitMessage("schedule")).toBe(
       "That day is full: Vibe Socials has reached its daily limit of posts for the whole service. Pick another day.",
+    );
+    expect(serviceDailyPostLimitMessage("retry")).toBe(
+      "Vibe Socials has reached its daily limit of posts for the whole service, and retries count toward it. Retry tomorrow.",
+    );
+    expect(serviceDailyPostLimitAtSendMessage()).toBe(
+      "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
+    );
+  });
+
+  it("the per-platform retry sentence names the platform", () => {
+    expect(postRetryLimitMessage(3, "Instagram")).toBe(
+      "Instagram on this post has been retried 3 times today, the most for one day. Try again tomorrow.",
     );
   });
 

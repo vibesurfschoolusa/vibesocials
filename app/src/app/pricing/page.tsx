@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 
 import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
@@ -54,9 +55,14 @@ export default async function PricingPage({
   // chosen in Settings, Plan; the sign-up form would only turn them away. A
   // failed session read keeps the signed-out page.
   const signedIn = Boolean(await getCurrentUser().catch(() => null));
-  const cardButton = signedIn
-    ? { href: "/settings#plan", label: "Choose a plan in Settings" }
-    : { href: "/register", label: "Start your free trial" };
+  // R6-pages L7: only an owner has Settings, Plan; anyone else signed in (or
+  // whose workspace could not be read) is told who chooses, with no link.
+  const owner = signedIn && (await getWorkspaceContext().catch(() => null))?.role === "owner";
+  const cardButton = !signedIn
+    ? { href: "/register", label: "Start your free trial" }
+    : owner
+      ? { href: "/settings#plan", label: "Choose a plan in Settings" }
+      : null;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -116,9 +122,13 @@ export default async function PricingPage({
                   <li key={line}>{line}</li>
                 ))}
               </ul>
-              <Link href={cardButton.href} className={buttonVariants({ variant: "primary", className: "mt-5 w-full" })}>
-                {cardButton.label}
-              </Link>
+              {cardButton ? (
+                <Link href={cardButton.href} className={buttonVariants({ variant: "primary", className: "mt-5 w-full" })}>
+                  {cardButton.label}
+                </Link>
+              ) : (
+                <p className="mt-5 text-sm text-muted-foreground">An owner of your workspace chooses its plan in Settings, Plan.</p>
+              )}
             </li>
           ))}
         </ul>

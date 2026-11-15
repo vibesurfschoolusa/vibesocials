@@ -14,6 +14,7 @@ import {
   listCheckoutSessions,
   stripeIdempotencyKey,
   StripeApiError,
+  updateCustomerEmail,
 } from "./stripeApi";
 import { reportDuplicatePriceIds } from "./priceConfig";
 import { isLiveSubscriptionStatus } from "./subscriptionSync";
@@ -99,6 +100,7 @@ export async function startCheckout(
     currentPeriodEnd: true,
     stripeCustomerId: true,
     stripeSubscriptionId: true,
+    billingUserId: true,
   } as const;
   const workspace = await prisma.workspace.findUnique({ where: { id: input.workspaceId }, select });
   if (!workspace) return { ok: false, status: 404, error: CHECKOUT_MESSAGES.noWorkspace };
@@ -116,6 +118,19 @@ export async function startCheckout(
       const subscriptions = await listCustomerSubscriptions(customer, env);
       if (subscriptions.some((s) => isLiveSubscriptionStatus(s.status))) {
         return { ok: false, status: 409, error: CHECKOUT_MESSAGES.subscribed };
+      }
+      // R6-new-customer L2: the customer still carries the email of whoever
+      // first paid. Another owner starting checkout becomes the payer, so the
+      // receipts follow them: the email is set before the session, and no
+      // session starts if Stripe refuses it. The address never goes into the key.
+      if (input.ownerUserId && workspace.billingUserId !== input.ownerUserId) {
+        const toDigest = crypto.createHash("sha256").update(input.ownerEmail).digest("hex").slice(0, 16);
+        await updateCustomerEmail(
+          customer,
+          input.ownerEmail,
+          stripeIdempotencyKey(["customer-email", customer, toDigest], 60_000, input.now.getTime()),
+          env,
+        );
       }
     } else {
       const created = await createCustomer(

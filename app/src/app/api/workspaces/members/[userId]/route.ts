@@ -5,6 +5,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { payerRefusal } from "@/server/billing/payerRefusal";
 
 import { noticeOwnersOfFormerOwner } from "../formerOwnerNotice";
 
@@ -76,6 +77,13 @@ export async function DELETE(request: Request, { params }: MemberRouteContext) {
 
   if (membership.role === "owner") {
     return NextResponse.json({ error: "Owners can't be removed." }, { status: 400 });
+  }
+
+  // R6-security L1: a co-owner could demote the payer and then remove them,
+  // and their card would keep paying for a workspace they are no longer in.
+  const payer = await payerRefusal({ userId: targetUserId, workspaceIds: [context.workspace.id], removedByOther: true });
+  if (payer) {
+    return NextResponse.json({ error: payer.error }, { status: payer.status });
   }
 
   const outcome = await prisma.$transaction(async (tx) => {

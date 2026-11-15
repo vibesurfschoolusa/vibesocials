@@ -68,61 +68,113 @@ export function aiInputTooLongResponse(overlong: { field: string; max: number })
   );
 }
 
+/** Which budget refused: the workspace's, or one of its owners' across their workspaces. */
+export type AiBudget = "workspace" | "owner";
+
+export type AiQuotaResult = { allowed: boolean; retryAfterSeconds?: number; budget?: AiBudget };
+
+type BudgetCounter = { userId: string; route: string; limit: number; budget: AiBudget };
+
 /**
- * Counts one AI call against the workspace's daily budget, then against each
- * of its owners' budgets across all their workspaces (R5-security M1). Shared
+ * The counter key checkRateLimit uses for a window of WORKSPACE_QUOTA_WINDOW_MS
+ * (`<userId>:<route>:<bucket>`, src/lib/rateLimit.ts). Read here only to look
+ * before spending; spending still goes through checkRateLimit.
+ */
+function counterKey(counter: BudgetCounter, now: number): string {
+  return `${counter.userId}:${counter.route}:${Math.floor(now / WORKSPACE_QUOTA_WINDOW_MS)}`;
+}
+
+/**
+ * R6-security L3: the first budget already spent, read before any is counted,
+ * so a refused call spends none of them. A failed read returns null and the
+ * spending below decides (it fails closed).
+ */
+async function firstSpentBudget(counters: BudgetCounter[], now: number): Promise<AiQuotaResult | null> {
+  try {
+    const keys = counters.map((counter) => counterKey(counter, now));
+    const rows = await prisma.rateLimitEntry.findMany({ where: { key: { in: keys } }, select: { key: true, count: true } });
+    const counts = new Map(rows.map((row) => [row.key, row.count]));
+    const spent = counters.find((counter, index) => (counts.get(keys[index]) ?? 0) >= counter.limit);
+    if (!spent) return null;
+    const resetAt = (Math.floor(now / WORKSPACE_QUOTA_WINDOW_MS) + 1) * WORKSPACE_QUOTA_WINDOW_MS;
+    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((resetAt - now) / 1000)), budget: spent.budget };
+  } catch (error) {
+    logger.warn("[ai] Couldn't read the AI budgets before spending; spending decides", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Counts one AI call against the workspace's daily budget and against each of
+ * its owners' budgets across all their workspaces (R5-security M1). Shared
  * across all three routes (one key per workspace and per owner, not per route)
  * so nobody can multiply a budget by spreading calls over the routes, members
- * or workspaces. The counters fail closed - a limiter outage must not open
- * unlimited LLM spend. A failed owner lookup leaves the workspace's budget in
- * charge: it reads the same database, so in an outage it has refused already.
- * The operator's workspaces have no owner budget.
+ * or workspaces. R6-security L3: every budget is read first, and a call one
+ * of them refuses spends none; then each is counted. The counters fail
+ * closed - a limiter outage must not open unlimited LLM spend. A failed owner
+ * lookup leaves the workspace's budget in charge: it reads the same database,
+ * so in an outage it refuses too. The operator's workspaces have no owner
+ * budget. A refusal names its budget, for aiWorkspaceLimitResponse.
  */
-export async function checkWorkspaceAiQuota(
-  workspaceId: string,
-): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
-  const workspace = await checkRateLimit({
-    userId: `ai:workspace:${workspaceId}`,
-    route: "ai/workspace-daily",
-    limit: AI_LIMITS.workspaceDailyCalls,
-    windowMs: WORKSPACE_QUOTA_WINDOW_MS,
-    failClosed: true,
-  });
-  if (!workspace.allowed) return workspace;
+export async function checkWorkspaceAiQuota(workspaceId: string): Promise<AiQuotaResult> {
+  const counters: BudgetCounter[] = [
+    {
+      userId: `ai:workspace:${workspaceId}`,
+      route: "ai/workspace-daily",
+      limit: AI_LIMITS.workspaceDailyCalls,
+      budget: "workspace",
+    },
+  ];
 
-  let owners: Array<{ userId: string; user: { email: string; emailVerifiedAt: Date | null } }>;
   try {
-    owners = await prisma.workspaceMember.findMany({
+    const owners = await prisma.workspaceMember.findMany({
       where: { workspaceId, role: "owner" },
       select: { userId: true, user: { select: { email: true, emailVerifiedAt: true } } },
     });
+    if (!owners.some((owner) => isOperatorUser(owner.user))) {
+      for (const owner of owners) {
+        counters.push({
+          userId: `ai:owner:${owner.userId}`,
+          route: "ai/owner-daily",
+          limit: AI_LIMITS.ownerDailyCalls,
+          budget: "owner",
+        });
+      }
+    }
   } catch (error) {
     logger.error("[ai] Couldn't read the workspace's owners for their AI budget; the workspace budget applies", {
       error,
       workspaceId,
     });
-    return workspace;
   }
-  if (owners.some((owner) => isOperatorUser(owner.user))) return workspace;
-  for (const owner of owners) {
-    const own = await checkRateLimit({
-      userId: `ai:owner:${owner.userId}`,
-      route: "ai/owner-daily",
-      limit: AI_LIMITS.ownerDailyCalls,
+
+  const spent = await firstSpentBudget(counters, Date.now());
+  if (spent) return spent;
+
+  for (const counter of counters) {
+    const result = await checkRateLimit({
+      userId: counter.userId,
+      route: counter.route,
+      limit: counter.limit,
       windowMs: WORKSPACE_QUOTA_WINDOW_MS,
       failClosed: true,
     });
-    if (!own.allowed) return own;
+    if (!result.allowed) return { ...result, budget: counter.budget };
   }
-  return workspace;
+  return { allowed: true };
 }
 
 /** `429 { code: "AI_WORKSPACE_DAILY_LIMIT", error, retryAfterSeconds }` + `Retry-After`. */
-export function aiWorkspaceLimitResponse(retryAfterSeconds?: number): NextResponse {
+export function aiWorkspaceLimitResponse(retryAfterSeconds?: number, budget: AiBudget = "workspace"): NextResponse {
   return NextResponse.json(
     {
       code: "AI_WORKSPACE_DAILY_LIMIT",
-      error: "Your workspace has reached today's AI limit. Try again tomorrow.",
+      error:
+        budget === "owner"
+          ? "This workspace's owner has reached today's AI limit across all the workspaces they own. Try again tomorrow."
+          : "Your workspace has reached today's AI limit. Try again tomorrow.",
       retryAfterSeconds,
     },
     {

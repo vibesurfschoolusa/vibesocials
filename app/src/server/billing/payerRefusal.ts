@@ -25,6 +25,14 @@ export function payerLeavingMessage(workspaceName: string, isOwner = true): stri
 }
 
 /**
+ * R6-security L1: the same rule when an owner removes the payer (a member:
+ * owners are not removed), told to the person removing them.
+ */
+export function payerRemovalMessage(workspaceName: string): string {
+  return `This member pays for ${workspaceName}'s plan. They cancel it with Manage your payment in Settings first (it stays active until the end of the period); you can then remove them, and another owner can start their own plan.`;
+}
+
+/**
  * Whether `userId` is the recorded payer of a plan that is still running, with
  * a Stripe customer to manage (reviews of L2): such a person may open the
  * customer portal even when no longer an owner, to cancel or change the card.
@@ -47,9 +55,13 @@ export async function isWorkspacePayer(workspaceId: string, userId: string): Pro
 
 export type PayerRefusal = { status: 409; error: string };
 
-/** Why `userId` may not go, or null. `workspaceIds` are the workspaces that survive their going. */
+/**
+ * Why `userId` may not go, or null. `workspaceIds` are the workspaces that
+ * survive their going. `removedByOther`: an owner is removing them, so the
+ * sentence speaks to that owner.
+ */
 export async function payerRefusal(
-  input: { userId: string; workspaceIds: string[] },
+  input: { userId: string; workspaceIds: string[]; removedByOther?: boolean },
   env: BillingEnv = process.env,
 ): Promise<PayerRefusal | null> {
   if (!billingEnabled(env) || input.workspaceIds.length === 0) return null;
@@ -71,5 +83,6 @@ export async function payerRefusal(
   });
   const running = paying.find((workspace) => isLiveSubscriptionStatus(workspace.planStatus));
   if (!running) return null;
+  if (input.removedByOther) return { status: 409, error: payerRemovalMessage(running.name) };
   return { status: 409, error: payerLeavingMessage(running.name, running.members[0]?.role === "owner") };
 }

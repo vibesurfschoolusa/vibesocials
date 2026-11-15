@@ -13,6 +13,7 @@ const {
   prepareDeferredMock,
   stampMediaMock,
   mediaUpdateManyMock,
+  withdrawSendMock,
 } = vi.hoisted(() => ({
   executeRawMock: vi.fn(),
   queryRawMock: vi.fn(),
@@ -24,7 +25,11 @@ const {
   prepareDeferredMock: vi.fn(),
   stampMediaMock: vi.fn(),
   mediaUpdateManyMock: vi.fn(),
+  withdrawSendMock: vi.fn(),
 }));
+
+// Second review of K2: a send not handed to publishing is taken back (usageLog.caps.test.ts).
+vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -90,6 +95,8 @@ beforeEach(() => {
   queryRawMock.mockResolvedValue([]);
   executeRawMock.mockReset();
   executeRawMock.mockResolvedValue(0);
+  withdrawSendMock.mockReset();
+  withdrawSendMock.mockResolvedValue(undefined);
 });
 
 // 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
@@ -715,6 +722,54 @@ describe("materializeClaimedJobs", () => {
     });
   });
 
+  // R6-security M2: the scanner is where a scheduled post meets the service's
+  // cap, as it falls due; one refused is failed with its sentence and its
+  // owner is told, like a post with nothing connected.
+  it("asks prepare to check the service's cap now, and tells the owner of a post it refused", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "full" ? { ok: false, reason: "LIMIT_REACHED", noticeFor: "full" } : okFor(id),
+    );
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["a", "full"], sleep);
+
+    expect(prepareDeferredMock).toHaveBeenCalledWith("a", { serviceCapAt: expect.any(Date) });
+    expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
+    expect(out.noConnections).toEqual([{ postJobId: "full", userId: "owner-1" }]);
+    expect(out.notFound).toEqual([]);
+  });
+
+  // Review of K2, point 3: a pair refused together gets one notice, the feed's.
+  it("a pair refused at send: both halves are refused and one notice goes out, for the feed", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "feed" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["feed", "story"], sleep);
+
+    expect(out.publishEvents).toEqual([]);
+    expect(out.noConnections).toEqual([{ postJobId: "feed", userId: "owner-1" }]);
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "feed" }, select: { userId: true } });
+  });
+
+  // Point 4: results written, the recompute threw; the inline retry finds them
+  // refused, so no publish event goes out (no publish-finished email) and the
+  // scanner's notice is sent once.
+  it("a refusal whose first attempt threw publishes nothing and is noticed once", async () => {
+    prepareDeferredMock
+      .mockRejectedValueOnce(new Error("lock timeout"))
+      .mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "full" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["full"], sleep);
+
+    expect(out).toEqual({
+      publishEvents: [],
+      noConnections: [{ postJobId: "full", userId: "owner-1" }],
+      notFound: [],
+      errorIds: [],
+    });
+  });
+
   it("puts a NOT_FOUND job in notFound and sends nothing for it", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
 
@@ -868,6 +923,8 @@ describe("splitEventsBySize", () => {
   });
 });
 
+const SEND_DAY = new Date("2026-11-14T15:00:00Z");
+
 describe("materializeAndDispatchChunk", () => {
   const sleep = vi.fn<(ms: number) => Promise<void>>();
   const send = vi.fn<(events: unknown[]) => Promise<unknown>>();
@@ -897,6 +954,62 @@ describe("materializeAndDispatchChunk", () => {
       notFound: [],
       errorIds: [],
     });
+  });
+
+  // Second review of K2, point 2: a send exists only for a post handed to publishing.
+  it("a rejected send takes back the sends this attempt wrote for its events", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => ({ ...okFor(id), sendsWritten: { postJobIds: [id], day: SEND_DAY } }));
+    send.mockRejectedValue(new Error("inngest down"));
+
+    const out = await materializeAndDispatchChunk(ids(2), { send, sleep });
+
+    expect(out.dispatchErrors).toBe(2);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-0", "job-1"], day: SEND_DAY });
+  });
+
+  it("a rejected re-send keeps a send an earlier attempt that day wrote", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
+    send.mockRejectedValue(new Error("inngest down"));
+
+    await materializeAndDispatchChunk(ids(2), { send, sleep });
+
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a pair half reserved by its feed whose materialize keeps throwing: its send is taken back", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => {
+      if (id === "story") throw new Error("pool timeout");
+      if (id === "other") throw new Error("pool timeout");
+      return { ...okFor(id), sendsWritten: { postJobIds: ["feed", "story"], day: SEND_DAY } };
+    });
+
+    const out = await materializeAndDispatchChunk(["feed", "story", "other"], { send, sleep });
+
+    expect(out.errorIds).toEqual(["story", "other"]);
+    expect(withdrawSendMock).toHaveBeenCalledTimes(1);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story"], day: SEND_DAY });
+  });
+
+  // Third review: a half its feed reserved that has nothing to send loses that send; the feed keeps its own.
+  it("a pair half reserved by its feed with nothing to send: its send is taken back, the feed's stays", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "story"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ...okFor(id), sendsWritten: { postJobIds: ["feed", "story"], day: SEND_DAY } },
+    );
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    await materializeAndDispatchChunk(["feed", "story"], { send, sleep });
+
+    expect(withdrawSendMock).toHaveBeenCalledTimes(1);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story"], day: SEND_DAY });
+  });
+
+  it("a post with nothing to send whose send this attempt did not write takes nothing back", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+    await materializeAndDispatchChunk(["lonely"], { send, sleep });
+    expect(withdrawSendMock).not.toHaveBeenCalled();
   });
 
   it("sends nothing for a chunk without an ok job", async () => {

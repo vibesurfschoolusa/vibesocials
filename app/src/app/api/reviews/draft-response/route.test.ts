@@ -12,7 +12,8 @@ const { getWorkspaceContextMock, checkRateLimitMock, memberFindManyMock } = vi.h
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 // R5-security M1: the owner budget reads the workspace's owners.
-vi.mock("@/lib/db", () => ({ prisma: { workspaceMember: { findMany: memberFindManyMock } } }));
+// aiGuards reads the AI counters before spending any (R6-security L3).
+vi.mock("@/lib/db", () => ({ prisma: { workspaceMember: { findMany: memberFindManyMock }, rateLimitEntry: { findMany: async () => [] } } }));
 
 import { POST } from "./route";
 
@@ -173,7 +174,12 @@ describe("POST /api/reviews/draft-response", () => {
       const response = await post(validBody);
 
       expect(response.status).toBe(429);
-      expect((await response.json()).code).toBe("AI_WORKSPACE_DAILY_LIMIT");
+      // R6-security L3: the sentence names the owner's budget, the one that is spent.
+      await expect(response.json()).resolves.toMatchObject({
+        code: "AI_WORKSPACE_DAILY_LIMIT",
+        error:
+          "This workspace's owner has reached today's AI limit across all the workspaces they own. Try again tomorrow.",
+      });
       expect(memberFindManyMock).toHaveBeenCalledWith(expect.objectContaining({ where: { workspaceId: "ws-1", role: "owner" } }));
       expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ userId: "ai:owner:owner-1" }));
     });

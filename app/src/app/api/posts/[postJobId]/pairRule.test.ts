@@ -1,20 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findFirstMock, transactionMock } = vi.hoisted(() => ({
-  findFirstMock: vi.fn(),
-  transactionMock: vi.fn(),
-}));
+const { findFirstMock, transactionMock, prepareMock, sendMock, failPendingMock, withdrawSendMock, resultFindFirstMock } =
+  vi.hoisted(() => ({
+    findFirstMock: vi.fn(),
+    transactionMock: vi.fn(),
+    prepareMock: vi.fn(),
+    sendMock: vi.fn(),
+    failPendingMock: vi.fn(),
+    withdrawSendMock: vi.fn(),
+    resultFindFirstMock: vi.fn(),
+  }));
 
 const TX = { tx: true };
 
 vi.mock("@/lib/db", () => ({
-  prisma: { postJob: { findFirst: findFirstMock }, $transaction: transactionMock },
+  prisma: {
+    postJob: { findFirst: findFirstMock },
+    postJobResult: { findFirst: resultFindFirstMock },
+    $transaction: transactionMock,
+  },
 }));
+// dispatchNow: the prepare and the send are mocked; the event builder is real.
+vi.mock("@/server/jobs/posting", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
+  prepareDeferredPostJobDispatch: prepareMock,
+}));
+vi.mock("@/lib/inngest", () => ({ inngest: { send: sendMock } }));
+vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/failPendingResults")>()),
+  failPendingPostJobResults: failPendingMock,
+}));
+vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
 
 import { prisma } from "@/lib/db";
 
 import {
   applyToPair,
+  dispatchNow,
   PAIR_HALF_SELECT,
   pairLimitArgs,
   readPairHalf,
@@ -222,5 +244,56 @@ describe("takenFeedHalf", () => {
     expect(takenFeedHalf(feed, { ...taken, changed: false })).toBeNull();
     expect(takenFeedHalf(feed, null)).toBeNull();
     expect(takenFeedHalf(null, null)).toBeNull();
+  });
+});
+
+// Third review of K2: publish and approve hand posts over through dispatchNow;
+// a send exists only for a post handed to publishing.
+describe("dispatchNow - the sends of a failed hand-over", () => {
+  const DAY = new Date("2026-11-14T15:00:00Z");
+  const ok = (id: string, sendsWritten?: { postJobIds: string[]; day: Date }) => ({
+    ok: true,
+    ...(sendsWritten ? { sendsWritten } : {}),
+    event: { postJobId: id, userId: "u", workspaceId: "ws", mediaItemId: null, baseCaption: "c", perPlatformOverrides: null },
+  });
+
+  beforeEach(() => {
+    prepareMock.mockReset();
+    sendMock.mockReset();
+    failPendingMock.mockReset();
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "failed" });
+    withdrawSendMock.mockReset();
+    withdrawSendMock.mockResolvedValue(undefined);
+    resultFindFirstMock.mockReset();
+    resultFindFirstMock.mockResolvedValue(null);
+  });
+
+  it("dispatch fails on the first send today: the sends prepare wrote are taken back", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id, { postJobIds: [id], day: DAY }));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+
+    expect(result.sendFailed).toBe(true);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["feed-1"], day: DAY });
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story-1"], day: DAY });
+  });
+
+  it("a send already there from earlier that day (prepare wrote none) stays", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await dispatchNow(["feed-1"], { route: "test" });
+
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a hand-over that succeeds takes nothing back", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id, { postJobIds: [id], day: DAY }));
+    sendMock.mockResolvedValue({ ids: [] });
+    await dispatchNow(["feed-1"], { route: "test" });
+    expect(withdrawSendMock).not.toHaveBeenCalled();
   });
 });

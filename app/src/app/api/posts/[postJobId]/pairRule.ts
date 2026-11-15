@@ -5,6 +5,7 @@ import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
+import { withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
 import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 
 /**
@@ -196,10 +197,13 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
   };
   const prepared: string[] = [];
   const events: ReturnType<typeof buildPublishEvent>[] = [];
+  // Third review of K2: the sends prepare wrote, taken back if the hand-over fails.
+  const sendsWritten: WrittenSends[] = [];
   for (const id of postJobIds) {
     const prep = await prepareDeferredPostJobDispatch(id);
     if (prep.ok) {
       prepared.push(id);
+      if (prep.sendsWritten) sendsWritten.push(prep.sendsWritten);
       // Stable event id + "Post now" priority (2026-11-01 scale audit, jobs H6 + H1).
       events.push(buildPublishEvent(prep.event, { immediate: true }));
     } else {
@@ -213,6 +217,8 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
   } catch (error) {
     logger.error(`[${log.route}] Couldn't dispatch the publish event`, { error, postJobId: prepared[0] });
     for (const id of prepared) await failPendingPostJobResults(id, DISPATCH_FAILURE);
+    // Not handed to publishing: a send already there from earlier that day was never reported, so it stays.
+    for (const written of sendsWritten) await withdrawSend(written);
     result.sendFailed = true;
     return result;
   }

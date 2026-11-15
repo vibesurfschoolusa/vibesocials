@@ -232,7 +232,7 @@ export async function POST(request: Request) {
     // the request is valid and a provider is configured.
     const quota = await checkWorkspaceAiQuota(context.workspace.id);
     if (!quota.allowed) {
-      return aiWorkspaceLimitResponse(quota.retryAfterSeconds);
+      return aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget);
     }
 
     if (wantsAltText) {

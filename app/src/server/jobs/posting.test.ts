@@ -16,6 +16,7 @@ const {
   postJobResultCreateMock,
   executeRawMock,
   postJobMediaCreateManyMock,
+  recordSendMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
   mediaItemCreateMock: vi.fn(),
@@ -25,7 +26,11 @@ const {
   postJobResultCreateMock: vi.fn(),
   executeRawMock: vi.fn(),
   postJobMediaCreateManyMock: vi.fn(),
+  recordSendMock: vi.fn(),
 }));
+
+// R6 review of K2: a post going out now records its send; usageLog.caps.test.ts covers the counting.
+vi.mock("@/server/usage/usageLog", () => ({ recordSend: recordSendMock, serviceCapRefusalAtSend: vi.fn(), withdrawSend: vi.fn() }));
 
 vi.mock("@/lib/db", () => {
   // The reuse helper runs its writes inside `prisma.$transaction(cb)` after a
@@ -185,6 +190,34 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
       Promise.resolve({ id: `result-${args.data.platform}` }),
     );
+  });
+
+  // R6 review of K2: the caps count the send written as a post goes out.
+  it("records the send of a post going out now, and none for a scheduled one or one with nothing to send", async () => {
+    recordSendMock.mockReset();
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube" })]);
+
+    await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
+    expect(recordSendMock).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      postJobIds: ["job-1"],
+      at: expect.any(Date),
+    });
+
+    recordSendMock.mockReset();
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media,
+      baseCaption: "hello",
+      intent: "scheduled",
+      scheduledFor: new Date("2030-01-01T10:00:00Z"),
+    });
+    expect(recordSendMock).not.toHaveBeenCalled();
+
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube", needsReconnect: true })]);
+    await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
+    expect(recordSendMock).not.toHaveBeenCalled();
   });
 
   it("targetPlatforms narrows the fan-out to only the matching connection", async () => {

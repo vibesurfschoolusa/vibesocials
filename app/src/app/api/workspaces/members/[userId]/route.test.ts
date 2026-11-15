@@ -19,8 +19,10 @@ const {
   requireOwnerContextMock,
   checkRateLimitMock,
   noticeMock,
+  payerRefusalMock,
 } = vi.hoisted(() => ({
   noticeMock: vi.fn(),
+  payerRefusalMock: vi.fn(),
   findFirstMock: vi.fn(),
   deleteManyMock: vi.fn(),
   updateManyMock: vi.fn(),
@@ -65,6 +67,8 @@ vi.mock("@/lib/rateLimit", () => ({
 }));
 // R5-security L1: the email itself is tested in ../formerOwnerNotice.test.ts.
 vi.mock("../formerOwnerNotice", () => ({ noticeOwnersOfFormerOwner: noticeMock }));
+// R6-security L1: the payer rule is tested in server/billing/payerRefusal.test.ts.
+vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: payerRefusalMock }));
 
 import { DELETE, PATCH } from "./route";
 
@@ -118,6 +122,8 @@ beforeEach(() => {
   inviteUpdateManyMock.mockResolvedValue({ count: 1 });
   noticeMock.mockReset();
   noticeMock.mockResolvedValue({ clientLinksToReplace: false });
+  payerRefusalMock.mockReset();
+  payerRefusalMock.mockResolvedValue(null);
 });
 
 describe("DELETE /api/workspaces/members/[userId]", () => {
@@ -195,6 +201,22 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     expect(deleteManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-2", role: { not: "owner" } },
     });
+  });
+
+  // R6-security L1: a co-owner could demote the payer and then remove them,
+  // leaving their card paying for a workspace they are no longer in.
+  it("refuses (409, no delete) removing the member who pays for the running plan", async () => {
+    const sentence =
+      "This member pays for Acme's plan. They cancel it with Manage your payment in Settings first (it stays active until the end of the period); you can then remove them, and another owner can start their own plan.";
+    payerRefusalMock.mockResolvedValue({ status: 409, error: sentence });
+
+    const response = await DELETE(deleteReq(), ctx("user-2"));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: sentence });
+    expect(payerRefusalMock).toHaveBeenCalledWith({ userId: "user-2", workspaceIds: ["ws-1"], removedByOther: true });
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(inviteUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the atomic delete matches nothing (membership raced away) and revokes NO invites", async () => {
