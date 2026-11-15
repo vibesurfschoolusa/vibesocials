@@ -12,6 +12,24 @@ export function reconnectRequiredMessage(platform: Platform): string {
   return `Reconnect ${platformLabel(platform)} in Settings, then retry.`;
 }
 
+/** R9-client-journey L4: the reconnect sentence a member reads; only an owner can reconnect. */
+export function memberReconnectMessage(platform: Platform): string {
+  return `The workspace owner can reconnect ${platformLabel(platform)}; then retry.`;
+}
+
+/**
+ * A stored result sentence as its reader should see it: a member gets
+ * {@link memberReconnectMessage} in place of the Settings one; anything else is
+ * shown as stored.
+ */
+export function reconnectSentenceFor(
+  message: string | null,
+  platform: Platform,
+  role: "owner" | "member",
+): string | null {
+  return role === "member" && message === reconnectRequiredMessage(platform) ? memberReconnectMessage(platform) : message;
+}
+
 /** A chosen platform with no connection at all when the post is sent (H1). */
 export function connectionGoneMessage(platform: Platform): string {
   return `${platformLabel(platform)} is no longer connected. Connect it in Settings, then retry.`;

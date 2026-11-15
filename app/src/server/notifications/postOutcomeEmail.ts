@@ -2,6 +2,7 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
+import { reconnectSentenceFor } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
@@ -82,6 +83,8 @@ export interface BuildPostOutcomeEmailParams {
   workspaceName: string;
   /** The post's caption; the email quotes its start so the owner knows which post it was. */
   caption: string;
+  /** The scanner's once-a-day notice (scannerNotice.ts): adds {@link SCAN_NOTICE_ONCE_A_DAY_LINE}. */
+  scanNotice?: boolean;
 }
 
 export interface PostOutcomeEmail {
@@ -97,6 +100,13 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+/**
+ * R9-pages L6 / client-journey L2: the scanner sends one such email per
+ * workspace, recipient and reason a day, so it says the others are in Activity.
+ */
+export const SCAN_NOTICE_ONCE_A_DAY_LINE =
+  "If more posts can't be sent today for the same reason, you won't get another email; Activity lists them.";
 
 /** Characters of the caption the email quotes (F4: instead of the internal id). */
 export const POST_OUTCOME_CAPTION_CHARS = 80;
@@ -173,6 +183,7 @@ export function buildPostOutcomeEmail({
   workspaceId,
   workspaceName,
   caption,
+  scanNotice = false,
 }: BuildPostOutcomeEmailParams): PostOutcomeEmail {
   const base = appBaseUrl || null;
   // Omitted cleanly (no dead link, no crash) when no base URL is available.
@@ -191,6 +202,7 @@ export function buildPostOutcomeEmail({
     workspaceId,
     appBaseUrl: base,
   });
+  const onceADay = scanNotice ? `<p>${escapeHtml(SCAN_NOTICE_ONCE_A_DAY_LINE)}</p>` : "";
   const subjectFor = (headline: string) =>
     `${oneLine(workspaceName)}: ${headline.charAt(0).toLowerCase()}${headline.slice(1)}`;
 
@@ -211,6 +223,7 @@ export function buildPostOutcomeEmail({
       // post or because our side gave up after 2 h. The job records neither
       // cause, so this says what is true for both, like the Activity card.
       "<p>This post was not sent. Open it in Activity and use Send again to try once more.</p>",
+      onceADay,
       link,
       optOut,
       "</div>",
@@ -227,6 +240,7 @@ export function buildPostOutcomeEmail({
     `<h1>${escapeHtml(headline)}</h1>`,
     about,
     `<ul>${rows}</ul>`,
+    onceADay,
     link,
     optOut,
     "</div>",
@@ -337,6 +351,44 @@ function pairDecision(
   return Math.abs(finishedAt(partner) - mine) < PAIR_EMAIL_WAIT_MS ? { send: "together" } : { send: "alone" };
 }
 
+/** What {@link pairPartnerStillToSend} reads of the other half. */
+const PARTNER_STATE_SELECT = {
+  workspaceId: true,
+  status: true,
+  scheduledFor: true,
+  results: { select: { status: true, deferredUntil: true } },
+} as const;
+
+/**
+ * R9-publishing L1: will the other half of this post's Feed and Story pair
+ * still be sent, so that its run sends the pair's one email? True while it is
+ * publishing, or scheduled and already due (this scan or the next sends it).
+ * Not for one waiting out a platform limit past {@link PAIR_EMAIL_WAIT_MS}: it
+ * would never share this half's email, so this half is told now.
+ */
+export async function pairPartnerStillToSend(postJobId: string, now: Date = new Date()): Promise<boolean> {
+  const job = await prisma.postJob.findUnique({
+    where: { id: postJobId },
+    select: { id: true, workspaceId: true, storyOfPostJobId: true },
+  });
+  if (!job) return false;
+  const partner = job.storyOfPostJobId
+    ? await prisma.postJob.findUnique({ where: { id: job.storyOfPostJobId }, select: PARTNER_STATE_SELECT })
+    : await prisma.postJob.findFirst({ where: { storyOfPostJobId: job.id }, select: PARTNER_STATE_SELECT });
+  if (!partner || partner.workspaceId !== job.workspaceId) return false;
+  if (PUBLISHING_STATUSES.includes(partner.status)) {
+    const waits = partner.results
+      .filter((result) => result.status === "pending" && result.deferredUntil)
+      .map((result) => new Date(result.deferredUntil!).getTime());
+    return !waits.some((until) => until > now.getTime() + PAIR_EMAIL_WAIT_MS);
+  }
+  return (
+    partner.status === "scheduled" &&
+    partner.scheduledFor !== null &&
+    new Date(partner.scheduledFor).getTime() <= now.getTime()
+  );
+}
+
 /**
  * The other half of a Feed and Story pair (F6: the Story job names its feed job
  * in storyOfPostJobId), or null. A partner in another workspace is no pair.
@@ -445,6 +497,8 @@ export interface DeliverPostOutcomeNotificationParams {
   postJobId: string;
   /** The second delivery, after the pair wait: never asks to wait again. */
   afterPairWait?: boolean;
+  /** The scanner's once-a-day notice of a post it did not send (scannerNotice.ts). */
+  scanNotice?: boolean;
 }
 
 /** Only when this half of a pair waits for the other: deliver again at `waitUntil` (ISO). */
@@ -471,6 +525,7 @@ export async function deliverPostOutcomeNotification({
   userId,
   postJobId,
   afterPairWait = false,
+  scanNotice = false,
 }: DeliverPostOutcomeNotificationParams): Promise<DeliverPostOutcomeNotificationResult | undefined> {
   try {
     const hasApiKey = Boolean(process.env.RESEND_API_KEY);
@@ -512,7 +567,7 @@ export async function deliverPostOutcomeNotification({
     // emailed in their place (the owners see the outcome in Activity).
     const membership = await prisma.workspaceMember.findUnique({
       where: { workspaceId_userId: { workspaceId: postJob.workspaceId, userId } },
-      select: { id: true },
+      select: { id: true, role: true },
     });
     if (!membership) {
       return undefined;
@@ -531,7 +586,12 @@ export async function deliverPostOutcomeNotification({
       return undefined;
     }
     const { feed, story } = claimed;
-    const rows = [...summaryRows(feed), ...(story ? summaryRows(story) : [])];
+    // R9-client-journey L4: a member can't reconnect, so is told the owner can.
+    const role = membership.role === "member" ? "member" : "owner";
+    const rows = [...summaryRows(feed), ...(story ? summaryRows(story) : [])].map((result) => ({
+      ...result,
+      errorMessage: reconnectSentenceFor(result.errorMessage, result.platform, role),
+    }));
 
     // Pause (2026-11-10): a paused workspace's due posts are all failed with this
     // code, and the owners already had the pause email, so a job whose every
@@ -553,6 +613,7 @@ export async function deliverPostOutcomeNotification({
       workspaceName: postJob.workspace.name,
       // The pair is described by its feed post (its caption; a Story has none).
       caption: feed.baseCaption ?? feed.mediaItem?.baseCaption ?? "",
+      scanNotice,
     });
 
     await sendEmail(

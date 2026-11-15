@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   connectionGoneMessage,
+  memberReconnectMessage,
   notSentAtCreation,
   notSentSentence,
   notReachedMessage,
@@ -11,6 +12,7 @@ import {
   platformRefusedMessage,
   publishErrorMessage,
   reconnectRequiredMessage,
+  reconnectSentenceFor,
 } from "./publishFailureText";
 
 describe("dispatch sentences (F1 H1)", () => {
@@ -269,5 +271,23 @@ describe("notSentSentence", () => {
     expect(notSentSentence([{ platform: "instagram", reason: "CONNECTION_GONE" }], false)).toBe(
       "Not sent to Instagram: Connect Instagram in Settings, then use Retry in Activity.",
     );
+  });
+});
+
+// R9-client-journey L4: a member can't reconnect; the owner can.
+describe("reconnectSentenceFor", () => {
+  it("gives a member the owner sentence in place of the Settings one", () => {
+    expect(memberReconnectMessage("instagram")).toBe("The workspace owner can reconnect Instagram; then retry.");
+    expect(reconnectSentenceFor("Reconnect Instagram in Settings, then retry.", "instagram", "member")).toBe(
+      "The workspace owner can reconnect Instagram; then retry.",
+    );
+  });
+
+  it("leaves an owner's sentence, and every other sentence, as stored", () => {
+    expect(reconnectSentenceFor("Reconnect Instagram in Settings, then retry.", "instagram", "owner")).toBe(
+      "Reconnect Instagram in Settings, then retry.",
+    );
+    expect(reconnectSentenceFor("X refused it.", "x", "member")).toBe("X refused it.");
+    expect(reconnectSentenceFor(null, "x", "member")).toBeNull();
   });
 });

@@ -44,6 +44,8 @@ import {
   buildPostOutcomeEmail,
   deliverPostOutcomeNotification,
   PAIR_EMAIL_WAIT_MS,
+  pairPartnerStillToSend,
+  SCAN_NOTICE_ONCE_A_DAY_LINE,
   shouldSendPostOutcomeEmail,
   type PostOutcomeResultSummary,
 } from "@/server/notifications/postOutcomeEmail";
@@ -322,7 +324,7 @@ describe("deliverPostOutcomeNotification", () => {
 
     expect(findUniqueMemberMock).toHaveBeenCalledWith({
       where: { workspaceId_userId: { workspaceId: "ws_1", userId: "member-1" } },
-      select: { id: true },
+      select: { id: true, role: true },
     });
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(updateManyPostJobMock).not.toHaveBeenCalled();
@@ -1116,6 +1118,70 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     });
   });
 
+  // R9-publishing L1: the scanner's notice for a half asks first whether the
+  // other half is still to be sent; if so it stays quiet and that half's run
+  // sends the pair's one email.
+  describe("pairPartnerStillToSend", () => {
+    const storyNothingToSend = () =>
+      storyJob({
+        status: "failed",
+        results: storyResults(NOW).map((r) => ({
+          ...r,
+          status: "failed",
+          errorCode: "RECONNECT_REQUIRED",
+          errorMessage: "Reconnect Instagram in Settings, then retry.",
+        })),
+      });
+
+    it("is true while the other half is publishing (pending or in progress)", async () => {
+      pair(feedJob({ status: "in_progress" }), storyNothingToSend());
+      await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(true);
+      pair(feedJob({ status: "pending" }), storyNothingToSend());
+      await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(true);
+    });
+
+    it("is true when the other half is scheduled and already due (the same scan sends it)", async () => {
+      pair(feedJob({ status: "scheduled", scheduledFor: NOW }), storyNothingToSend());
+      await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(true);
+    });
+
+    it("is false for a partner scheduled later, finished, held or cancelled, gone, or in another workspace, and for a lone post", async () => {
+      pair(feedJob({ status: "scheduled", scheduledFor: new Date(NOW.getTime() + HOUR) }), storyNothingToSend());
+      await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(false);
+      for (const status of ["completed", "failed", "cancelled", "pending_approval"]) {
+        pair(feedJob({ status }), storyNothingToSend());
+        await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(false);
+      }
+      pair(feedJob({ status: "in_progress", workspaceId: "ws_other" }), storyNothingToSend());
+      await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(false);
+      pair(null, storyNothingToSend());
+      await expect(pairPartnerStillToSend(STORY_ID, NOW)).resolves.toBe(false);
+      pair(feedJob(), null);
+      await expect(pairPartnerStillToSend(FEED_ID, NOW)).resolves.toBe(false);
+    });
+
+    it("looks the other way too: the feed's partner is its Story", async () => {
+      pair(feedJob({ status: "failed" }), storyPublishing());
+      await expect(pairPartnerStillToSend(FEED_ID, NOW)).resolves.toBe(true);
+    });
+
+    it("is false when the other half waits out a platform limit past the pair wait (it would never share the email)", async () => {
+      pair(feedJob({ status: "failed" }), storyPublishing(new Date(NOW.getTime() + PAIR_EMAIL_WAIT_MS + HOUR)));
+      await expect(pairPartnerStillToSend(FEED_ID, NOW)).resolves.toBe(false);
+    });
+
+    it("STORY NOTHING TO SEND WHILE THE FEED PUBLISHES: the feed's run then sends one email with both halves", async () => {
+      pair(feedJob(), storyNothingToSend());
+
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(keyOf(0)).toBe("post-outcome-pair/job-feed/first/first");
+      expect(sent(0).html).toContain("<li>Instagram: Succeeded</li>");
+      expect(sent(0).html).toContain("<li>Instagram Story: Failed — Reconnect Instagram in Settings, then retry.</li>");
+    });
+  });
+
   it("a Story-only post (no pair) labels its rows too", async () => {
     pair(null, storyJob({ storyOfPostJobId: null, results: [storyResults(NOW)[0]] }));
 
@@ -1123,5 +1189,71 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
 
     expect(sent(0).subject).toBe("Surf Co: your Story published successfully");
     expect(sent(0).html).toContain("<li>Instagram Story: Succeeded</li>");
+  });
+});
+
+// R9-pages L6 / client-journey L2: the scanner sends one such email a day.
+describe("buildPostOutcomeEmail - the scanner's once-a-day notice", () => {
+  const failed: PostOutcomeResultSummary[] = [{ platform: "x", status: "failed", errorMessage: "Limit." }];
+
+  it("says no other email comes today for the same reason, and where the others are", () => {
+    expect(SCAN_NOTICE_ONCE_A_DAY_LINE).toBe(
+      "If more posts can't be sent today for the same reason, you won't get another email; Activity lists them.",
+    );
+    const html = buildPostOutcomeEmail({ results: failed, status: "failed", scanNotice: true, ...WS }).html;
+    expect(html).toContain(
+      "<p>If more posts can&#39;t be sent today for the same reason, you won&#39;t get another email; Activity lists them.</p>",
+    );
+    const bare = buildPostOutcomeEmail({ results: [], status: "failed", scanNotice: true, ...WS }).html;
+    expect(bare).toContain("you won&#39;t get another email");
+  });
+
+  it("is left out of every other outcome email", () => {
+    expect(buildPostOutcomeEmail({ results: failed, status: "failed", ...WS }).html).not.toContain("another email");
+  });
+
+  it("deliverPostOutcomeNotification adds it only for the scanner's notice", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ status: "failed", results: [] }));
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1", afterPairWait: true, scanNotice: true });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect((sendEmailMock.mock.calls[0][0] as { html: string }).html).toContain("you won&#39;t get another email");
+    expect((sendEmailMock.mock.calls[1][0] as { html: string }).html).not.toContain("another email");
+  });
+});
+
+// R9-client-journey L4: only an owner can reconnect, so a member is told who can.
+describe("deliverPostOutcomeNotification - reconnect sentence for the recipient", () => {
+  const results = [
+    {
+      platform: "instagram",
+      status: "failed",
+      errorCode: "RECONNECT_REQUIRED",
+      errorMessage: "Reconnect Instagram in Settings, then retry.",
+    },
+    { platform: "x", status: "failed", errorCode: "X", errorMessage: "X refused it." },
+  ];
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ status: "failed", results }));
+  });
+  const html = () => (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+
+  it("a member reads that the workspace owner can reconnect it", async () => {
+    findUniqueMemberMock.mockResolvedValue({ id: "m", role: "member" });
+    await deliverPostOutcomeNotification({ userId: "member-1", postJobId: "job-1" });
+    expect(html()).toContain("<li>Instagram: Failed — The workspace owner can reconnect Instagram; then retry.</li>");
+    expect(html()).not.toContain("Reconnect Instagram in Settings");
+    expect(html()).toContain("<li>X: Failed — X refused it.</li>");
+  });
+
+  it("an owner keeps the Settings sentence", async () => {
+    findUniqueMemberMock.mockResolvedValue({ id: "m", role: "owner" });
+    await deliverPostOutcomeNotification({ userId: "owner-1", postJobId: "job-1" });
+    expect(html()).toContain("<li>Instagram: Failed — Reconnect Instagram in Settings, then retry.</li>");
   });
 });

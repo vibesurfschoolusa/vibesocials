@@ -2,7 +2,7 @@ import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
 import { utcDayKey, utcDayRange } from "@/lib/usageLimits";
 import { releaseOnceADayKey } from "@/server/notifications/onceADay";
-import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
+import { deliverPostOutcomeNotification, pairPartnerStillToSend } from "@/server/notifications/postOutcomeEmail";
 
 /**
  * R8-security L1: a scheduled post the scanner did not send (nothing it could
@@ -11,6 +11,11 @@ import { deliverPostOutcomeNotification } from "@/server/notifications/postOutco
  * result uses (same preference, same membership check), at most once per
  * workspace, recipient and reason a UTC day however many posts it has (a
  * second author hears about their own), keyed like the refused-connect email.
+ *
+ * R9-publishing L1: a Feed and Story pair gets one email. A half whose other
+ * half is still to be sent (publishing, or due in this scan) is not told about
+ * here and does not use up the day's key: the other half's run sends the
+ * pair's one email, this half's rows in it.
  */
 
 export type ScanNoticeReason = "NO_CONNECTIONS" | "LIMIT_REACHED";
@@ -31,11 +36,17 @@ export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Da
   const key = scanNoticeKey(notice, now);
   let claimed = false;
   try {
+    if (await pairPartnerStillToSend(notice.postJobId, now)) return;
     // Fail closed: a store error sends nothing rather than one email per post.
     claimed = (await consumeFixedWindow({ key, limit: 1, resetAt: utcDayRange(now).end, failClosed: true })).allowed;
     if (!claimed) return;
-    // The post failed before it was sent, so there is no other half to wait for.
-    await deliverPostOutcomeNotification({ userId: notice.userId, postJobId: notice.postJobId, afterPairWait: true });
+    // Any other half is done or not due yet (checked above), so none is waited for.
+    await deliverPostOutcomeNotification({
+      userId: notice.userId,
+      postJobId: notice.postJobId,
+      afterPairWait: true,
+      scanNotice: true,
+    });
   } catch (error) {
     logger.error("[scanner] Couldn't tell the owner about a post that was not sent (a later scan tries again)", {
       error,

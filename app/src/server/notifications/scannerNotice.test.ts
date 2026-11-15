@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { consumeMock, deliverMock, releaseMock } = vi.hoisted(() => ({
+const { consumeMock, deliverMock, partnerMock, releaseMock } = vi.hoisted(() => ({
   consumeMock: vi.fn(),
   deliverMock: vi.fn(),
+  partnerMock: vi.fn(),
   releaseMock: vi.fn(),
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeMock }));
-vi.mock("@/server/notifications/postOutcomeEmail", () => ({ deliverPostOutcomeNotification: deliverMock }));
+vi.mock("@/server/notifications/postOutcomeEmail", () => ({
+  deliverPostOutcomeNotification: deliverMock,
+  pairPartnerStillToSend: partnerMock,
+}));
 vi.mock("@/lib/db", () => ({ prisma: { rateLimitEntry: { deleteMany: releaseMock } } }));
 
 import { notifyNotSentAtScan } from "./scannerNotice";
@@ -20,6 +24,8 @@ beforeEach(() => {
   consumeMock.mockResolvedValue({ allowed: true });
   deliverMock.mockReset();
   deliverMock.mockResolvedValue(undefined);
+  partnerMock.mockReset();
+  partnerMock.mockResolvedValue(false);
   releaseMock.mockReset();
   releaseMock.mockResolvedValue({ count: 1 });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -37,7 +43,12 @@ describe("notifyNotSentAtScan", () => {
       resetAt: new Date("2026-11-15T00:00:00Z"),
       failClosed: true,
     });
-    expect(deliverMock).toHaveBeenCalledWith({ userId: "user-1", postJobId: "post-1", afterPairWait: true });
+    expect(deliverMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      postJobId: "post-1",
+      afterPairWait: true,
+      scanNotice: true,
+    });
     await notifyNotSentAtScan({ ...NOTICE, userId: "user-2", postJobId: "post-2" }, NOW);
     expect(consumeMock.mock.calls[1][0].key).toBe("scan-notice:ws-1:user-2:LIMIT_REACHED:2026-11-14");
     expect(releaseMock).not.toHaveBeenCalled();
@@ -60,5 +71,31 @@ describe("notifyNotSentAtScan", () => {
     consumeMock.mockRejectedValue(new Error("db down"));
     await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBeUndefined();
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  // R9-publishing L1: a Feed and Story pair gets one email. The half the scan
+  // could not send stays quiet while its partner is still to be sent; the
+  // partner's run then sends the pair's one email.
+  it("a half whose partner is still to be sent sends nothing and leaves the day's key unused", async () => {
+    partnerMock.mockResolvedValue(true);
+    await notifyNotSentAtScan(NOTICE, NOW);
+    expect(partnerMock).toHaveBeenCalledWith("post-1", NOW);
+    expect(consumeMock).not.toHaveBeenCalled();
+    expect(deliverMock).not.toHaveBeenCalled();
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("a lone post, or a half whose partner is done, is told about as before", async () => {
+    partnerMock.mockResolvedValue(false);
+    await notifyNotSentAtScan(NOTICE, NOW);
+    expect(consumeMock).toHaveBeenCalledTimes(1);
+    expect(deliverMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed partner check sends nothing, uses no key, and never throws", async () => {
+    partnerMock.mockRejectedValue(new Error("db down"));
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBeUndefined();
+    expect(consumeMock).not.toHaveBeenCalled();
+    expect(deliverMock).not.toHaveBeenCalled();
   });
 });
