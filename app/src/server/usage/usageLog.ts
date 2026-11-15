@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
-import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState, type BillingFields } from "@/lib/billing";
+import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, paysForPlan, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
@@ -79,9 +79,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * R5-security M1): the one rule, used both to refuse and to decide what is
  * counted. The pools protect the Inngest budget from free use, so they leave
  * out a workspace an operator owns, a grandfathered one (billingExempt, made
- * before billing), and, with billing on, one whose plan planState calls
- * active; those are bounded by their own plan's limits. Free accounts filling
- * a day cannot block them.
+ * before billing), and, with billing on, one whose plan Stripe has been paid
+ * for (paysForPlan; R9-security M1: a plan still in its card trial is
+ * counted); those are bounded by their own plan's limits. Free accounts
+ * filling a day cannot block them.
  */
 export function serviceCapApplies(
   workspace: BillingFields,
@@ -90,7 +91,7 @@ export function serviceCapApplies(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   if (operatorOwned || workspace.billingExempt) return false;
-  return !billingEnabled(env) || planState(workspace, now) !== "active";
+  return !billingEnabled(env) || !paysForPlan(workspace, now);
 }
 
 /**

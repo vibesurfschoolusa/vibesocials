@@ -346,6 +346,12 @@ describe("limits across workspaces", () => {
     expect(personalPostLimitApplies(trial, on, now)).toBe(true);
     expect(personalPostLimitApplies(paid, on, now)).toBe(false);
     expect(personalPostLimitApplies({ billingExempt: true }, on, now)).toBe(false);
+    // R9-security M1: a plan in its card trial is counted until Stripe has been paid.
+    const trialing = { ...paid, planStatus: "trialing", trialEndsAt: new Date("2026-11-20T00:00:00Z") };
+    expect(personalPostLimitApplies(trialing, on, now)).toBe(true);
+    const neverPaid = { ...paid, planStatus: "past_due", trialEndsAt: new Date("2026-11-12T00:00:00Z"), currentPeriodEnd: new Date("2026-11-12T00:00:00Z") };
+    expect(personalPostLimitApplies(neverPaid, on, now)).toBe(true);
+    expect(personalPostLimitApplies({ ...neverPaid, currentPeriodEnd: new Date("2026-11-13T00:00:00Z"), trialEndsAt: new Date("2026-10-12T00:00:00Z") }, on, now)).toBe(false);
     // R6-new-customer M1: made while billing was off (no plan, no trial) and
     // counted by the service's cap, so the per-person total counts it too.
     expect(personalPostLimitApplies({ billingExempt: false }, on, now)).toBe(true);

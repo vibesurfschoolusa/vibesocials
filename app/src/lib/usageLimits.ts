@@ -1,7 +1,7 @@
 import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/rateLimited";
 import { usableTimeZone } from "@/server/notifications/emailTime";
 
-import { billingEnabled, planState, type BillingFields } from "./billing";
+import { billingEnabled, paysForPlan, planState, type BillingFields } from "./billing";
 import { formatDisplayDate } from "./displayDate";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
 import { countWord } from "./plural";
@@ -235,8 +235,8 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
 
 /**
  * The runs the free workspaces of confirmed, day-old accounts send in one UTC
- * day, together (the main pool): those on a trial, on no plan, or whose plan
- * ended. A run is one hand-over to the background: a post going out (Post
+ * day, together (the main pool): those on a trial (a plan still in its card
+ * trial too, R9-security M1), on no plan, or whose plan ended. A run is one hand-over to the background: a post going out (Post
  * now, or the scanner when a scheduled one is due) or one retry request,
  * however many platforms it has. The operator's workspaces and paying ones are
  * never counted or refused here (R7-security L1).
@@ -332,9 +332,10 @@ export type CrossWorkspaceLimitMode = DailyPostLimitMode | "retry";
 
 /**
  * Whether a workspace's posts count toward its owners' per-person daily total.
- * R6-new-customer M1: with billing on, every workspace not on a running plan,
+ * R6-new-customer M1: with billing on, every workspace not on a paid plan,
  * so also one made while billing was off (no plan, no trial) and one whose
  * plan or trial ended: every workspace the service's cap counts.
+ * R9-security M1: and one whose plan is still in its card trial (paysForPlan).
  */
 export function personalPostLimitApplies(
   workspace: BillingFields,
@@ -342,7 +343,7 @@ export function personalPostLimitApplies(
   now: Date = new Date(),
 ): boolean {
   if (!billingEnabled(env)) return true;
-  return !workspace.billingExempt && planState(workspace, now) !== "active";
+  return !workspace.billingExempt && !paysForPlan(workspace, now);
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   BILLING_FIELDS_SELECT,
   billingEnabled,
   billingFieldsSelect,
+  paysForPlan,
   planState,
   trialDays,
   type BillingFields,
@@ -41,6 +42,49 @@ describe("billingEnabled", () => {
  * Fix round 1: a workspace can be "ended" only if it was offered a trial or
  * had a plan. A row with neither (created with billing off) is exempt.
  */
+// R9-security M1: paying, for the free limits, only once Stripe has been paid.
+describe("paysForPlan", () => {
+  const none: BillingFields = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null };
+  const trialEnd = new Date("2026-12-01T00:00:00Z");
+  const pro = { ...none, plan: "pro", trialEndsAt: trialEnd };
+
+  it("an active plan pays", () => {
+    expect(paysForPlan({ ...pro, planStatus: "active", currentPeriodEnd: new Date("2027-01-01T00:00:00Z") }, NOW)).toBe(true);
+    expect(paysForPlan({ ...none, plan: "starter", planStatus: "active" }, NOW)).toBe(true);
+  });
+
+  it("a plan still in its card trial does not pay, though planState calls it active", () => {
+    const trialing = { ...pro, planStatus: "trialing", trialEndsAt: new Date("2026-12-20T00:00:00Z") };
+    expect(planState(trialing, NOW)).toBe("active");
+    expect(paysForPlan(trialing, NOW)).toBe(false);
+  });
+
+  it("past_due after a paid period pays, within the grace", () => {
+    // Trial ended 1 Dec, first month paid, the renewal on 1 Jan failed: the period start is 1 Jan.
+    const renewal = new Date("2027-01-01T00:00:00Z");
+    const pastDue = { ...pro, planStatus: "past_due", currentPeriodEnd: renewal };
+    expect(paysForPlan(pastDue, new Date("2027-01-03T00:00:00Z"))).toBe(true);
+    expect(paysForPlan(pastDue, new Date(renewal.getTime() + 7 * DAY))).toBe(false);
+    // A plan bought with no trial: its first period was paid at checkout.
+    expect(paysForPlan({ ...pastDue, trialEndsAt: null }, new Date("2027-01-03T00:00:00Z"))).toBe(true);
+  });
+
+  it("past_due straight after the card trial (never paid) does not pay", () => {
+    const pastDue = { ...pro, planStatus: "past_due", currentPeriodEnd: trialEnd };
+    expect(planState(pastDue, new Date("2026-12-03T00:00:00Z"))).toBe("active");
+    expect(paysForPlan(pastDue, new Date("2026-12-03T00:00:00Z"))).toBe(false);
+    // Memoized as strings: the same.
+    expect(paysForPlan({ ...pastDue, trialEndsAt: trialEnd.toISOString(), currentPeriodEnd: trialEnd.toISOString() }, new Date("2026-12-03T00:00:00Z"))).toBe(false);
+  });
+
+  it("no plan, a trial with no plan, an ended plan and an exempt workspace do not pay", () => {
+    expect(paysForPlan(none, NOW)).toBe(false);
+    expect(paysForPlan({ ...none, trialEndsAt: new Date(NOW.getTime() + DAY) }, NOW)).toBe(false);
+    expect(paysForPlan({ ...pro, planStatus: "canceled" }, NOW)).toBe(false);
+    expect(paysForPlan({ ...pro, planStatus: "active", billingExempt: true }, NOW)).toBe(false);
+  });
+});
+
 describe("planState", () => {
   const none: BillingFields = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null };
 

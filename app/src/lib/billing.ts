@@ -83,6 +83,28 @@ export function planState(workspace: BillingFields, now: Date): PlanState {
   return trialEndsAt && trialEndsAt.getTime() > now.getTime() ? "trial" : "ended";
 }
 
+/**
+ * R9-security M1: whether Stripe has been paid for this workspace's plan, the
+ * one rule for what the free limits leave out (the ceiling, the pools and the
+ * per-person number). A plan in its card trial is "active" for its features
+ * (planState) but has cost nothing yet, so its runs count like a free
+ * workspace's. True for an active plan, and for one past_due after a paid
+ * period, within the grace. A past_due subscription's currentPeriodEnd holds
+ * the start of the unpaid period (subscriptionSync.ts): when that is the
+ * trial's end, the first charge failed and nothing was ever paid. A day's
+ * margin: a paid period is at least a month. No trial date: bought without a
+ * trial, so the first period was paid at checkout.
+ */
+export function paysForPlan(workspace: BillingFields, now: Date): boolean {
+  if (planState(workspace, now) !== "active") return false;
+  if (workspace.planStatus === "active") return true;
+  if (workspace.planStatus !== "past_due") return false;
+  const trialEndsAt = toBillingDate(workspace.trialEndsAt);
+  const unpaidFrom = toBillingDate(workspace.currentPeriodEnd);
+  if (!trialEndsAt) return true;
+  return unpaidFrom !== null && unpaidFrom.getTime() > trialEndsAt.getTime() + DAY_MS;
+}
+
 /** BILLING_TRIAL_DAYS: a whole number, 14 when unset or invalid, kept within 1 to 90. */
 export function trialDays(env: BillingEnv = process.env): number {
   const raw = env.BILLING_TRIAL_DAYS?.trim();
