@@ -380,10 +380,11 @@ describe("LinkedIn on the client's page", () => {
     expect(html).not.toContain("sign out of LinkedIn and reconnect");
     // R9-pages L2: the date is shown once, in the row.
     expect(html.match(/November 16, 2026/g)).toHaveLength(1);
+    // R11-pages L3: with the time, in UTC and labelled, so it can't read as another day than the owners' email.
     expect(html).not.toContain("is connected");
     const row = linkedInRow(html);
     expect(row).not.toContain("press Reconnect to keep it posting");
-    expect(row).toContain("Connected: Surf Co page. Ends November 16, 2026. LinkedIn kept this end date.");
+    expect(row).toContain("Connected: Surf Co page. Ends November 16, 2026, 12:00 UTC. LinkedIn kept this end date.");
     expect(h.findConnection).toHaveBeenCalledWith({
       where: { workspaceId_platform: { workspaceId: "ws-1", platform: "linkedin" } },
       select: { expiresAt: true },

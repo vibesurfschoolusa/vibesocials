@@ -180,6 +180,12 @@ export function utcDisplayDate(at: Date): string {
   return formatDisplayDate(`${utcDayKey(at)}T12:00:00`);
 }
 
+/** "November 21, 2026, 18:00 UTC": the date and a 24-hour time in UTC, labelled (R11-pages L3, L6). */
+export function utcDisplayDateTime(at: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${utcDisplayDate(at)}, ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`;
+}
+
 /** Bytes as GB with one decimal: "5.0 GB". */
 export function formatStorageGb(bytes: number): string {
   return `${(bytes / GB).toFixed(1)} GB`;
@@ -509,7 +515,8 @@ export function personalUsageText(
           ? ` ${low} on the account's first day (UTC), ${full} ${firstDayEndsText(time)} once ${confirms}.`
           : "";
   const same = billing
-    ? "The per-person number is the same for everyone until a workspace is paid for."
+    ? // R11-pages L7: paying doesn't raise the number; a paid workspace's posts are left out of it.
+      "The per-person number is the same for everyone; posts in a paid workspace don't count toward it."
     : "The per-person number is the same for everyone.";
   return { label, note: `Retries count too.${why} ${same}` };
 }
@@ -586,7 +593,12 @@ export function postRetryLimitMessage(limit: number, retryAllPlatforms: number):
 }
 
 
-/** `openAt`: when the oldest creation in the window leaves it. */
+/**
+ * `openAt`: when the oldest creation in the window leaves it. R11-pages L6: the
+ * time too, since the day alone is wrong until that hour; part of a minute is
+ * rounded up so the time named is never still refused.
+ */
 export function workspaceCreationLimitMessage(limit: number, openAt: Date): string {
-  return `You have created ${limit} ${countWord(limit, "workspace", "workspaces")} in the last ${WORKSPACES_CREATED_WINDOW_DAYS} days, the most allowed. Deleted workspaces count too. You can create another from ${utcDisplayDate(openAt)}.`;
+  const opens = new Date(Math.ceil(openAt.getTime() / 60_000) * 60_000);
+  return `You have created ${limit} ${countWord(limit, "workspace", "workspaces")} in the last ${WORKSPACES_CREATED_WINDOW_DAYS} days, the most allowed. Deleted workspaces count too. You can create another from ${utcDisplayDateTime(opens)}.`;
 }

@@ -407,7 +407,7 @@ describe("workspaces created per person", () => {
     await expect(workspaceCreationRefusal("user-1", NOW)).resolves.toEqual({
       code: "WORKSPACE_CREATION_LIMIT",
       error:
-        "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from November 15, 2026.",
+        "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from November 15, 2026, 15:01 UTC.",
     });
   });
 

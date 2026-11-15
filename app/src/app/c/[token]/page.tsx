@@ -22,9 +22,9 @@ import {
   linkDifferentAccountMessage,
   linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
-import { formatDisplayDate } from "@/lib/displayDate";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
+import { utcDisplayDateTime } from "@/lib/usageLimits";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
 
 import { ConnectLinkChoice } from "./connect-link-choice";
@@ -222,7 +222,8 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                         ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
                         : // R8-pages L5: just reconnected with the same end date; the warning says what to do.
                           sameEndOn?.platform === platform
-                          ? `${connected}. Ends ${formatDisplayDate(sameEndOn.expiresAt)}. LinkedIn kept this end date.`
+                          ? // R11-pages L3: date and time in UTC, labelled; the owners' email gives their own zone.
+                            `${connected}. Ends ${utcDisplayDateTime(sameEndOn.expiresAt)}. LinkedIn kept this end date.`
                           : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
                     </span>
                     {button}
