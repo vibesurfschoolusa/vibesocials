@@ -94,7 +94,10 @@ import { inngestPlanConcurrency, refreshConnectionConcurrency } from "./publishF
 import {
   GOOGLE_IDLE_REFRESH_MS,
   HEALTH_SWEEP_PAGE_SIZE,
+  INLINE_REFRESH_BUDGET_MS,
+  isProactiveRefreshEligible,
   proactiveRefreshWhere,
+  SWEEP_PAGE_SELECT,
 } from "./connectionHealthSweep";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import { EmailRetryableError } from "@/server/notifications/email";
@@ -148,6 +151,21 @@ function registeredConfig(fn: unknown, id: string) {
 
 const NOW = new Date("2026-11-01T04:45:00.000Z");
 const NO_NOTICES = { warned: 0, lapsed: 0, reconnectEmails: 0 };
+/** The sweep's count of free workspaces' connections refreshed in its own step: none. */
+const NO_FREE_REFRESH = { due: 0, refreshed: 0, flagged: 0, emailed: 0, unchanged: 0, failed: 0, leftForTomorrow: 0 };
+
+/**
+ * A workspace the fan-out keeps (grandfathered), as the page query selects it.
+ * R10 (V3): free workspaces' connections are refreshed in the sweep's own step.
+ */
+const FANNED_OUT_WORKSPACE = {
+  billingExempt: true,
+  plan: null,
+  planStatus: null,
+  trialEndsAt: null,
+  currentPeriodEnd: null,
+  members: [{ user: { email: "owner-a@example.com", emailVerifiedAt: NOW } }],
+};
 
 beforeEach(() => {
   for (const mock of [
@@ -186,7 +204,11 @@ afterEach(() => {
 
 describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
   const ids = (from: number, count: number) =>
-    Array.from({ length: count }, (_, i) => ({ id: `conn-${from + i}` }));
+    Array.from({ length: count }, (_, i) => ({
+      id: `conn-${from + i}`,
+      expiresAt: NOW,
+      workspace: FANNED_OUT_WORKSPACE,
+    }));
   const runCron = (step: FakeStep) =>
     handlerOf<{ pages: number; connections: number }>(connectionHealthSweep)({
       event: { name: "inngest/scheduled.timer", data: {} },
@@ -204,7 +226,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     expect(optsOf(connectionHealthSweep).singleton).toEqual({ mode: "skip" });
   });
 
-  it("pages ids only (select id, take 1000), and a short second page ends the sweep with no third query", async () => {
+  it("pages ids with their workspace's plan and owners (take 1000), and a short second page ends the sweep with no third query", async () => {
     findManyMock
       .mockResolvedValueOnce(ids(0, HEALTH_SWEEP_PAGE_SIZE))
       .mockResolvedValueOnce(ids(HEALTH_SWEEP_PAGE_SIZE, 3));
@@ -216,7 +238,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     const where = proactiveRefreshWhere(NOW);
     expect(findManyMock.mock.calls[0][0]).toEqual({
       where,
-      select: { id: true },
+      select: SWEEP_PAGE_SELECT,
       orderBy: { id: "asc" },
       take: 1000,
     });
@@ -226,7 +248,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     // real row, or return an empty page and end the sweep early.
     expect(findManyMock.mock.calls[1][0]).toEqual({
       where: { AND: [where, { id: { gt: "conn-999" } }] },
-      select: { id: true },
+      select: SWEEP_PAGE_SELECT,
       orderBy: { id: "asc" },
       take: 1000,
     });
@@ -235,7 +257,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     expect(step.sendEvent).toHaveBeenCalledTimes(2);
     expect(eventsOf(step, 0)).toHaveLength(1000);
     expect(eventsOf(step, 1)).toHaveLength(3);
-    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
+    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, freeRefresh: NO_FREE_REFRESH, connectionNotices: NO_NOTICES });
   });
 
   it("sends one event per connection with the id refresh-<id>-<UTC date> (a same-day re-run dedupes)", async () => {
@@ -391,7 +413,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
           .filter((id) => gt === undefined || id > gt)
           .slice(0, args.take);
         afterPage(page++, returned, rows);
-        return returned.map((id) => ({ id }));
+        return returned.map((id) => ({ id, expiresAt: NOW, workspace: FANNED_OUT_WORKSPACE }));
       });
       return rows;
     }
@@ -415,7 +437,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       expect(sent).toHaveLength(2500);
       expect(sent[0]).toBe(`refresh-${pad(0)}-2026-11-01`);
       expect(sent[sent.length - 1]).toBe(`refresh-${pad(2499)}-2026-11-01`);
-      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
+      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, freeRefresh: NO_FREE_REFRESH, connectionNotices: NO_NOTICES });
     });
 
     it("rows added while the sweep runs are picked up when they sort after the current page", async () => {
@@ -439,7 +461,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     const summary = await runCron(step);
 
     expect(step.sendEvent).toHaveBeenCalledTimes(1);
-    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
+    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, freeRefresh: NO_FREE_REFRESH, connectionNotices: NO_NOTICES });
   });
 
   it("no eligible connection: one page query, no event", async () => {
@@ -450,18 +472,19 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
 
     expect(findManyMock).toHaveBeenCalledTimes(1);
     expect(step.sendEvent).not.toHaveBeenCalled();
-    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, connectionNotices: NO_NOTICES });
+    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 }, freeRefresh: NO_FREE_REFRESH, connectionNotices: NO_NOTICES });
   });
 
-  it("never loads token columns, and its step outputs hold only ids", async () => {
+  it("never loads token columns, and its step outputs hold no token or address", async () => {
     findManyMock.mockResolvedValueOnce(ids(0, 2));
     const step = fakeStep();
 
     await runCron(step);
 
-    const select = findManyMock.mock.calls[0][0].select as Record<string, boolean>;
-    expect(Object.keys(select)).toEqual(["id"]);
-    expect(JSON.stringify(step.outputs)).not.toMatch(/accessToken|refreshToken/);
+    const select = findManyMock.mock.calls[0][0].select as Record<string, unknown>;
+    expect(Object.keys(select)).toEqual(["id", "expiresAt", "refreshFailedAt", "workspace"]);
+    expect(JSON.stringify(select)).not.toMatch(/accessToken|refreshToken/);
+    expect(JSON.stringify(step.outputs)).not.toMatch(/accessToken|refreshToken|@example/);
   });
 
   it("does not refresh anything itself", async () => {
@@ -472,6 +495,338 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     expect(getPlatformClientMock).not.toHaveBeenCalled();
     expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
     expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+});
+
+// R10 (V3): the daily refresh of a free workspace's connection used to be a
+// fanned-out run (two executions nothing counted). Now the sweep refreshes them
+// itself, in one step, one after another, under the same per-connection lock
+// and with the same flag and reconnect email as refresh-connection; at most
+// FREE_INLINE_REFRESH_DAILY_CAP a day, soonest-expiring first, within
+// INLINE_REFRESH_BUDGET_MS. Paid, grandfathered and operator-owned workspaces
+// keep the fan-out.
+describe("connectionHealthSweep — free workspaces' connections are refreshed in its own step", () => {
+  type Row = Record<string, unknown> & { id: string; platform: Platform; expiresAt: Date; workspace: Record<string, unknown> };
+  const OWNERS = [
+    { user: { email: "owner-a@example.com", emailVerifiedAt: NOW } },
+    { user: { email: "owner-b@example.com", emailVerifiedAt: NOW } },
+  ];
+  const FREE_WS = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null, members: OWNERS };
+  const PAID_WS = { ...FREE_WS, plan: "growth", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * 86_400_000) };
+  /** Access-token lifetime each refresher writes, per platform. */
+  const LIFETIME: Partial<Record<Platform, number>> = { tiktok: 86_400_000, pinterest: 30 * 86_400_000 };
+
+  let rows: Map<string, Row>;
+  const add = (id: string, overrides: Partial<Row> = {}) => {
+    const row: Row = {
+      id,
+      userId: "user-1",
+      workspaceId: `ws-${id}`,
+      platform: "tiktok",
+      accessToken: "secret-access-token",
+      refreshToken: "secret-refresh-token",
+      expiresAt: new Date(NOW.getTime() - 60_000),
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+      refreshFailedAt: null,
+      reconnectEmailedAt: null,
+      workspace: FREE_WS,
+      ...overrides,
+    };
+    rows.set(id, row);
+    return row;
+  };
+  /** The platform's refresher, as the real ones behave: a new expiry from the clock. */
+  let refresher: ReturnType<typeof vi.fn>;
+
+  const runCron = (step = fakeStep()) =>
+    handlerOf<Record<string, unknown> & { connections: number; freeRefresh: typeof NO_FREE_REFRESH }>(connectionHealthSweep)({
+      event: { name: "inngest/scheduled.timer", data: {} },
+      step,
+    }).then((summary) => ({ summary, step }));
+  const fannedOut = (step: FakeStep) =>
+    step.sendEvent.mock.calls.flatMap((call) => (call[1] as SentEvent[]).map((event) => event.data.socialConnectionId));
+  const refreshedIds = () => refreshConnectionTokenMock.mock.calls.map((call) => (call[0] as Row).id);
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    rows = new Map();
+    // The table: the page query's WHERE is the connection rule (its own suite pins the SQL).
+    findManyMock.mockImplementation(async (args: { where: { AND?: Array<{ id?: { gt: string } }> }; take: number }) => {
+      const gt = args.where.AND?.find((clause) => clause.id)?.id?.gt;
+      return [...rows.values()]
+        .filter((row) => isProactiveRefreshEligible(row as never, new Date()))
+        .filter((row) => gt === undefined || row.id > gt)
+        .sort((a, b) => (a.id < b.id ? -1 : 1))
+        .slice(0, args.take)
+        .map((row) => ({ id: row.id, expiresAt: row.expiresAt, refreshFailedAt: row.refreshFailedAt, workspace: row.workspace }));
+    });
+    findUniqueMock.mockImplementation(async (args: { where: { id: string }; select?: Record<string, boolean> }) => {
+      const row = rows.get(args.where.id);
+      if (!row) return null;
+      if (!args.select) return row;
+      return Object.fromEntries(Object.keys(args.select).map((key) => [key, row[key]]));
+    });
+    refresher = vi.fn(async (conn: Row) => {
+      const row = rows.get(conn.id)!;
+      row.expiresAt = new Date(Date.now() + (LIFETIME[row.platform] ?? 86_400_000));
+      return row;
+    });
+    getPlatformClientMock.mockImplementation(() => ({ publishVideo: vi.fn(), refreshToken: refresher }));
+    workspaceFindUniqueMock.mockResolvedValue({ name: "Acme" });
+    membersFindManyMock.mockResolvedValue([
+      { user: { id: "user-a", email: "owner-a@example.com" } },
+      { user: { id: "user-b", email: "owner-b@example.com" } },
+    ]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a free workspace's TikTok connection that is due is refreshed in the sweep's step, under the lock, with no fanned-out run", async () => {
+    add("conn-1");
+
+    const { summary, step } = await runCron();
+
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(refreshedIds()).toEqual(["conn-1"]);
+    // The step's deadline, handed to the lock and to the platform's refresher.
+    const [, refresh, opts] = refreshConnectionTokenMock.mock.calls[0];
+    expect(opts).toEqual({ deadline: NOW.getTime() + INLINE_REFRESH_BUDGET_MS });
+    await refresh(rows.get("conn-1"));
+    expect(refresher).toHaveBeenLastCalledWith(rows.get("conn-1"), { deadline: NOW.getTime() + INLINE_REFRESH_BUDGET_MS });
+    expect(step.order).toEqual([
+      "run:start",
+      "run:page-0",
+      "run:refresh-free-connections",
+      "run:purge-stale-youtube-metrics",
+      "run:refresh-linkedin-organization-profiles",
+      "run:backfill-gbp-location-titles",
+      "run:connection-notices",
+    ]);
+    expect(summary.connections).toBe(0);
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, refreshed: 1 });
+    expect(JSON.stringify(step.outputs)).not.toMatch(/secret|@example/);
+  });
+
+  it("a revoked grant: the connection is flagged and its owners are emailed the same day, in that step", async () => {
+    add("conn-1");
+    refresher.mockImplementation(async (conn: Row) => {
+      rows.get(conn.id)!.needsReconnect = true; // what markConnectionNeedsReconnect writes
+      throw Object.assign(new Error("revoked"), { code: "TIKTOK_RECONNECT_REQUIRED" });
+    });
+
+    const { summary, step } = await runCron();
+
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(sendEmailMock.mock.calls.map((call) => call[0].to)).toEqual(["owner-a@example.com", "owner-b@example.com"]);
+    expect(sendEmailMock.mock.calls[0][0].subject).toContain("TikTok");
+    // The key refresh-connection uses, so the notices step never emails them twice.
+    expect(sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey)).toEqual([
+      "reconnect/conn-1/2026-11-01/user-a",
+      "reconnect/conn-1/2026-11-01/user-b",
+    ]);
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "conn-1", needsReconnect: true },
+      data: { reconnectEmailedAt: NOW },
+    });
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, flagged: 1, emailed: 2 });
+  });
+
+  it("150 free connections due: the 100 soonest-expiring today, the other 50 tomorrow", async () => {
+    // Pinterest: a refresh moves expiresAt 30 days out, so today's are not due tomorrow.
+    for (let i = 0; i < 150; i++) {
+      add(`conn-${String(i).padStart(3, "0")}`, {
+        platform: "pinterest",
+        expiresAt: new Date(NOW.getTime() - (150 - i) * 60_000),
+      });
+    }
+    const soonest = [...rows.keys()].slice(0, 100);
+    const rest = [...rows.keys()].slice(100);
+
+    const today = await runCron();
+
+    expect(refreshedIds()).toEqual(soonest);
+    expect(today.step.sendEvent).not.toHaveBeenCalled();
+    expect(today.summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 150, refreshed: 100, leftForTomorrow: 50 });
+
+    refreshConnectionTokenMock.mockClear();
+    vi.setSystemTime(new Date(NOW.getTime() + 86_400_000));
+    const tomorrow = await runCron();
+
+    expect(refreshedIds()).toEqual(rest);
+    expect(tomorrow.summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 50, refreshed: 50 });
+  });
+
+  it("a paid workspace's connection is fanned out as now", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    add("conn-paid", { workspace: PAID_WS });
+    add("conn-free");
+
+    const { summary, step } = await runCron();
+
+    expect(fannedOut(step)).toEqual(["conn-paid"]);
+    expect((step.sendEvent.mock.calls[0][1] as SentEvent[])[0].id).toBe("refresh-conn-paid-2026-11-01");
+    expect(refreshedIds()).toEqual(["conn-free"]);
+    expect(summary.connections).toBe(1);
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, refreshed: 1 });
+  });
+
+  it("a grandfathered workspace's connection is fanned out", async () => {
+    add("conn-exempt", { workspace: { ...FREE_WS, billingExempt: true } });
+
+    const { step } = await runCron();
+
+    expect(fannedOut(step)).toEqual(["conn-exempt"]);
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    expect(step.order).not.toContain("run:refresh-free-connections");
+  });
+
+  it("the operator's client workspace is fanned out (billing off), a stranger's is refreshed inline", async () => {
+    vi.stubEnv("ADMIN_EMAILS", "operator@example.com");
+    add("conn-client", {
+      workspace: { ...FREE_WS, members: [{ user: { email: "operator@example.com", emailVerifiedAt: NOW } }] },
+    });
+    add("conn-stranger");
+
+    const { step } = await runCron();
+
+    expect(fannedOut(step)).toEqual(["conn-client"]);
+    expect(refreshedIds()).toEqual(["conn-stranger"]);
+  });
+
+  it("each refresh catches its own failure: a blip or a database error does not stop the next one", async () => {
+    add("conn-a");
+    add("conn-b");
+    add("conn-c");
+    refresher.mockImplementation(async (conn: Row) => {
+      if (conn.id === "conn-a") throw Object.assign(new Error("timeout"), { code: "TIKTOK_TOKEN_REFRESH_FAILED" });
+      const row = rows.get(conn.id)!;
+      row.expiresAt = new Date(Date.now() + 86_400_000);
+      return row;
+    });
+    const read = findUniqueMock.getMockImplementation()!;
+    findUniqueMock.mockImplementation(async (args: { where: { id: string } }) => {
+      if (args.where.id === "conn-b") throw new Error("connection reset");
+      return read(args);
+    });
+
+    const { summary } = await runCron();
+
+    expect(refreshedIds()).toEqual(["conn-a", "conn-c"]);
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 3, refreshed: 1, failed: 2 });
+    expect(rows.get("conn-a")!.needsReconnect).toBe(false);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("a reconnect email that cannot be sent now does not fail the step; the notices step sends it", async () => {
+    add("conn-a");
+    add("conn-b");
+    refresher.mockImplementation(async (conn: Row) => {
+      const row = rows.get(conn.id)!;
+      if (conn.id === "conn-a") {
+        row.needsReconnect = true;
+        throw Object.assign(new Error("revoked"), { code: "TIKTOK_RECONNECT_REQUIRED" });
+      }
+      row.expiresAt = new Date(Date.now() + 86_400_000);
+      return row;
+    });
+    sendEmailMock.mockRejectedValue(new EmailRetryableError("Resend send failed (status 500)"));
+
+    const { summary, step } = await runCron();
+
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 2, refreshed: 1, flagged: 1 });
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(step.order[step.order.length - 1]).toBe("run:connection-notices");
+  });
+
+  it("stops starting refreshes when the step's time budget is spent; the rest wait for tomorrow", async () => {
+    for (const id of ["conn-1", "conn-2", "conn-3", "conn-4", "conn-5", "conn-6"]) add(id);
+    // Each refresh takes 60 s: they start at 0, 60, 120 and 180 s of the 200 s.
+    refresher.mockImplementation(async (conn: Row) => {
+      vi.setSystemTime(new Date(Date.now() + 60_000));
+      const row = rows.get(conn.id)!;
+      row.expiresAt = new Date(Date.now() + 86_400_000);
+      return row;
+    });
+
+    const { summary } = await runCron();
+
+    expect(refreshedIds()).toEqual(["conn-1", "conn-2", "conn-3", "conn-4"]);
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 6, refreshed: 4, leftForTomorrow: 2 });
+  });
+
+  // Coordinator's review: failing connections keep their old expiresAt, so by
+  // expiry alone they would come first every day.
+  it("3 connections whose last refresh failed and 100 healthy ones due: the 100 healthy today, the 3 after them", async () => {
+    for (let i = 0; i < 3; i++) {
+      add(`bad-${i}`, { expiresAt: new Date(NOW.getTime() - 30 * 86_400_000), refreshFailedAt: new Date(NOW.getTime() - 86_400_000) });
+    }
+    for (let i = 0; i < 100; i++) add(`ok-${String(i).padStart(3, "0")}`);
+
+    const { summary } = await runCron();
+
+    expect(refreshedIds()).toHaveLength(100);
+    expect(refreshedIds().every((id) => id.startsWith("ok-"))).toBe(true);
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 103, refreshed: 100, leftForTomorrow: 3 });
+  });
+
+  it("a refresh that fails without flagging records refreshFailedAt (not the flag), so it goes last next time", async () => {
+    add("conn-a");
+    refresher.mockImplementation(async () => {
+      throw Object.assign(new Error("timeout"), { code: "TIKTOK_TOKEN_REFRESH_FAILED" });
+    });
+
+    const { summary } = await runCron();
+
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, failed: 1 });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "conn-a", needsReconnect: false },
+      data: { refreshFailedAt: NOW },
+    });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  // Coordinator's review: a sweep that started before this release memoized its
+  // pages as plain id lists; on the new code they are fanned out, as they were.
+  it("a page output in the old shape (a plain id list) is fanned out, not thrown on", async () => {
+    add("conn-1");
+    const step = fakeStep();
+    const run = step.run.getMockImplementation()!;
+    step.run.mockImplementation(async (id: string, cb: () => unknown) => {
+      if (id === "page-0") {
+        step.order.push(`run:${id}`);
+        return ["conn-old-1", "conn-old-2"];
+      }
+      return run(id, cb);
+    });
+
+    const { summary } = await runCron(step);
+
+    expect(fannedOut(step)).toEqual(["conn-old-1", "conn-old-2"]);
+    expect((step.sendEvent.mock.calls[0][1] as SentEvent[])[0].id).toBe("refresh-conn-old-1-2026-11-01");
+    expect(findManyMock).not.toHaveBeenCalled();
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    expect(summary.connections).toBe(2);
+    expect(summary.pages).toBe(1);
+  });
+
+  it("a connection refreshed elsewhere since the page was read is left alone", async () => {
+    add("conn-1");
+    const page = findManyMock.getMockImplementation()!;
+    findManyMock.mockImplementation(async (args: never) => {
+      const out = await page(args);
+      // A publish refreshes it between the page and the step.
+      rows.get("conn-1")!.expiresAt = new Date(NOW.getTime() + 2 * 86_400_000);
+      return out;
+    });
+
+    const { summary } = await runCron();
+
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, unchanged: 1 });
   });
 });
 

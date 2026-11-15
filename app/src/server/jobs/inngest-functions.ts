@@ -3,7 +3,7 @@ import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getPlatformClient } from "@/server/platforms";
-import { publishDeadline } from "@/server/platforms/publishBudget";
+import { MIN_REQUEST_WINDOW_MS, publishDeadline, remainingMs } from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
@@ -60,8 +60,13 @@ import { syncListingMetrics } from "@/server/jobs/listingMetrics";
 import { syncSocialPostMetrics } from "@/server/jobs/socialMetricsSync";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
+  INLINE_REFRESH_BUDGET_MS,
+  inlineRefreshQueue,
   isProactiveRefreshEligible,
   proactiveRefreshWhere,
+  refreshesInline,
+  SWEEP_PAGE_SELECT,
+  type InlineRefreshCandidate,
 } from "@/server/jobs/connectionHealthSweep";
 import { billingFieldsSelect, paymentsConfigured } from "@/lib/billing";
 import { needsMediaMessage } from "@/lib/postTargets";
@@ -2307,8 +2312,12 @@ export const stalePostJobSweep = inngest.createFunction(
  *  - `start` returns the ISO `now`. Every page's WHERE and the event ids derive
  *    from it, so a page that runs after UTC midnight still dedupes with its
  *    siblings.
- *  - `page-<i>` reads up to HEALTH_SWEEP_PAGE_SIZE ids (`select: { id: true }`:
- *    no token column is ever loaded), ordered by id. Page N resumes with the
+ *  - `page-<i>` reads up to HEALTH_SWEEP_PAGE_SIZE due connections
+ *    (SWEEP_PAGE_SELECT: id, expiresAt and the workspace's plan columns and
+ *    owners; no token column is ever loaded), ordered by id, and splits them
+ *    (refreshesInline): paid, grandfathered and operator-owned workspaces' ids
+ *    to fan out, free workspaces' ids with their expiry for the inline step
+ *    below. Its output holds ids and expiries only. Page N resumes with the
  *    keyset condition `id > <last id of page N-1>` AND the sweep's WHERE - NOT a
  *    Prisma `cursor` + `skip: 1`: a cursor row that stops matching the WHERE (it
  *    was refreshed since the previous page) would make `skip: 1` drop the next
@@ -2319,6 +2328,13 @@ export const stalePostJobSweep = inngest.createFunction(
  *    `refresh-<id>-<UTC YYYY-MM-DD>`, so a re-run of the cron the same day
  *    sends nothing twice (event ids are an idempotency key over 24 h, V1).
  * A page shorter than HEALTH_SWEEP_PAGE_SIZE is the last: no further query.
+ *  - `refresh-free-connections` (R10, V3), only when a free workspace has a
+ *    connection due: at most FREE_INLINE_REFRESH_DAILY_CAP of them,
+ *    soonest-expiring first, refreshed one after another within
+ *    INLINE_REFRESH_BUDGET_MS, each as `refresh-connection` would (same lock,
+ *    flag and reconnect email); see refreshConnectionsInline. A fanned-out
+ *    refresh costs two executions that no limit counts, so free workspaces
+ *    that never post could otherwise spend the plan's budget; this is one.
  *
  * `singleton: { mode: "skip" }` skips a tick that arrives while the previous
  * sweep is still running (https://www.inngest.com/docs/guides/singleton).
@@ -2332,7 +2348,8 @@ export const stalePostJobSweep = inngest.createFunction(
  * 04:45 UTC - cadence map: media-retention hourly :15, scheduled-scanner every
  * minute, youtube-metrics hourly :00, stale-post-sweep hourly :30.
  *
- * SEC: step outputs are ids and counts only - never connection rows (tokens).
+ * SEC: step outputs are ids, expiries and counts only - never connection rows
+ * (tokens) or addresses.
  */
 export const connectionHealthSweep = inngest.createFunction(
   {
@@ -2349,34 +2366,65 @@ export const connectionHealthSweep = inngest.createFunction(
     let pages = 0;
     let connections = 0;
     let cursor: string | undefined;
+    const freeDue: InlineRefreshCandidate[] = [];
 
     for (let page = 0; ; page++) {
-      const ids: string[] = await step.run(`page-${page}`, async () => {
+      const memoized: SweepPageRead | string[] = await step.run(`page-${page}`, async (): Promise<SweepPageRead> => {
         const eligible = proactiveRefreshWhere(now);
         const rows = await prisma.socialConnection.findMany({
           where: cursor ? { AND: [eligible, { id: { gt: cursor } }] } : eligible,
-          select: { id: true },
+          select: SWEEP_PAGE_SELECT,
           orderBy: { id: "asc" },
           take: HEALTH_SWEEP_PAGE_SIZE,
         });
-        return rows.map((row) => row.id);
+        const fanOut: string[] = [];
+        const inline: InlineRefreshCandidate[] = [];
+        for (const row of rows) {
+          if (row.expiresAt && refreshesInline(row.workspace, now)) {
+            inline.push({
+              id: row.id,
+              expiresAt: new Date(row.expiresAt).toISOString(),
+              failed: row.refreshFailedAt !== null,
+            });
+          } else {
+            fanOut.push(row.id);
+          }
+        }
+        return { fanOut, inline, last: rows.at(-1)?.id ?? null, count: rows.length };
       });
+      // A sweep that started before R10 (V3) memoized its pages as plain id
+      // lists: those are fanned out, as they were then.
+      const read: SweepPageRead = Array.isArray(memoized)
+        ? { fanOut: memoized, inline: [], last: memoized.at(-1) ?? null, count: memoized.length }
+        : memoized;
       pages++;
+      freeDue.push(...read.inline);
 
-      if (ids.length > 0) {
+      if (read.fanOut.length > 0) {
         await step.sendEvent(
           `fan-out-${page}`,
-          ids.map((id) => ({
+          read.fanOut.map((id) => ({
             id: `refresh-${id}-${day}`,
             name: "connection/refresh.requested" as const,
             data: { socialConnectionId: id },
           })),
         );
-        connections += ids.length;
+        connections += read.fanOut.length;
       }
 
-      if (ids.length < HEALTH_SWEEP_PAGE_SIZE) break;
-      cursor = ids[ids.length - 1];
+      if (read.count < HEALTH_SWEEP_PAGE_SIZE || read.last === null) break;
+      cursor = read.last;
+    }
+
+    // R10 (V3): free workspaces' connections, refreshed here one after another
+    // (one execution for all of them) instead of two uncounted executions each.
+    const queue = inlineRefreshQueue(freeDue);
+    let freeRefresh: FreeRefreshCounts = { ...NO_FREE_REFRESH, due: freeDue.length };
+    if (queue.ids.length > 0) {
+      const counts: FreeRefreshCounts = await step.run("refresh-free-connections", () =>
+        refreshConnectionsInline(queue.ids, day),
+      );
+      freeRefresh = { ...counts, due: freeDue.length, leftForTomorrow: counts.leftForTomorrow + queue.leftForTomorrow };
     }
 
     // YouTube API Services policy (2026-11-09): statistics not refreshed in 30
@@ -2430,6 +2478,7 @@ export const connectionHealthSweep = inngest.createFunction(
         flagged: gbpBackfill.flagged.length,
         reconnectEmails: gbpReconnectEmails,
       },
+      freeRefresh,
       connectionNotices,
     };
     logger.info("[Inngest] Connection health sweep fanned out", summary);
@@ -2453,7 +2502,10 @@ export type ConnectionRefreshOutcome =
  * grant or a blip is data, not a failed run. Returns only a label - never a
  * row, token or address.
  */
-async function refreshOneConnection(socialConnectionId: string): Promise<ConnectionRefreshOutcome> {
+async function refreshOneConnection(
+  socialConnectionId: string,
+  deadline: number = publishDeadline(),
+): Promise<ConnectionRefreshOutcome> {
   const connection = await prisma.socialConnection.findUnique({ where: { id: socialConnectionId } });
   if (!connection) return "gone";
   // Flagged since the cron paged it (a failed post, an earlier sweep): re-refreshing
@@ -2467,7 +2519,6 @@ async function refreshOneConnection(socialConnectionId: string): Promise<Connect
   if (!client?.refreshToken) return "no_refresh";
   const refreshToken = client.refreshToken.bind(client);
 
-  const deadline = publishDeadline();
   try {
     await refreshConnectionToken(connection, (current) => refreshToken(current, { deadline }), {
       deadline,
@@ -2497,11 +2548,114 @@ async function refreshOneConnection(socialConnectionId: string): Promise<Connect
   }
 }
 
+/** One `page-<i>` step's output: ids to fan out, free ones to refresh inline. */
+type SweepPageRead = { fanOut: string[]; inline: InlineRefreshCandidate[]; last: string | null; count: number };
+
+/**
+ * Coordinator's review of R10 (V3): an inline refresh that failed without
+ * flagging leaves `refreshFailedAt` set on the unflagged row, so tomorrow's
+ * queue puts it after the healthy ones (inlineRefreshQueue). A flag writes
+ * its own time there and every refresher's success write clears it, so it
+ * means "the last attempt failed" until one succeeds. Best effort: losing
+ * the mark only changes the order.
+ */
+async function markInlineRefreshFailed(socialConnectionId: string): Promise<void> {
+  try {
+    await prisma.socialConnection.updateMany({
+      where: { id: socialConnectionId, needsReconnect: false },
+      data: { refreshFailedAt: new Date() },
+    });
+  } catch (error) {
+    logger.warn("[Inngest] Could not record a failed inline refresh", {
+      socialConnectionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** What the sweep's inline refresh of free workspaces' connections did (counts only). */
+type FreeRefreshCounts = {
+  due: number;
+  refreshed: number;
+  flagged: number;
+  emailed: number;
+  /** Not due any more (refreshed elsewhere since the page), gone, or flagged by someone else. */
+  unchanged: number;
+  /** A blip or an error; the connection is due again tomorrow. */
+  failed: number;
+  /** Over the daily cap or past the time budget: the soonest ones tomorrow. */
+  leftForTomorrow: number;
+};
+
+const NO_FREE_REFRESH: FreeRefreshCounts = {
+  due: 0,
+  refreshed: 0,
+  flagged: 0,
+  emailed: 0,
+  unchanged: 0,
+  failed: 0,
+  leftForTomorrow: 0,
+};
+
+/**
+ * R10 (V3): the body of the sweep's `refresh-free-connections` step. Refreshes
+ * the given connections one after another, each exactly as `refresh-connection`
+ * does (refreshOneConnection: the rule re-checked, the per-connection lock, a
+ * dead grant flagged) and, on a flag, emails the owners with the same per-day
+ * key. Each catches its own error, so one connection never stops the others or
+ * fails the step: a reconnect email that cannot go now is sent by the sweep's
+ * connection-notices step, which emails every flag not yet told. One deadline
+ * for the whole step (INLINE_REFRESH_BUDGET_MS); none starts with less than a
+ * request's window left, and those are left for tomorrow. A retry of the step
+ * re-checks each connection, so one refreshed already is not refreshed again.
+ * Returns counts only.
+ */
+async function refreshConnectionsInline(ids: readonly string[], utcDay: string): Promise<FreeRefreshCounts> {
+  const deadline = Date.now() + INLINE_REFRESH_BUDGET_MS;
+  const counts: FreeRefreshCounts = { ...NO_FREE_REFRESH };
+  for (const [index, socialConnectionId] of ids.entries()) {
+    if (remainingMs(deadline) < MIN_REQUEST_WINDOW_MS) {
+      counts.leftForTomorrow = ids.length - index;
+      break;
+    }
+    let outcome: ConnectionRefreshOutcome;
+    try {
+      outcome = await refreshOneConnection(socialConnectionId, deadline);
+    } catch (error) {
+      logger.warn("[Inngest] Inline connection refresh failed; retried by the next sweep", {
+        socialConnectionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      counts.failed++;
+      await markInlineRefreshFailed(socialConnectionId);
+      continue;
+    }
+    if (outcome === "refreshed") counts.refreshed++;
+    else if (outcome === "transient_error") {
+      counts.failed++;
+      await markInlineRefreshFailed(socialConnectionId);
+    }
+    else if (outcome === "flagged") {
+      counts.flagged++;
+      try {
+        counts.emailed += (await notifyOwnersToReconnect(socialConnectionId, utcDay)).emailed;
+      } catch (error) {
+        logger.warn("[Inngest] Reconnect email not sent yet; the connection-notices step sends it", {
+          socialConnectionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else counts.unchanged++;
+  }
+  return counts;
+}
+
 /**
  * Refresh ONE connection for the daily health sweep (2026-11-01 scale audit,
  * jobs, token refresh). Triggered by `connection/refresh.requested`
  * `{ socialConnectionId }`, sent by `connectionHealthSweep` (one per eligible
- * connection, event id `refresh-<id>-<UTC date>`).
+ * connection of a paid, grandfathered or operator-owned workspace, event id
+ * `refresh-<id>-<UTC date>`; free workspaces' are refreshed in the sweep).
  *
  * `concurrency` (at most two constraints per function, V3): one run per
  * connection (the refresh itself is also serialized by the Postgres advisory lock

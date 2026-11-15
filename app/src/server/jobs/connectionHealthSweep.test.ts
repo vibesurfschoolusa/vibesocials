@@ -3,17 +3,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   EXPIRY_WARNING_LEAD_MS,
+  FREE_INLINE_REFRESH_DAILY_CAP,
   GOOGLE_IDLE_REFRESH_MS,
   HEALTH_SWEEP_PAGE_SIZE,
-  IDLE_FREE_REFRESH_MS,
+  INLINE_REFRESH_BUDGET_MS,
   REFRESH_HORIZON_MS,
-  REFRESH_TOKEN_DISUSE_LIFETIMES,
-  REFRESH_TOKEN_DISUSE_MARGIN_MS,
   expiryNoticeDue,
   expiryNoticeWhere,
   hasUnrenewableExpiry,
+  inlineRefreshQueue,
   isProactiveRefreshEligible,
   proactiveRefreshWhere,
+  refreshesInline,
 } from "./connectionHealthSweep";
 
 const NOW = new Date("2026-07-26T12:00:00.000Z");
@@ -239,139 +240,92 @@ describe("proactiveRefreshWhere", () => {
   });
 });
 
-// R9-publishing L3: the daily fan-out costs two executions a connection, so a
-// free workspace that has not posted in 14 days is left out, except when a
-// refresh token would otherwise lapse from disuse (lead's follow-up): then it
-// is refreshed once, 10 days before that, so an idle workspace never has to
-// reconnect because the sweep stopped. Publishing refreshes an expired access
-// token on use on every platform with a refresh token (their client tests).
-describe("proactiveRefreshWhere: which workspaces' connections", () => {
-  type Post = { status: string; updatedAt: Date };
-  type Ws = {
-    billingExempt: boolean;
-    plan: string | null;
-    planStatus: string | null;
-    currentPeriodEnd: Date | null;
-    postJobs: Post[];
-  };
-  type Row = ReturnType<typeof conn> & { workspace: Ws };
+// R10 (V3): a free workspace's connections are refreshed in the sweep's own
+// step, not fanned out (two uncounted executions each). "Free" is the rule the
+// service pools use (serviceCapApplies): not grandfathered, not the
+// operator's, and not paid for (paysForPlan) with billing on.
+describe("refreshesInline: which workspaces' connections the sweep refreshes itself", () => {
   const ON = { BILLING_ENABLED: "true" };
   const OFF = {};
-  const FREE: Ws = { billingExempt: false, plan: null, planStatus: null, currentPeriodEnd: null, postJobs: [] };
-  const PAID: Ws = { ...FREE, plan: "growth", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) };
-  const posted = (daysAgo: number, status = "completed"): Post => ({ status, updatedAt: new Date(NOW.getTime() - daysAgo * DAY) });
-  /** Access-token lifetimes, as each client writes expiresAt at a refresh. */
-  const ACCESS: Partial<Record<Platform, number>> = { tiktok: DAY, pinterest: 30 * DAY, youtube: HOUR, google_business_profile: HOUR, linkedin: 60 * DAY };
-  /** A connection whose last refresh was `daysAgo` days ago: expiresAt is then plus the access token's lifetime. */
-  const refreshedAgo = (platform: Platform, daysAgo: number, workspace: Ws = FREE): Row => ({
-    ...conn({ platform, expiresAt: new Date(NOW.getTime() - daysAgo * DAY + (ACCESS[platform] ?? 0)) }),
-    workspace,
+  const OWNER = { user: { email: "owner@example.com", emailVerifiedAt: new Date("2026-01-01T00:00:00Z") } };
+  const OPERATOR = { user: { email: "operator@example.com", emailVerifiedAt: new Date("2026-01-01T00:00:00Z") } };
+  const FREE = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null, members: [OWNER] };
+  const PAID = { ...FREE, plan: "growth", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) };
+  const withOperator = (env: Record<string, string>) => ({ ...env, ADMIN_EMAILS: "operator@example.com" });
+
+  it("a free workspace is refreshed inline, with billing on or off", () => {
+    expect(refreshesInline(FREE, NOW, ON)).toBe(true);
+    expect(refreshesInline(FREE, NOW, OFF)).toBe(true);
+    // In trial (no plan yet), ended, or a card trial Stripe has not been paid for: still free.
+    expect(refreshesInline({ ...FREE, trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, NOW, ON)).toBe(true);
+    expect(refreshesInline({ ...FREE, trialEndsAt: new Date(NOW.getTime() - 5 * DAY) }, NOW, ON)).toBe(true);
+    expect(
+      refreshesInline({ ...PAID, planStatus: "trialing", trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, NOW, ON),
+    ).toBe(true);
+    // With billing off nobody pays, so a plan does not keep the fan-out.
+    expect(refreshesInline(PAID, NOW, OFF)).toBe(true);
   });
 
-  /** The subset of Prisma's WHERE the sweep uses, evaluated the way the database would. */
-  function matches(value: unknown, cond: unknown): boolean {
-    if (cond === null) return value === null || value === undefined;
-    if (typeof cond !== "object" || cond instanceof Date) {
-      return value instanceof Date && cond instanceof Date ? value.getTime() === cond.getTime() : value === cond;
-    }
-    const c = cond as Record<string, unknown>;
-    if ("some" in c) return (value as Row[]).some((item) => evaluate(item, c.some as Record<string, unknown>));
-    if ("in" in c && !(c.in as unknown[]).includes(value)) return false;
-    if ("notIn" in c && (c.notIn as unknown[]).includes(value)) return false;
-    if ("not" in c && c.not === null && (value === null || value === undefined)) return false;
-    const time = value instanceof Date ? value.getTime() : null;
-    if ("lt" in c && !(time !== null && time < (c.lt as Date).getTime())) return false;
-    if ("gt" in c && !(time !== null && time > (c.gt as Date).getTime())) return false;
-    if ("gte" in c && !(time !== null && time >= (c.gte as Date).getTime())) return false;
-    return true;
-  }
-  function evaluate(row: object, where: Record<string, unknown>): boolean {
-    return Object.entries(where).every(([key, cond]) => {
-      if (key === "OR") return (cond as Record<string, unknown>[]).some((branch) => evaluate(row, branch));
-      if (key === "AND") return (cond as Record<string, unknown>[]).every((branch) => evaluate(row, branch));
-      const value = (row as Record<string, unknown>)[key];
-      if (key === "workspace") return evaluate(value as object, cond as Record<string, unknown>);
-      return matches(value, cond);
-    });
-  }
-  const selects = (row: Row, env: Record<string, string> = ON) => evaluate(row, proactiveRefreshWhere(NOW, env) as Record<string, unknown>);
-
-  it("one table of refresh-token lifetimes, lapsing from disuse, and a 10-day margin", () => {
-    expect(IDLE_FREE_REFRESH_MS).toBe(14 * DAY);
-    expect(REFRESH_TOKEN_DISUSE_MARGIN_MS).toBe(10 * DAY);
-    expect(REFRESH_TOKEN_DISUSE_LIFETIMES).toEqual({
-      pinterest: { refreshTokenMs: 60 * DAY, accessTokenMs: 30 * DAY },
-      youtube: { refreshTokenMs: 180 * DAY, accessTokenMs: HOUR },
-      google_business_profile: { refreshTokenMs: 180 * DAY, accessTokenMs: HOUR },
-      tiktok: { refreshTokenMs: 365 * DAY, accessTokenMs: DAY },
-    });
+  it("a paid, grandfathered or operator-owned workspace keeps the fan-out", () => {
+    expect(refreshesInline(PAID, NOW, ON)).toBe(false);
+    expect(refreshesInline({ ...FREE, billingExempt: true }, NOW, ON)).toBe(false);
+    expect(refreshesInline({ ...FREE, billingExempt: true }, NOW, OFF)).toBe(false);
+    expect(refreshesInline({ ...FREE, members: [OWNER, OPERATOR] }, NOW, withOperator(OFF))).toBe(false);
+    expect(refreshesInline({ ...FREE, members: [OPERATOR] }, NOW, withOperator(ON))).toBe(false);
   });
 
-  it("an idle free Pinterest connection: refreshed once its last refresh is past 50 days, not at 10", () => {
-    expect(selects(refreshedAgo("pinterest", 51))).toBe(true);
-    expect(selects(refreshedAgo("pinterest", 10))).toBe(false);
-    expect(selects(refreshedAgo("pinterest", 49))).toBe(false);
-    expect(selects(refreshedAgo("pinterest", 51), OFF)).toBe(true);
+  it("an operator address that is not verified does not count (the operator rule)", () => {
+    const unverified = { user: { ...OPERATOR.user, emailVerifiedAt: null } };
+    expect(refreshesInline({ ...FREE, members: [unverified] }, NOW, withOperator(OFF))).toBe(true);
+  });
+});
+
+describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", () => {
+  const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs).toISOString();
+
+  it("pins the cap (100 a day) and the step's time budget (200 s, inside the 300 s function limit)", () => {
+    expect(FREE_INLINE_REFRESH_DAILY_CAP).toBe(100);
+    expect(INLINE_REFRESH_BUDGET_MS).toBe(200_000);
   });
 
-  it("an idle free Google connection: not at 20 days, refreshed past 170; TikTok past 355", () => {
-    for (const platform of ["youtube", "google_business_profile"] as const) {
-      expect(selects(refreshedAgo(platform, 20)), platform).toBe(false);
-      expect(selects(refreshedAgo(platform, 169)), platform).toBe(false);
-      expect(selects(refreshedAgo(platform, 171)), platform).toBe(true);
-    }
-    // TikTok's 24 h access token expires daily: an idle free one waits for its refresh token's 355 days.
-    expect(selects(refreshedAgo("tiktok", 2))).toBe(false);
-    expect(selects(refreshedAgo("tiktok", 354))).toBe(false);
-    expect(selects(refreshedAgo("tiktok", 356))).toBe(true);
+  it("orders by expiresAt (ties by id) and leaves the rest for tomorrow", () => {
+    const queue = inlineRefreshQueue(
+      [
+        { id: "c", expiresAt: at(-HOUR) },
+        { id: "a", expiresAt: at(-DAY) },
+        { id: "b", expiresAt: at(-HOUR) },
+        { id: "d", expiresAt: at(HOUR) },
+      ],
+      3,
+    );
+    expect(queue).toEqual({ ids: ["a", "b", "c"], leftForTomorrow: 1 });
   });
 
-  it("a platform whose refresh token does not lapse from disuse is never refreshed for an idle free workspace", () => {
-    // LinkedIn's refresh token has a fixed life from the sign-in; a refresh does not extend it.
-    expect(selects(refreshedAgo("linkedin", 400))).toBe(false);
-    expect(selects(refreshedAgo("linkedin", 59))).toBe(false);
+  // Coordinator's review: a connection whose last refresh failed (refreshFailedAt
+  // on an unflagged row) goes after the healthy ones, so a few failing or
+  // hanging ones cannot push healthy ones to tomorrow.
+  it("puts connections whose last refresh failed after the healthy ones, each soonest-expiring first", () => {
+    const queue = inlineRefreshQueue(
+      [
+        { id: "failed-old", expiresAt: at(-10 * DAY), failed: true },
+        { id: "healthy-late", expiresAt: at(-HOUR) },
+        { id: "failed-new", expiresAt: at(-DAY), failed: true },
+        { id: "healthy-early", expiresAt: at(-2 * HOUR), failed: false },
+      ],
+      3,
+    );
+    expect(queue).toEqual({ ids: ["healthy-early", "healthy-late", "failed-old"], leftForTomorrow: 1 });
   });
 
-  it("idle means no post went out in 14 days: drafts, scheduled and cancelled ones, trials and ended plans do not count", () => {
-    const tiktok = (workspace: Ws) => refreshedAgo("tiktok", 2, workspace);
-    expect(selects(tiktok({ ...FREE, postJobs: [posted(15)] }))).toBe(false);
-    for (const status of ["draft", "scheduled", "cancelled"]) {
-      expect(selects(tiktok({ ...FREE, postJobs: [posted(1, status)] })), status).toBe(false);
-    }
-    expect(selects(tiktok({ ...FREE, plan: "pro", planStatus: "trialing", currentPeriodEnd: new Date(NOW.getTime() + 10 * DAY) }))).toBe(false);
-    expect(selects(tiktok({ ...FREE, plan: "pro", planStatus: "canceled" }))).toBe(false);
-    expect(selects(tiktok({ ...FREE, plan: "pro", planStatus: "past_due", currentPeriodEnd: new Date(NOW.getTime() - 8 * DAY) }))).toBe(false);
-    // With billing off a plan does not make a workspace paid.
-    expect(selects(tiktok(PAID), OFF)).toBe(false);
+  it("150 due: the 100 soonest today, 50 left", () => {
+    const due = Array.from({ length: 150 }, (_, i) => ({ id: `conn-${String(i).padStart(3, "0")}`, expiresAt: at(-(150 - i) * HOUR) }));
+    const queue = inlineRefreshQueue(due.slice().reverse());
+    expect(queue.ids).toEqual(due.slice(0, 100).map((row) => row.id));
+    expect(queue.leftForTomorrow).toBe(50);
   });
 
-  it("the same workspace once it posts (any run in 14 days) is refreshed daily again", () => {
-    for (const status of ["pending", "in_progress", "completed", "failed"]) {
-      expect(selects(refreshedAgo("tiktok", 2, { ...FREE, postJobs: [posted(13, status)] })), status).toBe(true);
-      expect(selects(refreshedAgo("tiktok", 2, { ...FREE, postJobs: [posted(13, status)] }), OFF), status).toBe(true);
-    }
-  });
-
-  it("a paid or grandfathered workspace is refreshed daily, as now", () => {
-    expect(selects(refreshedAgo("tiktok", 2, PAID))).toBe(true);
-    expect(selects(refreshedAgo("pinterest", 29.5, PAID))).toBe(true);
-    expect(selects(refreshedAgo("youtube", 8, PAID))).toBe(true);
-    expect(selects(refreshedAgo("tiktok", 2, { ...PAID, planStatus: "past_due", currentPeriodEnd: new Date(NOW.getTime() - 3 * DAY) }))).toBe(true);
-    expect(selects(refreshedAgo("tiktok", 2, { ...FREE, billingExempt: true }))).toBe(true);
-    expect(selects(refreshedAgo("tiktok", 2, { ...FREE, billingExempt: true }), OFF)).toBe(true);
-    // The connection rule still applies: not yet due, flagged, or nothing to refresh with.
-    expect(selects(refreshedAgo("youtube", 3, PAID))).toBe(false);
-    expect(selects({ ...refreshedAgo("tiktok", 2, PAID), needsReconnect: true })).toBe(false);
-    expect(selects({ ...refreshedAgo("tiktok", 2, PAID), refreshToken: null })).toBe(false);
-  });
-
-  it("keeps the connection part as it was", () => {
-    expect(proactiveRefreshWhere(NOW, ON)).toEqual({
-      AND: [expect.anything()],
-      needsReconnect: false,
-      refreshToken: { not: null },
-      OR: proactiveRefreshWhere(NOW, OFF).OR,
-    });
+  it("nothing due: nothing to do", () => {
+    expect(inlineRefreshQueue([])).toEqual({ ids: [], leftForTomorrow: 0 });
   });
 });
 
