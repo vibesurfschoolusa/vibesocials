@@ -2205,13 +2205,24 @@ export const stalePostJobSweep = inngest.createFunction(
       };
       const candidates = await prisma.postJob.findMany({
         where: stale,
-        select: { id: true },
+        select: { id: true, userId: true, updatedAt: true },
         orderBy: { updatedAt: "asc" },
         take: STALE_SWEEP_BATCH,
       });
       let count = 0;
-      for (const { id } of candidates) {
-        count += await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
+      const closed: Array<{ id: string; name: "notification.requested"; data: { userId: string; postJobId: string } }> = [];
+      for (const { id, userId, updatedAt } of candidates) {
+        const failed = await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
+        count += failed;
+        // The id carries the stale heartbeat: a re-run of this sweep for the same
+        // stuck job sends the same id, which Inngest dedupes.
+        if (failed === 1) {
+          closed.push({
+            id: `notify-stale-${id}-${new Date(updatedAt).getTime()}`,
+            name: "notification.requested",
+            data: { userId, postJobId: id },
+          });
+        }
       }
 
       if (count > 0) {
@@ -2220,8 +2231,24 @@ export const stalePostJobSweep = inngest.createFunction(
           cutoff: cutoff.toISOString(),
         });
       }
-      return { swept: count, cutoff: cutoff.toISOString() };
+      return { swept: count, cutoff: cutoff.toISOString(), closed };
     });
+
+    // R5-client-journey L3 review: every path that finishes a job notifies once.
+    // Its owner hears the outcome, and the other half of a Feed and Story pair
+    // applies the pair rule (postOutcomeEmail.ts). Memoized, so a replay sends
+    // nothing twice; a failed send is logged and never fails the sweep.
+    const { closed, ...swept } = summary;
+    if (closed.length > 0) {
+      try {
+        await step.sendEvent("notify-stale-closed", closed);
+      } catch (error) {
+        logger.error("[StaleSweep] could not announce the jobs it failed", {
+          postJobIds: closed.map((event) => event.data.postJobId),
+          error,
+        });
+      }
+    }
 
     const heal = await step.run("heal-result-workspace", async () => {
       try {
@@ -2238,7 +2265,7 @@ export const stalePostJobSweep = inngest.createFunction(
       }
     });
 
-    return { ...summary, healed: heal.healed };
+    return { ...swept, healed: heal.healed };
   },
 );
 

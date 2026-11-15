@@ -4053,6 +4053,69 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
     ]);
   });
 
+  // R5-client-journey L3 review: every path that finishes a job notifies once.
+  describe("announcing the jobs it fails", () => {
+    const STALE = new Date(NOW - 7 * 3_600_000);
+    const sweep = (step = fakeStep()) =>
+      handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step }).then(() => step);
+
+    it("sends one notification.requested per job it failed, after the sweep step, ids from the stale heartbeat", async () => {
+      db.postJobFindMany.mockResolvedValue([
+        { id: "stale-1", userId: "user-1", updatedAt: STALE },
+        { id: "moved-on", userId: "user-2", updatedAt: STALE },
+      ]);
+      finishSpy.mockReset();
+      finishSpy.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+
+      const step = await sweep();
+
+      expect(db.postJobFindMany.mock.calls[0][0].select).toEqual({ id: true, userId: true, updatedAt: true });
+      expect(step.order).toEqual([
+        "run:fail-stale-post-jobs",
+        "sendEvent:notify-stale-closed",
+        "run:heal-result-workspace",
+      ]);
+      expect(step.sendEvent).toHaveBeenCalledWith("notify-stale-closed", [
+        {
+          id: `notify-stale-stale-1-${STALE.getTime()}`,
+          name: "notification.requested",
+          data: { userId: "user-1", postJobId: "stale-1" },
+        },
+      ]);
+    });
+
+    it("a replay sends the same ids (Inngest dedupes them), and nothing failed sends nothing", async () => {
+      db.postJobFindMany.mockResolvedValue([{ id: "stale-1", userId: "user-1", updatedAt: STALE }]);
+      finishSpy.mockReset();
+      finishSpy.mockResolvedValue(1);
+      const first = await sweep();
+      const second = await sweep();
+      expect((first.sendEvent.mock.calls[0] as unknown[])[1]).toEqual((second.sendEvent.mock.calls[0] as unknown[])[1]);
+
+      finishSpy.mockReset();
+      finishSpy.mockResolvedValue(0);
+      expect((await sweep()).sendEvent).not.toHaveBeenCalled();
+    });
+
+    it("a failed send is logged and the sweep still completes", async () => {
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+      try {
+        db.postJobFindMany.mockResolvedValue([{ id: "stale-1", userId: "user-1", updatedAt: STALE }]);
+        finishSpy.mockReset();
+        finishSpy.mockResolvedValue(1);
+        const step = fakeStep();
+        step.sendEvent.mockRejectedValueOnce(new Error("send failed"));
+
+        await expect(
+          handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step }),
+        ).resolves.toMatchObject({ swept: 1 });
+        expect(step.order).toContain("run:heal-result-workspace");
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
+
   it("runs one sweep at a time (singleton skip)", () => {
     expect(optsOf().id).toBe("stale-post-job-sweep");
     expect(optsOf().singleton).toEqual({ mode: "skip" });
@@ -4107,7 +4170,7 @@ describe("stalePostJobSweep - result workspace heal step", () => {
 
       await expect(run(step)).resolves.toMatchObject({ swept: 2 });
 
-      expect(step.order).toEqual(["run:fail-stale-post-jobs", "run:heal-result-workspace"]);
+      expect(step.order).toEqual(["run:fail-stale-post-jobs", "sendEvent:notify-stale-closed", "run:heal-result-workspace"]);
       expect(step.outputs["heal-result-workspace"]).toEqual({ healed: 0 });
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy.mock.calls[0][0]).toContain("[StaleSweep]");

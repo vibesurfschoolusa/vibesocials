@@ -870,6 +870,49 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     }
   });
 
+  // The 6 h stale sweep fails a job whose run never started: its results stay
+  // pending, and its finish is the sweep's write to the job, not their old times.
+  it("STALE SWEEP, pair half: the swept Story finished hours after the feed, so it sends alone", async () => {
+    const sweptAt = at(6 * HOUR + 30 * 60_000);
+    const swept = storyJob({
+      status: "failed",
+      updatedAt: sweptAt,
+      results: storyResults(T0).map((r) => ({ ...r, status: "pending", errorCode: null, errorMessage: null })),
+    });
+    pair(feedJob(), swept);
+    vi.setSystemTime(sweptAt);
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-s" });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
+    expect(sent(0).html).toContain(
+      "<li>Instagram Story: Not sent — publishing stopped before it reached Instagram. Open the post in Activity to send it again.</li>",
+    );
+    expect(keyOf(0)).toBe("post-outcome/run-s");
+  });
+
+  it("STALE SWEEP, single job: one email, its unsent rows say so instead of Pending", async () => {
+    pair(
+      null,
+      jobRow({
+        id: STORY_ID,
+        status: "failed",
+        storyOfPostJobId: null,
+        updatedAt: NOW,
+        publishMetadata: null,
+        results: [{ ...storyResults(T0)[0], status: "pending" }],
+      }),
+    );
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-s" });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sent(0).subject).toBe("Surf Co: your post failed to publish");
+    expect(sent(0).html).toContain("<li>Instagram: Not sent — publishing stopped before it reached Instagram.");
+    expect(sent(0).html).not.toContain("Pending");
+  });
+
   it("a Story-only post (no pair) labels its rows too", async () => {
     pair(null, storyJob({ storyOfPostJobId: null, results: [storyResults(NOW)[0]] }));
 

@@ -60,6 +60,11 @@ export interface PostOutcomeResultSummary {
   errorMessage?: string | null;
   /** Sent as a Story: the row reads "Instagram Story" (R5-client-journey L3). */
   story?: boolean;
+  /**
+   * Still pending on a job that was closed (the stale sweep fails a job whose run
+   * never got to it): it was never sent, and counts as not published.
+   */
+  notSent?: boolean;
 }
 
 export interface BuildPostOutcomeEmailParams {
@@ -114,7 +119,7 @@ function oneLine(value: string): string {
 function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
   const total = results.length;
   const succeededCount = results.filter((r) => r.status === "success").length;
-  const failedCount = results.filter((r) => r.status === "failed").length;
+  const failedCount = results.filter((r) => r.status === "failed" || r.notSent).length;
   if (total === 0) return "Your post has finished processing";
   const stories = results.filter((r) => r.story).length;
   // A Feed and Story pair: its rows are feed posts and Stories, not platforms.
@@ -142,6 +147,9 @@ function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
 // module's DTO type can never leak into the email body.
 function renderResultRow(result: PostOutcomeResultSummary): string {
   const label = escapeHtml(`${platformLabel(result.platform)}${result.story ? " Story" : ""}`);
+  if (result.notSent) {
+    return `<li>${label}: Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}. Open the post in Activity to send it again.</li>`;
+  }
   if (result.status === "success") {
     return `<li>${label}: Succeeded</li>`;
   }
@@ -286,10 +294,16 @@ const FINISHED_STATUSES: readonly PostJobStatus[] = ["completed", "failed"];
  */
 export const PAIR_EMAIL_WAIT_MS = 3 * 60 * 60 * 1000;
 
-/** When a job finished: its last result's write, or the job's own for none. */
+/**
+ * When a job finished: its last write, the job's own or a result's. A job the
+ * stale sweep or the reconciler closed finished at that write, however old its
+ * results' times are.
+ */
 function finishedAt(job: OutcomeJob): number {
-  const times = job.results.map((result) => new Date(result.updatedAt).getTime());
-  return times.length > 0 ? Math.max(...times) : new Date(job.updatedAt).getTime();
+  return Math.max(
+    new Date(job.updatedAt).getTime(),
+    ...job.results.map((result) => new Date(result.updatedAt).getTime()),
+  );
 }
 
 /** The latest platform-limit wait among the job's pending results, or 0. */
@@ -333,10 +347,15 @@ async function pairPartnerOf(job: OutcomeJob): Promise<OutcomeJob | null> {
   return partner && partner.workspaceId === job.workspaceId ? partner : null;
 }
 
-/** A job's rows for the email, its Story platforms labelled. */
+/** A job's rows for the email, its Story platforms labelled, its never-sent rows marked. */
 function summaryRows(job: OutcomeJob) {
   const stories = storyPlatformsOf(job.publishMetadata) as Platform[];
-  return job.results.map((result) => ({ ...result, story: stories.includes(result.platform) }));
+  const closed = FINISHED_STATUSES.includes(job.status);
+  return job.results.map((result) => ({
+    ...result,
+    story: stories.includes(result.platform),
+    notSent: closed && result.status === "pending",
+  }));
 }
 
 /** One Resend key per pair outcome: the same from either half, new after a retry. */
