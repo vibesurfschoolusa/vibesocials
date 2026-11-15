@@ -2369,26 +2369,34 @@ export const connectionHealthSweep = inngest.createFunction(
     const freeDue: InlineRefreshCandidate[] = [];
 
     for (let page = 0; ; page++) {
-      const read: { fanOut: string[]; inline: InlineRefreshCandidate[]; last: string | null; count: number } =
-        await step.run(`page-${page}`, async () => {
-          const eligible = proactiveRefreshWhere(now);
-          const rows = await prisma.socialConnection.findMany({
-            where: cursor ? { AND: [eligible, { id: { gt: cursor } }] } : eligible,
-            select: SWEEP_PAGE_SELECT,
-            orderBy: { id: "asc" },
-            take: HEALTH_SWEEP_PAGE_SIZE,
-          });
-          const fanOut: string[] = [];
-          const inline: InlineRefreshCandidate[] = [];
-          for (const row of rows) {
-            if (row.expiresAt && refreshesInline(row.workspace, now)) {
-              inline.push({ id: row.id, expiresAt: new Date(row.expiresAt).toISOString() });
-            } else {
-              fanOut.push(row.id);
-            }
-          }
-          return { fanOut, inline, last: rows.at(-1)?.id ?? null, count: rows.length };
+      const memoized: SweepPageRead | string[] = await step.run(`page-${page}`, async (): Promise<SweepPageRead> => {
+        const eligible = proactiveRefreshWhere(now);
+        const rows = await prisma.socialConnection.findMany({
+          where: cursor ? { AND: [eligible, { id: { gt: cursor } }] } : eligible,
+          select: SWEEP_PAGE_SELECT,
+          orderBy: { id: "asc" },
+          take: HEALTH_SWEEP_PAGE_SIZE,
         });
+        const fanOut: string[] = [];
+        const inline: InlineRefreshCandidate[] = [];
+        for (const row of rows) {
+          if (row.expiresAt && refreshesInline(row.workspace, now)) {
+            inline.push({
+              id: row.id,
+              expiresAt: new Date(row.expiresAt).toISOString(),
+              failed: row.refreshFailedAt !== null,
+            });
+          } else {
+            fanOut.push(row.id);
+          }
+        }
+        return { fanOut, inline, last: rows.at(-1)?.id ?? null, count: rows.length };
+      });
+      // A sweep that started before R10 (V3) memoized its pages as plain id
+      // lists: those are fanned out, as they were then.
+      const read: SweepPageRead = Array.isArray(memoized)
+        ? { fanOut: memoized, inline: [], last: memoized.at(-1) ?? null, count: memoized.length }
+        : memoized;
       pages++;
       freeDue.push(...read.inline);
 
@@ -2540,6 +2548,31 @@ async function refreshOneConnection(
   }
 }
 
+/** One `page-<i>` step's output: ids to fan out, free ones to refresh inline. */
+type SweepPageRead = { fanOut: string[]; inline: InlineRefreshCandidate[]; last: string | null; count: number };
+
+/**
+ * Coordinator's review of R10 (V3): an inline refresh that failed without
+ * flagging leaves `refreshFailedAt` set on the unflagged row, so tomorrow's
+ * queue puts it after the healthy ones (inlineRefreshQueue). A flag writes
+ * its own time there and every refresher's success write clears it, so it
+ * means "the last attempt failed" until one succeeds. Best effort: losing
+ * the mark only changes the order.
+ */
+async function markInlineRefreshFailed(socialConnectionId: string): Promise<void> {
+  try {
+    await prisma.socialConnection.updateMany({
+      where: { id: socialConnectionId, needsReconnect: false },
+      data: { refreshFailedAt: new Date() },
+    });
+  } catch (error) {
+    logger.warn("[Inngest] Could not record a failed inline refresh", {
+      socialConnectionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /** What the sweep's inline refresh of free workspaces' connections did (counts only). */
 type FreeRefreshCounts = {
   due: number;
@@ -2594,10 +2627,14 @@ async function refreshConnectionsInline(ids: readonly string[], utcDay: string):
         error: error instanceof Error ? error.message : String(error),
       });
       counts.failed++;
+      await markInlineRefreshFailed(socialConnectionId);
       continue;
     }
     if (outcome === "refreshed") counts.refreshed++;
-    else if (outcome === "transient_error") counts.failed++;
+    else if (outcome === "transient_error") {
+      counts.failed++;
+      await markInlineRefreshFailed(socialConnectionId);
+    }
     else if (outcome === "flagged") {
       counts.flagged++;
       try {

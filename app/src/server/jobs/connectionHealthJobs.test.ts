@@ -482,7 +482,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     await runCron(step);
 
     const select = findManyMock.mock.calls[0][0].select as Record<string, unknown>;
-    expect(Object.keys(select)).toEqual(["id", "expiresAt", "workspace"]);
+    expect(Object.keys(select)).toEqual(["id", "expiresAt", "refreshFailedAt", "workspace"]);
     expect(JSON.stringify(select)).not.toMatch(/accessToken|refreshToken/);
     expect(JSON.stringify(step.outputs)).not.toMatch(/accessToken|refreshToken|@example/);
   });
@@ -560,7 +560,7 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
         .filter((row) => gt === undefined || row.id > gt)
         .sort((a, b) => (a.id < b.id ? -1 : 1))
         .slice(0, args.take)
-        .map((row) => ({ id: row.id, expiresAt: row.expiresAt, workspace: row.workspace }));
+        .map((row) => ({ id: row.id, expiresAt: row.expiresAt, refreshFailedAt: row.refreshFailedAt, workspace: row.workspace }));
     });
     findUniqueMock.mockImplementation(async (args: { where: { id: string }; select?: Record<string, boolean> }) => {
       const row = rows.get(args.where.id);
@@ -756,6 +756,61 @@ describe("connectionHealthSweep — free workspaces' connections are refreshed i
 
     expect(refreshedIds()).toEqual(["conn-1", "conn-2", "conn-3", "conn-4"]);
     expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 6, refreshed: 4, leftForTomorrow: 2 });
+  });
+
+  // Coordinator's review: failing connections keep their old expiresAt, so by
+  // expiry alone they would come first every day.
+  it("3 connections whose last refresh failed and 100 healthy ones due: the 100 healthy today, the 3 after them", async () => {
+    for (let i = 0; i < 3; i++) {
+      add(`bad-${i}`, { expiresAt: new Date(NOW.getTime() - 30 * 86_400_000), refreshFailedAt: new Date(NOW.getTime() - 86_400_000) });
+    }
+    for (let i = 0; i < 100; i++) add(`ok-${String(i).padStart(3, "0")}`);
+
+    const { summary } = await runCron();
+
+    expect(refreshedIds()).toHaveLength(100);
+    expect(refreshedIds().every((id) => id.startsWith("ok-"))).toBe(true);
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 103, refreshed: 100, leftForTomorrow: 3 });
+  });
+
+  it("a refresh that fails without flagging records refreshFailedAt (not the flag), so it goes last next time", async () => {
+    add("conn-a");
+    refresher.mockImplementation(async () => {
+      throw Object.assign(new Error("timeout"), { code: "TIKTOK_TOKEN_REFRESH_FAILED" });
+    });
+
+    const { summary } = await runCron();
+
+    expect(summary.freeRefresh).toEqual({ ...NO_FREE_REFRESH, due: 1, failed: 1 });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "conn-a", needsReconnect: false },
+      data: { refreshFailedAt: NOW },
+    });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  // Coordinator's review: a sweep that started before this release memoized its
+  // pages as plain id lists; on the new code they are fanned out, as they were.
+  it("a page output in the old shape (a plain id list) is fanned out, not thrown on", async () => {
+    add("conn-1");
+    const step = fakeStep();
+    const run = step.run.getMockImplementation()!;
+    step.run.mockImplementation(async (id: string, cb: () => unknown) => {
+      if (id === "page-0") {
+        step.order.push(`run:${id}`);
+        return ["conn-old-1", "conn-old-2"];
+      }
+      return run(id, cb);
+    });
+
+    const { summary } = await runCron(step);
+
+    expect(fannedOut(step)).toEqual(["conn-old-1", "conn-old-2"]);
+    expect((step.sendEvent.mock.calls[0][1] as SentEvent[])[0].id).toBe("refresh-conn-old-1-2026-11-01");
+    expect(findManyMock).not.toHaveBeenCalled();
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    expect(summary.connections).toBe(2);
+    expect(summary.pages).toBe(1);
   });
 
   it("a connection refreshed elsewhere since the page was read is left alone", async () => {

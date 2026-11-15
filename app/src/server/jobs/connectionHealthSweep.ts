@@ -122,13 +122,14 @@ export const FREE_INLINE_REFRESH_DAILY_CAP = 100;
 export const INLINE_REFRESH_BUDGET_MS = 200_000;
 
 /**
- * What the cron reads per due connection: its expiry (to order the inline
- * queue) and its workspace's plan columns and owners (to tell free from paid).
- * No token column.
+ * What the cron reads per due connection: its expiry and whether its last
+ * refresh failed (to order the inline queue) and its workspace's plan columns
+ * and owners (to tell free from paid). No token column.
  */
 export const SWEEP_PAGE_SELECT = {
   id: true,
   expiresAt: true,
+  refreshFailedAt: true,
   workspace: {
     select: {
       ...BILLING_FIELDS_SELECT,
@@ -156,12 +157,19 @@ export function refreshesInline(workspace: SweepWorkspace, now: Date, env: Billi
   return serviceCapApplies(workspace, operatorOwned, now, env);
 }
 
-/** A due connection of a free workspace, as a step output carries it. */
-export type InlineRefreshCandidate = { id: string; expiresAt: string };
+/**
+ * A due connection of a free workspace, as a step output carries it. `failed`:
+ * its last refresh attempt failed without flagging it (`refreshFailedAt` on an
+ * unflagged row; every refresher's success write clears it).
+ */
+export type InlineRefreshCandidate = { id: string; expiresAt: string; failed?: boolean };
 
 /**
- * The free connections to refresh today: soonest-expiring first (ties by id),
- * at most `cap`; the count left is reported, and they come first tomorrow.
+ * The free connections to refresh today: those whose last refresh failed after
+ * the healthy ones, each soonest-expiring first (ties by id), at most `cap`;
+ * the count left is reported. A failing connection keeps its old expiresAt, so
+ * by expiry alone a few failing or hanging ones would come first every day and
+ * push healthy ones to the next.
  */
 export function inlineRefreshQueue(
   candidates: readonly InlineRefreshCandidate[],
@@ -169,7 +177,9 @@ export function inlineRefreshQueue(
 ): { ids: string[]; leftForTomorrow: number } {
   const ordered = [...candidates].sort(
     (a, b) =>
-      new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      Number(a.failed === true) - Number(b.failed === true) ||
+      new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime() ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
   const ids = ordered.slice(0, cap).map((candidate) => candidate.id);
   return { ids, leftForTomorrow: candidates.length - ids.length };

@@ -301,6 +301,22 @@ describe("inlineRefreshQueue: at most the daily cap, soonest-expiring first", ()
     expect(queue).toEqual({ ids: ["a", "b", "c"], leftForTomorrow: 1 });
   });
 
+  // Coordinator's review: a connection whose last refresh failed (refreshFailedAt
+  // on an unflagged row) goes after the healthy ones, so a few failing or
+  // hanging ones cannot push healthy ones to tomorrow.
+  it("puts connections whose last refresh failed after the healthy ones, each soonest-expiring first", () => {
+    const queue = inlineRefreshQueue(
+      [
+        { id: "failed-old", expiresAt: at(-10 * DAY), failed: true },
+        { id: "healthy-late", expiresAt: at(-HOUR) },
+        { id: "failed-new", expiresAt: at(-DAY), failed: true },
+        { id: "healthy-early", expiresAt: at(-2 * HOUR), failed: false },
+      ],
+      3,
+    );
+    expect(queue).toEqual({ ids: ["healthy-early", "healthy-late", "failed-old"], leftForTomorrow: 1 });
+  });
+
   it("150 due: the 100 soonest today, 50 left", () => {
     const due = Array.from({ length: 150 }, (_, i) => ({ id: `conn-${String(i).padStart(3, "0")}`, expiresAt: at(-(150 - i) * HOUR) }));
     const queue = inlineRefreshQueue(due.slice().reverse());
