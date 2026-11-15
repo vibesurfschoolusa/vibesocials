@@ -349,3 +349,32 @@ describe("buildApprovalDecisionEmail - approved but nothing sent", () => {
     expect(email.html).toMatch(/publishing now/i);
   });
 });
+
+// R22 client-journey L2: the preview counts whole characters, so an emoji at
+// the cut is never split into a broken character.
+describe("the caption preview", () => {
+  const params = {
+    submitterName: "Sam",
+    workspaceId: "ws_1",
+    workspaceName: "Surf Co",
+    timeZone: null,
+    appBaseUrl: "https://vibesocials.wtf",
+  };
+  const quoted = (html: string) => /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/.exec(html)![1];
+
+  it("cuts after 240 whole characters, never inside an emoji, in both emails", () => {
+    const caption = `${"a".repeat(239)}🏄‍♂️🌊 more`;
+    const requested = quoted(buildApprovalRequestedEmail({ ...params, caption }).html);
+    expect(requested).toBe(`${"a".repeat(239)}🏄‍♂️…`);
+    expect(requested).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    const decided = quoted(
+      buildApprovalDecisionEmail({ ...params, approved: false, caption, scheduledFor: null }).html,
+    );
+    expect(decided).toBe(`${"a".repeat(239)}🏄‍♂️…`);
+  });
+
+  it("a caption of 240 characters or fewer is shown whole, with no ellipsis", () => {
+    const caption = `${"a".repeat(238)}🏄‍♂️🌊`;
+    expect(quoted(buildApprovalRequestedEmail({ ...params, caption }).html)).toBe(caption);
+  });
+});

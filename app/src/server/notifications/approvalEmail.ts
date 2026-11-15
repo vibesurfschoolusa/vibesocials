@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries, platformLabel } from "@/lib/platforms";
+import { truncateGraphemes } from "@/lib/truncate";
 import { emailDate, emailDateTime } from "@/server/notifications/emailTime";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -30,10 +31,17 @@ function normalizeBase(appBaseUrl: string | null): string | null {
   return appBaseUrl ? appBaseUrl.replace(/\/+$/, "") : null;
 }
 
-/** Short, safe preview of a caption for an email body. */
+/** Characters of the base caption the approval emails quote. */
+const CAPTION_PREVIEW_CHARS = 240;
+
+/**
+ * Short, safe preview of a caption for an email body. R22 client-journey L2:
+ * counted in whole characters (graphemes), so an emoji is never split.
+ */
 function captionBlock(caption: string): string {
   const trimmed = caption.trim();
-  const shown = trimmed.length > 240 ? `${trimmed.slice(0, 240)}…` : trimmed;
+  const cut = truncateGraphemes(trimmed, CAPTION_PREVIEW_CHARS);
+  const shown = cut === trimmed ? trimmed : `${cut}…`;
   return `<blockquote style="margin:12px 0;padding-left:12px;border-left:3px solid #ddd">${escapeHtml(
     shown,
   )}</blockquote>`;

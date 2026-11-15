@@ -1,3 +1,4 @@
+import { truncateGraphemes } from "@/lib/truncate";
 import { emailDateTime } from "@/server/notifications/emailTime";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -46,7 +47,9 @@ export function buildClientChangeRequestEmail(params: {
   withStory?: boolean;
 }): { subject: string; html: string } {
   const queueUrl = workspaceLink(params.workspaceId, "/queue", params.appUrl);
-  const caption = Array.from(params.caption).slice(0, CAPTION_PREVIEW_CHARS).join("");
+  // R22 client-journey L4: whole characters (graphemes), and "…" when cut.
+  const cut = truncateGraphemes(params.caption, CAPTION_PREVIEW_CHARS);
+  const caption = cut === params.caption ? cut : `${cut}…`;
 
   return {
     subject: `${params.workspaceName}: your client asked for a change`,

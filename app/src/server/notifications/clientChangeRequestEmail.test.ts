@@ -36,6 +36,19 @@ describe("buildClientChangeRequestEmail", () => {
     expect(html).not.toContain("TAIL");
   });
 
+  // R22 client-journey L4: a cut caption says so, and an emoji is never split.
+  it("ends a cut caption with an ellipsis, cut between whole characters", () => {
+    const caption = `${"a".repeat(99)}🏄‍♂️🌊TAIL`;
+    const { html } = buildClientChangeRequestEmail({ ...base, caption });
+    expect(html).toContain(`<strong>Caption:</strong> ${"a".repeat(99)}🏄‍♂️…</p>`);
+  });
+
+  it("a caption of 100 characters or fewer has no ellipsis", () => {
+    const caption = "b".repeat(100);
+    const { html } = buildClientChangeRequestEmail({ ...base, caption });
+    expect(html).toContain(`<strong>Caption:</strong> ${caption}</p>`);
+  });
+
   it("escapes every value", () => {
     const { html } = buildClientChangeRequestEmail({
       ...base,
