@@ -60,3 +60,10 @@ describe("Add many: a caption that failed", () => {
     }
   });
 });
+
+// R21 publishing-flow L1: a 401 is the shared signed-out sentence, not "ask again".
+describe("Add many: a caption refused because the session ended", () => {
+  it("401: the signed-out sentence", () => {
+    expect(captionFailedText(401, undefined)).toBe("You were signed out. Sign in again.");
+  });
+});

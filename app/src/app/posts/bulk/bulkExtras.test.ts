@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { storyVideoLengthRefusal } from "@/lib/storyPlacement";
 
 import {
+  BULK_COVER_FAILED_TEXT,
   BULK_IMPROVE_FAILED_TEXT,
   autoCaptionRequestBody,
+  coverUploadFailedText,
   buildBulkRowBody,
   bulkExtrasBlock,
   bulkGoogleMetadataError,
@@ -500,5 +502,34 @@ describe("Add many: the AI captions choice is remembered in this browser", () =>
         false,
       ),
     ).not.toThrow();
+  });
+});
+
+// R21 publishing-flow L1: a 401 reads the shared signed-out sentence, and a
+// cover upload's failure goes through explainUploadFailure.
+describe("signed out, and cover upload failures", () => {
+  const SIGNED_OUT = "You were signed out. Sign in again.";
+  const answer = (status: number, body: unknown) =>
+    vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+
+  it("Improve answered 401: the signed-out sentence", () => {
+    expect(improveFailedText(401, undefined)).toBe(SIGNED_OUT);
+  });
+
+  it("a cover upload refused because the session ended: the signed-out sentence", async () => {
+    const fetchImpl = answer(401, { error: SIGNED_OUT });
+    await expect(coverUploadFailedText(new Error("Failed to retrieve the client token"), fetchImpl)).resolves.toBe(SIGNED_OUT);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/upload", { method: "GET" });
+  });
+
+  it("a cover upload refused because storage is full: the route's sentence", async () => {
+    const full = "Your workspace's storage is full. Delete files in Media, then try again.";
+    const fetchImpl = answer(200, { storageFull: true, error: full });
+    await expect(coverUploadFailedText(new Error("Failed to retrieve the client token"), fetchImpl)).resolves.toBe(full);
+  });
+
+  it("any other failure: the cover sentence", async () => {
+    const fetchImpl = answer(200, {});
+    await expect(coverUploadFailedText(new Error("network down"), fetchImpl)).resolves.toBe(BULK_COVER_FAILED_TEXT);
   });
 });

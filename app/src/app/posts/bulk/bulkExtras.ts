@@ -10,7 +10,9 @@ import {
   type UploadedBlob,
 } from "@/lib/createPostRequest";
 import { parseGooglePostMetadata, type GoogleButton } from "@/lib/googlePostOptions";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { storyVideoLengthRefusal, type PlacementChoiceValue } from "@/lib/storyPlacement";
+import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import type { coverRequestFields } from "@/lib/videoCover";
 import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
@@ -30,11 +32,22 @@ export const BULK_COVER_FAILED_TEXT =
   "The cover image could not be uploaded. Try again, or choose Platform default.";
 
 /**
+ * What a failed cover upload says, on Create and in Add many (R21
+ * publishing-flow L1): the reason explainUploadFailure finds (signed out,
+ * storage full, the upload refused), else the cover sentence.
+ */
+export async function coverUploadFailedText(error: unknown, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const explained = await explainUploadFailure(error, fetchImpl);
+  return explained instanceof UploadRefusedError ? explained.message : BULK_COVER_FAILED_TEXT;
+}
+
+/**
  * Why Improve got no new caption, by the answer's status, the way
  * captionFailedText says it for a caption (`status` null: no answer at all).
  * The server's own text stays in the console.
  */
 export function improveFailedText(status: number | null, code: unknown): string {
+  if (status === 401) return SIGNED_OUT_ERROR;
   if (status === 429 && code === "AI_WORKSPACE_DAILY_LIMIT") {
     return "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.";
   }

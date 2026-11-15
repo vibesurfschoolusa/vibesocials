@@ -95,6 +95,7 @@ import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { captureVideoFrame } from "@/lib/captureVideoFrame";
 import { coverBlobPathname } from "@/lib/coverBlobPath";
 import { coverRequestFields, type CoverChoice, type UploadedCoverImage } from "@/lib/videoCover";
+import { coverUploadFailedText } from "@/app/posts/bulk/bulkExtras";
 import {
   deriveComposerPlatforms,
   isTikTokPrivacyMissing,
@@ -1405,7 +1406,10 @@ function CreatePostFormInner({
 
   // V1: the cover's image, uploaded like a photo: the chosen file, or the
   // chosen frame captured in the browser. Null when it could not be had.
-  async function uploadCoverImage(choice: CoverChoice, source: File | string): Promise<UploadedCoverImage | null> {
+  async function uploadCoverImage(
+    choice: CoverChoice,
+    source: File | string,
+  ): Promise<{ image: UploadedCoverImage | null; error: string | null }> {
     try {
       const file =
         choice.kind === "upload"
@@ -1413,16 +1417,17 @@ function CreatePostFormInner({
           : choice.kind === "frame"
             ? await captureVideoFrame(source, choice.timeMs)
             : null;
-      if (!file) return null;
+      if (!file) return { image: null, error: null };
       // Under this workspace's covers/ folder: the posts route takes no other.
       const blob = await upload(coverBlobPathname(workspaceId), file, {
         access: "public",
         handleUploadUrl: "/api/upload",
         clientPayload: uploadSizePayload(file),
       });
-      return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
-    } catch {
-      return null;
+      return { image: { url: blob.url, mimeType: file.type, sizeBytes: file.size }, error: null };
+    } catch (err: unknown) {
+      // R21 publishing-flow L1: why it failed (signed out, storage full), as a photo's upload says.
+      return { image: null, error: await coverUploadFailedText(err) };
     }
   }
 
@@ -1827,9 +1832,9 @@ function CreatePostFormInner({
       // (Instagram uses it); an uploaded cover that failed stops here.
       let coverFields: ReturnType<typeof coverRequestFields> = {};
       if (coverVideo && coverChoice.kind !== "default") {
-        const image = await uploadCoverImage(coverChoice, coverVideo.source);
+        const { image, error: coverError } = await uploadCoverImage(coverChoice, coverVideo.source);
         if (coverChoice.kind === "upload" && !image) {
-          toast.error("The cover image could not be uploaded. Try again, or choose Platform default.");
+          toast.error(coverError ?? "The cover image could not be uploaded. Try again, or choose Platform default.");
           setUploadLoading(false);
           return;
         }

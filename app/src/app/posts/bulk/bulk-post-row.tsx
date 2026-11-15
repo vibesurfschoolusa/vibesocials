@@ -13,6 +13,7 @@ import { VideoCoverPicker } from "@/components/video-cover-picker";
 import { ALT_TEXT_MAX } from "@/lib/altText";
 import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
 import { skippedForMediaLine } from "@/lib/postTargets";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { formatCoverTime, type CoverChoice } from "@/lib/videoCover";
 import type { BulkRow } from "./bulk-posts-form";
 
@@ -80,6 +81,9 @@ function Thumbnail({ row }: { row: BulkRow }) {
  * is never shown, and the browser console keeps it.
  */
 export function captionFailedText(status: number | null, code: unknown): string {
+  // R21 publishing-flow L1: the session ended (another tab, a new password);
+  // asking again fails until the person signs in.
+  if (status === 401) return SIGNED_OUT_ERROR;
   if (status === 504) {
     return "No caption was written: the AI service took too long. Write one yourself, or ask again.";
   }

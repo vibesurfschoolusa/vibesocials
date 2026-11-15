@@ -81,6 +81,7 @@ import {
   bulkRowResultText,
   bulkStoryChoice,
   captionThenDescribe,
+  coverUploadFailedText,
   describePhotoOnce,
   initialBulkGoogleMetadata,
   readAiCaptionsChoice,
@@ -551,7 +552,10 @@ export function BulkPostsForm({
   // The cover's image, uploaded as Create does: the chosen file, or the chosen
   // frame captured in the browser, under this workspace's covers/ folder (the
   // posts route takes no other). Null when it could not be had.
-  async function uploadCoverImage(choice: CoverChoice, source: File | string): Promise<UploadedCoverImage | null> {
+  async function uploadCoverImage(
+    choice: CoverChoice,
+    source: File | string,
+  ): Promise<{ image: UploadedCoverImage | null; error: string | null }> {
     try {
       const file =
         choice.kind === "upload"
@@ -559,16 +563,17 @@ export function BulkPostsForm({
           : choice.kind === "frame"
             ? await captureVideoFrame(source, choice.timeMs)
             : null;
-      if (!file) return null;
+      if (!file) return { image: null, error: null };
       const blob = await upload(coverBlobPathname(workspaceId), file, {
         access: "public",
         handleUploadUrl: "/api/upload",
         clientPayload: uploadSizePayload(file),
       });
-      return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
+      return { image: { url: blob.url, mimeType: file.type, sizeBytes: file.size }, error: null };
     } catch (error: unknown) {
       console.error("[Add many] Cover upload failed", error);
-      return null;
+      // R21 publishing-flow L1: why it failed (signed out, storage full), as a file's upload says.
+      return { image: null, error: await coverUploadFailedText(error) };
     }
   }
 
@@ -729,9 +734,9 @@ export function BulkPostsForm({
         // time (Instagram uses it); an uploaded cover that failed stops this row.
         let coverFields: ReturnType<typeof coverRequestFields> = {};
         if (row.mimeType.startsWith("video/") && row.cover.kind !== "default") {
-          const image = await uploadCoverImage(row.cover, filesRef.current.get(id) ?? row.blob.url);
+          const { image, error: coverError } = await uploadCoverImage(row.cover, filesRef.current.get(id) ?? row.blob.url);
           if (row.cover.kind === "upload" && !image) {
-            updateRow(id, { sending: false, sendError: BULK_COVER_FAILED_TEXT });
+            updateRow(id, { sending: false, sendError: coverError ?? BULK_COVER_FAILED_TEXT });
             continue;
           }
           coverFields = coverRequestFields(row.cover, image);
