@@ -335,7 +335,10 @@ describe("POST /api/invites/[token]/accept", () => {
     const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to join workspace" });
+    // R11-client-journey L3: the sentence the Join page shows, with its next step.
+    await expect(response.json()).resolves.toEqual({
+      error: "You weren't added to the workspace. Please press Join workspace again in a minute.",
+    });
     expect(cookieSetMock).not.toHaveBeenCalled();
 
     consoleSpy.mockRestore();

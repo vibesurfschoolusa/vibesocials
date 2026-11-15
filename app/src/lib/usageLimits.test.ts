@@ -26,6 +26,7 @@ import {
   WORKSPACES_CREATED_LIMIT,
   WORKSPACES_CREATED_WINDOW_DAYS,
   workspaceCreationLimitMessage,
+  utcDisplayDateTime,
   resolveWorkspaceLimits,
   storageFullMessage,
   usageResetText,
@@ -562,7 +563,8 @@ describe("limits across workspaces", () => {
     it("the Usage label and note", () => {
       expect(personalUsageText({ name: "Jane", isViewer: true, reduced: null }, false, {}, ON)).toEqual({
         label: "Your posts today (UTC), your workspaces not yet paid for",
-        note: "Retries count too. The per-person number is the same for everyone until a workspace is paid for.",
+        // R11-pages L7: paying doesn't raise the number; a paid workspace's posts are left out of it.
+        note: "Retries count too. The per-person number is the same for everyone; posts in a paid workspace don't count toward it.",
       });
       expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, true, {}, ON).label).toBe(
         "Jane's posts today (UTC), their workspaces not yet paid for",
@@ -597,9 +599,18 @@ describe("limits across workspaces", () => {
     });
   });
 
-  it("the workspace creation sentence names the day it opens again", () => {
-    expect(workspaceCreationLimitMessage(30, new Date("2026-12-03T09:00:00Z"))).toBe(
-      "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from December 3, 2026.",
+  // R11-pages L6: the day alone was wrong all morning when it opens at 18:00 UTC.
+  it("the workspace creation sentence names the time it opens again, in UTC", () => {
+    expect(workspaceCreationLimitMessage(30, new Date("2026-12-03T18:00:00Z"))).toBe(
+      "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from December 3, 2026, 18:00 UTC.",
     );
+    // Part of a minute is rounded up, so the time named is never still refused.
+    expect(workspaceCreationLimitMessage(30, new Date("2026-12-03T18:00:37Z"))).toContain("from December 3, 2026, 18:01 UTC.");
+    expect(workspaceCreationLimitMessage(30, new Date("2026-12-03T23:59:30Z"))).toContain("from December 4, 2026, 00:00 UTC.");
+  });
+
+  it("utcDisplayDateTime: the date and a 24-hour time in UTC, labelled", () => {
+    expect(utcDisplayDateTime(new Date("2026-11-21T01:00:00Z"))).toBe("November 21, 2026, 01:00 UTC");
+    expect(utcDisplayDateTime(new Date("2026-11-21T23:05:59Z"))).toBe("November 21, 2026, 23:05 UTC");
   });
 });

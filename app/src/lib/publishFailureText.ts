@@ -27,6 +27,10 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
   const label = platformLabel(platform);
   const reconnect = memberReconnectMessage(platform);
   const chooseBoard = `The workspace owner can reconnect ${label} and choose a board; then retry.`;
+  const linkedinNotSuperAdmin =
+    "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+  const linkedinNotSuperAdminMember =
+    "LinkedIn refused the post because the connected LinkedIn account is not a Super admin of this company page. A Super admin of the page can add that account as a Super admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.";
   return new Map([
     [reconnectRequiredMessage(platform), reconnect],
     [connectionGoneMessage(platform), `The workspace owner can connect ${label}; then retry.`],
@@ -41,9 +45,11 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
       "Could not find a Google Business Profile location for the given store code. Double-check the store code in Advanced settings.",
       "The workspace owner can check the store code for Google Business Profile; then retry.",
     ],
+    [linkedinNotSuperAdmin, linkedinNotSuperAdminMember],
+    // R11-pages L1: the sentence posts that failed before carry; a Content admin can't be picked on reconnect.
     [
       "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
-      "LinkedIn refused the post because the connected LinkedIn account is not an admin of this company page. A page admin can add that account as a Super admin or Content admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.",
+      linkedinNotSuperAdminMember,
     ],
     [
       "The Pinterest board this connection posts to no longer exists. Reconnect Pinterest in Settings and choose a board.",

@@ -725,6 +725,15 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(error?.message).toBe(LINKEDIN_NOT_PAGE_ADMIN_MESSAGE);
   });
 
+  // R11-pages L1: reconnecting lists only the pages the account is a Super
+  // admin of, so a Content admin can't fix it; the advice names Super admin only.
+  it("the not-a-page-admin advice names the role reconnecting needs: Super admin only", () => {
+    expect(LINKEDIN_NOT_PAGE_ADMIN_MESSAGE).toBe(
+      "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
+    );
+    expect(LINKEDIN_NOT_PAGE_ADMIN_MESSAGE).not.toContain("Content admin");
+  });
+
   it("any other 403 keeps LINKEDIN_POST_CREATION_FAILED", async () => {
     stubLinkedIn({ post: () => new Response(JSON.stringify({ message: "Not enough permissions" }), { status: 403 }) });
     expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe(

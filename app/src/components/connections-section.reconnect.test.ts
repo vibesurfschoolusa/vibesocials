@@ -71,7 +71,7 @@ describe("Settings, Connections: a LinkedIn connection about to end", () => {
   // R8-pages L5: the page passes the kept end date down to the row.
   it("just reconnected with the same end date: the row says LinkedIn kept it", () => {
     const html = linkedInRow(["linkedin"], {}, { linkedin: "2026-11-16T12:00:00.000Z" });
-    expect(html).toContain("Ends November 16, 2026. LinkedIn kept this end date.");
+    expect(html).toContain("Ends November 16, 2026, 12:00 UTC. LinkedIn kept this end date.");
     expect(html).not.toContain("Ends soon");
   });
 

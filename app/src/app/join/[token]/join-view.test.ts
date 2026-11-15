@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 const { getCurrentUserMock, inviteFindUniqueMock } = vi.hoisted(() => ({
@@ -18,6 +20,10 @@ import {
   invalidInviteDescription,
   JOIN_FAILED_MESSAGE,
   JOIN_OFFLINE_MESSAGE,
+  JOIN_SIGNED_OUT_MESSAGE,
+  JoinDeadLink,
+  JoinSignedOut,
+  JoinUnreachable,
   JoinView,
   joinPromise,
   loadInvite,
@@ -63,6 +69,11 @@ describe("loadInvite", () => {
     await expect(loadInvite(respond(500), "tok")).resolves.toEqual({ kind: "unreachable" });
     await expect(loadInvite(respond(429), "tok")).resolves.toEqual({ kind: "unreachable" });
   });
+
+  // R11 review: signed out in another tab before the preview loaded; the same state as Join's 401.
+  it("a 401 is signed out, not a network failure", async () => {
+    await expect(loadInvite(respond(401, { error: "Unauthorized" }), "tok")).resolves.toEqual({ kind: "signedOut" });
+  });
 });
 
 // R10-pages L3: Join's 404 shows the same state, with the server's sentence.
@@ -87,6 +98,23 @@ describe("acceptInvite", () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
     await expect(acceptInvite(offline, "tok")).resolves.toEqual({ kind: "failed", message: JOIN_OFFLINE_MESSAGE });
+  });
+
+  // R11-client-journey L3: a server's own failure text ("Failed to join
+  // workspace") has no next step, so any 5xx says the try-again sentence.
+  it("any 5xx: the try-again sentence, whatever the body says", async () => {
+    for (const status of [500, 502, 503]) {
+      await expect(acceptInvite(respond(status, { error: "Failed to join workspace" }), "tok")).resolves.toEqual({
+        kind: "failed",
+        message: JOIN_FAILED_MESSAGE,
+      });
+    }
+  });
+
+  // R11-client-journey L3: signed out in another tab between opening the link and Join.
+  it("a 401: signed out, not the server's bare word", async () => {
+    await expect(acceptInvite(respond(401, { error: "Unauthorized" }), "tok")).resolves.toEqual({ kind: "signedOut" });
+    expect(JOIN_SIGNED_OUT_MESSAGE).toBe("You were signed out. Sign in again, then open this invite link again.");
   });
 
   it("the dead-link page says the server's sentence, else the generic one", () => {
@@ -168,5 +196,32 @@ describe("what joining lets a member do", () => {
       };
       expect(element.props.requiresApproval).toBe(false);
     }
+  });
+});
+
+// R11-pages L5: each state the page can end on has the page's h1; R11-client-journey L3: the
+// signed-out state links to sign-in and back to this invite.
+describe("join states", () => {
+  const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
+
+  it("the dead link has its title as the page's h1", () => {
+    const page = html(createElement(JoinDeadLink, { message: undefined }));
+    expect(page).toMatch(/<h1[^>]*>This invite link isn&#x27;t valid anymore\.<\/h1>/);
+    expect(page).toContain(INVALID_INVITE_DESCRIPTION);
+    expect(page).not.toContain("<h3");
+  });
+
+  it("the unreachable invite has its title as the page's h1", () => {
+    const page = html(createElement(JoinUnreachable, { onRetry: () => {} }));
+    expect(page).toMatch(/<h1[^>]*>We couldn&#x27;t load this invite\.<\/h1>/);
+    expect(page).toContain("Try again");
+  });
+
+  it("signed out: says so, with an h1 and a sign-in link back to this invite", () => {
+    const page = html(createElement(JoinSignedOut, { token: "tok" }));
+    expect(page).toMatch(/<h1[^>]*>You weren&#x27;t added to the workspace\.<\/h1>/);
+    expect(page).toContain("You were signed out. Sign in again, then open this invite link again.");
+    expect(page).toContain(`href="/login?callbackUrl=${encodeURIComponent("/join/tok")}"`);
+    expect(page).toContain(">Sign in<");
   });
 });

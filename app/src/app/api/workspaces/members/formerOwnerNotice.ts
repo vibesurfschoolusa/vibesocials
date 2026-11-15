@@ -29,7 +29,8 @@ import { workspaceLink } from "@/server/notifications/links";
  *
  * R7-security L4: leaving also turns off the invite links the person made
  * (../../leave); the email says how many. R8-client-journey L1: so does a
- * demotion ([userId]/route.ts), and the email says when.
+ * demotion ([userId]/route.ts), and the email says when. R11-client-journey
+ * L4: so does deleting the account (api/auth/account).
  */
 
 /** The client connect link at the moment someone stopped being an owner. */
@@ -65,11 +66,13 @@ export function buildFormerOwnerEmail(input: {
   joinLinksRevoked?: number;
   /** The person was made a member rather than leaving. */
   demoted?: boolean;
+  /** The person deleted their account rather than leaving. */
+  deletedAccount?: boolean;
   appBaseUrl: string | null | undefined;
 }): { subject: string; html: string; text: string } {
   const { workspaceName, formerOwnerName } = input;
   const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
-  const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0, input.demoted ?? false);
+  const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0, stepDown(input));
   if (input.clientLinksIncluded === false) {
     return pausedLinksEmail({ ...input, href, invites });
   }
@@ -107,9 +110,22 @@ export function buildFormerOwnerEmail(input: {
   };
 }
 
-function inviteLinksLine(formerOwnerName: string, workspaceName: string, count: number, demoted: boolean): string | null {
+/** How the person stopped being an owner, for the invite-links line. */
+type StepDown = "left" | "demoted" | "deletedAccount";
+
+function stepDown(input: { demoted?: boolean; deletedAccount?: boolean }): StepDown {
+  return input.deletedAccount ? "deletedAccount" : input.demoted ? "demoted" : "left";
+}
+
+const STEP_DOWN_WORDS: Record<StepDown, string> = {
+  left: "left",
+  demoted: "stopped being an owner",
+  deletedAccount: "deleted their account",
+};
+
+function inviteLinksLine(formerOwnerName: string, workspaceName: string, count: number, how: StepDown): string | null {
   if (count <= 0) return null;
-  const when = `when ${formerOwnerName} ${demoted ? "stopped being an owner" : "left"}`;
+  const when = `when ${formerOwnerName} ${STEP_DOWN_WORDS[how]}`;
   return count === 1
     ? `The invite link ${formerOwnerName} made was turned off ${when}, so it can't be used to join ${workspaceName} again.`
     : `The ${count} invite links ${formerOwnerName} made were turned off ${when}, so they can't be used to join ${workspaceName} again.`;
@@ -161,6 +177,8 @@ export async function noticeOwnersOfFormerOwner(input: {
   joinLinksRevoked?: number;
   /** Given by a demotion: the person is still a member. */
   demoted?: boolean;
+  /** Given by an account deletion (with `formerOwnerName` and `joinLinksRevoked`). */
+  deletedAccount?: boolean;
 }): Promise<{ clientLinksToReplace: boolean }> {
   const { workspaceId, formerOwnerId } = input;
   let links: { uploadLink: boolean; reviewLink: boolean; connectLink: FormerOwnerConnectLink };
@@ -217,6 +235,7 @@ export async function noticeOwnersOfFormerOwner(input: {
       clientLinksIncluded,
       joinLinksRevoked: input.joinLinksRevoked ?? 0,
       demoted: input.demoted ?? false,
+      deletedAccount: input.deletedAccount ?? false,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
     });
     for (const owner of owners) {

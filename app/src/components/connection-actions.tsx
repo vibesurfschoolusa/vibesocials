@@ -22,6 +22,19 @@ import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
 
+/**
+ * R11 review: "November 21, 2026, 01:00 UTC", the end LinkedIn kept, in the
+ * same words as the client's page (/c), so the two can't name different days.
+ * UTC, not the viewer's zone: the server and the browser render the same text.
+ */
+export function endsAtText(value: string): string {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return "";
+  const date = at.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date}, ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`;
+}
+
 interface Props {
   platform: string;
   /** The workspace this page was rendered for; the routes refuse any other (F3). */
@@ -331,7 +344,7 @@ export function ConnectionActions({
             ) : sameEndAt ? (
               // R8-pages L5: Settings' warning says what to do; no call to reconnect here.
               <span className="basis-full text-sm text-muted-foreground">
-                Ends {formatDisplayDate(sameEndAt)}. LinkedIn kept this end date.
+                Ends {endsAtText(sameEndAt)}. LinkedIn kept this end date.
               </span>
             ) : (
               <Badge variant="warning">Ends soon</Badge>

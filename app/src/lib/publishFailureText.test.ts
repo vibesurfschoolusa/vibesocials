@@ -428,6 +428,20 @@ describe("sentenceForRecipient", () => {
     ).toBe("The workspace owner can check the store code for Google Business Profile; then retry.");
   });
 
+  // R11-pages L1: a Content admin can't be picked on reconnect, so the member
+  // sentence names Super admin only, for the sentence written now and the one
+  // stored on posts that failed before.
+  it("LinkedIn's not-a-page-admin sentence names Super admin only for a member, new and stored", () => {
+    const member =
+      "LinkedIn refused the post because the connected LinkedIn account is not a Super admin of this company page. A Super admin of the page can add that account as a Super admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.";
+    for (const stored of [
+      "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
+      "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
+    ]) {
+      expect(sentenceForRecipient(stored, "linkedin", "member")).toBe(member);
+    }
+  });
+
   it("an expired or invalid connection keeps saying so for a member", () => {
     expect(sentenceForRecipient("Your Instagram connection has expired — please reconnect it in Settings.", "instagram", "member")).toBe(
       "The Instagram connection has expired. The workspace owner can reconnect Instagram; then retry.",

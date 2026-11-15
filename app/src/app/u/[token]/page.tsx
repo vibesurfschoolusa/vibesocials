@@ -43,7 +43,7 @@ export default async function UploadLinkPage({ params }: UploadLinkPageProps) {
 
   if (!link) {
     return (
-      <ClientPageShell workspace={null}>
+      <ClientPageShell workspace={null} title="This link is not active">
         <p className="text-base">{UPLOAD_LINK_INACTIVE_MESSAGE}</p>
         <LegalLinks />
       </ClientPageShell>

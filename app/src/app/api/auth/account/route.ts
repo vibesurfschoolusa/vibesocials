@@ -128,8 +128,9 @@ export async function DELETE(request: Request) {
   const cancelled = cancel.cancelled > 0;
 
   let queued: QueuedFile[];
+  let joinLinksRevoked: ReadonlyMap<string, number>;
   try {
-    queued = await deleteInTransaction(user.id, plan);
+    ({ queued, joinLinksRevoked } = await deleteInTransaction(user.id, plan));
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
       const message = cancelled ? `${CANCELLED_ACCOUNT_KEPT_PREFIX} ${error.message}` : error.message;
@@ -159,6 +160,9 @@ export async function DELETE(request: Request) {
       formerOwnerId: user.id,
       formerOwnerName,
       at,
+      // R11-client-journey L4: the email says how many of their invite links went with the account.
+      joinLinksRevoked: joinLinksRevoked.get(workspace.workspaceId) ?? 0,
+      deletedAccount: true,
     });
   }
 
@@ -173,7 +177,10 @@ export async function DELETE(request: Request) {
  * again from fresh rows, queue the stored files, reassign, delete. Any failed
  * check throws DeletionRefusedError and the transaction rolls back.
  */
-async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): Promise<QueuedFile[]> {
+async function deleteInTransaction(
+  userId: string,
+  plan: AccountDeletionPlan,
+): Promise<{ queued: QueuedFile[]; joinLinksRevoked: Map<string, number> }> {
   return prisma.$transaction(
     async (tx) => {
       // The same ws-owners lock the leave and demote paths take, on the union
@@ -231,13 +238,24 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
       await tx.oAuthHandshake.deleteMany({ where: { userId } });
       // R10-client-journey L3: also keyed by a plain id. The invite links this
       // person made in the workspaces that survive stop working with them.
+      // R11-client-journey L4: counted per surviving workspace for the owners'
+      // email; the last call turns off any made anywhere else.
+      const joinLinksRevoked = new Map<string, number>();
+      const revokedAt = new Date();
+      for (const { workspaceId } of plan.reassign) {
+        const { count } = await tx.workspaceInvite.updateMany({
+          where: { workspaceId, createdById: userId, revokedAt: null },
+          data: { revokedAt },
+        });
+        joinLinksRevoked.set(workspaceId, count);
+      }
       await tx.workspaceInvite.updateMany({
         where: { createdById: userId, revokedAt: null },
-        data: { revokedAt: new Date() },
+        data: { revokedAt },
       });
 
       await tx.user.delete({ where: { id: userId } });
-      return queued;
+      return { queued, joinLinksRevoked };
     },
     { timeout: 15_000 },
   );

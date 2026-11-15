@@ -46,6 +46,8 @@ describe("the upload link page", () => {
 
     expect(unknown).toBe(revoked);
     expect(unknown).toContain(UPLOAD_LINK_INACTIVE_MESSAGE);
+    // R11-pages L5: the h1 says what happened.
+    expect(unknown).toMatch(/<h1[^>]*>This link is not active<\/h1>/);
     expect(unknown).not.toContain("<form");
     expect(formPropsMock).not.toHaveBeenCalled();
   });

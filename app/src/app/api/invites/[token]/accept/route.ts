@@ -7,6 +7,7 @@ import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/workspace";
+import { JOIN_FAILED_MESSAGE } from "@/app/join/[token]/joinMessages";
 import { notifyOwnersOfMemberJoined } from "@/server/notifications/memberJoinedEmail";
 
 import { inviteLinkWorks, MAKER_NOT_OWNER_MESSAGE } from "../inviteMaker";
@@ -115,7 +116,7 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
       workspaceId: invite.workspaceId,
       userId: user.id,
     });
-    return NextResponse.json({ error: "Failed to join workspace" }, { status: 500 });
+    return NextResponse.json({ error: JOIN_FAILED_MESSAGE }, { status: 500 });
   }
 
   if (joined === "maker_not_owner") {
