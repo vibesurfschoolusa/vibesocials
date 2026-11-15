@@ -496,7 +496,38 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
       workspaceName: "Acme",
       formerOwnerId: "user-2",
       at: expect.any(Date),
+      joinLinksRevoked: 1,
+      demoted: true,
     });
+  });
+
+  // R8-client-journey L1 / security L2: as on leave, the invite links they made stop working.
+  it("a demotion turns off the invite links the demoted owner made, inside the same transaction, after the role change", async () => {
+    findFirstMock.mockResolvedValue({ role: "owner" });
+    inviteUpdateManyMock.mockResolvedValue({ count: 2 });
+
+    const response = await PATCH(patchReq("member"), ctx("user-2"));
+
+    expect(response.status).toBe(200);
+    expect(transactionSpy).toHaveBeenCalledTimes(1);
+    expect(inviteUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(inviteUpdateManyMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", createdById: "user-2", revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+    expect(updateManyMock.mock.invocationCallOrder[0]).toBeLessThan(inviteUpdateManyMock.mock.invocationCallOrder[0]);
+    expect(noticeMock).toHaveBeenCalledWith(expect.objectContaining({ joinLinksRevoked: 2, demoted: true }));
+  });
+
+  it("turns off no invite link for a promotion, a refused demotion or a raced one", async () => {
+    await PATCH(patchReq("owner"), ctx("user-2"));
+    findFirstMock.mockResolvedValue({ role: "owner" });
+    countMock.mockResolvedValue(1);
+    await PATCH(patchReq("member"), ctx("user-2"));
+    countMock.mockResolvedValue(2);
+    updateManyMock.mockResolvedValue({ count: 0 });
+    await PATCH(patchReq("member"), ctx("user-2"));
+    expect(inviteUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("sends no notice for a promotion, a refused demotion or a raced one", async () => {
