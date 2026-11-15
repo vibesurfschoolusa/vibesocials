@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { accountCheckFailedMessage, settingsDifferentAccountMessage } from "@/lib/differentAccount";
+import { accountCheckFailedMessage, choiceDifferentAccountMessage } from "@/lib/differentAccount";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -12,6 +12,7 @@ import {
   listPendingCandidates,
   loadPendingConnection,
 } from "@/server/connections/pendingConnection";
+import { connectedWasOffered, pendingSignInEndsSoon } from "@/server/connections/choiceOutcome";
 
 interface PendingRouteContext {
   params: Promise<{ id: string }>;
@@ -133,8 +134,10 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
     }
     if (!result.ok && result.reason === "different_account") {
       // R6 review low 1: the connection stays as it was, and so does the choice.
+      // R7 review 3: when the connected one was on the list, choosing it is the way.
+      const offered = await connectedWasOffered(pending, owner.workspaceId);
       return NextResponse.json(
-        { error: settingsDifferentAccountMessage(result.signedInName, result.connectedName) },
+        { error: choiceDifferentAccountMessage(pending.platform, result.signedInName, result.connectedName, offered) },
         { status: 409 },
       );
     }
@@ -152,7 +155,12 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
 
     await deletePendingConnection(pending.id);
 
-    return NextResponse.json({ ok: true, platform: pending.platform });
+    // R7 review 4: the dialog adds same_end to the success address, as the callback does.
+    return NextResponse.json(
+      pendingSignInEndsSoon(pending)
+        ? { ok: true, platform: pending.platform, sameEnd: true }
+        : { ok: true, platform: pending.platform },
+    );
   } catch (error) {
     logger.error("[POST /api/connections/pending/[id]] Unexpected error", {
       error: errorKind(error),

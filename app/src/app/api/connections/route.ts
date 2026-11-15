@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
+import { CONNECTION_EXPIRY_SELECT, connectionExpiryState, type ConnectionExpiryState } from "@/lib/connectionExpiry";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -32,12 +33,18 @@ export async function GET() {
       where: { workspaceId: context.workspace.id },
       // Roadmap Phase 4: needsReconnect is the connection-health flag itself
       // (see server/platforms/connectionHealth.ts) — still never accessToken/
-      // refreshToken/scopes/metadata.
-      select: { platform: true, needsReconnect: true },
+      // scopes/metadata. R7-pages L4: the expiry columns too, for the warning
+      // window; the refresh token is only tested for presence, here, and
+      // never leaves the server.
+      select: CONNECTION_EXPIRY_SELECT,
     });
 
+    const now = new Date();
     const reconnectByPlatform = new Map(
       rows.map((row) => [row.platform, row.needsReconnect]),
+    );
+    const expiryByPlatform = new Map<Platform, ConnectionExpiryState>(
+      rows.map((row) => [row.platform, connectionExpiryState(row, now)]),
     );
     // A platform this deployment can't connect yet (Pinterest before its app
     // credentials are set, lib/advertisedPlatforms.ts) is listed only when the
@@ -49,6 +56,7 @@ export async function GET() {
         platform,
         connected: reconnectByPlatform.has(platform),
         needsReconnect: reconnectByPlatform.get(platform) ?? false,
+        expiry: expiryByPlatform.get(platform) ?? null,
       }));
 
     const payload: ConnectionsResponse = { connections };

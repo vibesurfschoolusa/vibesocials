@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { cn } from "@/lib/cn";
@@ -135,7 +136,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
         body: JSON.stringify({ candidateId: selectedId, workspaceId }),
       });
       const data = (await response.json().catch(() => null)) as
-        | { platform?: string; error?: string }
+        | { platform?: string; error?: string; sameEnd?: boolean }
         | null;
 
       if (response.status === 404) {
@@ -151,7 +152,8 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
 
       // The same success banner the OAuth callback shows for a lone account
       // (lib/oauthResult.ts), over a freshly rendered connections list.
-      router.replace(`/settings?success=${encodeURIComponent(`${data.platform}_connected`)}`);
+      // R7 review 4: with same_end when the saved LinkedIn sign-in still ends within a week.
+      router.replace(`/settings?${connectedSuccessQuery(data.platform, data.sameEnd === true)}`);
     } catch {
       setConnectError(PENDING_CONNECT_OFFLINE);
       setBusy(null);

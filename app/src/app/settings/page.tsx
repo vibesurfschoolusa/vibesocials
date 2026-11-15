@@ -31,23 +31,27 @@ import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
-import { describeOAuthResult } from "@/lib/oauthResult";
+import { describeOAuthResult, type OAuthResult } from "@/lib/oauthResult";
 import {
   LOCATION_CLEARED_PARAM,
-  SIGNED_IN_AS_PARAM,
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
   differentAccountPlatform,
   locationClearedSettingsMessage,
-  settingsDifferentAccountMessage,
-  signedInNameFromQuery,
+  reconnectDifferentAccountMessage,
 } from "@/lib/differentAccount";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { platformHelpHref } from "@/lib/platformGuides";
 import { platformLabel } from "@/lib/platforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
-import { CONNECTION_EXPIRY_SELECT, expiryEnded, inExpiryWarningWindow } from "@/lib/connectionExpiry";
+import {
+  CONNECTION_EXPIRY_SELECT,
+  SAME_END_PARAM,
+  expiryEnded,
+  inExpiryWarningWindow,
+  sameEndDateMessage,
+} from "@/lib/connectionExpiry";
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -68,8 +72,8 @@ export default async function SettingsPage({
     error?: string;
     success?: string;
     billing?: string;
-    signed_in_as?: string;
     location_cleared?: string;
+    same_end?: string;
   }>;
 }) {
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
@@ -85,7 +89,7 @@ export default async function SettingsPage({
   }
 
   const params = await searchParams;
-  let oauthResult = describeOAuthResult({
+  let oauthResult: OAuthResult | null = describeOAuthResult({
     error: params.error ?? null,
     success: params.success ?? null,
   });
@@ -128,7 +132,8 @@ export default async function SettingsPage({
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
 
   // R6 review low 1: a reconnect came back with another account and nothing
-  // changed; the sentence names both, the connected one from this workspace.
+  // changed; the sentence names only the connected one, from this workspace
+  // (R7-new-customer L2: nothing from the address is shown).
   const differentPlatform = differentAccountPlatform(params.error);
   const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
   // Anyone can type the parameter: the sentence only for a Business Profile
@@ -142,7 +147,7 @@ export default async function SettingsPage({
     oauthResult = {
       variant: "success",
       platform: "google_business_profile",
-      message: locationClearedSettingsMessage(params[LOCATION_CLEARED_PARAM]),
+      message: locationClearedSettingsMessage(),
     };
   }
   const uncheckedPlatform = accountCheckFailedPlatform(params.error);
@@ -158,13 +163,25 @@ export default async function SettingsPage({
     oauthResult = {
       variant: "danger",
       platform: differentPlatform,
-      message: settingsDifferentAccountMessage(
-        signedInNameFromQuery(params[SIGNED_IN_AS_PARAM], differentPlatform),
-        connectedAccountName(differentFrom),
-      ),
+      message: reconnectDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)),
     };
   }
   const now = new Date();
+  // Unconfirmed (R7 client-journey): the LinkedIn callback flagged a reconnect
+  // whose new sign-in still ends inside the warning window. The date comes
+  // from the stored row, and only when it really is in that window.
+  const sameEndRow =
+    params.success === "linkedin_connected" && params[SAME_END_PARAM] !== undefined
+      ? rows.find((row) => row.platform === "linkedin" && inExpiryWarningWindow(row, now) && !expiryEnded(row, now))
+      : undefined;
+  if (sameEndRow) {
+    // R7 review 2: a warning, as on /c: it worked, but it still ends then.
+    oauthResult = {
+      variant: "warning",
+      platform: "linkedin",
+      message: sameEndDateMessage("linkedin", sameEndRow.expiresAt!),
+    };
+  }
   const reconnectSoon = rows.filter((row) => inExpiryWarningWindow(row, now)).map((row) => row.platform);
   const endedAt = Object.fromEntries(
     rows.filter((row) => expiryEnded(row, now)).map((row) => [row.platform, new Date(row.expiresAt!).toISOString()]),

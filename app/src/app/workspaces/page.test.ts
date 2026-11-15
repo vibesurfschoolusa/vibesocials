@@ -37,6 +37,8 @@ function entry(overrides: Partial<WorkspaceOverviewEntry> = {}): WorkspaceOvervi
     failedLast7Days: 0,
     failedPlatforms: [],
     needsReconnect: [],
+    endsSoon: [],
+    ended: [],
     connected: 0,
     needsAttention: false,
     ...overrides,
@@ -149,5 +151,27 @@ describe("WorkspacesPage: waiting for approval", () => {
     expect(html).toMatch(/text-danger-ontint">3</);
     expect(html).not.toMatch(/text-danger-ontint">2</);
     expect(html).toMatch(/text-foreground">2</);
+  });
+});
+
+// R7-pages L4 / client-journey L3: the warning window and the end, named per workspace.
+describe("WorkspacesPage: connections that end", () => {
+  it("names the connections that end soon and those that ended, with what to do", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([
+      entry({ endsSoon: ["linkedin"], ended: ["x"], needsAttention: true }),
+    ]);
+
+    const html = await render();
+
+    expect(html).not.toContain("Nothing needs your attention");
+    expect(html).toContain("Ends soon:</span> LinkedIn. Reconnect it in Settings, Connections.");
+    expect(html).toContain("Ended:</span> X. Reconnect it in Settings, Connections.");
+  });
+
+  it("healthy: no such line", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([entry()]);
+    const html = await render();
+    expect(html).not.toContain("Ends soon");
+    expect(html).not.toContain("Ended:");
   });
 });

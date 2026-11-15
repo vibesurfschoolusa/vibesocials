@@ -80,7 +80,21 @@ export function ConnectionHealth({
                   />
                   {platformLabel(connection.platform)}
                 </span>
-                {connection.connected && !connection.needsReconnect ? (
+                {connection.connected && !connection.needsReconnect && connection.expiry ? (
+                  // R7-pages L4: it still works (or just stopped) but can't be
+                  // renewed: Settings has its Reconnect.
+                  <Link
+                    href={SETTINGS_CONNECTIONS_HREF}
+                    className={buttonVariants({
+                      variant: connection.expiry === "ended" ? "destructive" : "outline",
+                      size: "sm",
+                      className: "h-7 gap-1 px-2 text-xs",
+                    })}
+                  >
+                    <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
+                    {connection.expiry === "ended" ? "Ended" : "Ends soon"}
+                  </Link>
+                ) : connection.connected && !connection.needsReconnect ? (
                   // One check, not a "Connected" badge beside the green dot: at
                   // the shared page width the badge made long names wrap.
                   <span title="Connected" className="inline-flex shrink-0 items-center text-success">

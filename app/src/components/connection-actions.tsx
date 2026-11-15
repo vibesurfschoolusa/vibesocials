@@ -36,8 +36,8 @@ interface Props {
   /**
    * R6-pages M1: true inside the warning window (lib/connectionExpiry.ts): it
    * still works, but cannot be renewed and ends within a week. Shows Reconnect,
-   * straight to the sign-in with no disconnect, so the post numbers stay and
-   * the save updates this connection in place.
+   * to the sign-in with no disconnect (LinkedIn: after the sign-out steps), so
+   * the post numbers stay and the save updates this connection in place.
    */
   reconnectSoon?: boolean;
   /**
@@ -52,6 +52,8 @@ interface Props {
    * owner's actionable Reconnect button — with none of the buttons.
    */
   readOnly?: boolean;
+  /** The connected account's name: LinkedIn's Reconnect says to sign in to it. */
+  accountName?: string;
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
@@ -167,6 +169,7 @@ export function ConnectionActions({
   reconnectSoon = false,
   endedAt = null,
   readOnly = false,
+  accountName,
 }: Props) {
   const router = useRouter();
   const toast = useToast();
@@ -174,6 +177,7 @@ export function ConnectionActions({
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [reconnectOpen, setReconnectOpen] = useState(false);
 
   const isTikTok = platform === "tiktok";
   const isLinkedIn = platform === "linkedin";
@@ -274,36 +278,53 @@ export function ConnectionActions({
   }
 
   if (readOnly) {
-    return needsReconnect ? (
-      <Badge variant="danger">Needs reconnect</Badge>
+    // R7-pages L4: a member sees the end as the owner does, without the buttons.
+    if (needsReconnect) return <Badge variant="danger">Needs reconnect</Badge>;
+    if (reconnectSoon && endedAt) {
+      return (
+        <span className="basis-full text-sm text-muted-foreground">
+          Ended {formatDisplayDate(endedAt)}. The workspace owner can reconnect it.
+        </span>
+      );
+    }
+    if (reconnectSoon) return <Badge variant="warning">Ends soon</Badge>;
+    return <Badge variant="success">Connected</Badge>;
+  }
+
+  // R7-pages M2: LinkedIn's Reconnect opens the sign-out steps first (the
+  // dialog then starts the same sign-in); other platforms go straight to it.
+  function reconnectButton(variant: "destructive" | "primary") {
+    return isLinkedIn ? (
+      <Button size="sm" variant={variant} onClick={() => setReconnectOpen(true)}>
+        Reconnect
+      </Button>
     ) : (
-      <Badge variant="success">Connected</Badge>
+      <a href={authUrl} className={buttonVariants({ variant, size: "sm" })}>
+        Reconnect
+      </a>
     );
   }
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
+      {/* R7 review 1: wraps, the Ended sentence on its own line (basis-full). */}
+      <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
         {needsReconnect ? (
-          // Roadmap Phase 4: destructive button, links straight to this
-          // platform's OAuth start (a plain anchor — /api/auth/* is a
-          // redirect handler, not a Next.js route, matching the "Connect"
-          // ButtonLink below).
-          <a href={authUrl} className={buttonVariants({ variant: "destructive", size: "sm" })}>
-            Reconnect
-          </a>
+          // Roadmap Phase 4: destructive button to this platform's OAuth
+          // start (a plain anchor: /api/auth/* is a redirect handler, not a
+          // Next.js route); LinkedIn's opens the sign-out steps first.
+          reconnectButton("destructive")
         ) : reconnectSoon ? (
           <>
             {endedAt ? (
-              <span className="text-sm text-muted-foreground">
+              // R7-pages L7: on its own line, so the row never overflows.
+              <span className="basis-full text-sm text-muted-foreground">
                 Ended {formatDisplayDate(endedAt)}. Reconnect to keep posting.
               </span>
             ) : (
               <Badge variant="warning">Ends soon</Badge>
             )}
-            <a href={authUrl} className={buttonVariants({ size: "sm" })}>
-              Reconnect
-            </a>
+            {reconnectButton("primary")}
           </>
         ) : (
           <Badge variant="success">Connected</Badge>
@@ -330,6 +351,16 @@ export function ConnectionActions({
         confirmText="Disconnect"
         onConfirm={handleDisconnect}
       />
+
+      {isLinkedIn && (needsReconnect || reconnectSoon) ? (
+        <LinkedInAccountDialog
+          open={reconnectOpen}
+          onOpenChange={setReconnectOpen}
+          mode="reconnect"
+          accountName={accountName}
+          workspaceId={workspaceId}
+        />
+      ) : null}
 
       {isTikTok ? (
         <Dialog

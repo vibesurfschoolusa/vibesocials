@@ -169,8 +169,11 @@ export function ConnectionsSection({
 
           return (
             <Card key={key} className="p-4 sm:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 flex-1 items-start gap-3">
+              {/* R7 review 1: stacked below xl (name on top, the state and
+                  buttons below, wrapping), so the name column never
+                  collapses; side by side from xl, the name keeping 12rem. */}
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 flex-1 items-start gap-3 xl:min-w-[12rem]">
                   <span
                     aria-hidden
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius)] bg-muted text-muted-foreground"
@@ -224,7 +227,9 @@ export function ConnectionsSection({
                   </div>
                 </div>
 
-                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                {/* R7-pages L7: never shrink-0, so an Ended sentence and three
+                    buttons wrap inside the card instead of pushing past it. */}
+                <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
                   {connection ? (
                     <ConnectionActions
                       platform={key}
@@ -234,6 +239,7 @@ export function ConnectionsSection({
                       reconnectSoon={reconnectSoon.includes(key)}
                       endedAt={endedAt[key] ?? null}
                       readOnly={readOnly}
+                      accountName={username ?? undefined}
                     />
                   ) : readOnly ? null : key === "linkedin" ? (
                     // LinkedIn reuses whichever account is signed in to

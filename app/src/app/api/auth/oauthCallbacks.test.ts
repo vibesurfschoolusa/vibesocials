@@ -710,6 +710,8 @@ describe("choosing which account to connect", () => {
       const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
       expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+      // The fake token lasts an hour, inside the warning window: flagged (no name, no date).
+      expect(location(res).searchParams.get("same_end")).toBe("1");
       expect(pendingCreateMock).not.toHaveBeenCalled();
       const fields = {
         accessToken: "li-access",
@@ -736,6 +738,21 @@ describe("choosing which account to connect", () => {
           accountIdentifier: `linkedin_${NOW.getTime()}`,
         },
       });
+    });
+
+    // Unconfirmed (R7 client-journey): a fresh 60-day sign-in renews it; no flag.
+    it("a token that lasts 60 days: connected, no same_end flag", async () => {
+      const pages = linkedinProvider([{ id: 101, localizedName: "Org" }]);
+      useProvider((url) =>
+        url.includes("oauth/v2/accessToken")
+          ? json({ access_token: "li-access", expires_in: 60 * 24 * 60 * 60, scope: "w_organization_social" })
+          : pages(url),
+      );
+
+      const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+      expect(location(res).searchParams.has("same_end")).toBe(false);
     });
 
     it("several organizations connect none: the member token and the pages wait for the user's choice", async () => {
@@ -1133,7 +1150,9 @@ describe("a reconnect keeps the same account", () => {
       const loc = location(res);
       expect(loc.pathname).toBe("/settings");
       expect(loc.searchParams.get("error")).toBe(`${platform}_different_account`);
-      expect(loc.searchParams.get("signed_in_as")).toBe(STORED[platform].signedInAs);
+      // R7-new-customer L2: no name in the address; Settings names the stored connection.
+      expect(loc.searchParams.has("signed_in_as")).toBe(false);
+      expect(loc.toString()).not.toContain(encodeURIComponent(STORED[platform].signedInAs).replace(/%20/g, "+"));
       expect(loc.searchParams.get("success")).toBeNull();
       expectNoConnectionWrites();
     },
@@ -1167,7 +1186,9 @@ describe("a reconnect keeps the same account", () => {
 
       expect(loc.pathname).toBe("/settings");
       expect(loc.searchParams.get("success")).toBe("google_business_profile_connected");
-      expect(loc.searchParams.get("location_cleared")).toBe("Surf Co Dania");
+      // R7-new-customer L2: a flag only, never the location's title.
+      expect(loc.searchParams.get("location_cleared")).toBe("1");
+      expect(loc.toString()).not.toContain("Surf");
       expect(loc.searchParams.get("error")).toBeNull();
       const update = updateManyMock.mock.calls[0][0] as { data: { metadata: Record<string, unknown> } };
       expect(update.data.metadata).toMatchObject({ locationName: null, locationTitle: null });

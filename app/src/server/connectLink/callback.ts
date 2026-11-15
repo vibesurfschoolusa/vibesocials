@@ -7,7 +7,9 @@ import { alreadyConnectedCode, cancelledCode, connectFailedCode, type ConnectLin
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { looksLikeConnectLinkState, readConnectLinkState } from "@/lib/oauthState";
+import { differentAccountCode } from "@/lib/differentAccount";
 import { notifyOwnersOfClientConnect } from "@/server/notifications/clientConnectEmail";
+import { notifyOwnersOfRefusedConnect } from "@/server/notifications/refusedConnectEmail";
 
 import { clearConnectCookie, rawConnectCookie, readConnectCookie, type ConnectCookie } from "./cookie";
 import { findActiveConnectLink, linkOffers, placeTaken } from "./link";
@@ -216,6 +218,11 @@ async function toVisitorPage(
       });
     // F4: the owner did not make this connect, so they are told (never throws).
     await notifyOwnersOfClientConnect({ workspaceId: flow.workspaceId, platform });
+  } else if (page.searchParams.get("error") === differentAccountCode(platform)) {
+    // R7-client-journey L4: the save refused another account than the one
+    // connected, and the client is told to ask the owner, so the owners hear
+    // of it here, where it happened (once per connection per day; never throws).
+    await notifyOwnersOfRefusedConnect({ workspaceId: flow.workspaceId, platform });
   }
   return ending(page, response.status);
 }

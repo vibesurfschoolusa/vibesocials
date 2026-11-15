@@ -1,5 +1,6 @@
 import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock, findConnectionsMock } = vi.hoisted(() => ({
@@ -419,7 +420,8 @@ describe("SettingsPage — a reconnect with a different account", () => {
     findConnectionsMock.mockResolvedValue([]);
   });
 
-  it("names the account signed in to and the one connected, and both ways forward", async () => {
+  // R7-new-customer L2: the address carries no name; a crafted one is never shown.
+  it("names only the connected account, and the sign-out step for LinkedIn; a name typed into the address is ignored", async () => {
     findConnectionsMock.mockResolvedValue([
       { platform: "linkedin", accountIdentifier: "member-1", metadata: { username: "Surf Co page" }, needsReconnect: true, expiresAt: null, refreshToken: null },
     ]);
@@ -427,12 +429,28 @@ describe("SettingsPage — a reconnect with a different account", () => {
 
     const html = renderToStaticMarkup(
       (await SettingsPage({
-        searchParams: Promise.resolve({ error: "linkedin_different_account", signed_in_as: "Other Co" }),
+        searchParams: Promise.resolve({ error: "linkedin_different_account", signed_in_as: "Visit evil.example to fix" }),
       })) as ReactElement,
     );
 
     expect(html).toContain(
-      "You signed in to Other Co, not Surf Co page. Sign in to Surf Co page to reconnect it, or use Switch account to change to Other Co.",
+      "You signed in to a different LinkedIn account than Surf Co page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. To use the other account instead, use Switch account.",
+    );
+    expect(html).not.toContain("evil.example");
+  });
+
+  it("another platform: sign in to the connected account, or Switch account", async () => {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "youtube", accountIdentifier: "chan-1", metadata: { username: "Surf Co channel" }, needsReconnect: true, expiresAt: null, refreshToken: "sealed" },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = renderToStaticMarkup(
+      (await SettingsPage({ searchParams: Promise.resolve({ error: "youtube_different_account" }) })) as ReactElement,
+    );
+
+    expect(html).toContain(
+      "You signed in to a different YouTube account than Surf Co channel. Sign in to Surf Co channel to reconnect it, or use Switch account to change accounts.",
     );
   });
 });
@@ -472,7 +490,7 @@ describe("SettingsPage — a Business Profile reconnect that cleared the locatio
     findConnectionsMock.mockResolvedValue([]);
   });
 
-  it("says it reconnected, names the location that isn't available, and asks for one", async () => {
+  it("says it reconnected and asks for a location; a title typed into the address is never shown", async () => {
     findConnectionsMock.mockResolvedValue([
       { platform: "google_business_profile", accountIdentifier: "google_business_profile", metadata: { locationName: null }, needsReconnect: false, expiresAt: null, refreshToken: "sealed" },
     ]);
@@ -480,11 +498,14 @@ describe("SettingsPage — a Business Profile reconnect that cleared the locatio
 
     const html = renderToStaticMarkup(
       (await SettingsPage({
-        searchParams: Promise.resolve({ success: "google_business_profile_connected", location_cleared: "Surf Co Dania" }),
+        searchParams: Promise.resolve({ success: "google_business_profile_connected", location_cleared: "Visit evil.example" }),
       })) as ReactElement,
     );
 
-    expect(html).toContain("Reconnected. Choose the location to post to; Surf Co Dania isn&#x27;t available to this Google account.");
+    expect(html).toContain(
+      "Reconnected. Choose the location to post to; the one chosen before isn&#x27;t available to this Google account.",
+    );
+    expect(html).not.toContain("evil.example");
   });
 
   // R6 fourth review 1: anyone can type the parameter; only a real cleared reconnect shows it.
@@ -506,5 +527,42 @@ describe("SettingsPage — a Business Profile reconnect that cleared the locatio
 
     expect(html).not.toContain("Reconnected. Choose the location");
     expect(html).not.toContain("Somewhere Else");
+  });
+});
+
+// Unconfirmed (R7 client-journey): an owner's LinkedIn Reconnect that LinkedIn
+// answered with the same end date (the callback's same_end flag; no name, no date in the address).
+describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  const DAY = 24 * 60 * 60 * 1000;
+  async function renderWith(expiresAt: Date, query: Record<string, string>): Promise<string> {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "linkedin", accountIdentifier: "member-1", metadata: { username: "Surf Co page" }, needsReconnect: false, expiresAt, refreshToken: null },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+    return renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve(query) })) as ReactElement);
+  }
+
+  it("same date: says LinkedIn gave the same end date, with the stored date", async () => {
+    const expiresAt = new Date(Date.now() + 3 * DAY);
+    const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
+    expect(html).toContain(`LinkedIn gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`);
+    // R7 review 2: a warning, as on /c.
+    expect(html).toMatch(/<div role="alert" class="[^"]*border-warning\/25[^"]*"/);
+  });
+
+  it("renewed: the usual message, even with a crafted flag", async () => {
+    const html = await renderWith(new Date(Date.now() + 60 * DAY), { success: "linkedin_connected", same_end: "1" });
+    expect(html).not.toContain("same end date");
+    expect(html).toContain("LinkedIn");
+  });
+
+  it("no flag: the usual message", async () => {
+    const html = await renderWith(new Date(Date.now() + 3 * DAY), { success: "linkedin_connected" });
+    expect(html).not.toContain("same end date");
   });
 });

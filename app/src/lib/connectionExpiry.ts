@@ -1,5 +1,7 @@
 import type { Platform } from "@prisma/client";
 
+import { formatDisplayDate } from "@/lib/displayDate";
+import { platformLabel } from "@/lib/platforms";
 import { EXPIRY_WARNING_LEAD_MS, hasUnrenewableExpiry } from "@/server/jobs/connectionHealthSweep";
 
 /**
@@ -46,3 +48,47 @@ export function inExpiryWarningWindow(
 export function expiryEnded(connection: Parameters<typeof inExpiryWarningWindow>[0], now: Date = new Date()): boolean {
   return inExpiryWarningWindow(connection, now) && new Date(connection.expiresAt!).getTime() <= now.getTime();
 }
+
+/**
+ * R7-pages L4 / R7-client-journey L3: the one state every page shows for a
+ * connection's end (Settings, the member view, the dashboard widget, the
+ * Workspaces page), so none of them reads "Connected" for one that ends soon
+ * or has ended. A flagged connection is null here: needsReconnect says it.
+ */
+export type ConnectionExpiryState = "ends_soon" | "ended" | null;
+
+export function connectionExpiryState(
+  connection: Parameters<typeof inExpiryWarningWindow>[0],
+  now: Date = new Date(),
+): ConnectionExpiryState {
+  if (!inExpiryWarningWindow(connection, now)) return null;
+  return expiryEnded(connection, now) ? "ended" : "ends_soon";
+}
+
+/**
+ * Unconfirmed (R7 client-journey): a reconnect saved, yet the connection is
+ * still inside its warning window, so the platform gave the same end date
+ * (a fresh LinkedIn sign-in lasts 60 days). Said rather than looking as if
+ * nothing happened.
+ */
+
+export function sameEndDateMessage(platform: Platform, expiresAt: Date | string): string {
+  return `${platformLabel(platform)} gave the same end date (${formatDisplayDate(expiresAt)}); it still ends then.`;
+}
+
+/**
+ * Does a new sign-in already end inside the warning window (LinkedIn answered
+ * a reconnect with the same end date)? The callback and both choice routes
+ * use it to add {@link SAME_END_PARAM}.
+ */
+export function signInEndsSoon(
+  platform: Platform,
+  expiresAt: Date | string | null,
+  refreshToken: string | null,
+  now: Date = new Date(),
+): boolean {
+  return inExpiryWarningWindow({ platform, expiresAt, refreshToken, needsReconnect: false }, now);
+}
+
+// Client-safe (lib/differentAccount.ts); re-exported for the server callers.
+export { SAME_END_PARAM, connectedSuccessQuery } from "@/lib/differentAccount";

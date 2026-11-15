@@ -8,9 +8,14 @@ import {
   differentAccountPlatform,
   linkDifferentAccountMessage,
   refusedSaveSettingsUrl,
+  choiceDifferentAccountMessage,
+  connectedAmongCandidates,
+  linkChoiceDifferentAccountMessage,
+  locationClearedSettingsMessage,
+  reconnectDifferentAccountMessage,
   settingsDifferentAccountMessage,
-  signedInNameFromQuery,
 } from "./differentAccount";
+import * as differentAccount from "./differentAccount";
 
 /**
  * R6 review low 1: a reconnect only ever replaces a connection with the same
@@ -33,9 +38,30 @@ describe("different account on reconnect", () => {
     );
   });
 
-  it("the client's page: names the connected account and who can switch it", () => {
+  // R7-new-customer L2: the address carries no name; the sentence names only the stored connection.
+  it("Settings, after a refused reconnect: names only the connected account", () => {
+    expect(reconnectDifferentAccountMessage("youtube", "Surf Co channel")).toBe(
+      "You signed in to a different YouTube account than Surf Co channel. Sign in to Surf Co channel to reconnect it, or use Switch account to change accounts.",
+    );
+  });
+
+  // R7-pages M2: LinkedIn reuses the browser's signed-in account, so signing in to the right one needs a sign-out first.
+  it("Settings, LinkedIn: names the sign-out step before the sign-in", () => {
+    expect(reconnectDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
+      "You signed in to a different LinkedIn account than Surf Co page. Sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. To use the other account instead, use Switch account.",
+    );
+  });
+
+  // R7-client-journey L4: the client can't switch it; the owner can disconnect it.
+  it("the client's page: says whose it is and what works", () => {
+    expect(linkDifferentAccountMessage("youtube", "Surf Co channel")).toBe(
+      "This connection belongs to Surf Co channel. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+    );
+  });
+
+  it("the client's page, LinkedIn: also names the sign-out step for the one who owns it", () => {
     expect(linkDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
-      "You signed in to a different LinkedIn account than the one connected (Surf Co page). Sign in to that account, or ask the workspace owner to switch it.",
+      "This connection belongs to Surf Co page. If that is your account, sign out of LinkedIn first (Reconnect shows the steps), then sign in to Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
   });
 
@@ -47,11 +73,9 @@ describe("different account on reconnect", () => {
     );
   });
 
-  it("reads the signed-in name from the address, trimmed and capped, with a plain fallback", () => {
-    expect(signedInNameFromQuery("  Other Co  ", "youtube")).toBe("Other Co");
-    expect(signedInNameFromQuery("x".repeat(300), "youtube")).toHaveLength(100);
-    expect(signedInNameFromQuery(null, "youtube")).toBe("a different YouTube account");
-    expect(signedInNameFromQuery(["Other Co", "Second"], "youtube")).toBe("Other Co");
+  it("reads no name from the address any more", () => {
+    expect("signedInNameFromQuery" in differentAccount).toBe(false);
+    expect("SIGNED_IN_AS_PARAM" in differentAccount).toBe(false);
   });
 });
 
@@ -70,9 +94,61 @@ describe("a reconnect that couldn't be checked", () => {
   });
 
   it("the callback's address for each refusal", () => {
-    const different = refusedSaveSettingsUrl("https://app.example.com", "linkedin", { reason: "different_account", signedInName: "Other Co" });
-    expect(different.toString()).toBe("https://app.example.com/settings?error=linkedin_different_account&signed_in_as=Other+Co");
+    const different = refusedSaveSettingsUrl("https://app.example.com", "linkedin", { reason: "different_account" });
+    expect(different.toString()).toBe("https://app.example.com/settings?error=linkedin_different_account");
     const unchecked = refusedSaveSettingsUrl("https://app.example.com", "google_business_profile", { reason: "check_failed" });
     expect(unchecked.toString()).toBe("https://app.example.com/settings?error=google_business_profile_account_check_failed");
+  });
+});
+
+// R7-new-customer L2: the cleared-location sentence takes nothing from the address.
+describe("a Business Profile reconnect that cleared the location", () => {
+  it("one fixed sentence", () => {
+    expect(locationClearedSettingsMessage()).toBe(
+      "Reconnected. Choose the location to post to; the one chosen before isn't available to this Google account.",
+    );
+  });
+});
+
+// R7 review 3: a choice from a list (Pages, Instagram accounts, LinkedIn
+// pages, boards) that included the connected one: the way forward is to choose it.
+describe("a refused choice from a list", () => {
+  it("knows whether the connected account was on the list", () => {
+    expect(connectedAmongCandidates([{ id: "page-1" }, { id: "page-2" }], "page-1")).toBe(true);
+    expect(connectedAmongCandidates([{ id: "page-2" }], "page-1")).toBe(false);
+    expect(connectedAmongCandidates([{ id: "page-2" }], null)).toBe(false);
+  });
+
+  it("Settings, the connected one was offered: choose it", () => {
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", true)).toBe(
+      "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    );
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", true)).toBe(
+      "You chose Client Cafe, not My Surf School. Choose My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    );
+  });
+
+  it("Settings, LinkedIn, not offered (another member signed in): the sign-out step", () => {
+    expect(choiceDifferentAccountMessage("linkedin", "Client Cafe", "My Surf School", false)).toBe(
+      reconnectDifferentAccountMessage("linkedin", "My Surf School"),
+    );
+  });
+
+  it("Settings, another platform, not offered: as before", () => {
+    expect(choiceDifferentAccountMessage("pinterest", "Team photos", "My Surf School", false)).toBe(
+      settingsDifferentAccountMessage("Team photos", "My Surf School"),
+    );
+  });
+
+  it("the client's page, offered: choose it from the list", () => {
+    expect(linkChoiceDifferentAccountMessage("facebook_page", "My Surf School", true)).toBe(
+      "Choose My Surf School from the list, or ask the workspace owner to disconnect it first.",
+    );
+  });
+
+  it("the client's page, not offered: the different-account sentence", () => {
+    expect(linkChoiceDifferentAccountMessage("linkedin", "My Surf School", false)).toBe(
+      linkDifferentAccountMessage("linkedin", "My Surf School"),
+    );
   });
 });

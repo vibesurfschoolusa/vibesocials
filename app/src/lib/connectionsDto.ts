@@ -1,5 +1,7 @@
 import type { Platform } from "@prisma/client";
 
+import type { ConnectionExpiryState } from "@/lib/connectionExpiry";
+
 /**
  * Display-safe projection surfaced by `GET /api/connections`. Reports only
  * whether each platform is connected — never accessToken, refreshToken, scopes,
@@ -17,6 +19,12 @@ export interface ConnectionStatus {
    * expiry). Always `false` when `connected` is `false`.
    */
   needsReconnect: boolean;
+  /**
+   * R7-pages L4: a connection that can't be renewed and ends within the
+   * warning window ("ends_soon"), or whose end passed before the daily sweep
+   * flagged it ("ended"); null otherwise (lib/connectionExpiry.ts).
+   */
+  expiry?: ConnectionExpiryState;
 }
 
 export interface ConnectionsResponse {

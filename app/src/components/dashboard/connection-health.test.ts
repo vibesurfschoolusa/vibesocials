@@ -11,7 +11,7 @@ import { ConnectionHealth } from "./connection-health";
  * Profile"); a healthy row now shows one check, named for screen readers.
  */
 
-type Row = { platform: string; connected: boolean; needsReconnect?: boolean };
+type Row = { platform: string; connected: boolean; needsReconnect?: boolean; expiry?: "ends_soon" | "ended" | null };
 
 function render(connections: Row[]) {
   return renderToStaticMarkup(
@@ -59,5 +59,28 @@ describe("ConnectionHealth rows", () => {
       { platform: "youtube", connected: false },
     ]);
     expect(html).toContain("1 of 2 platforms connected");
+  });
+});
+
+// R7-pages L4 / client-journey L3: the warning window and the end show here too.
+describe("ConnectionHealth: connections that end", () => {
+  it("ends soon: says so, links to Settings, not a check", () => {
+    const row = rowFor(render([{ platform: "linkedin", connected: true, expiry: "ends_soon" }]), "LinkedIn");
+    expect(row).toContain("Ends soon");
+    expect(row).toContain('href="/settings#connections"');
+    expect(row).not.toContain("sr-only");
+  });
+
+  it("ended: says so, links to Settings, not a check", () => {
+    const row = rowFor(render([{ platform: "linkedin", connected: true, expiry: "ended" }]), "LinkedIn");
+    expect(row).toContain("Ended");
+    expect(row).not.toContain("Ends soon");
+    expect(row).toContain('href="/settings#connections"');
+    expect(row).not.toContain("sr-only");
+  });
+
+  it("healthy with no expiry: the check as before", () => {
+    const row = rowFor(render([{ platform: "linkedin", connected: true, expiry: null }]), "LinkedIn");
+    expect(row).toContain('<span class="sr-only">Connected</span>');
   });
 });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
+import { SAME_END_PARAM, signInEndsSoon } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
@@ -328,9 +329,14 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
     console.log("[LinkedIn OAuth] Connection saved successfully", { userId });
 
-    return NextResponse.redirect(
-      new URL("/settings?success=linkedin_connected", process.env.NEXTAUTH_URL!)
-    );
+    const settingsUrl = new URL("/settings?success=linkedin_connected", process.env.NEXTAUTH_URL!);
+    // Unconfirmed (R7 client-journey): LinkedIn may answer a reconnect with the
+    // same end date; then the new sign-in already ends inside the warning
+    // window, and Settings (or /c) says so instead of nothing.
+    if (signInEndsSoon(Platform.linkedin, expiresAt, refreshToken)) {
+      settingsUrl.searchParams.set(SAME_END_PARAM, "1");
+    }
+    return NextResponse.redirect(settingsUrl);
   } catch (error) {
     return oauthCallbackFailed({
       platform: "linkedin",

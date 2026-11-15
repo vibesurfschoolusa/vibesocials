@@ -18,7 +18,10 @@ const h = vi.hoisted(() => ({
   rateLimit: vi.fn(),
   saveFacebookPage: vi.fn(),
   notifyConnect: vi.fn(),
+  notifyRefused: vi.fn(),
+  saveLinkedIn: vi.fn(),
 }));
+vi.mock("@/server/notifications/refusedConnectEmail", () => ({ notifyOwnersOfRefusedConnect: h.notifyRefused }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     workspaceConnectLink: { findUnique: h.linkFind, update: h.linkUpdate },
@@ -30,10 +33,12 @@ vi.mock("@/lib/workspace", () => ({ isWorkspaceOwner: h.isOwner }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.rateLimit }));
 vi.mock("@/server/notifications/clientConnectEmail", () => ({ notifyOwnersOfClientConnect: h.notifyConnect }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
-vi.mock("@/server/connections/saveConnection", () => ({
+vi.mock("@/server/connections/saveConnection", async (importOriginal) => ({
+  // The real key rule: whether the connected account was on the list.
+  connectionAccountKey: (await importOriginal<typeof import("@/server/connections/saveConnection")>()).connectionAccountKey,
   saveFacebookPageConnection: h.saveFacebookPage,
   saveInstagramConnection: vi.fn(),
-  saveLinkedInConnection: vi.fn(),
+  saveLinkedInConnection: h.saveLinkedIn,
   savePinterestConnection: vi.fn(),
   fetchInstagramAccountDetails: vi.fn(),
 }));
@@ -196,11 +201,15 @@ describe("POST: the visitor's choice", () => {
 
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(
-      "You signed in to a different Facebook Page account than the one connected (My Surf School). Sign in to that account, or ask the workspace owner to switch it.",
+      // R7-client-journey L4: what works for a client is the owner disconnecting it.
+      "This connection belongs to My Surf School. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
     expect(h.pendingDeleteMany).not.toHaveBeenCalled();
     expect(h.linkUpdate).not.toHaveBeenCalled();
     expect(h.notifyConnect).not.toHaveBeenCalled();
+    // R7-client-journey L4: the choose-an-account path tells the owners too.
+    expect(h.notifyRefused).toHaveBeenCalledTimes(1);
+    expect(h.notifyRefused).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
   });
 
   it("a choice that is not one of the accounts is a 400 with the owner route's sentence", async () => {
@@ -282,5 +291,72 @@ describe("DELETE: Cancel", () => {
     const res = await DELETE(request("DELETE"), context());
     expect(res.status).toBe(404);
     expect(h.pendingDeleteMany).not.toHaveBeenCalled();
+  });
+});
+
+// R7 review 3: on the client's page too, a list that included the connected one says to choose it.
+describe("POST: a refused choice, by whether the connected one was on the list", () => {
+  const refused = { ok: false, reason: "different_account", connectedName: "My Surf School", signedInName: "Client Cafe" };
+
+  it("the list contains the connected Page: choose it from the list", async () => {
+    h.connectionFind.mockResolvedValue({ platform: "facebook_page", accountIdentifier: "page-1", metadata: {}, needsReconnect: true });
+    h.saveFacebookPage.mockResolvedValue(refused);
+
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(
+      "Choose My Surf School from the list, or ask the workspace owner to disconnect it first.",
+    );
+  });
+
+  it("the list lacks it: the different-account sentence", async () => {
+    h.connectionFind.mockResolvedValue({ platform: "facebook_page", accountIdentifier: "page-9", metadata: {}, needsReconnect: true });
+    h.saveFacebookPage.mockResolvedValue(refused);
+
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect((await res.json()).error).toBe(
+      "This connection belongs to My Surf School. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+    );
+  });
+});
+
+// R7 review 4: a LinkedIn choice whose sign-in still ends within a week says so on /c.
+describe("POST: the same-end flag on a LinkedIn choice", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  function linkedInRow(inDays: number) {
+    const payload = {
+      platform: "linkedin",
+      token: { accessToken: "li", refreshToken: null, expiresAt: new Date(NOW.getTime() + inDays * DAY).toISOString(), scope: "s" },
+      profile: { sub: "member-1", name: "A B", email: null, picture: null },
+      organizations: [{ id: 111, name: "My Surf School" }, { id: 222, name: "Client Cafe" }],
+    };
+    return pendingRow({ platform: "linkedin", payload: sealSecret(JSON.stringify(payload)) });
+  }
+
+  beforeEach(() => {
+    h.linkFind.mockResolvedValue({
+      id: "link-1",
+      workspaceId: "ws-1",
+      createdById: "user-creator",
+      platforms: ["linkedin"],
+      expiresAt: new Date(NOW.getTime() + DAY),
+      revokedAt: null,
+      workspace: { name: "Surf Co", pausedAt: null, pausedReason: null },
+    });
+    h.saveLinkedIn.mockResolvedValue({ ok: true });
+  });
+
+  it("renewed (60 days): the usual answer", async () => {
+    h.pendingFind.mockResolvedValue(linkedInRow(60));
+    const res = await POST(request("POST", { candidateId: "111" }), context());
+    expect(await res.json()).toEqual({ ok: true, platform: "linkedin" });
+  });
+
+  it("same end (3 days): sameEnd, for the success address", async () => {
+    h.pendingFind.mockResolvedValue(linkedInRow(3));
+    const res = await POST(request("POST", { candidateId: "111" }), context());
+    expect(await res.json()).toEqual({ ok: true, platform: "linkedin", sameEnd: true });
   });
 });

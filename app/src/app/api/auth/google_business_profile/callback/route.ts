@@ -154,8 +154,9 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     settingsUrl.searchParams.set("success", "google_business_profile_connected");
     if (saved.locationCleared !== undefined) {
       // R6 third review: this Google account can't use the chosen location, so
-      // it was cleared; Settings asks for one (the chooser), naming the old one.
-      settingsUrl.searchParams.set(LOCATION_CLEARED_PARAM, saved.locationCleared.slice(0, 200));
+      // it was cleared; Settings asks for one (the chooser). A flag only: no
+      // name in the address (R7-new-customer L2).
+      settingsUrl.searchParams.set(LOCATION_CLEARED_PARAM, "1");
     }
     return NextResponse.redirect(settingsUrl);
   } catch (error) {
