@@ -6,6 +6,8 @@ export interface EmptyStateProps extends ComponentPropsWithoutRef<"div"> {
   /** Icon element (e.g. a lucide icon). Rendered in a muted circle. */
   icon?: ReactNode;
   title: string;
+  /** 1 when the state is the whole page (a dead link), so the page has its h1. */
+  headingLevel?: 1 | 3;
   description?: string;
   /** Optional call to action (e.g. a `<Button>`). */
   action?: ReactNode;
@@ -16,7 +18,7 @@ export interface EmptyStateProps extends ComponentPropsWithoutRef<"div"> {
  * description + optional action.
  */
 export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(function EmptyState(
-  { icon, title, description, action, className, ...props },
+  { icon, title, headingLevel = 3, description, action, className, ...props },
   ref
 ) {
   return (
@@ -37,7 +39,11 @@ export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(function E
         </div>
       ) : null}
       <div className="flex flex-col gap-1">
-        <h3 className="text-base font-semibold text-foreground">{title}</h3>
+        {headingLevel === 1 ? (
+          <h1 className="text-base font-semibold text-foreground">{title}</h1>
+        ) : (
+          <h3 className="text-base font-semibold text-foreground">{title}</h3>
+        )}
         {description ? (
           <p className="mx-auto max-w-sm text-sm text-muted-foreground">{description}</p>
         ) : null}
