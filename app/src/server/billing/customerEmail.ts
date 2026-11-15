@@ -11,9 +11,10 @@ import { retrieveCustomer, stripeIdempotencyKey, updateCustomerEmail } from "./s
  * R5 new-customer L4 (review): after a person's sign-in email changes (or an
  * undo puts it back), the Stripe customers they pay with get the new address,
  * so receipts and Stripe's own emails reach them. "They pay with" is read
- * from Stripe: a customer of a workspace they own whose email is still their
- * previous address (checkout creates it with the owner's email). A customer
- * someone else set up keeps its address.
+ * from Stripe: a customer of a workspace they pay for (billingUserId: R7-
+ * security L3, a payer who was demoted to member still pays) or own, whose
+ * email is still their previous address (checkout creates it with the
+ * payer's email). A customer someone else set up keeps its address.
  *
  * Best effort and never throws: the change itself is already made. Logs carry
  * the workspace id only, never an address (Stripe's error messages are
@@ -27,7 +28,10 @@ export async function followEmailChangeInStripe(
   let workspaces: Array<{ id: string; stripeCustomerId: string | null }>;
   try {
     workspaces = await prisma.workspace.findMany({
-      where: { stripeCustomerId: { not: null }, members: { some: { userId: change.userId, role: "owner" } } },
+      where: {
+        stripeCustomerId: { not: null },
+        OR: [{ billingUserId: change.userId }, { members: { some: { userId: change.userId, role: "owner" } } }],
+      },
       select: { id: true, stripeCustomerId: true },
     });
   } catch (error) {
