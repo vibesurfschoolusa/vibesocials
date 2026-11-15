@@ -107,6 +107,8 @@ describe("the client's report page", () => {
   it("refuses a month outside the list without asking for a report", async () => {
     const html = await render(TOKEN, { month: "2030-01" });
     expect(html).toContain(REPORT_MONTH_INVALID_MESSAGE);
+    // R12-pages L6: the page still has an h1 without a report.
+    expect(html).toMatch(/<h1[^>]*>Monthly report<\/h1>/);
     expect(viewPropsMock).not.toHaveBeenCalled();
   });
 });

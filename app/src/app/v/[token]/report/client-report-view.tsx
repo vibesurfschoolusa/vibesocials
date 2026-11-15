@@ -9,6 +9,14 @@ import type { PublicMonthlyReport } from "@/lib/monthlyReport";
 const LOAD_FAILED_MESSAGE = "Couldn't load the report. Check your connection and try again.";
 
 /**
+ * The page's h1 until a report is shown, which carries its own (R12-pages L6).
+ * page.tsx writes the same h1 for a month outside the list.
+ */
+function ReportPendingTitle() {
+  return <h1 className="text-2xl font-bold tracking-tight">Monthly report</h1>;
+}
+
+/**
  * The client's side of the monthly report (18a): asks the limited route for
  * the month and renders the shared report. Failures are not linked anywhere:
  * the client has no Activity page.
@@ -44,6 +52,7 @@ export function ClientReportView({ token, month }: { token: string; month: strin
   if (error !== null) {
     return (
       <div className="space-y-3">
+        <ReportPendingTitle />
         <p className="text-sm">{error || LOAD_FAILED_MESSAGE}</p>
         <Button type="button" variant="outline" size="sm" data-report-noprint onClick={() => void load()}>
           Try again
@@ -53,9 +62,12 @@ export function ClientReportView({ token, month }: { token: string; month: strin
   }
   if (report === null) {
     return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading the report…
-      </p>
+      <div className="space-y-3">
+        <ReportPendingTitle />
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading the report…
+        </p>
+      </div>
     );
   }
   return <MonthlyReportView report={report} logoPrintOnly />;
