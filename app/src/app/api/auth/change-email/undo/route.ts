@@ -18,6 +18,8 @@ const refuse = (status: number, error: string) => NextResponse.json({ error }, {
 const NOT_VALID = `This link isn't valid, or it has expired: undo links work for 72 hours. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const USED = `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`;
 const EXPIRED = `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
+// R7-new-customer H1: no link is sent for such a change; this is the backstop.
+const UNCONFIRMED = `This change can't be undone with a link, because the address it replaced was never confirmed. If this is your account, write to ${SUPPORT_EMAIL}.`;
 const CHANGED_AGAIN = `The sign-in email has changed again since this email was sent, so this link can't undo it. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 
 /** Thrown inside the transaction so the claim rolls back with it. */
@@ -74,6 +76,7 @@ export async function POST(request: Request) {
       where: { undoTokenHash },
       include: { user: { select: { email: true } } },
     });
+    if (record?.previousEmailUnverified) return refuse(400, UNCONFIRMED);
     if (!record || !record.previousEmail || !record.undoExpiresAt) return refuse(400, NOT_VALID);
     if (record.undoneAt) return refuse(400, USED);
     if (record.undoExpiresAt <= now) return refuse(400, EXPIRED);
