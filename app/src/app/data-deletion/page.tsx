@@ -94,6 +94,10 @@ export default function DataDeletionPage() {
               </li>
             </ul>
             <p className="mt-2">
+              A count of posts per person and per X account, used for the daily and monthly limits,
+              is kept for 62 days, also after a workspace or account is deleted.
+            </p>
+            <p className="mt-2">
               In a workspace other people still use, what you added stays for them and passes to
               one of its owners (or, if it has none, a member) when your account is deleted.
             </p>
