@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { billingFieldsSelect } from "@/lib/billing";
+import { countPostsOnce, type PairableJob } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import {
   REPORT_NUMBER_KEYS,
@@ -62,23 +63,35 @@ export async function buildMonthlyReport(
     select: { name: true, logoUrl: true, ...billingFieldsSelect() },
   });
 
-  // Results per platform and failures per platform: one grouped count, served
-  // by the [workspaceId, updatedAt] index publish-health uses.
+  // Results per platform: one grouped count, served by the [workspaceId,
+  // updatedAt] index publish-health uses.
   const groups = await prisma.postJobResult.groupBy({
     by: ["platform", "status"],
     // The result's own workspace id, as publish-health: no join over PostJob.
-    where: {
-      workspaceId,
-      status: { in: ["success", "failed"] },
-      updatedAt: inMonth,
-    },
+    where: { workspaceId, status: "success", updatedAt: inMonth },
     _count: { _all: true },
   });
-  const countsOf = (status: "success" | "failed") =>
-    groups
-      .filter((g) => g.status === status && g._count._all > 0)
-      .sort((a, b) => platformIndex(a.platform) - platformIndex(b.platform))
-      .map((g) => ({ platform: platformLabel(g.platform), count: g._count._all }));
+  const succeeded = groups
+    .filter((g) => g.status === "success" && g._count._all > 0)
+    .sort((a, b) => platformIndex(a.platform) - platformIndex(b.platform))
+    .map((g) => ({ platform: platformLabel(g.platform), count: g._count._all }));
+
+  // Posts that did not publish, per platform, a Feed and Story pair counted
+  // once (R5-client-journey L2): the report says "posts", so it counts posts,
+  // not results. Rows, as a month's failures are few.
+  const failedResults = await prisma.postJobResult.findMany({
+    where: { workspaceId, status: "failed", updatedAt: inMonth },
+    select: { platform: true, postJobId: true, postJob: { select: { storyOfPostJobId: true } } },
+  });
+  const failedJobsByPlatform = new Map<Platform, PairableJob[]>();
+  for (const r of failedResults) {
+    const jobs = failedJobsByPlatform.get(r.platform) ?? [];
+    jobs.push({ id: r.postJobId, storyOfPostJobId: r.postJob?.storyOfPostJobId ?? null });
+    failedJobsByPlatform.set(r.platform, jobs);
+  }
+  const failed = [...failedJobsByPlatform.entries()]
+    .sort(([a], [b]) => platformIndex(a) - platformIndex(b))
+    .map(([platform, jobs]) => ({ platform: platformLabel(platform), count: countPostsOnce(jobs) }));
 
   const publishedInMonth = { some: { workspaceId, status: "success" as const, updatedAt: inMonth } };
   const jobCount = await prisma.postJob.count({
@@ -257,9 +270,9 @@ export async function buildMonthlyReport(
       platforms: post.platforms,
       ...(post.feedAndStory ? { feedAndStory: true } : {}),
     })),
-    totals: { resultsByPlatform: countsOf("success"), numbers: summarizePostNumbers(posts) },
+    totals: { resultsByPlatform: succeeded, numbers: summarizePostNumbers(posts) },
     listing: await readListing(workspaceId, month, now),
-    failed: countsOf("failed"),
+    failed,
   };
 }
 

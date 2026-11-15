@@ -114,7 +114,7 @@ export interface MonthlyReport {
   };
   /** Null when there is no listing or no stored day in the month. */
   listing: ReportListing | null;
-  /** Results that failed in the month, per platform. */
+  /** Posts with a result that failed in the month, per platform; a Feed and Story pair counts once. */
   failed: { platform: string; count: number }[];
 }
 
