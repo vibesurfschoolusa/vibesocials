@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SUPPORT_EMAIL } from "./siteInfo";
 import {
+  accessBlock,
+  accessBlockResponse,
   createWorkspaceWhileBlockedMessage,
   PLAN_ENDED_CODE,
   PLAN_ENDED_RESULT_FAILURE,
@@ -290,5 +292,55 @@ describe("splitWorkspaceStatus", () => {
     expect(rest).toEqual({ id: "ws-1" });
     expect(status).toEqual({ pausedAt: null, pausedReason: "x" });
     expect(Object.keys(status)).toEqual(["pausedAt", "pausedReason"]);
+  });
+});
+
+/**
+ * R12-publishing L1: only an owner has Settings, Plan, so a member refused by
+ * Create, Publish now, Send again or Retry (accessBlockResponse), or reading
+ * the banner (accessBlock), reads who can choose a plan. The role is the
+ * workspace context's; owners' sentences stay as they were.
+ */
+describe("who reads an ended trial or plan", () => {
+  const PERSON = { email: "someone@example.com", emailVerifiedAt: NOW, googleLinkedAt: null };
+  const MEMBER_TRIAL_ENDED = `This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`;
+  const MEMBER_PLAN_ENDED = `This workspace's plan has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`;
+
+  it("an owner: the sentences as before", () => {
+    billingOn();
+    expect(accessBlock({ user: PERSON, workspace: ENDED_TRIAL, role: "owner" }, NOW)?.message).toBe(TRIAL_ENDED);
+    expect(accessBlock({ user: PERSON, workspace: ENDED_PLAN, role: "owner" }, NOW)?.message).toBe(PLAN_ENDED);
+  });
+
+  it("a member: who can choose a plan, and where", () => {
+    billingOn();
+    expect(accessBlock({ user: PERSON, workspace: ENDED_TRIAL, role: "member" }, NOW)).toEqual({
+      code: PLAN_ENDED_CODE,
+      message: MEMBER_TRIAL_ENDED,
+    });
+    expect(accessBlock({ user: PERSON, workspace: ENDED_PLAN, role: "member" }, NOW)).toEqual({
+      code: PLAN_ENDED_CODE,
+      message: MEMBER_PLAN_ENDED,
+    });
+  });
+
+  it("a member's route answer: 403 with the member sentence and the same code", async () => {
+    billingOn();
+    const response = accessBlockResponse({ user: PERSON, workspace: ENDED_PLAN, role: "member" }, NOW);
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: MEMBER_PLAN_ENDED, code: PLAN_ENDED_CODE });
+  });
+
+  it("the pause reads the same for both: it names only who to write to", () => {
+    const paused = { pausedAt: NOW, pausedReason: null };
+    expect(accessBlock({ user: PERSON, workspace: paused, role: "member" }, NOW)?.message).toBe(
+      accessBlock({ user: PERSON, workspace: paused, role: "owner" }, NOW)?.message,
+    );
+  });
+
+  it("workspaceBlock alone words it for an owner unless told otherwise", () => {
+    billingOn();
+    expect(workspaceBlock(ENDED_PLAN, NOW)?.message).toBe(PLAN_ENDED);
+    expect(workspaceBlock(ENDED_PLAN, NOW, "member")?.message).toBe(MEMBER_PLAN_ENDED);
   });
 });

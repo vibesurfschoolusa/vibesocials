@@ -49,12 +49,24 @@ afterEach(() => {
 });
 
 describe("GET /api/workspaces/status with billing on", () => {
-  it("gives the block's sentence for a workspace whose trial ended, to every member, and owners the plan link", async () => {
+  it("gives the block's sentence for a workspace whose trial ended, owners with the plan link", async () => {
     const blockedMessage = `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() - DAY) }));
     expect(await (await GET()).json()).toEqual({ blockedMessage, planLink: true });
+  });
+
+  // R12-publishing L1: a member has no Settings, Plan, so the banner names who can choose a plan.
+  it("gives a member who can choose a plan, for an ended trial and an ended plan, and no link", async () => {
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() - DAY) }));
-    expect(await (await GET()).json()).toEqual({ blockedMessage });
+    expect(await (await GET()).json()).toEqual({
+      blockedMessage: `This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`,
+    });
+    getWorkspaceContextMock.mockResolvedValue(
+      context("member", { plan: "growth", planStatus: "canceled", currentPeriodEnd: new Date(NOW.getTime() - 3 * DAY) }),
+    );
+    expect(await (await GET()).json()).toEqual({
+      blockedMessage: `This workspace's plan has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`,
+    });
   });
 
   it("gives owners the quieter line in the last 3 days of a trial", async () => {
@@ -100,8 +112,9 @@ describe("GET /api/workspaces/status with billing on", () => {
     getWorkspaceContextMock.mockResolvedValue(
       context("member", { trialEndsAt: new Date(NOW.getTime() - DAY) }, { emailVerifiedAt: null, googleLinkedAt: null }),
     );
+    // R12-publishing L1: a member's sentence names who chooses a plan.
     expect(await (await GET()).json()).toEqual({
-      blockedMessage: `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
+      blockedMessage: `This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`,
     });
   });
 

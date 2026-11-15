@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
-import { listGbpLocations, refreshAccessToken, reviewsErrorBody } from "@/server/googleReviews";
+import { listGbpLocations, refreshAccessToken, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
 
@@ -13,12 +13,15 @@ const LOCATIONS_FAILED_MESSAGE = "Couldn't load your Google locations. Try again
  * member-level access as the rest of the reviews surface).
  */
 export async function GET() {
+  // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
+  let role: ReviewsReader = "member";
   try {
     const context = await getWorkspaceContext();
 
     if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    role = context.role;
 
     // Get the workspace's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
@@ -63,6 +66,6 @@ export async function GET() {
     });
   } catch (error: unknown) {
     console.error("[GBP Locations] Error:", error);
-    return NextResponse.json(reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE), { status: 500 });
+    return NextResponse.json(reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE, role), { status: 500 });
   }
 }

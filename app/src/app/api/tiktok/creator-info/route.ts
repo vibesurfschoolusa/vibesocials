@@ -58,10 +58,12 @@ export async function GET() {
       return NextResponse.json({ error: coded.message, code: coded.code }, { status: 409 });
     }
     if (coded.code === "TIKTOK_RECONNECT_REQUIRED") {
-      return NextResponse.json(
-        { error: "Reconnect TikTok in Settings to keep posting.", code: coded.code },
-        { status: 401 },
-      );
+      // R12 sweep: Create's TikTok panel shows this as is; only an owner can reconnect.
+      const error =
+        context.role === "member"
+          ? "The workspace owner can reconnect TikTok to keep posting."
+          : "Reconnect TikTok in Settings to keep posting.";
+      return NextResponse.json({ error, code: coded.code }, { status: 401 });
     }
     console.error("[API] Failed to fetch TikTok creator info:", error);
     return NextResponse.json(

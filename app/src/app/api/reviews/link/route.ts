@@ -5,18 +5,10 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { fetchNewReviewUri, refreshAccessToken, savedNewReviewUri } from "@/server/googleReviews";
+import { fetchNewReviewUri, refreshAccessToken, reviewLinkReason, savedNewReviewUri } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
 
-const NOT_CONNECTED =
-  "Connect Google Business Profile in Settings, Connections to get your review link.";
-const NO_LOCATION =
-  "Choose your Maps location for Google Business Profile in Settings, Connections to get your review link.";
-const NEEDS_RECONNECT =
-  "Reconnect Google Business Profile in Settings, Connections to get your review link.";
-const GOOGLE_HAS_NONE =
-  "Google has no review link for this location yet. Check that the listing is verified in Google Business Profile, then reload this page.";
 const GOOGLE_FAILED = "Couldn't get your review link from Google. Reload this page to try again.";
 
 function metadataOf(value: unknown): Record<string, unknown> {
@@ -46,7 +38,8 @@ async function saveLinkIfUnchanged(id: string, locationName: string, url: string
  * GET /api/reviews/link - the link where a customer leaves a Google review for
  * the workspace's chosen location (2026-11-10, the "Get more reviews" panel).
  * Any member may read, like the rest of the reviews surface. Returns `{ url }`,
- * or `{ url: null, reason }` with one line on what to do.
+ * or `{ url: null, reason }` with one line on what to do, worded for the
+ * caller's role (R12 L1: only an owner can connect, choose or reconnect).
  *
  * The link is read from Google (metadata.newReviewUri) only while none is saved
  * for the chosen location, then kept in the connection's metadata, so a page
@@ -71,18 +64,20 @@ export async function GET() {
     );
   }
 
+  const reason = (problem: Parameters<typeof reviewLinkReason>[0]) => reviewLinkReason(problem, context.role);
+
   const connection = await prisma.socialConnection.findFirst({
     where: { workspaceId: context.workspace.id, platform: "google_business_profile" },
   });
-  if (!connection) return NextResponse.json({ url: null, reason: NOT_CONNECTED });
+  if (!connection) return NextResponse.json({ url: null, reason: reason("not_connected") });
 
   const saved = savedNewReviewUri(connection.metadata);
   if (saved) return NextResponse.json({ url: saved });
 
   const rawLocation = metadataOf(connection.metadata).locationName;
   const locationName = typeof rawLocation === "string" ? rawLocation.trim() : "";
-  if (!locationName) return NextResponse.json({ url: null, reason: NO_LOCATION });
-  if (connection.needsReconnect) return NextResponse.json({ url: null, reason: NEEDS_RECONNECT });
+  if (!locationName) return NextResponse.json({ url: null, reason: reason("no_location") });
+  if (connection.needsReconnect) return NextResponse.json({ url: null, reason: reason("needs_reconnect") });
 
   try {
     let accessToken = connection.accessToken;
@@ -91,7 +86,7 @@ export async function GET() {
     }
 
     const url = await fetchNewReviewUri(accessToken, locationName);
-    if (!url) return NextResponse.json({ url: null, reason: GOOGLE_HAS_NONE });
+    if (!url) return NextResponse.json({ url: null, reason: reason("google_has_none") });
 
     await saveLinkIfUnchanged(connection.id, locationName, url);
     return NextResponse.json({ url });
@@ -102,8 +97,9 @@ export async function GET() {
       error: error instanceof Error ? error.name : "unknown",
       code: (error as { code?: unknown } | null)?.code,
     });
-    const reason =
-      (error as { code?: unknown } | null)?.code === "RECONNECT_REQUIRED" ? NEEDS_RECONNECT : GOOGLE_FAILED;
-    return NextResponse.json({ url: null, reason });
+    return NextResponse.json({
+      url: null,
+      reason: (error as { code?: unknown } | null)?.code === "RECONNECT_REQUIRED" ? reason("needs_reconnect") : GOOGLE_FAILED,
+    });
   }
 }

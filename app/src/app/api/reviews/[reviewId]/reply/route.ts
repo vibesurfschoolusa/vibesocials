@@ -4,10 +4,11 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import {
-  GOOGLE_REFUSED_MESSAGE,
+  googleRefusedBody,
   listGbpLocations,
   reviewLocationName,
   reviewsErrorBody,
+  type ReviewsReader,
 } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
@@ -21,12 +22,15 @@ const REVIEW_NOT_FOUND = { error: "Review not found." };
  * Google reviews (incl. AI draft)" is member-level).
  */
 export async function POST(request: Request) {
+  // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
+  let role: ReviewsReader = "member";
   try {
     const context = await getWorkspaceContext();
 
     if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    role = context.role;
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.
     const blocked = accessBlockResponse(context);
@@ -85,10 +89,7 @@ export async function POST(request: Request) {
     }
 
     if (!accessToken) {
-      return NextResponse.json(
-        { error: GOOGLE_REFUSED_MESSAGE, reconnect: true },
-        { status: 500 }
-      );
+      return NextResponse.json(googleRefusedBody(role), { status: 500 });
     }
 
     // The same listing the Reviews page shows, so any location the person can
@@ -116,6 +117,6 @@ export async function POST(request: Request) {
     });
   } catch (error: unknown) {
     console.error("[Reviews API] Reply error:", error);
-    return NextResponse.json(reviewsErrorBody(error, REPLY_FAILED_MESSAGE), { status: 500 });
+    return NextResponse.json(reviewsErrorBody(error, REPLY_FAILED_MESSAGE, role), { status: 500 });
   }
 }

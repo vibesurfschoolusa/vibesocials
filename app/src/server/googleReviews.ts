@@ -169,6 +169,50 @@ export async function fetchAllReviews(
 /** What the Reviews page says when Google refused: its token is no longer accepted. */
 export const GOOGLE_REFUSED_MESSAGE =
   "Google refused the request. Reconnect Google Business Profile in Settings.";
+/** R12 L1: the same for a member, who can read and reply but not reconnect. */
+export const GOOGLE_REFUSED_MEMBER_MESSAGE =
+  "Google refused the request. The workspace owner can reconnect Google Business Profile.";
+
+/** Who reads a Reviews answer: the role from the route's workspace context. */
+export type ReviewsReader = "owner" | "member";
+
+/**
+ * A refusal, for whoever reads it. Only an owner's carries `reconnect: true`
+ * (the page then links to Settings): a member's Settings is read-only.
+ */
+export function googleRefusedBody(role: ReviewsReader): { error: string; reconnect?: true } {
+  return role === "member" ? { error: GOOGLE_REFUSED_MEMBER_MESSAGE } : { error: GOOGLE_REFUSED_MESSAGE, reconnect: true };
+}
+
+/** Why GET /api/reviews/link has no link for the "Get more reviews" panel. */
+export type ReviewLinkProblem = "not_connected" | "no_location" | "needs_reconnect" | "google_has_none";
+
+const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, string>> = {
+  not_connected: {
+    owner: "Connect Google Business Profile in Settings, Connections to get your review link.",
+    member: "The workspace owner can connect Google Business Profile; then the review link shows here.",
+  },
+  no_location: {
+    owner: "Choose your Maps location for Google Business Profile in Settings, Connections to get your review link.",
+    member:
+      "The workspace owner can choose the Maps location for Google Business Profile; then the review link shows here.",
+  },
+  needs_reconnect: {
+    owner: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+    member: "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
+  },
+  google_has_none: {
+    owner:
+      "Google has no review link for this location yet. Check that the listing is verified in Google Business Profile, then reload this page.",
+    member:
+      "Google has no review link for this location yet. The workspace owner can check that the listing is verified in Google Business Profile.",
+  },
+};
+
+/** The panel's one line on what to do, worded for who reads it (R12 L1: members may read the panel). */
+export function reviewLinkReason(problem: ReviewLinkProblem, role: ReviewsReader): string {
+  return REVIEW_LINK_REASONS[problem][role];
+}
 
 /** What the Reviews page says when our own Google setup, not the person's grant, failed. */
 export const REVIEWS_UNAVAILABLE_MESSAGE = "Google Reviews are not available right now. Try again later.";
@@ -190,17 +234,20 @@ const APP_SETUP_OAUTH_ERRORS = new Set(["invalid_client", "unauthorized_client"]
  *
  * `oauthError` is the token endpoint's OAuth code when the thrown error carries
  * it. A refresh 400 without one reads as a refused grant, the common case.
+ * `role` is the route's workspace context's: a member reads who can reconnect
+ * (googleRefusedBody).
  */
 export function reviewsErrorBody(
   error: unknown,
-  fallback: string
+  fallback: string,
+  role: ReviewsReader,
 ): { error: string; reconnect?: true } {
   const { status, code, oauthError } = (error ?? {}) as {
     status?: unknown;
     code?: unknown;
     oauthError?: unknown;
   };
-  const refused = { error: GOOGLE_REFUSED_MESSAGE, reconnect: true as const };
+  const refused = googleRefusedBody(role);
   const unavailable = { error: REVIEWS_UNAVAILABLE_MESSAGE };
 
   if (code === "GOOGLE_MISSING_OAUTH_CREDENTIALS") return unavailable;

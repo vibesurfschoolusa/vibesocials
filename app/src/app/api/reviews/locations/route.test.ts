@@ -159,6 +159,23 @@ describe("GET /api/reviews/locations", () => {
     });
   });
 
+  // R12 L1: a member reads who can reconnect, and the page gets no Settings link.
+  it("a member: who can reconnect when Google refuses", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
+    findFirstMock.mockResolvedValue(CONNECTION);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: "Refused",
+      text: async () => "{}",
+    }) as unknown as typeof fetch;
+
+    expect(await (await GET()).json()).toEqual({
+      error: "Google refused the request. The workspace owner can reconnect Google Business Profile.",
+    });
+  });
+
   it("gives a plain sentence when Google is down", async () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
