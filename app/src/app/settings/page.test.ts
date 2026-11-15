@@ -62,7 +62,9 @@ vi.mock("@/components/planSectionView", () => ({
   planSectionActions: (role: string) => planActionsMock(role),
   planNoPlanYet: (...args: unknown[]) => noPlanYetMock(...args),
   planPersonalPostNote: (...args: unknown[]) => personalNoteMock(...args),
-  planSectionLabel: (role: string) => (role === "owner" && billing.on ? "Studio plan" : null),
+  // R13-new-customer L1: the viewer's zone, when the page passes one, shows in the label.
+  planSectionLabel: (role: string, _workspace: unknown, _now: unknown, _env: unknown, timeZone?: string | null) =>
+    role === "owner" && billing.on ? (timeZone ? `Studio plan in ${timeZone}` : "Studio plan") : null,
 }));
 // The sections' own contents are tested beside them; here only the page's frame.
 vi.mock("@/components/settings-form", () => ({
@@ -667,6 +669,15 @@ describe("SettingsPage — the viewer's time zone", () => {
     renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({}) })) as ReactElement);
     expect(sectionProps.UsageSection).toMatchObject({ timeZone: "America/New_York" });
     expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ timeZone: "America/New_York" });
+  });
+
+  // R13-new-customer L1: Settings, Plan's dates are written in the viewer's zone.
+  it("goes to the Plan line's dates", async () => {
+    const ctx = context("owner");
+    getWorkspaceContextMock.mockResolvedValue({ ...ctx, user: { ...ctx.user, timeZone: "America/New_York" } });
+    planSectionMock.mockClear();
+    renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({}) })) as ReactElement);
+    expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ label: "Studio plan in America/New_York" });
   });
 
   it("none known: null", async () => {

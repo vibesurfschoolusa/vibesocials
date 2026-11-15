@@ -228,7 +228,9 @@ export default async function SettingsPage({
   // 21a: owners only, and only with billing on. 21b fix round 1: with billing
   // off, the section still shows when the portal does.
   const planLabel =
-    planSectionLabel(context.role, planWorkspace, new Date()) ?? (planActions?.manage ? PLAN_PORTAL_ONLY_LABEL : null);
+    // R13-new-customer L1: the dates in the viewer's own zone, as the emails write them.
+    planSectionLabel(context.role, planWorkspace, new Date(), process.env, context.user.timeZone ?? null) ??
+    (planActions?.manage ? PLAN_PORTAL_ONLY_LABEL : null);
   // Usage (F7): point to a plan change only where the Plan section offers one.
   // A member's planActions is always null, so ask what the owner would be offered;
   // the Stripe columns are read for owners only, so a member's answer rests on the plan.
