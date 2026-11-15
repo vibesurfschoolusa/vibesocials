@@ -19,6 +19,7 @@ import {
   personalUsageText,
   postRetryLimitMessage,
   RETRIES_PER_POST_PER_DAY,
+  stillTodayText,
   SERVICE_DAILY_POST_LIMIT,
   serviceDailyPostLimitAtSendMessage,
   serviceDailyPostLimitMessage,
@@ -188,19 +189,19 @@ describe("sentences", () => {
 
   it("X monthly limit names this month and the next", () => {
     expect(xMonthlyLimitMessage(30, new Date("2026-11-10T12:00:00Z"))).toBe(
-      "This X account has used its 30 X posts for November, counted across every workspace it posts from. X posts start again on 1 December.",
+      "This X account has used its 30 X posts for November, counted across every workspace it posts from. X posts start again on December 1, 2026.",
     );
   });
 
   it("X monthly limit in December names January", () => {
     expect(xMonthlyLimitMessage(30, new Date("2026-12-31T23:59:59Z"))).toBe(
-      "This X account has used its 30 X posts for December, counted across every workspace it posts from. X posts start again on 1 January.",
+      "This X account has used its 30 X posts for December, counted across every workspace it posts from. X posts start again on January 1, 2027.",
     );
   });
 
   it("X monthly limit uses the UTC month, not the local one", () => {
     expect(xMonthlyLimitMessage(5, new Date("2026-12-01T00:00:00Z"))).toBe(
-      "This X account has used its 5 X posts for December, counted across every workspace it posts from. X posts start again on 1 January.",
+      "This X account has used its 5 X posts for December, counted across every workspace it posts from. X posts start again on January 1, 2027.",
     );
   });
 
@@ -224,8 +225,9 @@ describe("sentences", () => {
     expect(usageResetText("postsPerDay", new Date("2026-11-11T00:00:00Z"))).toBe(
       "Starts again at 00:00 UTC on November 11, 2026.",
     );
+    // R9-pages L7: every date in the Usage card written the same way.
     expect(usageResetText("xPostsPerMonth", new Date("2027-01-01T00:00:00Z"))).toBe(
-      "Starts again on 1 January.",
+      "Starts again on January 1, 2027.",
     );
     expect(usageResetText("youtubeUploadsPerDay", new Date("2026-11-11T08:00:00Z"))).toBe(
       "Starts again at midnight Pacific time.",
@@ -260,7 +262,7 @@ describe("limit messages agree with their number", () => {
     [10, "X posts"],
   ])("X posts: %i %s", (n, words) => {
     expect(xMonthlyLimitMessage(n, new Date("2026-11-10T12:00:00Z"))).toBe(
-      `This X account has used its ${n} ${words} for November, counted across every workspace it posts from. X posts start again on 1 December.`,
+      `This X account has used its ${n} ${words} for November, counted across every workspace it posts from. X posts start again on December 1, 2026.`,
     );
   });
 
@@ -328,11 +330,14 @@ describe("limits across workspaces", () => {
     expect(perDay - (525 + freeRunsAtCap)).toBe(194);
 
     // R8-security M1: whatever happens below it, free runs never pass the
-    // ceiling, so the worst free day is idle + ceiling x 12 and still leaves
-    // room for paying workspaces and the operator.
+    // ceiling, so a full free day of typical runs is idle + ceiling x 12 and
+    // still leaves room for paying workspaces and the operator.
     const worstFreeDay = 525 + FREE_RUNS_DAILY_CEILING * perRun;
     expect(worstFreeDay).toBe(885);
     expect(perDay - worstFreeDay).toBe(134);
+    // R9-publishing L2 (accepted): large chunked videos (~25 each) would not
+    // fit; the operator's ceiling email is the warning.
+    expect(525 + FREE_RUNS_DAILY_CEILING * 25).toBeGreaterThan(perDay);
   });
 
   it("the per-person posts apply with billing off, and with it on to every workspace not on a running plan", () => {
@@ -346,6 +351,12 @@ describe("limits across workspaces", () => {
     expect(personalPostLimitApplies(trial, on, now)).toBe(true);
     expect(personalPostLimitApplies(paid, on, now)).toBe(false);
     expect(personalPostLimitApplies({ billingExempt: true }, on, now)).toBe(false);
+    // R9-security M1: a plan in its card trial is counted until Stripe has been paid.
+    const trialing = { ...paid, planStatus: "trialing", trialEndsAt: new Date("2026-11-20T00:00:00Z") };
+    expect(personalPostLimitApplies(trialing, on, now)).toBe(true);
+    const neverPaid = { ...paid, planStatus: "past_due", trialEndsAt: new Date("2026-11-12T00:00:00Z"), currentPeriodEnd: new Date("2026-11-12T00:00:00Z") };
+    expect(personalPostLimitApplies(neverPaid, on, now)).toBe(true);
+    expect(personalPostLimitApplies({ ...neverPaid, currentPeriodEnd: new Date("2026-11-13T00:00:00Z"), trialEndsAt: new Date("2026-10-12T00:00:00Z") }, on, now)).toBe(false);
     // R6-new-customer M1: made while billing was off (no plan, no trial) and
     // counted by the service's cap, so the per-person total counts it too.
     expect(personalPostLimitApplies({ billingExempt: false }, on, now)).toBe(true);
@@ -406,12 +417,12 @@ describe("limits across workspaces", () => {
     expect(
       ownerDailyPostLimitMessage(5, "now", "first_day", you, { firstDayEnds, timeZone: "America/New_York" }),
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST).",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from Monday, 7:00 PM EST (00:00 UTC).",
     );
     expect(
       ownerDailyPostLimitMessage(5, "now", "first_day_unconfirmed", you, { firstDayEnds, timeZone: "America/New_York" }),
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST), once you confirm your email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from Monday, 7:00 PM EST (00:00 UTC), once you confirm your email address.",
     );
     // No known zone: the UTC time alone.
     expect(ownerDailyPostLimitMessage(5, "retry", "first_day_unconfirmed", { ...you, isViewer: false }, { firstDayEnds })).toBe(
@@ -489,29 +500,88 @@ describe("limits across workspaces", () => {
 
   // R8-pages M1: Settings, Usage shows the per-person number that binds, beside the workspace's own.
   it("the per-person usage line: whose, across which workspaces, and why it is 5", () => {
+    // R9-pages L5: the per-person number is not one the operator raises, so the row says so.
+    const same = "The per-person number is the same for everyone.";
     expect(personalUsageText({ name: "Jane", isViewer: true, reduced: null }, false)).toEqual({
       label: "Your posts today (UTC), all your workspaces",
-      note: "Retries count too.",
+      note: `Retries count too. ${same}`,
     });
     expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, false)).toEqual({
       label: "The owner's posts today (UTC), all their workspaces",
-      note: "Retries count too.",
+      note: `Retries count too. ${same}`,
     });
     expect(personalUsageText({ name: "Jane", isViewer: false, reduced: "unconfirmed" }, true)).toEqual({
       label: "Jane's posts today (UTC), all their workspaces",
-      note: "Retries count too. 5 until Jane confirms their email address, then 15.",
+      note: `Retries count too. 5 until Jane confirms their email address, then 15. ${same}`,
     });
     expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day" }, true).note).toBe(
-      "Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow.",
+      `Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow. ${same}`,
     );
     expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day_unconfirmed" }, false).note).toBe(
-      "Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow once you confirm your email address.",
+      `Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow once you confirm your email address. ${same}`,
     );
+  });
+
+  // R9-pages L7: the first-day note gives the reader's own time, as the refusal does.
+  it("the per-person usage line on the first day: 00:00 UTC and the reader's own time", () => {
+    const time = { firstDayEnds: new Date("2026-11-17T00:00:00Z"), timeZone: "America/New_York" };
+    expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day" }, false, time).note).toBe(
+      "Retries count too. 5 on the account's first day (UTC), 15 from Monday, 7:00 PM EST (00:00 UTC). The per-person number is the same for everyone.",
+    );
+    expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day_unconfirmed" }, false, time).note).toBe(
+      "Retries count too. 5 on the account's first day (UTC), 15 from Monday, 7:00 PM EST (00:00 UTC) once you confirm your email address. The per-person number is the same for everyone.",
+    );
+    // An unusable zone: the UTC time alone.
+    expect(
+      personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day" }, false, { ...time, timeZone: "Not/AZone" }).note,
+    ).toContain("15 from 00:00 UTC tomorrow. ");
+  });
+
+  // R9-pages L4: with billing on, paid workspaces are not counted, so every sentence says "free".
+  describe("with billing on: your free workspaces", () => {
+    const ON = { BILLING_ENABLED: "true" };
+
+    it("the Usage label and note", () => {
+      expect(personalUsageText({ name: "Jane", isViewer: true, reduced: null }, false, {}, ON)).toEqual({
+        label: "Your posts today (UTC), your free workspaces",
+        note: "Retries count too. The per-person number is the same for everyone while free.",
+      });
+      expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, true, {}, ON).label).toBe(
+        "Jane's posts today (UTC), their free workspaces",
+      );
+      expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, false, {}, ON).label).toBe(
+        "The owner's posts today (UTC), their free workspaces",
+      );
+    });
+
+    it("the refusal sentences", () => {
+      expect(ownerDailyPostLimitMessage(15, "now", null, null, {}, ON)).toBe(
+        "This workspace's owner has reached the limit of 15 posts a day across the free workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+      );
+      expect(ownerDailyPostLimitMessage(15, "retry", null, null, {}, ON)).toBe(
+        "This workspace's owner has reached the limit of 15 posts a day across the free workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.",
+      );
+      expect(ownerDailyPostLimitMessage(15, "schedule", null, null, {}, ON)).toBe(
+        "That day already has 15 posts across the free workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.",
+      );
+      expect(ownerDailyPostLimitMessage(5, "schedule", null, { name: "Maria", coOwned: true, isViewer: false }, {}, ON)).toBe(
+        "Maria, an owner of this workspace, already has 5 posts that day across the free workspaces they own, which is the daily limit for one person (retries count toward it). Pick another day.",
+      );
+    });
+
+    it("the member line", () => {
+      expect(stillTodayText({ remaining: 3, decidedBy: "owner", coOwned: false }, ON).note).toBe(
+        "The daily limit of its owner, counted across the free workspaces they own (retries too), leaves 3 posts.",
+      );
+      expect(stillTodayText({ remaining: 3, decidedBy: "owner", coOwned: true }, {}).note).toBe(
+        "The daily limit of one of its owners, counted across all the workspaces they own (retries too), leaves 3 posts.",
+      );
+    });
   });
 
   it("the workspace creation sentence names the day it opens again", () => {
     expect(workspaceCreationLimitMessage(30, new Date("2026-12-03T09:00:00Z"))).toBe(
-      "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from 3 December 2026.",
+      "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from December 3, 2026.",
     );
   });
 });

@@ -1,5 +1,7 @@
 import type { Platform, Prisma } from "@prisma/client";
 
+import { billingEnabled, PAST_DUE_GRACE_DAYS, type BillingEnv } from "@/lib/billing";
+
 /**
  * Connection health sweep — pure eligibility rule.
  *
@@ -70,14 +72,115 @@ export function isProactiveRefreshEligible(
   return expiresAt < now.getTime() + REFRESH_HORIZON_MS;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * R9-publishing L3: a free workspace whose last post went out this long ago
+ * is left out of the fan-out. Each connection costs two Inngest executions a
+ * sweep and nothing counts them, so throwaway workspaces that never post
+ * would spend the budget forever.
+ */
+export const IDLE_FREE_REFRESH_MS = 14 * DAY_MS;
+
+/** A post that went out (or tried to): drafts, scheduled and cancelled ones never ran. */
+const RAN_STATUSES = ["pending", "in_progress", "completed", "failed"] as const;
+
+/**
+ * R9-publishing L3 (lead's follow-up): the refresh tokens that lapse when they
+ * go unused, per platform, and the access token's lifetime each refresh
+ * writes into expiresAt (so the last refresh is expiresAt minus it; no column
+ * of its own). An idle free workspace's connection is refreshed only once its
+ * last refresh is older than the refresh token's lifetime minus
+ * REFRESH_TOKEN_DISUSE_MARGIN_MS, so it never has to reconnect because the
+ * sweep left it out. A platform not listed has no refresh token that lapses
+ * from disuse and is never refreshed for an idle free workspace:
+ * - LinkedIn: a refresh token lives a fixed time from the member's sign-in and
+ *   a refresh does not extend it
+ *   (https://learn.microsoft.com/linkedin/shared/authentication/programmatic-refresh-tokens),
+ *   so refreshing early saves nothing.
+ * - Facebook, Instagram (Page tokens) and X (OAuth 1.0a) have no refresh token.
+ */
+export const REFRESH_TOKEN_DISUSE_LIFETIMES: Partial<Record<Platform, { refreshTokenMs: number; accessTokenMs: number }>> = {
+  // Pinterest: "continuous" refresh tokens, 60 days from the last refresh;
+  // access tokens 30 days (pinterestClient.ts header, Pinterest API v5,
+  // https://developers.pinterest.com/docs/getting-started/authentication-and-scopes/, read 2026-11-10).
+  pinterest: { refreshTokenMs: 60 * DAY_MS, accessTokenMs: 30 * DAY_MS },
+  // Google (YouTube, Business Profile): a refresh token "has not been used for
+  // six months" expires (https://developers.google.com/identity/protocols/oauth2#expiration);
+  // six months taken as 180 days. Access tokens 1 hour (googleTokens.ts).
+  youtube: { refreshTokenMs: 180 * DAY_MS, accessTokenMs: 60 * 60 * 1000 },
+  google_business_profile: { refreshTokenMs: 180 * DAY_MS, accessTokenMs: 60 * 60 * 1000 },
+  // TikTok: refresh_expires_in 365 days; a refresh may answer with a new
+  // refresh token and lifetime, which the client keeps; access tokens 24 hours
+  // (https://developers.tiktok.com/doc/oauth-user-access-token-management, tiktokClient.ts).
+  tiktok: { refreshTokenMs: 365 * DAY_MS, accessTokenMs: DAY_MS },
+};
+
+/** How long before a refresh token would lapse from disuse an idle free workspace's connection is refreshed. */
+export const REFRESH_TOKEN_DISUSE_MARGIN_MS = 10 * DAY_MS;
+
+/**
+ * An idle free workspace's connections the sweep still refreshes: one branch
+ * per platform in REFRESH_TOKEN_DISUSE_LIFETIMES, last refreshed (expiresAt
+ * minus the access token's lifetime) before now minus (lifetime minus margin).
+ */
+function lapsingRefreshTokenWhere(now: Date): Prisma.SocialConnectionWhereInput[] {
+  return Object.entries(REFRESH_TOKEN_DISUSE_LIFETIMES).map(([platform, life]) => ({
+    platform: platform as Platform,
+    expiresAt: {
+      not: null,
+      lt: new Date(now.getTime() - (life.refreshTokenMs - REFRESH_TOKEN_DISUSE_MARGIN_MS) + life.accessTokenMs),
+    },
+  }));
+}
+
+/**
+ * R9-publishing L3: the workspaces whose connections the sweep refreshes
+ * daily, as before: grandfathered ones (billingExempt), with billing on those
+ * on a paid plan, and any other that had a post go out in the last
+ * IDLE_FREE_REFRESH_MS. Any other (idle and free) gets only
+ * {@link lapsingRefreshTokenWhere}. Leaving the daily refresh out is safe
+ * because publishing refreshes an expired access token on use on every
+ * platform with a refresh token (TikTok, YouTube, Google Business Profile,
+ * Pinterest, LinkedIn). "Paid" is paysForPlan
+ * (lib/billing.ts) as SQL can say it: active, or past_due within the grace;
+ * a past_due plan that was never paid is kept too, which only refreshes more.
+ * A post retried or sent in the window updates the post, so updatedAt is when
+ * it last ran.
+ */
+function refreshedWorkspaceWhere(now: Date, env: BillingEnv): Prisma.WorkspaceWhereInput {
+  const paid: Prisma.WorkspaceWhereInput = {
+    plan: { not: null },
+    OR: [
+      { planStatus: "active" },
+      { planStatus: "past_due", currentPeriodEnd: { gt: new Date(now.getTime() - PAST_DUE_GRACE_DAYS * DAY_MS) } },
+    ],
+  };
+  return {
+    OR: [
+      { billingExempt: true },
+      ...(billingEnabled(env) ? [paid] : []),
+      {
+        postJobs: {
+          some: { status: { in: [...RAN_STATUSES] }, updatedAt: { gte: new Date(now.getTime() - IDLE_FREE_REFRESH_MS) } },
+        },
+      },
+    ],
+  };
+}
+
 /**
  * {@link isProactiveRefreshEligible} as a Prisma WHERE, so the cron selects
  * the connections to refresh in SQL instead of loading every row. The two
  * must stay equivalent (connectionHealthSweep.test.ts evaluates one against
- * the other).
+ * the other). R9-publishing L3: plus, ANDed, the workspace rule
+ * ({@link refreshedWorkspaceWhere}) or, for an idle free workspace, a refresh
+ * token about to lapse from disuse ({@link lapsingRefreshTokenWhere}).
+ * Decided here only: the refresh function's re-check is about the connection row.
  */
-export function proactiveRefreshWhere(now: Date): Prisma.SocialConnectionWhereInput {
+export function proactiveRefreshWhere(now: Date, env: BillingEnv = process.env): Prisma.SocialConnectionWhereInput {
   return {
+    AND: [{ OR: [{ workspace: refreshedWorkspaceWhere(now, env) }, ...lapsingRefreshTokenWhere(now)] }],
     needsReconnect: false,
     refreshToken: { not: null },
     OR: [

@@ -39,7 +39,7 @@ import {
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
-import { FreeRunRefusedError, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
+import { FreeRunRefusedError, LimitCheckFailedError, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
@@ -1596,6 +1596,15 @@ export async function POST(request: Request) {
     if (error instanceof FreeRunRefusedError) {
       await error.notifyOperator();
       return NextResponse.json({ error: error.refusal.error, code: error.refusal.code }, { status: 429 });
+    }
+    // R9-new-customer L2: today's limits couldn't be checked (lock timeout,
+    // database error); the create transaction rolled back, so nothing exists.
+    if (error instanceof LimitCheckFailedError) {
+      logger.error("[POST /api/posts] Couldn't check today's limits; nothing created", {
+        error: error.cause,
+        workspaceId: context.workspace.id,
+      });
+      return NextResponse.json({ error: error.refusal.error, code: error.refusal.code }, { status: 503 });
     }
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(

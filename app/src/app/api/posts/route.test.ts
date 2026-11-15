@@ -44,6 +44,7 @@ const {
 // Review of T1, item 1: the real refusal class, which the create helpers throw.
 vi.mock("@/server/usage/usageLog", async (importOriginal) => ({
   FreeRunRefusedError: (await importOriginal<typeof import("@/server/usage/usageLog")>()).FreeRunRefusedError,
+  LimitCheckFailedError: (await importOriginal<typeof import("@/server/usage/usageLog")>()).LimitCheckFailedError,
   withdrawSend: withdrawSendMock,
 }));
 
@@ -3337,6 +3338,22 @@ describe("POST /api/posts - platforms not sent at creation", () => {
 
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toEqual(refusal);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
+  // R9-new-customer L2: the limits could not be checked (lock timeout, database error): nothing was created.
+  it("today's limits can't be checked: 503 with the try-again sentence, no event, nothing to take back", async () => {
+    const { LimitCheckFailedError } = await import("@/server/usage/usageLog");
+    createPostJobOnlyMock.mockRejectedValue(new LimitCheckFailedError(new Error("canceling statement due to lock timeout")));
+
+    const response = await post({ platforms: ["x"] });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "We couldn't check today's limits. Try again in a minute.",
+      code: "LIMIT_CHECK_FAILED",
+    });
     expect(inngestSendMock).not.toHaveBeenCalled();
     expect(withdrawSendMock).not.toHaveBeenCalled();
   });

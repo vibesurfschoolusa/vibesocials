@@ -1,7 +1,7 @@
 import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/rateLimited";
 import { usableTimeZone } from "@/server/notifications/emailTime";
 
-import { billingEnabled, planState, type BillingFields } from "./billing";
+import { billingEnabled, paysForPlan, planState, type BillingFields } from "./billing";
 import { formatDisplayDate } from "./displayDate";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
 import { countWord } from "./plural";
@@ -176,6 +176,15 @@ export function utcDateLabel(at: Date): string {
   return `${at.getUTCDate()} ${utcMonthName(at)} ${at.getUTCFullYear()}`;
 }
 
+/**
+ * R8-pages L8 and R9-pages L7: the UTC date of `at` as Settings writes its
+ * other dates ("November 16, 2026", formatDisplayDate). Noon of that UTC date
+ * in the zone it is rendered in, so the date shown is the UTC date wherever.
+ */
+export function utcDisplayDate(at: Date): string {
+  return formatDisplayDate(`${utcDayKey(at)}T12:00:00`);
+}
+
 /** Bytes as GB with one decimal: "5.0 GB". */
 export function formatStorageGb(bytes: number): string {
   return `${(bytes / GB).toFixed(1)} GB`;
@@ -197,7 +206,7 @@ export function dailyPostLimitMessage(limit: number, mode: DailyPostLimitMode): 
 
 export function xMonthlyLimitMessage(limit: number, now: Date): string {
   const next = utcMonthRange(now).end;
-  return `This X account has used its ${limit} ${countWord(limit, "X post", "X posts")} for ${utcMonthName(now)}, counted across every workspace it posts from. X posts start again on 1 ${utcMonthName(next)}.`;
+  return `This X account has used its ${limit} ${countWord(limit, "X post", "X posts")} for ${utcMonthName(now)}, counted across every workspace it posts from. X posts start again on ${utcDisplayDate(next)}.`;
 }
 
 export function youtubeWorkspaceDailyLimitMessage(limit: number): string {
@@ -217,12 +226,10 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
     return "Frees up when media is deleted on the Media page.";
   }
   if (kind === "postsPerDay") {
-    // R8-pages L8: written like Settings' other dates. Noon of that UTC date in
-    // the zone it is rendered in, so the date shown is the UTC date wherever.
-    return `Starts again at 00:00 UTC on ${formatDisplayDate(`${utcDayKey(resetsAt)}T12:00:00`)}.`;
+    return `Starts again at 00:00 UTC on ${utcDisplayDate(resetsAt)}.`;
   }
   if (kind === "xPostsPerMonth") {
-    return `Starts again on 1 ${utcMonthName(resetsAt)}.`;
+    return `Starts again on ${utcDisplayDate(resetsAt)}.`;
   }
   return "Starts again at midnight Pacific time.";
 }
@@ -235,8 +242,8 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
 
 /**
  * The runs the free workspaces of confirmed, day-old accounts send in one UTC
- * day, together (the main pool): those on a trial, on no plan, or whose plan
- * ended. A run is one hand-over to the background: a post going out (Post
+ * day, together (the main pool): those on a trial (a plan still in its card
+ * trial too, R9-security M1), on no plan, or whose plan ended. A run is one hand-over to the background: a post going out (Post
  * now, or the scanner when a scheduled one is due) or one retry request,
  * however many platforms it has. The operator's workspaces and paying ones are
  * never counted or refused here (R7-security L1).
@@ -255,10 +262,20 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  *   hourly (24 x 3 = 72), YouTube numbers hourly (24 x 2 = 48), the
  *   stale-post sweep hourly (24 x 3 = 72), the connection sweep (8) and the
  *   token refreshes it fans out (about 10 x 2 = 20), and the other daily jobs
- *   (15): 523 a day, call it 525.
- * - A run to 6 platforms: the publish run, its fetch step, a step per
- *   platform, finalize and the outcome event (10), and the outcome email's
- *   run and step (2): 12.
+ *   (15): 523 a day, call it 525. R9-publishing L2: the least the idle work
+ *   costs (each run finding nothing to do); a day with work costs more. The
+ *   token refreshes leave out idle free workspaces (connectionHealthSweep.ts).
+ * - A typical run, a photo or a small video to 6 platforms: the publish run,
+ *   its fetch step, a step per platform, finalize and the outcome event (10),
+ *   and the outcome email's run and step (2): 12. Not the most a run costs: a
+ *   step per result row (skipped failed ones too), a Feed and Story half's
+ *   wait and second email, and a large video (over 50 MiB) to X, LinkedIn or
+ *   YouTube continuing in extra steps make a large chunked video to several
+ *   platforms about 25. A day of about 20 such runs would use up the ~1,019
+ *   left before the ceiling is reached, so the operator's email (sent at the
+ *   first ceiling refusal, FREE_RUNS_DAILY_CEILING) can come after that day's
+ *   overrun, or not at all; check Inngest's usage page weekly until the plan
+ *   is upgraded.
  * - A full day of free runs at both pools: (20 + 5) x 12 = 300. With idle
  *   work, 825 a day, which leaves about 194 a day for paying workspaces, the
  *   operator's own posts and the guaranteed runs below that go past a full
@@ -274,10 +291,11 @@ export const SERVICE_DAILY_POST_LIMIT = 20;
  * Below it the pools, the per-person numbers and the guaranteed share apply as
  * they are; at it every free run is refused with the service sentence, and
  * the operator is emailed once that day. Paying workspaces and the operator's
- * are never counted or refused. Sized so the worst free day still fits: idle
- * 525 + 30 x 12 = 885 a day against the ~1,019 left, leaving ~134 a day for
- * paying workspaces and the operator. It allows the full pools (25) and five
- * guaranteed runs past them.
+ * are never counted or refused. Sized on typical runs (12 each, see above):
+ * idle 525 + 30 x 12 = 885 a day against the ~1,019 left, leaving ~134 a day
+ * for paying workspaces and the operator. 30 large chunked videos (~25 each)
+ * would not fit; the operator's email that day is the warning. It allows the
+ * full pools (25) and five guaranteed runs past them.
  */
 export const FREE_RUNS_DAILY_CEILING = 30;
 
@@ -332,9 +350,10 @@ export type CrossWorkspaceLimitMode = DailyPostLimitMode | "retry";
 
 /**
  * Whether a workspace's posts count toward its owners' per-person daily total.
- * R6-new-customer M1: with billing on, every workspace not on a running plan,
+ * R6-new-customer M1: with billing on, every workspace not on a paid plan,
  * so also one made while billing was off (no plan, no trial) and one whose
  * plan or trial ended: every workspace the service's cap counts.
+ * R9-security M1: and one whose plan is still in its card trial (paysForPlan).
  */
 export function personalPostLimitApplies(
   workspace: BillingFields,
@@ -342,7 +361,7 @@ export function personalPostLimitApplies(
   now: Date = new Date(),
 ): boolean {
   if (!billingEnabled(env)) return true;
-  return !workspace.billingExempt && planState(workspace, now) !== "active";
+  return !workspace.billingExempt && !paysForPlan(workspace, now);
 }
 
 /**
@@ -385,17 +404,32 @@ export type LimitHolder = { name: string; coOwned: boolean; isViewer: boolean };
  */
 export type ReducedNoteTime = { firstDayEnds?: Date; timeZone?: string | null };
 
-function firstDayEndsText(time: ReducedNoteTime): string {
+/** The first day's end in the reader's own zone ("Monday, 7:00 PM EST"), or null when either is unknown. */
+export function firstDayEndsLocal(time: ReducedNoteTime): string | null {
   const zone = usableTimeZone(time.timeZone);
-  if (!time.firstDayEnds || !zone) return "from 00:00 UTC tomorrow";
-  const local = time.firstDayEnds.toLocaleString("en-US", {
+  if (!time.firstDayEnds || !zone) return null;
+  return time.firstDayEnds.toLocaleString("en-US", {
     timeZone: zone,
     weekday: "long",
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",
   });
-  return `from 00:00 UTC tomorrow (${local})`;
+}
+
+function firstDayEndsText(time: ReducedNoteTime): string {
+  const local = firstDayEndsLocal(time);
+  return local ? `from ${local} (00:00 UTC)` : "from 00:00 UTC tomorrow";
+}
+
+/**
+ * R9-pages L4: the workspaces a person's number counts. With billing on a
+ * paid workspace is left out (personalPostLimitApplies), so the sentences
+ * say "free"; with it off every workspace counts.
+ */
+function ownedWorkspaces(env: Record<string, string | undefined>, all: boolean): string {
+  if (billingEnabled(env)) return "the free workspaces";
+  return all ? "all the workspaces" : "the workspaces";
 }
 
 /** When the lower number ends, both conditions on the first day: "you" only to the owner themself. */
@@ -421,32 +455,40 @@ export function ownerDailyPostLimitMessage(
   reduced: ReducedReason | null = null,
   holder: LimitHolder | null = null,
   time: ReducedNoteTime = {},
+  env: Record<string, string | undefined> = process.env,
 ): string {
   const posts = `${limit} ${countWord(limit, "post", "posts")}`;
   const named = holder !== null && holder.coOwned && !holder.isViewer;
   const who = named ? `${holder.name}, an owner of this workspace,` : "This workspace's owner";
   const sentence =
     mode === "now"
-      ? `${who} has reached the limit of ${posts} a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.`
+      ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, true)} they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.`
       : mode === "retry"
-        ? `${who} has reached the limit of ${posts} a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
+        ? `${who} has reached the limit of ${posts} a day across ${ownedWorkspaces(env, false)} they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
         : named
-          ? `${who} already has ${posts} that day across the workspaces they own, which is the daily limit for one person (retries count toward it). Pick another day.`
-          : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.`;
+          ? `${who} already has ${posts} that day across ${ownedWorkspaces(env, false)} they own, which is the daily limit for one person (retries count toward it). Pick another day.`
+          : `That day already has ${posts} across ${ownedWorkspaces(env, true)} this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.`;
   return reduced ? `${sentence} ${reducedNote(reduced, holder, named, time)}` : sentence;
 }
 
 /**
  * R8-pages M1: Settings, Usage's line for one owner's per-person number, the
  * one that binds a free workspace: whose it is, and why it is the lower one.
+ * R9-pages L4: with billing on it counts only the free workspaces, and says
+ * so. R9-pages L5: no one can raise it, so the note says it is the same for
+ * everyone (Settings' "write to us" is about the workspace's own limits).
+ * R9-pages L7: on the first day, `time` gives the reader's own time.
  */
 export function personalUsageText(
   person: { name: string; isViewer: boolean; reduced: ReducedReason | null },
   coOwned: boolean,
+  time: ReducedNoteTime = {},
+  env: Record<string, string | undefined> = process.env,
 ): { label: string; note: string } {
+  const billing = billingEnabled(env);
   const label = person.isViewer
-    ? "Your posts today (UTC), all your workspaces"
-    : `${coOwned ? `${person.name}'s` : "The owner's"} posts today (UTC), all their workspaces`;
+    ? `Your posts today (UTC), ${billing ? "your free workspaces" : "all your workspaces"}`
+    : `${coOwned ? `${person.name}'s` : "The owner's"} posts today (UTC), ${billing ? "their free workspaces" : "all their workspaces"}`;
   const confirms = person.isViewer
     ? "you confirm your email address"
     : `${coOwned ? person.name : "the owner"} confirms their email address`;
@@ -456,11 +498,14 @@ export function personalUsageText(
     person.reduced === "unconfirmed"
       ? ` ${low} until ${confirms}, then ${full}.`
       : person.reduced === "first_day"
-        ? ` ${low} on the account's first day (UTC), ${full} from 00:00 UTC tomorrow.`
+        ? ` ${low} on the account's first day (UTC), ${full} ${firstDayEndsText(time)}.`
         : person.reduced === "first_day_unconfirmed"
-          ? ` ${low} on the account's first day (UTC), ${full} from 00:00 UTC tomorrow once ${confirms}.`
+          ? ` ${low} on the account's first day (UTC), ${full} ${firstDayEndsText(time)} once ${confirms}.`
           : "";
-  return { label, note: `Retries count too.${why}` };
+  const same = billing
+    ? "The per-person number is the same for everyone while free."
+    : "The per-person number is the same for everyone.";
+  return { label, note: `Retries count too.${why} ${same}` };
 }
 
 /**
@@ -468,7 +513,10 @@ export function personalUsageText(
  * how many posts this workspace can still send today, and which limit
  * decides it, with no owner named.
  */
-export function stillTodayText(still: { remaining: number; decidedBy: "workspace" | "owner"; coOwned: boolean }): {
+export function stillTodayText(
+  still: { remaining: number; decidedBy: "workspace" | "owner"; coOwned: boolean },
+  env: Record<string, string | undefined> = process.env,
+): {
   label: string;
   note: string;
 } {
@@ -478,7 +526,7 @@ export function stillTodayText(still: { remaining: number; decidedBy: "workspace
     note:
       still.decidedBy === "workspace"
         ? `This workspace's own daily limit leaves ${posts}.`
-        : `The daily limit of ${still.coOwned ? "one of its owners" : "its owner"}, counted across all the workspaces they own (retries too), leaves ${posts}.`,
+        : `The daily limit of ${still.coOwned ? "one of its owners" : "its owner"}, counted across ${ownedWorkspaces(env, true)} they own (retries too), leaves ${posts}.`,
   };
 }
 
@@ -534,5 +582,5 @@ export function postRetryLimitMessage(limit: number, retryAllPlatforms: number):
 
 /** `openAt`: when the oldest creation in the window leaves it. */
 export function workspaceCreationLimitMessage(limit: number, openAt: Date): string {
-  return `You have created ${limit} ${countWord(limit, "workspace", "workspaces")} in the last ${WORKSPACES_CREATED_WINDOW_DAYS} days, the most allowed. Deleted workspaces count too. You can create another from ${utcDateLabel(openAt)}.`;
+  return `You have created ${limit} ${countWord(limit, "workspace", "workspaces")} in the last ${WORKSPACES_CREATED_WINDOW_DAYS} days, the most allowed. Deleted workspaces count too. You can create another from ${utcDisplayDate(openAt)}.`;
 }

@@ -91,7 +91,12 @@ vi.mock("@/components/team-section", () => ({
   },
 }));
 vi.mock("@/components/account-section", () => ({ AccountSection: () => null }));
-vi.mock("@/components/usage-section", () => ({ UsageSection: () => null }));
+vi.mock("@/components/usage-section", () => ({
+  UsageSection: (props: Record<string, unknown>) => {
+    sectionProps.UsageSection = props;
+    return null;
+  },
+}));
 vi.mock("@/components/workspace-logo-control", () => ({ WorkspaceLogoControl: () => null }));
 vi.mock("@/components/plan-section", () => ({ PlanSection: planSectionMock }));
 vi.mock("@/server/billing/payerRefusal", () => ({ isWorkspacePayer: isPayerMock }));
@@ -279,7 +284,8 @@ describe("SettingsPage — Usage words", () => {
     const start = html.indexOf('id="usage"');
     return (/<p[^>]*>([\s\S]*?)<\/p>/.exec(html.slice(start))?.[1] ?? "").replace(/<!-- -->/g, "");
   }
-  const SUPPORT = "What this workspace has used of its limits. For a higher limit, write to ";
+  // R9-pages L5: only the workspace's own limits are the operator's to raise.
+  const SUPPORT = "What this workspace has used of its limits. For a higher limit on this workspace, write to ";
 
   beforeEach(() => {
     vi.stubEnv("BILLING_ENABLED", "true");
@@ -639,6 +645,24 @@ describe("SettingsPage — the Plan section's per-person note and no-plan flag",
       expect.objectContaining({ where: { workspaceId: "ws-1", role: "owner" } }),
     );
     expect(personalNoteMock.mock.calls.at(-1)?.[2]).toBe(true);
+  });
+});
+
+// R9-pages L1 and L7: the first day's end is shown in the viewer's own time, in Usage and in Plan.
+describe("SettingsPage — the viewer's time zone", () => {
+  it("goes to the Usage and the Plan sections", async () => {
+    const ctx = context("owner");
+    getWorkspaceContextMock.mockResolvedValue({ ...ctx, user: { ...ctx.user, timeZone: "America/New_York" } });
+    planSectionMock.mockClear();
+    renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({}) })) as ReactElement);
+    expect(sectionProps.UsageSection).toMatchObject({ timeZone: "America/New_York" });
+    expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ timeZone: "America/New_York" });
+  });
+
+  it("none known: null", async () => {
+    planSectionMock.mockClear();
+    await render("owner");
+    expect(sectionProps.UsageSection).toMatchObject({ timeZone: null });
   });
 });
 

@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
@@ -19,8 +19,12 @@ function usage(people: WorkspaceUsage["people"]): WorkspaceUsage {
   };
 }
 
-const render = (value: WorkspaceUsage | null) =>
-  renderToStaticMarkup(createElement(UsageSection, { usage: value })).replace(/<!-- -->/g, "");
+const render = (value: WorkspaceUsage | null, timeZone: string | null = null) =>
+  renderToStaticMarkup(createElement(UsageSection, { usage: value, timeZone })).replace(/<!-- -->/g, "");
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 // R8-pages M1: the binding number for the person, beside the workspace's own line.
 describe("UsageSection", () => {
@@ -37,6 +41,35 @@ describe("UsageSection", () => {
     const html = render(usage([{ userId: "u-1", name: "Jane", isViewer: true, used: 5, limit: 5, reduced: "first_day" }]));
     expect(html).toContain("5 on the account&#x27;s first day (UTC), 15 from 00:00 UTC tomorrow.");
     expect(html).toMatch(/text-destructive[^>]*>5 of 5</);
+  });
+
+  // R9-pages L7: the first-day note gives the viewer's own time, like the refusal; every date one way.
+  it("the first day ends at 00:00 UTC, in the viewer's own time too; the X date as Settings writes dates", () => {
+    const person = { userId: "u-1", name: "Jane", isViewer: true, used: 1, limit: 5, reduced: "first_day_unconfirmed" as const };
+    const html = render(usage([person]), "America/New_York");
+    expect(html).toContain(
+      "5 on the account&#x27;s first day (UTC), 15 from Saturday, 7:00 PM EST (00:00 UTC) once you confirm your email address.",
+    );
+    expect(render(usage([person]))).toContain("15 from 00:00 UTC tomorrow once you confirm your email address.");
+    expect(html).toContain("Starts again on December 1, 2026.");
+    expect(html).toContain("Starts again at 00:00 UTC on November 15, 2026.");
+  });
+
+  // R9-pages L5: no one raises the per-person number, so its row says it is the same for everyone.
+  it("the per-person row says its number is the same for everyone", () => {
+    const html = render(usage([{ userId: "u-1", name: "Jane", isViewer: true, used: 1, limit: 15, reduced: null }]));
+    expect(html).toContain("Retries count too. The per-person number is the same for everyone.");
+  });
+
+  // R9-pages L4: with billing on paid workspaces are not counted.
+  it("with billing on: your free workspaces, in the label and the member line", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    const html = render(usage([{ userId: "u-1", name: "Jane", isViewer: true, used: 1, limit: 15, reduced: null }]));
+    expect(html).toContain("Your posts today (UTC), your free workspaces");
+    expect(html).toContain("The per-person number is the same for everyone while free.");
+    expect(html).not.toContain("all your workspaces");
+    const member = render({ ...usage(undefined), stillToday: { remaining: 3, decidedBy: "owner", coOwned: false } });
+    expect(member).toContain("The daily limit of its owner, counted across the free workspaces they own (retries too), leaves 3 posts.");
   });
 
   it("names each owner of a co-owned workspace", () => {

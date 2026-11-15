@@ -125,8 +125,11 @@ describe("serviceCapApplies: every plan state", () => {
   it.each([
     ["trial", { billingExempt: false, trialEndsAt: DAYS(5) }, true],
     ["active plan", plan({ planStatus: "active", currentPeriodEnd: DAYS(20) }), false],
-    ["trialing plan", plan({ planStatus: "trialing", currentPeriodEnd: DAYS(20) }), false],
+    // R9-security M1: a card trial keeps its plan's features but is counted until Stripe is paid.
+    ["trialing plan", plan({ planStatus: "trialing", currentPeriodEnd: DAYS(20), trialEndsAt: DAYS(20) }), true],
     ["past_due within the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3) }), false],
+    ["past_due after a paid period", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3), trialEndsAt: DAYS(-34) }), false],
+    ["past_due straight after the card trial", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-3), trialEndsAt: DAYS(-3) }), true],
     ["past_due after the grace", plan({ planStatus: "past_due", currentPeriodEnd: DAYS(-8) }), true],
     ["set to cancel at the period end, still active", plan({ planStatus: "active", currentPeriodEnd: DAYS(10) }), false],
     ["ended plan", plan({ planStatus: "canceled", currentPeriodEnd: DAYS(-1) }), true],
@@ -396,7 +399,7 @@ describe("workspaces created per person", () => {
     await expect(workspaceCreationRefusal("user-1", NOW)).resolves.toEqual({
       code: "WORKSPACE_CREATION_LIMIT",
       error:
-        "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from 15 November 2026.",
+        "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from November 15, 2026.",
     });
   });
 

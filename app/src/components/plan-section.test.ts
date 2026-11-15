@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/plan-actions", () => ({ PlanActions: () => null }));
 
@@ -109,8 +109,54 @@ const USAGE = {
 
 // R8-new-customer L1: beside the workspace's number, the viewer's own one where it applies.
 describe("PlanSection: posts per day", () => {
-  const render = (personalPostNote: { limit: number; reduced: "unconfirmed" | "first_day" | null } | null) =>
+  type Reduced = "unconfirmed" | "first_day" | "first_day_unconfirmed" | null;
+  const render = (personalPostNote: { limit: number; reduced: Reduced } | null) =>
     renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE, personalPostNote }));
+  /** The first day ends at 00:00 UTC on Tuesday 17 November: the Usage counts' reset. */
+  const FIRST_DAY_USAGE = { ...USAGE, postsToday: { used: 0, limit: 20, resetsAt: new Date("2026-11-17T00:00:00Z") } };
+  const renderIn = (personalPostNote: { limit: number; reduced: Reduced }, timeZone: string | null) =>
+    renderToStaticMarkup(
+      createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: FIRST_DAY_USAGE, personalPostNote, timeZone }),
+    );
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // R9-pages L1: the first day of an account whose email isn't confirmed: both reasons, and when it ends.
+  it("5 on the first day of an unconfirmed account: why, and 15 from 00:00 UTC in the viewer's time", () => {
+    expect(renderIn({ limit: 5, reduced: "first_day_unconfirmed" }, "America/New_York")).toContain(
+      "20 (up to 5 a day for you today: your account is new and your email isn&#x27;t confirmed yet. 15 from Monday, 7:00 PM EST (00:00 UTC) once you confirm it.)",
+    );
+    expect(renderIn({ limit: 5, reduced: "first_day_unconfirmed" }, null)).toContain(
+      "20 (up to 5 a day for you today: your account is new and your email isn&#x27;t confirmed yet. 15 from 00:00 UTC once you confirm it.)",
+    );
+    expect(render({ limit: 5, reduced: "first_day_unconfirmed" })).not.toContain("each person can send");
+  });
+
+  it("the first day gives the viewer's own time too", () => {
+    expect(renderIn({ limit: 5, reduced: "first_day" }, "America/New_York")).toContain(
+      `then ${OWNER_DAILY_POST_LIMIT} from Monday, 7:00 PM EST (00:00 UTC))`,
+    );
+  });
+
+  // R9-pages L4: with billing on, paid workspaces are not counted.
+  it("with billing on: your free workspaces, for every reason", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null })).toContain(
+      `20 (each person can send up to ${OWNER_DAILY_POST_LIMIT} a day across their free workspaces)`,
+    );
+    expect(render({ limit: 5, reduced: "unconfirmed" })).toContain(
+      `20 (up to 5 a day for you across your free workspaces until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`,
+    );
+    expect(render({ limit: 5, reduced: "first_day" })).toContain(
+      `20 (up to 5 a day for you across your free workspaces on your account&#x27;s first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`,
+    );
+    for (const reduced of [null, "unconfirmed", "first_day", "first_day_unconfirmed"] as const) {
+      expect(render({ limit: 5, reduced }), String(reduced)).not.toContain("all your workspaces");
+      expect(render({ limit: 5, reduced }), String(reduced)).not.toContain("all their workspaces");
+    }
+  });
 
   // R8 review: no "while free"; the note shows only where the limit applies.
   it("15: each person can send up to 15 a day across all their workspaces", () => {
