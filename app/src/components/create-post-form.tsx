@@ -241,12 +241,15 @@ export function composerPageView(input: {
   connected: readonly Platform[];
   deselected: ReadonlySet<Platform>;
   mimeType: string | null;
+  /** Every photo's type, in order, for a post with several (R21 platform-clients M1). */
+  mimeTypes?: readonly string[];
   mode: PublishMode;
   loading: boolean;
   triedSend: boolean;
 }) {
   const textPage = input.pageState === "text";
-  const { choices, selected } = deriveComposerPlatforms(input.connected, input.deselected, input.mimeType, {
+  const media = input.mimeTypes && input.mimeTypes.length > 1 ? input.mimeTypes : input.mimeType;
+  const { choices, selected } = deriveComposerPlatforms(input.connected, input.deselected, media, {
     noFile: textPage,
   });
   const allDisabled = choices.every((choice) => choice.disabledReason !== null);
@@ -948,6 +951,10 @@ function CreatePostFormInner({
   }, TEXT_POSTS_ON);
   // Set by the first press of the submit button (platformListAlert).
   const [triedSend, setTriedSend] = useState(false);
+  // Every photo is judged for each platform, not the first alone (R21 M1).
+  // Joined into a key so the list only changes when a type or the order does.
+  const photoSetTypeKey = photoSet.map((photo) => photo.file.type).join(" ");
+  const photoSetTypes = useMemo(() => (photoSetTypeKey ? photoSetTypeKey.split(" ") : []), [photoSetTypeKey]);
   const pageView = useMemo(
     () =>
       composerPageView({
@@ -955,11 +962,12 @@ function CreatePostFormInner({
         connected: connectedPlatforms,
         deselected,
         mimeType: activeMimeType,
+        mimeTypes: photoSetTypes,
         mode: publishMode,
         loading: uploadLoading,
         triedSend,
       }),
-    [pageState, connectedPlatforms, deselected, activeMimeType, publishMode, uploadLoading, triedSend],
+    [pageState, connectedPlatforms, deselected, activeMimeType, photoSetTypes, publishMode, uploadLoading, triedSend],
   );
   const { noFile, untouched, choices: platformChoices, selected: selectedPlatforms, platformAlert, textNotice } =
     pageView;

@@ -402,3 +402,62 @@ describe("skippedForMediaLine", () => {
     expect(skippedForMediaLine([], "image/jpeg")).toBeNull();
   });
 });
+
+// R21 platform-clients M1: a post with several photos is judged on every file
+// each platform receives, in the composer and in the posts route alike.
+describe("several photos: every file each platform receives", () => {
+  const jpg = "image/jpeg";
+  const webp = "image/webp";
+  const six: Platform[] = ["linkedin", "facebook_page", "instagram", "x", "google_business_profile", "pinterest"];
+  const none = new Set<Platform>();
+  const reasons = (types: readonly string[]) =>
+    Object.fromEntries(deriveComposerPlatforms(six, none, types).choices.map((c) => [c.platform, c.disabledReason]));
+
+  it.each([
+    ["first", [webp, jpg, jpg], 1],
+    ["middle", [jpg, webp, jpg], 2],
+    ["last", [jpg, jpg, webp], 3],
+  ] as const)("a WebP %s: LinkedIn and Facebook greyed out with the photo named", (_where, types, n) => {
+    expect(reasons(types)).toEqual({
+      linkedin: `photo ${n} is WebP; JPG, PNG or GIF only`,
+      facebook_page: `photo ${n} is WebP; JPG, PNG or GIF only`,
+      instagram: null,
+      x: null,
+      google_business_profile: n === 1 ? "photo 1 is WebP; JPG or PNG only" : null,
+      pinterest: null,
+    });
+  });
+
+  it("all JPEG: every platform stays chosen", () => {
+    expect(deriveComposerPlatforms(six, none, [jpg, jpg, jpg]).selected).toEqual(six);
+  });
+
+  it("a list of one is the single file", () => {
+    expect(deriveComposerPlatforms(six, none, [webp])).toEqual(deriveComposerPlatforms(six, none, webp));
+  });
+
+  it("the route's check refuses LinkedIn for a WebP in the middle, naming the photo", () => {
+    expect(() => assertPostTargetsValid(["linkedin", "instagram"], [jpg, webp, jpg], null)).toThrow(
+      "These platforms can't publish these photos: LinkedIn (photo 2 is WebP; JPG, PNG or GIF only). Remove them from platforms or choose different media.",
+    );
+    let thrown: unknown;
+    try {
+      assertPostTargetsValid(["linkedin", "facebook_page", "x"], [jpg, jpg, webp], null);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PostTargetingError);
+    expect((thrown as PostTargetingError).code).toBe("PLATFORM_MEDIA_MISMATCH");
+    expect((thrown as PostTargetingError).platforms).toEqual(["linkedin", "facebook_page"]);
+    expect(() => assertPostTargetsValid(["x", "instagram", "google_business_profile", "pinterest"], [jpg, webp], null)).not.toThrow();
+  });
+
+  it("with no list, the fan-out skips the platforms a later photo rules out", () => {
+    const connections = six.map(conn);
+    expect(
+      narrowConnectionsForPost({ connections, targetPlatforms: undefined, mimeType: [jpg, webp], tiktokMetadata: null }).map(
+        (c) => c.platform,
+      ),
+    ).toEqual(["instagram", "x", "google_business_profile", "pinterest"]);
+  });
+});

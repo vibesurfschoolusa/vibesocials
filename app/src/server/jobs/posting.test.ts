@@ -1664,6 +1664,38 @@ describe("createPostJobOnly - several photos (07a)", () => {
     expect(postJobMediaCreateManyMock).not.toHaveBeenCalled();
   });
 
+  // R21 platform-clients M1: every photo a platform receives decides, not the first alone.
+  it("a WebP after the first photo: LinkedIn is refused when chosen and skipped when not", async () => {
+    const webp = { ...photo(2), mimeType: "image/webp" };
+    await expect(
+      createPostJobOnly({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        media: photo(1),
+        extraMedia: [webp],
+        baseCaption: "hello",
+        targetPlatforms: ["linkedin"],
+      }),
+    ).rejects.toMatchObject({ code: "PLATFORM_MEDIA_MISMATCH", platforms: ["linkedin"] });
+
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-li", platform: "linkedin" }),
+      makeConnection({ id: "conn-x", platform: "x" }),
+    ]);
+    postJobResultCreateMock.mockClear();
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      extraMedia: [webp],
+      baseCaption: "hello",
+    });
+    const platforms = postJobResultCreateMock.mock.calls.map(
+      (c) => (c[0] as { data: { platform: string } }).data.platform,
+    );
+    expect(platforms).toEqual(["x"]);
+  });
+
   it("a scheduled multi-photo post writes its rows and no results", async () => {
     await createPostJobOnly({
       userId: "user-1",

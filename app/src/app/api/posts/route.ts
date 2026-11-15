@@ -1128,7 +1128,14 @@ export async function POST(request: Request) {
   // TikTok rule needs no media and is applied here for both paths.
   try {
     if (textOnly) assertTextPostTargetsValid(targetPlatforms);
-    else assertPostTargetsValid(targetPlatforms, mediaFields?.mimeType ?? null, tiktokMetadata);
+    else
+      assertPostTargetsValid(
+        targetPlatforms,
+        // R21 platform-clients M1: every file's type, so each platform is judged
+        // on all the files it receives (platformFilesReason), not the first alone.
+        mediaFields ? [mediaFields.mimeType, ...(extraMedia ?? []).map((entry) => entry.mimeType)] : null,
+        tiktokMetadata,
+      );
   } catch (error: unknown) {
     if (error instanceof PostTargetingError) return postTargetingErrorResponse(error);
     throw error;

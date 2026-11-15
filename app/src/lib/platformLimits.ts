@@ -1,5 +1,7 @@
 import type { Platform } from "@prisma/client";
 
+import { X_MAX_PHOTOS } from "./postMedia";
+
 /**
  * Roadmap Phase 7 (spec §7.1) — single source of truth for each platform's
  * CLIENT-ENFORCED caption length limit.
@@ -154,6 +156,9 @@ const PLATFORM_REFUSED_FORMATS: Partial<Record<Platform, Readonly<Record<string,
   // Pinterest's video Pins take .mp4, .mov and .m4v (H.264 / H.265); a WebM
   // upload fails its processing, so it is refused up front.
   pinterest: { "video/webm": "MP4 or MOV only" },
+  // Facebook's Page photos reference (checked 2026-11-15) lists ".jpeg, .bmp,
+  // .png, .gif, .tiff"; WebP is not among them.
+  facebook_page: { "image/webp": "JPG, PNG or GIF only" },
   // Instagram's content-publishing docs (checked 2026-11-15): Reels and video
   // Stories take "Container: MOV or MP4". A WebM failed Instagram's processing
   // after the post was sent; now it is refused before.
@@ -208,4 +213,75 @@ export function unsupportedMediaReason(
   const refusedFormat = PLATFORM_REFUSED_FORMATS[platform]?.[mimeType];
   if (refusedFormat !== undefined) return refusedFormat;
   return PLATFORM_ACCEPTED_MEDIA[platform].includes("video") ? "Video only" : "Images only";
+}
+
+/**
+ * How many of a post's files `platform` receives, read from each client
+ * (R21 platform-clients M1): LinkedIn, Facebook Page and Instagram post every
+ * file (multi-image post, attached_media, carousel); X the first
+ * {@link X_MAX_PHOTOS} (xClient.ts publishPhotos); every other client reads
+ * only `ctx.mediaItem`, the first.
+ */
+export function filesSentTo(platform: Platform, fileCount: number): number {
+  switch (platform) {
+    case "linkedin":
+    case "facebook_page":
+    case "instagram":
+      return fileCount;
+    case "x":
+      return Math.min(fileCount, X_MAX_PHOTOS);
+    default:
+      return Math.min(fileCount, 1);
+  }
+}
+
+/** A post's file types in order: one type, a list, or nothing chosen yet. */
+export type MediaTypes = string | readonly string[] | null | undefined;
+
+/** The list form of {@link MediaTypes}; `null` when no file is chosen yet. */
+export function mediaTypeList(types: MediaTypes): readonly string[] | null {
+  if (types == null) return null;
+  if (typeof types === "string") return [types];
+  return types.length > 0 ? types : null;
+}
+
+/** "WebP", "JPG", "WebM" for a reason that names the file's format. */
+function formatName(mimeType: string): string {
+  const names: Record<string, string> = {
+    "image/jpeg": "JPG",
+    "image/png": "PNG",
+    "image/gif": "GIF",
+    "image/webp": "WebP",
+    "video/mp4": "MP4",
+    "video/quicktime": "MOV",
+    "video/webm": "WebM",
+  };
+  return names[mimeType] ?? (mimeType.split("/")[1] ?? mimeType).toUpperCase();
+}
+
+/**
+ * Why `platform` can't publish this post's files, judged on every file it
+ * receives ({@link filesSentTo}), or `null` when it can. One file: the same
+ * answer as {@link unsupportedMediaReason}. Several: a refused format names
+ * the file ("photo 2 is WebP; JPG, PNG or GIF only"), so the order of the
+ * photos never changes the answer.
+ */
+export function platformFilesReason(platform: Platform, types: MediaTypes): string | null {
+  const list = mediaTypeList(types);
+  if (list === null) return null;
+  if (list.length === 1) return unsupportedMediaReason(platform, list[0]);
+  const received = list.slice(0, filesSentTo(platform, list.length));
+  for (const [index, mimeType] of received.entries()) {
+    const reason = unsupportedMediaReason(platform, mimeType);
+    if (reason === null) continue;
+    if (PLATFORM_REFUSED_FORMATS[platform]?.[mimeType] === undefined) return reason;
+    const noun = mediaKindOf(mimeType) === "image" ? "photo" : "file";
+    return `${noun} ${index + 1} is ${formatName(mimeType)}; ${reason}`;
+  }
+  return null;
+}
+
+/** Can `platform` publish every file of this post it receives? */
+export function platformAcceptsFiles(platform: Platform, types: MediaTypes): boolean {
+  return platformFilesReason(platform, types) === null;
 }

@@ -929,3 +929,38 @@ describe("Create's posting-times prompt", () => {
     expect(source).not.toContain("Set your posting times");
   });
 });
+
+// R21 platform-clients M1: the Publish to list judges every photo of a post
+// with several, so a WebP second or third greys LinkedIn out as a first does.
+describe("composerPageView: several photos", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const connected: Platform[] = ["linkedin", "instagram", "google_business_profile"];
+  function view(mimeTypes: readonly string[]) {
+    return composerPageView({
+      pageState: "file",
+      connected,
+      deselected: new Set<Platform>(),
+      mimeType: mimeTypes[0],
+      mimeTypes,
+      mode: "now",
+      loading: false,
+      triedSend: false,
+    });
+  }
+
+  it.each([
+    ["first", ["image/webp", "image/jpeg", "image/jpeg"], 1],
+    ["middle", ["image/jpeg", "image/webp", "image/jpeg"], 2],
+    ["last", ["image/jpeg", "image/jpeg", "image/webp"], 3],
+  ] as const)("a WebP %s: LinkedIn is greyed out naming the photo", (_where, types, n) => {
+    const v = view(types);
+    expect(v.choices.find((c) => c.platform === "linkedin")?.disabledReason).toBe(
+      `photo ${n} is WebP; JPG, PNG or GIF only`,
+    );
+    expect(v.selected).toEqual(n === 1 ? ["instagram"] : ["instagram", "google_business_profile"]);
+  });
+
+  it("all JPEG: every platform stays chosen", () => {
+    expect(view(["image/jpeg", "image/jpeg"]).selected).toEqual(connected);
+  });
+});

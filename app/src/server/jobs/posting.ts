@@ -553,7 +553,10 @@ export async function createPostJobOnly(
   // intent - against this media's type (a platform whose client rejects it is a
   // PostTargetingError, not a doomed result row) and the TikTok privacy rule -
   // before anything is written.
-  if (media) assertPostTargetsValid(targetPlatforms, media.mimeType, params.tiktokMetadata);
+  // R21 platform-clients M1: every file's type, so each platform is judged on
+  // all the files it receives, not the first alone.
+  const mediaTypes = media ? [media.mimeType, ...(params.extraMedia ?? []).map((file) => file.mimeType)] : null;
+  if (mediaTypes) assertPostTargetsValid(targetPlatforms, mediaTypes, params.tiktokMetadata);
   else assertTextPostTargetsValid(targetPlatforms);
 
   // Only the immediate path materializes the fan-out (and thus requires a
@@ -580,7 +583,7 @@ export async function createPostJobOnly(
         ? narrowConnectionsForPost({
             connections: socialConnections,
             targetPlatforms,
-            mimeType: media.mimeType,
+            mimeType: mediaTypes,
             tiktokMetadata: params.tiktokMetadata,
           })
         : narrowConnectionsForTextPost({ connections: socialConnections, targetPlatforms });

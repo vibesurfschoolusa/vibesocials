@@ -10,6 +10,8 @@ import {
   textPostsEnabled,
   platformAcceptsMedia,
   unsupportedMediaReason,
+  filesSentTo,
+  platformFilesReason,
 } from "./platformLimits";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
 
@@ -182,7 +184,7 @@ describe("media answers over every platform and every uploadable type (R17)", ()
       "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
     },
     facebook_page: {
-      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": OK,
+      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": "JPG, PNG or GIF only",
       "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
     },
     instagram: {
@@ -244,5 +246,74 @@ describe("TEXT_ONLY_PLATFORMS (posts without a photo)", () => {
 describe("textPostsEnabled (release switch)", () => {
   it("is on: posts without a photo can be created", () => {
     expect(textPostsEnabled()).toBe(true);
+  });
+});
+
+// R21 platform-clients M1: a post with several photos is judged, for each
+// platform, on every file that platform receives, not on the first alone.
+describe("platformFilesReason: every file a platform receives", () => {
+  const jpg = "image/jpeg";
+  const webp = "image/webp";
+  const all = ["linkedin", "facebook_page", "instagram", "x", "google_business_profile", "pinterest"] as const;
+
+  it("how many files each platform receives", () => {
+    expect(filesSentTo("linkedin", 7)).toBe(7);
+    expect(filesSentTo("facebook_page", 7)).toBe(7);
+    expect(filesSentTo("instagram", 7)).toBe(7);
+    expect(filesSentTo("x", 7)).toBe(4);
+    expect(filesSentTo("x", 3)).toBe(3);
+    expect(filesSentTo("google_business_profile", 7)).toBe(1);
+    expect(filesSentTo("pinterest", 7)).toBe(1);
+    expect(filesSentTo("youtube", 7)).toBe(1);
+    expect(filesSentTo("tiktok", 7)).toBe(1);
+  });
+
+  it("all JPEG: unchanged for every platform", () => {
+    for (const platform of all) {
+      expect(platformFilesReason(platform, [jpg, jpg, jpg])).toBe(unsupportedMediaReason(platform, jpg));
+    }
+    expect(platformFilesReason("youtube", [jpg, jpg])).toBe("Video only");
+  });
+
+  it("one file or none: the single-file answer", () => {
+    for (const platform of all) {
+      expect(platformFilesReason(platform, [webp])).toBe(unsupportedMediaReason(platform, webp));
+      expect(platformFilesReason(platform, webp)).toBe(unsupportedMediaReason(platform, webp));
+      expect(platformFilesReason(platform, null)).toBeNull();
+      expect(platformFilesReason(platform, [])).toBeNull();
+    }
+  });
+
+  it.each([
+    ["first", [webp, jpg, jpg], 1],
+    ["middle", [jpg, webp, jpg], 2],
+    ["last", [jpg, jpg, webp], 3],
+  ])("a WebP %s: LinkedIn and Facebook refuse it and name the photo", (_where, types, n) => {
+    expect(platformFilesReason("linkedin", types)).toBe(`photo ${n} is WebP; JPG, PNG or GIF only`);
+    expect(platformFilesReason("facebook_page", types)).toBe(`photo ${n} is WebP; JPG, PNG or GIF only`);
+    expect(platformFilesReason("instagram", types)).toBeNull();
+    expect(platformFilesReason("x", types)).toBeNull();
+    expect(platformFilesReason("pinterest", types)).toBeNull();
+    // Google takes the first photo only, so only a WebP first is refused.
+    expect(platformFilesReason("google_business_profile", types)).toBe(n === 1 ? "photo 1 is WebP; JPG or PNG only" : null);
+  });
+
+  it("Google and Pinterest are judged on the first file only", () => {
+    expect(platformFilesReason("google_business_profile", [jpg, webp, webp])).toBeNull();
+    expect(platformFilesReason("pinterest", ["video/mp4", "video/webm"])).toBeNull();
+    expect(platformFilesReason("pinterest", ["video/webm", "video/mp4"])).toBe("file 1 is WebM; MP4 or MOV only");
+  });
+
+  it("X is judged on its first 4 of a 5-photo post", () => {
+    const fifthBad = [jpg, jpg, jpg, jpg, "video/webm"];
+    expect(platformFilesReason("x", fifthBad)).toBeNull();
+    expect(platformFilesReason("linkedin", fifthBad)).toBe("file 5 is WebM; MP4 or MOV only");
+    expect(platformFilesReason("x", [jpg, jpg, jpg, "application/pdf", jpg])).toBe("Unsupported file type");
+    expect(platformFilesReason("x", [jpg, jpg, jpg, jpg, "application/pdf"])).toBeNull();
+  });
+
+  it("order no longer changes the answer for LinkedIn", () => {
+    expect(platformFilesReason("linkedin", [jpg, webp, jpg])).not.toBeNull();
+    expect(platformFilesReason("linkedin", [webp, jpg, jpg])).not.toBeNull();
   });
 });

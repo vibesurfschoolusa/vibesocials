@@ -2137,6 +2137,40 @@ describe("POST /api/posts - the media list (several photos, 07a)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
+  // R21 platform-clients M1: every file LinkedIn receives is checked, not the first alone.
+  it.each([
+    ["first", ["image/webp", "image/jpeg", "image/jpeg"], 1],
+    ["middle", ["image/jpeg", "image/webp", "image/jpeg"], 2],
+    ["last", ["image/jpeg", "image/jpeg", "image/webp"], 3],
+  ] as const)("a WebP %s refuses LinkedIn and names the photo", async (_where, types, n) => {
+    const response = await POST(
+      jsonRequest({
+        media: types.map((type, index) => photo(index + 1, type)),
+        baseCaption: "hi",
+        platforms: ["linkedin", "instagram"],
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "PLATFORM_MEDIA_MISMATCH",
+      platforms: ["linkedin"],
+      error: `These platforms can't publish these photos: LinkedIn (photo ${n} is WebP; JPG, PNG or GIF only). Remove them from platforms or choose different media.`,
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("Google is judged on the first photo only: a WebP second is accepted", async () => {
+    const response = await POST(
+      jsonRequest({
+        media: [photo(1), photo(2, "image/webp")],
+        baseCaption: "hi",
+        platforms: ["google_business_profile", "x"],
+      }),
+    );
+    expect(response.status).toBe(200);
+  });
+
   it("the daily post limit still applies", async () => {
     checkDailyPostLimitMock.mockResolvedValue({ error: "Limit reached.", code: "WORKSPACE_DAILY_POST_LIMIT" });
 

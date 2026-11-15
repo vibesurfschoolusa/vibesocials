@@ -2,10 +2,12 @@ import type { Platform } from "@prisma/client";
 
 import {
   mediaKindOf,
+  mediaTypeList,
+  type MediaTypes,
   PLATFORM_ACCEPTED_MEDIA,
-  platformAcceptsMedia,
+  platformAcceptsFiles,
   platformAcceptsTextOnly,
-  unsupportedMediaReason,
+  platformFilesReason,
 } from "./platformLimits";
 import { platformLabel } from "./platforms";
 
@@ -29,15 +31,19 @@ export interface PlatformSplit {
   incompatible: Platform[];
 }
 
-/** Partition `platforms` by whether their client accepts media of `mimeType`. */
+/**
+ * Partition `platforms` by whether their client accepts the post's files: one
+ * MIME type, or every file's in order (each platform judged on the files it
+ * receives, platformFilesReason).
+ */
 export function splitPlatformsByMedia(
   platforms: readonly Platform[],
-  mimeType: string | null | undefined,
+  mimeType: MediaTypes,
 ): PlatformSplit {
   const compatible: Platform[] = [];
   const incompatible: Platform[] = [];
   for (const platform of platforms) {
-    (platformAcceptsMedia(platform, mimeType) ? compatible : incompatible).push(platform);
+    (platformAcceptsFiles(platform, mimeType) ? compatible : incompatible).push(platform);
   }
   return { compatible, incompatible };
 }
@@ -50,13 +56,14 @@ function acceptedMediaWords(platform: Platform): string {
 }
 
 /** "Instagram (MP4 or MOV only), YouTube (video only)" for platforms that can't take this media. */
-function namedWithMediaWords(platforms: readonly Platform[], mimeType: string | null | undefined): string {
-  const kind = mimeType == null ? null : mediaKindOf(mimeType);
+function namedWithMediaWords(platforms: readonly Platform[], mimeType: MediaTypes): string {
+  const first = mediaTypeList(mimeType)?.[0];
+  const kind = first === undefined ? null : mediaKindOf(first);
   // A platform that takes this kind but refuses the format (a WebM for
   // Instagram) names the formats it takes, as the composer does.
   const words = (platform: Platform) =>
     kind !== null && PLATFORM_ACCEPTED_MEDIA[platform].includes(kind)
-      ? (unsupportedMediaReason(platform, mimeType) ?? acceptedMediaWords(platform))
+      ? (platformFilesReason(platform, mimeType) ?? acceptedMediaWords(platform))
       : acceptedMediaWords(platform);
   return platforms.map((platform) => `${platformLabel(platform)} (${words(platform)})`).join(", ");
 }
@@ -67,7 +74,7 @@ function namedWithMediaWords(platforms: readonly Platform[], mimeType: string | 
  */
 export function skippedForMediaLine(
   skipped: readonly Platform[],
-  mimeType: string | null | undefined,
+  mimeType: MediaTypes,
 ): string | null {
   if (skipped.length === 0) return null;
   return `Skips ${namedWithMediaWords(skipped, mimeType)} for this file.`;
@@ -76,15 +83,19 @@ export function skippedForMediaLine(
 /** 400 message naming every platform that can't publish this media. */
 export function incompatibleMediaMessage(
   incompatible: readonly Platform[],
-  mimeType: string | null | undefined,
+  mimeType: MediaTypes,
 ): string {
   const named = namedWithMediaWords(incompatible, mimeType);
+  const types = mediaTypeList(mimeType);
+  const first = types?.[0];
   const subject =
-    mimeType && mimeType.startsWith("video/")
-      ? "a video"
-      : mimeType && mimeType.startsWith("image/")
-        ? "an image"
-        : "this file type";
+    types && types.length > 1
+      ? "these photos"
+      : first && first.startsWith("video/")
+        ? "a video"
+        : first && first.startsWith("image/")
+          ? "an image"
+          : "this file type";
   return `These platforms can't publish ${subject}: ${named}. Remove them from platforms or choose different media.`;
 }
 
@@ -148,7 +159,7 @@ export class PostTargetingError extends Error {
  */
 export function assertPostTargetsValid(
   targetPlatforms: readonly Platform[] | undefined,
-  mimeType: string | null | undefined,
+  mimeType: MediaTypes,
   tiktokMetadata: { privacyLevel?: unknown; brandedContent?: unknown } | null | undefined,
 ): void {
   if (!targetPlatforms) return;
@@ -196,7 +207,7 @@ export function assertPostTargetsValid(
 export function narrowConnectionsForPost<T extends { platform: Platform }>(args: {
   connections: readonly T[];
   targetPlatforms: readonly Platform[] | undefined;
-  mimeType: string | null | undefined;
+  mimeType: MediaTypes;
   tiktokMetadata: { privacyLevel?: unknown } | null | undefined;
 }): T[] {
   const { connections, targetPlatforms, mimeType, tiktokMetadata } = args;
@@ -206,7 +217,7 @@ export function narrowConnectionsForPost<T extends { platform: Platform }>(args:
     return connections.filter((c) => targetPlatforms.includes(c.platform));
   }
 
-  const compatible = connections.filter((c) => platformAcceptsMedia(c.platform, mimeType));
+  const compatible = connections.filter((c) => platformAcceptsFiles(c.platform, mimeType));
   if (connections.length > 0 && compatible.length === 0) {
     throw new PostTargetingError(
       "NO_COMPATIBLE_PLATFORMS",
@@ -300,18 +311,19 @@ export interface ComposerPlatformChoice {
  * `opts.noFile`: the person has written a post with no file attached, so only
  * the platforms that publish text alone can be chosen. Without it, a null
  * `mimeType` still means "no media chosen yet" and accepts everything.
+ * `mimeType` may list every file's type, in order (several photos).
  */
 export function deriveComposerPlatforms(
   connected: readonly Platform[],
   deselected: ReadonlySet<Platform>,
-  mimeType: string | null | undefined,
+  mimeType: MediaTypes,
   opts: { noFile?: boolean } = {},
 ): { choices: ComposerPlatformChoice[]; selected: Platform[] } {
   const choices = connected.map((platform): ComposerPlatformChoice => {
     const disabledReason =
       opts.noFile && !platformAcceptsTextOnly(platform)
         ? NEEDS_MEDIA_REASON
-        : unsupportedMediaReason(platform, mimeType);
+        : platformFilesReason(platform, mimeType);
     return {
       platform,
       checked: disabledReason === null && !deselected.has(platform),
