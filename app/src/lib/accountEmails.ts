@@ -152,7 +152,7 @@ export function buildEmailChangedNoticeEmail(opts: {
   const intro = (address: string) =>
     `Your Vibe Socials account now signs in with ${address}, and every device was signed out. If you did this, there is nothing else to do.`;
   const ifNotYou =
-    "If it was not you, use the link below to put this address back. It works once, for 7 days, and signs out every device; then reset your password.";
+    "If it was not you, use the link below to put this address back. It works once, for 72 hours, and signs out every device; then reset your password.";
   const help = `If the link no longer works, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
   const escaped = opts.newEmail.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
   const html = [

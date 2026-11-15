@@ -77,7 +77,6 @@ function record(overrides: Record<string, unknown> = {}) {
     undoTokenHash: hashAccountToken("undo-token"),
     undoExpiresAt: new Date(NOW + 60_000),
     undoneAt: null,
-    undoTurnedOffAt: null,
     user: { email: "new@example.com" },
     ...overrides,
   };
@@ -130,8 +129,8 @@ describe("POST /api/auth/change-email/undo", () => {
     expect(claimMock.mock.calls[0][0].where).toMatchObject({
       undoTokenHash: hashAccountToken("undo-token"),
       undoneAt: null,
-      undoTurnedOffAt: null,
     });
+    expect(claimMock.mock.calls[0][0].where).not.toHaveProperty("undoTurnedOffAt");
     const update = userUpdateManyMock.mock.calls[0][0];
     // Only while the account still signs in with the address this change set.
     expect(update.where).toEqual({ id: "user-1", email: "new@example.com" });
@@ -168,17 +167,6 @@ describe("POST /api/auth/change-email/undo", () => {
     expect(afterMock).toHaveBeenCalledTimes(1);
     await afterMock.mock.calls[0][0]();
     expect(followMock).toHaveBeenCalledWith({ userId: "user-1", from: "new@example.com", to: "old@example.com" });
-  });
-
-  // Review 2 item 3.
-  it("is refused when the account holder turned the link off", async () => {
-    findUniqueMock.mockResolvedValue(record({ undoTurnedOffAt: new Date(NOW - 1000) }));
-    const response = await POST(request({ token: "undo-token" }));
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: `The account holder turned this link off in Settings, so it can't undo the change. If that wasn't you, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
-    });
-    expect(userUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("works once: a used link is refused and changes nothing", async () => {
@@ -220,7 +208,7 @@ describe("POST /api/auth/change-email/undo", () => {
     let response = await POST(request({ token: "undo-token" }));
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: `This link has expired: it worked for 7 days. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
+      error: `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
     });
     findUniqueMock.mockResolvedValue(null);
     response = await POST(request({ token: "undo-token" }));
@@ -245,5 +233,18 @@ describe("POST /api/auth/change-email/undo", () => {
     );
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+  });
+});
+
+describe("EmailChangeRequest migration", () => {
+  it("has no turn-off column", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const sql = readFileSync(
+      join(__dirname, "../../../../../../prisma/migrations/20261114550000_email_change_request/migration.sql"),
+      "utf8",
+    );
+    expect(sql).toContain('"undoTokenHash" TEXT');
+    expect(sql).not.toContain("undoTurnedOffAt");
   });
 });

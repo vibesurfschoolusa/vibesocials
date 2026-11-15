@@ -17,7 +17,6 @@ CREATE TABLE "EmailChangeRequest" (
     "undoTokenHash" TEXT,
     "undoExpiresAt" TIMESTAMP(3),
     "undoneAt" TIMESTAMP(3),
-    "undoTurnedOffAt" TIMESTAMP(3),
 
     CONSTRAINT "EmailChangeRequest_pkey" PRIMARY KEY ("id")
 );

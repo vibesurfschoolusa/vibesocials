@@ -43,8 +43,9 @@ describe("Settings, Account: sign-in email", () => {
   });
 });
 
-// Review 2 item 3: the person can turn off the undo link sent to the
-// previous address (a lost or hacked mailbox).
+// Review 3: the person sees until when the previous address can undo the
+// change, and whom to write to if that mailbox is lost. There is no switch to
+// turn the link off: whoever changed the email knows the password.
 describe("Settings, Account: undo link", () => {
   const UNTIL = "2026-11-21T12:00:00.000Z";
 
@@ -52,21 +53,17 @@ describe("Settings, Account: undo link", () => {
     expect(undoLinkSentence(UNTIL)).toBe("Your previous address can undo this change until November 21, 2026.");
   });
 
-  it("shows the sentence and Turn this off while a link is live", () => {
+  it("shows the line and where to write, and no way to turn it off", () => {
     const html = renderToStaticMarkup(createElement(UndoLinkNotice, { initialUntil: UNTIL }));
     expect(html).toContain("Your previous address can undo this change until November 21, 2026.");
-    expect(html).toMatch(/<button[^>]*>(<[^>]+>)*Turn this off/);
+    expect(html).toContain("Lost access to your old address? Write to hello@vibesocials.wtf.");
+    expect(html).not.toContain("Turn");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("<input");
   });
 
   it("shows nothing when there is no live link", () => {
     expect(renderToStaticMarkup(createElement(UndoLinkNotice, { initialUntil: null }))).toBe("");
-  });
-
-  it("asks for the current password before turning it off", () => {
-    const html = renderToStaticMarkup(createElement(UndoLinkNotice, { initialUntil: UNTIL, startConfirming: true }));
-    expect(html).toMatch(/<label[^>]*for="undo-off-password"[^>]*>Current password<\/label>/);
-    expect(html).toMatch(/<input[^>]*id="undo-off-password"[^>]*type="password"|<input[^>]*type="password"[^>]*id="undo-off-password"/);
-    expect(html).toMatch(/<button[^>]*type="submit"[^>]*>(<[^>]+>)*Turn off/);
   });
 
   it("is part of a password account's sign-in email section", () => {

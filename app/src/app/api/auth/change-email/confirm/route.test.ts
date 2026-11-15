@@ -147,7 +147,7 @@ describe("POST /api/auth/change-email/confirm", () => {
     expect(claimed.previousEmail).toBe("old@example.com");
     expect(claimed.undoTokenHash).toMatch(/^[0-9a-f]{64}$/);
     const undoTtl = claimed.undoExpiresAt.getTime() - claimed.usedAt.getTime();
-    expect(undoTtl).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(undoTtl).toBe(72 * 60 * 60 * 1000);
     const update = userUpdateMock.mock.calls[0][0];
     expect(update.where).toEqual({ id: "user-1" });
     expect(update.data).toMatchObject({

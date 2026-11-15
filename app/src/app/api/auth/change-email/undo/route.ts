@@ -15,8 +15,7 @@ const refuse = (status: number, error: string) => NextResponse.json({ error }, {
 
 const NOT_VALID = `This link isn't valid. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const USED = `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`;
-const EXPIRED = `This link has expired: it worked for 7 days. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
-const TURNED_OFF = `The account holder turned this link off in Settings, so it can't undo the change. If that wasn't you, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
+const EXPIRED = `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const CHANGED_AGAIN = `The sign-in email has changed again since this email was sent, so this link can't undo it. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 
 /** Thrown inside the transaction so the claim rolls back with it. */
@@ -28,7 +27,7 @@ class ChangedAgain extends Error {}
  * The "This wasn't me: undo" link in the notice sent to the old address
  * (lib/accountEmails.ts buildEmailChangedNoticeEmail) lands on
  * /verify-email/undo, which posts here when the person presses its button.
- * It puts the previous address back, once, within 7 days, and only while the
+ * It puts the previous address back, once, within 72 hours, and only while the
  * account still signs in with the address that change set: after a later
  * change it would hand the account to an address its owner has since left.
  * Whoever made the change knows the password, so the undo locks them out in
@@ -37,9 +36,8 @@ class ChangedAgain extends Error {}
  * dropped. A fresh password-reset link then goes to the restored address, the
  * only way back in besides Google sign-in, which links an account without a
  * password only for a Google account on that same address
- * (lib/googleSso.ts). The account holder can turn the link off in Settings,
- * Account (../undo-link). Anonymous and rate limited by network, like the
- * other account links.
+ * (lib/googleSso.ts). Anonymous and rate limited by network, like the other
+ * account links.
  */
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
@@ -72,14 +70,13 @@ export async function POST(request: Request) {
     });
     if (!record || !record.previousEmail || !record.undoExpiresAt) return refuse(400, NOT_VALID);
     if (record.undoneAt) return refuse(400, USED);
-    if (record.undoTurnedOffAt) return refuse(400, TURNED_OFF);
     if (record.undoExpiresAt <= now) return refuse(400, EXPIRED);
     if (record.user.email !== record.newEmail) return refuse(409, CHANGED_AGAIN);
     const previousEmail = record.previousEmail;
 
     const resetToken = await prisma.$transaction(async (tx) => {
       const { count } = await tx.emailChangeRequest.updateMany({
-        where: { undoTokenHash, undoneAt: null, undoTurnedOffAt: null, undoExpiresAt: { gt: now } },
+        where: { undoTokenHash, undoneAt: null, undoExpiresAt: { gt: now } },
         data: { undoneAt: now },
       });
       if (count === 0) return null;

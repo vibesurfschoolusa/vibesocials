@@ -147,14 +147,14 @@ describe("buildEmailChangedNoticeEmail", () => {
   });
 
   // Review: the old mailbox can take the account back with one press.
-  it("carries a one-use undo link, its token only in a fragment, valid 7 days", () => {
+  it("carries a one-use undo link, its token only in a fragment, valid 72 hours", () => {
     const { html, text } = notice();
     const link = `${BASE_URL}/verify-email/undo#${RAW_TOKEN}`;
     expect(html).toContain(`<a href="${link}">This wasn&#39;t me: undo the change</a>`);
     expect(text).toContain(link);
     expect(countOccurrences(html, RAW_TOKEN)).toBe(1);
     expect(countOccurrences(text, RAW_TOKEN)).toBe(1);
-    expect(text).toContain("works once, for 7 days");
+    expect(text).toContain("works once, for 72 hours");
   });
 
   it("escapes the address it names", () => {

@@ -9,8 +9,14 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
 
-/** How long the old mailbox's "This wasn't me: undo" link works. */
-const UNDO_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How long the old mailbox's "This wasn't me: undo" link works: long enough
+ * to notice the email over a weekend, short enough that a lost or hacked old
+ * mailbox can't take the account back for long. There is no way to turn it
+ * off: whoever changed the email knows the password, so a switch would only
+ * help a hijacker.
+ */
+const UNDO_TTL_MS = 72 * 60 * 60 * 1000;
 
 const RATE_LIMIT = { route: "auth/change-email-confirm", limit: 10, windowMs: 15 * 60 * 1000 } as const;
 
@@ -35,7 +41,7 @@ const deadLinkResponse = () =>
  * mailbox, stop working. Following the link proves the new mailbox, so the
  * email counts as verified. A Google link was made by the old address, so it
  * is cleared. The old address is told, so its owner learns of a change they
- * did not make, with a one-use undo link (./undo) that works for 7 days.
+ * did not make, with a one-use undo link (./undo) that works for 72 hours.
  *
  * The page posts here only when the person presses its button, never on
  * load, so a mail scanner opening the link changes nothing. `viewer` says
