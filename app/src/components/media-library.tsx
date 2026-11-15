@@ -75,6 +75,32 @@ interface CreateResponse {
 }
 
 /** The card's retention note: "soon" at 0, else "in 1 day" / "in N days". */
+/**
+ * The library's own error sentences (R5-pages L8): what happened and what to
+ * do next. A server answer with its own sentence is shown instead.
+ */
+export const MEDIA_MESSAGES = {
+  loadNetwork: "Couldn't load your media. Check your connection, then press Retry.",
+  loadFailed: "Couldn't load your media. Press Retry in a moment.",
+  loadMoreNetwork: "Couldn't load more media. Check your connection, then press Load more again.",
+  loadMoreFailed: "Couldn't load more media. Press Load more to try again.",
+  noFile: "Choose a photo or video first. Then press Upload.",
+  uploadNetwork: "Couldn't upload the file. Check your connection and try again.",
+  uploadFailed: "Couldn't save the upload. Upload the file again.",
+  deleteNetwork: "Couldn't delete the file. Check your connection and try again.",
+  deleteFailed: "Couldn't delete the file. Try again in a moment.",
+} as const;
+
+/**
+ * An upload's failure as a sentence: a network failure (fetch throws a
+ * TypeError: the browser says Failed to fetch) in plain words; our own explained errors
+ * (lib/uploadFailure.ts, lib/prepareUploadFile.ts) as they are.
+ */
+export function uploadErrorMessage(error: unknown): string {
+  if (error instanceof TypeError || !(error instanceof Error) || !error.message) return MEDIA_MESSAGES.uploadNetwork;
+  return error.message;
+}
+
 export function retentionText(days: number): string {
   return days === 0 ? "auto-removes soon" : `auto-removes in ${days} ${countWord(days, "day", "days")}`;
 }
@@ -242,7 +268,7 @@ interface MediaCardProps {
   onToggleSelect: (item: MediaItemDto) => void;
 }
 
-function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect, onToggleSelect }: MediaCardProps) {
+export function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect, onToggleSelect }: MediaCardProps) {
   // null for a never-posted upload (retention-exempt — see
   // server/jobs/mediaRetention.ts); 0 means "eligible for removal now".
   const retentionDays = daysUntilRemoval(item.lastUsedAt, RETENTION_DAYS, new Date());
@@ -294,26 +320,30 @@ function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect, onTogg
             </>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        {/* R5-pages M3: on a phone the card is half the screen wide, so the
+            buttons stack and Delete keeps its word; from sm they share a row
+            and the Use label is cut rather than pushing Delete out. */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="flex-1"
+            className="w-full min-w-0 sm:w-auto sm:flex-1"
             onClick={() => onReuse(item)}
           >
-            <Repeat className="h-3.5 w-3.5" aria-hidden />
-            Use in new post
+            <Repeat className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="truncate">Use in new post</span>
           </Button>
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
+            size="sm"
+            className="w-full flex-shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8 sm:px-0"
             aria-label={`Delete ${item.originalFilename}`}
             onClick={() => onDeleteRequest(item)}
           >
             <Trash2 className="h-4 w-4" aria-hidden />
+            <span className="sm:sr-only">Delete</span>
           </Button>
         </div>
       </div>
@@ -606,7 +636,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       const data = (await response.json().catch(() => null)) as ListResponse | null;
 
       if (!response.ok) {
-        setError((data as { error?: string } | null)?.error ?? "Failed to load media items.");
+        setError((data as { error?: string } | null)?.error ?? MEDIA_MESSAGES.loadFailed);
         return;
       }
 
@@ -616,7 +646,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       setItems(list);
       setNextCursor(typeof data?.nextCursor === "string" ? data.nextCursor : null);
     } catch {
-      setError("Unexpected error while loading media items.");
+      setError(MEDIA_MESSAGES.loadNetwork);
     } finally {
       setLoading(false);
     }
@@ -649,7 +679,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         | null;
 
       if (!response.ok) {
-        toast.error((data as { error?: string } | null)?.error ?? "Failed to load more media.");
+        toast.error((data as { error?: string } | null)?.error ?? MEDIA_MESSAGES.loadMoreFailed);
         return;
       }
 
@@ -658,7 +688,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       setItems((prev) => appendMediaPage(prev, list));
       setNextCursor(typeof page?.nextCursor === "string" ? page.nextCursor : null);
     } catch {
-      toast.error("Unexpected error while loading more media.");
+      toast.error(MEDIA_MESSAGES.loadMoreNetwork);
     } finally {
       setLoadingMore(false);
     }
@@ -668,7 +698,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     event.preventDefault();
 
     if (!file) {
-      toast.error("Please choose a file to upload.");
+      toast.error(MEDIA_MESSAGES.noFile);
       return;
     }
 
@@ -730,7 +760,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         | null;
 
       if (!response.ok) {
-        toast.error((data as { error?: string } | null)?.error ?? "Failed to upload media.");
+        toast.error((data as { error?: string } | null)?.error ?? MEDIA_MESSAGES.uploadFailed);
         return;
       }
 
@@ -742,7 +772,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       setFileInputKey((key) => key + 1);
       toast.success("Media uploaded successfully.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unexpected error while uploading media.");
+      toast.error(uploadErrorMessage(err));
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -774,7 +804,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     try {
       response = await fetch(`/api/media/${target.id}`, { method: "DELETE" });
     } catch {
-      toast.error("Unexpected error while deleting media.");
+      toast.error(MEDIA_MESSAGES.deleteNetwork);
       throw new Error("DELETE_FAILED");
     }
 
@@ -782,7 +812,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       // Covers the 409 "still referenced by an active post" case: the
       // server's message already states the reason, so it's shown as-is.
-      toast.error(data?.error ?? "Failed to delete media.");
+      toast.error(data?.error ?? MEDIA_MESSAGES.deleteFailed);
       throw new Error("DELETE_FAILED");
     }
 
