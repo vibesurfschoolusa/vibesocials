@@ -38,7 +38,11 @@ vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
 
 // R8-security L1: the scanner's notices go from its own step (scannerNotice.ts runs for
 // real); the outcome email itself and the counter store are stand-ins.
-vi.mock("@/server/notifications/postOutcomeEmail", () => ({ deliverPostOutcomeNotification: deliverMock }));
+// R9-publishing L1: none of these posts is half of a pair still being sent.
+vi.mock("@/server/notifications/postOutcomeEmail", () => ({
+  deliverPostOutcomeNotification: deliverMock,
+  pairPartnerStillToSend: async () => false,
+}));
 vi.mock("@/lib/rateLimit", () => ({
   consumeFixedWindow: async ({ key, limit }: { key: string; limit: number }) => {
     const count = (windows.get(key) ?? 0) + 1;
@@ -1146,7 +1150,12 @@ describe("materializeAndDispatchChunk", () => {
 
       expect(send).toHaveBeenCalledTimes(1);
       expect(sentIds(0)).toEqual(["publish-job-0", "publish-job-2"]);
-      expect(deliverMock).toHaveBeenCalledWith({ userId: "owner-1", postJobId: "job-1", afterPairWait: true });
+      expect(deliverMock).toHaveBeenCalledWith({
+        userId: "owner-1",
+        postJobId: "job-1",
+        afterPairWait: true,
+        scanNotice: true,
+      });
     });
 
     it("600 due posts with nothing to send across 120 workspaces: no event at all, at most 120 emails", async () => {
