@@ -111,6 +111,22 @@ beforeEach(() => {
 });
 
 describe("POST /api/auth/change-email/undo", () => {
+  // R7-new-customer H1: a change from an address that was never confirmed
+  // opens no window and sends no link; a request marked so is refused even
+  // if a token for it turned up, so the unconfirmed address can never take
+  // the account.
+  it("refuses a change whose previous address was never confirmed, and changes nothing", async () => {
+    findUniqueMock.mockResolvedValue(record({ previousEmailUnverified: true }));
+    const response = await POST(request({ token: "undo-token" }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: `This change can't be undone with a link, because the address it replaced was never confirmed. If this is your account, write to ${SUPPORT_EMAIL}.`,
+    });
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(userUpdateManyMock).not.toHaveBeenCalled();
+    expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+  });
+
   it("is rate limited by network and fails closed", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     expect((await POST(request({ token: "undo-token" }))).status).toBe(429);

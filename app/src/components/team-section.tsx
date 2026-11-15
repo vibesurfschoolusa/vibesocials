@@ -27,6 +27,7 @@ import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 
+import { FormError } from "./account-section";
 import { announceClientLinksReplaced, subscribeClientLinksReplaced } from "./client-links-refresh";
 
 /** GET /api/workspaces/members list item — owner-only route (SEC-1: never fetched for a member). */
@@ -186,6 +187,15 @@ export function clientLinksButtonShown(state: ClientLinksState | null): boolean 
   return !!state && state.included && (state.on.upload || state.on.review || state.on.connect);
 }
 
+/**
+ * R7-pages L3: on a plan without client links they are paused, not off, and
+ * a replace is refused; "Turn off client links" is offered instead while one
+ * is on, so a former owner's copies can't come back with the plan.
+ */
+export function clientLinksTurnOffShown(state: ClientLinksState | null): boolean {
+  return !!state && !state.included && (state.on.upload || state.on.review || state.on.connect);
+}
+
 /** The links' state, or null when it can't be read (no button then). */
 async function fetchClientLinks(workspaceId: string, fetchImpl: typeof fetch = fetch): Promise<ClientLinksState | null> {
   try {
@@ -247,18 +257,76 @@ export async function requestClientLinksReplace(
 }
 
 /**
+ * DELETE /api/workspaces/client-links: turns every client link off, on any
+ * plan. Then `announce`, as after a replace; throws an Error whose message
+ * the person can act on, announcing nothing.
+ */
+export async function requestClientLinksTurnOff(
+  fetchImpl: typeof fetch,
+  workspaceId: string,
+  announce: () => void = announceClientLinksReplaced,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchImpl("/api/workspaces/client-links", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
+  } catch {
+    throw new Error("Couldn't reach the server. The client links are unchanged. Check your connection and try again.");
+  }
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    throw new Error(
+      typeof data?.error === "string" ? data.error : "Couldn't turn off the client links. Nothing changed. Try again.",
+    );
+  }
+  announce();
+}
+
+/**
  * The Client links block of the owners' Team card. "Make new client links"
- * asks first (R6 L2). `onReplace` follows the ConfirmDialog contract: it
- * throws to keep the dialog open.
+ * asks first (R6 L2); on a plan without client links "Turn off client
+ * links" does (R7-pages L3). `onReplace` and `onTurnOff` follow the
+ * ConfirmDialog contract: they throw to keep the dialog open.
  */
 export function ClientLinksPanel({
   state,
   onReplace,
+  onTurnOff,
 }: {
   state: ClientLinksState | null;
   onReplace: () => Promise<void>;
+  onTurnOff: () => Promise<void>;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  if (clientLinksTurnOffShown(state)) {
+    return (
+      <div className="flex flex-col gap-2 border-t border-border pt-6">
+        <h3 className="text-sm font-medium text-foreground">Client links</h3>
+        <p className="text-sm text-muted-foreground">
+          Client links are paused, because this workspace&apos;s plan doesn&apos;t include them. Copies kept by
+          someone who stopped being an owner would work again if the plan changes to one with client links. Turning
+          them off stops that.
+        </p>
+        <div>
+          <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>
+            Turn off client links
+          </Button>
+        </div>
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          destructive
+          title="Turn off client links?"
+          description="The client upload, review and connect links stop working for good, including any copies a former owner kept. You can make new ones on a plan with client links."
+          confirmText="Turn off"
+          onConfirm={onTurnOff}
+        />
+      </div>
+    );
+  }
   if (!clientLinksButtonShown(state)) return null;
   return (
     <div className="flex flex-col gap-2 border-t border-border pt-6">
@@ -708,6 +776,20 @@ function OwnerView({
     toast.success(clientLinksReplacedMessage(made));
   }, [toast, workspaceId]);
 
+  // R7-pages L3: on a plan without client links, turns them all off instead.
+  const turnOffClientLinks = useCallback(async () => {
+    try {
+      await requestClientLinksTurnOff(fetch, workspaceId);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't turn off the client links. Nothing changed. Try again.");
+      throw error;
+    }
+    setClientLinks((prev) =>
+      prev ? { ...prev, on: { upload: false, review: false, connect: false }, connectStopped: false } : prev,
+    );
+    toast.success("Client links are off. Nobody can use the old ones, even if the plan changes.");
+  }, [toast, workspaceId]);
+
   // ConfirmDialog contract: throw to keep the dialog open on failure. Verbatim
   // MemberView.handleLeave — an owner may leave once another owner remains (the
   // Leave control is disabled below until then; the server backstops with a
@@ -883,7 +965,7 @@ function OwnerView({
       </div>
 
       {/* R5-security L1 / R6 M2: a former owner's copies of the client links keep working until these are replaced. */}
-      <ClientLinksPanel state={clientLinks} onReplace={replaceClientLinks} />
+      <ClientLinksPanel state={clientLinks} onReplace={replaceClientLinks} onTurnOff={turnOffClientLinks} />
 
       {/* Leave — an owner may step down once another owner exists. Disabled
           with an explanation until then (the server backstops with a 400). */}
@@ -972,8 +1054,9 @@ function plural(count: number, one: string, many: string): string {
  * Owner-only "Delete this workspace". The confirm button is replaced by the
  * server's refusal sentence when one applies; otherwise the owner must type
  * the workspace name exactly, as DELETE /api/workspaces/active requires.
+ * R7-pages L6: its error is announced (FormError, role="alert").
  */
-function DeleteWorkspace({
+export function DeleteWorkspace({
   workspaceId,
   workspaceName,
   deletion,
@@ -1052,7 +1135,7 @@ function DeleteWorkspace({
               />
             </div>
           )}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <FormError message={error} /> : null}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>

@@ -19,7 +19,9 @@ const {
   cookiesMock,
   payerRefusalMock,
   noticeMock,
+  inviteUpdateManyMock,
 } = vi.hoisted(() => ({
+  inviteUpdateManyMock: vi.fn(),
   noticeMock: vi.fn(),
   payerRefusalMock: vi.fn(),
   deleteManyMock: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock("@/lib/db", () => {
       findFirst: findFirstMock,
       delete: deleteMock,
     },
+    workspaceInvite: { updateMany: inviteUpdateManyMock },
     $transaction: (cb: (tx: unknown) => unknown) => cb(prisma),
   };
   return { prisma };
@@ -118,6 +121,43 @@ beforeEach(() => {
   payerRefusalMock.mockResolvedValue(null);
   noticeMock.mockReset();
   noticeMock.mockResolvedValue({ clientLinksToReplace: true });
+  inviteUpdateManyMock.mockReset();
+  inviteUpdateManyMock.mockResolvedValue({ count: 1 });
+});
+
+// R7-security L4: like removal, leaving turns off the invite links the person
+// made, in the same transaction, so they can't rejoin with a copy.
+describe("POST /api/workspaces/leave turns off the leaver's invite links", () => {
+  const REVOKE_WHERE = { workspaceId: "ws-1", createdById: "user-1", revokedAt: null };
+
+  it("for an owner who leaves, after their row is gone, and tells the owners how many", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    const response = await POST(leaveReq());
+    expect(response.status).toBe(200);
+    expect(inviteUpdateManyMock).toHaveBeenCalledWith({ where: REVOKE_WHERE, data: { revokedAt: expect.any(Date) } });
+    expect(deleteMock.mock.invocationCallOrder[0]).toBeLessThan(inviteUpdateManyMock.mock.invocationCallOrder[0]);
+    expect(noticeMock).toHaveBeenCalledWith(expect.objectContaining({ joinLinksRevoked: 1 }));
+  });
+
+  it("for a member who leaves (a demoted owner may have made some)", async () => {
+    const response = await POST(leaveReq());
+    expect(response.status).toBe(200);
+    expect(inviteUpdateManyMock).toHaveBeenCalledWith({
+      where: { ...REVOKE_WHERE, createdById: "user-2" },
+      data: { revokedAt: expect.any(Date) },
+    });
+    expect(deleteManyMock.mock.invocationCallOrder[0]).toBeLessThan(inviteUpdateManyMock.mock.invocationCallOrder[0]);
+  });
+
+  it("not when nothing was left: a sole owner refused, or a membership that raced away", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    countMock.mockResolvedValue(0);
+    await POST(leaveReq());
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    deleteManyMock.mockResolvedValue({ count: 0 });
+    await POST(leaveReq());
+    expect(inviteUpdateManyMock).not.toHaveBeenCalled();
+  });
 });
 
 // R5-security L1: an owner who leaves could copy the client links, which keep working.
@@ -133,6 +173,7 @@ describe("POST /api/workspaces/leave tells the remaining owners about the client
       workspaceName: "Acme",
       formerOwnerId: "user-1",
       at: expect.any(Date),
+      joinLinksRevoked: 1,
     });
     expect(deleteMock.mock.invocationCallOrder[0]).toBeLessThan(noticeMock.mock.invocationCallOrder[0]);
   });

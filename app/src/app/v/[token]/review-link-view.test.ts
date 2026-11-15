@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { ReviewPostCard, changeNoteHint } from "./review-link-view";
+import { REVIEW_MORE_SENTENCE, ReviewListMore, ReviewPostCard, changeNoteHint } from "./review-link-view";
 
 type ReviewPostDTO = ReviewCardDTO;
 
@@ -87,5 +87,18 @@ describe("ReviewPostCard - a Feed and Story pair", () => {
       "This post and its Story will not go out until they are scheduled again.",
     );
     expect(changeNoteHint(post())).toBe("This post will not go out until it is scheduled again.");
+  });
+});
+
+// R7-client-journey L5: the server lists at most 100 cards and says whether
+// there are more; the page then says so under the list.
+describe("ReviewListMore", () => {
+  it("says more appear when the server says there are more", () => {
+    expect(REVIEW_MORE_SENTENCE).toBe("Showing the next 100 scheduled posts; more appear as these go out.");
+    expect(renderToStaticMarkup(createElement(ReviewListMore, { more: true }))).toContain(REVIEW_MORE_SENTENCE);
+  });
+
+  it("says nothing otherwise", () => {
+    expect(renderToStaticMarkup(createElement(ReviewListMore, { more: false }))).toBe("");
   });
 });

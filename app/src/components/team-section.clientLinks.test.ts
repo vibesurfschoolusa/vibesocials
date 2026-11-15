@@ -25,7 +25,9 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), e
 import {
   CLIENT_LINKS_REPLACED_EVENT,
   clientLinksButtonShown,
+  clientLinksTurnOffShown,
   requestClientLinksReplace,
+  requestClientLinksTurnOff,
   watchClientLinks,
   ClientLinksPanel,
   clientLinksReplacedMessage,
@@ -46,7 +48,9 @@ const ON = { included: true, on: { upload: true, review: false, connect: false }
 
 function panel(state: Parameters<typeof ClientLinksPanel>[0]["state"]): string {
   confirmProps.length = 0;
-  return renderToStaticMarkup(createElement(ClientLinksPanel, { state, onReplace: async () => {} }));
+  return renderToStaticMarkup(
+    createElement(ClientLinksPanel, { state, onReplace: async () => {}, onTurnOff: async () => {} }),
+  );
 }
 
 describe("Make new client links", () => {
@@ -65,7 +69,8 @@ describe("Make new client links", () => {
     expect(clientLinksButtonShown({ ...ON, on: { upload: false, review: false, connect: false } })).toBe(false);
     expect(clientLinksButtonShown({ ...ON, included: false })).toBe(false);
     expect(clientLinksButtonShown(null)).toBe(false);
-    expect(panel({ ...ON, included: false })).toBe("");
+    expect(panel({ ...ON, included: false })).not.toContain("Make new client links");
+    expect(panel({ ...ON, included: false, on: { upload: false, review: false, connect: false } })).toBe("");
     expect(panel(null)).toBe("");
   });
 
@@ -220,3 +225,59 @@ describe("Make new client links follows the client links on the page", () => {
 function announce(source: "team" | "connect-link") {
   window.dispatchEvent(new CustomEvent(CLIENT_LINKS_REPLACED_EVENT, { detail: { source } }));
 }
+
+// R7-pages L3 / client-journey L2: on a plan without client links they are
+// paused; the owners are offered "Turn off client links" instead of a
+// replace the plan refuses.
+describe("Turn off client links", () => {
+  const PAUSED = { ...ON, included: false };
+
+  it("is offered on a plan without client links while one is on, saying they are paused", () => {
+    expect(clientLinksTurnOffShown(PAUSED)).toBe(true);
+    expect(clientLinksTurnOffShown(ON)).toBe(false);
+    expect(clientLinksTurnOffShown({ ...PAUSED, on: { upload: false, review: false, connect: false } })).toBe(false);
+    expect(clientLinksTurnOffShown(null)).toBe(false);
+    const html = panel(PAUSED);
+    expect(html).toContain("Turn off client links");
+    expect(html).toContain(
+      "Client links are paused, because this workspace&#x27;s plan doesn&#x27;t include them. Copies kept by someone who stopped being an owner would work again if the plan changes to one with client links. Turning them off stops that.",
+    );
+    expect(html).not.toContain("Make new client links");
+  });
+
+  it("asks first, as a destructive confirm", () => {
+    panel(PAUSED);
+    expect(confirmProps).toHaveLength(1);
+    expect(confirmProps[0]).toMatchObject({
+      destructive: true,
+      title: "Turn off client links?",
+      description:
+        "The client upload, review and connect links stop working for good, including any copies a former owner kept. You can make new ones on a plan with client links.",
+      confirmText: "Turn off",
+      open: false,
+    });
+  });
+
+  it("sends DELETE for the rendered workspace and tells the page; a refusal throws its sentence and tells nothing", async () => {
+    const announce = vi.fn();
+    const ok = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await requestClientLinksTurnOff(ok as unknown as typeof fetch, "ws-1", announce);
+    expect(ok).toHaveBeenCalledWith("/api/workspaces/client-links", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId: "ws-1" }),
+    });
+    expect(announce).toHaveBeenCalledTimes(1);
+
+    announce.mockClear();
+    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Nope." }), { status: 500 }));
+    await expect(requestClientLinksTurnOff(refused as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow("Nope.");
+    const offline = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(requestClientLinksTurnOff(offline as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow(
+      "Couldn't reach the server. The client links are unchanged. Check your connection and try again.",
+    );
+    expect(announce).not.toHaveBeenCalled();
+  });
+});

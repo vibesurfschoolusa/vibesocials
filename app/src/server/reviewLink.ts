@@ -161,14 +161,32 @@ function alsoStoryLine(story: ReviewPostRow): string {
 }
 
 /**
+ * Rows each query reads: a card may hold two (a feed post and its folded
+ * Story), and one row more tells whether any card is left out.
+ */
+const REVIEW_ROWS_TAKE = 2 * REVIEW_LIST_MAX + 1;
+
+/** The order the page lists cards in: by time, the ones without a time last. */
+function cardOrder(a: { scheduledFor: string | null; id: string }, b: { scheduledFor: string | null; id: string }): number {
+  return (a.scheduledFor ?? "￿").localeCompare(b.scheduledFor ?? "￿") || a.id.localeCompare(b.id);
+}
+
+/**
  * What the public page lists for a workspace: its scheduled posts in the next
- * 60 days (at most 100, earliest first) and the drafts its client asked to
- * change in the last 30 days, merged in time order. Only drafts and scheduled
+ * 60 days and the drafts its client asked to change in the last 30 days,
+ * merged in time order. At most 100 scheduled cards (R7-client-journey L5:
+ * counted after a Story is folded into its feed post's card, so the cut
+ * never parts a pair); every change-requested draft is shown and none
+ * counts. `more` says whether scheduled cards were left out, so the page
+ * can say so (review-link-view.tsx). Only drafts and scheduled
  * posts are ever asked for, so a published, failed or cancelled post cannot
  * appear. A change request is cleared when the post is scheduled again, so a
  * draft that still carries one was not.
  */
-export async function listReviewPosts(workspaceId: string, now: Date): Promise<ReviewCardDTO[]> {
+export async function listReviewPosts(
+  workspaceId: string,
+  now: Date,
+): Promise<{ posts: ReviewCardDTO[]; more: boolean }> {
   const scheduled = await prisma.postJob.findMany({
     where: {
       workspaceId,
@@ -176,7 +194,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       scheduledFor: { gte: now, lte: reviewWindowEnd(now) },
     },
     orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
-    take: REVIEW_LIST_MAX,
+    take: REVIEW_ROWS_TAKE,
     select: REVIEW_POST_SELECT,
   });
   const changed = await prisma.postJob.findMany({
@@ -186,15 +204,23 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       clientChangeRequestedAt: { gte: new Date(now.getTime() - REVIEW_CHANGE_SHOWN_DAYS * DAY_MS) },
     },
     orderBy: [{ clientChangeRequestedAt: "desc" }, { id: "asc" }],
-    take: REVIEW_LIST_MAX,
+    take: REVIEW_ROWS_TAKE,
     select: REVIEW_POST_SELECT,
   });
   const listed: ReviewPostRow[] = [...scheduled, ...changed];
-  if (listed.length === 0) return [];
+  if (listed.length === 0) return { posts: [], more: false };
   // F6: a Story folded into its feed post's card has no card of its own.
   const storyOf = foldStoryPairs(listed);
   const folded = new Set(Array.from(storyOf.values(), (row) => row.id));
-  const rows = listed.filter((row) => !folded.has(row.id));
+  const cards = listed.filter((row) => !folded.has(row.id));
+  // Only scheduled cards are cut and counted: a draft the client asked to
+  // change always shows, so the client sees their request is still open.
+  // A pair folds only within one status, so the cut parts no pair.
+  const scheduledCards = cards
+    .filter((row) => row.status === "scheduled")
+    .sort((a, b) => cardOrder(cardKey(a), cardKey(b)));
+  const more = scheduledCards.length > REVIEW_LIST_MAX;
+  const rows = [...scheduledCards.slice(0, REVIEW_LIST_MAX), ...cards.filter((row) => row.status !== "scheduled")];
 
   // As GET /api/posts: one grouped count for the posts with several photos.
   const photoCounts = await prisma.postJobMedia.groupBy({
@@ -267,10 +293,11 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     };
   });
 
-  return posts.sort(
-    (a, b) =>
-      (a.scheduledFor ?? "￿").localeCompare(b.scheduledFor ?? "￿") || a.id.localeCompare(b.id),
-  );
+  return { posts: posts.sort(cardOrder), more };
+}
+
+function cardKey(row: ReviewPostRow): { scheduledFor: string | null; id: string } {
+  return { scheduledFor: row.scheduledFor?.toISOString() ?? null, id: row.id };
 }
 
 /** How long the owners' email may run before the caller carries on (as uploadLink.ts). */

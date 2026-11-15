@@ -5,8 +5,7 @@ import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
 import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
-import { planFeatureResponse } from "@/lib/planFeatureResponse";
-import { planIncludes } from "@/lib/planFeatures";
+import { PLAN_FEATURE_CODE, planIncludes } from "@/lib/planFeatures";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { reviewLinkUrl } from "@/lib/reviewLink";
 import { sealSecret } from "@/lib/tokenCrypto";
@@ -37,6 +36,13 @@ import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
  * (`connectStopped`: the connect link is on but its maker is no longer an
  * owner, so it works for nobody): the Team
  * card shows the button only while a link is on and the plan includes them.
+ *
+ * DELETE { workspaceId } (R7-pages L3 / client-journey L2): "Turn off client
+ * links". On a plan without client links they are paused, not off, and a
+ * former owner's copies would work again if the plan changes back; this
+ * turns all three off, on any plan, as each link route's own DELETE does
+ * (none of those is gated by the plan either). POST, which makes new ones,
+ * stays for plans that include client links.
  */
 
 /** A connect link that has not been turned off or run out, whoever made it. */
@@ -68,6 +74,9 @@ export async function GET(request: Request) {
 
 export const CLIENT_LINKS_LIMIT_MESSAGE = "You made new client links many times this hour. Try again later.";
 const FAILED_MESSAGE = "Couldn't make new client links. The old ones still work. Try again.";
+export const CLIENT_LINKS_NOT_INCLUDED_MESSAGE =
+  "This workspace's plan doesn't include client links, so new ones can't be made. To stop the old ones working, press Turn off client links.";
+const TURN_OFF_FAILED_MESSAGE = "Couldn't turn off the client links. Nothing changed. Try again.";
 
 export async function POST(request: Request) {
   const contextOrError = await requireOwnerContext();
@@ -76,8 +85,9 @@ export async function POST(request: Request) {
   const workspaceId = context.workspace.id;
   const mismatch = renderedWorkspaceRefusal(((await readJsonObject(request)) ?? {}).workspaceId, workspaceId);
   if (mismatch) return mismatch;
-  const notIncluded = planFeatureResponse(context.workspace, "clientLinks");
-  if (notIncluded) return notIncluded;
+  if (!planIncludes(context.workspace, "clientLinks")) {
+    return NextResponse.json({ error: CLIENT_LINKS_NOT_INCLUDED_MESSAGE, code: PLAN_FEATURE_CODE }, { status: 403 });
+  }
 
   const rateLimit = await checkRateLimit({
     userId: context.user.id,
@@ -169,5 +179,27 @@ export async function POST(request: Request) {
   } catch (error) {
     logger.error("[POST /api/workspaces/client-links] Unexpected error", { error, workspaceId });
     return NextResponse.json({ error: FAILED_MESSAGE }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  const contextOrError = await requireOwnerContext();
+  if (contextOrError instanceof NextResponse) return contextOrError;
+  const workspaceId = contextOrError.workspace.id;
+  const mismatch = renderedWorkspaceRefusal(((await readJsonObject(request)) ?? {}).workspaceId, workspaceId);
+  if (mismatch) return mismatch;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const active = { workspaceId, revokedAt: null };
+      const off = { revokedAt: new Date() };
+      await tx.workspaceUploadLink.updateMany({ where: active, data: off });
+      await tx.workspaceReviewLink.updateMany({ where: active, data: off });
+      await tx.workspaceConnectLink.updateMany({ where: active, data: off });
+    });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    logger.error("[DELETE /api/workspaces/client-links] Unexpected error", { error, workspaceId });
+    return NextResponse.json({ error: TURN_OFF_FAILED_MESSAGE }, { status: 500 });
   }
 }

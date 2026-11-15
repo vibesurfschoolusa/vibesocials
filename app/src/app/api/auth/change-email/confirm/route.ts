@@ -52,7 +52,8 @@ type Outcome = { kind: "changed" } | { kind: "used" } | { kind: "locked"; until:
  * mailbox, stop working. Following the link proves the new mailbox, so the
  * email counts as verified. A Google link was made by the old address, so it
  * is cleared. The old address is told, so its owner learns of a change they
- * did not make, with a one-use undo link (./undo) that works for 72 hours.
+ * did not make, with a one-use undo link (./undo) that works for 72 hours;
+ * only an address that was confirmed, though (R7-new-customer H1).
  *
  * The page posts here only when the person presses its button, never on
  * load, so a mail scanner opening the link changes nothing. `viewer` says
@@ -96,7 +97,7 @@ export async function POST(request: Request) {
     const caller = await getCurrentUser();
     const record = await prisma.emailChangeRequest.findUnique({
       where: { tokenHash },
-      include: { user: { select: { email: true } } },
+      include: { user: { select: { email: true, emailVerifiedAt: true, googleLinkedAt: true } } },
     });
     if (record?.usedAt) {
       return usedLinkResponse();
@@ -105,6 +106,11 @@ export async function POST(request: Request) {
       return deadLinkResponse();
     }
 
+    // R7-new-customer H1: only a confirmed address may undo. One never
+    // confirmed (a mistyped sign-up address fixed here) may belong to a
+    // stranger, whom an undo would hand the account. Confirmed as everywhere
+    // else (lib/workspaceStatus.ts): verified, or linked to Google.
+    const previousConfirmed = record.user.emailVerifiedAt !== null || record.user.googleLinkedAt !== null;
     const outcome = await prisma.$transaction(async (tx): Promise<Outcome> => {
       const lockedUntil = await accountUndoWindowUntil(tx, record.userId, now);
       if (lockedUntil) return { kind: "locked", until: lockedUntil };
@@ -113,12 +119,15 @@ export async function POST(request: Request) {
 
       const { count } = await tx.emailChangeRequest.updateMany({
         where: { tokenHash, usedAt: null, expiresAt: { gt: now } },
-        data: {
-          usedAt: now,
-          previousEmail: record.user.email,
-          undoTokenHash: undo.hash,
-          undoExpiresAt: new Date(now.getTime() + UNDO_TTL_MS),
-        },
+        data: previousConfirmed
+          ? {
+              usedAt: now,
+              previousEmail: record.user.email,
+              undoTokenHash: undo.hash,
+              undoExpiresAt: new Date(now.getTime() + UNDO_TTL_MS),
+            }
+          : // No window: the account may change again or be deleted at once.
+            { usedAt: now, previousEmailUnverified: true },
       });
       // The same `now` as the read above, so the link can't have expired
       // since: it was used in the meantime.
@@ -150,14 +159,18 @@ export async function POST(request: Request) {
     }
 
     // Best-effort: deliverAccountEmail logs and returns false on any failure.
-    await deliverAccountEmail(
-      record.user.email,
-      buildEmailChangedNoticeEmail({
-        newEmail: record.newEmail,
-        rawUndoToken: undo.raw,
-        baseUrl: process.env.NEXTAUTH_URL ?? "",
-      }),
-    );
+    // An unconfirmed previous address is told nothing: the notice would name
+    // the new address to whoever owns that mailbox.
+    if (previousConfirmed) {
+      await deliverAccountEmail(
+        record.user.email,
+        buildEmailChangedNoticeEmail({
+          newEmail: record.newEmail,
+          rawUndoToken: undo.raw,
+          baseUrl: process.env.NEXTAUTH_URL ?? "",
+        }),
+      );
+    }
     // After the answer is sent, never on its path: Stripe can be slow or
     // down, and the change is already made. It logs and never throws; the
     // catch is for a surprise.

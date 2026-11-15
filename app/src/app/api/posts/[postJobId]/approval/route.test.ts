@@ -22,7 +22,9 @@ const {
   mediaUpdateManyMock,
   transactionMock,
   resultFindFirstMock,
+  memberFindUniqueMock,
 } = vi.hoisted(() => ({
+  memberFindUniqueMock: vi.fn(),
   transactionMock: vi.fn(),
   resultFindFirstMock: vi.fn(),
   stampJobFindUniqueMock: vi.fn(),
@@ -46,6 +48,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock, updateMany: updateManyMock, findUnique: stampJobFindUniqueMock },
     user: { findUnique: userFindUniqueMock },
+    workspaceMember: { findUnique: memberFindUniqueMock },
     // Second review, item 1: a reject ends the post through finishPostJob, which
     // stamps its media (read the post's media, then write lastUsedAt).
     mediaItem: { updateMany: mediaUpdateManyMock },
@@ -151,6 +154,8 @@ beforeEach(() => {
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   updateManyMock.mockResolvedValue({ count: 1 });
   userFindUniqueMock.mockResolvedValue({ email: "member@example.com" });
+  memberFindUniqueMock.mockReset();
+  memberFindUniqueMock.mockResolvedValue({ id: "membership-1" });
   inngestSendMock.mockResolvedValue(undefined);
   sendEmailMock.mockResolvedValue(undefined);
   prepareDispatchMock.mockResolvedValue({
@@ -380,6 +385,24 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0][0]).toMatchObject({ to: "member@example.com" });
     expect(sendEmailMock.mock.calls[0][0].html).toContain("/go?w=ws-1&amp;to=%2Factivity");
+  });
+
+  // R7-client-journey L1: as postOutcomeEmail, only a submitter who is still
+  // a member hears about the decision; a removed one gets no caption or link.
+  it("emails nobody when the submitter is no longer a member, and the decision stands", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    memberFindUniqueMock.mockResolvedValue(null);
+
+    for (const decision of ["approve", "reject"]) {
+      const res = await POST(req({ decision }), ctx("job-1"));
+      expect(res.status).toBe(200);
+    }
+
+    expect(memberFindUniqueMock).toHaveBeenCalledWith({
+      where: { workspaceId_userId: { workspaceId: "ws-1", userId: "member-1" } },
+      select: { id: true },
+    });
+    expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
   it("shows the scheduled time in the member's own zone (F4)", async () => {

@@ -361,6 +361,11 @@ model EmailChangeRequest {
   undoTokenHash String?   @unique
   undoExpiresAt DateTime?
   undoneAt      DateTime?
+  // R7-new-customer H1: true when the address the change replaced was never
+  // confirmed (a mistyped sign-up address, say). Such a change opens no undo
+  // window and sends no undo link, and the undo route refuses it, so whoever
+  // owns that mailbox can't take the account. Null on every other row.
+  previousEmailUnverified Boolean?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

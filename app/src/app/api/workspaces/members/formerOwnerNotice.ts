@@ -1,5 +1,7 @@
+import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { planIncludes } from "@/lib/planFeatures";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -15,6 +17,18 @@ import { workspaceLink } from "@/server/notifications/links";
  * made acts as them, so it stopped working with their ownership
  * (server/connectLink/link.ts) and the client needs a new one ("stopped").
  * The same button replaces it, with the same platforms.
+ *
+ * R7-pages L3 / client-journey L2: on a plan without client links the links
+ * are paused, not off (lib/uploadLink.ts and the others answer as inactive),
+ * and "Make new client links" is refused. So the email says they are paused,
+ * that the former owner's copies would work again on a plan with client
+ * links, and offers "Turn off client links" (DELETE
+ * /api/workspaces/client-links), which works on any plan. A connect link
+ * that already stopped works for nobody and can't be replaced on that plan,
+ * so with nothing else on there is nothing to say.
+ *
+ * R7-security L4: leaving also turns off the invite links the person made
+ * (../../leave); the email says how many.
  */
 
 /** The client connect link at the moment someone stopped being an owner. */
@@ -44,9 +58,18 @@ export function buildFormerOwnerEmail(input: {
   uploadLink: boolean;
   reviewLink: boolean;
   connectLink?: FormerOwnerConnectLink;
+  /** False when the workspace's plan doesn't include client links (they are paused). */
+  clientLinksIncluded?: boolean;
+  /** How many invite links the person made were turned off as they left. */
+  joinLinksRevoked?: number;
   appBaseUrl: string | null | undefined;
 }): { subject: string; html: string; text: string } {
   const { workspaceName, formerOwnerName } = input;
+  const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
+  const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0);
+  if (input.clientLinksIncluded === false) {
+    return pausedLinksEmail({ ...input, href, invites });
+  }
   const working = [
     input.uploadLink ? "client upload link" : null,
     input.reviewLink ? "client review link" : null,
@@ -73,11 +96,47 @@ export function buildFormerOwnerEmail(input: {
       ? 'To make a new one with the same platforms, open Settings, Team and press "Make new client links"; send the new link to your client.'
       : `To stop ${working.length > 1 ? "them" : "it"} working, open Settings, Team and press "Make new client links". It replaces ${replaces}; send the new ${replaced > 1 ? "links" : "link"} to your client.`,
   );
-  const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
+  if (invites) lines.push(invites);
   return {
     subject: `Make new client links for ${workspaceName}`,
     text: `${lines.join("\n\n")}\n\nOpen Settings, Team: ${href}\n`,
     html: `${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}<p><a href="${escapeHtml(href)}">Open Settings, Team</a></p>`,
+  };
+}
+
+function inviteLinksLine(formerOwnerName: string, workspaceName: string, count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? `The invite link ${formerOwnerName} made was turned off when ${formerOwnerName} left, so it can't be used to join ${workspaceName} again.`
+    : `The ${count} invite links ${formerOwnerName} made were turned off when ${formerOwnerName} left, so they can't be used to join ${workspaceName} again.`;
+}
+
+/** The plan doesn't include client links: the working ones are paused, and can be turned off. */
+function pausedLinksEmail(input: {
+  workspaceName: string;
+  formerOwnerName: string;
+  uploadLink: boolean;
+  reviewLink: boolean;
+  connectLink?: FormerOwnerConnectLink;
+  href: string;
+  invites: string | null;
+}): { subject: string; html: string; text: string } {
+  const { workspaceName, formerOwnerName } = input;
+  const paused = [
+    input.uploadLink ? "client upload link" : null,
+    input.reviewLink ? "client review link" : null,
+    input.connectLink === "works" ? "client connect link" : null,
+  ].filter((name): name is string => name !== null);
+  const one = paused.length === 1;
+  const lines = [
+    `${formerOwnerName} is no longer an owner of ${workspaceName}. As an owner, ${formerOwnerName} had access to its ${listOf(paused)}. ${one ? "It is" : "They are"} paused, because this workspace's plan doesn't include client links.`,
+    `If the plan changes to one with client links (Growth or Pro), the copies ${formerOwnerName} kept would work again. To stop that, open Settings, Team and press "Turn off client links".`,
+  ];
+  if (input.invites) lines.push(input.invites);
+  return {
+    subject: `Turn off client links for ${workspaceName}`,
+    text: `${lines.join("\n\n")}\n\nOpen Settings, Team: ${input.href}\n`,
+    html: `${lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}<p><a href="${escapeHtml(input.href)}">Open Settings, Team</a></p>`,
   };
 }
 
@@ -94,18 +153,23 @@ export async function noticeOwnersOfFormerOwner(input: {
   /** Given when the person is being deleted, so their row cannot be read. */
   formerOwnerName?: string;
   at: Date;
+  /** Given by a leave: how many of the person's invite links it turned off. */
+  joinLinksRevoked?: number;
 }): Promise<{ clientLinksToReplace: boolean }> {
   const { workspaceId, formerOwnerId } = input;
   let links: { uploadLink: boolean; reviewLink: boolean; connectLink: FormerOwnerConnectLink };
+  let clientLinksIncluded: boolean;
   try {
-    const [upload, review, connect] = await Promise.all([
+    const [upload, review, connect, workspace] = await Promise.all([
       prisma.workspaceUploadLink.findFirst({ where: { workspaceId, revokedAt: null }, select: { id: true } }),
       prisma.workspaceReviewLink.findFirst({ where: { workspaceId, revokedAt: null }, select: { id: true } }),
       prisma.workspaceConnectLink.findFirst({
         where: { workspaceId, revokedAt: null, expiresAt: { gt: new Date() } },
         select: { createdById: true },
       }),
+      prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, ...billingFieldsSelect() } }),
     ]);
+    clientLinksIncluded = planIncludes(workspace ?? {}, "clientLinks");
     let connectLink: FormerOwnerConnectLink = null;
     if (connect?.createdById === formerOwnerId) {
       connectLink = "stopped";
@@ -124,6 +188,10 @@ export async function noticeOwnersOfFormerOwner(input: {
     return { clientLinksToReplace: false };
   }
   if (!links.uploadLink && !links.reviewLink && !links.connectLink) return { clientLinksToReplace: false };
+  // Paused by the plan: a stopped connect link alone leaves nothing to turn off.
+  if (!clientLinksIncluded && !links.uploadLink && !links.reviewLink && links.connectLink !== "works") {
+    return { clientLinksToReplace: false };
+  }
 
   try {
     const [former, owners] = await Promise.all([
@@ -140,6 +208,8 @@ export async function noticeOwnersOfFormerOwner(input: {
       workspaceName: input.workspaceName,
       formerOwnerName: former?.name?.trim() || former?.email || "A former owner",
       ...links,
+      clientLinksIncluded,
+      joinLinksRevoked: input.joinLinksRevoked ?? 0,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
     });
     for (const owner of owners) {

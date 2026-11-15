@@ -41,7 +41,7 @@ import { NextResponse } from "next/server";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { openSecret } from "@/lib/tokenCrypto";
 
-import { GET, POST } from "./route";
+import { DELETE, GET, POST } from "./route";
 
 /**
  * R5-security L1: "Make new client links" replaces the upload link and the
@@ -243,6 +243,11 @@ describe("POST /api/workspaces/client-links", () => {
     });
     const response = await POST(request());
     expect(response.status).toBe(403);
+    // R7-pages L3: a plain sentence that says what still works.
+    await expect(response.json()).resolves.toMatchObject({
+      error:
+        "This workspace's plan doesn't include client links, so new ones can't be made. To stop the old ones working, press Turn off client links.",
+    });
     expect(m.transaction).not.toHaveBeenCalled();
   });
 
@@ -301,5 +306,60 @@ describe("GET /api/workspaces/client-links", () => {
     m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
     expect((await get("?workspaceId=ws-other")).status).toBe(409);
     expect(m.uploadFindFirst).not.toHaveBeenCalled();
+  });
+});
+
+// R7-pages L3 / client-journey L2: "Turn off client links" works on any plan,
+// so the owners can stop a former owner's paused copies coming back.
+describe("DELETE /api/workspaces/client-links", () => {
+  const del = (body: unknown = { workspaceId: "ws-1" }) =>
+    DELETE(
+      new Request("http://localhost/api/workspaces/client-links", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+  const STARTER = {
+    ...OWNER_CONTEXT,
+    workspace: { ...OWNER_CONTEXT.workspace, billingExempt: false, plan: "starter", planStatus: "active" },
+  };
+
+  it("turns off the upload, review and connect links in one transaction, on a plan without client links", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.requireOwnerContext.mockResolvedValue(STARTER);
+    const response = await del();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    const off = { where: { workspaceId: "ws-1", revokedAt: null }, data: { revokedAt: expect.any(Date) } };
+    expect(m.uploadUpdateMany).toHaveBeenCalledWith(off);
+    expect(m.reviewUpdateMany).toHaveBeenCalledWith(off);
+    expect(m.connectUpdateMany).toHaveBeenCalledWith(off);
+    expect(m.calls[0]).toBe("transaction");
+    expect(m.uploadCreate).not.toHaveBeenCalled();
+    expect(m.reviewCreate).not.toHaveBeenCalled();
+    expect(m.connectCreate).not.toHaveBeenCalled();
+  });
+
+  it("works on a plan with client links too", async () => {
+    expect((await del()).status).toBe(200);
+    expect(m.uploadUpdateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the gate's response for a member, refuses another workspace's id, and changes nothing", async () => {
+    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
+    expect((await del()).status).toBe(403);
+    m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
+    expect((await del({ workspaceId: "ws-other" })).status).toBe(409);
+    expect(m.transaction).not.toHaveBeenCalled();
+  });
+
+  it("answers 500 with a plain sentence when the transaction fails", async () => {
+    m.transaction.mockRejectedValue(new Error("db down"));
+    const response = await del();
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't turn off the client links. Nothing changed. Try again.",
+    });
   });
 });
