@@ -13,7 +13,8 @@ import type { Platform } from "@prisma/client";
 const h = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
   isOwner: vi.fn(),
-  upsert: vi.fn(),
+  create: vi.fn(),
+  updateMany: vi.fn(),
   connectionFind: vi.fn(),
   pendingCreate: vi.fn(),
   pendingDeleteMany: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock("@/lib/workspace", () => ({ isWorkspaceOwner: h.isOwner }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    socialConnection: { upsert: h.upsert, findUnique: h.connectionFind },
+    socialConnection: { create: h.create, updateMany: h.updateMany, findUnique: h.connectionFind },
     pendingConnection: { create: h.pendingCreate, deleteMany: h.pendingDeleteMany, updateMany: h.pendingUpdateMany },
     workspaceConnectLink: { findUnique: h.linkFind, update: h.linkUpdate },
     oAuthHandshake: { findUnique: h.handshakeFind, delete: h.handshakeDelete },
@@ -184,7 +185,9 @@ beforeEach(() => {
   });
   h.isOwner.mockResolvedValue(true);
   h.connectionFind.mockResolvedValue(null);
-  h.upsert.mockResolvedValue({ id: "conn-1" });
+  // The shared save creates a first connection (R6 second review 3).
+  h.create.mockResolvedValue({ id: "conn-1" });
+  h.updateMany.mockResolvedValue({ count: 1 });
   h.linkUpdate.mockResolvedValue({});
   h.pendingCreate.mockResolvedValue({ id: "pending-1" });
   h.pendingDeleteMany.mockResolvedValue({ count: 0 });
@@ -207,13 +210,9 @@ describe.each(ALL)("%s: a visitor's flow through the real callback", (platform) 
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?success=${platform}_connected`);
     expect(h.getCurrentUser).not.toHaveBeenCalled();
     expect(h.isOwner).toHaveBeenCalledWith(CREATOR, WORKSPACE);
-    expect(h.upsert).toHaveBeenCalledTimes(1);
-    const args = h.upsert.mock.calls[0][0] as {
-      where: { workspaceId_platform: { workspaceId: string; platform: string } };
-      create: { userId: string; workspaceId: string };
-    };
-    expect(args.where.workspaceId_platform).toEqual({ workspaceId: WORKSPACE, platform });
-    expect(args.create.userId).toBe(CREATOR);
+    expect(h.create).toHaveBeenCalledTimes(1);
+    const args = h.create.mock.calls[0][0] as { data: { userId: string; workspaceId: string; platform: string } };
+    expect(args.data).toMatchObject({ userId: CREATOR, workspaceId: WORKSPACE, platform });
     expect(h.linkUpdate).toHaveBeenCalledWith({ where: { id: "link-1" }, data: { lastUsedAt: NOW } });
     expect(res.headers.get("set-cookie")).toMatch(/^vs_connect=;/);
   });
@@ -225,7 +224,7 @@ describe.each(ALL)("%s: a visitor's flow through the real callback", (platform) 
 
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=${platform}_already_connected`);
     expect(h.fetch).not.toHaveBeenCalled();
-    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.create).not.toHaveBeenCalled();
   });
 });
 
@@ -238,7 +237,7 @@ describe("a link flow without its cookie, in a browser signed in as the creator"
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c`);
     expect(h.getCurrentUser).not.toHaveBeenCalled();
     expect(h.fetch).not.toHaveBeenCalled();
-    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.create).not.toHaveBeenCalled();
   });
 
   it("x: the link's handshake row is refused by the callback as an expired session", async () => {
@@ -249,7 +248,7 @@ describe("a link flow without its cookie, in a browser signed in as the creator"
     expect(res.headers.get("location")).toBe(`${ORIGIN}/settings?error=x_session_expired`);
     expect(h.getCurrentUser).not.toHaveBeenCalled();
     expect(h.fetch).not.toHaveBeenCalled();
-    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.create).not.toHaveBeenCalled();
   });
 });
 
@@ -265,7 +264,7 @@ describe("a choice at the end of a link flow", () => {
       where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR },
       data: { connectLinkId: "link-1" },
     });
-    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.create).not.toHaveBeenCalled();
     expect(res.headers.get("set-cookie")).toBeNull();
   });
 });
@@ -299,7 +298,7 @@ describe("the platform's own refusal in a link flow", () => {
     const res = await CALLBACKS[platform](refusal(platform, params));
 
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=${platform}_${outcome}`);
-    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.create).not.toHaveBeenCalled();
     expect(res.headers.get("set-cookie")).toMatch(/^vs_connect=;/);
   });
 
@@ -322,7 +321,7 @@ describe("x: an empty denied parameter", () => {
     const res = await xGET(new NextRequest(url, { headers: { cookie: cookie() } }));
 
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?success=x_connected`);
-    expect(h.upsert).toHaveBeenCalledTimes(1);
+    expect(h.create).toHaveBeenCalledTimes(1);
     expect(h.linkUpdate).toHaveBeenCalledWith({ where: { id: "link-1" }, data: { lastUsedAt: NOW } });
   });
 });

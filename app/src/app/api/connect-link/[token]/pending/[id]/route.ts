@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { linkDifferentAccountMessage } from "@/lib/differentAccount";
+import { accountCheckFailedMessage, linkDifferentAccountMessage } from "@/lib/differentAccount";
 import {
   CONNECT_LINK_CHOICES_PER_HOUR,
   CONNECT_LINK_INACTIVE_MESSAGE,
@@ -127,6 +127,9 @@ export async function POST(request: Request, context: RouteContext) {
       workspaceId: link.workspaceId,
       userId: link.createdById,
     });
+    if (!result.ok && result.reason === "check_failed") {
+      return NextResponse.json({ error: accountCheckFailedMessage(result.connectedName) }, { status: 503 });
+    }
     if (!result.ok && result.reason === "different_account") {
       // R6 review low 1: the connection stays as it was, and so does the choice.
       return NextResponse.json(

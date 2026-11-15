@@ -226,7 +226,9 @@ export type ConnectPendingResult =
   /** The platform wouldn't describe the chosen account (Instagram only). */
   | { ok: false; reason: "provider_failed" }
   /** R6 review low 1: not the account already connected; nothing was saved. */
-  | { ok: false; reason: "different_account"; connectedName: string; signedInName: string };
+  | { ok: false; reason: "different_account"; connectedName: string; signedInName: string }
+  /** Whether it is the account connected couldn't be checked (Business Profile only); nothing was saved. */
+  | { ok: false; reason: "check_failed"; connectedName: string };
 
 /**
  * Connects the chosen account exactly as the OAuth callback connects a lone

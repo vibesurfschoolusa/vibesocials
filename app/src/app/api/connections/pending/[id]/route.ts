@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { settingsDifferentAccountMessage } from "@/lib/differentAccount";
+import { accountCheckFailedMessage, settingsDifferentAccountMessage } from "@/lib/differentAccount";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -128,6 +128,9 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
     }
 
     const result = await connectPendingCandidate(pending, candidateId, owner);
+    if (!result.ok && result.reason === "check_failed") {
+      return NextResponse.json({ error: accountCheckFailedMessage(result.connectedName) }, { status: 503 });
+    }
     if (!result.ok && result.reason === "different_account") {
       // R6 review low 1: the connection stays as it was, and so does the choice.
       return NextResponse.json(

@@ -14,6 +14,7 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
  */
 
 const SUFFIX = "_different_account";
+const CHECK_FAILED_SUFFIX = "_account_check_failed";
 
 /** The query parameter that carries the name of the account the person signed in to. */
 export const SIGNED_IN_AS_PARAM = "signed_in_as";
@@ -57,10 +58,32 @@ export function linkDifferentAccountMessage(platform: Platform, connectedName: s
   return `You signed in to a different ${platformLabel(platform)} account than the one connected (${connectedName}). Sign in to that account, or ask the workspace owner to switch it.`;
 }
 
-/** Where a callback sends the owner when a different account came back (a link flow turns it into /c). */
-export function differentAccountSettingsUrl(base: string | URL, platform: Platform, signedInName: string): URL {
+/**
+ * R6 second review 1: Google Business Profile only. Whether the new Google
+ * account manages the chosen location couldn't be read (a 429, 5xx or network
+ * failure); nothing changed.
+ */
+export function accountCheckFailedPlatform(code: string | null | undefined): Platform | null {
+  if (!code || !code.endsWith(CHECK_FAILED_SUFFIX)) return null;
+  const platform = code.slice(0, -CHECK_FAILED_SUFFIX.length);
+  return (PLATFORM_ORDER as readonly string[]).includes(platform) ? (platform as Platform) : null;
+}
+
+export function accountCheckFailedMessage(locationTitle: string): string {
+  return `We couldn't check that this Google account manages ${locationTitle}. Try again in a minute.`;
+}
+
+/** A save the shared save refused (server/connections/saveConnection.ts). */
+export type SaveRefusal = { reason: "different_account"; signedInName: string } | { reason: "check_failed" };
+
+/** Where a callback sends the owner when the save was refused (a link flow turns it into /c). */
+export function refusedSaveSettingsUrl(base: string | URL, platform: Platform, refusal: SaveRefusal): URL {
   const url = new URL("/settings", base);
+  if (refusal.reason === "check_failed") {
+    url.searchParams.set("error", `${platform}${CHECK_FAILED_SUFFIX}`);
+    return url;
+  }
   url.searchParams.set("error", differentAccountCode(platform));
-  url.searchParams.set(SIGNED_IN_AS_PARAM, signedInName.slice(0, NAME_MAX_CHARS));
+  url.searchParams.set(SIGNED_IN_AS_PARAM, refusal.signedInName.slice(0, NAME_MAX_CHARS));
   return url;
 }

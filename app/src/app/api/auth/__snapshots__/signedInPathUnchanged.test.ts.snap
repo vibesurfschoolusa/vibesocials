@@ -113,9 +113,11 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -126,9 +128,9 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "page-token",
           "accountIdentifier": "page-1",
           "expiresAt": "2027-01-10T08:00:00.000Z",
@@ -142,24 +144,6 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
           "refreshToken": null,
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "page-token",
-          "accountIdentifier": "page-1",
-          "expiresAt": "2027-01-10T08:00:00.000Z",
-          "lastRefreshErrorCode": null,
-          "metadata": {
-            "pageName": "Page",
-          },
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": null,
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "facebook_page",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -287,9 +271,11 @@ exports[`'google_business_profile' callback, signed in: unchanged > success 1`] 
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -300,9 +286,9 @@ exports[`'google_business_profile' callback, signed in: unchanged > success 1`] 
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "gbp-access",
           "accountIdentifier": "google_business_profile",
           "expiresAt": null,
@@ -316,21 +302,6 @@ exports[`'google_business_profile' callback, signed in: unchanged > success 1`] 
           "refreshToken": null,
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "gbp-access",
-          "accountIdentifier": "google_business_profile",
-          "expiresAt": null,
-          "lastRefreshErrorCode": null,
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": null,
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "google_business_profile",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -483,9 +454,11 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -496,9 +469,9 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "page-token",
           "accountIdentifier": "ig-1",
           "expiresAt": "2027-01-10T08:00:00.000Z",
@@ -514,26 +487,6 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
           "refreshToken": null,
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "page-token",
-          "accountIdentifier": "ig-1",
-          "expiresAt": "2027-01-10T08:00:00.000Z",
-          "lastRefreshErrorCode": null,
-          "metadata": {
-            "pageId": "page-1",
-            "profilePicture": null,
-            "username": "brand",
-          },
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": null,
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "instagram",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -741,9 +694,11 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -754,9 +709,9 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "li-access",
           "accountIdentifier": "linkedin_1794384000000",
           "expiresAt": "2026-11-11T09:00:00.000Z",
@@ -781,34 +736,6 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
           "scopes": "w_organization_social",
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "li-access",
-          "expiresAt": "2026-11-11T09:00:00.000Z",
-          "lastRefreshErrorCode": null,
-          "metadata": {
-            "email": null,
-            "name": "LinkedIn User",
-            "organizations": [
-              {
-                "id": "101",
-                "name": "Org",
-              },
-            ],
-            "organizationsFetchedAt": "2026-11-11T08:00:00.000Z",
-            "picture": null,
-            "username": "Org",
-          },
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": null,
-          "scopes": "w_organization_social",
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "linkedin",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -944,9 +871,11 @@ exports[`'pinterest' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -957,9 +886,9 @@ exports[`'pinterest' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "pin-access",
           "accountIdentifier": "brand",
           "expiresAt": "2026-12-11T08:00:00.000Z",
@@ -984,35 +913,6 @@ exports[`'pinterest' callback, signed in: unchanged > success 1`] = `
           ],
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "pin-access",
-          "accountIdentifier": "brand",
-          "expiresAt": "2026-12-11T08:00:00.000Z",
-          "lastRefreshErrorCode": null,
-          "metadata": {
-            "accountId": "9001",
-            "accountType": "BUSINESS",
-            "boardId": "555",
-            "boardName": "Board",
-            "username": "brand",
-          },
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": "pin-refresh",
-          "scopes": [
-            "boards:read",
-            "boards:write",
-            "pins:read",
-            "pins:write",
-            "user_accounts:read",
-          ],
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "pinterest",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -1147,9 +1047,11 @@ exports[`'tiktok' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -1160,9 +1062,9 @@ exports[`'tiktok' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "tt-access",
           "accountIdentifier": "open-1",
           "expiresAt": null,
@@ -1179,27 +1081,6 @@ exports[`'tiktok' callback, signed in: unchanged > success 1`] = `
           ],
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "tt-access",
-          "accountIdentifier": "open-1",
-          "expiresAt": null,
-          "lastRefreshErrorCode": null,
-          "metadata": {
-            "username": "Brand",
-          },
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": null,
-          "scopes": [
-            "user.info.basic",
-          ],
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "tiktok",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -1388,9 +1269,11 @@ exports[`'x' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -1401,9 +1284,9 @@ exports[`'x' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "access-token",
           "accountIdentifier": "42",
           "expiresAt": null,
@@ -1419,26 +1302,6 @@ exports[`'x' callback, signed in: unchanged > success 1`] = `
           "scopes": "read write",
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "access-token",
-          "accountIdentifier": "42",
-          "expiresAt": null,
-          "lastRefreshErrorCode": null,
-          "metadata": {
-            "user_id": "42",
-            "username": "brand",
-          },
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": "access-secret",
-          "scopes": "read write",
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "x",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],
@@ -1597,9 +1460,11 @@ exports[`'youtube' callback, signed in: unchanged > success 1`] = `
       {
         "select": {
           "accountIdentifier": true,
+          "id": true,
           "metadata": true,
           "needsReconnect": true,
           "platform": true,
+          "updatedAt": true,
         },
         "where": {
           "workspaceId_platform": {
@@ -1610,9 +1475,9 @@ exports[`'youtube' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
-      "prisma.socialConnection.upsert",
+      "prisma.socialConnection.create",
       {
-        "create": {
+        "data": {
           "accessToken": "yt-access",
           "accountIdentifier": "My Channel",
           "expiresAt": "2026-11-11T09:00:00.000Z",
@@ -1627,21 +1492,6 @@ exports[`'youtube' callback, signed in: unchanged > success 1`] = `
           "refreshToken": null,
           "userId": "user-owner",
           "workspaceId": "ws-1",
-        },
-        "update": {
-          "accessToken": "yt-access",
-          "accountIdentifier": "My Channel",
-          "expiresAt": "2026-11-11T09:00:00.000Z",
-          "lastRefreshErrorCode": null,
-          "needsReconnect": false,
-          "refreshFailedAt": null,
-          "refreshToken": null,
-        },
-        "where": {
-          "workspaceId_platform": {
-            "platform": "youtube",
-            "workspaceId": "ws-1",
-          },
         },
       },
     ],

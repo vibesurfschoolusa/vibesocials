@@ -256,6 +256,10 @@ beforeEach(() => {
   isWorkspaceOwnerMock.mockResolvedValue(true);
   findUniqueMock.mockResolvedValue(null);
   upsertMock.mockResolvedValue({ id: "conn-1" });
+  // The shared save creates a first connection and updates an existing one
+  // only while it is still the row it compared (R6 second review 3).
+  createMock.mockResolvedValue({ id: "conn-1" });
+  updateManyMock.mockResolvedValue({ count: 1 });
   pendingCreateMock.mockResolvedValue({ id: "pending-1" });
   pendingDeleteManyMock.mockResolvedValue({ count: 0 });
 });
@@ -305,14 +309,9 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
     expect(getCurrentUserMock.mock.invocationCallOrder[0]).toBeLessThan(
       fetchMock.mock.invocationCallOrder[0],
     );
-    expect(upsertMock).toHaveBeenCalledTimes(1);
-    const args = upsertMock.mock.calls[0][0] as {
-      where: { workspaceId_platform: { workspaceId: string; platform: string } };
-      create: { userId: string; workspaceId: string };
-    };
-    expect(args.where.workspaceId_platform).toEqual({ workspaceId: STATE_WORKSPACE, platform });
-    expect(args.create.userId).toBe(STATE_USER);
-    expect(args.create.workspaceId).toBe(STATE_WORKSPACE);
+    expect(createMock).toHaveBeenCalledTimes(1);
+    const args = createMock.mock.calls[0][0] as { data: { userId: string; workspaceId: string; platform: string } };
+    expect(args.data).toMatchObject({ userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform });
   });
 
   it("keeps the owner re-check: a matching session that is no longer owner is refused before the exchange", async () => {
@@ -380,7 +379,7 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
     it("DB failure writing the connection", async () => {
       getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
       fetchMock.mockImplementation(async (input: string | URL) => provider(String(input)));
-      upsertMock.mockRejectedValue(new Error("db down"));
+      createMock.mockRejectedValue(new Error("db down"));
 
       const res = await GET(callbackRequest(platform, signedState()));
 
@@ -398,12 +397,8 @@ describe("linkedin OAuth callback: the name Settings shows", () => {
 
     await linkedinGET(callbackRequest("linkedin", signedState()));
 
-    const args = upsertMock.mock.calls[0][0] as {
-      create: { metadata: { username?: string | null } };
-      update: { metadata: { username?: string | null } };
-    };
-    expect(args.create.metadata.username).toBe("Org");
-    expect(args.update.metadata.username).toBe("Org");
+    const args = createMock.mock.calls[0][0] as { data: { metadata: { username?: string | null } } };
+    expect(args.data.metadata.username).toBe("Org");
   });
 });
 
@@ -575,10 +570,8 @@ describe("choosing which account to connect", () => {
         metadata: { pageName: "Page" },
         ...HEALTHY,
       };
-      expect(upsertMock).toHaveBeenCalledWith({
-        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "facebook_page" } },
-        update: fields,
-        create: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "facebook_page", ...fields },
+      expect(createMock).toHaveBeenCalledWith({
+        data: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "facebook_page", ...fields },
       });
     });
 
@@ -595,7 +588,7 @@ describe("choosing which account to connect", () => {
       const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
 
       expectChooseRedirect(res);
-      expect(upsertMock).not.toHaveBeenCalled();
+      expect(createMock).not.toHaveBeenCalled();
 
       const pending = createdPending();
       expect(pending.workspaceId).toBe(STATE_WORKSPACE);
@@ -648,10 +641,8 @@ describe("choosing which account to connect", () => {
         metadata: { username: "brand", profilePicture: null, pageId: "page-1" },
         ...HEALTHY,
       };
-      expect(upsertMock).toHaveBeenCalledWith({
-        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "instagram" } },
-        update: fields,
-        create: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "instagram", ...fields },
+      expect(createMock).toHaveBeenCalledWith({
+        data: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "instagram", ...fields },
       });
     });
 
@@ -685,7 +676,7 @@ describe("choosing which account to connect", () => {
       const res = await instagramGET(callbackRequest("instagram", signedState()));
 
       expectChooseRedirect(res);
-      expect(upsertMock).not.toHaveBeenCalled();
+      expect(createMock).not.toHaveBeenCalled();
       const pending = createdPending();
       expect(pending.platform).toBe("instagram");
       expect(pending.payload).not.toContain("page-token");
@@ -736,16 +727,14 @@ describe("choosing which account to connect", () => {
         },
         ...HEALTHY,
       };
-      expect(upsertMock).toHaveBeenCalledWith({
-        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "linkedin" } },
-        create: {
+      expect(createMock).toHaveBeenCalledWith({
+        data: {
           userId: STATE_USER,
           workspaceId: STATE_WORKSPACE,
           platform: "linkedin",
-          accountIdentifier: `linkedin_${NOW.getTime()}`,
           ...fields,
+          accountIdentifier: `linkedin_${NOW.getTime()}`,
         },
-        update: fields,
       });
     });
 
@@ -760,7 +749,7 @@ describe("choosing which account to connect", () => {
       const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
       expectChooseRedirect(res);
-      expect(upsertMock).not.toHaveBeenCalled();
+      expect(createMock).not.toHaveBeenCalled();
       const pending = createdPending();
       expect(pending.platform).toBe("linkedin");
       expect(pending.payload).not.toContain("li-access");
@@ -829,8 +818,9 @@ describe("choosing which account to connect", () => {
         const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
         expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
-        const args = upsertMock.mock.calls[0][0] as { update: { metadata: { organizations: unknown[] } } };
-        expect(args.update.metadata.organizations).toEqual([{ id: "555", name: "New Name", vanityName: "old-name" }]);
+        // The same page as the stored connection: updated in place.
+        const args = updateManyMock.mock.calls[0][0] as { data: { metadata: { organizations: unknown[] } } };
+        expect(args.data.metadata.organizations).toEqual([{ id: "555", name: "New Name", vanityName: "old-name" }]);
       });
 
       // 2026-11-09, live: an account that administers no page was "connected"
@@ -874,8 +864,8 @@ describe("choosing which account to connect", () => {
         const res = await linkedinGET(callbackRequest("linkedin", vanityState("777")));
 
         expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
-        const args = upsertMock.mock.calls[0][0] as { update: { metadata: { organizations: unknown[] } } };
-        expect(args.update.metadata.organizations).toEqual([{ id: "777", name: "Hinted Page", vanityName: null }]);
+        const args = createMock.mock.calls[0][0] as { data: { metadata: { organizations: unknown[] } } };
+        expect(args.data.metadata.organizations).toEqual([{ id: "777", name: "Hinted Page", vanityName: null }]);
       });
 
       it("organizationAcls refused: a vanity name from the setup dialog is looked up with GET /rest/organizations?q=vanityName", async () => {
@@ -892,9 +882,9 @@ describe("choosing which account to connect", () => {
         const res = await linkedinGET(callbackRequest("linkedin", vanityState("acme-surf")));
 
         expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
-        const args = upsertMock.mock.calls[0][0] as { update: { metadata: { organizations: unknown[]; username: string } } };
-        expect(args.update.metadata.organizations).toEqual([{ id: "888", name: "Acme Surf", vanityName: "acme-surf" }]);
-        expect(args.update.metadata.username).toBe("Acme Surf");
+        const args = createMock.mock.calls[0][0] as { data: { metadata: { organizations: unknown[]; username: string } } };
+        expect(args.data.metadata.organizations).toEqual([{ id: "888", name: "Acme Surf", vanityName: "acme-surf" }]);
+        expect(args.data.metadata.username).toBe("Acme Surf");
       });
 
       it("a page whose name LinkedIn will not give is still offered, by its id", async () => {
@@ -958,10 +948,8 @@ describe("choosing which account to connect", () => {
         },
         ...HEALTHY,
       };
-      expect(upsertMock).toHaveBeenCalledWith({
-        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "pinterest" } },
-        update: fields,
-        create: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "pinterest", ...fields },
+      expect(createMock).toHaveBeenCalledWith({
+        data: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "pinterest", ...fields },
       });
     });
 
@@ -1002,7 +990,7 @@ describe("choosing which account to connect", () => {
       const res = await pinterestGET(callbackRequest("pinterest", signedState()));
 
       expectChooseRedirect(res);
-      expect(upsertMock).not.toHaveBeenCalled();
+      expect(createMock).not.toHaveBeenCalled();
       const pending = createdPending();
       expect(pending.platform).toBe("pinterest");
       expect(pending.payload).not.toContain("pin-access");
@@ -1129,7 +1117,8 @@ describe("a reconnect keeps the same account", () => {
     const res = await GET(callbackRequest(platform, signedState()));
 
     expect(location(res).searchParams.get("success")).toBe(`${platform}_connected`);
-    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it.each(accountCases)(
@@ -1150,34 +1139,58 @@ describe("a reconnect keeps the same account", () => {
     },
   );
 
-  it("google_business_profile: a different Google account leaves the connection unchanged", async () => {
+  // R6 second review 1: the token carries no account (only business.manage is
+  // asked, no id_token); the chosen location, read with the NEW token, decides.
+  const GBP_STORED = {
+    id: "conn-gbp",
+    platform: "google_business_profile",
+    needsReconnect: true,
+    accountIdentifier: "google_business_profile",
+    metadata: { locationName: "accounts/1/locations/555", locationTitle: "Surf Co Dania" },
+  };
+  function gbpProvider(locationStatus: number) {
+    return async (input: string | URL) =>
+      String(input).includes("mybusinessbusinessinformation.googleapis.com/v1/locations/555")
+        ? json(locationStatus === 200 ? { name: "locations/555" } : { error: {} }, locationStatus)
+        : json({ access_token: "gbp-access", token_type: "Bearer" });
+  }
+
+  it.each([403, 404])("google_business_profile: the new account can't read the chosen location (%i): unchanged, refused", async (code) => {
     getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
-    const idToken = `x.${Buffer.from(JSON.stringify({ sub: "g-sub-2", email: "other@example.com" })).toString("base64url")}.y`;
-    fetchMock.mockImplementation(async () => json({ access_token: "gbp-access", token_type: "Bearer", id_token: idToken }));
-    findUniqueMock.mockResolvedValue({
-      platform: "google_business_profile",
-      needsReconnect: true,
-      accountIdentifier: "g-sub-1",
-      metadata: { locationTitle: "Surf Co Dania" },
-    });
+    fetchMock.mockImplementation(gbpProvider(code));
+    findUniqueMock.mockResolvedValue(GBP_STORED);
 
-    const res = await gbpGET(callbackRequest("google_business_profile", signedState()));
+    const loc = location(await gbpGET(callbackRequest("google_business_profile", signedState())));
 
-    const loc = location(res);
     expect(loc.searchParams.get("error")).toBe("google_business_profile_different_account");
-    expect(loc.searchParams.get("signed_in_as")).toBe("other@example.com");
+    expect(loc.searchParams.get("signed_in_as")).toBe("a different Google Business Profile account");
     expectNoConnectionWrites();
   });
 
-  it("google_business_profile: the same Google account is replaced in place", async () => {
+  it("google_business_profile: the location couldn't be read (500): unchanged, try again", async () => {
     getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
-    const idToken = `x.${Buffer.from(JSON.stringify({ sub: "g-sub-1", email: "owner@example.com" })).toString("base64url")}.y`;
-    fetchMock.mockImplementation(async () => json({ access_token: "gbp-access", token_type: "Bearer", id_token: idToken }));
-    findUniqueMock.mockResolvedValue({ platform: "google_business_profile", needsReconnect: true, accountIdentifier: "g-sub-1", metadata: {} });
+    fetchMock.mockImplementation(gbpProvider(500));
+    findUniqueMock.mockResolvedValue(GBP_STORED);
+
+    const loc = location(await gbpGET(callbackRequest("google_business_profile", signedState())));
+
+    expect(loc.searchParams.get("error")).toBe("google_business_profile_account_check_failed");
+    expectNoConnectionWrites();
+  });
+
+  it("google_business_profile: the new account reads the chosen location (200): updated in place, location kept", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+    fetchMock.mockImplementation(gbpProvider(200));
+    findUniqueMock.mockResolvedValue(GBP_STORED);
 
     const res = await gbpGET(callbackRequest("google_business_profile", signedState()));
 
     expect(location(res).searchParams.get("success")).toBe("google_business_profile_connected");
-    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    const update = updateManyMock.mock.calls[0][0] as { where: { id: string }; data: Record<string, unknown> };
+    expect(update.where.id).toBe("conn-gbp");
+    expect(update.data).not.toHaveProperty("metadata");
+    // The token response has no id_token, and none is needed.
+    expect(update.data.accountIdentifier).toBe("google_business_profile");
   });
 });

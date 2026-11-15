@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { saveSocialConnection } from "@/server/connections/saveConnection";
-import { differentAccountSettingsUrl } from "@/lib/differentAccount";
+import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -107,30 +107,16 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       ? new Date(now + tokenJson.expires_in * 1000)
       : null;
 
-    let accountIdentifier = "google_business_profile";
-    let signedInEmail: string | null = null;
-
-    if (tokenJson.id_token) {
-      try {
-        const [, payloadSegment] = tokenJson.id_token.split(".");
-        const payloadJson = Buffer.from(payloadSegment, "base64url").toString("utf8");
-        const payload = JSON.parse(payloadJson) as { sub?: string; email?: string };
-        signedInEmail = payload.email ?? null;
-        if (payload.sub) {
-          accountIdentifier = payload.sub;
-        } else if (payload.email) {
-          accountIdentifier = payload.email;
-        }
-      } catch {
-        // If ID token parsing fails, fall back to default accountIdentifier.
-      }
-    }
+    // Only business.manage is asked, so the token names no Google account:
+    // a reconnect is checked against the chosen location instead
+    // (saveConnection.ts gbpVerdict, R6 second review 1).
+    const accountIdentifier = "google_business_profile";
 
     const saved = await saveSocialConnection({
       userId,
       workspaceId,
       platform: Platform.google_business_profile,
-      signedInName: signedInEmail,
+      signedInName: null,
       create: {
         accessToken: tokenJson.access_token,
         refreshToken: tokenJson.refresh_token ?? null,
@@ -160,8 +146,9 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       },
     });
     if (!saved.ok) {
-      // R6 review low 1: a different account than the one connected; nothing changed.
-      return NextResponse.redirect(differentAccountSettingsUrl(url.origin, Platform.google_business_profile, saved.signedInName));
+      // R6 review low 1: a different account (or, for Business Profile, one
+      // that couldn't be checked) than the one connected; nothing changed.
+      return NextResponse.redirect(refusedSaveSettingsUrl(url.origin, Platform.google_business_profile, saved));
     }
 
     settingsUrl.searchParams.set("success", "google_business_profile_connected");

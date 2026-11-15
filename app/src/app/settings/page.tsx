@@ -34,6 +34,8 @@ import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
 import {
   SIGNED_IN_AS_PARAM,
+  accountCheckFailedMessage,
+  accountCheckFailedPlatform,
   connectedAccountName,
   differentAccountPlatform,
   settingsDifferentAccountMessage,
@@ -121,6 +123,15 @@ export default async function SettingsPage({
   // changed; the sentence names both, the connected one from this workspace.
   const differentPlatform = differentAccountPlatform(params.error);
   const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
+  const uncheckedPlatform = accountCheckFailedPlatform(params.error);
+  const uncheckedFrom = uncheckedPlatform && connections.find((c) => c.platform === uncheckedPlatform);
+  if (uncheckedPlatform && uncheckedFrom) {
+    oauthResult = {
+      variant: "danger",
+      platform: uncheckedPlatform,
+      message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)),
+    };
+  }
   if (differentPlatform && differentFrom) {
     oauthResult = {
       variant: "danger",

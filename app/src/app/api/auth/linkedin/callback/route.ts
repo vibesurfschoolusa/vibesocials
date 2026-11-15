@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { differentAccountSettingsUrl } from "@/lib/differentAccount";
+import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import { prisma } from "@/lib/db";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
@@ -321,8 +321,9 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       organization: organizations[0],
     });
     if (!saved.ok) {
-      // R6 review low 1: a different account than the one connected; nothing changed.
-      return NextResponse.redirect(differentAccountSettingsUrl(process.env.NEXTAUTH_URL!, Platform.linkedin, saved.signedInName));
+      // R6 review low 1: a different account (or, for Business Profile, one
+      // that couldn't be checked) than the one connected; nothing changed.
+      return NextResponse.redirect(refusedSaveSettingsUrl(process.env.NEXTAUTH_URL!, Platform.linkedin, saved));
     }
 
     console.log("[LinkedIn OAuth] Connection saved successfully", { userId });

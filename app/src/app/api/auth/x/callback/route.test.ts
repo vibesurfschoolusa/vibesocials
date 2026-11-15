@@ -8,7 +8,8 @@ const {
   isWorkspaceOwnerMock,
   handshakeFindUniqueMock,
   handshakeDeleteMock,
-  upsertMock,
+  createMock,
+  updateManyMock,
   connectionFindUniqueMock,
   fetchMock,
 } = vi.hoisted(() => ({
@@ -16,7 +17,8 @@ const {
   isWorkspaceOwnerMock: vi.fn(),
   handshakeFindUniqueMock: vi.fn(),
   handshakeDeleteMock: vi.fn(),
-  upsertMock: vi.fn(),
+  createMock: vi.fn(),
+  updateManyMock: vi.fn(),
   connectionFindUniqueMock: vi.fn(),
   fetchMock: vi.fn(),
 }));
@@ -35,7 +37,8 @@ vi.mock("@/lib/db", () => ({
       findUnique: handshakeFindUniqueMock,
       delete: handshakeDeleteMock,
     },
-    socialConnection: { upsert: upsertMock, findUnique: connectionFindUniqueMock },
+    // The shared save creates a first connection (R6 second review 3).
+    socialConnection: { create: createMock, updateMany: updateManyMock, findUnique: connectionFindUniqueMock },
   },
 }));
 
@@ -86,7 +89,8 @@ beforeEach(() => {
     isWorkspaceOwnerMock,
     handshakeFindUniqueMock,
     handshakeDeleteMock,
-    upsertMock,
+    createMock,
+    updateManyMock,
     connectionFindUniqueMock,
     fetchMock,
   ]) {
@@ -104,7 +108,8 @@ beforeEach(() => {
   handshakeFindUniqueMock.mockResolvedValue(handshakeRow());
   handshakeDeleteMock.mockResolvedValue({});
   isWorkspaceOwnerMock.mockResolvedValue(true);
-  upsertMock.mockResolvedValue({ id: "conn-1" });
+  createMock.mockResolvedValue({ id: "conn-1" });
+  updateManyMock.mockResolvedValue({ count: 1 });
 });
 
 afterEach(() => {
@@ -124,7 +129,7 @@ describe("X OAuth callback: session binding", () => {
     expect(loc.pathname).toBe("/settings");
     expect(loc.searchParams.get("error")).toBe("oauth_session_mismatch");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
     expect(handshakeDeleteMock).not.toHaveBeenCalled();
     expect(isWorkspaceOwnerMock).not.toHaveBeenCalled();
   });
@@ -136,7 +141,7 @@ describe("X OAuth callback: session binding", () => {
 
     expect(res.headers.get("location")).toBe(`${ORIGIN}/login?callbackUrl=%2Fsettings`);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
     expect(handshakeDeleteMock).not.toHaveBeenCalled();
   });
 
@@ -150,13 +155,10 @@ describe("X OAuth callback: session binding", () => {
     expect(getCurrentUserMock.mock.invocationCallOrder[0]).toBeLessThan(
       fetchMock.mock.invocationCallOrder[0],
     );
-    expect(upsertMock).toHaveBeenCalledTimes(1);
-    const args = upsertMock.mock.calls[0][0] as {
-      where: { workspaceId_platform: { workspaceId: string } };
-      create: { userId: string; workspaceId: string };
-    };
-    expect(args.where.workspaceId_platform.workspaceId).toBe(WORKSPACE);
-    expect(args.create.userId).toBe(STARTER);
+    expect(createMock).toHaveBeenCalledTimes(1);
+    const args = createMock.mock.calls[0][0] as { data: { userId: string; workspaceId: string } };
+    expect(args.data.workspaceId).toBe(WORKSPACE);
+    expect(args.data.userId).toBe(STARTER);
     // One-time handshake consumed.
     expect(handshakeDeleteMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
   });
@@ -170,7 +172,7 @@ describe("X OAuth callback: session binding", () => {
     expect(location(res).searchParams.get("error")).toBe("x_not_workspace_owner");
     expect(isWorkspaceOwnerMock).toHaveBeenCalledWith(STARTER, WORKSPACE);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("an expired handshake is still x_session_expired, before any session lookup", async () => {
@@ -202,7 +204,7 @@ describe("X OAuth callback: unexpected errors redirect to x_connect_failed inste
 
     expect(location(res).searchParams.get("error")).toBe("x_connect_failed");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("owner re-check failure", async () => {
@@ -221,13 +223,13 @@ describe("X OAuth callback: unexpected errors redirect to x_connect_failed inste
     const res = await GET(callbackRequest());
 
     expect(location(res).searchParams.get("error")).toBe("x_connect_failed");
-    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("DB failure writing the connection", async () => {
     getCurrentUserMock.mockResolvedValue({ id: STARTER });
     fetchMock.mockResolvedValue(accessTokenResponse());
-    upsertMock.mockRejectedValue(new Error("db down"));
+    createMock.mockRejectedValue(new Error("db down"));
 
     const res = await GET(callbackRequest());
 
@@ -240,12 +242,12 @@ describe("X OAuth callback: a reconnect keeps the same account", () => {
   it("the same account (user id 42) is replaced in place", async () => {
     getCurrentUserMock.mockResolvedValue({ id: STARTER });
     fetchMock.mockResolvedValue(accessTokenResponse());
-    connectionFindUniqueMock.mockResolvedValue({ platform: "x", needsReconnect: true, accountIdentifier: "42", metadata: { username: "brand" } });
+    connectionFindUniqueMock.mockResolvedValue({ id: "conn-x", platform: "x", needsReconnect: true, accountIdentifier: "42", metadata: { username: "brand" } });
 
     const res = await GET(callbackRequest());
 
     expect(location(res).searchParams.get("success")).toBe("x_connected");
-    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
   });
 
   it("a different account leaves the connection unchanged and names the one signed in to", async () => {
@@ -259,7 +261,8 @@ describe("X OAuth callback: a reconnect keeps the same account", () => {
     expect(loc.pathname).toBe("/settings");
     expect(loc.searchParams.get("error")).toBe("x_different_account");
     expect(loc.searchParams.get("signed_in_as")).toBe("@brand");
-    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
     // The one-time handshake is used up either way.
     expect(handshakeDeleteMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
   });

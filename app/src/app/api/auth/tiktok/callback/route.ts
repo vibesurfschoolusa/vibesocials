@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { saveSocialConnection } from "@/server/connections/saveConnection";
-import { differentAccountSettingsUrl } from "@/lib/differentAccount";
+import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
@@ -180,8 +180,9 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       },
     });
     if (!saved.ok) {
-      // R6 review low 1: a different account than the one connected; nothing changed.
-      return NextResponse.redirect(differentAccountSettingsUrl(url.origin, Platform.tiktok, saved.signedInName));
+      // R6 review low 1: a different account (or, for Business Profile, one
+      // that couldn't be checked) than the one connected; nothing changed.
+      return NextResponse.redirect(refusedSaveSettingsUrl(url.origin, Platform.tiktok, saved));
     }
 
     settingsUrl.searchParams.set("success", "tiktok_connected");

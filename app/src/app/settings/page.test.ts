@@ -436,3 +436,31 @@ describe("SettingsPage — a reconnect with a different account", () => {
     );
   });
 });
+
+// R6 second review 1: the new Google sign-in couldn't be checked against the chosen location.
+describe("SettingsPage — a Business Profile reconnect that couldn't be checked", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  it("names the location and says to try again", async () => {
+    findConnectionsMock.mockResolvedValue([
+      {
+        platform: "google_business_profile",
+        accountIdentifier: "google_business_profile",
+        metadata: { locationTitle: "Surf Co Dania" },
+        needsReconnect: true,
+        expiresAt: null,
+        refreshToken: "sealed",
+      },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = renderToStaticMarkup(
+      (await SettingsPage({ searchParams: Promise.resolve({ error: "google_business_profile_account_check_failed" }) })) as ReactElement,
+    );
+
+    expect(html).toContain("We couldn&#x27;t check that this Google account manages Surf Co Dania. Try again in a minute.");
+  });
+});

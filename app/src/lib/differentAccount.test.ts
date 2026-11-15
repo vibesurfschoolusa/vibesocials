@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  accountCheckFailedMessage,
+  accountCheckFailedPlatform,
   connectedAccountName,
   differentAccountCode,
   differentAccountPlatform,
   linkDifferentAccountMessage,
+  refusedSaveSettingsUrl,
   settingsDifferentAccountMessage,
   signedInNameFromQuery,
 } from "./differentAccount";
@@ -49,5 +52,27 @@ describe("different account on reconnect", () => {
     expect(signedInNameFromQuery("x".repeat(300), "youtube")).toHaveLength(100);
     expect(signedInNameFromQuery(null, "youtube")).toBe("a different YouTube account");
     expect(signedInNameFromQuery(["Other Co", "Second"], "youtube")).toBe("Other Co");
+  });
+});
+
+// R6 second review 1: a Business Profile reconnect whose location couldn't be checked.
+describe("a reconnect that couldn't be checked", () => {
+  it("has its own code per platform, read back to its platform", () => {
+    expect(accountCheckFailedPlatform("google_business_profile_account_check_failed")).toBe("google_business_profile");
+    expect(accountCheckFailedPlatform("google_business_profile_different_account")).toBeNull();
+    expect(accountCheckFailedPlatform(undefined)).toBeNull();
+  });
+
+  it("names the location and says to try again", () => {
+    expect(accountCheckFailedMessage("Surf Co Dania")).toBe(
+      "We couldn't check that this Google account manages Surf Co Dania. Try again in a minute.",
+    );
+  });
+
+  it("the callback's address for each refusal", () => {
+    const different = refusedSaveSettingsUrl("https://app.example.com", "linkedin", { reason: "different_account", signedInName: "Other Co" });
+    expect(different.toString()).toBe("https://app.example.com/settings?error=linkedin_different_account&signed_in_as=Other+Co");
+    const unchecked = refusedSaveSettingsUrl("https://app.example.com", "google_business_profile", { reason: "check_failed" });
+    expect(unchecked.toString()).toBe("https://app.example.com/settings?error=google_business_profile_account_check_failed");
   });
 });

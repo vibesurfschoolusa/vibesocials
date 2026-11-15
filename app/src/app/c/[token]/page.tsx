@@ -9,7 +9,13 @@ import {
   describeConnectLinkResult,
 } from "@/lib/connectLink";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
-import { connectedAccountName, differentAccountPlatform, linkDifferentAccountMessage } from "@/lib/differentAccount";
+import {
+  accountCheckFailedMessage,
+  accountCheckFailedPlatform,
+  connectedAccountName,
+  differentAccountPlatform,
+  linkDifferentAccountMessage,
+} from "@/lib/differentAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
 
@@ -81,10 +87,14 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   // connected, and nothing changed. Named by the connected account only.
   const differentPlatform = differentAccountPlatform(outcome.get("error"));
   const differentFrom = differentPlatform ? byPlatform.get(differentPlatform) : undefined;
+  const uncheckedPlatform = accountCheckFailedPlatform(outcome.get("error"));
+  const uncheckedFrom = uncheckedPlatform ? byPlatform.get(uncheckedPlatform) : undefined;
   const result =
     differentPlatform && differentFrom
       ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
-      : describeConnectLinkResult(outcome);
+      : uncheckedFrom
+        ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
+        : describeConnectLinkResult(outcome);
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 

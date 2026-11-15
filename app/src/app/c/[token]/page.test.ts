@@ -170,6 +170,18 @@ describe("the connect link page", () => {
     expect(html).not.toContain("Client Cafe");
   });
 
+  it("a Business Profile reconnect that couldn't be checked: names the location, try again", async () => {
+    vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "g");
+    vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "s");
+    vi.stubEnv("GOOGLE_GBP_REDIRECT_URI", "r");
+    h.findLink.mockResolvedValue({ ...LINK, platforms: [...LINK.platforms, "google_business_profile"] });
+    h.listConnections.mockResolvedValue([
+      { platform: "google_business_profile", accountIdentifier: "", username: "Surf Co Dania", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
+    ]);
+    const html = await render({ error: "google_business_profile_account_check_failed" });
+    expect(html).toContain("We couldn&#x27;t check that this Google account manages Surf Co Dania. Try again in a minute.");
+  });
+
   it("a typed-in success is not told for a connection in its warning window", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true },
