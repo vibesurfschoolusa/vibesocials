@@ -33,7 +33,7 @@ export interface WorkspaceContext {
   > &
     // 21a: present only with billing on, for workspaceBlock and the Plan section.
     Partial<
-      Pick<Workspace, "billingExempt" | "plan" | "planStatus" | "trialEndsAt" | "currentPeriodEnd">
+      Pick<Workspace, "billingExempt" | "plan" | "planStatus" | "trialEndsAt" | "currentPeriodEnd" | "planPaidAt">
     >;
   role: WorkspaceRole;
 }
@@ -320,6 +320,8 @@ export async function getWorkspaceContext(
             planStatus: active.workspace.planStatus,
             trialEndsAt: active.workspace.trialEndsAt,
             currentPeriodEnd: active.workspace.currentPeriodEnd,
+            // R10-security M1: paysForPlan needs it (Settings, Plan's per-person note).
+            planPaidAt: active.workspace.planPaidAt,
           }
         : {}),
     },

@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -23,6 +25,10 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: h.getCurrentUser }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: h.cookieGet }) }));
+vi.mock("@/components/plan-actions", () => ({ PlanActions: () => null }));
+
+import { PlanSection } from "@/components/plan-section";
+import { planPersonalPostNote } from "@/components/planSectionView";
 
 import { getWorkspaceContext, provisionPersonalWorkspace } from "./workspace";
 
@@ -35,9 +41,10 @@ const BILLING = {
   planStatus: "active",
   trialEndsAt: null,
   currentPeriodEnd: new Date("2027-01-02T00:00:00Z"),
+  planPaidAt: new Date("2026-12-02T01:00:00Z"),
 };
 
-function membership() {
+function membership(billing: Record<string, unknown> = BILLING) {
   return {
     workspaceId: "ws-1",
     role: "owner",
@@ -56,7 +63,7 @@ function membership() {
       pausedAt: null,
       pausedReason: null,
       createdAt: CREATED,
-      ...BILLING,
+      ...billing,
     },
   };
 }
@@ -105,6 +112,41 @@ describe("getWorkspaceContext", () => {
     expect(context?.workspace).toMatchObject(BILLING);
     expect(context?.workspace).not.toHaveProperty("createdAt");
     expect(h.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  // R10-security M1 follow-up: Settings, Plan reads paysForPlan from this
+  // context (planPersonalPostNote), so it must carry planPaidAt.
+  describe("Settings, Plan from the context, as the page builds it", () => {
+    const VIEWER = { emailVerifiedAt: new Date("2026-11-01T09:00:00Z"), createdAt: new Date("2026-11-01T08:00:00Z") };
+    const USAGE = {
+      postsToday: { used: 0, limit: 50, resetsAt: null },
+      xPostsThisMonth: { used: 0, limit: 100, resetsAt: null },
+      youtubeUploadsToday: { used: 0, limit: 5, resetsAt: null },
+      storage: { used: 0, limit: 1024 ** 3, resetsAt: null },
+    };
+    async function planHtml() {
+      const context = await getWorkspaceContext();
+      const note = planPersonalPostNote(context!.workspace, VIEWER, false, NOW);
+      return renderToStaticMarkup(
+        createElement(PlanSection, { workspaceId: "ws-1", label: "Growth plan", usage: USAGE, personalPostNote: note }),
+      );
+    }
+
+    it("a paid workspace: no per-person note and no line until the first payment", async () => {
+      billingOn();
+      const html = await planHtml();
+      expect(html).toMatch(/<dd>50<\/dd>/);
+      expect(html).not.toContain("not yet paid for");
+      expect(html).not.toContain("Until the first payment");
+    });
+
+    it("the same plan with no paid invoice yet: the note and the line", async () => {
+      billingOn();
+      h.findMany.mockResolvedValue([membership({ ...BILLING, planPaidAt: null })]);
+      const html = await planHtml();
+      expect(html).toContain("not yet paid for");
+      expect(html).toContain("Until the first payment, posts here count toward your 15 a day.");
+    });
   });
 });
 
