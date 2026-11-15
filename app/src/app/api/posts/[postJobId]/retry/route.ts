@@ -13,7 +13,7 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
-import { recordRetry, retryRefusal } from "@/server/usage/usageLog";
+import { recordRetry, retryRefusal, withdrawRetry } from "@/server/usage/usageLog";
 import { Prisma, type Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -236,13 +236,13 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  // R6-security M3: a retry costs background runs like a post: each platform
-  // a few times a day, and the post counts once a day toward the per-person
-  // and service caps. Checked before anything is claimed.
+  // R7-security L1: a retry request is one background run, counted like a
+  // post toward the per-person number and the pools, and a post may have a
+  // few a day, all its platforms together (Retry all failed is one).
+  // Checked before anything is claimed.
   const budget = await retryRefusal({
     workspaceId: workspaceContext.workspace.id,
     postJobId,
-    platforms: candidates,
     now: new Date(),
   });
   if (budget) {
@@ -311,6 +311,14 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // `failed` would tell the user "couldn't start" about a post that may be live
   // (inviting a second post). Its run records the real outcome.
   const requestId = randomUUID();
+  // The run counts from now, so the next request's check sees it; taken back
+  // below only if this hand-over fails. Never throws (recordRetry logs).
+  await recordRetry({
+    workspaceId: workspaceContext.workspace.id,
+    postJobId,
+    requestId,
+    at: new Date(),
+  });
   try {
     // Parent job re-enters the running state while the retried platforms publish.
     await prisma.postJob.update({
@@ -337,6 +345,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   } catch (error) {
     console.error("[retry] failed to enqueue retry run; reverting claim", error);
+    await withdrawRetry({ postJobId, requestId });
     await prisma.postJobResult.updateMany({
       where: { postJobId, platform: { in: eligible }, status: "pending", claimRunId: null },
       data: {
@@ -362,15 +371,6 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
       { status: 500 },
     );
   }
-
-  // Counted once the run has it; never throws (recordRetry logs a failure).
-  await recordRetry({
-    workspaceId: workspaceContext.workspace.id,
-    postJobId,
-    platforms: eligible,
-    requestId,
-    at: new Date(),
-  });
 
   return NextResponse.json({ ok: true, retrying: eligible }, { status: 202 });
 }

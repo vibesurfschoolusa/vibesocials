@@ -260,7 +260,7 @@ describe("before a workspace is deleted", () => {
     expect(prisma.usageEvent.createMany).not.toHaveBeenCalled();
     // R6 review of K2: today's sends keep counting toward the deleting owner.
     expect(tx.usageEvent.updateMany).toHaveBeenCalledWith({
-      where: { kind: "send", workspaceId: { in: ["ws-gone"] }, at: { gte: DAY_START, lt: DAY_END } },
+      where: { kind: "send", pool: null, workspaceId: { in: ["ws-gone"] }, at: { gte: DAY_START, lt: DAY_END } },
       data: { userId: "owner-1" },
     });
     expect(tx.usageEvent.deleteMany).not.toHaveBeenCalled();
@@ -300,9 +300,9 @@ describe("before a workspace is deleted", () => {
     ]);
     // A paying workspace's sends count toward no free limit, so they go with it;
     // the trial's stay, now counted toward the deleting owner.
-    expect(tx.usageEvent.deleteMany).toHaveBeenCalledWith({ where: { kind: "send", workspaceId: { in: ["ws-paid"] } } });
+    expect(tx.usageEvent.deleteMany).toHaveBeenCalledWith({ where: { kind: "send", pool: null, workspaceId: { in: ["ws-paid"] } } });
     expect(tx.usageEvent.updateMany).toHaveBeenCalledWith({
-      where: { kind: "send", workspaceId: { in: ["ws-trial"] }, at: { gte: DAY_START, lt: DAY_END } },
+      where: { kind: "send", pool: null, workspaceId: { in: ["ws-trial"] }, at: { gte: DAY_START, lt: DAY_END } },
       data: { userId: "owner-1" },
     });
   });
@@ -349,7 +349,7 @@ describe("before a workspace is deleted", () => {
     expect(tx.postJob.findMany).not.toHaveBeenCalled();
     expect(tx.usageEvent.createMany).not.toHaveBeenCalled();
     expect(tx.postJobResult.findMany).toHaveBeenCalled();
-    expect(tx.usageEvent.deleteMany).toHaveBeenCalledWith({ where: { kind: "send", workspaceId: { in: ["ws-ops"] } } });
+    expect(tx.usageEvent.deleteMany).toHaveBeenCalledWith({ where: { kind: "send", pool: null, workspaceId: { in: ["ws-ops"] } } });
     expect(tx.usageEvent.updateMany).not.toHaveBeenCalled();
   });
 

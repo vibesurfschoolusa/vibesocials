@@ -1,11 +1,14 @@
-import type { Platform, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
-import { platformLabel } from "@/lib/platforms";
 import {
+  GUARANTEED_RUNS_PER_PERSON,
+  NEW_ACCOUNT_POOL_DAILY_LIMIT,
+  newAccountPoolAtSendMessage,
+  newAccountPoolMessage,
   OWNER_DAILY_POST_LIMIT_CODE,
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
@@ -35,30 +38,38 @@ import type { LimitRefusal } from "./workspaceUsage";
  * workspaces or start again when one is deleted. A workspace's posts and
  * results cascade with it, so what still counts lives in UsageEvent (no
  * foreign keys): each X post is written with its success, with the X account
- * it published from (resultClaim.ts), each send of a post as it goes out
- * (one per post per UTC day: Post now, the scanner, a retry), and today's
- * posts are copied inside the deleting transaction. The service's cap counts
- * the sends; the per-person totals read the live rows and the log together.
- * The numbers and sentences are in src/lib/usageLimits.ts.
+ * it published from (resultClaim.ts), and each run (R7-security L1: a post
+ * going out, or one retry request) as it is handed over, with the pool it
+ * drew from and the workspace's owners at that time (R7-security M1). The
+ * pools and the per-person numbers count the runs. The numbers and sentences
+ * are in src/lib/usageLimits.ts.
  */
 
 export const USAGE_KIND = {
   workspaceCreated: "workspace_created",
   post: "post",
   xPost: "x_post",
-  // R6-security M3: one per platform of a retry request, for the per-platform guard.
+  // R6-security M3: one per platform of a retry request. Written before
+  // R7-security L1 only; the retry guard still reads today's, by request.
   retry: "retry",
-  // R6 review of K2: one per post per UTC day it was sent (Post now, the
-  // scanner, a retry). The service's cap and the per-person totals count these.
+  // R7-security L1: one per run: a post going out (Post now, the scanner) or
+  // one retry request. The pools and the per-person numbers count these.
   send: "send",
 } as const;
+
+/**
+ * R7-security M1: the pool a run draws from, recorded on its row. "none" is a
+ * run no pool counts (paying, grandfathered or the operator's workspaces).
+ */
+export const RUN_POOL = { main: "main", newAccounts: "new", none: "none" } as const;
+export type RunPool = (typeof RUN_POOL)[keyof typeof RUN_POOL];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Whether the service's daily cap applies to a workspace (reviews of
+ * Whether the service's daily pools apply to a workspace (reviews of
  * R5-security M1): the one rule, used both to refuse and to decide what is
- * counted. The cap protects the Inngest budget from free use, so it leaves
+ * counted. The pools protect the Inngest budget from free use, so they leave
  * out a workspace an operator owns, a grandfathered one (billingExempt, made
  * before billing), and, with billing on, one whose plan planState calls
  * active; those are bounded by their own plan's limits. Free accounts filling
@@ -97,28 +108,94 @@ export function postsOnUtcDayWhere(
 }
 
 /**
- * R6 review of K2: the source id of a post's send on the UTC day of `at`. One
- * per post per day, so a post sent and then retried that day counts once,
- * and a retry on a later day counts once on that day.
+ * The source id of a post's run as it goes out on the UTC day of `at`. A post
+ * goes out once (a re-run of the same hand-over finds the row and writes no
+ * second), so this is one row per run; a retry has its own id per request.
  */
 export function sendSourceId(postJobId: string, at: Date): string {
   return `${USAGE_KIND.send}:${postJobId}:${utcDayKey(at)}`;
 }
 
-/** The post id of a send's source id, or null for anything else. */
-function sentPostId(sourceId: string | null): string | null {
-  const match = sourceId?.match(/^send:(.+):\d{4}-\d{2}-\d{2}$/);
-  return match ? match[1] : null;
+const retryRunPrefix = (postJobId: string) => `${USAGE_KIND.send}:${postJobId}:retry:`;
+
+/** R7-security L1: the source id of one retry request's run. */
+export function retrySourceId(postJobId: string, requestId: string): string {
+  return `${retryRunPrefix(postJobId)}${requestId}`;
+}
+
+type OwnerRow = { userId: string; user: { email: string; emailVerifiedAt: Date | null; createdAt: Date } };
+
+function workspaceOwners(workspaceId: string): Promise<OwnerRow[]> {
+  return prisma.workspaceMember.findMany({
+    where: { workspaceId, role: "owner" },
+    select: { userId: true, user: { select: { email: true, emailVerifiedAt: true, createdAt: true } } },
+  });
+}
+
+/** The posting workspace's own plan columns, the flag included: with billing off the caller's row has none of them. */
+async function ownBillingFields(workspaceId: string): Promise<BillingFields> {
+  return (await prisma.workspace.findUnique({ where: { id: workspaceId }, select: BILLING_FIELDS_SELECT })) ?? {};
+}
+
+/** Confirmed and a day old at `at`: draws from the main pool, with its guaranteed share. */
+function established(owner: OwnerRow, at: Date): boolean {
+  return !ownerDailyPostLimit(owner.user, at).reduced;
 }
 
 /**
- * Records that these posts were sent at `at`: the send the daily caps count.
- * Written as each one goes out (Post now, the scanner, a retry), so the next
- * check sees it, and kept when the workspace is deleted (no foreign key).
- * Create-or-skip on the unique sourceId. Answers the posts whose send it wrote
- * (a send already there for the day, from an earlier attempt, is not), so a
- * caller whose hand-over then fails takes back only its own. Never throws:
- * the post is going out.
+ * R7-security M1: who a run of a workspace at a moment is: its owners then,
+ * the pool it draws from, and whose per-person number it counts toward. The
+ * operator's workspaces and those the pools leave out (serviceCapApplies)
+ * draw from none; one with at least one confirmed, day-old owner from the
+ * main pool; any other from the new-account pool.
+ */
+type RunAttribution = { owners: OwnerRow[]; operator: boolean; pool: RunPool; ownerIds: string[] };
+
+async function runAttribution(workspaceId: string, at: Date): Promise<RunAttribution> {
+  const owners = await workspaceOwners(workspaceId);
+  if (owners.some((owner) => isOperatorUser(owner.user))) {
+    return { owners, operator: true, pool: RUN_POOL.none, ownerIds: [] };
+  }
+  const fields = await ownBillingFields(workspaceId);
+  const pool = !serviceCapApplies(fields, false, at)
+    ? RUN_POOL.none
+    : owners.some((owner) => established(owner, at))
+      ? RUN_POOL.main
+      : RUN_POOL.newAccounts;
+  const ownerIds = personalPostLimitApplies(fields, process.env, at) ? owners.map((owner) => owner.userId) : [];
+  return { owners, operator: false, pool, ownerIds };
+}
+
+/**
+ * The rows of runs of one workspace at `at`, each saying who it is. When that
+ * cannot be read the row is still written, with no pool: the older rule then
+ * counts it (the main pool, the workspace's owners at the time of the check).
+ */
+async function runRows(workspaceId: string, sourceIds: readonly string[], at: Date) {
+  let who: RunAttribution | null = null;
+  try {
+    who = await runAttribution(workspaceId, at);
+  } catch (error) {
+    logger.error("[usage] Couldn't read a run's owners; recording it without them", { error, workspaceId });
+  }
+  return sourceIds.map((sourceId) => ({
+    kind: USAGE_KIND.send,
+    workspaceId,
+    sourceId,
+    at,
+    pool: who?.pool ?? null,
+    ownerIds: who?.ownerIds ?? [],
+  }));
+}
+
+/**
+ * Records that these posts went out at `at`: one run each, which the pools and
+ * the per-person numbers count. Written as each one goes out (Post now, the
+ * scanner), so the next check sees it, and kept when the workspace is deleted
+ * (no foreign key). Create-or-skip on the unique sourceId. Answers the posts
+ * whose run it wrote (one already there, from an earlier attempt of the same
+ * hand-over, is not), so a caller whose hand-over then fails takes back only
+ * its own. Never throws: the post is going out.
  */
 export async function recordSend(input: {
   workspaceId: string;
@@ -136,12 +213,11 @@ export async function recordSend(input: {
     const writing = input.postJobIds.filter((postJobId) => !there.has(sendSourceId(postJobId, input.at)));
     if (writing.length === 0) return [];
     await prisma.usageEvent.createMany({
-      data: writing.map((postJobId) => ({
-        kind: USAGE_KIND.send,
-        workspaceId: input.workspaceId,
-        sourceId: sendSourceId(postJobId, input.at),
-        at: input.at,
-      })),
+      data: await runRows(
+        input.workspaceId,
+        writing.map((postJobId) => sendSourceId(postJobId, input.at)),
+        input.at,
+      ),
       skipDuplicates: true,
     });
     return writing;
@@ -155,11 +231,11 @@ export async function recordSend(input: {
 export type WrittenSends = { postJobIds: string[]; day: Date };
 
 /**
- * Second and third reviews of K2: a send exists only for a post handed to
- * publishing. Takes back sends an attempt's own recordSend reported writing,
- * when that attempt's hand-over failed or its post had nothing to send; a
- * send already there for the day (a real one, earlier) was never reported,
- * so it is never taken. Never throws.
+ * Second and third reviews of K2: a run exists only for a post handed to
+ * publishing. Takes back runs an attempt's own recordSend reported writing,
+ * when that attempt's hand-over failed or its post had nothing to send; one
+ * already there (a real one, earlier) was never reported, so it is never
+ * taken. Never throws.
  */
 export async function withdrawSend(input: { postJobIds: readonly string[]; day: Date }): Promise<void> {
   if (input.postJobIds.length === 0) return;
@@ -360,21 +436,23 @@ async function copyPostsBeforeDeletion(
     serviceCapApplies(workspace, workspace.members.some((owner) => isOperatorUser(owner.user)), now),
   );
   // R6 review of K2: send rows have no foreign key and stay, so the day's
-  // count does not drop. Those of a workspace no free limit counts go with
-  // it, so a deleted workspace's remaining sends are all ones the cap counts.
+  // count does not drop. R7-security M1: a run's row says its pool and owners
+  // itself; only rows written before that (no pool) are decided by the
+  // workspace, so those of a workspace no free limit counts go with it.
   const uncapped = workspaces.filter((workspace) => !capped.includes(workspace)).map((workspace) => workspace.id);
   if (uncapped.length > 0) {
-    await tx.usageEvent.deleteMany({ where: { kind: USAGE_KIND.send, workspaceId: { in: uncapped } } });
+    await tx.usageEvent.deleteMany({ where: { kind: USAGE_KIND.send, pool: null, workspaceId: { in: uncapped } } });
   }
   if (capped.length === 0) return;
   const personal = new Set(
     capped.filter((workspace) => personalPostLimitApplies(workspace, process.env, now)).map((w) => w.id),
   );
-  // Today's sends keep counting toward the deleting person's own total.
+  // Today's runs written before pools keep counting toward the deleting
+  // person's own total; newer rows carry their owners.
   if (personal.size > 0) {
     const { start, end } = utcDayRange(now);
     await tx.usageEvent.updateMany({
-      where: { kind: USAGE_KIND.send, workspaceId: { in: [...personal] }, at: { gte: start, lt: end } },
+      where: { kind: USAGE_KIND.send, pool: null, workspaceId: { in: [...personal] }, at: { gte: start, lt: end } },
       data: { userId },
     });
   }
@@ -406,7 +484,7 @@ function unitIds(exclude: string | readonly string[] | undefined): string[] {
   return typeof exclude === "string" ? [exclude] : [...exclude];
 }
 
-/** The owner's free workspaces: those whose posts count toward their own total. */
+/** The owner's free workspaces now: whose scheduled posts count toward their own number. */
 async function ownerFreeWorkspaceIds(ownerId: string): Promise<string[]> {
   const owned = await prisma.workspaceMember.findMany({
     where: { userId: ownerId, role: "owner" },
@@ -418,184 +496,215 @@ async function ownerFreeWorkspaceIds(ownerId: string): Promise<string[]> {
     .map((workspace) => workspace.id);
 }
 
-/**
- * Scheduling, moving, approving or posting now (second review of K2): the
- * owner's posts by their slot day, what the calendar shows and the sentence
- * says. The live posts of their free workspaces given that day, and those
- * copied from ones they deleted, each once, other than `unit`.
- */
-async function ownerPostsOnDay(ownerId: string, day: Date, unit: readonly string[]): Promise<number> {
-  const ids = await ownerFreeWorkspaceIds(ownerId);
-  const { start, end } = utcDayRange(day);
-  const [live, copied] = await Promise.all([
-    ids.length > 0
-      ? prisma.postJob.findMany({ where: { workspaceId: { in: ids }, ...postsOnUtcDayWhere(day) }, select: { id: true } })
-      : [],
-    prisma.usageEvent.findMany({
-      where: { kind: USAGE_KIND.post, userId: ownerId, at: { gte: start, lt: end } },
-      select: { sourceId: true },
-    }),
-  ]);
-  const posts = new Set(live.map((post) => post.id));
-  for (const row of copied) if (row.sourceId) posts.add(row.sourceId);
-  for (const id of unit) posts.delete(id);
-  return posts.size;
+/** A unit's own runs on `day`, which never count against it (a half its pair reserved). */
+function unitSourceIds(unit: readonly string[], day: Date): string[] {
+  return unit.map((id) => sendSourceId(id, day));
 }
 
 /**
- * A retry: the owner's posts sent today (their send rows: their free
- * workspaces', or moved to them when one was deleted), each once, other than
- * `unit`. A retry of a post already sent today adds nothing.
+ * R7-security M1 (d): the runs on the UTC day of `day` that count toward
+ * `ownerId`: those recorded with them as an owner at the time of the run, so
+ * leaving, handing over or deleting a workspace lowers nothing. Rows written
+ * before that carry no owners and count by the older rule: the owner's free
+ * workspaces now, or moved to them when one was deleted.
  */
-async function ownerSendsOnDay(ownerId: string, day: Date, unit: readonly string[]): Promise<number> {
-  const ids = await ownerFreeWorkspaceIds(ownerId);
+async function ownerRunsOnDay(
+  ownerId: string,
+  day: Date,
+  unit: readonly string[],
+  freeIds: readonly string[],
+): Promise<number> {
   const { start, end } = utcDayRange(day);
-  const sends = await prisma.usageEvent.findMany({
+  const rows = await prisma.usageEvent.findMany({
     where: {
       kind: USAGE_KIND.send,
       at: { gte: start, lt: end },
-      OR: [{ workspaceId: { in: ids } }, { userId: ownerId }],
+      OR: [
+        { ownerIds: { has: ownerId } },
+        { pool: null, workspaceId: { in: [...freeIds] } },
+        { pool: null, userId: ownerId },
+      ],
     },
     select: { sourceId: true },
   });
-  const posts = new Set(sends.map((row) => sentPostId(row.sourceId)).filter((id): id is string => id !== null));
-  for (const id of unit) posts.delete(id);
-  return posts.size;
+  const own = new Set(unitSourceIds(unit, day));
+  return new Set(rows.map((row) => row.sourceId).filter((id) => id !== null && !own.has(id))).size;
 }
 
 /**
- * The sends on the UTC day of `day` that the service's cap counts, other than
- * `unit`'s: those of workspaces it applies to, and those of deleted
- * workspaces (deletion keeps only those). Bounded reads: the day's sends
- * grouped by workspace, then those workspaces' plan columns and owners; each
- * is decided by serviceCapApplies in code, so the rule is never restated as a query.
+ * One owner's number for the UTC day of `day`: the runs that counted toward
+ * them that day, plus their free workspaces' posts given that day that have
+ * not gone out yet (the calendar), other than `unit`. A day ahead has only the
+ * calendar; today has what ran and what is still to go.
  */
-async function serviceSendsOnDay(day: Date, unit: readonly string[], now: Date): Promise<number> {
+async function ownerCountOnDay(ownerId: string, day: Date, unit: readonly string[]): Promise<number> {
+  const freeIds = await ownerFreeWorkspaceIds(ownerId);
+  const [runs, waiting] = await Promise.all([
+    ownerRunsOnDay(ownerId, day, unit, freeIds),
+    freeIds.length > 0
+      ? prisma.postJob.findMany({
+          where: { workspaceId: { in: freeIds }, ...postsOnUtcDayWhere(day, unit), status: "scheduled" },
+          select: { id: true },
+        })
+      : [],
+  ]);
+  return runs + waiting.length;
+}
+
+/**
+ * The runs on the UTC day of `day` in each pool, other than `unit`'s. A row
+ * says its pool; one written before pools counts in the main pool when its
+ * workspace is one the pools apply to now, or is deleted (deletion keeps only
+ * those), as before. Bounded reads: the day's rows grouped by workspace and
+ * pool, then only the older rows' workspaces.
+ */
+async function poolRunsOnDay(
+  day: Date,
+  unit: readonly string[],
+  now: Date,
+): Promise<{ main: number; newAccounts: number }> {
   const { start, end } = utcDayRange(day);
   const groups = await prisma.usageEvent.groupBy({
-    by: ["workspaceId"],
+    by: ["workspaceId", "pool"],
     where: {
       kind: USAGE_KIND.send,
       at: { gte: start, lt: end },
-      ...(unit.length > 0 ? { sourceId: { notIn: unit.map((id) => sendSourceId(id, day)) } } : {}),
+      ...(unit.length > 0 ? { sourceId: { notIn: unitSourceIds(unit, day) } } : {}),
     },
     _count: { _all: true },
   });
-  const ids = groups.map((group) => group.workspaceId).filter((id): id is string => typeof id === "string");
-  if (ids.length === 0) return 0;
+  const sum = (pool: RunPool) =>
+    groups.reduce((total, group) => (group.pool === pool ? total + group._count._all : total), 0);
 
-  const workspaces = await prisma.workspace.findMany({
-    where: { id: { in: ids } },
-    select: {
-      id: true,
-      ...BILLING_FIELDS_SELECT,
-      members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
-    },
-  });
-  const found = new Set(workspaces.map((workspace) => workspace.id));
-  const capped = new Set(
-    workspaces
-      .filter((workspace) =>
-        serviceCapApplies(workspace, workspace.members.some((owner) => isOperatorUser(owner.user)), now),
-      )
-      .map((workspace) => workspace.id),
+  const older = groups.filter(
+    (group): group is typeof group & { workspaceId: string } => group.pool === null && typeof group.workspaceId === "string",
   );
-  return groups.reduce(
-    (sum, group) =>
-      group.workspaceId && (capped.has(group.workspaceId) || !found.has(group.workspaceId))
-        ? sum + group._count._all
-        : sum,
-    0,
-  );
-}
-
-type OwnerRow = { userId: string; user: { email: string; emailVerifiedAt: Date | null; createdAt: Date } };
-
-function workspaceOwners(workspaceId: string): Promise<OwnerRow[]> {
-  return prisma.workspaceMember.findMany({
-    where: { workspaceId, role: "owner" },
-    select: { userId: true, user: { select: { email: true, emailVerifiedAt: true, createdAt: true } } },
-  });
-}
-
-/** The posting workspace's own plan columns, the flag included: with billing off the caller's row has none of them. */
-async function ownBillingFields(workspaceId: string): Promise<BillingFields> {
-  return (await prisma.workspace.findUnique({ where: { id: workspaceId }, select: BILLING_FIELDS_SELECT })) ?? {};
+  let olderMain = 0;
+  if (older.length > 0) {
+    const workspaces = await prisma.workspace.findMany({
+      where: { id: { in: older.map((group) => group.workspaceId) } },
+      select: {
+        id: true,
+        ...BILLING_FIELDS_SELECT,
+        members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
+      },
+    });
+    const found = new Set(workspaces.map((workspace) => workspace.id));
+    const capped = new Set(
+      workspaces
+        .filter((workspace) =>
+          serviceCapApplies(workspace, workspace.members.some((owner) => isOperatorUser(owner.user)), now),
+        )
+        .map((workspace) => workspace.id),
+    );
+    olderMain = older.reduce(
+      (total, group) =>
+        capped.has(group.workspaceId) || !found.has(group.workspaceId) ? total + group._count._all : total,
+      0,
+    );
+  }
+  return { main: sum(RUN_POOL.main) + olderMain, newAccounts: sum(RUN_POOL.newAccounts) };
 }
 
 /**
- * The one rule for the service's cap, shared by Post now (the routes), the
- * scanner and a retry: `size` posts going out on the UTC day of `day` (both
- * halves of a pair: 2) would take the day's sends past the cap. `unit` are
- * their ids when known; their own sends that day are not counted against
- * them, so a half reserved by its pair, or a retry of a post sent today,
- * adds nothing. A day still ahead has no sends.
+ * R7-security M1: the one rule for the pools, shared by Post now (the
+ * routes), the scanner and a retry: whether `size` runs (both halves of a
+ * pair: 2) on the UTC day of `day` would go past this workspace's pool, and
+ * which. The new-account pool is its own. The main pool never refuses runs
+ * that fit inside the first GUARANTEED_RUNS_PER_PERSON of the day of any of
+ * the workspace's confirmed, day-old owners. `unit` are the posts' ids when
+ * known; their own runs that day are not counted against them, so a half
+ * reserved by its pair adds nothing. A day still ahead has no runs.
  */
-async function serviceCapReached(input: {
-  workspaceId: string;
+async function poolRefusal(input: {
+  who: RunAttribution;
   day: Date;
   unit: readonly string[];
   size: number;
   now: Date;
-}): Promise<boolean> {
-  if (!serviceCapApplies(await ownBillingFields(input.workspaceId), false, input.now)) return false;
-  return (await serviceSendsOnDay(input.day, input.unit, input.now)) + input.size > SERVICE_DAILY_POST_LIMIT;
+}): Promise<"main" | "new" | null> {
+  const { who, day, unit, size, now } = input;
+  if (who.pool === RUN_POOL.none) return null;
+  const used = await poolRunsOnDay(day, unit, now);
+  if (who.pool === RUN_POOL.newAccounts) {
+    return used.newAccounts + size > NEW_ACCOUNT_POOL_DAILY_LIMIT ? "new" : null;
+  }
+  if (used.main + size <= SERVICE_DAILY_POST_LIMIT) return null;
+  for (const owner of who.owners) {
+    if (!established(owner, now)) continue;
+    const freeIds = await ownerFreeWorkspaceIds(owner.userId);
+    if ((await ownerRunsOnDay(owner.userId, day, unit, freeIds)) + size <= GUARANTEED_RUNS_PER_PERSON) return null;
+  }
+  return "main";
 }
 
-/**
- * The daily post limits across workspaces, for a post committed to the UTC day
- * of `day` in `workspaceId` (whose billing columns are `workspace`), or for a
- * retry today: each owner's own total (personalPostLimitApplies; the lower
- * number for a new or unconfirmed account; their posts by slot day, or for a
- * retry their sends today), then the service's cap. A
- * workspace any operator owns is never refused here. Throws on a database
- * error; checkDailyPostLimit fails open around it.
- */
-export async function crossWorkspacePostRefusal(input: {
-  workspaceId: string;
+/** The later of two moments. */
+function later(a: Date, b: Date): Date {
+  return a.getTime() >= b.getTime() ? a : b;
+}
+
+type CrossWorkspaceCheck = {
   workspace: BillingFields;
   day: Date;
   mode: CrossWorkspaceLimitMode;
   excludePostJobId?: string | readonly string[];
   alsoOnDay?: number;
-}): Promise<LimitRefusal | null> {
-  const { workspaceId, day, mode } = input;
+};
+
+/**
+ * The daily limits across workspaces, for a post committed to the UTC day of
+ * `day` in `workspaceId` (whose billing columns are `workspace`), or for a
+ * retry today: each owner's own number (personalPostLimitApplies; the lower
+ * one for a new or unconfirmed account), then the workspace's pool. A
+ * workspace any operator owns is never refused here. Throws on a database
+ * error; checkDailyPostLimit fails open around it.
+ */
+export async function crossWorkspacePostRefusal(
+  input: CrossWorkspaceCheck & { workspaceId: string },
+): Promise<LimitRefusal | null> {
+  const now = new Date();
+  return refusalFor(await runAttribution(input.workspaceId, now), input, now);
+}
+
+async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: Date): Promise<LimitRefusal | null> {
+  const { day, mode } = input;
+  if (who.operator) return null;
   const unit = unitIds(input.excludePostJobId);
   const size = 1 + (input.alsoOnDay ?? 0);
-  const now = new Date();
-
-  const owners = await workspaceOwners(workspaceId);
-  if (owners.some((owner) => isOperatorUser(owner.user))) return null;
 
   if (personalPostLimitApplies(input.workspace)) {
-    for (const owner of owners) {
-      const { limit, reduced } = ownerDailyPostLimit(owner.user, now);
-      if (mode === "retry") {
-        if ((await ownerSendsOnDay(owner.userId, day, unit)) + size > limit) {
-          return { error: ownerDailySendLimitMessage(limit, reduced), code: OWNER_DAILY_POST_LIMIT_CODE };
-        }
-      } else if ((await ownerPostsOnDay(owner.userId, day, unit)) + size > limit) {
-        return { error: ownerDailyPostLimitMessage(limit, mode, reduced), code: OWNER_DAILY_POST_LIMIT_CODE };
+    // Unconfirmed in R7-new-customer: a later day is judged as it starts, so
+    // a confirmed account's first day holds back only the days before it is
+    // a day old (an unconfirmed one stays reduced until it confirms).
+    const judgedAt = mode === "schedule" ? later(now, utcDayRange(day).start) : now;
+    for (const owner of who.owners) {
+      const { limit, reduced } = ownerDailyPostLimit(owner.user, judgedAt);
+      if ((await ownerCountOnDay(owner.userId, day, unit)) + size > limit) {
+        return {
+          error:
+            mode === "retry" ? ownerDailySendLimitMessage(limit, reduced) : ownerDailyPostLimitMessage(limit, mode, reduced),
+          code: OWNER_DAILY_POST_LIMIT_CODE,
+        };
       }
     }
   }
 
-  // A post given a later slot meets the cap when it is sent (the scanner);
+  // A post given a later slot meets the pools when it is sent (the scanner);
   // now it meets only what has gone out on its day already.
   const sending = mode === "schedule" ? 1 : size;
-  if (await serviceCapReached({ workspaceId, day, unit, size: sending, now })) {
-    return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
-  }
+  const pool = await poolRefusal({ who, day, unit, size: sending, now });
+  if (pool === "new") return { error: newAccountPoolMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
+  if (pool === "main") return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
   return null;
 }
 
 /**
  * R6-security M2: the scanner's check as a scheduled post falls due, before
  * its results are made: the post, or both halves of a Feed and Story pair as
- * one unit (sent together or not at all). Only the service's cap: the
- * per-workspace and per-person limits counted the post when it was given its
- * day, and they only ever hold back their own workspaces. What the results
- * then say, or null to send. Fails open, like every usage check.
+ * one unit (sent together or not at all). Only the pools: the per-workspace
+ * and per-person limits counted the post when it was given its day, and they
+ * only ever hold back their own workspaces. What the results then say, or
+ * null to send. Fails open, like every usage check.
  */
 export async function serviceCapRefusalAtSend(input: {
   workspaceId: string;
@@ -603,71 +712,72 @@ export async function serviceCapRefusalAtSend(input: {
   now: Date;
 }): Promise<{ errorCode: string; errorMessage: string } | null> {
   try {
-    const owners = await workspaceOwners(input.workspaceId);
-    if (owners.some((owner) => isOperatorUser(owner.user))) return null;
-    const reached = await serviceCapReached({
-      workspaceId: input.workspaceId,
+    const who = await runAttribution(input.workspaceId, input.now);
+    if (who.operator) return null;
+    const pool = await poolRefusal({
+      who,
       day: input.now,
       unit: input.postJobIds,
       size: input.postJobIds.length,
       now: input.now,
     });
-    return reached
-      ? { errorCode: SERVICE_DAILY_POST_LIMIT_CODE, errorMessage: serviceDailyPostLimitAtSendMessage() }
-      : null;
+    if (pool === "new") return { errorCode: SERVICE_DAILY_POST_LIMIT_CODE, errorMessage: newAccountPoolAtSendMessage() };
+    if (pool === "main") {
+      return { errorCode: SERVICE_DAILY_POST_LIMIT_CODE, errorMessage: serviceDailyPostLimitAtSendMessage() };
+    }
+    return null;
   } catch (error) {
     logger.error("[usage] Service cap check at send failed; sending", { error, workspaceId: input.workspaceId });
     return null;
   }
 }
 
-const retrySourcePrefix = (postJobId: string, platform: Platform) => `${USAGE_KIND.retry}:${postJobId}:${platform}:`;
+/**
+ * The retry runs of a post on the UTC day of `now`: its retry rows, and the
+ * per-platform rows written before R7-security L1, once per request.
+ */
+async function retryRunsToday(workspaceId: string, postJobId: string, now: Date): Promise<number> {
+  const { start, end } = utcDayRange(now);
+  const [runs, older] = await Promise.all([
+    prisma.usageEvent.count({
+      where: { kind: USAGE_KIND.send, sourceId: { startsWith: retryRunPrefix(postJobId) }, at: { gte: start, lt: end } },
+    }),
+    prisma.usageEvent.findMany({
+      where: {
+        kind: USAGE_KIND.retry,
+        workspaceId,
+        sourceId: { startsWith: `${USAGE_KIND.retry}:${postJobId}:` },
+        at: { gte: start, lt: end },
+      },
+      select: { sourceId: true },
+    }),
+  ]);
+  const requests = new Set(older.map((row) => row.sourceId?.split(":").pop()).filter(Boolean));
+  return runs + requests.size;
+}
 
 /**
- * R6-security M3 and the review of K2: why this retry may not run, or null.
- * Each platform of a post may be retried RETRIES_PER_POST_PER_DAY times a UTC
- * day (it only stops a platform that keeps failing, so it applies to paying
- * workspaces too); then the retry counts toward the owners' per-person totals
- * and the service's cap as one send of the post (crossWorkspacePostRefusal),
- * which paying workspaces are never refused by. The operator's workspaces are
- * never refused. Fails open, like the post checks.
+ * R7-security L1: why this retry may not run, or null. A retry request is one
+ * run, however many platforms it includes (Retry all failed is one). Each post
+ * may have RETRIES_PER_POST_PER_DAY a UTC day, in every workspace but the
+ * operator's: it only stops a post that keeps failing, so it applies to
+ * paying ones too. Then the run counts toward the owners' per-person numbers
+ * and the pool like a post, which paying workspaces are never refused by.
+ * Fails open, like the post checks.
  */
 export async function retryRefusal(input: {
   workspaceId: string;
   postJobId: string;
-  platforms: readonly Platform[];
   now: Date;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, postJobId, now } = input;
   try {
-    const owners = await workspaceOwners(workspaceId);
-    if (owners.some((owner) => isOperatorUser(owner.user))) return null;
-
-    const { start, end } = utcDayRange(now);
-    for (const platform of input.platforms) {
-      const retriedToday = await prisma.usageEvent.count({
-        where: {
-          kind: USAGE_KIND.retry,
-          workspaceId,
-          sourceId: { startsWith: retrySourcePrefix(postJobId, platform) },
-          at: { gte: start, lt: end },
-        },
-      });
-      if (retriedToday >= RETRIES_PER_POST_PER_DAY) {
-        return {
-          error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY, platformLabel(platform)),
-          code: POST_RETRY_LIMIT_CODE,
-        };
-      }
+    const who = await runAttribution(workspaceId, now);
+    if (who.operator) return null;
+    if ((await retryRunsToday(workspaceId, postJobId, now)) >= RETRIES_PER_POST_PER_DAY) {
+      return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
     }
-
-    return await crossWorkspacePostRefusal({
-      workspaceId,
-      workspace: await ownBillingFields(workspaceId),
-      day: now,
-      mode: "retry",
-      excludePostJobId: postJobId,
-    });
+    return await refusalFor(who, { workspace: await ownBillingFields(workspaceId), day: now, mode: "retry" }, now);
   } catch (error) {
     logger.error("[usage] Retry limit check failed; allowing", { error, workspaceId, postJobId });
     return null;
@@ -675,33 +785,35 @@ export async function retryRefusal(input: {
 }
 
 /**
- * Records one retry that was handed to the background run: a row per platform
- * it includes (the per-platform guard), and the post's send for the day (the
- * caps: once per post per day, however many platforms or requests). Never
- * throws: the retry is already running.
+ * R7-security L1: records one retry request as one run, before it is handed
+ * to the background, so the next request's check sees it. withdrawRetry
+ * takes it back when that hand-over fails. Never throws.
  */
 export async function recordRetry(input: {
   workspaceId: string;
   postJobId: string;
-  platforms: readonly Platform[];
   requestId: string;
   at: Date;
 }): Promise<void> {
   try {
     await prisma.usageEvent.createMany({
-      data: input.platforms.map((platform) => ({
-        kind: USAGE_KIND.retry,
-        workspaceId: input.workspaceId,
-        platform,
-        sourceId: `${retrySourcePrefix(input.postJobId, platform)}${input.requestId}`,
-        at: input.at,
-      })),
+      data: await runRows(input.workspaceId, [retrySourceId(input.postJobId, input.requestId)], input.at),
       skipDuplicates: true,
     });
   } catch (error) {
     logger.error("[usage] Couldn't record a retry (ignored)", { error, workspaceId: input.workspaceId });
   }
-  await recordSend({ workspaceId: input.workspaceId, postJobIds: [input.postJobId], at: input.at });
+}
+
+/** Takes back the run of a retry request whose hand-over failed, and only that one. Never throws. */
+export async function withdrawRetry(input: { postJobId: string; requestId: string }): Promise<void> {
+  try {
+    await prisma.usageEvent.deleteMany({
+      where: { kind: USAGE_KIND.send, sourceId: retrySourceId(input.postJobId, input.requestId) },
+    });
+  } catch (error) {
+    logger.error("[usage] Couldn't take back a retry (ignored)", { error });
+  }
 }
 
 /**

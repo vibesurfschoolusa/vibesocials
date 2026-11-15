@@ -230,46 +230,71 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  */
 
 /**
- * The most posts (and retries, R6-security M3) the free workspaces of the
- * whole service send in one UTC day: those on a trial, on no plan, or whose
- * plan ended. The operator's workspaces and paying ones are never counted or
- * refused here; their posts are sized in below instead (R6-security M2).
+ * The runs the free workspaces of confirmed, day-old accounts send in one UTC
+ * day, together (the main pool): those on a trial, on no plan, or whose plan
+ * ended. A run is one hand-over to the background: a post going out (Post
+ * now, or the scanner when a scheduled one is due) or one retry request,
+ * however many platforms it has. The operator's workspaces and paying ones are
+ * never counted or refused here (R7-security L1).
  *
- * It counts the sends written as each post goes out (Post now, the scanner
- * when a scheduled post is due, a retry), one per post per UTC day of the
- * send, and is checked at that moment, so scheduling far ahead reserves
- * nothing (src/server/usage/usageLog.ts).
+ * Each run is a row written as it is handed over and checked at that moment
+ * (src/server/usage/usageLog.ts), so scheduling far ahead reserves nothing.
+ * The row records the pool it drew from and the workspace's owners at that
+ * time (R7-security M1).
  *
- * Sizing against the Inngest plan's 50,000 executions a month. About 28,000
- * are used already (CLAUDE.md: idle work, the scanners, sweeps and syncs, and
- * the operator's own posting). A post costs about 6 executions plus 1 per
- * platform, so about 10 for a post to 4 platforms. Paying workspaces are
- * expected at about 15 posts a day (five workspaces at 3). So 28,000 +
- * (40 free + 15 paid) x 10 x 31 = 45,050 in a 31-day month, which leaves about
- * 4,950 (10%) for Reels (about 10 more each) and posts to more platforms. Even
- * with every post at 6 platforms (12 each) the month is 48,460.
+ * Sizing (R7-security M1, 14 Nov 2026), against the Inngest Hobby plan's
+ * 50,000 executions a month:
+ * - Used by 14 Nov: 33,687 (33,594 earlier that day; most of it testing),
+ *   so 16,313 are left for 15 to 30 November: about 1,019 a day.
+ * - Idle work, one execution per step of each scheduled run with nothing to
+ *   do: the scanner every 10 minutes (144), media retention hourly (48),
+ *   YouTube numbers hourly (24), the stale-post sweep hourly (48), the daily
+ *   jobs (about 26, the token refreshes they fan out included): about 290 a
+ *   day, call it 300.
+ * - A run costs about 6 executions plus 1 per platform: 10 at 4 platforms, 12
+ *   at 6.
+ * - A full day of free runs at both pools: (30 + 10) x 12 = 480. With idle
+ *   work, 780 a day, which leaves about 239 a day for paying workspaces, the
+ *   operator's own posts and the guaranteed runs below that go past a full
+ *   pool. From December (31 days): 300 x 31 + 480 x 31 = 24,180, half the
+ *   plan.
  */
-export const SERVICE_DAILY_POST_LIMIT = 40;
+export const SERVICE_DAILY_POST_LIMIT = 30;
 
 /**
- * The most posts (and retries) one owner's free workspaces take in one UTC
- * day, together: with billing off every workspace, with it on every workspace
- * the service's cap counts. Sized for an agency on its trial: several client
- * workspaces at a few posts a day each (7 workspaces x 4 posts = 28) fits.
- * Below the service cap, so one person cannot take all of it.
+ * R7-security M1 (a): the runs a UTC day, across the whole service, of
+ * workspaces none of whose owners is a confirmed, day-old account (email not
+ * confirmed, or signed up less than NEW_ACCOUNT_HOURS ago). They draw only
+ * from this pool and never from the main one, so throwaway registrations can
+ * use up only this.
  */
-export const OWNER_DAILY_POST_LIMIT = 30;
+export const NEW_ACCOUNT_POOL_DAILY_LIMIT = 10;
+
+/**
+ * R7-security M1 (b): each confirmed, day-old person's first runs a UTC day
+ * are never refused by the main pool (they still count in it), so strangers
+ * filling the pool cannot stop a customer's day. Bounded by the number of
+ * confirmed, day-old accounts with free workspaces.
+ */
+export const GUARANTEED_RUNS_PER_PERSON = 3;
+
+/**
+ * The most runs one confirmed, day-old owner's free workspaces take in one
+ * UTC day, together, counting the posts still scheduled for later that day:
+ * with billing off every workspace, with it on every workspace the pools
+ * count. Half the main pool, so one person cannot take all of it.
+ */
+export const OWNER_DAILY_POST_LIMIT = 15;
 
 /**
  * R6-security M2: the per-person number for an owner whose email address is
- * not confirmed, or whose account is less than NEW_ACCOUNT_HOURS old, so
- * throwaway accounts take only a small share of the service's cap. Enough to
- * try the app on the first day.
+ * not confirmed, or whose account is less than NEW_ACCOUNT_HOURS old. Half the
+ * new-account pool. Enough to try the app on the first day.
  */
 export const NEW_ACCOUNT_DAILY_POST_LIMIT = 5;
 export const NEW_ACCOUNT_HOURS = 24;
 
-/** R6-security M3: how often each platform of one post may be retried in one UTC day. */
+/** R7-security L1: the retry runs one post may have in one UTC day, all its platforms together. */
 export const RETRIES_PER_POST_PER_DAY = 3;
 
 /** Workspaces one person may create in WORKSPACES_CREATED_WINDOW_DAYS, deleted ones included. */
@@ -299,7 +324,11 @@ export function personalPostLimitApplies(
   return !workspace.billingExempt && planState(workspace, now) !== "active";
 }
 
-/** One owner's per-person number, and whether it is the lower one for a new or unconfirmed account. */
+/**
+ * One owner's per-person number at `at`, and whether it is the lower one for a
+ * new or unconfirmed account. Whether a person draws from the new-account
+ * pool is the same test (`reduced`).
+ */
 export function ownerDailyPostLimit(
   owner: { emailVerifiedAt: Date | null; createdAt: Date },
   now: Date,
@@ -328,10 +357,10 @@ export function ownerDailyPostLimitMessage(limit: number, mode: DailyPostLimitMo
   );
 }
 
-/** A retry (second review of K2): the owner's posts sent today, against the same number. */
+/** A retry (R7-security L1): a run like a post, against the same number. */
 export function ownerDailySendLimitMessage(limit: number, reduced = false): string {
   return withReducedNote(
-    `This workspace's owner has sent ${limit} ${countWord(limit, "post", "posts")} today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day.`,
+    `This workspace's owner has reached the limit of ${limit} ${countWord(limit, "post", "posts")} a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`,
     reduced,
   );
 }
@@ -351,8 +380,31 @@ export function serviceDailyPostLimitAtSendMessage(): string {
   return `Not sent: ${PRODUCT_NAME} had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.`;
 }
 
-export function postRetryLimitMessage(limit: number, platform: string): string {
-  return `${platform} on this post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow.`;
+const LEAVE_NEW_ACCOUNT_POOL =
+  "It stops applying once the owner has confirmed their email address and the account is a day old.";
+const NEW_ACCOUNT_POOL_WHO = "shared by accounts under a day old or with an unconfirmed email address";
+
+/** R7-security M1: the new-account pool, when posting, scheduling or retrying. */
+export function newAccountPoolMessage(mode: CrossWorkspaceLimitMode): string {
+  const posts = `${NEW_ACCOUNT_POOL_DAILY_LIMIT} ${countWord(NEW_ACCOUNT_POOL_DAILY_LIMIT, "post", "posts")}`;
+  if (mode === "now") {
+    return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}. Schedule this post for another day, or try again tomorrow. ${LEAVE_NEW_ACCOUNT_POOL}`;
+  }
+  if (mode === "retry") {
+    return `${PRODUCT_NAME} has reached today's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO}, and retries count toward it. Retry tomorrow. ${LEAVE_NEW_ACCOUNT_POOL}`;
+  }
+  return `That day is full: ${PRODUCT_NAME} has reached the limit of ${posts} a day ${NEW_ACCOUNT_POOL_WHO}. Pick another day. ${LEAVE_NEW_ACCOUNT_POOL}`;
+}
+
+/** On the results of a scheduled post of a new account the scanner did not send. */
+export function newAccountPoolAtSendMessage(): string {
+  const posts = `${NEW_ACCOUNT_POOL_DAILY_LIMIT} ${countWord(NEW_ACCOUNT_POOL_DAILY_LIMIT, "post", "posts")}`;
+  return `Not sent: ${PRODUCT_NAME} had reached the day's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO} when this post was due. Retry it tomorrow, or schedule it again. ${LEAVE_NEW_ACCOUNT_POOL}`;
+}
+
+/** R7-security L1: the retry runs of one post, pointing to Retry all failed, which is one. */
+export function postRetryLimitMessage(limit: number): string {
+  return `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.`;
 }
 
 /** `openAt`: when the oldest creation in the window leaves it. */

@@ -948,7 +948,7 @@ model StripeEvent {
 // the PostJob or PostJobResult a row was copied from, so each is copied once.
 model UsageEvent {
   id          String    @id @default(cuid())
-  // "workspace_created" | "post" | "x_post"
+  // "workspace_created" | "post" | "x_post" | "retry" | "send"
   kind        String
   // Who it counts against: the person who created the workspace, or the owner
   // whose per-person daily posts include the post. Null: nobody's own total.
@@ -962,6 +962,13 @@ model UsageEvent {
   // createdAt), or when the X post published.
   at          DateTime
   createdAt   DateTime  @default(now())
+  // R7-security M1, on a "send" (one run): the pool it drew from, "main",
+  // "new" (accounts under a day old or unconfirmed) or "none" (paying or the
+  // operator's). Null: written before pools, counted by the older rule.
+  pool        String?
+  // R7-security M1, on a "send": the workspace's owners at the time of the
+  // run whose per-person number it counts toward; empty when none does.
+  ownerIds    String[]  @default([])
 
   @@index([kind, at])
   @@index([userId, kind, at])

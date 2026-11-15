@@ -19,6 +19,7 @@ const {
   recomputeStatusMock,
   retryRefusalMock,
   recordRetryMock,
+  withdrawRetryMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   postJobFindFirstMock: vi.fn(),
@@ -30,6 +31,7 @@ const {
   recomputeStatusMock: vi.fn(),
   retryRefusalMock: vi.fn(),
   recordRetryMock: vi.fn(),
+  withdrawRetryMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -55,7 +57,11 @@ vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
 // R6-security M3: the retry budgets are tested in server/usage/usageLog.test.ts.
-vi.mock("@/server/usage/usageLog", () => ({ retryRefusal: retryRefusalMock, recordRetry: recordRetryMock }));
+vi.mock("@/server/usage/usageLog", () => ({
+  retryRefusal: retryRefusalMock,
+  recordRetry: recordRetryMock,
+  withdrawRetry: withdrawRetryMock,
+}));
 
 import { logger } from "@/lib/logger";
 
@@ -103,6 +109,8 @@ beforeEach(() => {
   retryRefusalMock.mockResolvedValue(null);
   recordRetryMock.mockReset();
   recordRetryMock.mockResolvedValue(undefined);
+  withdrawRetryMock.mockReset();
+  withdrawRetryMock.mockResolvedValue(undefined);
 });
 
 describe("parseRetryBody (pure)", () => {
@@ -767,53 +775,44 @@ describe("POST /api/posts/[postJobId]/retry - retriedAt (N3)", () => {
   });
 });
 
-// R6-security M3: retries count. A post may be retried 3 times a day, and each
-// retry counts with the posts toward the per-person and service caps.
+// R7-security L1: a retry request is one run, counted like a post; a post
+// may have 3 a day, all its platforms together.
 describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
   it("refuses with the budget's sentence before claiming anything", async () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
-    retryRefusalMock.mockResolvedValue({
-      error: "TikTok on this post has been retried 3 times today, the most for one day. Try again tomorrow.",
-      code: "POST_RETRY_LIMIT",
-    });
+    const sentence =
+      "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.";
+    retryRefusalMock.mockResolvedValue({ error: sentence, code: "POST_RETRY_LIMIT" });
 
     const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
 
     expect(res.status).toBe(429);
-    expect(await res.json()).toEqual({
-      error: "TikTok on this post has been retried 3 times today, the most for one day. Try again tomorrow.",
-      code: "POST_RETRY_LIMIT",
-    });
-    expect(retryRefusalMock).toHaveBeenCalledWith({
-      workspaceId: "ws-1",
-      postJobId: "job-1",
-      platforms: ["tiktok"],
-      now: expect.any(Date),
-    });
+    expect(await res.json()).toEqual({ error: sentence, code: "POST_RETRY_LIMIT" });
+    expect(retryRefusalMock).toHaveBeenCalledWith({ workspaceId: "ws-1", postJobId: "job-1", now: expect.any(Date) });
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();
     expect(recordRetryMock).not.toHaveBeenCalled();
   });
 
-  it("records the retry once it was handed to the run, under the event's own request id", async () => {
+  it("records the run before the hand-over, under the event's own request id", async () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
     resultUpdateManyMock.mockResolvedValue({ count: 1 });
 
-    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
 
     expect(res.status).toBe(202);
     const { id } = inngestSendMock.mock.calls[0][0] as { id: string };
     expect(recordRetryMock).toHaveBeenCalledWith({
       workspaceId: "ws-1",
       postJobId: "job-1",
-      platforms: ["tiktok"],
       requestId: id.replace(/^retry-job-1-/, ""),
       at: expect.any(Date),
     });
+    expect(recordRetryMock.mock.invocationCallOrder[0]).toBeLessThan(inngestSendMock.mock.invocationCallOrder[0]);
+    expect(withdrawRetryMock).not.toHaveBeenCalled();
   });
 
-  // Review of K2, point 2: an {all} retry counts one for each platform it includes.
-  it("an all-failed retry asks about every failed platform and records each one it claimed", async () => {
+  it("Retry all failed with 4 failed platforms: one check, one run, every claimed platform in it", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([
         { platform: "x", status: "failed" },
@@ -823,23 +822,24 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
         { platform: "youtube", status: "success" },
       ]),
     );
-    resultUpdateManyMock
-      .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 0 })
-      .mockResolvedValueOnce({ count: 1 });
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
 
     const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
 
     expect(res.status).toBe(202);
-    expect(retryRefusalMock.mock.calls[0][0].platforms).toEqual(["x", "facebook_page", "instagram", "linkedin"]);
-    // Instagram was claimed by a concurrent retry: not counted here.
-    expect(recordRetryMock.mock.calls[0][0].platforms).toEqual(["x", "facebook_page", "linkedin"]);
+    expect(await res.json()).toEqual({ ok: true, retrying: ["x", "facebook_page", "instagram", "linkedin"] });
+    expect(retryRefusalMock).toHaveBeenCalledTimes(1);
+    expect(recordRetryMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect((inngestSendMock.mock.calls[0][0] as { data: { platforms: string[] } }).data.platforms).toEqual([
+      "x",
+      "facebook_page",
+      "instagram",
+      "linkedin",
+    ]);
   });
 
-  // Third review: a post sent this morning and retried this afternoon whose
-  // hand-over fails keeps its morning send: the retry wrote none and takes none back.
-  it("records nothing when the retry could not be started", async () => {
+  it("takes back that request's run when the retry could not be started", async () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
     resultUpdateManyMock.mockResolvedValue({ count: 1 });
     inngestSendMock.mockRejectedValue(new Error("inngest down"));
@@ -848,6 +848,17 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
     const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
 
     expect(res.status).toBe(500);
+    const { requestId } = recordRetryMock.mock.calls[0][0] as { requestId: string };
+    expect(withdrawRetryMock).toHaveBeenCalledWith({ postJobId: "job-1", requestId });
+  });
+
+  it("records nothing when nothing was claimed", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
     expect(recordRetryMock).not.toHaveBeenCalled();
   });
 });
