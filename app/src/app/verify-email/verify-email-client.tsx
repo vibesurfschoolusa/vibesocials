@@ -1,17 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 
-type VerifyState = "verifying" | "success" | "error";
-
-const SUCCESS_MESSAGE = "Email verified — you're all set.";
-const ERROR_MESSAGE =
-  "This link is invalid or has expired. Log in and use the resend button to get a fresh one.";
+import { attemptVerify, readAccountState, resendVerificationEmail, verifyView, type VerifyView } from "./verifyOutcome";
 
 function CardShell({
   title,
@@ -40,42 +37,42 @@ function CardShell({
  * (SEC-1). The fragment is only readable client-side, so it is pulled from
  * `window.location.hash` and POSTed in the request BODY.
  *
- * The POST is fired exactly ONCE on mount (a `useRef` guard makes it survive
- * React StrictMode's double-invoke in development). There is no retry button —
- * a failed or expired link is a terminal state here; the user re-requests a
- * fresh link from the signed-in banner's "Resend email" action.
+ * The POST is fired ONCE on mount (a `useRef` guard makes it survive React
+ * StrictMode's double-invoke in development); Try again repeats it only when
+ * the link was not used up (no network, server failure). What the page says
+ * is decided in ./verifyOutcome.ts.
  */
 export function VerifyEmailClient() {
-  const [state, setState] = useState<VerifyState>("verifying");
+  const [view, setView] = useState<VerifyView | null>(null);
+  const [resend, setResend] = useState<{ sending: boolean; result: { ok: boolean; message: string } | null }>({
+    sending: false,
+    result: null,
+  });
   const started = useRef(false);
+
+  // State updates happen inside the async callback, never synchronously in
+  // the effect body, so each try resolves to exactly one answer.
+  const verify = useCallback(async () => {
+    setView(null);
+    const attempt = await attemptVerify(fetch, window.location.hash.slice(1));
+    // Only a failure needs to know who is reading (lib comment in verifyOutcome.ts).
+    const account = attempt === "ok" ? "unknown" : await readAccountState(fetch);
+    setView(verifyView(attempt, account));
+  }, []);
 
   useEffect(() => {
     if (started.current) return;
     started.current = true;
+    void verify();
+  }, [verify]);
 
-    // All state updates happen INSIDE this async callback (never synchronously
-    // in the effect body) so the single POST-on-mount reads the fragment and
-    // resolves to exactly one terminal state without cascading renders.
-    void (async () => {
-      const token = window.location.hash.slice(1);
-      if (!token) {
-        setState("error");
-        return;
-      }
-      try {
-        const response = await fetch("/api/auth/verify-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
-        });
-        setState(response.ok ? "success" : "error");
-      } catch {
-        setState("error");
-      }
-    })();
-  }, []);
+  async function handleResend() {
+    setResend({ sending: true, result: null });
+    const result = await resendVerificationEmail(fetch);
+    setResend({ sending: false, result });
+  }
 
-  if (state === "verifying") {
+  if (!view) {
     return (
       <CardShell title="Verifying your email">
         <div className="flex justify-center py-4">
@@ -85,31 +82,55 @@ export function VerifyEmailClient() {
     );
   }
 
-  if (state === "success") {
-    return (
-      <CardShell title="Email verified" description="Thanks for confirming your email address.">
+  return <VerifyResult view={view} resend={resend} onResend={handleResend} onRetry={() => void verify()} />;
+}
+
+/** The answer card; exported so its markup can be checked without a browser. */
+export function VerifyResult({
+  view,
+  resend,
+  onResend,
+  onRetry,
+}: {
+  view: VerifyView;
+  resend: { sending: boolean; result: { ok: boolean; message: string } | null };
+  onResend: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <CardShell title={view.title}>
+      {view.verified ? (
         <Alert variant="success" className="mb-4">
-          {SUCCESS_MESSAGE}
+          {view.message}
         </Alert>
+      ) : (
+        <p role="alert" className="text-sm text-muted-foreground">
+          {view.message}
+        </p>
+      )}
+      {resend.result ? (
+        <Alert variant={resend.result.ok ? "success" : "danger"} className="mt-4">
+          {resend.result.message}
+        </Alert>
+      ) : null}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        {view.offerRetry ? (
+          <Button size="sm" onClick={onRetry}>
+            Try again
+          </Button>
+        ) : null}
+        {view.offerResend && !resend.result?.ok ? (
+          <Button size="sm" loading={resend.sending} onClick={onResend}>
+            Send a new link
+          </Button>
+        ) : null}
         <Link
-          href="/"
+          href={view.next.href}
           className="inline-block font-semibold text-primary outline-none hover:underline focus-visible:underline"
         >
-          Continue to Vibe Socials
+          {view.next.label}
         </Link>
-      </CardShell>
-    );
-  }
-
-  return (
-    <CardShell title="This link isn't valid" description="We couldn't verify your email from this link.">
-      <p className="text-sm text-muted-foreground">{ERROR_MESSAGE}</p>
-      <Link
-        href="/login"
-        className="mt-4 inline-block font-semibold text-primary outline-none hover:underline focus-visible:underline"
-      >
-        Log in
-      </Link>
+      </div>
     </CardShell>
   );
 }

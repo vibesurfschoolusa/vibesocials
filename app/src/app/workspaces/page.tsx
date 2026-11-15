@@ -60,8 +60,22 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
         <Stat label="Connected" value={entry.connected} />
       </dl>
 
-      {entry.failedPlatforms.length > 0 || entry.needsReconnect.length > 0 ? (
+      {entry.failedPlatforms.length > 0 ||
+      entry.needsReconnect.length > 0 ||
+      entry.clientChangesRequested > 0 ||
+      entry.chooseGoogleLocation ? (
         <div className="flex flex-col gap-1 text-sm">
+          {entry.clientChangesRequested > 0 ? (
+            <p className="text-muted-foreground">
+              A client asked for changes on {entry.clientChangesRequested}{" "}
+              {entry.clientChangesRequested === 1 ? "post" : "posts"}. Open the workspace, then the Queue.
+            </p>
+          ) : null}
+          {entry.chooseGoogleLocation ? (
+            <p className="text-muted-foreground">
+              Choose the Google business location: open the workspace, then Settings, Connections.
+            </p>
+          ) : null}
           {entry.failedPlatforms.length > 0 ? (
             <p className="text-muted-foreground">
               <span className="font-medium text-foreground">Failed on:</span>{" "}

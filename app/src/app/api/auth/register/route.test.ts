@@ -232,6 +232,57 @@ describe("POST /api/auth/register", () => {
     });
   });
 
+  // R5 new-customer L5: the name becomes "<name>'s workspace", so it is
+  // cleaned like a workspace name and capped so that fits the 60-character limit.
+  function happyPathEchoingUser() {
+    happyPathUser();
+    createMock.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: "user-1", ...data }));
+  }
+
+  it("trims and collapses the spaces in the name before saving it", async () => {
+    happyPathEchoingUser();
+    await POST(jsonRequest({ email: "user@example.com", password: "goodpassword", name: "  Maria \t  Lopez  " }));
+    expect(createMock.mock.calls[0][0].data.name).toBe("Maria Lopez");
+    expect(workspaceCreateMock.mock.calls[0][0].data.name).toBe("Maria Lopez's workspace");
+  });
+
+  it("saves no name when the name is only spaces", async () => {
+    happyPathEchoingUser();
+    await POST(jsonRequest({ email: "user@example.com", password: "goodpassword", name: "   " }));
+    expect(createMock.mock.calls[0][0].data.name).toBeNull();
+  });
+
+  it("refuses a name longer than 48 characters and creates nothing", async () => {
+    happyPathEchoingUser();
+    const response = await POST(
+      jsonRequest({ email: "user@example.com", password: "goodpassword", name: "a".repeat(49) }),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Use a name of up to 48 characters, or leave it empty.",
+    });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a name of exactly 48 characters", async () => {
+    happyPathEchoingUser();
+    const response = await POST(
+      jsonRequest({ email: "user@example.com", password: "goodpassword", name: "a".repeat(48) }),
+    );
+    expect(response.status).toBe(201);
+    expect(workspaceCreateMock.mock.calls[0][0].data.name.length).toBe(60);
+  });
+
+  it("says what happened and what to do on an unexpected failure", async () => {
+    findUniqueMock.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await POST(jsonRequest({ email: "user@example.com", password: "goodpassword" }));
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "We couldn't create your account just now. Nothing was saved. Please try again in a minute.",
+    });
+  });
+
   it("returns 429 when the registration rate limit blocks", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 900 });
 

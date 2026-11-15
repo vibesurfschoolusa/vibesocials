@@ -63,6 +63,20 @@ function describeCode(params: {
           "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect again.",
       };
     }
+    // R5 new-customer M1: the account reached the platform but has nothing
+    // to post to. Retrying repeats the failure, so say what to fix first. The
+    // Meta sentences match the connect link page's (lib/connectLink.ts).
+    const NOTHING_TO_POST_TO: Record<string, string> = {
+      facebook_page_no_pages:
+        "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page, then click Connect again.",
+      instagram_no_instagram_account:
+        "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page, then click Connect again.",
+      youtube_no_channel:
+        "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel, then click Connect again.",
+    };
+    if (Object.hasOwn(NOTHING_TO_POST_TO, error)) {
+      return { variant: "danger", message: NOTHING_TO_POST_TO[error] };
+    }
     // Pinterest: a Pin always goes on a board, and GET /boards listed none
     // (app/api/auth/pinterest/callback/route.ts). Secret boards are not listed:
     // the app does not ask for boards:read_secret.

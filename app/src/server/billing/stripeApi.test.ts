@@ -13,8 +13,10 @@ import {
   listCheckoutSessions,
   listAllCustomerSubscriptions,
   listCustomerSubscriptions,
+  retrieveCustomer,
   retrievePrice,
   retrieveSubscription,
+  updateCustomerEmail,
   stripeIdempotencyKey,
 } from "./stripeApi";
 
@@ -322,5 +324,26 @@ describe("stripeIdempotencyKey", () => {
 
   it("without a bucket, is fixed by its parts", () => {
     expect(stripeIdempotencyKey(["customer", "ws_1"])).toBe("vs-customer-ws_1");
+  });
+});
+
+// R5 new-customer L4 (review): an email change follows to the Stripe customer.
+describe("retrieveCustomer and updateCustomerEmail", () => {
+  it("reads the customer", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "cus_1", email: "old@example.com" }));
+    await expect(retrieveCustomer("cus_1", ENV)).resolves.toEqual({ id: "cus_1", email: "old@example.com" });
+    const call = lastCall();
+    expect(call.url).toBe("https://api.stripe.com/v1/customers/cus_1");
+    expect(call.init.method).toBe("GET");
+  });
+
+  it("sets the email with an idempotency key", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "cus_1", email: "new@example.com" }));
+    await updateCustomerEmail("cus_1", "new@example.com", "vs-key", ENV);
+    const call = lastCall();
+    expect(call.url).toBe("https://api.stripe.com/v1/customers/cus_1");
+    expect(call.init.method).toBe("POST");
+    expect(call.body?.get("email")).toBe("new@example.com");
+    expect(call.headers.get("Idempotency-Key")).toBe("vs-key");
   });
 });

@@ -72,3 +72,21 @@ describe("Register metadata", () => {
     expect(metadata.title).toBe("Create an account | Vibe Socials");
   });
 });
+
+// R5 pages L13 and L8.
+describe("Register page landmarks and failure sentences", () => {
+  it("has a main landmark", () => {
+    expect(render()).toMatch(/<main[ >]/);
+  });
+
+  it("says what happened and what to do when sign-up fails", async () => {
+    const { REGISTER_FAILED_MESSAGE, REGISTER_OFFLINE_MESSAGE } = await import("./register-form");
+    expect(REGISTER_FAILED_MESSAGE).toContain("Nothing was saved");
+    expect(REGISTER_FAILED_MESSAGE).toContain("try again");
+    expect(REGISTER_OFFLINE_MESSAGE).toContain("Check your internet connection");
+  });
+
+  it("caps the name field at what the workspace name can hold", () => {
+    expect(render()).toMatch(/<input[^>]*id="name"[^>]*maxLength="48"|<input[^>]*maxLength="48"[^>]*id="name"/);
+  });
+});

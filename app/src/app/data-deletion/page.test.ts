@@ -42,3 +42,10 @@ describe("Data deletion: deleting a workspace or account", () => {
     );
   });
 });
+
+// R5 pages L13.
+describe("Data deletion: landmarks", () => {
+  it("has a main landmark", () => {
+    expect(renderToStaticMarkup(DataDeletionPage() as ReactElement)).toMatch(/<main[ >]/);
+  });
+});

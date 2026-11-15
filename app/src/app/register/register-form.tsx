@@ -26,6 +26,12 @@ export type RegisterBilling = {
   agreement: { before: string; terms: string; between: string; privacy: string; after: string };
 };
 
+/** What the form says when sign-up didn't go through (R5 pages L8). */
+export const REGISTER_FAILED_MESSAGE =
+  "We couldn't create your account just now. Nothing was saved. Please try again in a minute.";
+export const REGISTER_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so no account was created. Check your internet connection and try again.";
+
 function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -56,20 +62,20 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
 
       if (!response.ok) {
         const data = await response.json().catch(() => null);
-        setError(data?.error ?? "Failed to register.");
+        setError(data?.error ?? REGISTER_FAILED_MESSAGE);
         setLoading(false);
         return;
       }
     } catch {
-      setError("Unexpected error while registering.");
+      setError(REGISTER_OFFLINE_MESSAGE);
       setLoading(false);
       return;
     }
 
     // The account exists now (201 above) regardless of what happens next, so
     // auto-sign-in runs in its own try/catch: a network blip here must not
-    // land in the block above and show the misleading "Unexpected error while
-    // registering." — it should just fall through to the friendly login
+    // land in the block above and show the misleading "no account was
+    // created" — it should just fall through to the friendly login
     // handoff below, same as the "signed in but not ok" case.
     try {
       const result = await signIn("credentials", { redirect: false, email, password });
@@ -80,12 +86,14 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
     } catch {
       // fall through to the handoff below
     }
-    // Extremely unlikely (account was just created) — fall back to a friendly login handoff.
+    // Sign-in failed: usually the email already had an account with another
+    // password (the 201 above is the same either way). The login page says
+    // both possibilities without claiming an account was created.
     router.push(`/login?registered=1&callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-primary/5 via-background to-background"
@@ -123,6 +131,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
                   id="name"
                   type="text"
                   autoComplete="name"
+                  maxLength={48}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
@@ -204,7 +213,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </main>
   );
 }
 

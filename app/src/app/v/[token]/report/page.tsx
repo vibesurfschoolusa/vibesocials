@@ -5,6 +5,7 @@ import { ClientPageShell } from "@/components/client-page-header";
 import { ReportMonthPicker } from "@/components/reports/monthly-report";
 import { PrintReportButton } from "@/components/reports/print-button";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
+import { prisma } from "@/lib/db";
 import { parseReportMonth, reportMonths } from "@/lib/monthlyReport";
 import { REVIEW_LINK_INACTIVE_MESSAGE } from "@/lib/reviewLink";
 import { findActiveReviewLink } from "@/server/reviewLink";
@@ -47,7 +48,12 @@ export default async function ClientReportPage({ params, searchParams }: ClientR
   const logoUrl = await findClientPageLogo(link.workspaceId);
   const now = new Date();
   const { month } = await searchParams;
-  const parsed = parseReportMonth(month, now);
+  // R5-new-customer L9: a workspace made this month opens on this month.
+  const createdAt = month
+    ? null
+    : ((await prisma.workspace.findUnique({ where: { id: link.workspaceId }, select: { createdAt: true } }))
+        ?.createdAt ?? null);
+  const parsed = parseReportMonth(month, now, createdAt);
   const months = reportMonths(now);
 
   // No title in the header: the report carries its own, with the month. The

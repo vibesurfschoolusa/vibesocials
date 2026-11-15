@@ -25,6 +25,18 @@ interface RemoteLocation {
   accountName: string | null;
 }
 
+/** What the form says when something didn't work (R5 new-customer L8, pages L8). */
+export const LOCATION_MESSAGES = {
+  noLocations:
+    "This Google account has no business listing we can post to. Press Switch account above and sign in with the Google account that manages your listing (an owner or manager in Google Business Profile).",
+  saveFailed: "The location wasn't saved. Please try again in a minute.",
+  saveOffline:
+    "We couldn't reach Vibe Socials, so the location wasn't saved. Check your internet connection and try again.",
+  loadFailed: "Google didn't send the list of locations. Please press Fetch locations from Google again in a minute.",
+  loadOffline:
+    "We couldn't reach Vibe Socials, so the locations weren't loaded. Check your internet connection and try again.",
+} as const;
+
 export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, initialLocationTitle }: Props) {
   const toast = useToast();
   const router = useRouter();
@@ -53,7 +65,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
 
       if (!response.ok) {
-        toast.error(data?.error ?? "Failed to save location.");
+        toast.error(data?.error ?? LOCATION_MESSAGES.saveFailed);
         setSaving(false);
         return;
       }
@@ -66,7 +78,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       // Settings' "Connected as" label is server-rendered from the saved name.
       router.refresh();
     } catch {
-      toast.error("Unexpected error while saving location.");
+      toast.error(LOCATION_MESSAGES.saveOffline);
       setSaving(false);
     }
   }
@@ -93,7 +105,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
       if (!response.ok) {
         setLocations(null);
-        toast.error(data?.error ?? "Failed to load locations from Google.");
+        toast.error(data?.error ?? LOCATION_MESSAGES.loadFailed);
         setLoadingLocations(false);
         return;
       }
@@ -102,12 +114,12 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         data && Array.isArray(data.locations) ? data.locations : [];
       setLocations(list);
       if (list.length === 0) {
-        toast.info("No locations found for this Google account.");
+        toast.info(LOCATION_MESSAGES.noLocations);
       }
       setLoadingLocations(false);
     } catch {
       setLocations(null);
-      toast.error("Unexpected error while loading locations.");
+      toast.error(LOCATION_MESSAGES.loadOffline);
       setLoadingLocations(false);
     }
   }

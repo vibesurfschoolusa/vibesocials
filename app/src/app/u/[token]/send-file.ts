@@ -36,20 +36,52 @@ const browserDeps: SendFileDeps = {
 
 const UPLOAD_FAILED_MESSAGE = "The upload didn't finish. Check your connection and try again.";
 
-async function errorOf(response: Response, fallback: string): Promise<string> {
+/**
+ * Why a file did not arrive. "network": the request or the upload never got a
+ * usable answer, so retrying on a working connection may help. "refused": the
+ * server (link off, storage full, today's limit) or the file itself said no,
+ * and the sentence says why. Set where the failure is detected, so the upload
+ * page decides from the kind and never from a sentence's words.
+ */
+export type ClientFileFailureKind = "network" | "refused";
+
+export interface ClientFileFailure {
+  kind: ClientFileFailureKind;
+  message: string;
+}
+
+export class ClientFileError extends Error implements ClientFileFailure {
+  constructor(
+    readonly kind: ClientFileFailureKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ClientFileError";
+  }
+}
+
+/** A refused answer: the server's sentence; a network failure when it gave none (a gateway error). */
+async function failureOf(response: Response, fallback: string): Promise<ClientFileError> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-  return typeof body?.error === "string" && body.error ? body.error : fallback;
+  return typeof body?.error === "string" && body.error
+    ? new ClientFileError("refused", body.error)
+    : new ClientFileError("network", fallback);
 }
 
-function postJson(deps: SendFileDeps, url: string, body: unknown): Promise<Response> {
-  return deps.fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function postJson(deps: SendFileDeps, url: string, body: unknown): Promise<Response> {
+  try {
+    return await deps.fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // fetch throws only when no answer came back (offline, dropped connection).
+    throw new ClientFileError("network", UPLOAD_FAILED_MESSAGE);
+  }
 }
 
-/** Resolves once the file is in the library; throws an Error whose message is the sentence to show. */
+/** Resolves once the file is in the library; throws a ClientFileError: its kind, and the sentence to show. */
 export async function sendClientFile(
   input: {
     token: string;
@@ -60,7 +92,16 @@ export async function sendClientFile(
   },
   deps: SendFileDeps = browserDeps,
 ): Promise<void> {
-  const prepared = await deps.prepare(input.file);
+  let prepared: File;
+  try {
+    prepared = await deps.prepare(input.file);
+  } catch (error) {
+    // The file itself was refused (a photo that cannot be converted, a type that is not accepted).
+    throw new ClientFileError(
+      "refused",
+      error instanceof Error && error.message ? error.message : "This file can't be sent. Choose a photo or video.",
+    );
+  }
   const base = `/api/upload-link/${encodeURIComponent(input.token)}`;
 
   const tokenResponse = await postJson(deps, `${base}/upload`, {
@@ -72,13 +113,13 @@ export async function sendClientFile(
     },
   });
   if (!tokenResponse.ok) {
-    throw new Error(await errorOf(tokenResponse, UPLOAD_FAILED_MESSAGE));
+    throw await failureOf(tokenResponse, UPLOAD_FAILED_MESSAGE);
   }
   const issued = (await tokenResponse.json().catch(() => null)) as
     | { clientToken?: unknown; pathname?: unknown }
     | null;
   if (typeof issued?.clientToken !== "string" || typeof issued.pathname !== "string") {
-    throw new Error(UPLOAD_FAILED_MESSAGE);
+    throw new ClientFileError("network", UPLOAD_FAILED_MESSAGE);
   }
 
   let blob: { url: string };
@@ -90,7 +131,7 @@ export async function sendClientFile(
       onUploadProgress: (event) => input.onProgress(event.percentage),
     });
   } catch {
-    throw new Error(UPLOAD_FAILED_MESSAGE);
+    throw new ClientFileError("network", UPLOAD_FAILED_MESSAGE);
   }
 
   const mediaResponse = await postJson(deps, `${base}/media`, {
@@ -100,6 +141,6 @@ export async function sendClientFile(
     note: input.note,
   });
   if (!mediaResponse.ok) {
-    throw new Error(await errorOf(mediaResponse, "Couldn't save the file. Try again."));
+    throw await failureOf(mediaResponse, "Couldn't save the file. Check your connection and try again.");
   }
 }

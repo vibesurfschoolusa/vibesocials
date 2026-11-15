@@ -2499,7 +2499,7 @@ function CreatePostFormInner({
                 disabled={enhancingCaption || !uploadCaption.trim()}
               >
                 {!enhancingCaption && <Sparkles className="h-4 w-4" aria-hidden />}
-                Enhance caption
+                Improve caption
               </Button>
             </div>
           </div>

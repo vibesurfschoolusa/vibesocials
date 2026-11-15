@@ -80,12 +80,12 @@ describe("Add many row: Improve", () => {
   it("shows Improve beside Write again when the row is editable and has a caption", () => {
     const html = render(row());
     expect(html).toContain(">Write again<");
-    expect(html).toContain(">Improve<");
+    expect(html).toContain(">Improve caption<");
   });
 
   it("no Improve without a caption, or while the row is locked", () => {
-    expect(render(row({ caption: "  " }))).not.toContain(">Improve<");
-    expect(render(row(), { locked: true })).not.toContain(">Improve<");
+    expect(render(row({ caption: "  " }))).not.toContain(">Improve caption<");
+    expect(render(row(), { locked: true })).not.toContain(">Improve caption<");
   });
 
   it("while improving: the button is busy and the caption box is read-only", () => {
@@ -180,7 +180,7 @@ describe("Add many row: Write captions with AI off", () => {
   });
 
   it("still offers Improve once the person has written a caption", () => {
-    expect(render(row({ caption: "Typed" }), { aiCaptions: false })).toContain(">Improve<");
+    expect(render(row({ caption: "Typed" }), { aiCaptions: false })).toContain(">Improve caption<");
   });
 
   it("on (the default) keeps Write again", () => {

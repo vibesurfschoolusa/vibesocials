@@ -197,6 +197,24 @@ export function createCustomer(
   });
 }
 
+/** GET /v1/customers/:id. A deleted customer answers `deleted: true` and no email. */
+export function retrieveCustomer(
+  id: string,
+  env: BillingEnv = process.env,
+): Promise<{ id: string; email?: string | null; deleted?: boolean }> {
+  return stripeRequest("GET", `/customers/${segment(id)}`, { env });
+}
+
+/** POST /v1/customers/:id: the customer's email, after its owner changed their sign-in email. */
+export function updateCustomerEmail(
+  id: string,
+  email: string,
+  idempotencyKey: string,
+  env: BillingEnv = process.env,
+): Promise<{ id: string }> {
+  return stripeRequest("POST", `/customers/${segment(id)}`, { form: encodeForm({ email }), idempotencyKey, env });
+}
+
 /** POST /v1/checkout/sessions in subscription mode, for one plan's price. */
 export function createCheckoutSession(
   input: {

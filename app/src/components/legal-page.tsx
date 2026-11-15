@@ -16,7 +16,7 @@ export function LegalPage({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen justify-center bg-background px-4 py-10 text-foreground">
+    <main className="flex min-h-screen justify-center bg-background px-4 py-10 text-foreground">
       <div className="w-full max-w-3xl rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card p-6 text-card-foreground shadow-sm sm:p-8">
         <div className="mb-4 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
@@ -34,7 +34,7 @@ export function LegalPage({
         <div className="space-y-5 text-sm leading-relaxed text-muted-foreground">{children}</div>
         <SiteLinks />
       </div>
-    </div>
+    </main>
   );
 }
 

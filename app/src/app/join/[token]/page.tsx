@@ -1,7 +1,12 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth";
 import { JoinView } from "./join-view";
+
+export const metadata: Metadata = {
+  title: "Join a workspace | Vibe Socials",
+};
 
 interface JoinPageProps {
   params: Promise<{ token: string }>;
