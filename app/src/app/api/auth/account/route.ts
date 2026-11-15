@@ -8,6 +8,7 @@ import { accountDeleteLockedSentence } from "@/lib/displayDate";
 import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { personLabel } from "@/lib/usageLimits";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { accountDeletionRefusal, blockedMessage, loadAccountDeletion } from "@/server/account/accountDeletion";
 import {
@@ -150,7 +151,8 @@ export async function DELETE(request: Request) {
   // owners left are told the deleted owner had its client links. After the
   // commit; never throws. The name is passed: the person's row is gone.
   const survives = new Set(plan.reassign.map((r) => r.workspaceId));
-  const formerOwnerName = user.name?.trim() || user.email;
+  // The readers are the owners left: the one person label (R15-new-customer L3).
+  const formerOwnerName = personLabel(user, true);
   const at = new Date();
   for (const workspace of workspaces) {
     if (workspace.role !== "owner" || !survives.has(workspace.workspaceId)) continue;

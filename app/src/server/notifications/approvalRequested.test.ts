@@ -84,15 +84,25 @@ describe("notifyOwnersOfApprovalRequest", () => {
     expect(sendEmailMock.mock.calls[0][0].html).not.toContain("Platform-specific captions");
   });
 
-  it("names the submitter by their email local-part when they have no display name", async () => {
+  // R15-new-customer L3: the readers are owners, so the one person label
+  // (personLabel) gives them the full address, as the Team card shows it.
+  it("names a nameless submitter by their full address, as owners see them on the Team card", async () => {
     await notifyOwnersOfApprovalRequest({
       ...PARAMS,
       submitter: { id: "member-1", name: null, email: "sam.lee@example.com" },
     });
 
     const sent = sendEmailMock.mock.calls[0][0];
-    expect(sent.html).toContain("sam.lee");
-    expect(sent.html).not.toContain("sam.lee@example.com");
+    expect(sent.html).toContain("sam.lee@example.com");
+  });
+
+  it("treats a blank name as no name", async () => {
+    await notifyOwnersOfApprovalRequest({
+      ...PARAMS,
+      submitter: { id: "member-1", name: "  ", email: "info@agency.example" },
+    });
+
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("info@agency.example");
   });
 
   it("renders without a link when NEXTAUTH_URL isn't configured", async () => {

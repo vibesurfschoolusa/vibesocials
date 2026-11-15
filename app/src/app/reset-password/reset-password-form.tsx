@@ -11,10 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 
-/** R5 pages L8: what the form says when the reset didn't go through. */
-export const RESET_FAILED_MESSAGE = "Your password wasn't changed. Please try again in a minute.";
-export const RESET_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so your password wasn't changed. Check your internet connection and try again.";
+import { submitReset } from "./resetOutcome";
 
 function CardShell({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
@@ -47,6 +44,8 @@ export function ResetPasswordForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // R15-new-customer L2: the server said the link is dead (used or expired).
+  const [linkDead, setLinkDead] = useState(false);
 
   useEffect(() => {
     const fromHash = window.location.hash.slice(1);
@@ -70,25 +69,11 @@ export function ResetPasswordForm() {
     }
 
     setLoading(true);
-    try {
-      const response = await fetch("/api/auth/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, password }),
-      });
-
-      if (response.ok) {
-        setDone(true);
-        return;
-      }
-
-      const data = await response.json().catch(() => null);
-      setError(data?.error ?? RESET_FAILED_MESSAGE);
-    } catch {
-      setError(RESET_OFFLINE_MESSAGE);
-    } finally {
-      setLoading(false);
-    }
+    const outcome = await submitReset(fetch, token ?? "", password);
+    setLoading(false);
+    if (outcome.kind === "done") setDone(true);
+    else if (outcome.kind === "invalid_link") setLinkDead(true);
+    else setError(outcome.message);
   }
 
   // Before the effect resolves the fragment, show a neutral loading state so
@@ -103,7 +88,7 @@ export function ResetPasswordForm() {
     );
   }
 
-  if (!token) {
+  if (!token || linkDead) {
     return (
       <CardShell title="This link isn't valid" description="This password reset link is invalid or has expired.">
         <p className="text-sm text-muted-foreground">

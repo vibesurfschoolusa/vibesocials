@@ -48,7 +48,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import { REPEAT_STORY_MESSAGE, validateRepeatAt } from "@/lib/repeatSchedule";
-import { utcDayKey } from "@/lib/usageLimits";
+import { personLabel, utcDayKey } from "@/lib/usageLimits";
 import type {
   FacebookPostMetadata,
   GoogleBusinessPostMetadata,
@@ -603,11 +603,13 @@ export async function GET(request: Request) {
                 googleButton: snapshot.googleBusinessProfile?.button?.type ?? null,
               }
             : null,
-          // Team Workspaces (Task 4) — creator attribution. `name` falls back
-          // to the email local-part; the full email never reaches the DTO
-          // (SEC-1). `null` only if the creator relation is missing.
+          // Team Workspaces (Task 4) — creator attribution, by the one person
+          // label (R15-new-customer L3): with no name, an owner reads the full
+          // address (as on the Team card), a member only the part before the @,
+          // so a member's DTO never carries an address (SEC-1). `null` only if
+          // the creator relation is missing.
           createdBy: job.user
-            ? { name: job.user.name ?? job.user.email.split("@")[0] }
+            ? { name: personLabel(job.user, context.role === "owner") }
             : null,
           results: job.results.map((result) => {
             const metricRow = result.externalPostId

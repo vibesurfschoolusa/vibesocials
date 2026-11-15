@@ -2,6 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { personLabel } from "@/lib/usageLimits";
 import { buildApprovalRequestedEmail } from "@/server/notifications/approvalEmail";
 import { sendEmail } from "@/server/notifications/email";
 
@@ -41,10 +42,10 @@ export async function notifyOwnersOfApprovalRequest(params: {
     });
     if (owners.length === 0) return;
 
-    // Same display rule as the activity feed's `createdBy`: the name, else the
-    // email local-part — never the submitter's full address.
-    const submitterName =
-      params.submitter.name?.trim() || params.submitter.email.split("@")[0];
+    // Every reader is an owner: the one person label gives the name, else the
+    // full address, as the Team card and the posts' "by" show it to owners
+    // (R15-new-customer L3).
+    const submitterName = personLabel(params.submitter, true);
     // One email per owner: a repeating post's days are shown in each owner's own zone (F4).
     const emailFor = (timeZone: string | null) =>
       buildApprovalRequestedEmail({

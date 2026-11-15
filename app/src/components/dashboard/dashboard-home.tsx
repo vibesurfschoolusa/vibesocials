@@ -48,9 +48,13 @@ type DashboardProps = {
 export function DashboardHome({ availablePlatforms, setup, notice }: DashboardProps) {
   const { status } = useSession();
   if (status !== "authenticated") {
+    // R15-pages L2: the server HTML for a signed-in "/" is this branch, so the
+    // page's heading and its loading line are here too.
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <Spinner size="lg" label="Loading" className="text-muted-foreground" />
+        <h1 className="sr-only">Dashboard</h1>
+        <p role="status" className="sr-only">Loading your dashboard…</p>
+        <Spinner size="lg" className="text-muted-foreground" />
       </div>
     );
   }

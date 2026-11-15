@@ -596,7 +596,11 @@ describe("GET /api/posts — createdBy attribution round-trip (Team Workspaces, 
     expect(body.jobs[0].createdBy).toEqual({ name: "Alice" });
   });
 
-  it("falls back to the email local-part when the creator has no display name, and NEVER includes the full email", async () => {
+  // R15-new-customer L3: the one person label (personLabel). A member reads
+  // only the part before the @; an owner reads the full address, as the Team
+  // card, Usage and the limit sentences show it.
+  it("a member reading a nameless creator's post sees the part before the @, NEVER the full email", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
     postJobFindManyMock.mockResolvedValue([
       { ...jobWithYouTube(), user: { name: null, email: "bob.smith@example.com" } },
     ]);
@@ -608,6 +612,46 @@ describe("GET /api/posts — createdBy attribution round-trip (Team Workspaces, 
     expect(body.jobs[0].createdBy).toEqual({ name: "bob.smith" });
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("bob.smith@example.com");
+  });
+
+  it("an owner reading a nameless co-owner's post sees their full address", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "owner" }));
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), user: { name: null, email: "bob@agency.example" } },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs[0].createdBy).toEqual({ name: "bob@agency.example" });
+  });
+
+  it("an owner tells two nameless info@ co-owners apart", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "owner" }));
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), id: "job-a", user: { name: null, email: "info@surf.example" } },
+      { ...jobWithYouTube(), id: "job-b", user: { name: null, email: "info@agency.example" } },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs.map((job) => job.createdBy?.name)).toEqual(["info@surf.example", "info@agency.example"]);
+  });
+
+  it("a blank name counts as no name", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), user: { name: "  ", email: "bob@agency.example" } },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs[0].createdBy).toEqual({ name: "bob" });
   });
 
   it("maps createdBy: null when the creator relation is missing", async () => {

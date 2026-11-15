@@ -20,13 +20,4 @@ describe("/reset-password", () => {
   });
 });
 
-// R5 pages L8.
-describe("reset password failure sentences", () => {
-  it("say what happened and what to do", async () => {
-    const { RESET_FAILED_MESSAGE, RESET_OFFLINE_MESSAGE } = await import("./reset-password-form");
-    expect(RESET_FAILED_MESSAGE).toBe("Your password wasn't changed. Please try again in a minute.");
-    expect(RESET_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so your password wasn't changed. Check your internet connection and try again.",
-    );
-  });
-});
+// R5 pages L8: the failure sentences are tested in resetOutcome.test.ts.
