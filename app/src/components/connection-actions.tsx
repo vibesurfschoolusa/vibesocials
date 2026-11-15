@@ -33,6 +33,13 @@ interface Props {
    */
   needsReconnect?: boolean;
   /**
+   * R6-pages M1: true inside the warning window (lib/connectionExpiry.ts): it
+   * still works, but cannot be renewed and ends within a week. Shows Reconnect,
+   * straight to the sign-in with no disconnect, so the post numbers stay and
+   * the save updates this connection in place.
+   */
+  reconnectSoon?: boolean;
+  /**
    * Team Workspaces (Task 7, design §7): connect/disconnect/switch/reconnect
    * are all owner-only mutations. A read-only (member) caller gets the same
    * health status — Connected, or a "Needs reconnect" badge in place of the
@@ -141,6 +148,7 @@ export function ConnectionActions({
   workspaceId,
   isConnected,
   needsReconnect = false,
+  reconnectSoon = false,
   readOnly = false,
 }: Props) {
   const router = useRouter();
@@ -267,6 +275,13 @@ export function ConnectionActions({
           <a href={authUrl} className={buttonVariants({ variant: "destructive", size: "sm" })}>
             Reconnect
           </a>
+        ) : reconnectSoon ? (
+          <>
+            <Badge variant="warning">Ends soon</Badge>
+            <a href={authUrl} className={buttonVariants({ size: "sm" })}>
+              Reconnect
+            </a>
+          </>
         ) : (
           <Badge variant="success">Connected</Badge>
         )}

@@ -75,7 +75,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const success = first(query.success);
   const succeeded = PLATFORM_ORDER.find((platform) => success === `${platform}_connected`);
   const working = succeeded ? byPlatform.get(succeeded) : undefined;
-  if (success && working && !working.needsReconnect) outcome.set("success", success);
+  if (success && working && !working.needsReconnect && !working.reconnectSoon) outcome.set("success", success);
   const result = describeConnectLinkResult(outcome);
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
@@ -116,20 +116,31 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
             const connection = byPlatform.get(platform);
             const working = connection && !connection.needsReconnect;
             const name = connection?.username || connection?.accountIdentifier || null;
+            const connected = name ? `Connected: ${name}` : "Connected";
+            const button = (
+              <form action={action} method="post">
+                <input type="hidden" name="platform" value={platform} />
+                <Button type="submit" size="md">
+                  {connection ? "Reconnect" : "Connect"}
+                </Button>
+              </form>
+            );
             return (
               <li key={platform} className="flex min-h-14 items-center justify-between gap-3 px-4 py-3">
                 <span className="font-medium">{PLATFORM_LABELS[platform]}</span>
-                {working ? (
-                  <span className="text-right text-sm text-muted-foreground">
-                    {name ? `Connected: ${name}` : "Connected"}
-                  </span>
+                {working && connection.reconnectSoon ? (
+                  // R6 M1: it still works but can't be renewed and ends soon;
+                  // the sign-in replaces it in place (server/connectLink/link.ts).
+                  <div className="flex flex-wrap items-center justify-end gap-3">
+                    <span className="text-right text-sm text-muted-foreground">
+                      {connected}. It stops working soon: press Reconnect to keep it posting.
+                    </span>
+                    {button}
+                  </div>
+                ) : working ? (
+                  <span className="text-right text-sm text-muted-foreground">{connected}</span>
                 ) : (
-                  <form action={action} method="post">
-                    <input type="hidden" name="platform" value={platform} />
-                    <Button type="submit" size="md">
-                      {connection ? "Reconnect" : "Connect"}
-                    </Button>
-                  </form>
+                  button
                 )}
               </li>
             );

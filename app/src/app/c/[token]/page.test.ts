@@ -135,6 +135,26 @@ describe("the connect link page", () => {
     expect(html).not.toContain(code);
   });
 
+  // R6 M1: an account that can't be renewed and ends within the warning lead.
+  it("a connection in its warning window still says Connected, and offers Reconnect", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true },
+      { platform: "tiktok", accountIdentifier: "open-1", username: "Surf TT", locationName: null, needsReconnect: false, reconnectSoon: false },
+    ]);
+    const html = await render();
+    expect(html).toContain("Connected: surfco. It stops working soon: press Reconnect to keep it posting.");
+    expect(html).toMatch(/value="instagram"[\s\S]*?Reconnect/);
+    expect(html).toContain("Connected: Surf TT</span>");
+    expect(html).not.toContain('value="tiktok"');
+  });
+
+  it("a typed-in success is not told for a connection in its warning window", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true },
+    ]);
+    expect(await render({ success: "instagram_connected" })).not.toContain("is connected");
+  });
+
   it("a waiting choice hands the list only the token and the choice id", async () => {
     const html = await render({ choose: "pending-1" });
     expect(html).toContain("<section>choice</section>");

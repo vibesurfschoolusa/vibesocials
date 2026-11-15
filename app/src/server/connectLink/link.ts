@@ -3,6 +3,7 @@ import type { Platform } from "@prisma/client";
 import { billingFieldsSelect } from "@/lib/billing";
 import { toConnectionSummary, type ConnectionSummary } from "@/lib/connectionSummary";
 import { connectLinkPlatformConfigured, isConnectLinkTokenShape } from "@/lib/connectLink";
+import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { isWorkspaceOwner } from "@/lib/workspace";
@@ -72,24 +73,30 @@ export function linkOffers(link: Pick<ActiveConnectLink, "platforms">, platform:
 /**
  * A link fills an empty place and never replaces a working account: the place
  * is taken when the workspace has a connection for the platform that does not
- * need reconnecting.
+ * need reconnecting. R6 M1: one about to end that cannot be renewed (its
+ * warning window, lib/connectionExpiry.ts) counts as needing it, so the client
+ * can reconnect it before posts start failing; the save updates that row.
  */
 export async function placeTaken(workspaceId: string, platform: Platform): Promise<boolean> {
   const existing = await prisma.socialConnection.findUnique({
     where: { workspaceId_platform: { workspaceId, platform } },
-    select: { needsReconnect: true },
+    select: CONNECTION_EXPIRY_SELECT,
   });
-  return !!existing && !existing.needsReconnect;
+  return !!existing && !existing.needsReconnect && !inExpiryWarningWindow(existing);
 }
+
+/** A connection as the visitor's page shows it; `reconnectSoon`: offer Reconnect though it still works. */
+export type LinkConnection = ConnectionSummary & { reconnectSoon: boolean };
 
 /**
  * The workspace's connections as the visitor's page may show them: the
  * browser-safe summary Settings uses (names only, never tokens).
  */
-export async function listLinkConnections(workspaceId: string): Promise<ConnectionSummary[]> {
+export async function listLinkConnections(workspaceId: string): Promise<LinkConnection[]> {
   const rows = await prisma.socialConnection.findMany({
     where: { workspaceId },
-    select: { platform: true, accountIdentifier: true, metadata: true, needsReconnect: true },
+    select: { accountIdentifier: true, metadata: true, ...CONNECTION_EXPIRY_SELECT },
   });
-  return rows.map(toConnectionSummary);
+  const now = new Date();
+  return rows.map((row) => ({ ...toConnectionSummary(row), reconnectSoon: inExpiryWarningWindow(row, now) }));
 }

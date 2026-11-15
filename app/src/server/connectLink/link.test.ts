@@ -3,19 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   linkFind: vi.fn(),
   connectionFind: vi.fn(),
+  connectionFindMany: vi.fn(),
   isOwner: vi.fn(),
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     workspaceConnectLink: { findUnique: h.linkFind },
-    socialConnection: { findUnique: h.connectionFind },
+    socialConnection: { findUnique: h.connectionFind, findMany: h.connectionFindMany },
   },
 }));
 vi.mock("@/lib/workspace", () => ({ isWorkspaceOwner: h.isOwner }));
 
 import { generateInviteToken, hashInviteToken } from "@/lib/inviteToken";
 
-import { findActiveConnectLink, linkOffers, placeTaken } from "./link";
+import { findActiveConnectLink, linkOffers, listLinkConnections, placeTaken } from "./link";
 
 const NOW = new Date("2026-11-11T08:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -108,16 +109,48 @@ describe("linkOffers", () => {
 });
 
 describe("placeTaken (rule 3)", () => {
+  const working = { platform: "tiktok", expiresAt: new Date(NOW.getTime() + DAY), refreshToken: "sealed", needsReconnect: false };
+
   it("is free with no connection, or one that needs reconnecting; taken by a working one", async () => {
     h.connectionFind.mockResolvedValueOnce(null);
     expect(await placeTaken("ws-1", "tiktok")).toBe(false);
-    h.connectionFind.mockResolvedValueOnce({ needsReconnect: true });
+    h.connectionFind.mockResolvedValueOnce({ ...working, needsReconnect: true });
     expect(await placeTaken("ws-1", "tiktok")).toBe(false);
-    h.connectionFind.mockResolvedValueOnce({ needsReconnect: false });
+    h.connectionFind.mockResolvedValueOnce(working);
     expect(await placeTaken("ws-1", "tiktok")).toBe(true);
     expect(h.connectionFind).toHaveBeenCalledWith({
       where: { workspaceId_platform: { workspaceId: "ws-1", platform: "tiktok" } },
-      select: { needsReconnect: true },
+      select: { platform: true, expiresAt: true, refreshToken: true, needsReconnect: true },
     });
+  });
+
+  // R6 M1: inside the warning window the link may replace it in place.
+  it("is free for a connection that can't be renewed and ends within the warning lead", async () => {
+    const linkedIn = { platform: "linkedin", refreshToken: null, needsReconnect: false };
+    h.connectionFind.mockResolvedValueOnce({ ...linkedIn, expiresAt: new Date(NOW.getTime() + 3 * DAY) });
+    expect(await placeTaken("ws-1", "linkedin")).toBe(false);
+    h.connectionFind.mockResolvedValueOnce({ ...linkedIn, expiresAt: new Date(NOW.getTime() + 40 * DAY) });
+    expect(await placeTaken("ws-1", "linkedin")).toBe(true);
+  });
+});
+
+describe("listLinkConnections", () => {
+  it("says which connection is in its warning window, and never passes a token on", async () => {
+    h.connectionFindMany.mockResolvedValue([
+      { platform: "linkedin", accountIdentifier: "li", metadata: { username: "Surf Co page" }, needsReconnect: false, expiresAt: new Date(NOW.getTime() + 3 * DAY), refreshToken: null },
+      { platform: "tiktok", accountIdentifier: "tt", metadata: { username: "surfco" }, needsReconnect: false, expiresAt: new Date(NOW.getTime() + 3 * DAY), refreshToken: "sealed" },
+    ]);
+
+    const connections = await listLinkConnections("ws-1");
+
+    expect(h.connectionFindMany).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1" },
+      select: { accountIdentifier: true, metadata: true, platform: true, expiresAt: true, refreshToken: true, needsReconnect: true },
+    });
+    expect(connections).toEqual([
+      { platform: "linkedin", accountIdentifier: "li", username: "Surf Co page", locationName: null, needsReconnect: false, reconnectSoon: true },
+      { platform: "tiktok", accountIdentifier: "tt", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: false },
+    ]);
+    expect(JSON.stringify(connections)).not.toContain("sealed");
   });
 });
