@@ -417,12 +417,12 @@ describe("limits across workspaces", () => {
     expect(
       ownerDailyPostLimitMessage(5, "now", "first_day", you, { firstDayEnds, timeZone: "America/New_York" }),
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST).",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from Monday, 7:00 PM EST (00:00 UTC).",
     );
     expect(
       ownerDailyPostLimitMessage(5, "now", "first_day_unconfirmed", you, { firstDayEnds, timeZone: "America/New_York" }),
     ).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST), once you confirm your email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from Monday, 7:00 PM EST (00:00 UTC), once you confirm your email address.",
     );
     // No known zone: the UTC time alone.
     expect(ownerDailyPostLimitMessage(5, "retry", "first_day_unconfirmed", { ...you, isViewer: false }, { firstDayEnds })).toBe(
@@ -526,10 +526,10 @@ describe("limits across workspaces", () => {
   it("the per-person usage line on the first day: 00:00 UTC and the reader's own time", () => {
     const time = { firstDayEnds: new Date("2026-11-17T00:00:00Z"), timeZone: "America/New_York" };
     expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day" }, false, time).note).toBe(
-      "Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST). The per-person number is the same for everyone.",
+      "Retries count too. 5 on the account's first day (UTC), 15 from Monday, 7:00 PM EST (00:00 UTC). The per-person number is the same for everyone.",
     );
     expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day_unconfirmed" }, false, time).note).toBe(
-      "Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST) once you confirm your email address. The per-person number is the same for everyone.",
+      "Retries count too. 5 on the account's first day (UTC), 15 from Monday, 7:00 PM EST (00:00 UTC) once you confirm your email address. The per-person number is the same for everyone.",
     );
     // An unusable zone: the UTC time alone.
     expect(

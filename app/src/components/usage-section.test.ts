@@ -48,7 +48,7 @@ describe("UsageSection", () => {
     const person = { userId: "u-1", name: "Jane", isViewer: true, used: 1, limit: 5, reduced: "first_day_unconfirmed" as const };
     const html = render(usage([person]), "America/New_York");
     expect(html).toContain(
-      "5 on the account&#x27;s first day (UTC), 15 from 00:00 UTC tomorrow (Saturday, 7:00 PM EST) once you confirm your email address.",
+      "5 on the account&#x27;s first day (UTC), 15 from Saturday, 7:00 PM EST (00:00 UTC) once you confirm your email address.",
     );
     expect(render(usage([person]))).toContain("15 from 00:00 UTC tomorrow once you confirm your email address.");
     expect(html).toContain("Starts again on December 1, 2026.");

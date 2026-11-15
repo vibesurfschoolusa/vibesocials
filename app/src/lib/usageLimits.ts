@@ -262,19 +262,20 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  *   hourly (24 x 3 = 72), YouTube numbers hourly (24 x 2 = 48), the
  *   stale-post sweep hourly (24 x 3 = 72), the connection sweep (8) and the
  *   token refreshes it fans out (about 10 x 2 = 20), and the other daily jobs
- *   (15): 523 a day, call it 525. R9-publishing L2: an estimate from the
- *   schedules, on the high side (a run with work to do costs more, one that
- *   finds nothing costs this); the token refreshes leave out idle free
- *   workspaces (connectionHealthSweep.ts).
+ *   (15): 523 a day, call it 525. R9-publishing L2: the least the idle work
+ *   costs (each run finding nothing to do); a day with work costs more. The
+ *   token refreshes leave out idle free workspaces (connectionHealthSweep.ts).
  * - A typical run, a photo or a small video to 6 platforms: the publish run,
  *   its fetch step, a step per platform, finalize and the outcome event (10),
  *   and the outcome email's run and step (2): 12. Not the most a run costs: a
  *   step per result row (skipped failed ones too), a Feed and Story half's
  *   wait and second email, and a large video (over 50 MiB) to X, LinkedIn or
  *   YouTube continuing in extra steps make a large chunked video to several
- *   platforms about 25. A day of only such runs would pass the ~1,019 left;
- *   the operator's email at the first ceiling refusal (FREE_RUNS_DAILY_CEILING)
- *   is the early warning to look at the day's runs.
+ *   platforms about 25. A day of about 20 such runs would use up the ~1,019
+ *   left before the ceiling is reached, so the operator's email (sent at the
+ *   first ceiling refusal, FREE_RUNS_DAILY_CEILING) can come after that day's
+ *   overrun, or not at all; check Inngest's usage page weekly until the plan
+ *   is upgraded.
  * - A full day of free runs at both pools: (20 + 5) x 12 = 300. With idle
  *   work, 825 a day, which leaves about 194 a day for paying workspaces, the
  *   operator's own posts and the guaranteed runs below that go past a full
@@ -418,7 +419,7 @@ export function firstDayEndsLocal(time: ReducedNoteTime): string | null {
 
 function firstDayEndsText(time: ReducedNoteTime): string {
   const local = firstDayEndsLocal(time);
-  return local ? `from 00:00 UTC tomorrow (${local})` : "from 00:00 UTC tomorrow";
+  return local ? `from ${local} (00:00 UTC)` : "from 00:00 UTC tomorrow";
 }
 
 /**

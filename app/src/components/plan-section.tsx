@@ -20,7 +20,7 @@ function personalPostNoteText(note: PersonalPostNote, time: ReducedNoteTime): st
   const free = billingEnabled();
   const yours = free ? "your free workspaces" : "all your workspaces";
   const local = firstDayEndsLocal(time);
-  const fromMidnight = `from 00:00 UTC${local ? ` (${local})` : ""}`;
+  const fromMidnight = local ? `from ${local} (00:00 UTC)` : "from 00:00 UTC";
   if (note.reduced === "unconfirmed") {
     return `(up to ${note.limit} a day for you across ${yours} until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`;
   }

@@ -126,7 +126,7 @@ describe("PlanSection: posts per day", () => {
   // R9-pages L1: the first day of an account whose email isn't confirmed: both reasons, and when it ends.
   it("5 on the first day of an unconfirmed account: why, and 15 from 00:00 UTC in the viewer's time", () => {
     expect(renderIn({ limit: 5, reduced: "first_day_unconfirmed" }, "America/New_York")).toContain(
-      "20 (up to 5 a day for you today: your account is new and your email isn&#x27;t confirmed yet. 15 from 00:00 UTC (Monday, 7:00 PM EST) once you confirm it.)",
+      "20 (up to 5 a day for you today: your account is new and your email isn&#x27;t confirmed yet. 15 from Monday, 7:00 PM EST (00:00 UTC) once you confirm it.)",
     );
     expect(renderIn({ limit: 5, reduced: "first_day_unconfirmed" }, null)).toContain(
       "20 (up to 5 a day for you today: your account is new and your email isn&#x27;t confirmed yet. 15 from 00:00 UTC once you confirm it.)",
@@ -136,7 +136,7 @@ describe("PlanSection: posts per day", () => {
 
   it("the first day gives the viewer's own time too", () => {
     expect(renderIn({ limit: 5, reduced: "first_day" }, "America/New_York")).toContain(
-      `then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC (Monday, 7:00 PM EST))`,
+      `then ${OWNER_DAILY_POST_LIMIT} from Monday, 7:00 PM EST (00:00 UTC))`,
     );
   });
 

@@ -1101,7 +1101,7 @@ describe("a new account, day by day", () => {
     }
     expect(store.events.map((event) => event.pool)).toEqual(["new", "new", "new", "new", "new"]);
     expect((await nowCheck(at("2026-11-16T21:30:00Z"), "maria"))?.error).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST).",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from Monday, 7:00 PM EST (00:00 UTC).",
     );
 
     // Monday evening she schedules 10 for Tuesday 08:00 to 17:00: Tuesday's number is 15.
