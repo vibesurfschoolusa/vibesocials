@@ -123,7 +123,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const result = locationCleared
     ? { variant: "success" as const, message: LOCATION_CLEARED_LINK_MESSAGE }
     : sameEnd?.expiresAt && working
-      ? { variant: "warning" as const, message: sameEndDateMessage(working.platform, sameEnd.expiresAt) }
+      ? { variant: "warning" as const, message: sameEndDateMessage(working.platform) }
       : differentPlatform && differentFrom
       ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
       : uncheckedFrom

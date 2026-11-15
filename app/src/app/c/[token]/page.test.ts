@@ -374,9 +374,10 @@ describe("LinkedIn on the client's page", () => {
     h.findConnection.mockResolvedValue({ expiresAt: new Date("2026-11-16T12:00:00Z") });
     const html = await render({ success: "linkedin_connected", same_end: "1" });
     // R8-pages L5: what to do next, and the row no longer asks for the Reconnect that changed nothing.
-    expect(html).toContain(
-      "LinkedIn kept the end date November 16, 2026. Reconnect again after that date, or sign out of LinkedIn and reconnect to get a new 60-day sign-in.",
-    );
+    expect(html).toContain("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
+    expect(html).not.toContain("sign out of LinkedIn and reconnect");
+    // R9-pages L2: the date is shown once, in the row.
+    expect(html.match(/November 16, 2026/g)).toHaveLength(1);
     expect(html).not.toContain("is connected");
     const row = linkedInRow(html);
     expect(row).not.toContain("press Reconnect to keep it posting");
@@ -401,7 +402,7 @@ describe("LinkedIn on the client's page", () => {
     ]);
     h.findConnection.mockResolvedValue({ expiresAt: new Date("2026-11-16T12:00:00Z") });
     const html = await render({ success: "instagram_connected", same_end: "1" });
-    expect(html).not.toContain("kept the end date");
+    expect(html).not.toContain("kept the same end date");
     expect(html).not.toContain("kept this end date");
     expect(h.findConnection).not.toHaveBeenCalled();
   });
@@ -409,7 +410,7 @@ describe("LinkedIn on the client's page", () => {
   it("without the flag: no such sentence and no end-date read", async () => {
     h.listConnections.mockResolvedValue([linkedin()]);
     const html = await render({ success: "linkedin_connected" });
-    expect(html).not.toContain("kept the end date");
+    expect(html).not.toContain("kept the same end date");
     expect(linkedInRow(html)).toContain("press Reconnect to keep it posting");
     expect(h.findConnection).not.toHaveBeenCalled();
   });
@@ -418,7 +419,7 @@ describe("LinkedIn on the client's page", () => {
     h.listConnections.mockResolvedValue([linkedin({ reconnectSoon: false })]);
     const html = await render({ success: "linkedin_connected", same_end: "1" });
     expect(html).toContain("LinkedIn is connected.");
-    expect(html).not.toContain("kept the end date");
+    expect(html).not.toContain("kept the same end date");
     expect(h.findConnection).not.toHaveBeenCalled();
   });
 });

@@ -109,10 +109,11 @@ describe("connectionExpiryState", () => {
 // Unconfirmed (client-journey): a reconnect that LinkedIn answered with the same end date.
 describe("sameEndDateMessage", () => {
   // R8-pages L5: says what to do, since pressing Reconnect again changes nothing.
-  it("names the date and the two ways forward", () => {
-    expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe(
-      "LinkedIn kept the end date November 16, 2026. Reconnect again after that date, or sign out of LinkedIn and reconnect to get a new 60-day sign-in.",
-    );
+  // R9-pages L2: no date of its own (the row shows it, formatted once), and no
+  // unverified sign-out advice.
+  it("says what to do, with no date of its own", () => {
+    expect(sameEndDateMessage("linkedin")).toBe("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
+    expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
   });
 });
 

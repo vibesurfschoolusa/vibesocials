@@ -1,6 +1,5 @@
 import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { formatDisplayDate } from "@/lib/displayDate";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -581,22 +580,21 @@ describe("SettingsPage — a LinkedIn reconnect that did not renew", () => {
     const expiresAt = new Date(Date.now() + 3 * DAY);
     const html = await renderWith(expiresAt, { success: "linkedin_connected", same_end: "1" });
     // R8-pages L5: what to do next.
-    expect(html).toContain(
-      `LinkedIn kept the end date ${formatDisplayDate(expiresAt)}. Reconnect again after that date, or sign out of LinkedIn and reconnect to get a new 60-day sign-in.`,
-    );
+    // R9-pages L2: no date of its own; the row shows it.
+    expect(html).toContain("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
     // R7 review 2: a warning, as on /c.
     expect(html).toMatch(/<div role="alert" class="[^"]*border-warning\/25[^"]*"/);
   });
 
   it("renewed: the usual message, even with a crafted flag", async () => {
     const html = await renderWith(new Date(Date.now() + 60 * DAY), { success: "linkedin_connected", same_end: "1" });
-    expect(html).not.toContain("kept the end date");
+    expect(html).not.toContain("kept the same end date");
     expect(html).toContain("LinkedIn");
   });
 
   it("no flag: the usual message", async () => {
     const html = await renderWith(new Date(Date.now() + 3 * DAY), { success: "linkedin_connected" });
-    expect(html).not.toContain("kept the end date");
+    expect(html).not.toContain("kept the same end date");
   });
 });
 

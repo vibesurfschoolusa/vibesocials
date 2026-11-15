@@ -1,6 +1,5 @@
 import type { Platform } from "@prisma/client";
 
-import { formatDisplayDate } from "@/lib/displayDate";
 import { platformLabel } from "@/lib/platforms";
 import { EXPIRY_WARNING_LEAD_MS, hasUnrenewableExpiry } from "@/server/jobs/connectionHealthSweep";
 
@@ -71,10 +70,14 @@ export function connectionExpiryState(
  * (a fresh LinkedIn sign-in lasts 60 days). Said rather than looking as if
  * nothing happened. R8-pages L5: and what to do, since another Reconnect with
  * the same sign-in changes nothing. Only LinkedIn can't be renewed.
+ * R9-pages L2: no date of its own, since the server and the row formatted the
+ * same end date in different zones; the row next to it shows it once. The
+ * sign-out advice went too: nobody confirmed that it gets a new sign-in.
+ * `_expiresAt` is unused: Settings still passes it; drop it there and here together.
  */
-export function sameEndDateMessage(platform: Platform, expiresAt: Date | string): string {
-  const label = platformLabel(platform);
-  return `${label} kept the end date ${formatDisplayDate(expiresAt)}. Reconnect again after that date, or sign out of ${label} and reconnect to get a new 60-day sign-in.`;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- see above
+export function sameEndDateMessage(platform: Platform, _expiresAt?: Date | string): string {
+  return `${platformLabel(platform)} kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.`;
 }
 
 /**
