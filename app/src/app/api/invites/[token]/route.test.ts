@@ -169,7 +169,7 @@ describe("GET /api/invites/[token]", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toEqual({ workspaceName: "Acme", alreadyMember: false });
+    expect(body).toEqual({ workspaceId: "ws-1", workspaceName: "Acme", alreadyMember: false });
     expect(findFirstMembershipMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-1" },
     });
@@ -183,7 +183,8 @@ describe("GET /api/invites/[token]", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toEqual({ workspaceName: "Acme", alreadyMember: true });
+    // R13-client-journey L1: with the workspace's id, so Go to dashboard can open it.
+    expect(body).toEqual({ workspaceId: "ws-1", workspaceName: "Acme", alreadyMember: true });
   });
 
   // R9-client-journey L6: as Join does, so the join page shows the dead-link state before Join is pressed.

@@ -73,7 +73,17 @@ describe("GET /api/workspaces/status with billing on", () => {
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }));
     expect(await (await GET()).json()).toEqual({
       blockedMessage: null,
-      trialNotice: "Your free trial ends on December 12, 2026. Choose a plan in Settings.",
+      trialNotice: "Your free trial ends on December 12, 2026 (UTC). Choose a plan in Settings.",
+    });
+  });
+
+  // R13-new-customer L1: the line is in the owner's own zone (User.timeZone), as the trial email.
+  it("writes the trial's end in the owner's zone", async () => {
+    const owner = context("owner", { trialEndsAt: new Date("2026-12-11T01:30:00Z") });
+    getWorkspaceContextMock.mockResolvedValue({ ...owner, user: { ...owner.user, timeZone: "America/New_York" } });
+    expect(await (await GET()).json()).toEqual({
+      blockedMessage: null,
+      trialNotice: "Your free trial ends on December 10, 2026, 8:30 PM EST. Choose a plan in Settings.",
     });
   });
 

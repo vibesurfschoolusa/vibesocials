@@ -98,11 +98,11 @@ describe("planSectionLabel with planEndsAt (fix round 1)", () => {
   const ON = { BILLING_ENABLED: "true" };
   it("a plan set to cancel says when it ends, not that it renews", () => {
     const endsAt = new Date(NOW.getTime() + 20 * DAY);
-    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: endsAt }, NOW, ON)).toBe("Starter plan, ends on December 30, 2026");
+    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: endsAt }, NOW, ON)).toBe("Starter plan, ends on December 30, 2026 (UTC)");
   });
 
   it("without planEndsAt it still renews", () => {
-    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: null }, NOW, ON)).toBe("Starter plan, renews December 30, 2026");
+    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: null }, NOW, ON)).toBe("Starter plan, renews December 30, 2026 (UTC)");
   });
 });
 

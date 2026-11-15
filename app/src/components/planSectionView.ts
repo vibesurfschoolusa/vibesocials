@@ -9,10 +9,10 @@ import {
   type BillingEnv,
   type BillingFields,
 } from "@/lib/billing";
-import { formatDisplayDate } from "@/lib/displayDate";
 import { PLAN_FEATURES, planIncludes } from "@/lib/planFeatures";
 import { isPlanKey, PLANS, type PlanKey } from "@/lib/plans";
 import { ownerDailyPostLimit, personalPostLimitApplies, type ReducedReason } from "@/lib/usageLimits";
+import { planDateText } from "@/lib/workspaceStatus";
 
 /**
  * What Settings → Plan says (21a): the workspace's plan state in words. Null
@@ -81,6 +81,8 @@ export function planSectionLabel(
   workspace: BillingFields & { planEndsAt?: Date | string | null },
   now: Date,
   env: BillingEnv = process.env,
+  // R13-new-customer L1: the viewer's User.timeZone; the dates are labelled UTC without one.
+  timeZone: string | null = null,
 ): string | null {
   if (role !== "owner" || !billingEnabled(env)) return null;
 
@@ -94,22 +96,22 @@ export function planSectionLabel(
 
   if (state === "trial") {
     // planState is "trial" only with a valid trialEndsAt.
-    return `Free trial until ${formatDisplayDate(toBillingDate(workspace.trialEndsAt) as Date)}`;
+    return `Free trial until ${planDateText(toBillingDate(workspace.trialEndsAt) as Date, timeZone)}`;
   }
 
   const name = isPlanKey(workspace.plan) ? `${PLANS[workspace.plan].name} plan` : "Your plan";
   const periodEnd = toBillingDate(workspace.currentPeriodEnd);
   if (workspace.planStatus === "past_due" && periodEnd) {
     const stops = new Date(periodEnd.getTime() + PAST_DUE_GRACE_DAYS * DAY_MS);
-    return `${name}. The last payment did not go through; posting stops on ${formatDisplayDate(stops)}.`;
+    return `${name}. The last payment did not go through; posting stops on ${planDateText(stops, timeZone)}.`;
   }
   const endsAt = toBillingDate(workspace.planEndsAt);
-  if (endsAt) return `${name}, ends on ${formatDisplayDate(endsAt)}`;
+  if (endsAt) return `${name}, ends on ${planDateText(endsAt, timeZone)}`;
   if (!periodEnd) return name;
   // A plan chosen during the free trial is "trialing" at Stripe until the trial
   // ends: nothing has been charged, so its period end is the first payment.
-  if (workspace.planStatus === "trialing") return `${name}, first payment on ${formatDisplayDate(periodEnd)}`;
-  return `${name}, renews ${formatDisplayDate(periodEnd)}`;
+  if (workspace.planStatus === "trialing") return `${name}, first payment on ${planDateText(periodEnd, timeZone)}`;
+  return `${name}, renews ${planDateText(periodEnd, timeZone)}`;
 }
 
 /** 21b fix round 1: the Plan section's line with billing off, when only the portal button shows. */
