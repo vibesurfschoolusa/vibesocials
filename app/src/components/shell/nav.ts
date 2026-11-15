@@ -38,6 +38,8 @@ export const NAV_ITEMS: NavItemDef[] = [
 const TITLE_ONLY_ITEMS: Pick<NavItemDef, "label" | "href">[] = [
   { label: "Workspaces", href: "/workspaces" },
   { label: "Join a workspace", href: "/join" },
+  // R21 GG1: where the signed-out line's new tab lands after signing in.
+  { label: "Signed in again", href: "/signed-in-again" },
 ];
 
 /**

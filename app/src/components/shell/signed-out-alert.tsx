@@ -1,7 +1,6 @@
 "use client";
 
 import { useContext, useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
 import { SessionContext } from "next-auth/react";
 
 import { readServerSession, type ServerSession } from "@/components/signed-in-swap";
@@ -48,13 +47,13 @@ export function useServerSaysSignedOut(
  * re-read a null session on focus), so a sign-in in the other tab clears the
  * line and the account menu returns.
  *
+ * GG1 follow-up: the new tab lands on /signed-in-again, not on this page,
+ * which would open a second, empty copy of it.
+ *
  * Only rendered once the server has said so (useServerSaysSignedOut), never
- * in the server's HTML, so reading window.location for the query is safe. The pathname from
- * usePathname makes it render again after a client-side navigation.
+ * in the server's HTML.
  */
 export function SignedOutAlert() {
-  const pathname = usePathname();
-  const here = typeof window === "undefined" ? pathname : `${window.location.pathname}${window.location.search}`;
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState === "visible") rereadSessionHere(window);
@@ -68,7 +67,7 @@ export function SignedOutAlert() {
         <span className="text-foreground">
           You were signed out.{" "}
           <a
-            href={`/login?callbackUrl=${encodeURIComponent(here)}`}
+            href={`/login?callbackUrl=${encodeURIComponent("/signed-in-again")}`}
             target="_blank"
             rel="noopener"
             className="font-medium text-primary underline-offset-4 hover:underline"

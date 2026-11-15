@@ -22,6 +22,8 @@ describe("isPublicRoute", () => {
     expect(isPublicRoute("/settings")).toBe(false);
     expect(isPublicRoute("/")).toBe(false);
     expect(isPublicRoute("/helpdesk")).toBe(false);
+    // R21 GG1: where the signed-out line's new tab lands; an app page, signed in only.
+    expect(isPublicRoute("/signed-in-again")).toBe(false);
   });
 });
 

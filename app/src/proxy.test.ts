@@ -87,7 +87,7 @@ describe("/pricing in the proxy (23, fix round 1)", () => {
     for (const prefix of PUBLIC_ROUTE_PREFIXES) {
       expect(isPublicPath(prefix, {}), prefix).toBe(true);
     }
-    for (const path of ["/settings", "/queue", "/posts/new", "/media", "/reports", "/reviews", "/workspaces", "/admin", "/join/abc", "/connections"]) {
+    for (const path of ["/settings", "/queue", "/posts/new", "/media", "/reports", "/reviews", "/workspaces", "/admin", "/join/abc", "/connections", "/signed-in-again"]) {
       expect(isPublicPath(path, PAYMENTS), path).toBe(false);
     }
   });

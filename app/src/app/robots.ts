@@ -24,6 +24,7 @@ export default function robots(): MetadataRoute.Robots {
         "/workspaces",
         "/connections",
         "/join",
+        "/signed-in-again",
       ],
     },
     sitemap: `${siteOrigin()}/sitemap.xml`,

@@ -4,7 +4,7 @@ import robots from "./robots";
 
 const SIGNED_IN_PATHS = [
   "/settings", "/posts", "/queue", "/activity", "/reports", "/media",
-  "/reviews", "/workspaces", "/connections", "/join",
+  "/reviews", "/workspaces", "/connections", "/join", "/signed-in-again",
 ];
 
 describe("robots()", () => {
