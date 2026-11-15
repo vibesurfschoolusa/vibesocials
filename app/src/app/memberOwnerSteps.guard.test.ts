@@ -209,7 +209,6 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
     render(createElement(NoPlatformConnectedLine, { isMember: role === "member", onlyTikTok: true })),
   "Create, publish, retry and the banner, trial ended": (role) => banner(ENDED_TRIAL, role),
   "Create, publish, retry and the banner, plan ended": (role) => banner(ENDED_PLAN, role),
-  "Create, TikTok needs reconnecting (creator info answer)": tiktokReconnectAnswer,
   "Dashboard, Connections card": (role) =>
     render(
       createElement(ConnectionHealth, {
@@ -222,6 +221,15 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
   "Activity, a result that needs reconnecting": (role) =>
     render(createElement(ReconnectStep, { platform: "instagram", role })),
 };
+
+/**
+ * The one exclusion, frozen for TikTok's audit: Create's TikTok panel shows
+ * GET /api/tiktok/creator-info's answer as is, and that panel stays exactly as
+ * it is while TikTok reviews the app. So a member still reads "Reconnect TikTok
+ * in Settings to keep posting." there. Pinned here so a change to it is a
+ * decision, not an accident; move it into SURFACES once the audit is over.
+ */
+const FROZEN_FOR_TIKTOK_AUDIT = "Reconnect TikTok in Settings to keep posting.";
 
 beforeEach(() => {
   vi.stubEnv("BILLING_ENABLED", "true");
@@ -248,6 +256,17 @@ describe("members are never told to take an owner-only step", () => {
       expect(member, `${surface}: a member's version names the owner`).toMatch(/workspace owner/i);
     });
   }
+});
+
+describe("excluded: frozen for TikTok's audit", () => {
+  it("the TikTok panel's reconnect answer is the same for an owner and a member", async () => {
+    for (const role of ["owner", "member"] as const) {
+      expect(JSON.parse(await tiktokReconnectAnswer(role))).toEqual({
+        error: FROZEN_FOR_TIKTOK_AUDIT,
+        code: "TIKTOK_RECONNECT_REQUIRED",
+      });
+    }
+  });
 });
 
 describe("the member sentences", () => {
