@@ -4,6 +4,7 @@ import { buildCaptionWithFooter } from "./captionFooter";
 import { buildPlatformPreview } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
 import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
+import { computeInstagramCaption } from "@/server/platforms/instagramClient";
 import { computeLinkedInCommentary } from "@/server/platforms/linkedinClient";
 import { computeTweetText } from "@/server/platforms/xClient";
 import { fitPinterestDescription } from "./pinterestApi";
@@ -208,7 +209,30 @@ describe("buildPlatformPreview", () => {
       expect(result.truncated).toBe(true);
       expect(result.willTruncate).toBe(true);
     });
+
+    // R5-publishing L2: the footer goes whole, as at publish, instead of being
+    // cut inside its link or a hashtag.
+    it("drops the footer, not the caption, when caption + footer is over", () => {
+      const caption = "a".repeat(2190);
+      const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #miami" };
+      const result = buildPlatformPreview({ platform: "instagram", caption, user });
+      expect(result.rendered).toBe(caption);
+      expect(result.rendered).toBe(computeInstagramCaption(buildCaptionWithFooter(caption, user, "instagram")));
+      expect(result.willTruncate).toBe(false);
+    });
   });
+
+  it.each(["tiktok", "google_business_profile", "pinterest"] as const)(
+    "%s: a long caption loses the footer whole and is never cut inside its link",
+    (platform) => {
+      const limit = PLATFORM_CAPTION_LIMITS[platform].charLimit as number;
+      const caption = "a".repeat(limit - 20);
+      const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+      const result = buildPlatformPreview({ platform, caption, user });
+      expect(result.rendered).toBe(caption);
+      expect(result.willTruncate).toBe(false);
+    },
+  );
 
   it("keeps emoji/ZWJ sequences whole when truncating (delegates to truncateGraphemes, never slices mid-grapheme)", () => {
     const caption = "😀👨‍👩‍👧🇺🇸".repeat(60);
