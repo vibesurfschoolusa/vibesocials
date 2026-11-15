@@ -5,6 +5,7 @@ import {
   EXPIRY_WARNING_LEAD_MS,
   GOOGLE_IDLE_REFRESH_MS,
   HEALTH_SWEEP_PAGE_SIZE,
+  IDLE_FREE_REFRESH_MS,
   REFRESH_HORIZON_MS,
   expiryNoticeDue,
   expiryNoticeWhere,
@@ -233,6 +234,103 @@ describe("proactiveRefreshWhere", () => {
         }
       }
     }
+  });
+});
+
+// R9-publishing L3: the daily fan-out costs two executions a connection, so a
+// free workspace that has not posted in 14 days is left out. Publishing
+// refreshes an expired token on use on every platform that has a refresh
+// token (TikTok, YouTube, Google Business Profile, Pinterest, LinkedIn: their
+// client tests), so such a workspace's next post still goes.
+describe("proactiveRefreshWhere: which workspaces' connections", () => {
+  type Post = { status: string; updatedAt: Date };
+  type Ws = {
+    billingExempt: boolean;
+    plan: string | null;
+    planStatus: string | null;
+    currentPeriodEnd: Date | null;
+    posts: Post[];
+  };
+  const ON = { BILLING_ENABLED: "true" };
+  const OFF = {};
+  const FREE: Ws = { billingExempt: false, plan: null, planStatus: null, currentPeriodEnd: null, posts: [] };
+  const posted = (daysAgo: number, status = "completed"): Post => ({ status, updatedAt: new Date(NOW.getTime() - daysAgo * DAY) });
+
+  /** The workspace part of the WHERE, evaluated the way the database would. */
+  function selects(ws: Ws, env: Record<string, string>): boolean {
+    const where = proactiveRefreshWhere(NOW, env).workspace as { OR: Array<Record<string, unknown>> };
+    return where.OR.some((branch) => {
+      if ("billingExempt" in branch) return ws.billingExempt === branch.billingExempt;
+      if ("postJobs" in branch) {
+        const some = (branch.postJobs as { some: { status: { in: string[] }; updatedAt: { gte: Date } } }).some;
+        return ws.posts.some((post) => some.status.in.includes(post.status) && post.updatedAt >= some.updatedAt.gte);
+      }
+      const paid = branch as { plan: { not: null }; OR: Array<{ planStatus: string; currentPeriodEnd?: { gt: Date } }> };
+      return (
+        ws.plan !== null &&
+        paid.OR.some(
+          (status) =>
+            ws.planStatus === status.planStatus &&
+            (!status.currentPeriodEnd || (ws.currentPeriodEnd !== null && ws.currentPeriodEnd > status.currentPeriodEnd.gt)),
+        )
+      );
+    });
+  }
+
+  it("is pinned: a grandfathered workspace, a paid plan (billing on), or a post that went out in the last 14 days", () => {
+    expect(IDLE_FREE_REFRESH_MS).toBe(14 * DAY);
+    expect(proactiveRefreshWhere(NOW, ON).workspace).toEqual({
+      OR: [
+        { billingExempt: true },
+        {
+          plan: { not: null },
+          OR: [{ planStatus: "active" }, { planStatus: "past_due", currentPeriodEnd: { gt: new Date(NOW.getTime() - 7 * DAY) } }],
+        },
+        {
+          postJobs: {
+            some: {
+              status: { in: ["pending", "in_progress", "completed", "failed"] },
+              updatedAt: { gte: new Date(NOW.getTime() - 14 * DAY) },
+            },
+          },
+        },
+      ],
+    });
+    // With billing off no workspace pays: only the grandfathered and the active ones.
+    expect((proactiveRefreshWhere(NOW, OFF).workspace as { OR: unknown[] }).OR).toHaveLength(2);
+  });
+
+  it("an idle free workspace's TikTok and Google connections are not fanned out", () => {
+    expect(selects(FREE, ON)).toBe(false);
+    expect(selects(FREE, OFF)).toBe(false);
+    // Posted 15 days ago, or only drafts, scheduled or cancelled posts since: idle.
+    expect(selects({ ...FREE, posts: [posted(15)] }, ON)).toBe(false);
+    for (const status of ["draft", "scheduled", "cancelled"]) {
+      expect(selects({ ...FREE, posts: [posted(1, status)] }, ON), status).toBe(false);
+    }
+    // A plan still in its card trial, or one that ended, is free.
+    expect(selects({ ...FREE, plan: "pro", planStatus: "trialing", currentPeriodEnd: new Date(NOW.getTime() + 10 * DAY) }, ON)).toBe(false);
+    expect(selects({ ...FREE, plan: "pro", planStatus: "canceled" }, ON)).toBe(false);
+    expect(selects({ ...FREE, plan: "pro", planStatus: "past_due", currentPeriodEnd: new Date(NOW.getTime() - 8 * DAY) }, ON)).toBe(false);
+  });
+
+  it("the same workspace once it posts (a run, a failed one too, in the last 14 days) is fanned out again", () => {
+    for (const status of ["pending", "in_progress", "completed", "failed"]) {
+      expect(selects({ ...FREE, posts: [posted(13, status)] }, ON), status).toBe(true);
+      expect(selects({ ...FREE, posts: [posted(13, status)] }, OFF), status).toBe(true);
+    }
+  });
+
+  it("a paid or grandfathered workspace is refreshed as now, idle or not", () => {
+    expect(selects({ ...FREE, plan: "growth", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) }, ON)).toBe(true);
+    expect(selects({ ...FREE, plan: "growth", planStatus: "past_due", currentPeriodEnd: new Date(NOW.getTime() - 3 * DAY) }, ON)).toBe(true);
+    expect(selects({ ...FREE, billingExempt: true }, ON)).toBe(true);
+    expect(selects({ ...FREE, billingExempt: true }, OFF)).toBe(true);
+  });
+
+  it("keeps the connection part as it was", () => {
+    const { workspace: _workspace, ...rest } = proactiveRefreshWhere(NOW, ON);
+    expect(rest).toEqual({ needsReconnect: false, refreshToken: { not: null }, OR: proactiveRefreshWhere(NOW, OFF).OR });
   });
 });
 

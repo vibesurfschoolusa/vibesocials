@@ -1,5 +1,7 @@
 import type { Platform, Prisma } from "@prisma/client";
 
+import { billingEnabled, PAST_DUE_GRACE_DAYS, type BillingEnv } from "@/lib/billing";
+
 /**
  * Connection health sweep — pure eligibility rule.
  *
@@ -70,14 +72,66 @@ export function isProactiveRefreshEligible(
   return expiresAt < now.getTime() + REFRESH_HORIZON_MS;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * R9-publishing L3: a free workspace whose last post went out this long ago
+ * is left out of the fan-out. Each connection costs two Inngest executions a
+ * sweep and nothing counts them, so throwaway workspaces that never post
+ * would spend the budget forever.
+ */
+export const IDLE_FREE_REFRESH_MS = 14 * DAY_MS;
+
+/** A post that went out (or tried to): drafts, scheduled and cancelled ones never ran. */
+const RAN_STATUSES = ["pending", "in_progress", "completed", "failed"] as const;
+
+/**
+ * R9-publishing L3: the workspaces whose connections the sweep refreshes:
+ * grandfathered ones (billingExempt), with billing on those on a paid plan,
+ * and any other that had a post go out in the last IDLE_FREE_REFRESH_MS.
+ * Leaving an idle one out is safe because publishing refreshes an expired
+ * token on use on every platform with a refresh token (TikTok, YouTube,
+ * Google Business Profile, Pinterest, LinkedIn). The cost, accepted for a
+ * free workspace: a refresh token can lapse while it is idle (Pinterest's 60
+ * days after the last refresh, Google's six months unused), and then its next
+ * post asks for a reconnect, as any dead grant does. "Paid" is paysForPlan
+ * (lib/billing.ts) as SQL can say it: active, or past_due within the grace;
+ * a past_due plan that was never paid is kept too, which only refreshes more.
+ * A post retried or sent in the window updates the post, so updatedAt is when
+ * it last ran.
+ */
+function refreshedWorkspaceWhere(now: Date, env: BillingEnv): Prisma.WorkspaceWhereInput {
+  const paid: Prisma.WorkspaceWhereInput = {
+    plan: { not: null },
+    OR: [
+      { planStatus: "active" },
+      { planStatus: "past_due", currentPeriodEnd: { gt: new Date(now.getTime() - PAST_DUE_GRACE_DAYS * DAY_MS) } },
+    ],
+  };
+  return {
+    OR: [
+      { billingExempt: true },
+      ...(billingEnabled(env) ? [paid] : []),
+      {
+        postJobs: {
+          some: { status: { in: [...RAN_STATUSES] }, updatedAt: { gte: new Date(now.getTime() - IDLE_FREE_REFRESH_MS) } },
+        },
+      },
+    ],
+  };
+}
+
 /**
  * {@link isProactiveRefreshEligible} as a Prisma WHERE, so the cron selects
  * the connections to refresh in SQL instead of loading every row. The two
  * must stay equivalent (connectionHealthSweep.test.ts evaluates one against
- * the other).
+ * the other). R9-publishing L3: plus the workspace rule
+ * ({@link refreshedWorkspaceWhere}), decided here only: the refresh function's
+ * re-check is about the connection row.
  */
-export function proactiveRefreshWhere(now: Date): Prisma.SocialConnectionWhereInput {
+export function proactiveRefreshWhere(now: Date, env: BillingEnv = process.env): Prisma.SocialConnectionWhereInput {
   return {
+    workspace: refreshedWorkspaceWhere(now, env),
     needsReconnect: false,
     refreshToken: { not: null },
     OR: [
