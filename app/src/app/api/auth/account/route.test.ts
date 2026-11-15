@@ -424,6 +424,11 @@ describe("DELETE /api/auth/account", () => {
       { id: "m3", workspaceId: "ws-personal", storageLocation: FILE("shared") },
       { id: "m4", workspaceId: "ws-co", storageLocation: FILE("shared") },
     ];
+    // R11-client-journey L4: two of the person's invite links were on in ws-co.
+    m.inviteUpdateMany.mockImplementation(async (args: { where: { workspaceId?: string }; data: { revokedAt: unknown } }) => {
+      m.callLog.push(`revoke workspaceInvite ${JSON.stringify(args.where)} ${args.data.revokedAt instanceof Date}`);
+      return { count: args.where.workspaceId === "ws-co" ? 2 : 0 };
+    });
 
     const response = await DELETE(request({ password: "right-password" }));
 
@@ -454,7 +459,10 @@ describe("DELETE /api/auth/account", () => {
       `delete workspaces ${JSON.stringify({ where: { id: { in: ["ws-personal"] } } })}`,
       `delete pendingConnection ${JSON.stringify({ where: { userId: USER_ID } })}`,
       `delete oAuthHandshake ${JSON.stringify({ where: { userId: USER_ID } })}`,
-      // R10-client-journey L3: the links this person made stop working with the account.
+      // R10-client-journey L3: the links this person made stop working with the account;
+      // R11-client-journey L4: counted in each workspace that carries on, then any left.
+      `revoke workspaceInvite ${JSON.stringify({ workspaceId: "ws-co", createdById: USER_ID, revokedAt: null })} true`,
+      `revoke workspaceInvite ${JSON.stringify({ workspaceId: "ws-joined", createdById: USER_ID, revokedAt: null })} true`,
       `revoke workspaceInvite ${JSON.stringify({ createdById: USER_ID, revokedAt: null })} true`,
       `delete user ${JSON.stringify({ where: { id: USER_ID } })}`,
       "commit",
@@ -472,6 +480,9 @@ describe("DELETE /api/auth/account", () => {
       formerOwnerId: USER_ID,
       formerOwnerName: "me@example.com",
       at: expect.any(Date),
+      // R11-client-journey L4: the email says how many invite links went with the account.
+      joinLinksRevoked: 2,
+      deletedAccount: true,
     });
     expect(m.deliverAccountEmail).toHaveBeenCalledWith(
       "me@example.com",

@@ -268,6 +268,31 @@ describe("buildFormerOwnerEmail: invite links turned off", () => {
     expect(m.sendEmail.mock.calls[0][0].text).toContain("The invite link Sam made was turned off when Sam stopped being an owner");
   });
 
+  // R11-client-journey L4: deleting the account turns them off too.
+  it("after an account deletion: turned off when they deleted their account", () => {
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 1, deletedAccount: true }).text).toContain(
+      "The invite link Sam made was turned off when Sam deleted their account, so it can't be used to join Surf Co again.",
+    );
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 2, deletedAccount: true }).text).toContain(
+      "The 2 invite links Sam made were turned off when Sam deleted their account, so they can't be used to join Surf Co again.",
+    );
+  });
+
+  it("the notice passes an account deletion on, with the name it is given", async () => {
+    await noticeOwnersOfFormerOwner({
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      formerOwnerId: "user-2",
+      formerOwnerName: "Gone Person",
+      at: new Date(),
+      joinLinksRevoked: 2,
+      deletedAccount: true,
+    });
+    expect(m.sendEmail.mock.calls[0][0].text).toContain(
+      "The 2 invite links Gone Person made were turned off when Gone Person deleted their account",
+    );
+  });
+
   it("says nothing about invite links when none was turned off", () => {
     expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 0 }).text).not.toContain("invite link");
     expect(buildFormerOwnerEmail(base).text).not.toContain("invite link");
