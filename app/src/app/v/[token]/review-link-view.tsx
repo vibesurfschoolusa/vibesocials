@@ -19,7 +19,7 @@ const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
 
 /** R7-client-journey L5: under the list when it holds the first 100 of more. */
-export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} posts; more appear as these go out.`;
+export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} scheduled posts; more appear as these go out.`;
 
 /** The sentence, when the server says cards were left out (server/reviewLink.ts listReviewPosts). */
 export function ReviewListMore({ more }: { more: boolean }) {

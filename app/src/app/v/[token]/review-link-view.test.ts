@@ -94,7 +94,7 @@ describe("ReviewPostCard - a Feed and Story pair", () => {
 // there are more; the page then says so under the list.
 describe("ReviewListMore", () => {
   it("says more appear when the server says there are more", () => {
-    expect(REVIEW_MORE_SENTENCE).toBe("Showing the next 100 posts; more appear as these go out.");
+    expect(REVIEW_MORE_SENTENCE).toBe("Showing the next 100 scheduled posts; more appear as these go out.");
     expect(renderToStaticMarkup(createElement(ReviewListMore, { more: true }))).toContain(REVIEW_MORE_SENTENCE);
   });
 
