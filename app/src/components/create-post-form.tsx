@@ -2561,7 +2561,7 @@ function CreatePostFormInner({
             className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
           />
           <p className="text-xs text-muted-foreground">
-            Type to search for locations. The place is added to YouTube videos only.
+            Pick a place from the list; it is added to YouTube videos only.
           </p>
         </div>
         ) : null}

@@ -233,8 +233,11 @@ describe("showLocationField", () => {
 describe("the Location help", () => {
   const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
 
-  it("says the place is added to YouTube videos only", () => {
-    expect(source).toContain("Type to search for locations. The place is added to YouTube videos only.");
+  // R19 publishing L4: only a place picked from the list carries coordinates
+  // (location-autocomplete.tsx); typed text alone is dropped by YouTube.
+  it("says to pick a place from the list, added to YouTube videos only", () => {
+    expect(source).toContain("Pick a place from the list; it is added to YouTube videos only.");
+    expect(source).not.toContain("Type to search for locations.");
   });
 
   it("no longer names Instagram, TikTok or X", () => {
