@@ -79,40 +79,24 @@ export function disconnectDescription(platform: string, chosenCount: number | nu
   return `${scheduledPostsSentence(platform, chosenCount)} Your past posts stay in Activity, and you can reconnect at any time.${numbersDeletedSentence(platform)}`;
 }
 
-/** Pages read at most, 50 posts each (api/posts): far beyond any real queue. */
-const MAX_COUNT_PAGES = 20;
-
-type ScheduledPage = {
-  jobs?: Array<{ id: string; storyOf?: { id: string }; publish: { targetPlatforms: string[] | null } | null }>;
-  nextCursor?: string | null;
-};
-
 /**
- * How many scheduled posts chose `platform`, read from the Queue's list
- * (GET /api/posts). A Feed and Story post counts once. Null when the list
- * can't be read, so the dialog still warns without a number.
+ * How many scheduled posts chose `platform`, counted by the server
+ * (api/connections/[platform]/scheduled-count) for the workspace this page was
+ * rendered for. Null when it can't be read, so the dialog still warns, without
+ * a number.
  */
-export async function countScheduledPostsChoosing(
+export async function fetchScheduledCount(
   platform: string,
+  workspaceId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<number | null> {
-  const posts = new Set<string>();
-  let cursor: string | null = null;
   try {
-    for (let page = 0; page < MAX_COUNT_PAGES; page += 1) {
-      const url: string = cursor
-        ? `/api/posts?status=scheduled&cursor=${encodeURIComponent(cursor)}`
-        : "/api/posts?status=scheduled";
-      const response = await fetchImpl(url);
-      if (!response.ok) return null;
-      const data = (await response.json()) as ScheduledPage;
-      for (const job of data.jobs ?? []) {
-        if (job.publish?.targetPlatforms?.includes(platform)) posts.add(job.storyOf?.id ?? job.id);
-      }
-      cursor = data.nextCursor ?? null;
-      if (!cursor) return posts.size;
-    }
-    return posts.size;
+    const response = await fetchImpl(
+      `/api/connections/${platform}/scheduled-count?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as { count?: unknown };
+    return typeof data.count === "number" ? data.count : null;
   } catch {
     return null;
   }
@@ -170,18 +154,23 @@ export function ConnectionActions({
   const isLinkedIn = platform === "linkedin";
   const authUrl = withWorkspaceId(`/api/auth/${platform}/start`, workspaceId);
 
-  // Read when the Disconnect dialog opens, so its count is current.
+  // Read each time the Disconnect dialog opens, from no number, so it never
+  // shows an earlier count while the new one loads or after it fails.
   const [chosenCount, setChosenCount] = useState<number | null>(null);
+  function openDisconnect() {
+    setChosenCount(null);
+    setDisconnectOpen(true);
+  }
   useEffect(() => {
     if (!disconnectOpen) return;
     let cancelled = false;
-    void countScheduledPostsChoosing(platform).then((count) => {
+    void fetchScheduledCount(platform, workspaceId).then((count) => {
       if (!cancelled) setChosenCount(count);
     });
     return () => {
       cancelled = true;
     };
-  }, [disconnectOpen, platform]);
+  }, [disconnectOpen, platform, workspaceId]);
 
   // Shared disconnect call. Throws on failure so callers can decide whether to
   // keep a dialog open (ConfirmDialog) or reset local state (TikTok flow).
@@ -288,7 +277,7 @@ export function ConnectionActions({
           size="sm"
           variant="ghost"
           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-          onClick={() => setDisconnectOpen(true)}
+          onClick={openDisconnect}
         >
           Disconnect
         </Button>

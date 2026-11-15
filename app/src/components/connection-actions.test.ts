@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DISCONNECT_FAILED_MESSAGE,
   DISCONNECT_OFFLINE_MESSAGE,
-  countScheduledPostsChoosing,
+  fetchScheduledCount,
   disconnectDescription,
   requestDisconnect,
   switchDescription,
@@ -65,57 +65,22 @@ describe("Disconnect dialog", () => {
   });
 });
 
-type Page = { jobs: Array<{ id: string; storyOf?: { id: string }; publish: { targetPlatforms: string[] | null } | null }>; nextCursor: string | null };
-
-function pagesFetch(pages: Page[]) {
-  const calls: string[] = [];
-  const impl = vi.fn(async (url: string) => {
-    calls.push(url);
-    const page = pages[calls.length - 1];
-    return new Response(JSON.stringify(page), { status: 200 });
-  });
-  return { impl: impl as unknown as typeof fetch, calls };
-}
-
-describe("countScheduledPostsChoosing", () => {
-  it("counts the scheduled posts whose chosen platforms name it, across pages", async () => {
-    const { impl, calls } = pagesFetch([
-      {
-        jobs: [
-          { id: "a", publish: { targetPlatforms: ["instagram", "x"] } },
-          { id: "b", publish: { targetPlatforms: ["x"] } },
-          { id: "c", publish: null },
-          { id: "d", publish: { targetPlatforms: null } },
-        ],
-        nextCursor: "next-1",
-      },
-      { jobs: [{ id: "e", publish: { targetPlatforms: ["instagram"] } }], nextCursor: null },
-    ]);
-    await expect(countScheduledPostsChoosing("instagram", impl)).resolves.toBe(2);
-    expect(calls[0]).toBe("/api/posts?status=scheduled");
-    expect(calls[1]).toBe("/api/posts?status=scheduled&cursor=next-1");
+describe("fetchScheduledCount", () => {
+  it("asks the server for the rendered workspace's count", async () => {
+    const impl = vi.fn(async () => new Response(JSON.stringify({ count: 3 }), { status: 200 })) as unknown as typeof fetch;
+    await expect(fetchScheduledCount("instagram", "ws 1", impl)).resolves.toBe(3);
+    expect(impl).toHaveBeenCalledWith("/api/connections/instagram/scheduled-count?workspaceId=ws%201");
   });
 
-  it("counts a Feed and Story post once", async () => {
-    const { impl } = pagesFetch([
-      {
-        jobs: [
-          { id: "feed", publish: { targetPlatforms: ["instagram"] } },
-          { id: "story", storyOf: { id: "feed" }, publish: { targetPlatforms: ["instagram"] } },
-        ],
-        nextCursor: null,
-      },
-    ]);
-    await expect(countScheduledPostsChoosing("instagram", impl)).resolves.toBe(1);
-  });
-
-  it("answers null when the list can't be read", async () => {
+  it("answers null when the count can't be read, so the dialog shows no number", async () => {
     const failing = vi.fn(async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
-    await expect(countScheduledPostsChoosing("instagram", failing)).resolves.toBeNull();
+    await expect(fetchScheduledCount("instagram", "ws-1", failing)).resolves.toBeNull();
+    const odd = vi.fn(async () => new Response(JSON.stringify({ count: "3" }), { status: 200 })) as unknown as typeof fetch;
+    await expect(fetchScheduledCount("instagram", "ws-1", odd)).resolves.toBeNull();
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
-    await expect(countScheduledPostsChoosing("instagram", offline)).resolves.toBeNull();
+    await expect(fetchScheduledCount("instagram", "ws-1", offline)).resolves.toBeNull();
   });
 });
 
