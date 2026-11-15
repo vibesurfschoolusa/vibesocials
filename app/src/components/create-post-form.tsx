@@ -671,6 +671,37 @@ interface CreatePostFormInnerProps {
   workspaceId: string;
   /** 2026-11-10 — the workspace's default Google button; Google posts start from it. */
   googleButtonDefault?: GoogleButton | null;
+  /** R11-client-journey L2: the viewer is a member; only the nothing-connected state reads it. */
+  isMember?: boolean;
+}
+
+/**
+ * Create with nothing connected. R11-client-journey L2: only the owner can
+ * connect (a member's Settings is read-only), so a member reads who can.
+ */
+export function NothingConnectedState({ isMember }: { isMember: boolean }) {
+  return (
+    <Card className="p-6">
+      {isMember ? (
+        <EmptyState
+          icon={<PlugZap />}
+          title="No platform is connected yet"
+          description="Vibe Socials publishes to the platforms connected to this workspace. The workspace owner can connect accounts for this workspace."
+        />
+      ) : (
+        <EmptyState
+          icon={<PlugZap />}
+          title="Connect a platform to start posting"
+          description="Vibe Socials publishes to the platforms you've connected. Connect at least one in Settings, then come back here."
+          action={
+            <Link href={SETTINGS_CONNECTIONS_HREF} className={buttonVariants({ variant: "primary" })}>
+              Go to connections
+            </Link>
+          }
+        />
+      )}
+    </Card>
+  );
 }
 
 function CreatePostFormInner({
@@ -678,6 +709,7 @@ function CreatePostFormInner({
   holdsForApproval = false,
   workspaceId,
   googleButtonDefault = null,
+  isMember = false,
 }: CreatePostFormInnerProps) {
   const toast = useToast();
   const searchParams = useSearchParams();
@@ -2151,20 +2183,7 @@ function CreatePostFormInner({
   // (arriving from Media -> "Use in new post"), where posting is equally
   // impossible.
   if (composerGate === "connect") {
-    return (
-      <Card className="p-6">
-        <EmptyState
-          icon={<PlugZap />}
-          title="Connect a platform to start posting"
-          description="Vibe Socials publishes to the platforms you've connected. Connect at least one in Settings, then come back here."
-          action={
-            <Link href={SETTINGS_CONNECTIONS_HREF} className={buttonVariants({ variant: "primary" })}>
-              Go to connections
-            </Link>
-          }
-        />
-      </Card>
-    );
+    return <NothingConnectedState isMember={isMember} />;
   }
 
   // Publish-now confirmation copy — a held member's post is submitted for
@@ -2971,6 +2990,8 @@ export interface CreatePostFormProps {
   workspaceId: string;
   /** 2026-11-10 — the workspace's default Google button (app/posts/new/page.tsx). */
   googleButtonDefault?: GoogleButton | null;
+  /** R11-client-journey L2: the viewer is a member (app/posts/new/page.tsx); for the nothing-connected state. */
+  isMember?: boolean;
 }
 
 /**
@@ -2984,6 +3005,7 @@ export function CreatePostForm({
   holdsForApproval,
   workspaceId,
   googleButtonDefault,
+  isMember,
 }: CreatePostFormProps) {
   return (
     <Suspense fallback={<CreatePostFormSkeleton />}>
@@ -2992,6 +3014,7 @@ export function CreatePostForm({
         holdsForApproval={holdsForApproval}
         workspaceId={workspaceId}
         googleButtonDefault={googleButtonDefault}
+        isMember={isMember}
       />
     </Suspense>
   );

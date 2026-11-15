@@ -10,8 +10,12 @@ vi.mock("@/lib/platformLimits", async (importOriginal) => ({
   textPostsEnabled: () => textPosts.enabled,
 }));
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
 import {
   buildTextPostBody,
+  NothingConnectedState,
   composerPageState,
   composerPageView,
   FILE_LOST_MESSAGE,
@@ -862,5 +866,22 @@ describe("notSentBanner", () => {
 
   it("healthy: nothing changes", () => {
     expect(notSentBanner(null)).toBeNull();
+  });
+});
+
+// R11-client-journey L2: only the owner can connect, so a member is not sent to Settings.
+describe("NothingConnectedState", () => {
+  it("owner: connect in Settings, with the button", () => {
+    const html = renderToStaticMarkup(createElement(NothingConnectedState, { isMember: false }));
+    expect(html).toContain("Connect at least one in Settings");
+    expect(html).toContain('href="/settings#connections"');
+    expect(html).toContain("Go to connections");
+  });
+
+  it("member: the owner can connect, no link into Settings", () => {
+    const html = renderToStaticMarkup(createElement(NothingConnectedState, { isMember: true }));
+    expect(html).toContain("The workspace owner can connect accounts for this workspace.");
+    expect(html).not.toContain("<a");
+    expect(html).not.toContain("Settings");
   });
 });

@@ -49,6 +49,8 @@ export default async function BulkPostsPage({
           initialMedia={handoff.items}
           skippedMedia={handoff.skipped}
           googleButtonDefault={googleButtonFromWorkspace(context.workspace)}
+          // R11-client-journey L2: only the owner can connect a platform.
+          isMember={context.role === "member"}
         />
       ) : context.role !== "owner" ? (
         // P1 fix round 2: a member cannot see Settings, Plan.

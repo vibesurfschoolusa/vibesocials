@@ -10,7 +10,7 @@ vi.mock("@/hooks/useConnections", () => ({
 import { refreshedFirstDay } from "@/lib/bulkPosts";
 import { localTimeZoneLabel } from "@/lib/scheduling";
 
-import { BulkPostsForm } from "./bulk-posts-form";
+import { BulkPostsForm, NoPlatformConnectedLine } from "./bulk-posts-form";
 
 const ORIGINAL_TZ = process.env.TZ;
 
@@ -115,5 +115,20 @@ describe("Add many: Write captions with AI", () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
     expect(source).toContain("{ ai: aiCaptionsRef.current }");
+  });
+});
+
+// R11-client-journey L2: only the owner can connect, so a member is not sent to Settings.
+describe("NoPlatformConnectedLine", () => {
+  it("owner: connect one in Settings", () => {
+    const html = renderToString(createElement(NoPlatformConnectedLine, { isMember: false }));
+    expect(html).toContain("Connect one in Settings");
+    expect(html).toContain('href="/settings#connections"');
+  });
+
+  it("member: the owner can connect, no link", () => {
+    const html = renderToString(createElement(NoPlatformConnectedLine, { isMember: true }));
+    expect(html).toContain("No platform here is connected yet. The workspace owner can connect accounts for this workspace.");
+    expect(html).not.toContain("<a");
   });
 });

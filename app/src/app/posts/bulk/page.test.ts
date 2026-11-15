@@ -13,7 +13,8 @@ const h = vi.hoisted(() => ({ getWorkspaceContext: vi.fn(), redirect: vi.fn() })
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: h.getWorkspaceContext }));
 vi.mock("next/navigation", () => ({ redirect: h.redirect }));
 vi.mock("./bulk-posts-form", () => ({
-  BulkPostsForm: ({ workspaceId }: { workspaceId: string }) => createElement("form", { "data-workspace": workspaceId }),
+  BulkPostsForm: ({ workspaceId, isMember }: { workspaceId: string; isMember?: boolean }) =>
+    createElement("form", { "data-workspace": workspaceId, ...(isMember ? { "data-member": "yes" } : {}) }),
 }));
 
 import BulkPostsPage from "./page";
@@ -70,8 +71,13 @@ describe("/posts/bulk on Starter for a member", () => {
     expect(html).not.toContain("/settings#plan");
   });
 
-  it("a member on Growth gets the form", async () => {
+  it("a member on Growth gets the form, told they are a member", async () => {
     h.getWorkspaceContext.mockResolvedValue(context({ ...STARTER, plan: "growth" }, "member"));
+    expect(await render()).toContain('<form data-workspace="ws-1" data-member="yes">');
+  });
+
+  it("an owner's form is not told they are a member", async () => {
+    h.getWorkspaceContext.mockResolvedValue(context({ ...STARTER, plan: "growth" }));
     expect(await render()).toContain('<form data-workspace="ws-1">');
   });
 });

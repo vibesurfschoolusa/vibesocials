@@ -60,6 +60,8 @@ export default async function NewPostPage() {
         workspaceId={context.workspace.id}
         // 2026-11-10: Google posts start with the workspace's default button.
         googleButtonDefault={googleButtonFromWorkspace(context.workspace)}
+        // R11-client-journey L2: only the owner can connect a platform.
+        isMember={context.role === "member"}
       />
     </div>
   );

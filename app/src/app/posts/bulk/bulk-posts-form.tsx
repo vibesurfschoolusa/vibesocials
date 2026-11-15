@@ -191,13 +191,33 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+/** R11-client-journey L2: only the owner can connect, so a member reads who can. */
+export function NoPlatformConnectedLine({ isMember }: { isMember: boolean }) {
+  return isMember ? (
+    <p className="text-sm text-muted-foreground">
+      No platform here is connected yet. The workspace owner can connect accounts for this workspace.
+    </p>
+  ) : (
+    <p className="text-sm text-muted-foreground">
+      No platform here is connected yet.{" "}
+      <Link href={SETTINGS_CONNECTIONS_HREF} className="text-primary underline-offset-4 hover:underline">
+        Connect one in Settings
+      </Link>
+      .
+    </p>
+  );
+}
+
 export function BulkPostsForm({
   workspaceId,
   initialMedia = [],
   skippedMedia = 0,
   googleButtonDefault = null,
+  isMember = false,
 }: {
   workspaceId: string;
+  /** R11-client-journey L2: the viewer is a member (page.tsx); for the no-platform line. */
+  isMember?: boolean;
   /** The workspace's default Google button, which the batch's Google options start from (as on Create). */
   googleButtonDefault?: GoogleButton | null;
   /** Media items to start with (the Media page's "Schedule with Add many"). */
@@ -911,13 +931,7 @@ export function BulkPostsForm({
               </Button>
             </Alert>
           ) : offeredPlatforms.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No platform here is connected yet.{" "}
-              <Link href={SETTINGS_CONNECTIONS_HREF} className="text-primary underline-offset-4 hover:underline">
-                Connect one in Settings
-              </Link>
-              .
-            </p>
+            <NoPlatformConnectedLine isMember={isMember} />
           ) : (
             <div className="flex flex-wrap gap-2">
               {offeredPlatforms.map((platform) => (
