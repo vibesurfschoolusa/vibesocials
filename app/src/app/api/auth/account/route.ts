@@ -7,7 +7,6 @@ import { prisma } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { accountDeletionRefusal, blockedMessage, loadAccountDeletion } from "@/server/account/accountDeletion";
 import {
@@ -115,7 +114,7 @@ export async function DELETE(request: Request) {
 
   let queued: QueuedFile[];
   try {
-    queued = await deleteInTransaction(user.id, plan, isOperatorUser(user));
+    queued = await deleteInTransaction(user.id, plan);
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
       const message = cancelled ? `${CANCELLED_ACCOUNT_KEPT_PREFIX} ${error.message}` : error.message;
@@ -159,11 +158,7 @@ export async function DELETE(request: Request) {
  * again from fresh rows, queue the stored files, reassign, delete. Any failed
  * check throws DeletionRefusedError and the transaction rolls back.
  */
-async function deleteInTransaction(
-  userId: string,
-  plan: AccountDeletionPlan,
-  operator: boolean,
-): Promise<QueuedFile[]> {
+async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): Promise<QueuedFile[]> {
   return prisma.$transaction(
     async (tx) => {
       // The same ws-owners lock the leave and demote paths take, on the union
@@ -212,7 +207,7 @@ async function deleteInTransaction(
       }
 
       // R5-security M1: what still counts toward the limits outlives the rows.
-      await copyUsageBeforeDeletion(tx, { workspaceIds: plan.deleteWorkspaceIds, userId, operator, now: new Date() });
+      await copyUsageBeforeDeletion(tx, { workspaceIds: plan.deleteWorkspaceIds, userId, now: new Date() });
       await deleteWorkspaceRows(tx, plan.deleteWorkspaceIds);
 
       // Keyed by userId with no foreign key, so nothing cascades them. Both

@@ -451,7 +451,6 @@ describe("DELETE /api/workspaces/active", () => {
       "unqueue q0,q1",
     ]);
     expect(m.workspaceDeleteMany).toHaveBeenCalledWith({ where: { id: { in: ["ws-1"] } } });
-    expect(m.copyUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ operator: false }));
     expect(m.cookieSet).toHaveBeenCalledWith(
       "vs_active_workspace",
       "",

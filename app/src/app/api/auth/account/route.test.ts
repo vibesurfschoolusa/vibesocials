@@ -429,8 +429,6 @@ describe("DELETE /api/auth/account", () => {
       "unqueue q0",
     ]);
     expect(m.del).toHaveBeenCalledWith([FILE("mine")], expect.anything());
-    // Review: the copy knows whether an operator is deleting (their posts count toward no limit).
-    expect(m.copyUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ operator: false }));
     // R5-security L1 (review): the owners left in a co-owned workspace hear
     // that the deleted owner had its client links; not for a workspace the
     // user was only a member of.

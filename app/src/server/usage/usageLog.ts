@@ -233,15 +233,12 @@ type DeletionCopyClient = XCopyClient & {
  */
 export async function copyUsageBeforeDeletion(
   tx: DeletionCopyClient,
-  // `operator`: the deleting person is an operator, whose posts count toward no limit.
-  input: { workspaceIds: string[]; userId: string; operator: boolean; now: Date },
+  input: { workspaceIds: string[]; userId: string; now: Date },
 ): Promise<void> {
   const { workspaceIds, userId, now } = input;
   if (workspaceIds.length === 0) return;
 
-  if (!input.operator) {
-    await copyPostsBeforeDeletion(tx, workspaceIds, userId, now);
-  }
+  await copyPostsBeforeDeletion(tx, workspaceIds, userId, now);
   await copyXPosts(tx, workspaceIds, now);
 }
 
@@ -254,10 +251,18 @@ async function copyPostsBeforeDeletion(
 ): Promise<void> {
   const workspaces = await tx.workspace.findMany({
     where: { id: { in: workspaceIds } },
-    select: { id: true, ...BILLING_FIELDS_SELECT },
+    select: {
+      id: true,
+      ...BILLING_FIELDS_SELECT,
+      members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
+    },
   });
-  // The caller copies nothing for an operator, so none here is operator-owned.
-  const capped = workspaces.filter((workspace) => serviceCapApplies(workspace, false, now));
+  // Third review: each workspace's own owners decide (still there: the rows go
+  // after this), not the deleting person, so an operator-owned workspace a
+  // customer co-owner deletes stays out of the count.
+  const capped = workspaces.filter((workspace) =>
+    serviceCapApplies(workspace, workspace.members.some((owner) => isOperatorUser(owner.user)), now),
+  );
   if (capped.length === 0) return;
   const personal = new Set(
     capped.filter((workspace) => personalPostLimitApplies(workspace, process.env, now)).map((w) => w.id),

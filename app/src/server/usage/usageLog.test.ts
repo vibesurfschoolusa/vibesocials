@@ -462,10 +462,10 @@ describe("before a workspace is deleted", () => {
           },
         ]),
       },
-      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-gone" }]) },
+      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-gone", members: [PLAIN_OWNER] }]) },
     };
 
-    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-gone"], userId: "owner-1", operator: false, now: NOW });
+    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-gone"], userId: "owner-1", now: NOW });
 
     expect(tx.postJob.findMany).toHaveBeenCalledWith({
       where: {
@@ -516,8 +516,8 @@ describe("before a workspace is deleted", () => {
       postJobResult: { findMany: vi.fn().mockResolvedValue([]) },
       workspace: {
         findMany: vi.fn().mockResolvedValue([
-          { id: "ws-paid", ...PAID },
-          { id: "ws-trial", ...TRIAL },
+          { id: "ws-paid", ...PAID, members: [PLAIN_OWNER] },
+          { id: "ws-trial", ...TRIAL, members: [PLAIN_OWNER] },
         ]),
       },
     };
@@ -525,7 +525,6 @@ describe("before a workspace is deleted", () => {
     await copyUsageBeforeDeletion(tx as never, {
       workspaceIds: ["ws-paid", "ws-trial"],
       userId: "owner-1",
-      operator: false,
       now: NOW,
     });
 
@@ -541,18 +540,28 @@ describe("before a workspace is deleted", () => {
       usageEvent: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
       postJob: { findMany: vi.fn().mockResolvedValue([]) },
       postJobResult: { findMany: vi.fn().mockResolvedValue([]) },
-      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-old", billingExempt: true }]) },
+      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-old", billingExempt: true, members: [PLAIN_OWNER] }]) },
     };
-    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-old"], userId: "owner-1", operator: false, now: NOW });
+    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-old"], userId: "owner-1", now: NOW });
     expect(tx.workspace.findMany).toHaveBeenCalledWith({
       where: { id: { in: ["ws-old"] } },
-      select: { id: true, billingExempt: true, plan: true, planStatus: true, trialEndsAt: true, currentPeriodEnd: true },
+      select: {
+        id: true,
+        billingExempt: true,
+        plan: true,
+        planStatus: true,
+        trialEndsAt: true,
+        currentPeriodEnd: true,
+        members: { where: { role: "owner" }, select: { user: { select: { email: true, emailVerifiedAt: true } } } },
+      },
     });
     expect(tx.postJob.findMany).not.toHaveBeenCalled();
     expect(tx.usageEvent.createMany).not.toHaveBeenCalled();
   });
 
-  it("an operator's deleted workspaces copy no posts (they count toward no limit), only X posts", async () => {
+  // Third review case: a customer owner deletes a workspace the operator also
+  // owns. The workspace's own owners decide, not the deleting person.
+  it("a workspace an operator also owns copies no posts, whoever deletes it; only X posts", async () => {
     const tx = {
       usageEvent: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
       postJob: {
@@ -561,9 +570,9 @@ describe("before a workspace is deleted", () => {
         ]),
       },
       postJobResult: { findMany: vi.fn().mockResolvedValue([]) },
-      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-ops" }]) },
+      workspace: { findMany: vi.fn().mockResolvedValue([{ id: "ws-ops", members: [PLAIN_OWNER, OPS_OWNER] }]) },
     };
-    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-ops"], userId: "ops-1", operator: true, now: NOW });
+    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-ops"], userId: "owner-1", now: NOW });
     expect(tx.postJob.findMany).not.toHaveBeenCalled();
     expect(tx.usageEvent.createMany).not.toHaveBeenCalled();
     expect(tx.postJobResult.findMany).toHaveBeenCalled();
@@ -576,7 +585,7 @@ describe("before a workspace is deleted", () => {
       postJobResult: { findMany: vi.fn().mockResolvedValue([]) },
       workspace: { findMany: vi.fn().mockResolvedValue([]) },
     };
-    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-gone"], userId: "owner-1", operator: false, now: NOW });
+    await copyUsageBeforeDeletion(tx as never, { workspaceIds: ["ws-gone"], userId: "owner-1", now: NOW });
     expect(tx.usageEvent.createMany).not.toHaveBeenCalled();
   });
 });
