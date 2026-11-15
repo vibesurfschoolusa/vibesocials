@@ -21,8 +21,9 @@ export default function HelpPage() {
       showUpdated={false}
       intro={
         <p>
-          You connect accounts in Settings, under Connections. Only the workspace owner can connect
-          an account. Each workspace holds one account per platform.
+          You connect accounts in Settings, under Connections. Only a workspace owner can connect an
+          account there. A client can connect their own accounts through a client connect link an
+          owner sends them. Each workspace holds one account per platform.
         </p>
       }
     >
@@ -49,6 +50,30 @@ export default function HelpPage() {
           </div>
         );
       })}
+
+      {/* R6-pages L5: the other way in, for accounts the client owns. */}
+      <div id="client-connect-link" className="scroll-mt-6">
+        <LegalSection title="Letting a client connect their accounts">
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              An owner makes the link in Settings, under Connections, Client connect link: tick the
+              platforms it offers, then copy the link and send it to your client.
+            </li>
+            <li>
+              Your client opens it and signs in on each platform. They don&apos;t need a{" "}
+              {PRODUCT_NAME} account, and you never see their password.
+            </li>
+            <li>
+              The link works for 14 days. An owner can replace it or turn it off at any time, and it
+              stops working when the owner who made it is no longer an owner.
+            </li>
+            <li>
+              It connects a platform that has no working account yet, or one that is about to stop
+              working; it never replaces an account that works.
+            </li>
+          </ul>
+        </LegalSection>
+      </div>
 
       <div id="troubleshooting" className="scroll-mt-6">
         <LegalSection title="When something goes wrong">

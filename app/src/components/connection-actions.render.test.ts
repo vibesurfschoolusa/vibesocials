@@ -2,6 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+const linkedInDialogProps: Record<string, unknown>[] = [];
+vi.mock("./linkedin-account-dialog", () => ({
+  LinkedInAccountDialog: (props: Record<string, unknown>) => {
+    linkedInDialogProps.push(props);
+    return null;
+  },
+}));
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: () => null,
   DialogBody: () => null,
@@ -53,6 +60,16 @@ describe("Settings connection row", () => {
     const html = row({ needsReconnect: true, reconnectSoon: false });
     expect(html).toMatch(RECONNECT_LINK);
     expect(html).not.toContain("Ends soon");
+  });
+
+  it("Switch account for LinkedIn tells what happens to scheduled posts", () => {
+    linkedInDialogProps.length = 0;
+    row();
+    expect(linkedInDialogProps[0]).toMatchObject({
+      mode: "switch",
+      scheduledNote:
+        "Scheduled posts that chose LinkedIn go to the new account once you finish signing in. If you stop before then, they fail on LinkedIn until you connect an account again.",
+    });
   });
 
   it("a member sees the status and no button", () => {

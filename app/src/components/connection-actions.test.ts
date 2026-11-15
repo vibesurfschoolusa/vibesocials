@@ -7,6 +7,7 @@ import {
   disconnectDescription,
   requestDisconnect,
   switchDescription,
+  switchScheduledSentence,
 } from "./connection-actions";
 
 /**
@@ -125,5 +126,14 @@ describe("Switch account dialog", () => {
 
   it("Google Business Profile: names the listing numbers too", () => {
     expect(switchDescription("google_business_profile")).toContain(GBP_GONE);
+  });
+
+  // R6-pages L3: what happens to scheduled posts.
+  it("says scheduled posts go to the new account once the sign-in completes, and fail if it is abandoned", () => {
+    const sentence =
+      "Scheduled posts that chose YouTube go to the new account once you finish signing in. If you stop before then, they fail on YouTube until you connect an account again.";
+    expect(switchScheduledSentence("youtube")).toBe(sentence);
+    expect(switchDescription("youtube")).toContain(sentence);
+    expect(switchScheduledSentence("tiktok")).toContain("Scheduled posts that chose TikTok go to the new account");
   });
 });

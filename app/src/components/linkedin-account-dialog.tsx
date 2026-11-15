@@ -30,6 +30,8 @@ interface Props {
    * connection). Throw to stay on the dialog; the caller reports the error.
    */
   beforeContinue?: () => Promise<void>;
+  /** R6-pages L3: Switch account says what happens to scheduled posts (connection-actions.tsx). */
+  scheduledNote?: string;
 }
 
 /**
@@ -47,7 +49,7 @@ export function linkedInSwitchNumbersNote(mode: LinkedInAccountDialogMode): stri
  * account to use instead of silently reusing the signed-in one
  * (lib/linkedinAccount.ts).
  */
-export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, beforeContinue }: Props) {
+export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, beforeContinue, scheduledNote }: Props) {
   const [busy, setBusy] = useState(false);
   const copy = linkedInAccountDialogCopy(mode);
   const numbersNote = linkedInSwitchNumbersNote(mode);
@@ -77,6 +79,7 @@ export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, b
           ))}
         </ol>
         <p className="mt-3 text-sm text-muted-foreground">{copy.shortcut}</p>
+        {scheduledNote ? <p className="mt-3 text-sm text-muted-foreground">{scheduledNote}</p> : null}
         {numbersNote ? <p className="mt-3 text-sm text-muted-foreground">{numbersNote}</p> : null}
       </DialogBody>
       <DialogFooter>

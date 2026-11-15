@@ -139,8 +139,18 @@ export async function requestDisconnect(
   throw new Error(response.status < 500 && data?.error ? data.error : DISCONNECT_FAILED_MESSAGE);
 }
 
+/**
+ * R6-pages L3: Switch account disconnects first, so a scheduled post that chose
+ * the platform fails on it (CONNECTION_GONE) until an account is connected
+ * again; once one is, it posts to that account.
+ */
+export function switchScheduledSentence(platform: string): string {
+  const label = platformLabel(platform as Platform);
+  return `Scheduled posts that chose ${label} go to the new account once you finish signing in. If you stop before then, they fail on ${label} until you connect an account again.`;
+}
+
 export function switchDescription(platform: string): string {
-  return `This disconnects your current account and sends you to reconnect a different one. Your past posts stay in Activity.${numbersDeletedSentence(platform)}`;
+  return `This disconnects your current account and sends you to reconnect a different one. ${switchScheduledSentence(platform)} Your past posts stay in Activity.${numbersDeletedSentence(platform)}`;
 }
 
 export function ConnectionActions({
@@ -329,6 +339,7 @@ export function ConnectionActions({
               </li>
               <li>Sign in with your private TikTok account.</li>
             </ol>
+            <p className="mt-3 text-sm text-muted-foreground">{switchScheduledSentence(platform)}</p>
             <p className="mt-3 text-sm text-muted-foreground">
               Your account must be set to{" "}
               <span className="font-medium text-foreground">Private</span> in TikTok
@@ -351,6 +362,7 @@ export function ConnectionActions({
           mode="switch"
           beforeContinue={disconnectForLinkedInSwitch}
           workspaceId={workspaceId}
+          scheduledNote={switchScheduledSentence(platform)}
         />
       ) : (
         <ConfirmDialog
