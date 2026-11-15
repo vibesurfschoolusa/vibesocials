@@ -64,6 +64,52 @@ describe("fetchReviews", () => {
   });
 });
 
+// R19 client-journey: Google fills Reviewer.displayName only when the reviewer
+// is not anonymous, so a review can come without a name. Every reader (the card,
+// the AI draft, the new-review email) gets "A Google user" instead.
+describe("reviews from Google: the reviewer's name", () => {
+  const withReviewer = (reviewer: unknown) =>
+    json({
+      reviews: [
+        {
+          name: "accounts/1/locations/2/reviews/r1",
+          ...(reviewer === undefined ? {} : { reviewer }),
+          starRating: "FIVE",
+          createTime: "2026-11-01T00:00:00Z",
+          updateTime: "2026-11-01T00:00:00Z",
+        },
+      ],
+    });
+
+  it("an anonymous reviewer with no name is 'A Google user', on both reads", async () => {
+    fetchMock.mockResolvedValueOnce(withReviewer({ isAnonymous: true }));
+    const [first] = await fetchReviews("tok", "accounts/1/locations/2");
+    expect(first.reviewer).toEqual({ displayName: "A Google user", isAnonymous: true });
+
+    fetchMock.mockResolvedValueOnce(withReviewer({ isAnonymous: true, displayName: "  " }));
+    const { reviews } = await fetchAllReviews("tok", "accounts/1/locations/2");
+    expect(reviews[0].reviewer.displayName).toBe("A Google user");
+  });
+
+  it("a review with no reviewer at all still names one", async () => {
+    fetchMock.mockResolvedValueOnce(withReviewer(undefined));
+    const [first] = await fetchReviews("tok", "accounts/1/locations/2");
+    expect(first.reviewer).toEqual({ displayName: "A Google user", isAnonymous: false });
+  });
+
+  it("a real name is kept, trimmed, with the photo", async () => {
+    fetchMock.mockResolvedValueOnce(
+      withReviewer({ displayName: " Maria Lopez ", isAnonymous: false, profilePhotoUrl: "https://example.com/p.png" }),
+    );
+    const [first] = await fetchReviews("tok", "accounts/1/locations/2");
+    expect(first.reviewer).toEqual({
+      displayName: "Maria Lopez",
+      isAnonymous: false,
+      profilePhotoUrl: "https://example.com/p.png",
+    });
+  });
+});
+
 describe("fetchNewReviewUri", () => {
   it("reads only metadata.newReviewUri of the location", async () => {
     fetchMock.mockResolvedValue(json({ metadata: { newReviewUri: "https://g.page/r/abc/review" } }));

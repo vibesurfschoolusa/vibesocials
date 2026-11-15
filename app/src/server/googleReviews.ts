@@ -51,7 +51,22 @@ export async function refreshAccessToken(
   return refreshConnectionToken(connection, (current) => refreshGoogleToken(current));
 }
 
-type GoogleReviewPayload = Omit<GoogleReview, "reviewId">;
+type GoogleReviewPayload = Omit<GoogleReview, "reviewId" | "reviewer"> & {
+  reviewer?: Partial<GoogleReview["reviewer"]>;
+};
+
+/** The words for a reviewer Google gives no name for (as the new-review email says). */
+const NAMELESS_REVIEWER = "A Google user";
+
+/**
+ * R19 client-journey: Google fills displayName only when the reviewer is not
+ * anonymous, so it can be missing. Made a trimmed string here, where reviews
+ * come in, so the card's initial, the AI draft and the email always have a name.
+ */
+function reviewerOf(reviewer: GoogleReviewPayload["reviewer"]): GoogleReview["reviewer"] {
+  const name = typeof reviewer?.displayName === "string" ? reviewer.displayName.trim() : "";
+  return { ...reviewer, displayName: name || NAMELESS_REVIEWER, isAnonymous: reviewer?.isAnonymous === true };
+}
 
 /** One page of a location's reviews: `query` is the list call's query string. */
 async function fetchReviewsPage(
@@ -84,6 +99,7 @@ async function fetchReviewsPage(
 
   const reviews = (data.reviews || []).map((review) => ({
     ...review,
+    reviewer: reviewerOf(review.reviewer),
     // Extract review ID from name (e.g., "accounts/.../locations/.../reviews/ABC123")
     reviewId: review.name.split("/").pop() || "",
   }));
