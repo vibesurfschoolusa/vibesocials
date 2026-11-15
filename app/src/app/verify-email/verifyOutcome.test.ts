@@ -50,23 +50,32 @@ describe("readAccountState", () => {
 describe("verifyView", () => {
   const all: AccountState[] = ["verified", "unverified", "signed_out", "unknown"];
 
-  it("a used link for a verified person says it is already verified", () => {
-    const view = verifyView("invalid", "verified");
-    expect(view.title).toBe("Your email is already verified");
-    expect(view.offerResend).toBe(false);
+  // Review: the link may belong to another account than the one signed in,
+  // so a dead link is answered about the link, never about this account.
+  const DEAD =
+    "This link has expired or was already used. If it is for another account, sign in to that account first.";
+
+  it("a dead link is answered about the link, whoever reads it", () => {
+    for (const account of all) {
+      const view = verifyView("invalid", account);
+      expect(view.title).toBe("This link isn't valid");
+      expect(view.message).toBe(DEAD);
+      expect(view.message).not.toContain("already verified");
+    }
   });
 
-  it("a dead link for a signed-in unverified person says it expired and offers a new one", () => {
-    const view = verifyView("invalid", "unverified");
-    expect(view.title).toBe("This link has expired");
-    expect(view.message).toContain("newest email");
-    expect(view.offerResend).toBe(true);
+  it("offers a new link only when the signed-in account itself is unverified", () => {
+    expect(verifyView("invalid", "unverified").offerResend).toBe(true);
+    for (const account of ["verified", "signed_out", "unknown"] as const) {
+      expect(verifyView("invalid", account).offerResend).toBe(false);
+    }
+    for (const attempt of ["ok", "rate_limited", "server", "network"] as const) {
+      expect(verifyView(attempt, "unverified").offerResend).toBe(false);
+    }
   });
 
-  it("a dead link for a signed-out visitor says expired or used and sends them to log in", () => {
-    const view = verifyView("invalid", "signed_out");
-    expect(view.message).toContain("expired or was already used");
-    expect(view.next).toEqual({ href: "/login", label: "Log in" });
+  it("a signed-out visitor is pointed to log in", () => {
+    expect(verifyView("invalid", "signed_out").next).toEqual({ href: "/login", label: "Log in" });
   });
 
   // R5 new-customer L3: a signed-in person is never sent to the login form.

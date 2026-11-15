@@ -2,10 +2,10 @@
  * What the verify-email page says after it tries the link (R5 new-customer
  * L3, pages L7). The verify route answers one uniform 400 for every dead
  * link (no oracle, api/auth/verify-email), so the page tells the cases apart
- * from what it can know itself: the answer's status, whether the request got
- * through at all, and whether the signed-in person is verified. A used link
- * always belongs to a verified person, so a signed-in unverified person's dead
- * link expired or was replaced by a newer one.
+ * from what it can know itself: the answer's status and whether the request
+ * got through at all. A dead link may be another account's, so it is never
+ * answered about the signed-in account; that account's own state decides
+ * only whether a new link is offered.
  */
 
 export type VerifyAttempt = "ok" | "invalid" | "rate_limited" | "server" | "network";
@@ -57,7 +57,6 @@ const CONTINUE = { href: "/", label: "Continue to Vibe Socials" };
 const LOG_IN = { href: "/login", label: "Log in" };
 
 export function verifyView(attempt: VerifyAttempt, account: AccountState): VerifyView {
-  const signedIn = account === "verified" || account === "unverified";
   const next = account === "signed_out" ? LOG_IN : CONTINUE;
   const base = { verified: false, next, offerResend: false, offerRetry: false };
 
@@ -89,28 +88,15 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
       message: "Your email isn't verified yet, and this link still works. Please try again in a minute.",
     };
   }
-  // A dead link.
-  if (account === "verified") {
-    return {
-      ...base,
-      title: "Your email is already verified",
-      message: "This link was already used, and your email address is verified. There is nothing else to do.",
-    };
-  }
-  if (signedIn) {
-    return {
-      ...base,
-      offerResend: true,
-      title: "This link has expired",
-      message:
-        "Each link works for 7 days, and a new email replaces the link before it. Press Send a new link, then use the button in the newest email.",
-    };
-  }
+  // A dead link. It may belong to another account than the one signed in, so
+  // the answer is about the link; a new link is offered only to a signed-in
+  // account that itself still needs verifying.
   return {
     ...base,
+    offerResend: account === "unverified",
     title: "This link isn't valid",
     message:
-      "This link has expired or was already used. If you verified your email before, there is nothing to do. Otherwise log in and press Resend email at the top of the page to get a new link.",
+      "This link has expired or was already used. If it is for another account, sign in to that account first.",
   };
 }
 
