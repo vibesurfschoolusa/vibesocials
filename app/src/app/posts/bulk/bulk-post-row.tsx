@@ -219,7 +219,7 @@ export function BulkPostRow({
               ) : null}
               {row.caption.trim() ? (
                 <Button variant="outline" size="md" loading={row.improving} aria-busy={row.improving} onClick={onImprove}>
-                  {row.improving ? "Improving..." : "Improve"}
+                  {row.improving ? "Improving..." : "Improve caption"}
                 </Button>
               ) : null}
             </div>

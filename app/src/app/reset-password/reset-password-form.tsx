@@ -11,6 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 
+/** R5 pages L8: what the form says when the reset didn't go through. */
+export const RESET_FAILED_MESSAGE = "Your password wasn't changed. Please try again in a minute.";
+export const RESET_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so your password wasn't changed. Check your internet connection and try again.";
+
 function CardShell({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
     <Card>
@@ -78,9 +83,9 @@ export function ResetPasswordForm() {
       }
 
       const data = await response.json().catch(() => null);
-      setError(data?.error ?? "Something went wrong. Please try again.");
+      setError(data?.error ?? RESET_FAILED_MESSAGE);
     } catch {
-      setError("Something went wrong. Please try again.");
+      setError(RESET_OFFLINE_MESSAGE);
     } finally {
       setLoading(false);
     }

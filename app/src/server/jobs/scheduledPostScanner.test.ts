@@ -139,6 +139,21 @@ describe("scheduledPostScanner - telling owners about posts given up on", () => 
     expect(dispatches()).toEqual([[{ id: "notify-unsent-job-old-1", name: "notification.requested", data: {} }]]);
   });
 
+  // R5-client-journey L3 review: a job the reconciler closes is announced like a
+  // finished run, so a Feed and Story pair whose run died still gets its email.
+  it("gives the reconcile inngest.send to announce the jobs it closes", async () => {
+    claimDueMock.mockResolvedValue([]);
+
+    await runScanner(fakeStep());
+
+    const [now, take, maxAge, deps] = reconcileMock.mock.calls[0] as [Date, unknown, unknown, { notify: (events: unknown[]) => Promise<unknown> }];
+    expect(now).toBeInstanceOf(Date);
+    expect(take).toBeUndefined();
+    expect(maxAge).toBeUndefined();
+    await deps.notify([{ id: "notify-reconciled-job-1-1", name: "notification.requested", data: {} }]);
+    expect(dispatches()).toEqual([[{ id: "notify-reconciled-job-1-1", name: "notification.requested", data: {} }]]);
+  });
+
   it("still tells owners when the reconcile throws", async () => {
     claimDueMock.mockResolvedValue([]);
     reconcileMock.mockRejectedValue(new Error("db blip"));

@@ -583,7 +583,7 @@ function OwnerView({
           <div className="mt-2 flex flex-col gap-2">
             {freshUrl ? (
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Input readOnly value={freshUrl} className="font-mono text-xs sm:max-w-md" />
+                <Input readOnly value={freshUrl} aria-label="New invite link" className="font-mono text-xs sm:max-w-md" />
                 <Button size="sm" variant="outline" className="shrink-0" onClick={copyInviteUrl}>
                   <Copy aria-hidden className="h-4 w-4" />
                   Copy link

@@ -5,12 +5,12 @@ import { BrandMark } from "@/components/brand-mark";
 import { VerifyEmailClient } from "./verify-email-client";
 
 export const metadata: Metadata = {
-  title: "Verify your email",
+  title: "Verify your email | Vibe Socials",
 };
 
 export default function VerifyEmailPage() {
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-primary/5 via-background to-background"
@@ -33,10 +33,9 @@ export default function VerifyEmailPage() {
 
         {/* The Card (with its state-dependent header) lives in the client
             component, which reads the token from the URL fragment and POSTs it
-            once on mount, swapping between the verifying / success / error
-            states. */}
+            on mount, then shows the answer verifyOutcome.ts chooses. */}
         <VerifyEmailClient />
       </div>
-    </div>
+    </main>
   );
 }

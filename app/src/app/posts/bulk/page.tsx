@@ -37,8 +37,8 @@ export default async function BulkPostsPage({
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Add many posts</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Add up to 20 photos and videos. Each one becomes its own post with an AI caption, spread over the
-          coming days.
+          Add up to 20 photos and videos. Each one becomes its own post, spread over the coming days. With
+          &quot;Write captions with AI&quot; on, each gets a caption written for it.
         </p>
       </div>
       {/* P1: Add many is a Growth and Pro feature. Its requests are Create's own POST

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
@@ -7,6 +8,10 @@ import { savedNewReviewUri } from "@/server/googleReviews";
 import { PrintCard } from "./print-card";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Review card | Vibe Socials",
+};
 
 /**
  * The printable review card (2026-11-10), opened from the "Get more reviews"

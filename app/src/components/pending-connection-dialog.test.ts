@@ -46,3 +46,14 @@ describe("PendingConnectionDialog: first render is the same on the server and in
     expect(firstRender("", true)).toBe("");
   });
 });
+
+// R5 pages L8: a failed connect says what happened and what to do.
+describe("PendingConnectionDialog failure sentences", () => {
+  it("names a network failure and a server failure plainly", async () => {
+    const { PENDING_CONNECT_FAILED, PENDING_CONNECT_OFFLINE } = await import("./pending-connection-dialog");
+    expect(PENDING_CONNECT_FAILED).toBe("That account wasn't connected. Please press Connect again in a minute.");
+    expect(PENDING_CONNECT_OFFLINE).toBe(
+      "We couldn't reach Vibe Socials, so nothing was connected. Check your internet connection and press Connect again.",
+    );
+  });
+});

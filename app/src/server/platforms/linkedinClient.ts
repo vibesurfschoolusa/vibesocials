@@ -2056,4 +2056,15 @@ export const linkedinClient: PlatformClient = {
       throw error;
     }
   },
+
+  /**
+   * The health sweep's refresher (R5-publishing L1): it calls this, under the
+   * per-connection lock, only for a connection that holds a refresh token
+   * (connectionHealthSweep.ts). Without one there is nothing to renew; the
+   * sweep's pre-expiry warning covers that connection instead.
+   */
+  async refreshToken(connection: SocialConnection, opts?: { deadline?: number }): Promise<SocialConnection> {
+    if (!connection.refreshToken) return connection;
+    return refreshLinkedInToken(connection, opts);
+  },
 };

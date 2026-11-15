@@ -9,7 +9,6 @@ import type { UploadStateStore } from "@/server/jobs/uploadState";
 import {
   connectionTokenChangedError,
   flagRejectedToken,
-  flagTerminalRefreshFailure,
   type TokenSnapshot,
 } from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
@@ -35,26 +34,27 @@ import { classifyRateLimit } from "./rateLimited";
  */
 const INSTAGRAM_ALT_TEXT_LIMIT = 1000;
 
-// COR-5: Instagram token expiry handling.
+// Instagram token handling.
 //
 // Token-material reality (see app/src/app/api/auth/instagram/callback/route.ts):
 // the connection's `accessToken` is a long-lived Facebook PAGE access token
 // (minted from a long-lived user token during OAuth) and `refreshToken` is
 // stored as null. Page tokens derived from a long-lived user token carry no
-// refresh token and generally do not expire on a fixed clock, but they CAN be
-// invalidated (the user revokes access / changes password, or the parent
-// long-lived user token lapses). The stored `expiresAt` mirrors that user
-// token's ~60-day window and is used here as a conservative "time to prompt
-// reconnect" signal.
+// refresh token and do not expire on a fixed clock, but they CAN be invalidated
+// (the user revokes access or changes password). The stored `expiresAt` is the
+// user token's ~60-day window, not the Page token's.
 //
-// There is deliberately NO refresh call: `fb_exchange_token` re-extends USER
-// tokens, not page tokens, and no user token is stored — so the only real
-// recovery is to reconnect. The fix is therefore an expiry check on the token
-// actually used for publishing, surfaced as a clean, coded reconnect error.
+// R5-publishing M1: until 2026-11-14 that `expiresAt` was enforced here, so every
+// Instagram connection was refused at day 60 while the same Page token kept
+// working for Facebook. Now, as in facebookPageClient.ts, the only health signal
+// is the Graph API rejecting the token (HTTP 401, or OAuthException 190), mapped
+// at every Graph call below to a clean, coded reconnect error plus the
+// `needsReconnect` flag; the daily sweep then emails the owners
+// (server/jobs/connectionNotices.ts). There is no refresh call:
+// `fb_exchange_token` re-extends USER tokens, and none is stored.
 
-const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
-// Roadmap Phase 4: the code flagged (flagRejectedToken / flagTerminalRefreshFailure)
-// at every site below that throws this error (expiry guard + 401 mapping).
+// Roadmap Phase 4: the code flagged (flagRejectedToken) at every site below that
+// throws this error (the 401 / 190 mapping).
 const INSTAGRAM_RECONNECT_CODE = "INSTAGRAM_RECONNECT_REQUIRED";
 
 // 2026-11-02 scale audit (jobs L5): a REELS video is processed by Instagram
@@ -115,17 +115,11 @@ export const INSTAGRAM_POLL_MAX_ATTEMPTS = 30;
  */
 export const INSTAGRAM_PUBLISH_RESERVE_MS = 20_000;
 
-function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
-  if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
-  return new Date(expiresAt).getTime() - Date.now() <= TOKEN_EXPIRY_BUFFER_MS;
-}
-
-function instagramReconnectRequiredError(cause?: unknown): Error & { code: string } {
+function instagramReconnectRequiredError(): Error & { code: string } {
   const error = new Error(
     "Your Instagram connection has expired — please reconnect it in Settings.",
   ) as Error & { code: string };
   error.code = INSTAGRAM_RECONNECT_CODE;
-  if (cause !== undefined) error.cause = cause;
   return error;
 }
 
@@ -134,29 +128,13 @@ function instagramReconnectRequiredError(cause?: unknown): Error & { code: strin
  * reconnect error. The flag is guarded by the tokens the rejected call used
  * (2026-11-02 scale audit, jobs, token refresh): if another process changed them
  * since this publish read the row (the user reconnected), NOTHING is flagged and
- * the plain, retryable CONNECTION_TOKEN_CHANGED is thrown. Not for
- * instagramClient.refreshToken: a refresher flags through
- * flagTerminalRefreshFailure, which throws TOKEN_REFRESH_SUPERSEDED.
+ * the plain, retryable CONNECTION_TOKEN_CHANGED is thrown.
  */
 async function throwInstagramReconnect(connection: TokenSnapshot): Promise<never> {
   if ((await flagRejectedToken(connection, INSTAGRAM_RECONNECT_CODE)) === "superseded") {
     throw connectionTokenChangedError();
   }
   throw instagramReconnectRequiredError();
-}
-
-/**
- * The expiry guard (ensureFreshInstagramToken) refused the stored `expiresAt`:
- * flag the connection, guarded by the tokens this publish read, and rethrow the
- * guard's reconnect error. Nothing was sent to Meta, but the row may be stale: if
- * the stored tokens changed since (the user reconnected), nothing is flagged and
- * the retryable CONNECTION_TOKEN_CHANGED is thrown instead.
- */
-async function flagExpiredToken(connection: TokenSnapshot, guardError: unknown): Promise<never> {
-  if ((await flagRejectedToken(connection, INSTAGRAM_RECONNECT_CODE)) === "superseded") {
-    throw connectionTokenChangedError();
-  }
-  throw guardError;
 }
 
 /**
@@ -170,18 +148,11 @@ function isGraphAuthFailure(status: number, body: string): boolean {
 }
 
 /**
- * Guard the token before hitting the Graph API. Instagram cannot refresh (see
- * file header), so an expired/near-expired token becomes a clean, actionable
- * reconnect error instead of a raw OAuth failure surfaced to the user via
- * PostJobResult.errorMessage. Returns the connection unchanged when usable.
- * Exported for unit tests.
+ * The connection, ready to call the Graph API with: as it is, whatever its stored
+ * `expiresAt` says (see the file header, R5-publishing M1). Kept for the metrics
+ * sync (socialMetricsSync.ts), which reads Instagram numbers through it.
  */
-export function ensureFreshInstagramToken(
-  connection: SocialConnection,
-): SocialConnection {
-  if (isExpiredOrExpiringSoon(connection.expiresAt)) {
-    throw instagramReconnectRequiredError();
-  }
+export function ensureFreshInstagramToken(connection: SocialConnection): SocialConnection {
   return connection;
 }
 
@@ -1097,20 +1068,7 @@ async function publishInstagramCarousel(args: {
 
 export const instagramClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    let { socialConnection } = ctx;
-    const { mediaItem, caption, deadline } = ctx;
-
-    // COR-5: fail fast with a clear reconnect error if the page token has
-    // aged out, rather than letting the Graph API return a cryptic OAuth error.
-    // Roadmap Phase 4: mark needsReconnect before the guard's error
-    // propagates (see connectionHealth.ts).
-    try {
-      socialConnection = ensureFreshInstagramToken(socialConnection);
-    } catch (error) {
-      // Guarded like every other flag: the stored expiresAt this guard judged may
-      // be stale (the user reconnected since this publish read the row).
-      await flagExpiredToken(socialConnection, error);
-    }
+    const { socialConnection, mediaItem, caption, deadline } = ctx;
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -1297,19 +1255,10 @@ export const instagramClient: PlatformClient = {
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    // Instagram page tokens cannot be refreshed (see file header). Delegate to
-    // the same guard used at publish time so any future caller gets correct
-    // behavior — a fresh connection or a coded reconnect error — not a silent
-    // no-op that hides an expired token.
-    try {
-      return ensureFreshInstagramToken(connection);
-    } catch (error) {
-      // Roadmap Phase 4: flag before throwing. A refresher (the health sweep calls
-      // this through refreshConnectionToken), so the flag is guarded by the stored
-      // tokens and throws TOKEN_REFRESH_SUPERSEDED, which the helper turns into the
-      // stored row, when they changed (2026-11-01 scale audit, jobs, token refresh).
-      await flagTerminalRefreshFailure(connection, INSTAGRAM_RECONNECT_CODE);
-      throw error;
-    }
+    // Nothing to refresh (see the file header): the Page token does not expire on
+    // a schedule, and a dead one is flagged at the Graph call that is refused. The
+    // health sweep leaves out connections without a refresh token, so it never
+    // calls this (connectionHealthSweep.ts).
+    return connection;
   },
 };

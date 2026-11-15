@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildReconnectEmail } from "./reconnectEmail";
+import { buildExpiryWarningEmail, buildReconnectEmail } from "./reconnectEmail";
 
 describe("buildReconnectEmail", () => {
   const email = buildReconnectEmail({
@@ -66,5 +66,91 @@ describe("buildReconnectEmail", () => {
       appBaseUrl: null,
     });
     expect(evil.html).not.toContain("<img");
+  });
+
+  // R5-client-journey L4: an agency's client often connected the account through
+  // a connect link, and only they can connect it again.
+  it("says to send the client a connect link, linked to Settings, Connections through /go", () => {
+    expect(email.html).toContain("If your client connected it, send them a connect link from");
+    expect(email.html).toContain(
+      'href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23connect-link">Settings, Connections</a>.',
+    );
+  });
+
+  it("names Settings, Connections without a link when appBaseUrl is null", () => {
+    const noLink = buildReconnectEmail({ platformLabel: "X", workspaceId: "ws_1", workspaceName: "W", appBaseUrl: null });
+    expect(noLink.html).toContain("If your client connected it, send them a connect link from Settings, Connections.");
+  });
+
+  // R5-publishing M1: a connection flagged by a failed post (a Graph 190, a 401)
+  // gets this email too, so it no longer speaks of a renewal that never happened.
+  it("says the platform no longer accepts the sign-in", () => {
+    expect(email.html).toContain(
+      "has stopped working: Google Business Profile no longer accepts its sign-in, which usually means access was removed or the sign-in expired.",
+    );
+    expect(email.html).not.toContain("renewal");
+  });
+
+  it("an expired sign-in that cannot be renewed says so", () => {
+    const expired = buildReconnectEmail({
+      platformLabel: "LinkedIn",
+      workspaceId: "ws_1",
+      workspaceName: "Acme",
+      appBaseUrl: null,
+      reason: "expired",
+    });
+    expect(expired.html).toContain(
+      "The LinkedIn connection in <strong>Acme</strong> has stopped working: its sign-in expired, and LinkedIn does not let us renew it automatically.",
+    );
+    expect(expired.subject).toBe("Action needed: reconnect LinkedIn in Acme");
+  });
+});
+
+// R5-publishing M1: LinkedIn gives this app no refresh token, so its 60-day
+// sign-in ends on a known date. The owners hear a week before.
+describe("buildExpiryWarningEmail", () => {
+  const params = {
+    platformLabel: "LinkedIn",
+    workspaceId: "ws_1",
+    workspaceName: "Surf & Co",
+    expiresAt: new Date("2026-11-20T15:30:00.000Z"),
+    timeZone: "America/New_York",
+    appBaseUrl: "https://vibesocials.wtf",
+  };
+  const email = buildExpiryWarningEmail(params);
+
+  it("subject: '<Platform> needs reconnecting by <date>' and the workspace", () => {
+    expect(email.subject).toBe("LinkedIn needs reconnecting by Friday, November 20, 2026 (Surf & Co)");
+  });
+
+  it("dates it in the owner's time zone, and labels UTC when the zone is unknown", () => {
+    expect(email.html).toContain("Fri, Nov 20, 2026, 10:30 AM EST");
+    const utc = buildExpiryWarningEmail({ ...params, timeZone: null });
+    expect(utc.subject).toBe("LinkedIn needs reconnecting by Friday, November 20, 2026 (UTC) (Surf & Co)");
+    expect(utc.html).toContain("3:30 PM UTC");
+  });
+
+  it("says what happens, why, and what to do: reconnect, or send the client a connect link", () => {
+    expect(email.html).toContain("The LinkedIn connection in <strong>Surf &amp; Co</strong> stops working on");
+    expect(email.html).toContain("LinkedIn does not let us renew this sign-in automatically");
+    expect(email.html).toContain("posts to LinkedIn will fail");
+    expect(email.html).toContain(
+      'href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23connections">Reconnect LinkedIn in Settings</a>',
+    );
+    expect(email.html).toContain("If your client connected it, send them a connect link from");
+    expect(email.html).toContain('to=%2Fsettings%23connect-link">Settings, Connections</a>.');
+  });
+
+  it("renders without links when appBaseUrl is null, and escapes the workspace name", () => {
+    const plain = buildExpiryWarningEmail({ ...params, appBaseUrl: null, workspaceName: "<b>x</b>" });
+    expect(plain.html).not.toContain("<a ");
+    expect(plain.html).not.toContain("<b>x</b>");
+    expect(plain.html).toContain("Reconnect LinkedIn in Settings");
+  });
+
+  it("keeps a line break in the workspace name out of the subject", () => {
+    expect(buildExpiryWarningEmail({ ...params, workspaceName: "Surf\r\nCo" }).subject).toBe(
+      "LinkedIn needs reconnecting by Friday, November 20, 2026 (Surf Co)",
+    );
   });
 });

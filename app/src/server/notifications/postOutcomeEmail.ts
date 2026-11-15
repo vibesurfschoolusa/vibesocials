@@ -2,6 +2,7 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
+import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import { emailSettingsLine, workspaceLink } from "@/server/notifications/links";
@@ -55,6 +56,13 @@ export interface PostOutcomeResultSummary {
   platform: Platform;
   status: PostJobResultStatus;
   errorMessage?: string | null;
+  /** Sent as a Story: the row reads "Instagram Story" (R5-client-journey L3). */
+  story?: boolean;
+  /**
+   * Still pending on a job that was closed (the stale sweep fails a job whose run
+   * never got to it): it was never sent, and counts as not published.
+   */
+  notSent?: boolean;
 }
 
 export interface BuildPostOutcomeEmailParams {
@@ -106,26 +114,40 @@ function oneLine(value: string): string {
   return value.replace(/[\r\n]+/g, " ").trim();
 }
 
-function buildHeadline(succeededCount: number, failedCount: number, total: number): string {
+function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
+  const total = results.length;
+  const succeededCount = results.filter((r) => r.status === "success").length;
+  const failedCount = results.filter((r) => r.status === "failed" || r.notSent).length;
   if (total === 0) return "Your post has finished processing";
+  const stories = results.filter((r) => r.story).length;
+  // A Feed and Story pair: its rows are feed posts and Stories, not platforms.
+  if (stories > 0 && stories < total) {
+    if (failedCount === 0) return "Your post and Story published successfully";
+    if (succeededCount === 0) return "Your post and Story failed to publish";
+    return `Your post and Story finished: ${succeededCount} of ${total} succeeded`;
+  }
+  const subject = stories === total ? "Your Story" : "Your post";
   if (failedCount === 0) {
     return total === 1
-      ? "Your post published successfully"
-      : `Your post published successfully to all ${total} platforms`;
+      ? `${subject} published successfully`
+      : `${subject} published successfully to all ${total} platforms`;
   }
   if (succeededCount === 0) {
     return total === 1
-      ? "Your post failed to publish"
-      : `Your post failed to publish to all ${total} platforms`;
+      ? `${subject} failed to publish`
+      : `${subject} failed to publish to all ${total} platforms`;
   }
-  return `Your post finished: ${succeededCount} of ${total} platforms succeeded`;
+  return `${subject} finished: ${succeededCount} of ${total} platforms succeeded`;
 }
 
 // Field-by-field rendering (never a blanket JSON.stringify of `result`) so a
 // result object that happens to carry extra runtime fields beyond this
 // module's DTO type can never leak into the email body.
 function renderResultRow(result: PostOutcomeResultSummary): string {
-  const label = escapeHtml(platformLabel(result.platform));
+  const label = escapeHtml(`${platformLabel(result.platform)}${result.story ? " Story" : ""}`);
+  if (result.notSent) {
+    return `<li>${label}: Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}. Open the post in Activity to send it again.</li>`;
+  }
   if (result.status === "success") {
     return `<li>${label}: Succeeded</li>`;
   }
@@ -196,9 +218,7 @@ export function buildPostOutcomeEmail({
     return { subject: subjectFor(headline), html };
   }
 
-  const succeededCount = results.filter((r) => r.status === "success").length;
-  const failedCount = results.filter((r) => r.status === "failed").length;
-  const headline = buildHeadline(succeededCount, failedCount, results.length);
+  const headline = buildHeadline(results);
 
   const rows = results.map(renderResultRow).join("");
 
@@ -215,14 +235,158 @@ export function buildPostOutcomeEmail({
   return { subject: subjectFor(headline), html };
 }
 
+/** What the email reads from a job, and from the other half of its pair. */
+const OUTCOME_JOB_SELECT = {
+  id: true,
+  // Task 9: needed so buildPostOutcomeEmail can tell a
+  // zero-eligible-connections `failed` job apart from any other
+  // empty-results state.
+  status: true,
+  // F4: the workspace (its name and /go links) and the caption the email quotes.
+  workspaceId: true,
+  baseCaption: true,
+  mediaItem: { select: { baseCaption: true } },
+  workspace: { select: { name: true } },
+  // R5-client-journey L3: the pair (F6) and which platforms went as a Story.
+  storyOfPostJobId: true,
+  publishMetadata: true,
+  // When the job finished, for a job without results (see finishedAt).
+  updatedAt: true,
+  // The publish attempt the email is about (a Retry sets it): its key.
+  retriedAt: true,
+  results: {
+    // Only what the email renders or keys on — externalPostId was selected but
+    // never read (review Minor #3), so it's dropped.
+    select: {
+      id: true,
+      platform: true,
+      status: true,
+      // Pause (2026-11-10): to send nothing for a paused workspace's job.
+      errorCode: true,
+      errorMessage: true,
+      // When the result finished, and a platform limit the other half waits out.
+      updatedAt: true,
+      deferredUntil: true,
+    },
+  },
+} as const;
+
+type OutcomeJob = NonNullable<
+  Awaited<ReturnType<typeof prisma.postJob.findUnique<{ where: { id: string }; select: typeof OUTCOME_JOB_SELECT }>>>
+>;
+
+/** Still sending: a pair half in this state may still finish, so it is waited for. */
+const PUBLISHING_STATUSES: readonly PostJobStatus[] = ["pending", "in_progress"];
+/** Done: may share one email. Any other state (held, scheduled, cancelled) is not waited for. */
+const FINISHED_STATUSES: readonly PostJobStatus[] = ["completed", "failed"];
+
+/**
+ * R5-client-journey L3 review: the two halves of a Feed and Story pair share one
+ * email when they finish within this long of each other; otherwise each sends
+ * its own. A half whose partner is still publishing waits this long
+ * (sendNotification sleeps), so the pair never ends without an email. Longer
+ * than the stuck-run reconciler takes (STUCK_IN_PROGRESS_MS, 2 h, plus a scanner
+ * tick; it notifies the half it closes), so a half whose run died still shares
+ * the email. A partner waiting out a platform limit beyond it is not waited for.
+ * Both halves apply the same rule to the same two finish times, so they agree.
+ */
+export const PAIR_EMAIL_WAIT_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * When a job finished: its last write, the job's own or a result's. A job the
+ * stale sweep or the reconciler closed finished at that write, however old its
+ * results' times are.
+ */
+function finishedAt(job: OutcomeJob): number {
+  return Math.max(
+    new Date(job.updatedAt).getTime(),
+    ...job.results.map((result) => new Date(result.updatedAt).getTime()),
+  );
+}
+
+/** The latest platform-limit wait among the job's pending results, or 0. */
+function deferredUntil(job: OutcomeJob): number {
+  const times = job.results
+    .filter((result) => result.status === "pending" && result.deferredUntil)
+    .map((result) => new Date(result.deferredUntil!).getTime());
+  return times.length > 0 ? Math.max(...times) : 0;
+}
+
+/**
+ * Which email this half sends: "wait" (until `until`), "alone", or "together"
+ * (one email for the pair).
+ */
+function pairDecision(
+  job: OutcomeJob,
+  partner: OutcomeJob | null,
+  now: number,
+  afterPairWait: boolean,
+): { send: "alone" | "together" } | { send: "wait"; until: number } {
+  if (!partner) return { send: "alone" };
+  const mine = finishedAt(job);
+  if (PUBLISHING_STATUSES.includes(partner.status)) {
+    const deadline = mine + PAIR_EMAIL_WAIT_MS;
+    // It will finish after the deadline whatever happens: its own email then.
+    if (afterPairWait || now >= deadline || deferredUntil(partner) > deadline) return { send: "alone" };
+    return { send: "wait", until: deadline };
+  }
+  if (!FINISHED_STATUSES.includes(partner.status)) return { send: "alone" };
+  return Math.abs(finishedAt(partner) - mine) < PAIR_EMAIL_WAIT_MS ? { send: "together" } : { send: "alone" };
+}
+
+/**
+ * The other half of a Feed and Story pair (F6: the Story job names its feed job
+ * in storyOfPostJobId), or null. A partner in another workspace is no pair.
+ */
+async function pairPartnerOf(job: OutcomeJob): Promise<OutcomeJob | null> {
+  const partner = job.storyOfPostJobId
+    ? await prisma.postJob.findUnique({ where: { id: job.storyOfPostJobId }, select: OUTCOME_JOB_SELECT })
+    : await prisma.postJob.findFirst({ where: { storyOfPostJobId: job.id }, select: OUTCOME_JOB_SELECT });
+  return partner && partner.workspaceId === job.workspaceId ? partner : null;
+}
+
+/** A job's rows for the email, its Story platforms labelled, its never-sent rows marked. */
+function summaryRows(job: OutcomeJob) {
+  const stories = storyPlatformsOf(job.publishMetadata) as Platform[];
+  const closed = FINISHED_STATUSES.includes(job.status);
+  return job.results.map((result) => ({
+    ...result,
+    story: stories.includes(result.platform),
+    notSent: closed && result.status === "pending",
+  }));
+}
+
+/**
+ * Review 2: which publish of the job an email is about. Stable for one publish
+ * (the job's first, or the Retry that set `retriedAt`), so every notice of that
+ * publish, from its run, onFailure, the reconciler or the stale sweep, builds
+ * the same Resend key and Resend sends one email; a Retry is a new attempt and
+ * emails again.
+ */
+function attemptOf(job: OutcomeJob): string {
+  return job.retriedAt ? String(new Date(job.retriedAt).getTime()) : "first";
+}
+
+/** The Resend key of one job's email for one publish attempt. */
+function outcomeIdempotencyKey(postJobId: string, job: OutcomeJob): string {
+  return `post-outcome/${postJobId}/${attemptOf(job)}`;
+}
+
+/** The Resend key of a pair's one email: the same from either half, new after a Retry of either. */
+function pairIdempotencyKey(feed: OutcomeJob, story: OutcomeJob): string {
+  return `post-outcome-pair/${feed.id}/${attemptOf(feed)}/${attemptOf(story)}`;
+}
+
 export interface DeliverPostOutcomeNotificationParams {
   userId: string;
   postJobId: string;
-  /**
-   * Resend `Idempotency-Key` for this outcome (`post-outcome/<runId>`): a retry
-   * after a lost ack is a no-op instead of a second email.
-   */
-  idempotencyKey?: string;
+  /** The second delivery, after the pair wait: never asks to wait again. */
+  afterPairWait?: boolean;
+}
+
+/** Only when this half of a pair waits for the other: deliver again at `waitUntil` (ISO). */
+export interface DeliverPostOutcomeNotificationResult {
+  waitUntil?: string;
 }
 
 /**
@@ -243,8 +407,8 @@ export interface DeliverPostOutcomeNotificationParams {
 export async function deliverPostOutcomeNotification({
   userId,
   postJobId,
-  idempotencyKey,
-}: DeliverPostOutcomeNotificationParams): Promise<void> {
+  afterPairWait = false,
+}: DeliverPostOutcomeNotificationParams): Promise<DeliverPostOutcomeNotificationResult | undefined> {
   try {
     const hasApiKey = Boolean(process.env.RESEND_API_KEY);
 
@@ -254,7 +418,7 @@ export async function deliverPostOutcomeNotification({
     // retry) hits this function, so skipping the two queries below also
     // keeps the feature's cost at zero for installs that haven't opted in.
     if (!hasApiKey) {
-      return;
+      return undefined;
     }
 
     const [user, postJob] = await Promise.all([
@@ -262,31 +426,7 @@ export async function deliverPostOutcomeNotification({
         where: { id: userId },
         select: { email: true, notifyOnPostComplete: true },
       }),
-      prisma.postJob.findUnique({
-        where: { id: postJobId },
-        select: {
-          // Task 9: needed so buildPostOutcomeEmail can tell a
-          // zero-eligible-connections `failed` job apart from any other
-          // empty-results state.
-          status: true,
-          // F4: the workspace (its name and /go links) and the caption the email quotes.
-          workspaceId: true,
-          baseCaption: true,
-          mediaItem: { select: { baseCaption: true } },
-          workspace: { select: { name: true } },
-          results: {
-            // Only what buildPostOutcomeEmail renders — externalPostId was
-            // selected but never read (review Minor #3), so it's dropped.
-            select: {
-              platform: true,
-              status: true,
-              // Pause (2026-11-10): to send nothing for a paused workspace's job.
-              errorCode: true,
-              errorMessage: true,
-            },
-          },
-        },
-      }),
+      prisma.postJob.findUnique({ where: { id: postJobId }, select: OUTCOME_JOB_SELECT }),
     ]);
 
     const shouldSend = shouldSendPostOutcomeEmail({
@@ -296,8 +436,28 @@ export async function deliverPostOutcomeNotification({
     });
 
     if (!shouldSend || !user || !postJob) {
-      return;
+      return undefined;
     }
+    // Publishing again (a retry took it, e.g. while this waited for its pair):
+    // that run notifies when it finishes.
+    if (PUBLISHING_STATUSES.includes(postJob.status)) {
+      return undefined;
+    }
+
+    // R5-client-journey L3: a Feed and Story pair that finishes within
+    // PAIR_EMAIL_WAIT_MS sends one email for both; see pairDecision.
+    const partner = await pairPartnerOf(postJob);
+    const decision = pairDecision(postJob, partner, Date.now(), afterPairWait);
+    if (decision.send === "wait") {
+      return { waitUntil: new Date(decision.until).toISOString() };
+    }
+    const together = decision.send === "together" ? partner : null;
+    const [feed, story] = together
+      ? postJob.storyOfPostJobId
+        ? [together, postJob]
+        : [postJob, together]
+      : [postJob, null];
+    const rows = [...summaryRows(feed), ...(story ? summaryRows(story) : [])];
 
     // Pause (2026-11-10): a paused workspace's due posts are all failed with this
     // code, and the owners already had the pause email, so a job whose every
@@ -306,24 +466,30 @@ export async function deliverPostOutcomeNotification({
     // partial retry after a resume read as a full success while a platform is
     // still unpublished.
     const allPaused =
-      postJob.results.length > 0 &&
-      postJob.results.every((result) => result.status === "failed" && result.errorCode === WORKSPACE_PAUSED_CODE);
+      rows.length > 0 && rows.every((result) => result.status === "failed" && result.errorCode === WORKSPACE_PAUSED_CODE);
     if (allPaused) {
-      return;
+      return undefined;
     }
 
     const { subject, html } = buildPostOutcomeEmail({
-      results: postJob.results,
-      status: postJob.status,
+      results: rows,
+      status: feed.status,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
-      workspaceId: postJob.workspaceId,
+      workspaceId: feed.workspaceId,
       workspaceName: postJob.workspace.name,
-      caption: postJob.baseCaption ?? postJob.mediaItem?.baseCaption ?? "",
+      // The pair is described by its feed post (its caption; a Story has none).
+      caption: feed.baseCaption ?? feed.mediaItem?.baseCaption ?? "",
     });
 
     await sendEmail(
       { to: user.email, subject, html },
-      { idempotencyKey, throwOnRetryable: true },
+      // Keyed on the outcome, not on who asked: a replay, a lost ack, or a second
+      // notice of the same attempt (or the other half of the pair) is a no-op at
+      // Resend, so no outcome is emailed twice; a Retry is a new attempt.
+      {
+        idempotencyKey: story ? pairIdempotencyKey(feed, story) : outcomeIdempotencyKey(postJobId, postJob),
+        throwOnRetryable: true,
+      },
     );
   } catch (error) {
     if (isRetryableEmailError(error)) throw error;
@@ -333,4 +499,5 @@ export async function deliverPostOutcomeNotification({
       error,
     });
   }
+  return undefined;
 }

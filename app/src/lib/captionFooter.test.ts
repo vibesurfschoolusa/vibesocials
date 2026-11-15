@@ -183,9 +183,10 @@ describe("buildCaptionWithFooter tracking tags only when they fit", () => {
   it("counts code points, so an emoji caption never gets the tags into a cut", () => {
     // The surfer emoji below is one grapheme but four code points; Pinterest
     // cuts on code points too (fitPinterestDescription).
+    // As graphemes the tagged text would fit; as code points only the plain one does.
     const surfer = "\u{1F3C4}\u200D\u2642\uFE0F";
-    const room = 800 - tagged("", "pinterest").length;
-    const caption = surfer.repeat(room);
+    const caption = surfer.repeat(Math.floor((800 - plain("").length) / 4));
+    expect(Array.from(new Intl.Segmenter().segment(tagged(caption, "pinterest"))).length).toBeLessThan(800);
     expect(buildCaptionWithFooter(caption, on, "pinterest")).toBe(plain(caption));
   });
 
@@ -237,8 +238,42 @@ describe("buildCaptionWithFooter drops the footer before the caption is cut", ()
     expect(buildCaptionWithFooter(caption, footer, "linkedin")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
   });
 
-  it("keeps the footer on other platforms (their clients cut as before)", () => {
-    const caption = "a".repeat(2200);
-    expect(buildCaptionWithFooter(caption, footer, "instagram")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+  // R5-publishing L2: Instagram, Business Profile, TikTok and Pinterest cut the
+  // whole text at their limit, so a long caption lost the end of its footer: a
+  // half link, a half hashtag. Every platform with a limit now drops footer parts
+  // whole first. Website line 38 + hashtags 12, each after a blank line (2).
+  describe.each([
+    ["instagram", 2200],
+    ["tiktok", 2200],
+    ["google_business_profile", 1500],
+    ["pinterest", 800],
+  ] as const)("on %s (limit %i)", (platform, limit) => {
+    it("keeps the whole footer when it fits", () => {
+      const caption = "a".repeat(limit - 54);
+      expect(buildCaptionWithFooter(caption, footer, platform)).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+    });
+
+    it("drops the hashtags first", () => {
+      const caption = "a".repeat(limit - 53);
+      expect(buildCaptionWithFooter(caption, footer, platform)).toBe(`${caption}\n\n${website}`);
+    });
+
+    it("then drops the website line, never cutting inside the link", () => {
+      const caption = "a".repeat(limit - 39);
+      expect(buildCaptionWithFooter(caption, footer, platform)).toBe(caption);
+      expect(buildCaptionWithFooter("a".repeat(limit + 100), footer, platform)).toBe("a".repeat(limit + 100));
+    });
+
+    it("counts an emoji by its code points, so the client never cuts into the footer", () => {
+      const surfer = String.fromCodePoint(0x1f3c4, 0x200d, 0x2642, 0xfe0f); // one grapheme, four code points
+      const caption = surfer.repeat(Math.floor((limit - 54) / 4) + 1);
+      expect(buildCaptionWithFooter(caption, footer, platform)).toBe(`${caption}\n\n${website}`);
+    });
+  });
+
+  it("leaves a platform without a limit untouched", () => {
+    const caption = "a".repeat(20_000);
+    expect(buildCaptionWithFooter(caption, footer, "facebook_page")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+    expect(buildCaptionWithFooter(caption, footer, "youtube")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
   });
 });

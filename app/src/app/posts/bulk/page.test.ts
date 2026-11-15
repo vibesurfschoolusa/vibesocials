@@ -75,3 +75,15 @@ describe("/posts/bulk on Starter for a member", () => {
     expect(await render()).toContain('<form data-workspace="ws-1">');
   });
 });
+
+// R5 pages L2: "Write captions with AI" can be off, so the subtitle doesn't promise an AI caption.
+describe("/posts/bulk subtitle", () => {
+  it("promises an AI caption only with the switch on", async () => {
+    h.getWorkspaceContext.mockResolvedValue(context({ ...STARTER, plan: "growth" }));
+    const text = (await render()).replace(/<[^>]+>/g, "").replace(/&quot;/g, '"');
+    expect(text).toContain(
+      "Add up to 20 photos and videos. Each one becomes its own post, spread over the coming days. With \"Write captions with AI\" on, each gets a caption written for it.",
+    );
+    expect(text).not.toContain("own post with an AI caption");
+  });
+});

@@ -48,7 +48,7 @@ import {
   staleCutoff,
 } from "@/server/jobs/stalePostJobs";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
-import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
+import { notifyOwnersToReconnect, sendConnectionNotices } from "@/server/jobs/connectionNotices";
 import { collectProblemDigests, sendProblemDigests } from "@/server/jobs/problemDigest";
 import { runMonthlyReportEmails } from "@/server/jobs/monthlyReportEmail";
 import {
@@ -58,13 +58,11 @@ import {
 } from "@/server/jobs/reviewAlerts";
 import { syncListingMetrics } from "@/server/jobs/listingMetrics";
 import { syncSocialPostMetrics } from "@/server/jobs/socialMetricsSync";
-import { sendEmail } from "@/server/notifications/email";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
   isProactiveRefreshEligible,
   proactiveRefreshWhere,
 } from "@/server/jobs/connectionHealthSweep";
-import { platformLabel } from "@/lib/platforms";
 import { billingFieldsSelect, paymentsConfigured } from "@/lib/billing";
 import { needsMediaMessage } from "@/lib/postTargets";
 import { runBillingReminders } from "@/server/billing/reminders";
@@ -903,10 +901,42 @@ interface PublishRunFailureArgs {
       function_id?: string;
       run_id?: string;
       /** The ORIGINAL triggering event (`post/publish.requested` / `post/retry.requested`). */
-      event: { data?: { postJobId?: unknown; platforms?: unknown } };
+      event: { data?: { postJobId?: unknown; userId?: unknown; platforms?: unknown } };
     };
   };
   error: unknown;
+  /** The failure handler's own steps: its notice is memoized per failed run. */
+  step: { sendEvent(id: string, payload: { id: string; name: "notification.requested"; data: Record<string, string> }): Promise<unknown> };
+}
+
+/**
+ * Review 2: a job the failure handler closed is announced like a finished run,
+ * so a run whose retries were all killed still emails once. Memoized per failed
+ * run (the event id carries its run id), and the email is keyed on the job's
+ * publish attempt (postOutcomeEmail.ts), so a notice of the same attempt from
+ * any other path dedupes. A job still publishing (another run owns its other
+ * platforms) is announced by that run. A failed send is logged only.
+ */
+async function notifyClosedByFailure(
+  args: PublishRunFailureArgs,
+  postJobId: string,
+  status: string,
+): Promise<void> {
+  if (!isTerminalOutcome(status)) return;
+  const userId = args.event.data.event.data?.userId;
+  if (typeof userId !== "string" || userId.length === 0) {
+    logger.error("[Inngest] Failed run has no userId; its outcome email is not sent", { postJobId });
+    return;
+  }
+  try {
+    await args.step.sendEvent("notify-outcome-after-failure", {
+      id: `notify-failed-${postJobId}-${args.event.data.run_id ?? "run"}`,
+      name: "notification.requested",
+      data: { userId, postJobId },
+    });
+  } catch (error) {
+    logger.error("[Inngest] Announcing a job closed by a failed run failed", { postJobId, error });
+  }
 }
 
 /** The failed run's postJobId, or null (logged) when its event carries none. */
@@ -947,6 +977,7 @@ export async function failInterruptedPublishRun(args: PublishRunFailureArgs): Pr
     ...outcome,
     error: args.error,
   });
+  await notifyClosedByFailure(args, postJobId, outcome.status);
 }
 
 /**
@@ -985,6 +1016,7 @@ export async function failInterruptedRetryRun(args: PublishRunFailureArgs): Prom
     ...outcome,
     error: args.error,
   });
+  await notifyClosedByFailure(args, postJobId, outcome.status);
 }
 
 /**
@@ -1891,7 +1923,11 @@ export const scheduledPostScanner = inngest.createFunction(
       // A reconcile failure is only logged; recovery must never stop publishing,
       // and the next tick tries again.
       try {
-        const reconciled = await reconcileStuckInProgressJobs(new Date());
+        // R5-client-journey L3 review: the jobs it closes are announced like a
+        // finished run, so a Feed and Story pair whose run died still gets its email.
+        const reconciled = await reconcileStuckInProgressJobs(new Date(), undefined, undefined, {
+          notify: (events) => inngest.send(events),
+        });
         if (reconciled.reconciled > 0) {
           logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
         }
@@ -2036,21 +2072,31 @@ export const sendNotification = inngest.createFunction(
     throttle: { limit: 8, period: "1s", burst: 1 },
   },
   { event: "notification.requested" },
-  async ({ event, step, runId }) => {
+  async ({ event, step }) => {
     // `event.data` is untyped (schemaless Inngest client) — assign into typed
     // locals here rather than annotating with `any` (mirrors retryPlatforms).
     const userId: string = event.data.userId;
     const postJobId: string = event.data.postJobId;
 
     // At-least-once: if the email sends but Inngest loses the step ack, the retry
-    // re-runs this step, and Resend dedupes the repeat by this key (no second email).
-    await step.run("deliver-notification", async () => {
-      await deliverPostOutcomeNotification({
-        userId,
-        postJobId,
-        idempotencyKey: `post-outcome/${runId}`,
-      });
-    });
+    // re-runs this step, and Resend dedupes the repeat by the outcome's key (the
+    // job and its publish attempt, built in deliverPostOutcomeNotification), which
+    // also dedupes a second notice of the same attempt sent by another path.
+    const delivered = await step.run("deliver-notification", () =>
+      deliverPostOutcomeNotification({ userId, postJobId }),
+    );
+
+    // R5-client-journey L3 review: half of a Feed and Story pair whose other half
+    // is still publishing waits for it (a durable sleep holds no slot), then
+    // delivers once more: one email for both if the other half finished, else
+    // this half's own. Once only, and only for a pair, so a single post still
+    // costs one step.
+    if (delivered?.waitUntil) {
+      await step.sleepUntil("wait-for-pair", delivered.waitUntil);
+      await step.run("deliver-after-pair-wait", () =>
+        deliverPostOutcomeNotification({ userId, postJobId, afterPairWait: true }),
+      );
+    }
 
     return { postJobId };
   },
@@ -2194,13 +2240,24 @@ export const stalePostJobSweep = inngest.createFunction(
       };
       const candidates = await prisma.postJob.findMany({
         where: stale,
-        select: { id: true },
+        select: { id: true, userId: true, updatedAt: true },
         orderBy: { updatedAt: "asc" },
         take: STALE_SWEEP_BATCH,
       });
       let count = 0;
-      for (const { id } of candidates) {
-        count += await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
+      const closed: Array<{ id: string; name: "notification.requested"; data: { userId: string; postJobId: string } }> = [];
+      for (const { id, userId, updatedAt } of candidates) {
+        const failed = await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
+        count += failed;
+        // The id carries the stale heartbeat: a re-run of this sweep for the same
+        // stuck job sends the same id, which Inngest dedupes.
+        if (failed === 1) {
+          closed.push({
+            id: `notify-stale-${id}-${new Date(updatedAt).getTime()}`,
+            name: "notification.requested",
+            data: { userId, postJobId: id },
+          });
+        }
       }
 
       if (count > 0) {
@@ -2209,8 +2266,26 @@ export const stalePostJobSweep = inngest.createFunction(
           cutoff: cutoff.toISOString(),
         });
       }
-      return { swept: count, cutoff: cutoff.toISOString() };
+      return { swept: count, cutoff: cutoff.toISOString(), closed };
     });
+
+    // R5-client-journey L3 review: every path that finishes a job notifies once.
+    // Its owner hears the outcome, and the other half of a Feed and Story pair
+    // applies the pair rule (postOutcomeEmail.ts). Memoized, so a replay sends
+    // nothing twice; a failed send is logged and never fails the sweep.
+    // A sweep that began on the previous deployment replays its step output,
+    // which has no `closed` list: nothing to announce then.
+    const { closed = [], ...swept } = summary as typeof summary & { closed?: typeof summary.closed };
+    if (closed.length > 0) {
+      try {
+        await step.sendEvent("notify-stale-closed", closed);
+      } catch (error) {
+        logger.error("[StaleSweep] could not announce the jobs it failed", {
+          postJobIds: closed.map((event) => event.data.postJobId),
+          error,
+        });
+      }
+    }
 
     const heal = await step.run("heal-result-workspace", async () => {
       try {
@@ -2227,7 +2302,7 @@ export const stalePostJobSweep = inngest.createFunction(
       }
     });
 
-    return { ...summary, healed: heal.healed };
+    return { ...swept, healed: heal.healed };
   },
 );
 
@@ -2269,7 +2344,10 @@ export const stalePostJobSweep = inngest.createFunction(
  *
  * Email exactly-once: eligibility requires `needsReconnect === false`, so a
  * connection that flips is skipped by every later sweep; a transient failure
- * leaves the flag false, sends nothing, and is simply retried tomorrow. Cron slot
+ * leaves the flag false, sends nothing, and is simply retried tomorrow. A
+ * connection flagged anywhere else (a failed post) gets its email from the last
+ * step, `connection-notices`, which also warns before a sign-in that cannot be
+ * renewed (LinkedIn) ends (R5-publishing M1, connectionNotices.ts). Cron slot
  * 04:45 UTC - cadence map: media-retention hourly :15, scheduled-scanner every
  * minute, youtube-metrics hourly :00, stale-post-sweep hourly :30.
  *
@@ -2352,6 +2430,14 @@ export const connectionHealthSweep = inngest.createFunction(
       gbpReconnectEmails += notified.emailed;
     }
 
+    // R5-publishing M1: the warning a week before a sign-in that cannot be renewed
+    // ends, the flag once it has, and the reconnect email for every flag that has
+    // not had one (a failed post flags without it). Last, so a failing send never
+    // holds back the steps above (connectionNotices.ts).
+    const connectionNotices = await step.run("connection-notices", () =>
+      sendConnectionNotices(startedAt, day),
+    );
+
     const summary = {
       pages,
       connections,
@@ -2363,6 +2449,7 @@ export const connectionHealthSweep = inngest.createFunction(
         flagged: gbpBackfill.flagged.length,
         reconnectEmails: gbpReconnectEmails,
       },
+      connectionNotices,
     };
     logger.info("[Inngest] Connection health sweep fanned out", summary);
     return summary;
@@ -2388,8 +2475,9 @@ export type ConnectionRefreshOutcome =
 async function refreshOneConnection(socialConnectionId: string): Promise<ConnectionRefreshOutcome> {
   const connection = await prisma.socialConnection.findUnique({ where: { id: socialConnectionId } });
   if (!connection) return "gone";
-  // Flagged since the cron paged it (a failed post, an earlier sweep): its owner
-  // is already notified, and re-refreshing a dead grant would only re-fail.
+  // Flagged since the cron paged it (a failed post, an earlier sweep): re-refreshing
+  // a dead grant would only re-fail. Its owners hear from the sweep's
+  // connection-notices step if nobody has told them yet (R5-publishing M1).
   if (connection.needsReconnect) return "already_flagged";
   // The rule is re-checked now: the event may have waited in the queue while a
   // publish or the metrics sync refreshed the connection.
@@ -2426,67 +2514,6 @@ async function refreshOneConnection(socialConnectionId: string): Promise<Connect
     });
     return "transient_error";
   }
-}
-
-/**
- * Email every owner of the connection's workspace that it needs reconnecting
- * (the body of the `notify-owners` step). Re-checks the flag so an owner who
- * reconnected between the two steps is not told to. Returns a COUNT only.
- *
- * 2026-11-01 scale audit (jobs, notifications): a retryable Resend failure now
- * throws out of the step (the function's `retries` re-run it) instead of being
- * dropped; the per-owner idempotency key keeps the owners already emailed from
- * being emailed again on that retry.
- *
- * 2026-11-02 scale audit (jobs, notifications): the UTC day in that key is an
- * argument (the memoized `notify-day` step), not read from the clock here: a
- * retry after midnight UTC would otherwise build a new key and email the owners
- * already emailed before midnight a second time.
- */
-async function notifyOwnersToReconnect(
-  socialConnectionId: string,
-  utcDay: string,
-): Promise<{ emailed: number }> {
-  const connection = await prisma.socialConnection.findUnique({
-    where: { id: socialConnectionId },
-    select: { platform: true, workspaceId: true, needsReconnect: true },
-  });
-  if (!connection?.needsReconnect) return { emailed: 0 };
-
-  const [workspace, owners] = await Promise.all([
-    prisma.workspace.findUnique({
-      where: { id: connection.workspaceId },
-      select: { name: true },
-    }),
-    prisma.workspaceMember.findMany({
-      where: { workspaceId: connection.workspaceId, role: "owner" },
-      select: { user: { select: { id: true, email: true } } },
-    }),
-  ]);
-  const email = buildReconnectEmail({
-    platformLabel: platformLabel(connection.platform),
-    workspaceId: connection.workspaceId,
-    workspaceName: workspace?.name ?? "your workspace",
-    appBaseUrl: process.env.NEXTAUTH_URL || null,
-  });
-  // One reconnect email per owner per connection per UTC day. A retry of this step
-  // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
-  // owners already emailed (V18). `utcDay` is the memoized output of the `notify-day`
-  // step, so a retry that crosses UTC midnight still builds the same key.
-  let emailed = 0;
-  for (const owner of owners) {
-    // A retryable failure (Resend 429 / 5xx / network) throws, failing the step so
-    // Inngest retries it; every other failure is logged and dropped.
-    await sendEmail(
-      { to: owner.user.email, ...email },
-      {
-        idempotencyKey: `reconnect/${socialConnectionId}/${utcDay}/${owner.user.id}`,
-        throwOnRetryable: true,
-      },
-    );
-    emailed++;
-  }
-  return { emailed };
 }
 
 /**

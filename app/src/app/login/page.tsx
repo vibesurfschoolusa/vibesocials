@@ -54,7 +54,7 @@ function LoginPageInner() {
   }
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-primary/5 via-background to-background"
@@ -84,8 +84,15 @@ function LoginPageInner() {
           </CardHeader>
           <CardContent>
             {registered ? (
-              <Alert variant="success" className="mb-4">
-                Account created — sign in below.
+              // Sign-up answers alike for a new and an existing email (no
+              // email-existence oracle), so this cannot say which happened.
+              <Alert variant="info" className="mb-4">
+                If this email is new, your account is ready. If you already had an account, sign in
+                with its password or{" "}
+                <Link href="/forgot-password" className="font-medium underline underline-offset-2">
+                  reset it
+                </Link>
+                .
               </Alert>
             ) : null}
             {oauthErrorMessage && !error ? (
@@ -162,7 +169,7 @@ function LoginPageInner() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </main>
   );
 }
 

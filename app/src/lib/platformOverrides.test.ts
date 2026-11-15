@@ -139,6 +139,19 @@ describe("platformCaptionCounter", () => {
     expect(platformCaptionCounter("a".repeat(3001), "linkedin", footer).over).toBe(true);
   });
 
+  // R5-publishing L2: every platform with a limit drops the footer whole, so the
+  // counter is not red for a caption that fits once the footer goes.
+  it.each([
+    ["instagram", 2200, "2,190 / 2,200"],
+    ["google_business_profile", 1500, "1,490 / 1,500"],
+    ["pinterest", 800, "790 / 800"],
+  ] as const)("counts %s against its limit with the footer dropped first", (platform, limit, label) => {
+    const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+    const counter = platformCaptionCounter("a".repeat(limit - 10), platform, footer);
+    expect(counter).toEqual({ length: limit - 10, max: limit, over: false, label });
+    expect(platformCaptionCounter("a".repeat(limit + 1), platform, footer).over).toBe(true);
+  });
+
   it("is over when the text is longer than the room left", () => {
     const counter = platformCaptionCounter("y".repeat(281), "x", {});
     expect(counter.over).toBe(true);

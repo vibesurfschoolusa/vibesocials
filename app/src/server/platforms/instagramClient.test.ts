@@ -24,16 +24,12 @@ import {
 import { verifyInstagramPhotoRequest } from "@/server/platforms/instagramPhoto";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 
-// Instagram stores a long-lived Facebook PAGE token with no refresh path, so
-// the core behavior to pin is the expiry guard: usable token -> returned
-// as-is; expired/near-expired -> a clean, coded reconnect error.
-//
-// ensureFreshInstagramToken() itself still has no DB import — Roadmap Phase 4
-// marking is wrapped at instagramClient's call sites (publishVideo,
-// refreshToken), not inside the guard, so it stays synchronous and directly
-// testable. But instagramClient.ts now imports connectionHealth.ts (which
-// resolves prisma via `await import("@/lib/db")` at call time), so the mock
-// below is required for the refreshToken() tests further down.
+// Instagram stores a long-lived Facebook PAGE token with no refresh path. It
+// does not expire on a clock (R5-publishing M1: the stored 60-day expiresAt is
+// the user token's), so nothing refuses it by date; a dead token is the Graph
+// API's 190 / 401, flagged at the call that got it. instagramClient.ts imports
+// connectionHealth.ts (which resolves prisma via `await import("@/lib/db")` at
+// call time), so the mock below is required for the flag tests.
 const { updateMock, findUniqueMock } = vi.hoisted(() => ({
   updateMock: vi.fn(),
   findUniqueMock: vi.fn(),
@@ -86,114 +82,34 @@ function makeConnection(
     needsReconnect: false,
     lastRefreshErrorCode: null,
     refreshFailedAt: null,
+    reconnectEmailedAt: null,
+    expiryWarnedFor: null,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
     ...overrides,
   };
 }
 
-describe("ensureFreshInstagramToken", () => {
-  it("returns the connection unchanged when the token is comfortably fresh", () => {
-    const future = new Date(Date.now() + 24 * 60 * 60 * 1000); // 1 day ahead
-    const connection = makeConnection({ expiresAt: future });
+// R5-publishing M1: the stored expiresAt is the 60 days of the user token the
+// Page token was minted from; the Page token itself does not expire, so a
+// connection past that date kept working on Facebook but was refused here.
+describe("ensureFreshInstagramToken (the metrics sync's guard)", () => {
+  it("returns the connection as it is, even past the stored expiresAt", () => {
+    const connection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
 
     expect(ensureFreshInstagramToken(connection)).toBe(connection);
-  });
-
-  it("returns the connection unchanged when no expiry is recorded (cannot judge)", () => {
-    const connection = makeConnection({ expiresAt: null });
-
-    expect(ensureFreshInstagramToken(connection)).toBe(connection);
-  });
-
-  it("throws INSTAGRAM_RECONNECT_REQUIRED with an actionable message when the token has expired", () => {
-    const connection = makeConnection(); // expiresAt in the past
-
-    const error = (() => {
-      try {
-        ensureFreshInstagramToken(connection);
-        return null;
-      } catch (e) {
-        return e as Error & { code?: string };
-      }
-    })();
-
-    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
-    expect(error?.message).toContain("reconnect");
-  });
-
-  it("throws INSTAGRAM_RECONNECT_REQUIRED when the token is within the 5-minute safety buffer", () => {
-    const almostExpired = new Date(Date.now() + 2 * 60 * 1000); // 2 min ahead
-    const connection = makeConnection({ expiresAt: almostExpired });
-
-    const error = (() => {
-      try {
-        ensureFreshInstagramToken(connection);
-        return null;
-      } catch (e) {
-        return e as Error & { code?: string };
-      }
-    })();
-
-    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
   });
 });
 
 describe("instagramClient.refreshToken", () => {
-  it("returns the connection unchanged without touching the database when the token is fresh", async () => {
-    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const connection = makeConnection({ expiresAt: future });
+  it("returns the connection unchanged, touching nothing, even past the stored 60-day expiresAt", async () => {
+    const connection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
 
     const result = await instagramClient.refreshToken!(connection);
 
     expect(result).toBe(connection);
     expect(updateMock).not.toHaveBeenCalled();
-  });
-
-  it("marks needsReconnect (flag fields only, no tokens) and rethrows INSTAGRAM_RECONNECT_REQUIRED when expired", async () => {
-    const connection = makeConnection({ id: "conn-99" }); // expiresAt in the past
-
-    const error = await instagramClient
-      .refreshToken!(connection)
-      .then(() => null)
-      .catch((e: unknown) => e as Error & { code?: string });
-
-    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
-
-    // Roadmap Phase 4: marked before the error propagates — flag fields
-    // only, never accessToken/refreshToken.
-    expect(updateMock).toHaveBeenCalledTimes(1);
-    const arg = updateMock.mock.calls[0][0] as {
-      where: { id: string };
-      data: Record<string, unknown>;
-    };
-    expect(arg.where).toEqual({ id: "conn-99" });
-    expect(Object.keys(arg.data).sort()).toEqual([
-      "lastRefreshErrorCode",
-      "needsReconnect",
-      "refreshFailedAt",
-    ]);
-    expect(arg.data.needsReconnect).toBe(true);
-    expect(arg.data.lastRefreshErrorCode).toBe("INSTAGRAM_RECONNECT_REQUIRED");
-    expect(arg.data).not.toHaveProperty("accessToken");
-    expect(arg.data).not.toHaveProperty("refreshToken");
-  });
-});
-
-describe("instagramClient.refreshToken - superseded", () => {
-  // The health sweep calls refreshToken through refreshConnectionToken, which
-  // catches TOKEN_REFRESH_SUPERSEDED and returns the stored row. It must NOT
-  // surface CONNECTION_TOKEN_CHANGED (that is the publish path's code).
-  it("throws TOKEN_REFRESH_SUPERSEDED and flags nothing when the stored tokens already changed", async () => {
-    findUniqueMock.mockResolvedValue(ROTATED_TOKENS);
-
-    const error = await instagramClient
-      .refreshToken!(makeConnection({ id: "conn-99" })) // expiresAt in the past
-      .then(() => null)
-      .catch((e: unknown) => e as Error & { code?: string });
-
-    expect(error?.code).toBe("TOKEN_REFRESH_SUPERSEDED");
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(findUniqueMock).not.toHaveBeenCalled();
   });
 });
 
@@ -440,35 +356,24 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
       expect(updateMock).not.toHaveBeenCalled();
     });
 
-    it("the expiry guard at publish time: CONNECTION_TOKEN_CHANGED and no flag", async () => {
-      // An expired stored expiresAt, but the row was refreshed or reconnected since.
-      stubGraph({ container: () => new Response("{}", { status: 500 }) });
-
-      const error = await failureOf(
-        instagramClient.publishVideo({
-          ...ctx("image/jpeg"),
-          socialConnection: makeConnection({ id: "conn-ig" }), // expiresAt in the past
-        }),
-      );
-
-      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
-      expect(updateMock).not.toHaveBeenCalled();
-    });
   });
 
-  it("the expiry guard at publish time flags (tokens unchanged) and keeps INSTAGRAM_RECONNECT_REQUIRED", async () => {
-    stubGraph({ container: () => new Response("{}", { status: 500 }) });
+  it("a connection past its stored 60-day expiresAt still publishes (the Page token does not expire)", async () => {
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    stubGraph({
+      container: () => json({ id: "container-1" }),
+      status: () => json({ status_code: "FINISHED" }),
+      publish: () => json({ id: "media-1" }),
+      permalink: () => new Response("{}", { status: 500 }),
+    });
 
-    const error = await instagramClient
-      .publishVideo({
-        ...ctx("image/jpeg"),
-        socialConnection: makeConnection({ id: "conn-ig" }), // expiresAt in the past
-      })
-      .then(() => null)
-      .catch((e: unknown) => e as Error & { code?: string });
+    const result = await instagramClient.publishVideo({
+      ...ctx("image/jpeg"),
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: new Date("2020-01-01T00:00:00Z") }),
+    });
 
-    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
-    expectFlagged();
+    expect(result).toEqual({ externalPostId: "media-1" });
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
 

@@ -166,6 +166,7 @@ model User {
   postJobs             PostJob[]
   postMetrics          PostMetric[]
   accountTokens        AccountToken[]
+  emailChangeRequests  EmailChangeRequest[]
 }
 
 // Short-lived server-side store for OAuth handshakes that cannot put secrets
@@ -340,6 +341,32 @@ model AccountToken {
   @@index([userId, type])
 }
 
+// R5 new-customer L4: a signed-in person's request to change their sign-in
+// email, confirmed by a link sent to the new address. Stored like
+// AccountToken (only the sha256 of the raw token), with the address it would
+// set, and once made, the link that undoes it from the old mailbox. Its own
+// table so AccountToken and its type list stay as they are.
+model EmailChangeRequest {
+  id        String    @id @default(cuid())
+  userId    String
+  // normalizeEmail() form, like User.email.
+  newEmail  String
+  tokenHash String    @unique // sha256 hex of the raw token
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  // Set when the change is made: the address it replaced, and the one-use
+  // "This wasn't me: undo" link sent to that address (sha256 of its token).
+  previousEmail String?
+  undoTokenHash String?   @unique
+  undoExpiresAt DateTime?
+  undoneAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
 model SocialConnection {
   id                   String    @id @default(cuid())
   userId               String
@@ -363,6 +390,15 @@ model SocialConnection {
   needsReconnect       Boolean   @default(false)
   lastRefreshErrorCode String?
   refreshFailedAt      DateTime?
+  // R5-publishing M1 (server/jobs/connectionNotices.ts): each connection notice
+  // goes out once. `reconnectEmailedAt`: when the owners were emailed about the
+  // current flag (due while `refreshFailedAt`, the flag's time, is newer).
+  // `expiryWarnedFor`: the `expiresAt` the pre-expiry warning was sent for, for a
+  // sign-in that cannot be renewed (LinkedIn). Neither is ever cleared: a
+  // reconnect writes a new flag time or expiry. Nullable: the previous deployment
+  // neither reads nor writes them.
+  reconnectEmailedAt   DateTime?
+  expiryWarnedFor      DateTime?
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Team Workspaces. Tenant owner of this connection; userId above stays as

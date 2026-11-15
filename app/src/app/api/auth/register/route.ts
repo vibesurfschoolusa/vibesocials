@@ -16,6 +16,13 @@ const REGISTER_RATE_LIMIT = {
   windowMs: 60 * 60 * 1000,
 } as const;
 
+/**
+ * R5 new-customer L5: the personal workspace is named "<name>'s workspace",
+ * and a workspace name may be 60 characters (api/workspaces); "'s workspace"
+ * takes 12 of them.
+ */
+const REGISTER_NAME_MAX_LENGTH = 48;
+
 export async function POST(request: Request) {
   // IP throttle first (anonymous abuse surface). Fail closed on store errors so
   // a DB blip cannot open unlimited signup.
@@ -75,8 +82,18 @@ export async function POST(request: Request) {
       );
     }
 
+    // Cleaned the way a workspace name is, so stray spaces never reach the
+    // workspace name ("Maria 's workspace").
+    const cleanedName = typeof name === "string" ? name.replace(/\s+/g, " ").trim() : "";
+    if (cleanedName.length > REGISTER_NAME_MAX_LENGTH) {
+      return NextResponse.json(
+        { error: `Use a name of up to ${REGISTER_NAME_MAX_LENGTH} characters, or leave it empty.` },
+        { status: 400 },
+      );
+    }
+
     const email = normalizeEmail(rawEmail);
-    const displayName = typeof name === "string" ? name : null;
+    const displayName = cleanedName || null;
     parsedEmail = email;
     parsedDisplayName = displayName;
 
@@ -148,6 +165,6 @@ export async function POST(request: Request) {
       );
     }
     logger.error("[POST /api/auth/register] Unexpected error", { error });
-    return NextResponse.json({ error: "Failed to register user." }, { status: 500 });
+    return NextResponse.json({ error: "We couldn't create your account just now. Nothing was saved. Please try again in a minute." }, { status: 500 });
   }
 }

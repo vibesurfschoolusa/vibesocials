@@ -347,6 +347,13 @@ export async function materializeAndDispatchChunk(
   return { dispatched, dispatchErrors, noConnections, notFound, errorIds };
 }
 
+/** The `notification.requested` the reconciler sends for a job it closed. */
+export type ClosedJobNotification = {
+  id: string;
+  name: "notification.requested";
+  data: { userId: string; postJobId: string };
+};
+
 /**
  * Finalize jobs stuck in `in_progress` past {@link STUCK_IN_PROGRESS_MS}.
  *
@@ -375,11 +382,19 @@ export async function materializeAndDispatchChunk(
  * F1 H3: first, a scheduled post that was claimed but never got its results
  * (its materialize threw, or its step died) is handled by
  * {@link requeueUnsentScheduledJobs}, so it is sent again instead of failed.
+ *
+ * R5-client-journey L3 review: a job with results that this closes is announced
+ * through `deps.notify` with the `notification.requested` its dead run would have
+ * sent, so its owner hears the outcome, and the other half of a Feed and Story
+ * pair shares one email with it (postOutcomeEmail.ts). The event id carries the
+ * stuck job's last heartbeat, so a resend for the same stuck run is deduped by
+ * Inngest. A failed send is logged, not thrown: the jobs are closed either way.
  */
 export async function reconcileStuckInProgressJobs(
   now: Date,
   take: number = STUCK_RECONCILE_BATCH,
   maxAgeMs: number = STUCK_IN_PROGRESS_MS,
+  deps?: { notify?: (events: ClosedJobNotification[]) => Promise<unknown> },
 ): Promise<{ reconciled: number; requeued: number; gaveUp: number }> {
   const { requeued, gaveUp } = await requeueUnsentScheduledJobs(now, take);
   const cutoff = new Date(now.getTime() - maxAgeMs);
@@ -389,12 +404,13 @@ export async function reconcileStuckInProgressJobs(
       updatedAt: { lt: cutoff },
       results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
     },
-    select: { id: true },
+    select: { id: true, userId: true, updatedAt: true },
     orderBy: { updatedAt: "asc" },
     take,
   });
 
   let reconciled = 0;
+  const closed: ClosedJobNotification[] = [];
   for (const job of candidates) {
     const results = await prisma.postJobResult.findMany({
       where: { postJobId: job.id },
@@ -450,6 +466,24 @@ export async function reconcileStuckInProgressJobs(
         ? (await prisma.postJob.updateMany(write)).count
         : await finishPostJob(prisma, { ...write, now });
     if (count === 1) reconciled += 1;
+    if (count === 1 && finalStatus !== "in_progress") {
+      closed.push({
+        id: `notify-reconciled-${job.id}-${new Date(job.updatedAt).getTime()}`,
+        name: "notification.requested",
+        data: { userId: job.userId, postJobId: job.id },
+      });
+    }
+  }
+
+  if (closed.length > 0 && deps?.notify) {
+    try {
+      await deps.notify(closed);
+    } catch (error) {
+      logger.error("[Inngest] Announcing reconciled jobs failed; their owners get no outcome email", {
+        postJobIds: closed.map((event) => event.data.postJobId),
+        error,
+      });
+    }
   }
 
   return { reconciled, requeued, gaveUp };

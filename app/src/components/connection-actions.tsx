@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { Platform } from "@prisma/client";
 import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { platformLabel } from "@/lib/platforms";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
@@ -54,8 +56,80 @@ function numbersDeletedSentence(platform: string): string {
   return " The post numbers read from this platform are deleted and cannot be brought back.";
 }
 
-export function disconnectDescription(platform: string): string {
-  return `Future posts, including scheduled ones, will skip this platform. Your past posts stay in Activity, and you can reconnect at any time.${numbersDeletedSentence(platform)}`;
+/**
+ * R5 pages M1: a scheduled post that chose this platform does not skip it:
+ * at publish time it gets a failed "not connected" result on it
+ * (server/jobs/posting.ts CONNECTION_GONE). `chosenCount` is how many
+ * scheduled posts chose it, null when that could not be read.
+ */
+function scheduledPostsSentence(platform: string, chosenCount: number | null): string {
+  const label = platformLabel(platform as Platform);
+  if (chosenCount === null) {
+    return `Scheduled posts that chose ${label} will fail on it until you reconnect it.`;
+  }
+  if (chosenCount === 0) {
+    return `No scheduled post chose ${label}, so none will fail on it.`;
+  }
+  return chosenCount === 1
+    ? `1 scheduled post chose ${label}. It will fail on ${label} until you reconnect it.`
+    : `${chosenCount} scheduled posts chose ${label}. They will fail on ${label} until you reconnect it.`;
+}
+
+export function disconnectDescription(platform: string, chosenCount: number | null): string {
+  return `${scheduledPostsSentence(platform, chosenCount)} Your past posts stay in Activity, and you can reconnect at any time.${numbersDeletedSentence(platform)}`;
+}
+
+/**
+ * How many scheduled posts chose `platform`, counted by the server
+ * (api/connections/[platform]/scheduled-count) for the workspace this page was
+ * rendered for. Null when it can't be read, so the dialog still warns, without
+ * a number.
+ */
+export async function fetchScheduledCount(
+  platform: string,
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number | null> {
+  try {
+    const response = await fetchImpl(
+      `/api/connections/${platform}/scheduled-count?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as { count?: unknown };
+    return typeof data.count === "number" ? data.count : null;
+  } catch {
+    return null;
+  }
+}
+
+export const DISCONNECT_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so the account is still connected. Check your internet connection and try again.";
+export const DISCONNECT_FAILED_MESSAGE =
+  "The account couldn't be disconnected and is still connected. Please try again in a minute.";
+
+/**
+ * The disconnect call. Throws an Error whose message the person can act on:
+ * the route's own refusal (another workspace's tab, not the owner), or ours
+ * for a network or server failure instead of the browser's "Failed to fetch".
+ */
+export async function requestDisconnect(
+  fetchImpl: typeof fetch,
+  platform: string,
+  workspaceId: string,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchImpl(`/api/connections/${platform}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
+  } catch {
+    throw new Error(DISCONNECT_OFFLINE_MESSAGE);
+  }
+  if (response.ok) return;
+  const data = (await response.json().catch(() => null)) as { error?: string } | null;
+  throw new Error(response.status < 500 && data?.error ? data.error : DISCONNECT_FAILED_MESSAGE);
 }
 
 export function switchDescription(platform: string): string {
@@ -80,18 +154,28 @@ export function ConnectionActions({
   const isLinkedIn = platform === "linkedin";
   const authUrl = withWorkspaceId(`/api/auth/${platform}/start`, workspaceId);
 
+  // Read each time the Disconnect dialog opens, from no number, so it never
+  // shows an earlier count while the new one loads or after it fails.
+  const [chosenCount, setChosenCount] = useState<number | null>(null);
+  function openDisconnect() {
+    setChosenCount(null);
+    setDisconnectOpen(true);
+  }
+  useEffect(() => {
+    if (!disconnectOpen) return;
+    let cancelled = false;
+    void fetchScheduledCount(platform, workspaceId).then((count) => {
+      if (!cancelled) setChosenCount(count);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [disconnectOpen, platform, workspaceId]);
+
   // Shared disconnect call. Throws on failure so callers can decide whether to
   // keep a dialog open (ConfirmDialog) or reset local state (TikTok flow).
-  async function disconnect() {
-    const response = await fetch(`/api/connections/${platform}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
-    const data = (await response.json().catch(() => null)) as { error?: string } | null;
-    if (!response.ok) {
-      throw new Error(data?.error ?? "Failed to disconnect.");
-    }
+  function disconnect() {
+    return requestDisconnect(fetch, platform, workspaceId);
   }
 
   // Disconnect: replaces the native confirm(). On error we re-throw so the
@@ -101,7 +185,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Disconnect] Error:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to disconnect.");
+      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
       throw err;
     }
     toast.success(
@@ -120,7 +204,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Switch Account] Error:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to disconnect current account.");
+      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
       throw err;
     }
   }
@@ -133,7 +217,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Switch Account] Error:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to disconnect current account.");
+      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
       throw err;
     }
     window.location.href = authUrl;
@@ -149,7 +233,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Switch Account] Error:", err);
-      toast.error(err instanceof Error ? err.message : "Unexpected error.");
+      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
       setSwitching(false);
       return;
     }
@@ -193,7 +277,7 @@ export function ConnectionActions({
           size="sm"
           variant="ghost"
           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-          onClick={() => setDisconnectOpen(true)}
+          onClick={openDisconnect}
         >
           Disconnect
         </Button>
@@ -204,7 +288,7 @@ export function ConnectionActions({
         onOpenChange={setDisconnectOpen}
         destructive
         title="Disconnect this account?"
-        description={disconnectDescription(platform)}
+        description={disconnectDescription(platform, chosenCount)}
         confirmText="Disconnect"
         onConfirm={handleDisconnect}
       />
