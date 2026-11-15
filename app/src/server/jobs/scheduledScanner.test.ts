@@ -13,6 +13,7 @@ const {
   prepareDeferredMock,
   stampMediaMock,
   mediaUpdateManyMock,
+  withdrawSendMock,
 } = vi.hoisted(() => ({
   executeRawMock: vi.fn(),
   queryRawMock: vi.fn(),
@@ -24,7 +25,11 @@ const {
   prepareDeferredMock: vi.fn(),
   stampMediaMock: vi.fn(),
   mediaUpdateManyMock: vi.fn(),
+  withdrawSendMock: vi.fn(),
 }));
+
+// Second review of K2: a send not handed to publishing is taken back (usageLog.caps.test.ts).
+vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -90,6 +95,8 @@ beforeEach(() => {
   queryRawMock.mockResolvedValue([]);
   executeRawMock.mockReset();
   executeRawMock.mockResolvedValue(0);
+  withdrawSendMock.mockReset();
+  withdrawSendMock.mockResolvedValue(undefined);
 });
 
 // 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
@@ -945,6 +952,40 @@ describe("materializeAndDispatchChunk", () => {
       notFound: [],
       errorIds: [],
     });
+  });
+
+  // Second review of K2, point 2: a send exists only for a post handed to publishing.
+  it("a rejected send takes back the sends this attempt wrote for its events", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => ({ ...okFor(id), sendsWritten: [id] }));
+    send.mockRejectedValue(new Error("inngest down"));
+
+    const out = await materializeAndDispatchChunk(ids(2), { send, sleep });
+
+    expect(out.dispatchErrors).toBe(2);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-0", "job-1"], day: expect.any(Date) });
+  });
+
+  it("a rejected re-send keeps a send an earlier attempt that day wrote", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => ({ ...okFor(id), sendsWritten: [] }));
+    send.mockRejectedValue(new Error("inngest down"));
+
+    await materializeAndDispatchChunk(ids(2), { send, sleep });
+
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a pair half reserved by its feed whose materialize keeps throwing: its send is taken back", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => {
+      if (id === "story") throw new Error("pool timeout");
+      if (id === "other") throw new Error("pool timeout");
+      return { ...okFor(id), sendsWritten: ["feed", "story"] };
+    });
+
+    const out = await materializeAndDispatchChunk(["feed", "story", "other"], { send, sleep });
+
+    expect(out.errorIds).toEqual(["story", "other"]);
+    expect(withdrawSendMock).toHaveBeenCalledTimes(1);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story"], day: expect.any(Date) });
   });
 
   it("sends nothing for a chunk without an ok job", async () => {

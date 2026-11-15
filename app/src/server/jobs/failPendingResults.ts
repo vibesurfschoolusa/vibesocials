@@ -3,6 +3,7 @@ import type { Platform, PostJobStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
+import { withdrawDispatchFailedSend } from "@/server/usage/usageLog";
 
 /** Why a job's still-pending results are being failed. */
 export interface PendingResultFailure {
@@ -218,6 +219,14 @@ export async function failPendingPostJobResults(
   // The row writes above are NOT in the recompute's transaction, so the job lock
   // is never held while result rows are locked.
   const { status } = await recomputeAndStorePostJobStatus(postJobId);
+
+  // Second review of K2: a post whose hand-over to publishing failed was not
+  // sent, so the day's send its attempt wrote is taken back (the person's
+  // Retry writes one when it goes). Not when a run had claimed a result: the
+  // post may be live.
+  if (failure.errorCode === DISPATCH_FAILURE.errorCode && unconfirmedCount === 0 && failedCount > 0) {
+    await withdrawDispatchFailedSend(postJobId, new Date());
+  }
 
   return { failedCount, unconfirmedCount, status };
 }

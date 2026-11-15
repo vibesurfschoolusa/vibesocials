@@ -17,6 +17,7 @@ const {
   mediaUpdateManyMock,
   executeRawMock,
   transactionMock,
+  withdrawMock,
 } = vi.hoisted(() => ({
   resultUpdateManyMock: vi.fn(),
   resultFindManyMock: vi.fn(),
@@ -25,7 +26,11 @@ const {
   mediaUpdateManyMock: vi.fn(),
   executeRawMock: vi.fn(),
   transactionMock: vi.fn(),
+  withdrawMock: vi.fn(),
 }));
+
+// Second review of K2: the send of a post whose hand-over failed is taken back (usageLog.caps.test.ts).
+vi.mock("@/server/usage/usageLog", () => ({ withdrawDispatchFailedSend: withdrawMock }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -125,6 +130,29 @@ describe("PUBLISH_UNCONFIRMED", () => {
       errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
     });
     expect(PUBLISH_UNCONFIRMED_CODE).toBe("PUBLISH_UNCONFIRMED");
+  });
+});
+
+describe("failPendingPostJobResults - the send of a post that was never handed over", () => {
+  beforeEach(() => {
+    withdrawMock.mockReset();
+    withdrawMock.mockResolvedValue(undefined);
+  });
+
+  it("a dispatch failure takes back the day's send, so the post counts only once it really goes out", async () => {
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 2 });
+    await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+    expect(withdrawMock).toHaveBeenCalledWith("job-1", expect.any(Date));
+  });
+
+  it("keeps it when a run had claimed a result (the post may be live), or for any other failure", async () => {
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 });
+    await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 2 });
+    await failPendingPostJobResults("job-1", { errorCode: "PUBLISH_INTERRUPTED", errorMessage: "Interrupted." });
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 0 });
+    await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+    expect(withdrawMock).not.toHaveBeenCalled();
   });
 });
 

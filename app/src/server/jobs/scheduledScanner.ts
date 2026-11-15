@@ -10,6 +10,7 @@ import {
   prepareDeferredPostJobDispatch,
   type PublishEvent,
 } from "@/server/jobs/posting";
+import { withdrawSend } from "@/server/usage/usageLog";
 
 /**
  * Roadmap Phase 5 — DB-backed cron due-scanner claim logic (§6.2).
@@ -217,6 +218,12 @@ async function withMaterializeRetries<T>(
 export async function materializeClaimedJobs(
   postJobIds: string[],
   sleep: Sleep = defaultSleep,
+  /**
+   * Second review of K2: the posts whose day's send this call wrote, with the
+   * moment (its day): a pair's feed reserves its Story's. A post that then
+   * keeps throwing, or whose hand-over fails, has its send taken back.
+   */
+  sendsWritten: Map<string, Date> = new Map(),
 ): Promise<MaterializedBatch> {
   const batch: MaterializedBatch = {
     publishEvents: [],
@@ -231,8 +238,10 @@ export async function materializeClaimedJobs(
         async () => {
           // R6-security M2: a scheduled post meets the service's daily cap as
           // it falls due, so posts scheduled far ahead cannot fill a day.
-          const prep = await prepareDeferredPostJobDispatch(postJobId, { serviceCapAt: new Date() });
+          const at = new Date();
+          const prep = await prepareDeferredPostJobDispatch(postJobId, { serviceCapAt: at });
           if (prep.ok) {
+            for (const id of prep.sendsWritten ?? []) sendsWritten.set(id, at);
             // The scanner is not "Post now": `immediate: false` keeps the run at
             // priority 0 behind user-triggered publishes.
             batch.publishEvents.push(buildPublishEvent(prep.event, { immediate: false }));
@@ -261,6 +270,12 @@ export async function materializeClaimedJobs(
     } catch (error) {
       logger.error("[Inngest] Scheduled materialize failed", { postJobId, error });
       batch.errorIds.push(postJobId);
+      // Not handed to publishing: a send reserved for it in this call goes.
+      const day = sendsWritten.get(postJobId);
+      if (day) {
+        await withdrawSend({ postJobIds: [postJobId], day });
+        sendsWritten.delete(postJobId);
+      }
     }
   }
 
@@ -327,9 +342,11 @@ export async function materializeAndDispatchChunk(
   postJobIds: string[],
   deps: { send: (events: PublishEvent[]) => Promise<unknown>; sleep?: Sleep },
 ): Promise<ChunkDispatchResult> {
+  const sendsWritten = new Map<string, Date>();
   const { publishEvents, noConnections, notFound, errorIds } = await materializeClaimedJobs(
     postJobIds,
     deps.sleep,
+    sendsWritten,
   );
 
   let dispatched = 0;
@@ -347,6 +364,10 @@ export async function materializeAndDispatchChunk(
         error,
       });
       dispatchErrors += subBatch.length;
+      // Second review of K2: these posts were not handed to publishing, so the
+      // sends this attempt wrote for them go (one written earlier that day stays).
+      const taken = subBatch.map((event) => event.data.postJobId).filter((id) => sendsWritten.has(id));
+      if (taken.length > 0) await withdrawSend({ postJobIds: taken, day: sendsWritten.get(taken[0])! });
     }
   }
 

@@ -30,7 +30,7 @@ const {
 }));
 
 // R6 review of K2: a post going out now records its send; usageLog.caps.test.ts covers the counting.
-vi.mock("@/server/usage/usageLog", () => ({ recordSend: recordSendMock, serviceCapRefusalAtSend: vi.fn() }));
+vi.mock("@/server/usage/usageLog", () => ({ recordSend: recordSendMock, serviceCapRefusalAtSend: vi.fn(), withdrawSend: vi.fn() }));
 
 vi.mock("@/lib/db", () => {
   // The reuse helper runs its writes inside `prisma.$transaction(cb)` after a

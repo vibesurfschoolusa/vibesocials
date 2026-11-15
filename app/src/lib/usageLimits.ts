@@ -311,17 +311,29 @@ export function ownerDailyPostLimit(
     : { limit: OWNER_DAILY_POST_LIMIT, reduced: false };
 }
 
-export function ownerDailyPostLimitMessage(limit: number, mode: CrossWorkspaceLimitMode, reduced = false): string {
-  const posts = `${limit} ${countWord(limit, "post", "posts")}`;
-  const sentence =
-    mode === "now"
-      ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
-      : mode === "retry"
-        ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own, and retries count toward it. Retry tomorrow.`
-        : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`;
+function withReducedNote(sentence: string, reduced: boolean): string {
   return reduced
     ? `${sentence} The limit is ${OWNER_DAILY_POST_LIMIT} once the owner has confirmed their email address and the account is a day old.`
     : sentence;
+}
+
+/** Posting or scheduling: the owner's posts by their slot day, as the calendar shows them. */
+export function ownerDailyPostLimitMessage(limit: number, mode: DailyPostLimitMode, reduced = false): string {
+  const posts = `${limit} ${countWord(limit, "post", "posts")}`;
+  return withReducedNote(
+    mode === "now"
+      ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
+      : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`,
+    reduced,
+  );
+}
+
+/** A retry (second review of K2): the owner's posts sent today, against the same number. */
+export function ownerDailySendLimitMessage(limit: number, reduced = false): string {
+  return withReducedNote(
+    `This workspace's owner has sent ${limit} ${countWord(limit, "post", "posts")} today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day.`,
+    reduced,
+  );
 }
 
 export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {

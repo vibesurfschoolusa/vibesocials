@@ -15,6 +15,7 @@ const store = vi.hoisted(() => ({
   down: false,
   events: [] as Record<string, unknown>[],
   posts: [] as Record<string, unknown>[],
+  results: [] as Record<string, unknown>[],
   workspaces: [] as Array<Record<string, unknown> & { id: string; owners: Array<{ userId: string; user: unknown }> }>,
 }));
 
@@ -56,7 +57,7 @@ vi.mock("@/lib/db", () => {
   const usageEvent = {
     create: async ({ data }: { data: Row }) => {
       if (store.events.some((event) => event.sourceId === data.sourceId)) throw new Error("Unique constraint failed");
-      store.events.push({ ...data });
+      store.events.push({ createdAt: new Date(), ...data });
       return data;
     },
     createMany: async ({ data, skipDuplicates }: { data: Row[]; skipDuplicates?: boolean }) => {
@@ -66,7 +67,7 @@ vi.mock("@/lib/db", () => {
           if (!skipDuplicates) throw new Error("Unique constraint failed");
           continue;
         }
-        store.events.push({ ...row });
+        store.events.push({ createdAt: new Date(), ...row });
         count += 1;
       }
       return { count };
@@ -101,7 +102,15 @@ vi.mock("@/lib/db", () => {
       postJob: {
         findMany: async ({ where }: { where: Row }) => store.posts.filter((post) => matches(post, where)),
       },
-      postJobResult: { findMany: async () => [] },
+      postJobResult: {
+        findMany: async () => [],
+        findFirst: async ({ where }: { where: Row }) => {
+          if (store.down) throw new Error("db down");
+          return store.results
+            .filter((result) => matches(result, where))
+            .sort((a, b) => (a.createdAt as Date).getTime() - (b.createdAt as Date).getTime())[0] ?? null;
+        },
+      },
       workspaceMember: {
         findMany: async ({ where }: { where: { workspaceId?: string; userId?: string } }) =>
           where.workspaceId
@@ -131,6 +140,8 @@ import {
   recordSend,
   retryRefusal,
   serviceCapRefusalAtSend,
+  withdrawDispatchFailedSend,
+  withdrawSend,
 } from "./usageLog";
 
 const DAY_1 = new Date("2026-11-13T12:00:00.000Z");
@@ -173,6 +184,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   store.events = [];
   store.posts = [];
+  store.results = [];
   store.workspaces = [];
   store.down = false;
   vi.stubEnv("BILLING_ENABLED", "");
@@ -346,19 +358,45 @@ describe("the per-person total", () => {
     });
   });
 
-  it("an older post retried today counts once through its send, however many retries", async () => {
+  // Second review, point 3: scheduling and creating count the calendar (posts
+  // by their slot day); a retry counts today's sends. Same number, own sentence.
+  it("a post due 23:55 on D and sent at 00:00 counts on D's calendar, not D+1's", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    livePosts("ws-1", 29);
-    await recordRetry({ workspaceId: "ws-1", postJobId: "old-post", platforms: ["x", "facebook_page"], requestId: "r1", at: NOW });
-    await recordRetry({ workspaceId: "ws-1", postJobId: "old-post", platforms: ["x"], requestId: "r2", at: NOW });
-    // 29 + the retried post = 30: one more is refused, a retry of the same post is not.
-    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }))?.code).toBe(
-      "OWNER_DAILY_POST_LIMIT",
-    );
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "old-post", platforms: ["instagram"], now: NOW })).resolves.toBeNull();
+    const d1 = new Date("2026-11-15T12:00:00Z");
+    livePosts("ws-1", 29, d1);
+    store.posts.push({ id: "late", workspaceId: "ws-1", status: "completed", scheduledFor: new Date("2026-11-14T23:55:00Z"), createdAt: LONG_AGO });
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["late"], at: new Date("2026-11-15T00:00:30Z") });
+    await expect(crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: d1, mode: "schedule" })).resolves.toBeNull();
   });
 
-  it("a deleted workspace's sends keep counting toward the person who deleted it", async () => {
+  it("30 scheduled on today's calendar: the 31st is refused with the calendar sentence", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    livePosts("ws-1", 30);
+    await expect(crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "schedule" })).resolves.toEqual({
+      code: "OWNER_DAILY_POST_LIMIT",
+      error:
+        "That day already has 30 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.",
+    });
+  });
+
+  it("a retry today of an older post counts in today's sends, not on any calendar day", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (let i = 0; i < 30; i += 1) {
+      await recordRetry({ workspaceId: "ws-1", postJobId: `old-${i}`, platforms: ["x"], requestId: "r1", at: NOW });
+    }
+    // The calendar for today is empty: scheduling or posting now still fits.
+    await expect(crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "schedule" })).resolves.toBeNull();
+    // Today's sends are at 30: another older post's retry is refused with its own sentence.
+    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "old-30", platforms: ["x"], now: NOW })).resolves.toEqual({
+      code: "OWNER_DAILY_POST_LIMIT",
+      error:
+        "This workspace's owner has sent 30 posts today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day.",
+    });
+    // A post already sent today adds nothing.
+    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "old-3", platforms: ["instagram"], now: NOW })).resolves.toBeNull();
+  });
+
+  it("a deleted workspace's sends keep counting toward the person who deleted it, on a retry", async () => {
     workspace("ws-gone", {}, [owner("owner-1")]);
     workspace("ws-1", {}, [owner("owner-1")]);
     for (let i = 0; i < 30; i += 1) await recordSend({ workspaceId: "ws-gone", postJobIds: [`g-${i}`], at: NOW });
@@ -368,7 +406,7 @@ describe("the per-person total", () => {
       now: NOW,
     });
     store.workspaces = store.workspaces.filter((w) => w.id !== "ws-gone");
-    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }))?.code).toBe(
+    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "older", platforms: ["x"], now: NOW }))?.code).toBe(
       "OWNER_DAILY_POST_LIMIT",
     );
   });
@@ -504,5 +542,66 @@ describe("the checks fail open, and the operator is who the list says once verif
     expect((await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["a"], now: NOW }))?.errorCode).toBe(
       "SERVICE_DAILY_POST_LIMIT",
     );
+  });
+});
+
+// Second review, point 2: a send exists only for a post handed to publishing.
+describe("withdrawing a send that was not handed to publishing", () => {
+  it("recordSend says which sends it wrote, so a later attempt knows a real one was already there", async () => {
+    workspace("ws-1");
+    await expect(recordSend({ workspaceId: "ws-1", postJobIds: ["a", "b"], at: NOW })).resolves.toEqual(["a", "b"]);
+    await expect(recordSend({ workspaceId: "ws-1", postJobIds: ["a", "c"], at: NOW })).resolves.toEqual(["c"]);
+  });
+
+  it("a send whose dispatch failed is removed; the person's Retry later writes one", async () => {
+    workspace("ws-1");
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW });
+    await withdrawSend({ postJobIds: ["a"], day: NOW });
+    expect(sendsOf("a")).toHaveLength(0);
+    await recordRetry({ workspaceId: "ws-1", postJobId: "a", platforms: ["x"], requestId: "r1", at: NOW });
+    expect(sendsOf("a")).toHaveLength(1);
+  });
+
+  it("only a send written since the attempt began is removed; an earlier real send that day stays", async () => {
+    workspace("ws-1");
+    vi.setSystemTime(new Date("2026-11-14T09:00:00Z"));
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: new Date() });
+    vi.setSystemTime(NOW);
+    await withdrawSend({ postJobIds: ["a"], day: NOW, writtenSince: new Date("2026-11-14T14:59:00Z") });
+    expect(sendsOf("a")).toHaveLength(1);
+  });
+
+  it("removes only that post's send for that day", async () => {
+    workspace("ws-1");
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], at: NOW });
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["story"], at: DAY_1 });
+    await withdrawSend({ postJobIds: ["story"], day: NOW });
+    expect(sendsOf("feed")).toHaveLength(1);
+    expect(sendsOf("story").map((event) => event.sourceId)).toEqual(["send:story:2026-11-13"]);
+  });
+});
+
+describe("withdrawDispatchFailedSend: after inngest.send threw", () => {
+  it("takes back the send written by the attempt that made the post's results", async () => {
+    workspace("ws-1");
+    store.results.push({ postJobId: "a", createdAt: new Date(NOW.getTime() - 1_000) });
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW });
+    await withdrawDispatchFailedSend("a", NOW);
+    expect(sendsOf("a")).toHaveLength(0);
+  });
+
+  it("keeps a send from before those results: a second attempt the same day after a real send", async () => {
+    workspace("ws-1");
+    vi.setSystemTime(new Date("2026-11-14T09:00:00Z"));
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: new Date() });
+    vi.setSystemTime(NOW);
+    store.results.push({ postJobId: "a", createdAt: new Date(NOW.getTime() - 1_000) });
+    await withdrawDispatchFailedSend("a", NOW);
+    expect(sendsOf("a")).toHaveLength(1);
+  });
+
+  it("never throws", async () => {
+    store.down = true;
+    await expect(withdrawDispatchFailedSend("a", NOW)).resolves.toBeUndefined();
   });
 });

@@ -8,6 +8,7 @@ import {
   OWNER_DAILY_POST_LIMIT,
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
+  ownerDailySendLimitMessage,
   pacificDayRange,
   personalPostLimitApplies,
   postRetryLimitMessage,
@@ -333,8 +334,12 @@ describe("limits across workspaces", () => {
     expect(ownerDailyPostLimitMessage(30, "schedule")).toBe(
       "That day already has 30 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.",
     );
-    expect(ownerDailyPostLimitMessage(30, "retry")).toBe(
-      "This workspace's owner has reached the limit of 30 posts a day across all the workspaces they own, and retries count toward it. Retry tomorrow.",
+    // Second review, point 3: a retry counts today's sends, with its own sentence.
+    expect(ownerDailySendLimitMessage(30)).toBe(
+      "This workspace's owner has sent 30 posts today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day.",
+    );
+    expect(ownerDailySendLimitMessage(5, true)).toBe(
+      "This workspace's owner has sent 5 posts today across the workspaces they own, the most for one day. Retry tomorrow, or schedule the post again for another day. The limit is 30 once the owner has confirmed their email address and the account is a day old.",
     );
     expect(ownerDailyPostLimitMessage(5, "now", true)).toBe(
       "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 30 once the owner has confirmed their email address and the account is a day old.",
