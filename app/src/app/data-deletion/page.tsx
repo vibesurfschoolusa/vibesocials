@@ -34,7 +34,7 @@ export default function DataDeletionPage() {
         </div>
 
         <p className="mb-6 text-sm text-muted-foreground">
-          You can remove your data from Vibe Socials at any time. Choose whichever of the
+          You can remove your data from Vibe Socials yourself. Choose whichever of the
           following matches what you want to delete.
         </p>
 
@@ -73,6 +73,8 @@ export default function DataDeletionPage() {
               <li>
                 <strong>Delete your account:</strong> go to <strong>Account</strong> and choose{" "}
                 <strong>Delete account</strong>. Workspaces only you use are deleted with it.
+                Deleting your account waits while a change of your sign-in email can still be
+                undone: up to 72 hours after you changed it from a confirmed address.
               </li>
             </ul>
             <p>Deleting a workspace, or an account with its workspaces, permanently removes:</p>

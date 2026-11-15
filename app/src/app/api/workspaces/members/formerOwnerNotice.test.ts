@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   memberFindMany: vi.fn(),
   memberFindFirst: vi.fn(),
   userFindUnique: vi.fn(),
+  workspaceFindUnique: vi.fn(),
   sendEmail: vi.fn(),
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -18,6 +19,7 @@ vi.mock("@/lib/db", () => ({
     workspaceConnectLink: { findFirst: m.connectFindFirst },
     workspaceMember: { findMany: m.memberFindMany, findFirst: m.memberFindFirst },
     user: { findUnique: m.userFindUnique },
+    workspace: { findUnique: m.workspaceFindUnique },
   },
 }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: m.sendEmail }));
@@ -33,7 +35,8 @@ import { buildFormerOwnerEmail, noticeOwnersOfFormerOwner } from "./formerOwnerN
 
 
 beforeEach(() => {
-  for (const fn of [m.uploadFindFirst, m.reviewFindFirst, m.connectFindFirst, m.memberFindMany, m.memberFindFirst, m.userFindUnique, m.sendEmail]) fn.mockReset();
+  for (const fn of [m.uploadFindFirst, m.reviewFindFirst, m.connectFindFirst, m.memberFindMany, m.memberFindFirst, m.userFindUnique, m.workspaceFindUnique, m.sendEmail]) fn.mockReset();
+  m.workspaceFindUnique.mockResolvedValue({ id: "ws-1", billingExempt: false, plan: "growth", planStatus: "active" });
   m.userFindUnique.mockResolvedValue({ name: "Sam", email: "sam@example.com" });
   for (const fn of Object.values(m.logger)) fn.mockReset();
   m.uploadFindFirst.mockResolvedValue({ id: "up-1" });
@@ -219,5 +222,93 @@ describe("noticeOwnersOfFormerOwner", () => {
     expect(m.logger.error).toHaveBeenCalled();
     // The log never carries an address.
     expect(JSON.stringify(m.logger.error.mock.calls)).not.toContain("@example.com");
+  });
+});
+
+// R7-security L4: leaving turned off the invite links the person made; the
+// owners are told, so a teammate's failed join makes sense.
+describe("buildFormerOwnerEmail: invite links turned off", () => {
+  const base = {
+    workspaceId: "ws-1",
+    workspaceName: "Surf Co",
+    formerOwnerName: "Sam",
+    uploadLink: true,
+    reviewLink: false,
+    appBaseUrl: "https://app.example.com",
+  };
+
+  it("says how many of their invite links were turned off", () => {
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 1 }).text).toContain(
+      "The invite link Sam made was turned off when Sam left, so it can't be used to join Surf Co again.",
+    );
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 2 }).text).toContain(
+      "The 2 invite links Sam made were turned off when Sam left, so they can't be used to join Surf Co again.",
+    );
+  });
+
+  it("says nothing about invite links when none was turned off", () => {
+    expect(buildFormerOwnerEmail({ ...base, joinLinksRevoked: 0 }).text).not.toContain("invite link");
+    expect(buildFormerOwnerEmail(base).text).not.toContain("invite link");
+  });
+
+  it("is passed on by the notice", async () => {
+    await noticeOwnersOfFormerOwner({
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      formerOwnerId: "user-2",
+      at: new Date(),
+      joinLinksRevoked: 1,
+    });
+    expect(m.sendEmail.mock.calls[0][0].text).toContain("The invite link Sam made was turned off when Sam left");
+  });
+});
+
+// R7-pages L3 / client-journey L2: on a plan without client links the links
+// are paused, not off, and "Make new client links" is not offered; the owners
+// can turn them off on any plan.
+describe("buildFormerOwnerEmail: on a plan without client links", () => {
+  const base = { workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerName: "Sam", appBaseUrl: "https://app.example.com" };
+
+  it("as today when the plan includes client links", () => {
+    const email = buildFormerOwnerEmail({ ...base, uploadLink: true, reviewLink: true, clientLinksIncluded: true });
+    expect(email.subject).toBe("Make new client links for Surf Co");
+    expect(email.text).toContain("and those links still work.");
+    expect(email.text).toContain('press "Make new client links"');
+  });
+
+  it("says the links are paused, that the copies would work again with a plan with client links, and offers Turn off", () => {
+    const email = buildFormerOwnerEmail({ ...base, uploadLink: true, reviewLink: true, clientLinksIncluded: false });
+    expect(email.subject).toBe("Turn off client links for Surf Co");
+    expect(email.text).toContain(
+      "Sam is no longer an owner of Surf Co. As an owner, Sam had access to its client upload link and client review link. They are paused, because this workspace's plan doesn't include client links.",
+    );
+    expect(email.text).toContain(
+      "If the plan changes to one with client links (Growth or Pro), the copies Sam kept would work again. To stop that, open Settings, Team and press \"Turn off client links\".",
+    );
+    expect(email.text).not.toContain("Make new client links");
+    expect(email.text).not.toContain("still work");
+  });
+
+  it("one link: singular wording", () => {
+    const email = buildFormerOwnerEmail({ ...base, uploadLink: false, reviewLink: true, clientLinksIncluded: false });
+    expect(email.text).toContain("Sam had access to its client review link. It is paused, because");
+  });
+
+  it("the notice reads the plan, and with only a stopped connect link there is nothing to turn off: no email", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.workspaceFindUnique.mockResolvedValue({ id: "ws-1", billingExempt: false, plan: "starter", planStatus: "active" });
+    await noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() });
+    expect(m.workspaceFindUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "ws-1" } }));
+    expect(m.sendEmail.mock.calls[0][0].subject).toBe("Turn off client links for Surf Co");
+
+    m.sendEmail.mockClear();
+    m.uploadFindFirst.mockResolvedValue(null);
+    m.reviewFindFirst.mockResolvedValue(null);
+    m.connectFindFirst.mockResolvedValue({ createdById: "user-2" });
+    await expect(
+      noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() }),
+    ).resolves.toEqual({ clientLinksToReplace: false });
+    expect(m.sendEmail).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 });

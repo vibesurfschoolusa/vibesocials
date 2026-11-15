@@ -336,11 +336,20 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Fire-and-forget: sendEmail never throws, and the extra try/catch documents
   // that a mail failure must not fail the decision.
   try {
-    const submitter = await prisma.user.findUnique({
-      where: { id: job.userId },
-      // F4: the scheduled time is shown in the member's own zone.
-      select: { email: true, timeZone: true },
+    // R7-client-journey L1: only a submitter who is still a member hears about
+    // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
+    // removed or left gets no caption, time or link.
+    const stillMember = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: job.userId } },
+      select: { id: true },
     });
+    const submitter = stillMember
+      ? await prisma.user.findUnique({
+          where: { id: job.userId },
+          // F4: the scheduled time is shown in the member's own zone.
+          select: { email: true, timeZone: true },
+        })
+      : null;
     if (submitter?.email) {
       const email = buildApprovalDecisionEmail({
         approved: approving,

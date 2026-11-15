@@ -41,8 +41,9 @@ export async function GET(request: Request, context: RouteContext): Promise<Next
   if (!link) return NextResponse.json({ error: REVIEW_LINK_INACTIVE_MESSAGE }, { status: 404 });
 
   try {
-    const posts = await listReviewPosts(link.workspaceId, new Date());
-    return NextResponse.json({ posts }, { headers: { "Cache-Control": "no-store" } });
+    // R7-client-journey L5: `more` when cards were left out past the 100.
+    const { posts, more } = await listReviewPosts(link.workspaceId, new Date());
+    return NextResponse.json({ posts, more }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     logger.error("[review-link] Couldn't list the posts", { error, linkId: link.id });
     return NextResponse.json({ error: "Couldn't load the posts. Try again." }, { status: 500 });

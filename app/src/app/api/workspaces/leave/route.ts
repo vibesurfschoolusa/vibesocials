@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
@@ -34,10 +35,24 @@ import { noticeOwnersOfFormerOwner } from "../members/formerOwnerNotice";
  * cannot race it to zero owners — re-reads the OTHER-owner count INSIDE the
  * lock, then deletes the caller's own row by id.
  *
+ * R7-security L4: like removal (members/[userId]), leaving turns off the
+ * invite links the leaver made, in the same transaction as the delete, so a
+ * copy can't bring them back in as a member. Only theirs: the others' links
+ * were never theirs to copy (the raw token is shown once, to its maker).
+ *
  * The body carries `{ workspaceId }`, the workspace the Team card was rendered
  * for (F3): the active workspace is one cookie every tab shares, so a Leave
  * clicked in a stale tab must not leave the other workspace.
  */
+/** Turns off the invite links this person made in this workspace; answers how many. */
+async function revokeOwnInvites(tx: Prisma.TransactionClient, workspaceId: string, userId: string): Promise<number> {
+  const { count } = await tx.workspaceInvite.updateMany({
+    where: { workspaceId, createdById: userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return count;
+}
+
 export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
@@ -101,7 +116,7 @@ export async function POST(request: Request) {
         return "not_found" as const;
       }
       await tx.workspaceMember.delete({ where: { id: own.id } });
-      return "left" as const;
+      return { joinLinksRevoked: await revokeOwnInvites(tx, context.workspace.id, context.user.id) };
     });
     if (outcome === "sole_owner") {
       return NextResponse.json({ error: "Transfer ownership before removing yourself." }, { status: 400 });
@@ -126,12 +141,18 @@ export async function POST(request: Request) {
       workspaceName: context.workspace.name,
       formerOwnerId: context.user.id,
       at: new Date(),
+      joinLinksRevoked: outcome.joinLinksRevoked,
     });
     return NextResponse.json({ left: true }, { status: 200 });
   }
 
-  const { count } = await prisma.workspaceMember.deleteMany({
-    where: { workspaceId: context.workspace.id, userId: context.user.id, role: "member" },
+  // A member may have made invite links while an owner (since demoted).
+  const count = await prisma.$transaction(async (tx) => {
+    const deleted = await tx.workspaceMember.deleteMany({
+      where: { workspaceId: context.workspace.id, userId: context.user.id, role: "member" },
+    });
+    if (deleted.count > 0) await revokeOwnInvites(tx, context.workspace.id, context.user.id);
+    return deleted.count;
   });
 
   if (count === 0) {

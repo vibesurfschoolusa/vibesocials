@@ -39,11 +39,13 @@ describe("followEmailChangeInStripe", () => {
     expect(findManyMock).not.toHaveBeenCalled();
   });
 
-  it("reads only the workspaces this person owns that have a customer", async () => {
+  // R7-security L3: a payer may have been demoted to member (or never been an
+  // owner); their card still pays, so their customer follows too.
+  it("reads the workspaces with a customer that this person pays for or owns", async () => {
     await followEmailChangeInStripe({ userId: "u1", from: "old@example.com", to: "new@example.com" }, ENV);
     expect(findManyMock.mock.calls[0][0].where).toEqual({
       stripeCustomerId: { not: null },
-      members: { some: { userId: "u1", role: "owner" } },
+      OR: [{ billingUserId: "u1" }, { members: { some: { userId: "u1", role: "owner" } } }],
     });
   });
 

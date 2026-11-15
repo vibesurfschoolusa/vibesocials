@@ -80,7 +80,7 @@ function record(overrides: Record<string, unknown> = {}) {
     tokenHash: hashAccountToken("raw-token"),
     expiresAt: new Date(NOW + 60_000),
     usedAt: null,
-    user: { email: "old@example.com" },
+    user: { email: "old@example.com", emailVerifiedAt: new Date(NOW - 86_400_000), googleLinkedAt: null },
     ...overrides,
   };
 }
@@ -180,6 +180,59 @@ describe("POST /api/auth/change-email/confirm", () => {
     const raw = /\/verify-email\/undo#([A-Za-z0-9_-]+)/.exec(email.text)?.[1];
     expect(raw).toBeTruthy();
     expect(hashAccountToken(raw!)).toBe(claimMock.mock.calls[0][0].data.undoTokenHash);
+  });
+
+  // R7-new-customer H1: a mistyped sign-up address fixed with Change email
+  // must not let that mailbox's owner take the account with an undo link.
+  describe("from an address that was never confirmed", () => {
+    const unconfirmed = () =>
+      record({ user: { email: "old@example.com", emailVerifiedAt: null, googleLinkedAt: null } });
+
+    it("makes the change but opens no undo window and keeps no previous address", async () => {
+      findUniqueMock.mockResolvedValue(unconfirmed());
+      const response = await POST(request({ token: "raw-token" }));
+      expect(response.status).toBe(200);
+      const claimed = claimMock.mock.calls[0][0].data;
+      expect(claimed.usedAt).toBeInstanceOf(Date);
+      expect(claimed.previousEmailUnverified).toBe(true);
+      // No window: the account can change its email again and be deleted at once.
+      expect(claimed).not.toHaveProperty("undoExpiresAt");
+      expect(claimed).not.toHaveProperty("undoTokenHash");
+      expect(claimed).not.toHaveProperty("previousEmail");
+      expect(userUpdateMock.mock.calls[0][0].data).toMatchObject({ email: "new@example.com" });
+    });
+
+    it("sends the unconfirmed address no undo link and no notice naming the new address", async () => {
+      findUniqueMock.mockResolvedValue(unconfirmed());
+      await POST(request({ token: "raw-token" }));
+      expect(deliverAccountEmailMock).not.toHaveBeenCalled();
+    });
+
+    it("still passes the change on to Stripe", async () => {
+      findUniqueMock.mockResolvedValue(unconfirmed());
+      await POST(request({ token: "raw-token" }));
+      await afterMock.mock.calls[0][0]();
+      expect(followMock).toHaveBeenCalledWith({ userId: "user-1", from: "old@example.com", to: "new@example.com" });
+    });
+
+    it("counts an account linked to Google as confirmed, as everywhere else", async () => {
+      findUniqueMock.mockResolvedValue(
+        record({ user: { email: "old@example.com", emailVerifiedAt: null, googleLinkedAt: new Date(NOW - 1000) } }),
+      );
+      await POST(request({ token: "raw-token" }));
+      const claimed = claimMock.mock.calls[0][0].data;
+      expect(claimed.previousEmail).toBe("old@example.com");
+      expect(claimed.undoExpiresAt).toBeInstanceOf(Date);
+      expect(claimed).not.toHaveProperty("previousEmailUnverified");
+      expect(deliverAccountEmailMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads whether the previous address was confirmed with the request", async () => {
+      await POST(request({ token: "raw-token" }));
+      expect(findUniqueMock.mock.calls[0][0].include).toEqual({
+        user: { select: { email: true, emailVerifiedAt: true, googleLinkedAt: true } },
+      });
+    });
   });
 
   // Review item 5: Stripe follows, best effort, after the answer is sent.

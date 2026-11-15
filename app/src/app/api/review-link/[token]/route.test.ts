@@ -48,7 +48,7 @@ beforeEach(() => {
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   findActiveReviewLinkMock.mockResolvedValue(LINK);
-  listReviewPostsMock.mockResolvedValue([POST]);
+  listReviewPostsMock.mockResolvedValue({ posts: [POST], more: false });
 });
 
 describe("GET /api/review-link/[token]", () => {
@@ -57,11 +57,17 @@ describe("GET /api/review-link/[token]", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ posts: [POST] });
+    expect(body).toEqual({ posts: [POST], more: false });
     expect(findActiveReviewLinkMock).toHaveBeenCalledWith(TOKEN);
     expect(listReviewPostsMock).toHaveBeenCalledWith("ws-1", expect.any(Date));
     expect(JSON.stringify(body)).not.toContain("link-1");
     expect(JSON.stringify(body)).not.toContain("ws-1");
+  });
+
+  // R7-client-journey L5: whether cards were left out, for the page's sentence.
+  it("says when there are more posts than it lists", async () => {
+    listReviewPostsMock.mockResolvedValue({ posts: [POST], more: true });
+    await expect((await call()).json()).resolves.toEqual({ posts: [POST], more: true });
   });
 
   it("answers an unknown and a revoked link identically", async () => {

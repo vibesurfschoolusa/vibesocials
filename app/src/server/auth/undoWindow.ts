@@ -12,7 +12,7 @@ import { logger } from "@/lib/logger";
  * elsewhere, and the undo would no longer work.
  */
 
-type Db = { emailChangeRequest: Pick<Prisma.TransactionClient["emailChangeRequest"], "findFirst" | "updateMany"> };
+type Db = { emailChangeRequest: Pick<Prisma.TransactionClient["emailChangeRequest"], "findFirst" | "deleteMany"> };
 
 /** Until when this account's last email change can still be undone, or null. */
 export async function accountUndoWindowUntil(db: Db, userId: string, now: Date): Promise<Date | null> {
@@ -35,21 +35,26 @@ export async function addressHeldUntil(db: Db, email: string, now: Date): Promis
 }
 
 /**
- * R6-pages L6: the previous address is kept only while it can undo. Cleared
- * for every account at once by the existing daily sweep
- * (jobs/orphanBlobSweep.ts), which keeps the privacy page's 72 hours true,
- * and also by the account routes that read these rows, so a passed window
- * is usually gone sooner. Returns how many rows it cleared; never throws, so
- * it can't fail the request or the sweep it runs in (0 on a failure).
+ * R6-pages L6, R7-pages L1 / security L2: a request row is kept only while it
+ * is needed, then deleted with every address on it: a change once its undo
+ * window has passed (undone or not), and a link with no window (never used,
+ * or a change from an address that was never confirmed, which opens none)
+ * once the link itself has expired. So after A -> B -> C neither A nor B is
+ * left in a row, and a mistyped address in an unused link goes too.
+ *
+ * Run for every account at once by the existing daily sweep
+ * (jobs/orphanBlobSweep.ts), which keeps the privacy page's "within a day
+ * after the 72 hours" true, and also by the account routes that read these
+ * rows, so a passed row is usually gone sooner. Returns how many rows it
+ * deleted; never throws, so it can't fail the request or the sweep it runs
+ * in (0 on a failure).
  */
 export async function clearPassedUndoWindows(db: Db, now: Date): Promise<number> {
   try {
-    const { count } = await db.emailChangeRequest.updateMany({
+    const { count } = await db.emailChangeRequest.deleteMany({
       where: {
-        undoExpiresAt: { lte: now },
-        OR: [{ previousEmail: { not: null } }, { undoTokenHash: { not: null } }],
+        OR: [{ undoExpiresAt: { lte: now } }, { undoExpiresAt: null, expiresAt: { lte: now } }],
       },
-      data: { previousEmail: null, undoTokenHash: null },
     });
     return count;
   } catch (error) {

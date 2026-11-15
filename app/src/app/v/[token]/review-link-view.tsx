@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  REVIEW_LIST_MAX,
   REVIEW_NOTE_MAX,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
@@ -16,6 +17,14 @@ import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
 /** Shown when the first load failed. */
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
+
+/** R7-client-journey L5: under the list when it holds the first 100 of more. */
+export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} scheduled posts; more appear as these go out.`;
+
+/** The sentence, when the server says cards were left out (server/reviewLink.ts listReviewPosts). */
+export function ReviewListMore({ more }: { more: boolean }) {
+  return more ? <p className="text-sm text-muted-foreground">{REVIEW_MORE_SENTENCE}</p> : null;
+}
 
 /**
  * The client's side of a review link (2026-11-10): the upcoming posts, each
@@ -255,6 +264,7 @@ export function ReviewPostCard({
 
 export function ReviewLinkView({ token }: { token: string }) {
   const [posts, setPosts] = useState<ReviewPostDTO[] | null>(null);
+  const [more, setMore] = useState(false);
   // A failed load: the server's sentence, or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
   // Why the list was just reloaded (a post changed, or left the schedule).
@@ -266,7 +276,7 @@ export function ReviewLinkView({ token }: { token: string }) {
         cache: "no-store",
       });
       const data = (await response.json().catch(() => null)) as
-        | { posts?: ReviewPostDTO[]; error?: string }
+        | { posts?: ReviewPostDTO[]; more?: boolean; error?: string }
         | null;
       if (!response.ok || !data?.posts) {
         setError(data?.error ?? "");
@@ -274,6 +284,7 @@ export function ReviewLinkView({ token }: { token: string }) {
       }
       setError(null);
       setPosts(data.posts);
+      setMore(data.more === true);
     } catch {
       setError("");
     }
@@ -347,6 +358,7 @@ export function ReviewLinkView({ token }: { token: string }) {
           ))}
         </ul>
       )}
+      <ReviewListMore more={more} />
     </div>
   );
 }
