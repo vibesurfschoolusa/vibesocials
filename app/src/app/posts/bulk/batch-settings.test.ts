@@ -6,7 +6,7 @@ import { BatchSettingsFieldset } from "./batch-settings";
 
 // P1 fix 1: nothing on the batch card changes while rows are sending. One
 // disabled fieldset disables every control inside it natively, shared
-// components (StoryPlacementSettings, LocationAutocomplete) included.
+// components (StoryPlacementSettings) included.
 describe("Add many batch settings", () => {
   const render = (locked: boolean) =>
     renderToStaticMarkup(

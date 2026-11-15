@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -146,4 +148,14 @@ describe("instagramClient - a container answer without a usable id", () => {
       expect(sentenceForRecipient(stored, "instagram", "member")).toBe(PLAIN);
     });
   }
+});
+
+// R20 publishing L1: Instagram never sent a location_id; the client no longer
+// reads a post's place or logs its coordinates.
+describe("instagramClient - no location", () => {
+  const source = readFileSync(new URL("./instagramClient.ts", import.meta.url), "utf8");
+
+  it("reads no location and sends no location_id", () => {
+    expect(source).not.toMatch(/location_id|locationId|Location coordinates|metadata as \{ location/);
+  });
 });

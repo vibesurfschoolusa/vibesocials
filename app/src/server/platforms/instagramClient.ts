@@ -579,7 +579,6 @@ async function createInstagramContainer(args: {
   caption: string;
   mediaUrl: string;
   isVideo: boolean;
-  locationId?: string;
   deadline: number | undefined;
   /** A Story (2026-11-10) instead of a feed post. */
   story: boolean;
@@ -588,8 +587,7 @@ async function createInstagramContainer(args: {
   /** V1: a Reel's chosen cover; ignored for a photo and a Story. */
   cover?: PostCover;
 }): Promise<string> {
-  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline, story, altText, cover } =
-    args;
+  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, deadline, story, altText, cover } = args;
 
   if (story) {
     // IG User Media reference (read 2026-11-10): a Story container takes
@@ -633,14 +631,7 @@ async function createInstagramContainer(args: {
     if (altText) containerParams.alt_text = altText;
   }
 
-  if (locationId) {
-    containerParams.location_id = locationId;
-  }
-
-  console.log("[Instagram] Creating media container", {
-    mediaType: isVideo ? "REELS" : "IMAGE",
-    hasLocation: !!locationId,
-  });
+  console.log("[Instagram] Creating media container", { mediaType: isVideo ? "REELS" : "IMAGE" });
 
   return postInstagramContainer({ igAccountId, params: containerParams, connection, deadline });
 }
@@ -659,9 +650,9 @@ export const INSTAGRAM_COVER_REFUSED_NOTE =
  * A Reel's container with its cover (V1). Nothing is published before
  * media_publish, so a container refused with the cover is created once more
  * without it: a cover never fails the post. A throttle or a dead token is not
- * the cover's fault and is thrown as before. An answer without a container id
- * is not the cover's fault either: it is tried once more without the cover, as
- * before, but the post's note does not blame the cover.
+ * the cover's fault and is thrown as before. Nor is an answer without a
+ * container id (R20 publishing L2): it fails the post with its plain sentence,
+ * and the cover stays for the retry.
  */
 async function createContainerWithCover(
   args: Parameters<typeof createInstagramContainer>[0],
@@ -678,16 +669,12 @@ async function createContainerWithCover(
     return { containerId: await createInstagramContainer(args), coverSent: true, coverRefused: false };
   } catch (error) {
     if ((error as { code?: unknown } | null)?.code !== "INSTAGRAM_CONTAINER_FAILED") throw error;
-    const noId = (error as Error).message === INSTAGRAM_NO_CONTAINER_ID_MESSAGE;
-    console.warn(
-      noId
-        ? "[Instagram] The container answer had no id; creating it once more without the cover"
-        : "[Instagram] The container was refused with the cover; creating it without one",
-    );
+    if ((error as Error).message === INSTAGRAM_NO_CONTAINER_ID_MESSAGE) throw error;
+    console.warn("[Instagram] The container was refused with the cover; creating it without one");
     return {
       containerId: await createInstagramContainer({ ...args, cover: undefined }),
       coverSent: false,
-      coverRefused: !noId,
+      coverRefused: true,
     };
   }
 }
@@ -1164,25 +1151,6 @@ export const instagramClient: PlatformClient = {
     const mediaUrl = mediaItem.storageLocation;
     const isVideo = !!mediaItem.mimeType?.startsWith("video/");
 
-    // Parse location from metadata if available
-    const locationMetadata = (mediaItem.metadata as { location?: { description?: string } } | null)?.location;
-    let locationId: string | undefined;
-
-    if (locationMetadata?.description) {
-      const locStr = locationMetadata.description.trim();
-      const coordMatch = locStr.match(/\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)/);
-
-      if (coordMatch) {
-        const lat = parseFloat(coordMatch[1]);
-        const lng = parseFloat(coordMatch[2]);
-
-        console.log("[Instagram] Location coordinates found", { lat, lng });
-        // Note: Instagram Graph API requires a Facebook Place ID, not just coordinates
-        // For now, we'll skip location. To add it, you'd need to search Facebook Places API
-        // with these coordinates to get a location_id
-      }
-    }
-
     try {
       // A REELS video polls across steps when it is given somewhere to keep its
       // state (see the header). Images, and callers without a store, wait inside
@@ -1208,7 +1176,6 @@ export const instagramClient: PlatformClient = {
         caption: fitted.caption,
         mediaUrl,
         isVideo,
-        locationId,
         deadline,
         story,
         altText: altTextOf(mediaItem, INSTAGRAM_ALT_TEXT_LIMIT),

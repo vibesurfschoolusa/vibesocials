@@ -238,7 +238,7 @@ describe("no Location field on Create", () => {
 
   it("sends no location in a post's body", () => {
     expect(source).not.toMatch(/location: uploadLocation/);
-    expect(raw).not.toMatch(/^\s*location: [^"]/m);
+    expect(raw).not.toMatch(/^\s*location:/m);
   });
 
   // TikTok's audit: the Create page's TikTok parts are frozen. Every line that

@@ -289,8 +289,6 @@ export function buildBulkRowBody(input: BulkRowBodyInput): BulkRowBody {
   const isVideo = row.mimeType.startsWith("video/");
   const common = {
     baseCaption: row.caption,
-    // No platform uses a location (R20 publishing L1); blank sends none.
-    location: "",
     platforms,
     deferred: input.deferred,
     workspaceId: input.workspaceId,

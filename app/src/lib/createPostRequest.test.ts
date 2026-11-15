@@ -70,6 +70,15 @@ describe("buildReusePostBody", () => {
     );
   });
 
+  // R20 publishing L1: Create and Add many send no location; the field is optional.
+  it("without a location the body carries none", () => {
+    const { location: _unused, ...noPlace } = input;
+    void _unused;
+    expect(sent(buildReusePostBody(noPlace))).not.toHaveProperty("location");
+    expect(sent(buildUploadPostBody({ ...noPlace, blob: BLOB }))).not.toHaveProperty("location");
+    expect(sent(buildPhotosPostBody({ ...noPlace, blobs: [BLOB, BLOB] }))).not.toHaveProperty("location");
+  });
+
   it("attaches per-platform overrides and platform metadata only when given", () => {
     const plain = sent(buildReusePostBody({ ...input, platforms: ["x"] }));
     expect(plain).not.toHaveProperty("perPlatformOverrides");

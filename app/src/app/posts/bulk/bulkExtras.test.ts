@@ -48,10 +48,12 @@ describe("Add many: the body for one row", () => {
     const label = reuse ? "Media reuse body" : "upload body";
     const asRow = (row: BulkBodyRow) => (reuse ? { ...row, mediaItemId: "media_1" } : row);
 
-    // R20 publishing L1: no platform uses a location, so no row sends one.
+    // R20 publishing L1: no platform uses a location, so no row sends one,
+    // and the builder no longer names the field at all.
     it(`${label}: no location field`, () => {
       const body = buildBulkRowBody({ ...BASE, row: asRow(photoRow()), platforms: ["instagram", "youtube"] });
       expect(JSON.parse(JSON.stringify(body))).not.toHaveProperty("location");
+      expect("location" in body).toBe(false);
       expect(reuse ? "mediaItemId" in body : "blobUrl" in body).toBe(true);
     });
 

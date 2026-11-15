@@ -1747,8 +1747,6 @@ function CreatePostFormInner({
         postData = buildReusePostBody({
           mediaItemId: reuseItem.id,
           baseCaption: uploadCaption,
-          // No platform uses a location (R20 publishing L1); blank sends none.
-          location: "",
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
           deferred,
@@ -1767,7 +1765,6 @@ function CreatePostFormInner({
         postData = buildPhotosPostBody({
           blobs: photoSet.flatMap((photo) => (photo.blob ? [photo.blob] : [])),
           baseCaption: uploadCaption,
-          location: "",
           platforms: selectedPlatforms,
           deferred,
           workspaceId,
@@ -1794,7 +1791,6 @@ function CreatePostFormInner({
         postData = buildUploadPostBody({
           blob,
           baseCaption: uploadCaption,
-          location: "",
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
           deferred,

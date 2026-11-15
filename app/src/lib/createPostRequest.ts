@@ -60,8 +60,11 @@ export interface CreatePostReuseRequest extends CreatePostBodyBase {
 
 interface CommonBodyInput {
   baseCaption: string;
-  /** Raw location input; trimmed here, and left out of the body when blank. */
-  location: string;
+  /**
+   * Raw location input; trimmed here, and left out of the body when blank or
+   * absent. Create and Add many send none: no platform uses it (R20 publishing L1).
+   */
+  location?: string;
   platforms: Platform[];
   deferred: DeferredPostFields;
   workspaceId: string;
@@ -106,7 +109,7 @@ export function buildUploadPostBody(input: BuildUploadPostBodyInput): CreatePost
     mimeType: input.blob.mimeType,
     sizeBytes: input.blob.sizeBytes,
     baseCaption: input.baseCaption,
-    location: input.location.trim() || undefined,
+    ...(input.location?.trim() ? { location: input.location.trim() } : {}),
     platforms: input.platforms,
     ...input.deferred,
     workspaceId: input.workspaceId,
@@ -176,7 +179,7 @@ export function buildReusePostBody(input: BuildReusePostBodyInput): CreatePostRe
   const body: CreatePostReuseRequest = {
     mediaItemId: input.mediaItemId,
     baseCaption: input.baseCaption,
-    location: input.location.trim() || undefined,
+    ...(input.location?.trim() ? { location: input.location.trim() } : {}),
     platforms: input.platforms,
     ...input.deferred,
     workspaceId: input.workspaceId,
