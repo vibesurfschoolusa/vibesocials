@@ -32,6 +32,7 @@ import {
 } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
+import { publishErrorMessage } from "@/lib/publishFailureText";
 
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above imports,
 // and refreshLinkedInToken resolves prisma via `await import("@/lib/db")` at
@@ -4161,9 +4162,22 @@ describe("linkedinClient — several photos in one post", () => {
     const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
 
     expect(error?.code).toBe("LINKEDIN_IMAGE_REGISTRATION_FAILED");
+    expect(error?.status).toBe(400);
     expect(error?.message).toBe(
       "LinkedIn couldn't upload photo 2 of 3. Nothing was posted. Try again; if it fails again, replace photo 2.",
     );
+  });
+
+  // DD2 review: the registration's status is kept, so a LinkedIn outage reads as
+  // LinkedIn being down, not as a fault in photo 2.
+  it("the second photo's registration meets a LinkedIn outage: the platform-down text, not the photo's", async () => {
+    stub({ init: (n) => (n === 2 ? new Response("{}", { status: 503 }) : undefined) });
+
+    const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
+
+    expect(error?.code).toBe("LINKEDIN_IMAGE_REGISTRATION_FAILED");
+    expect(error?.status).toBe(503);
+    expect(publishErrorMessage("linkedin", error!)).not.toContain("replace photo");
   });
 
   it("the second photo cannot be read from storage: says so and to upload it again, status kept", async () => {
@@ -4177,7 +4191,7 @@ describe("linkedinClient — several photos in one post", () => {
 
     expect(error?.code).toBe("LINKEDIN_IMAGE_DOWNLOAD_FAILED");
     expect(error?.status).toBe(404);
-    expect(error?.message).toBe("Photo 2 of 3 couldn't be read from storage. Nothing was posted. Upload it again, then retry.");
+    expect(error?.message).toBe("Photo 2 of 3 couldn't be read from storage. Nothing was posted. Try again; if it fails again, create the post again with that photo.");
   });
 
   it("a rate limit or a rejected token on a later photo keeps its own error, and nothing is posted", async () => {

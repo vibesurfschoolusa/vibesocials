@@ -457,10 +457,13 @@ async function uploadImage(
       throw notPageAdminError();
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+    // The status rides on the error too, so a multi-photo post (whose text names the
+    // photo) still reads a LinkedIn outage as LinkedIn being down (DD2 review).
     const error = new Error(
       `LinkedIn image registration failed (status ${registerResponse.status})`,
     ) as Error & { code: string };
     error.code = "LINKEDIN_IMAGE_REGISTRATION_FAILED";
+    (error as Error & { status?: number }).status = registerResponse.status;
     throw error;
   }
 
@@ -1833,7 +1836,7 @@ function photoFailed(error: unknown, index: number, count: number): unknown {
   const failed = linkedinCodedError(
     code,
     code === "LINKEDIN_IMAGE_DOWNLOAD_FAILED"
-      ? `Photo ${photo} of ${count} couldn't be read from storage. Nothing was posted. Upload it again, then retry.`
+      ? `Photo ${photo} of ${count} couldn't be read from storage. Nothing was posted. Try again; if it fails again, create the post again with that photo.`
       : `LinkedIn couldn't upload photo ${photo} of ${count}. Nothing was posted. Try again; if it fails again, replace photo ${photo}.`,
     (error as { status?: unknown }).status as number | undefined,
   );

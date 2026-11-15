@@ -1551,7 +1551,7 @@ async function publishPhotos(args: {
       if (error instanceof Error && code === "X_IMAGE_UPLOAD_FAILED") {
         error.message = `X could not upload photo ${photo} of ${sent.length}, so no post was created. Try again; if it fails again, replace photo ${photo}.`;
       } else if (error instanceof Error && code === "X_MEDIA_DOWNLOAD_FAILED") {
-        error.message = `Photo ${photo} of ${sent.length} couldn't be read from storage, so no post was created. Upload it again, then retry.`;
+        error.message = `Photo ${photo} of ${sent.length} couldn't be read from storage, so no post was created. Try again; if it fails again, create the post again with that photo.`;
       }
       throw error;
     }

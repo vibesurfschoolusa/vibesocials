@@ -2554,7 +2554,7 @@ describe("xClient.publishVideo — several photos in one post (07b)", () => {
     expect(error?.code).toBe("X_MEDIA_DOWNLOAD_FAILED");
     expect(error?.status).toBe(404);
     expect(error?.message).toBe(
-      "Photo 2 of 2 couldn't be read from storage, so no post was created. Upload it again, then retry.",
+      "Photo 2 of 2 couldn't be read from storage, so no post was created. Try again; if it fails again, create the post again with that photo.",
     );
     expect(x.tweets()).toHaveLength(0);
   });

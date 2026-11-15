@@ -662,7 +662,8 @@ describe("blobInterruptionDetails", () => {
 // R18 DD2 follow-up: what a person reads when the stored video can't be read. The status stays in
 // error.status; each text says nothing was posted and what to try.
 describe("BLOB_READ_FAILED texts", () => {
-  const READ_AGAIN = "Nothing was posted. Upload it again, then retry.";
+  // DD2 review: Retry reads the same stored file, so the text also says what works if it is gone.
+  const READ_AGAIN = "Nothing was posted. Try again; if it fails again, create the post again with the video.";
   const TRY_AGAIN = "Nothing was posted. Try again.";
   const opened = () => openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL });
   const failureOf = (promise: Promise<unknown>) =>

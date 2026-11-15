@@ -289,7 +289,7 @@ class BlobBodyStream implements BlobChunkStream {
   private async pull(): Promise<Buffer> {
     const { done, value } = await this.reader.read();
     if (done) {
-      throw blobReadFailed("The stored video ended before its recorded size. Nothing was posted. Upload it again, then retry.");
+      throw blobReadFailed("The stored video ended before its recorded size. Nothing was posted. Try again; if it fails again, create the post again with the video.");
     }
     return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   }
@@ -364,11 +364,11 @@ export async function openBlobChunkStream(
       if (length !== totalBytes) throw sizeMismatch();
     } else {
       // The status stays in error.status, out of the text (R18 DD2 follow-up).
-      throw blobReadFailed("The stored video couldn't be read. Nothing was posted. Upload it again, then retry.", {
+      throw blobReadFailed("The stored video couldn't be read. Nothing was posted. Try again; if it fails again, create the post again with the video.", {
         status: response.status,
       });
     }
-    if (!response.body) throw blobReadFailed("The stored video had no content. Nothing was posted. Upload it again, then retry.", { status: response.status });
+    if (!response.body) throw blobReadFailed("The stored video had no content. Nothing was posted. Try again; if it fails again, create the post again with the video.", { status: response.status });
   } catch (error) {
     await discardBody(response);
     throw error;
