@@ -661,6 +661,10 @@ describe("facebookPageClient.publishVideo — several photos (photos published=f
     const error = await failure(multiContext(["image/jpeg", mimeType, "image/png"]));
 
     expect(error?.code).toBe("FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE");
+    // GG3 review: Facebook's Page photos reference lists no WebP, so the text names JPG and PNG.
+    expect(error?.message).toBe(
+      "A Facebook Page post with several photos takes JPG or PNG photos only, so nothing was posted. Replace the other photos, then retry.",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

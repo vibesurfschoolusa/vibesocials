@@ -202,8 +202,11 @@ async function publishSeveralPhotos(
     throw error;
   }
   if (mediaItems.some((item) => !MULTI_PHOTO_MIME_TYPES.includes(item.mimeType ?? ""))) {
+    // GG3 review: Facebook's Page photos reference (checked 2026-11-15) lists
+    // ".jpeg, .bmp, .png, .gif, .tiff" and no WebP; Create refuses WebP for
+    // Facebook, so the text names what a several-photo post can carry here.
     const error = new Error(
-      "A Facebook Page post with several photos takes JPEG, PNG or WebP photos only.",
+      "A Facebook Page post with several photos takes JPG or PNG photos only, so nothing was posted. Replace the other photos, then retry.",
     ) as Error & { code: string };
     error.code = "FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE";
     throw error;
