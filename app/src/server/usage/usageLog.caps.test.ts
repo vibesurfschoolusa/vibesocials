@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 type Row = Record<string, unknown>;
-type Owner = { userId: string; user: { email: string; emailVerifiedAt: Date | null; createdAt: Date } };
+type Owner = { userId: string; user: { email: string; name?: string; emailVerifiedAt: Date | null; createdAt: Date } };
 type Workspace = Row & { id: string; owners: Owner[] };
 
 const store = vi.hoisted(() => ({
@@ -136,6 +136,7 @@ import {
   crossWorkspacePostRefusal,
   recordRetry,
   recordSend,
+  reserveRetry,
   retryRefusal,
   serviceCapRefusalAtSend,
   withdrawRetry,
@@ -164,7 +165,7 @@ function workspace(id: string, fields: Row = {}, owners: Owner[] = [owner(`owner
 
 let othersSent = 0;
 
-/** `n` more runs of free workspaces that other confirmed people sent on `at`'s day, 15 each. */
+/** `n` more runs of free workspaces that other confirmed people sent on `at`'s day, 15 each (main pool: 20). */
 async function sentElsewhere(n: number, at: Date) {
   for (let i = 0; i < n; i += 1) {
     othersSent += 1;
@@ -188,7 +189,7 @@ const sendsOf = (postJobId: string) =>
 const LEAVE_SMALL_POOL = "It stops applying once the owner has confirmed their email address and the account is a day old.";
 const FULL_AT_SEND =
   "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.";
-const SMALL_POOL_AT_SEND = `Not sent: Vibe Socials had reached the day's limit of 10 posts shared by accounts under a day old or with an unconfirmed email address when this post was due. Retry it tomorrow, or schedule it again. ${LEAVE_SMALL_POOL}`;
+const SMALL_POOL_AT_SEND = `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts under a day old or with an unconfirmed email address when this post was due. Retry it tomorrow, or schedule it again. ${LEAVE_SMALL_POOL}`;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -211,35 +212,33 @@ afterEach(() => {
 
 // R7-security M1 (a): new accounts draw from their own small pool.
 describe("new and unconfirmed accounts have a pool of their own", () => {
-  it("8 fresh accounts at 5 each: 10 runs go, the main pool is untouched, and a 9th fresh account is refused", async () => {
+  it("8 fresh accounts at 5 each: 5 runs go, the main pool is untouched, and a 9th fresh account is refused", async () => {
     const outcomes: Array<string | null> = [];
     for (let a = 1; a <= 8; a += 1) {
       workspace(`ws-fresh-${a}`, {}, [a % 2 ? fresh(`fresh-${a}`) : owner(`unconfirmed-${a}`, { emailVerifiedAt: null })]);
       for (let p = 1; p <= 5; p += 1) outcomes.push(await due(`ws-fresh-${a}`, `fresh-${a}-${p}`));
     }
-    expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(10);
-    expect(outcomes.filter((outcome) => outcome === SMALL_POOL_AT_SEND)).toHaveLength(30);
-    expect(runsIn("new")).toBe(10);
+    expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(5);
+    expect(outcomes.filter((outcome) => outcome === SMALL_POOL_AT_SEND)).toHaveLength(35);
+    expect(runsIn("new")).toBe(5);
     expect(runsIn("main")).toBe(0);
 
     workspace("ws-fresh-9", {}, [fresh("fresh-9")]);
     await expect(due("ws-fresh-9", "fresh-9-1")).resolves.toBe(SMALL_POOL_AT_SEND);
 
-    // Confirmed customers still have the whole main pool: all 30 go today.
-    await sentElsewhere(29, NOW);
+    // Confirmed customers still have the whole main pool: all 20 go today.
+    await sentElsewhere(19, NOW);
     workspace("ws-customer", {}, [owner("customer")]);
     await expect(due("ws-customer", "c-1")).resolves.toBeNull();
-    expect(runsIn("main")).toBe(30);
+    expect(runsIn("main")).toBe(20);
   });
 
   it("a full main pool never refuses a new account, and a full small pool never refuses a confirmed one", async () => {
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
-    workspace("ws-fresh-2", {}, [fresh("fresh-2")]);
     workspace("ws-customer", {}, [owner("customer")]);
-    await sentElsewhere(30, NOW);
+    await sentElsewhere(20, NOW);
     for (let p = 1; p <= 5; p += 1) await expect(due("ws-fresh", `f-${p}`)).resolves.toBeNull();
-    for (let p = 1; p <= 5; p += 1) await expect(due("ws-fresh-2", `g-${p}`)).resolves.toBeNull();
-    expect(runsIn("new")).toBe(10);
+    expect(runsIn("new")).toBe(5);
     // The customer's first run of the day goes on their guaranteed share.
     await expect(due("ws-customer", "c-1")).resolves.toBeNull();
   });
@@ -260,12 +259,10 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
 
   it("Post now and scheduling for today meet the small pool too, with their own sentences", async () => {
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
-    workspace("ws-fresh-2", {}, [fresh("fresh-2")]);
     workspace("ws-fresh-3", {}, [fresh("fresh-3")]);
     for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
-    for (let p = 1; p <= 5; p += 1) await due("ws-fresh-2", `g-${p}`);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(
-      `Vibe Socials has reached today's limit of 10 posts shared by accounts under a day old or with an unconfirmed email address. Schedule this post for another day, or try again tomorrow. ${LEAVE_SMALL_POOL}`,
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts under a day old or with an unconfirmed email address. Schedule this post for another day, or try again tomorrow. ${LEAVE_SMALL_POOL}`,
     );
     expect(
       (await crossWorkspacePostRefusal({ workspaceId: "ws-fresh-3", workspace: {}, day: NOW, mode: "schedule" }))?.code,
@@ -281,24 +278,24 @@ describe("new and unconfirmed accounts have a pool of their own", () => {
 describe("each confirmed person's first 3 runs a day", () => {
   it("main pool used up: a confirmed customer's first 3 runs still go, the 4th is refused", async () => {
     workspace("ws-customer", {}, [owner("customer")]);
-    await sentElsewhere(30, NOW);
+    await sentElsewhere(20, NOW);
     const outcomes = [];
     for (let p = 1; p <= 4; p += 1) outcomes.push(await due("ws-customer", `c-${p}`));
     expect(outcomes).toEqual([null, null, null, FULL_AT_SEND]);
     // They still count in the pool.
-    expect(runsIn("main")).toBe(33);
+    expect(runsIn("main")).toBe(23);
   });
 
   it("a customer who used 3 earlier in the day, while the pool had room, gets no more once it is full", async () => {
     workspace("ws-customer", {}, [owner("customer")]);
     for (let p = 1; p <= 3; p += 1) await due("ws-customer", `c-${p}`);
-    await sentElsewhere(27, NOW);
+    await sentElsewhere(17, NOW);
     await expect(due("ws-customer", "c-4")).resolves.toBe(FULL_AT_SEND);
   });
 
   it("a pair needs both places inside the share: 2 used, the pair is refused once the pool is full", async () => {
     workspace("ws-customer", {}, [owner("customer")]);
-    await sentElsewhere(30, NOW);
+    await sentElsewhere(20, NOW);
     await due("ws-customer", "c-1");
     await expect(
       serviceCapRefusalAtSend({ workspaceId: "ws-customer", postJobIds: ["feed", "story"], now: NOW }),
@@ -313,7 +310,7 @@ describe("each confirmed person's first 3 runs a day", () => {
     workspace("ws-busy", {}, [owner("busy")]);
     workspace("ws-shared", {}, [owner("busy"), owner("quiet")]);
     for (let p = 1; p <= 3; p += 1) await due("ws-busy", `b-${p}`);
-    await sentElsewhere(27, NOW);
+    await sentElsewhere(17, NOW);
     await expect(due("ws-busy", "b-4")).resolves.toBe(FULL_AT_SEND);
     await expect(due("ws-shared", "s-1")).resolves.toBeNull();
   });
@@ -321,7 +318,7 @@ describe("each confirmed person's first 3 runs a day", () => {
   it("the share starts again on the next UTC day", async () => {
     workspace("ws-customer", {}, [owner("customer")]);
     for (let p = 1; p <= 3; p += 1) await due("ws-customer", `c-${p}`, DAY_1);
-    await sentElsewhere(30, NOW);
+    await sentElsewhere(20, NOW);
     await expect(due("ws-customer", "c-4")).resolves.toBeNull();
   });
 });
@@ -414,26 +411,30 @@ describe("the per-person number", () => {
     workspace("ws-1", {}, [owner("owner-1", { emailVerifiedAt: null })]);
     scheduled("ws-1", 5);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once the owner has confirmed their email address and the account is a day old.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
     );
   });
 
-  // Unconfirmed in R7-new-customer: the reduced number is for the days before the account is a day old.
-  it("a confirmed account on its first day gets 5 for today and tomorrow, 15 for the days after", async () => {
+  // R7 review, point 5: the lower number holds only the UTC day the account was made.
+  it("a confirmed account gets 5 on the UTC day it was made and 15 from the next day, said so", async () => {
     workspace("ws-1", {}, [fresh("owner-1")]);
     const tomorrow = new Date("2026-11-15T09:00:00Z");
-    const later = new Date("2026-11-20T09:00:00Z");
     scheduled("ws-1", 5, NOW);
     scheduled("ws-1", 5, tomorrow);
-    scheduled("ws-1", 5, later);
-    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "schedule" }))?.code).toBe(
-      "OWNER_DAILY_POST_LIMIT",
+    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "schedule" }))?.error).toBe(
+      "That day already has 5 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day. The limit is 15 from tomorrow.",
     );
-    // Signed up at 14:00 on the 14th: still under a day old when the 15th starts.
-    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: tomorrow, mode: "schedule" }))?.code).toBe(
-      "OWNER_DAILY_POST_LIMIT",
+    // Signed up at 14:00 on the 14th: under a day old on the 15th's morning, but it is a new day.
+    await expect(crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: tomorrow, mode: "schedule" })).resolves.toBeNull();
+  });
+
+  // R7 review, point 6: a workspace held to 5 by a new co-owner names them.
+  it("a workspace held to 5 by a new or unconfirmed co-owner names that owner", async () => {
+    workspace("ws-team", {}, [owner("lead"), owner("maria", { name: "Maria", createdAt: new Date(NOW.getTime() - 3_600_000), emailVerifiedAt: NOW })]);
+    scheduled("ws-team", 5, NOW);
+    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-team", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(
+      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. Their limit is 15 from tomorrow.",
     );
-    await expect(crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: later, mode: "schedule" })).resolves.toBeNull();
   });
 
   it("an unconfirmed account keeps 5 on every day until it confirms", async () => {
@@ -471,13 +472,13 @@ describe("the per-person number", () => {
 describe("the main pool counts one row per run", () => {
   it("posts due 23:51-23:59 that go out in the 00:00 run count on the new day, each before the next is checked", async () => {
     workspace("ws-1");
-    await sentElsewhere(30, new Date("2026-11-13T10:00:00Z"));
+    await sentElsewhere(20, new Date("2026-11-13T10:00:00Z"));
     const run = new Date("2026-11-14T00:00:30Z");
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `early-${p}`, run);
-    await sentElsewhere(24, run);
+    await sentElsewhere(14, run);
     const outcomes = [];
     for (const id of ["due-51", "due-53", "due-55", "due-57", "due-59"]) outcomes.push(await due("ws-1", id, run));
-    // Day 1's 30 do not count on day 2; 27 + 3 fill it, and the last two meet the cap.
+    // Day 1's 20 do not count on day 2; 17 + 3 fill it, and the last two meet the cap.
     expect(outcomes).toEqual([null, null, null, FULL_AT_SEND, FULL_AT_SEND]);
     expect(sendsOf("due-51")[0]?.sourceId).toBe("send:due-51:2026-11-14");
   });
@@ -487,7 +488,7 @@ describe("the main pool counts one row per run", () => {
     workspace("ws-gone-2", {}, [owner("owner-2")]);
     workspace("ws-1");
     for (let p = 1; p <= 15; p += 1) await due("ws-gone", `gone-${p}`);
-    for (let p = 1; p <= 12; p += 1) await due("ws-gone-2", `gone2-${p}`);
+    for (let p = 1; p <= 2; p += 1) await due("ws-gone-2", `gone2-${p}`);
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
     await copyUsageBeforeDeletion((await import("@/lib/db")).prisma as never, {
       workspaceIds: ["ws-gone", "ws-gone-2"],
@@ -507,15 +508,15 @@ describe("the main pool counts one row per run", () => {
       await due("ws-ops", `ops-${i}`);
     }
     expect(runsIn("main")).toBe(0);
-    await sentElsewhere(30, NOW);
+    await sentElsewhere(20, NOW);
     await expect(due("ws-paid", "p")).resolves.toBeNull();
     await expect(due("ws-ops", "o")).resolves.toBeNull();
   });
 
-  it("28 sent: the pair goes; 29: one place left, neither half", async () => {
+  it("18 sent: the pair goes; 19: one place left, neither half", async () => {
     workspace("ws-1");
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
-    await sentElsewhere(25, NOW);
+    await sentElsewhere(15, NOW);
     await expect(serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], now: NOW })).resolves.toBeNull();
     await sentElsewhere(1, NOW);
     expect((await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], now: NOW }))?.errorMessage).toBe(
@@ -526,7 +527,7 @@ describe("the main pool counts one row per run", () => {
   it("Post now of a pair (alsoOnDay 1) meets the same rule", async () => {
     workspace("ws-1");
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
-    await sentElsewhere(26, NOW);
+    await sentElsewhere(16, NOW);
     expect(
       (await crossWorkspacePostRefusal({
         workspaceId: "ws-1",
@@ -545,7 +546,7 @@ describe("the main pool counts one row per run", () => {
   it("a half already reserved by its pair's send counts once, not against itself", async () => {
     workspace("ws-1");
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
-    await sentElsewhere(25, NOW);
+    await sentElsewhere(15, NOW);
     await recordSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], at: NOW });
     await expect(serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["story"], now: NOW })).resolves.toBeNull();
   });
@@ -556,7 +557,7 @@ describe("the main pool counts one row per run", () => {
     for (let p = 1; p <= 15; p += 1) {
       store.events.push({ kind: "send", workspaceId: "ws-1", sourceId: `send:legacy-${p}:2026-11-14`, at: NOW, pool: null, ownerIds: [] });
     }
-    await sentElsewhere(12, NOW);
+    await sentElsewhere(2, NOW);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }))?.code).toBe(
       "OWNER_DAILY_POST_LIMIT",
     );
@@ -631,7 +632,7 @@ describe("retries", () => {
     );
     workspace("ws-2", {}, [owner("owner-2")]);
     for (let p = 1; p <= 3; p += 1) await due("ws-2", `q-${p}`);
-    await sentElsewhere(12, NOW);
+    await sentElsewhere(2, NOW);
     expect((await retryRefusal({ workspaceId: "ws-2", postJobId: "q-1", now: NOW }))?.error).toBe(
       "Vibe Socials has reached its daily limit of posts for the whole service, and retries count toward it. Retry tomorrow.",
     );
@@ -642,7 +643,7 @@ describe("retries", () => {
     workspace("ws-paid", PAID, [owner("owner-1")]);
     workspace("ws-free", { trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, [owner("owner-1")]);
     for (let p = 1; p <= 15; p += 1) await due("ws-free", `f-${p}`);
-    await sentElsewhere(30, NOW);
+    await sentElsewhere(20, NOW);
     for (const requestId of ["r1", "r2", "r3"]) {
       await expect(retryRefusal({ workspaceId: "ws-paid", postJobId: "p", now: NOW })).resolves.toBeNull();
       await recordRetry({ workspaceId: "ws-paid", postJobId: "p", requestId, at: NOW });
@@ -678,9 +679,7 @@ describe("the checks fail open, and the operator is who the list says once verif
   it("an unverified address on the operator list is not the operator: it is a new account", async () => {
     workspace("ws-1", {}, [owner("x-1", { email: "ops@example.com", emailVerifiedAt: null, createdAt: LONG_AGO })]);
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
-    workspace("ws-fresh-2", {}, [fresh("fresh-2")]);
     for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
-    for (let p = 1; p <= 5; p += 1) await due("ws-fresh-2", `g-${p}`);
     expect((await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["a"], now: NOW }))?.errorMessage).toBe(
       SMALL_POOL_AT_SEND,
     );
@@ -719,5 +718,61 @@ describe("withdrawing a send that was not handed to publishing", () => {
     vi.spyOn(prisma.workspaceMember, "findMany").mockRejectedValueOnce(new Error("blip"));
     await expect(recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW })).resolves.toEqual(["a"]);
     expect(sendsOf("a")[0]).toMatchObject({ pool: null, ownerIds: [] });
+  });
+});
+
+// R7 review, point 7: record first, then count; a run past a limit is removed again.
+describe("create, then check", () => {
+  it("two retry clicks at once cannot make a 4th retry run of a post", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (const requestId of ["r1", "r2"]) await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW });
+    const outcomes = await Promise.all(
+      ["r3", "r4"].map((requestId) => reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW })),
+    );
+    expect(outcomes.filter((outcome) => outcome === null).length).toBeLessThanOrEqual(1);
+    expect(sendsOf("post-a").length).toBeLessThanOrEqual(3);
+    // A request refused leaves no row behind.
+    const refused = ["r3", "r4"].filter((_, i) => outcomes[i] !== null);
+    for (const requestId of refused) expect(sendsOf("post-a").some((e) => e.sourceId === `send:post-a:retry:${requestId}`)).toBe(false);
+  });
+
+  it("the 4th retry is refused with the sentence and its row is removed", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (const requestId of ["r1", "r2", "r3"]) {
+      await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW })).resolves.toBeNull();
+    }
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.code).toBe(
+      "POST_RETRY_LIMIT",
+    );
+    expect(sendsOf("post-a").map((event) => event.sourceId)).toEqual([
+      "send:post-a:retry:r1",
+      "send:post-a:retry:r2",
+      "send:post-a:retry:r3",
+    ]);
+  });
+
+  it("a reserved retry past the pool is refused and removed; within it, it stays", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
+    await sentElsewhere(16, NOW);
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "one-1", requestId: "r1", now: NOW })).resolves.toBeNull();
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "one-2", requestId: "r2", now: NOW }))?.code).toBe(
+      "SERVICE_DAILY_POST_LIMIT",
+    );
+    expect(runsIn("main")).toBe(20);
+  });
+
+  it("a run recorded before the check at send is counted once: the 20th goes, the 21st does not", async () => {
+    workspace("ws-1");
+    for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
+    await sentElsewhere(16, NOW);
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["p-20"], at: NOW });
+    await expect(
+      serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["p-20"], now: NOW, recorded: true }),
+    ).resolves.toBeNull();
+    await recordSend({ workspaceId: "ws-1", postJobIds: ["p-21"], at: NOW });
+    expect(
+      (await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["p-21"], now: NOW, recorded: true }))?.errorMessage,
+    ).toBe(FULL_AT_SEND);
   });
 });

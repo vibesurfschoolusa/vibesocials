@@ -636,9 +636,23 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
 
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW });
+    // R7 review, point 7: the run is recorded first, then counted with it.
     expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: NOW });
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW, recorded: true });
+    expect(recordSendMock.mock.invocationCallOrder[0]).toBeLessThan(serviceCapMock.mock.invocationCallOrder[0]);
     expect(result.ok).toBe(true);
+  });
+
+  it("past the cap, the run it recorded is taken back, and only that one", async () => {
+    jobs({ "job-1": {} });
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+    recordSendMock.mockResolvedValue(["job-1"]);
+    serviceCapMock.mockResolvedValue(FULL);
+
+    const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
+
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-1"], day: NOW });
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
   });
 
   it("at the cap, every platform gets a failed result that says why, nothing is sent or recorded", async () => {
@@ -658,7 +672,7 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       ],
     });
     expect(recomputeMock).toHaveBeenCalledWith("job-1");
-    expect(recordSendMock).not.toHaveBeenCalled();
+    expect(recordSendMock).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
   });
 
@@ -678,7 +692,12 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
         where: { storyOfPostJobId: "job-1" },
         select: PAIR_HALF_SELECT,
       });
-      expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], now: NOW });
+      expect(serviceCapMock).toHaveBeenCalledWith({
+        workspaceId: "workspace-1",
+        postJobIds: ["job-1", "story-1"],
+        now: NOW,
+        recorded: true,
+      });
       expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], at: NOW });
       expect(result.ok).toBe(true);
     });
@@ -696,9 +715,9 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
         expect(args.data.every((row: { status: string; errorCode: string }) => row.status === "failed" && row.errorCode === FULL.errorCode)).toBe(true);
       }
       expect(recomputeMock.mock.calls.map(([id]) => id)).toEqual(["job-1", "story-1"]);
-      // Checked once, for the pair.
+      // Checked once, for the pair; its runs were recorded for the check and taken back.
       expect(serviceCapMock).toHaveBeenCalledTimes(1);
-      expect(recordSendMock).not.toHaveBeenCalled();
+      expect(recordSendMock).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
     });
 
@@ -713,7 +732,7 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
 
       const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-      expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW });
+      expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW, recorded: true });
       expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
     });
 
@@ -721,11 +740,11 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       jobs({ "job-1": {} });
       postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "completed", _count: { results: 1 } });
       await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
-      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW });
+      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW, recorded: true });
 
       postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "cancelled", _count: { results: 0 } });
       await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
-      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW });
+      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW, recorded: true });
     });
   });
 
@@ -834,7 +853,7 @@ describe("prepareDeferredPostJobDispatch - who is told, and the sends it wrote",
     const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
     expect(postJobFindUniqueMock).toHaveBeenCalledWith({ where: { id: "job-1" }, select: PARTNER_SELECT });
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW });
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
     expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1" });
   });
 
@@ -1002,7 +1021,7 @@ describe("a pair whose other half has nothing to send", () => {
 
     const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW });
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
     expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], at: NOW });
     expect(result.ok).toBe(true);
   });
@@ -1017,6 +1036,6 @@ describe("a pair whose other half has nothing to send", () => {
 
     await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW });
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW, recorded: true });
   });
 });

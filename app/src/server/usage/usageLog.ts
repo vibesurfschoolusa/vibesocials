@@ -6,13 +6,13 @@ import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
 import {
   GUARANTEED_RUNS_PER_PERSON,
+  isNewAccount,
   NEW_ACCOUNT_POOL_DAILY_LIMIT,
   newAccountPoolAtSendMessage,
   newAccountPoolMessage,
   OWNER_DAILY_POST_LIMIT_CODE,
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
-  ownerDailySendLimitMessage,
   personalPostLimitApplies,
   POST_RETRY_LIMIT_CODE,
   postRetryLimitMessage,
@@ -123,12 +123,15 @@ export function retrySourceId(postJobId: string, requestId: string): string {
   return `${retryRunPrefix(postJobId)}${requestId}`;
 }
 
-type OwnerRow = { userId: string; user: { email: string; emailVerifiedAt: Date | null; createdAt: Date } };
+type OwnerRow = {
+  userId: string;
+  user: { email: string; name?: string | null; emailVerifiedAt: Date | null; createdAt: Date };
+};
 
 function workspaceOwners(workspaceId: string): Promise<OwnerRow[]> {
   return prisma.workspaceMember.findMany({
     where: { workspaceId, role: "owner" },
-    select: { userId: true, user: { select: { email: true, emailVerifiedAt: true, createdAt: true } } },
+    select: { userId: true, user: { select: { email: true, name: true, emailVerifiedAt: true, createdAt: true } } },
   });
 }
 
@@ -139,7 +142,7 @@ async function ownBillingFields(workspaceId: string): Promise<BillingFields> {
 
 /** Confirmed and a day old at `at`: draws from the main pool, with its guaranteed share. */
 function established(owner: OwnerRow, at: Date): boolean {
-  return !ownerDailyPostLimit(owner.user, at).reduced;
+  return !isNewAccount(owner.user, at);
 }
 
 /**
@@ -624,6 +627,7 @@ async function poolRefusal(input: {
   now: Date;
 }): Promise<"main" | "new" | null> {
   const { who, day, unit, size, now } = input;
+  // `size` 0 with no unit: the runs were recorded first and are in the counts.
   if (who.pool === RUN_POOL.none) return null;
   const used = await poolRunsOnDay(day, unit, now);
   if (who.pool === RUN_POOL.newAccounts) {
@@ -638,17 +642,17 @@ async function poolRefusal(input: {
   return "main";
 }
 
-/** The later of two moments. */
-function later(a: Date, b: Date): Date {
-  return a.getTime() >= b.getTime() ? a : b;
-}
-
 type CrossWorkspaceCheck = {
   workspace: BillingFields;
   day: Date;
   mode: CrossWorkspaceLimitMode;
   excludePostJobId?: string | readonly string[];
   alsoOnDay?: number;
+  /**
+   * R7 review, point 7: the run was recorded before the check (create, then
+   * check), so it is in the counts already and adds nothing more.
+   */
+  recorded?: boolean;
 };
 
 /**
@@ -670,28 +674,24 @@ async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: 
   const { day, mode } = input;
   if (who.operator) return null;
   const unit = unitIds(input.excludePostJobId);
-  const size = 1 + (input.alsoOnDay ?? 0);
+  const size = input.recorded ? 0 : 1 + (input.alsoOnDay ?? 0);
 
   if (personalPostLimitApplies(input.workspace)) {
-    // Unconfirmed in R7-new-customer: a later day is judged as it starts, so
-    // a confirmed account's first day holds back only the days before it is
-    // a day old (an unconfirmed one stays reduced until it confirms).
-    const judgedAt = mode === "schedule" ? later(now, utcDayRange(day).start) : now;
     for (const owner of who.owners) {
-      const { limit, reduced } = ownerDailyPostLimit(owner.user, judgedAt);
+      // R7 review, point 5: the lower number holds the account's first UTC
+      // day, and every day until its email is confirmed.
+      const { limit, reduced } = ownerDailyPostLimit(owner.user, day);
       if ((await ownerCountOnDay(owner.userId, day, unit)) + size > limit) {
-        return {
-          error:
-            mode === "retry" ? ownerDailySendLimitMessage(limit, reduced) : ownerDailyPostLimitMessage(limit, mode, reduced),
-          code: OWNER_DAILY_POST_LIMIT_CODE,
-        };
+        // Point 6: a co-owner whose lower number holds the workspace is named.
+        const coOwner = reduced && who.owners.length > 1 ? owner.user.name?.trim() || owner.user.email : null;
+        return { error: ownerDailyPostLimitMessage(limit, mode, reduced, coOwner), code: OWNER_DAILY_POST_LIMIT_CODE };
       }
     }
   }
 
   // A post given a later slot meets the pools when it is sent (the scanner);
   // now it meets only what has gone out on its day already.
-  const sending = mode === "schedule" ? 1 : size;
+  const sending = input.recorded ? 0 : mode === "schedule" ? 1 : size;
   const pool = await poolRefusal({ who, day, unit, size: sending, now });
   if (pool === "new") return { error: newAccountPoolMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
   if (pool === "main") return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
@@ -710,6 +710,11 @@ export async function serviceCapRefusalAtSend(input: {
   workspaceId: string;
   postJobIds: readonly string[];
   now: Date;
+  /**
+   * R7 review, point 7: the posts' runs were recorded first (create, then
+   * check), so they are counted as they stand and add nothing more.
+   */
+  recorded?: boolean;
 }): Promise<{ errorCode: string; errorMessage: string } | null> {
   try {
     const who = await runAttribution(input.workspaceId, input.now);
@@ -717,8 +722,8 @@ export async function serviceCapRefusalAtSend(input: {
     const pool = await poolRefusal({
       who,
       day: input.now,
-      unit: input.postJobIds,
-      size: input.postJobIds.length,
+      unit: input.recorded ? [] : input.postJobIds,
+      size: input.recorded ? 0 : input.postJobIds.length,
       now: input.now,
     });
     if (pool === "new") return { errorCode: SERVICE_DAILY_POST_LIMIT_CODE, errorMessage: newAccountPoolAtSendMessage() };
@@ -769,19 +774,46 @@ export async function retryRefusal(input: {
   workspaceId: string;
   postJobId: string;
   now: Date;
+  /** The request's own run is recorded already (reserveRetry) and is in the counts. */
+  recorded?: boolean;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, postJobId, now } = input;
   try {
     const who = await runAttribution(workspaceId, now);
     if (who.operator) return null;
-    if ((await retryRunsToday(workspaceId, postJobId, now)) >= RETRIES_PER_POST_PER_DAY) {
+    const allowed = RETRIES_PER_POST_PER_DAY + (input.recorded ? 1 : 0);
+    if ((await retryRunsToday(workspaceId, postJobId, now)) >= allowed) {
       return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
     }
-    return await refusalFor(who, { workspace: await ownBillingFields(workspaceId), day: now, mode: "retry" }, now);
+    return await refusalFor(
+      who,
+      { workspace: await ownBillingFields(workspaceId), day: now, mode: "retry", recorded: input.recorded },
+      now,
+    );
   } catch (error) {
     logger.error("[usage] Retry limit check failed; allowing", { error, workspaceId, postJobId });
     return null;
   }
+}
+
+/**
+ * R7 review, point 7: the retry route's check, made safe against two clicks
+ * at once. The request's run is recorded first, then counted with it; when
+ * that is past a limit, that same row is removed and the request refused. Two
+ * requests at the same moment both see each other, so neither can make a
+ * 4th run (at worst both are refused). Null: the run stays recorded, and the
+ * caller takes it back with withdrawRetry if its hand-over then fails.
+ */
+export async function reserveRetry(input: {
+  workspaceId: string;
+  postJobId: string;
+  requestId: string;
+  now: Date;
+}): Promise<LimitRefusal | null> {
+  await recordRetry({ workspaceId: input.workspaceId, postJobId: input.postJobId, requestId: input.requestId, at: input.now });
+  const refusal = await retryRefusal({ workspaceId: input.workspaceId, postJobId: input.postJobId, now: input.now, recorded: true });
+  if (refusal) await withdrawRetry({ postJobId: input.postJobId, requestId: input.requestId });
+  return refusal;
 }
 
 /**

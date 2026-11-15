@@ -8,12 +8,14 @@ import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { isUnconfirmedResult } from "@/lib/postsDto";
+import { leftOutSentence, retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
-import { recordRetry, retryRefusal, withdrawRetry } from "@/server/usage/usageLog";
+import { reserveRetry, withdrawRetry } from "@/server/usage/usageLog";
 import { Prisma, type Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -152,7 +154,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
         orderBy: { position: "asc" },
         select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
       },
-      results: { select: { platform: true, status: true } },
+      results: { select: { platform: true, status: true, errorCode: true } },
     },
   });
 
@@ -181,12 +183,38 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  // Candidate platforms: the named one, or every currently-failed platform.
+  // Candidate platforms: the named one, or (R7 review, points 1 and 2) what
+  // the shared Retry all rule covers: failed platforms whose outcome is known
+  // and whose connection does not need reconnecting. The others are left
+  // out and the answer says why, rather than refusing the rest.
   let candidates: Platform[];
+  let leftOut: LeftOut[] = [];
   if (target.kind === "all") {
-    candidates = postJob.results
-      .filter((r) => r.status === "failed")
-      .map((r) => r.platform);
+    const failed = postJob.results.filter((r) => r.status === "failed");
+    const dead = new Set<Platform>();
+    for (const result of failed) {
+      if (!isUnconfirmedResult(result) && (await needsReconnect(workspaceContext.workspace.id, result.platform))) {
+        dead.add(result.platform);
+      }
+    }
+    const plan = retryAllPlan(
+      failed.map((result) => ({ ...result, unconfirmed: isUnconfirmedResult(result) })),
+      (platform) => dead.has(platform),
+    );
+    leftOut = plan.leftOut;
+    if (plan.included.length === 0 && leftOut.length > 0) {
+      const reconnect = leftOut.find((entry) => entry.reason === "reconnect");
+      return NextResponse.json(
+        {
+          error: leftOutSentence(leftOut),
+          code: reconnect ? "RECONNECT_REQUIRED" : "NOTHING_TO_RETRY",
+          ...(reconnect ? { platform: reconnect.platform } : {}),
+          leftOut,
+        },
+        { status: 409 },
+      );
+    }
+    candidates = plan.included;
   } else {
     const hasResult = postJob.results.some((r) => r.platform === target.platform);
     if (!hasResult) {
@@ -211,19 +239,19 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  // Reconnect preflight for every candidate (R6-security M3: the retry of all
-  // failed platforms runs it too): if a connection is dead, retrying would
-  // just fail again, at the cost of a run. Surface a reconnect signal the
-  // client can turn into a "Reconnect … in Settings" link (`platform`, the
-  // first one), and don't flip anything to pending.
+  // Reconnect preflight for the named platform ({all} left such platforms out
+  // above): if a connection is dead, retrying would just fail again, at the
+  // cost of a run. Surface a reconnect signal the client can turn into a
+  // "Reconnect … in Settings" link (`platform`), and don't flip anything to
+  // pending.
   // Team Workspaces (Task 4): the connection lookup reads the caller's ACTIVE
   // workspace directly off the context (replaces the Task 2
   // `resolveWorkspaceForUser` bridge, which always resolved the caller's
   // PERSONAL workspace — wrong for an invited member acting in someone
   // else's shared workspace).
   const dead: Platform[] = [];
-  for (const platform of candidates) {
-    if (await needsReconnect(workspaceContext.workspace.id, platform)) dead.push(platform);
+  if (target.kind === "platform" && (await needsReconnect(workspaceContext.workspace.id, target.platform))) {
+    dead.push(target.platform);
   }
   if (dead.length > 0) {
     return NextResponse.json(
@@ -238,11 +266,15 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
 
   // R7-security L1: a retry request is one background run, counted like a
   // post toward the per-person number and the pools, and a post may have a
-  // few a day, all its platforms together (Retry all failed is one).
-  // Checked before anything is claimed.
-  const budget = await retryRefusal({
+  // few a day, all its platforms together (Retry all failed is one). R7
+  // review, point 7: the run is recorded first and then counted (two clicks
+  // at once see each other), before anything is claimed; it is taken back
+  // below if nothing is claimed or the hand-over fails.
+  const requestId = randomUUID();
+  const budget = await reserveRetry({
     workspaceId: workspaceContext.workspace.id,
     postJobId,
+    requestId,
     now: new Date(),
   });
   if (budget) {
@@ -290,6 +322,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   if (eligible.length === 0) {
     // Everything was already pending/in-flight/succeeded — nothing this call
     // legitimately claimed. This is the double-click / concurrent-retry stop.
+    await withdrawRetry({ postJobId, requestId });
     return NextResponse.json(
       {
         error: "Nothing to retry — those platforms aren't in a failed state.",
@@ -310,15 +343,6 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // belongs to a run that is, or was, calling the platform, and reverting it to
   // `failed` would tell the user "couldn't start" about a post that may be live
   // (inviting a second post). Its run records the real outcome.
-  const requestId = randomUUID();
-  // The run counts from now, so the next request's check sees it; taken back
-  // below only if this hand-over fails. Never throws (recordRetry logs).
-  await recordRetry({
-    workspaceId: workspaceContext.workspace.id,
-    postJobId,
-    requestId,
-    at: new Date(),
-  });
   try {
     // Parent job re-enters the running state while the retried platforms publish.
     await prisma.postJob.update({
@@ -372,5 +396,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  return NextResponse.json({ ok: true, retrying: eligible }, { status: 202 });
+  const notice = leftOutSentence(leftOut);
+  return NextResponse.json(
+    { ok: true, retrying: eligible, ...(notice ? { leftOut, notice } : {}) },
+    { status: 202 },
+  );
 }

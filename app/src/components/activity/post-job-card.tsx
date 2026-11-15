@@ -18,6 +18,7 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
+import { retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { PlatformResultBadge } from "./platform-result";
 import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
 
@@ -43,6 +44,21 @@ interface RetryErrorBody {
   code?: string;
   /** RECONNECT_REQUIRED: the first platform to reconnect. */
   platform?: Platform;
+  /** R7 review: what Retry all failed left out, and why (on a 202 or a 409). */
+  leftOut?: LeftOut[];
+  /** On a 202: the sentence naming what was left out. */
+  notice?: string;
+}
+
+/** "X", "X and YouTube", "X, YouTube and Instagram". */
+function platformList(platforms: readonly Platform[]): string {
+  const labels = platforms.map(platformLabel);
+  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/** R7 review, points 1 and 2: what Retry all failed says once the server took it. */
+export function retryAllToast(retrying: readonly Platform[], notice: string | undefined): string {
+  return notice ? `Retrying ${platformList(retrying)}. ${notice}` : `Retrying ${platformList(retrying)}.`;
 }
 
 /** One platform, or (R7-security L1) every failed platform of the post in one request. */
@@ -308,9 +324,12 @@ export function PostJobCard({
     toast.error(outcome.error);
   }, [job.id, onRetryAccepted, pressSendAgain, toast]);
 
-  // R7-security L1: the platforms "Retry all failed" sends, the ones not
-  // waiting for a reconnect. Shown with two or more: one is its own button.
-  const retryAllPlatforms = failedPlatforms.filter((platform) => !reconnect.has(platform));
+  // R7-security L1 and its review: what "Retry all failed" sends, by the rule
+  // the retry route uses too (lib/retryAll.ts): never a platform that may
+  // already be live, nor one the server said needs reconnecting. Shown when
+  // the rule covers at least one and more than one platform failed (with
+  // one, its own Retry button is the same request).
+  const retryAllPlatforms = retryAllPlan(results, (platform) => reconnect.has(platform)).included;
 
   const retry = useCallback(
     // `all`: the platforms it sends, for the optimistic state.
@@ -339,7 +358,26 @@ export function PostJobCard({
         });
 
         if (response.ok) {
-          toast.success(`Retrying ${label}…`);
+          if (target === "all") {
+            let body: RetryErrorBody & { retrying?: Platform[] } = {};
+            try {
+              body = (await response.json()) as typeof body;
+            } catch {
+              // An answer without a body still means it started.
+            }
+            const leftOut = body.leftOut ?? [];
+            // What the server left out is not retrying: it shows as it was.
+            setPending((prev) => {
+              const next = new Set(prev);
+              for (const entry of leftOut) next.delete(entry.platform);
+              return next;
+            });
+            const dead = leftOut.filter((entry) => entry.reason === "reconnect").map((entry) => entry.platform);
+            if (dead.length > 0) setReconnect((prev) => new Set([...prev, ...dead]));
+            toast.success(retryAllToast(body.retrying ?? platforms, body.notice));
+          } else {
+            toast.success(`Retrying ${label}…`);
+          }
           // Keep the optimistic pending state until the refetch this triggers
           // delivers the server's view of the job.
           onRetryAccepted(job.id);
@@ -357,9 +395,12 @@ export function PostJobCard({
         rollBack();
 
         if (body.code === "RECONNECT_REQUIRED") {
-          const dead = target === "all" ? body.platform : target;
-          if (dead) setReconnect((prev) => new Set(prev).add(dead));
-          toast.error(body.error ?? `Reconnect ${dead ? platformLabel(dead) : label} in Settings before retrying.`);
+          const dead =
+            target === "all"
+              ? (body.leftOut ?? []).filter((entry) => entry.reason === "reconnect").map((entry) => entry.platform)
+              : [target];
+          if (dead.length > 0) setReconnect((prev) => new Set([...prev, ...dead]));
+          toast.error(body.error ?? `Reconnect ${dead.length > 0 ? platformList(dead) : label} in Settings before retrying.`);
           return;
         }
 
@@ -523,7 +564,7 @@ export function PostJobCard({
               </Button>
             ),
           )}
-          {retryAllPlatforms.length >= 2 ? (
+          {retryAllPlatforms.length >= 1 && failedPlatforms.length >= 2 ? (
             <Button
               size="sm"
               variant="outline"

@@ -17,7 +17,7 @@ import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import { SERVICE_DAILY_POST_LIMIT_CODE } from "@/lib/usageLimits";
 import { BILLING_FIELDS_SELECT } from "@/lib/billing";
 import { blockedResultFailure, PLAN_ENDED_CODE, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
-import { recordSend, serviceCapRefusalAtSend, type WrittenSends } from "@/server/usage/usageLog";
+import { recordSend, serviceCapRefusalAtSend, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -1345,13 +1345,29 @@ export async function prepareDeferredPostJobDispatch(
 
   // The posts whose sends this one records: itself, or both halves of a pair.
   let sending = [postJobId];
+  // The runs this call recorded before the check below (R7 review, point 7).
+  let reserved: string[] = [];
   // A re-run that finds its results made has been past this check already.
   if ((options.serviceCapAt || options.unitRefusal) && existingResults === 0 && rows.some((row) => row.status === "pending")) {
     const partner = options.unitRefusal ? null : await unsentPairHalf(job, connections);
     if (partner) sending = [postJobId, partner];
-    const refusal =
-      options.unitRefusal ??
-      (await serviceCapRefusalAtSend({ workspaceId: job.workspaceId, postJobIds: sending, now: options.serviceCapAt! }));
+    let refusal = options.unitRefusal ?? null;
+    if (!refusal) {
+      // R7 review, point 7: create, then check. The runs are recorded first
+      // and counted with them, so a Post now at the same moment sees them;
+      // past the cap, the ones this call wrote are taken back.
+      reserved = (await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: sendDay })) ?? [];
+      refusal = await serviceCapRefusalAtSend({
+        workspaceId: job.workspaceId,
+        postJobIds: sending,
+        now: options.serviceCapAt!,
+        recorded: true,
+      });
+      if (refusal) {
+        await withdrawSend({ postJobIds: reserved, day: sendDay });
+        reserved = [];
+      }
+    }
     if (refusal) {
       await prisma.postJobResult.createMany({
         data: rows.map((row) => (row.status === "pending" ? { ...row, status: "failed" as const, ...refusal } : row)),
@@ -1375,7 +1391,12 @@ export async function prepareDeferredPostJobDispatch(
   }
 
   // R6 review of K2: the send the caps count, before the next post is checked.
-  const written = (await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: sendDay })) ?? [];
+  const written = [
+    ...new Set([
+      ...reserved,
+      ...((await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: sendDay })) ?? []),
+    ]),
+  ];
 
   const captionSource = resolvePostCaptionSource(job, job.mediaItem);
 

@@ -10,7 +10,7 @@ import type { Platform } from "@prisma/client";
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 
-import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, retryRequestBody, SEND_AGAIN_FAILED } from "./post-job-card";
+import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, retryAllToast, retryRequestBody, SEND_AGAIN_FAILED } from "./post-job-card";
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
 // builds no link from a Facebook Story's id.
@@ -252,6 +252,37 @@ describe("PostJobCard - Retry all failed", () => {
     expect(html).toContain("Retry all failed</button>");
     expect(html).toContain("Retry X</button>");
     expect(html).toContain("Retry LinkedIn</button>");
+  });
+
+  // R7 review, points 1 and 2: the shared rule decides; a result that may already be live is never in it.
+  it("X, Facebook and LinkedIn failed, Instagram unconfirmed: Retry all failed is there for the three", () => {
+    const html = render(
+      job({
+        status: "failed",
+        results: [failed("x"), failed("facebook_page"), result({ platform: "instagram", status: "failed", unconfirmed: true }), failed("linkedin")],
+      }),
+    );
+    expect(html).toContain("Retry all failed</button>");
+  });
+
+  it("no Retry all failed when only platforms that may already be live are left", () => {
+    const html = render(
+      job({
+        status: "failed",
+        results: [
+          result({ platform: "instagram", status: "failed", unconfirmed: true }),
+          result({ platform: "x", status: "failed", unconfirmed: true }),
+        ],
+      }),
+    );
+    expect(html).not.toContain("Retry all failed");
+  });
+
+  it("the toast says what was retried and what was left out", () => {
+    expect(retryAllToast(["x", "facebook_page"], "Instagram left out: check whether it posted first.")).toBe(
+      "Retrying X and Facebook Page. Instagram left out: check whether it posted first.",
+    );
+    expect(retryAllToast(["x"], undefined)).toBe("Retrying X.");
   });
 
   it("shows no Retry all failed for a single failed platform", () => {
