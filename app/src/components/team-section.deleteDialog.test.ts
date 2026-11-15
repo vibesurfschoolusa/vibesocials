@@ -35,9 +35,13 @@ import { DeleteWorkspace } from "./team-section";
 
 const DELETION = { memberCount: 2, scheduledCount: 0, refusal: null };
 
-function dialog(): string {
+function dialog(memberCount = DELETION.memberCount): string {
   return renderToStaticMarkup(
-    createElement(DeleteWorkspace, { workspaceId: "ws-1", workspaceName: "Surf Co", deletion: DELETION }),
+    createElement(DeleteWorkspace, {
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      deletion: { ...DELETION, memberCount },
+    }),
   );
 }
 
@@ -53,5 +57,17 @@ describe("Delete workspace dialog", () => {
 
   it("has no alert without an error", () => {
     expect(dialog()).not.toContain('role="alert"');
+  });
+
+  // R12-client-journey L3: the count includes the owner, so a workspace with
+  // only its owner must not read "for all 1 member".
+  it("with only the owner, does not say 'for all 1 member'", () => {
+    const html = dialog(1);
+    expect(html).toContain("This removes the workspace with its connections, media, posts and stats.");
+    expect(html).not.toContain("for all");
+  });
+
+  it("with two members, says 'for all 2 members'", () => {
+    expect(dialog(2)).toContain("This removes the workspace for all 2 members, with its connections, media, posts and stats.");
   });
 });

@@ -56,8 +56,9 @@ export default async function ClientReportPage({ params, searchParams }: ClientR
   const parsed = parseReportMonth(month, now, createdAt);
   const months = reportMonths(now);
 
-  // No title in the header: the report carries its own, with the month. The
-  // header is a <header>, which the print sheet hides.
+  // No title in the header: the report carries its own, with the month, and
+  // the view shows "Monthly report" until then. The header is a <header>,
+  // which the print sheet hides.
   return (
     <ClientPageShell workspace={{ name: link.workspaceName, logoUrl }} width="2xl">
       <div className="space-y-6">
@@ -73,7 +74,11 @@ export default async function ClientReportPage({ params, searchParams }: ClientR
         {parsed.ok ? (
           <ClientReportView token={token} month={parsed.month} />
         ) : (
-          <p className="text-sm">{parsed.error}</p>
+          // R12-pages L6: no report, so no report title; the page still has an h1.
+          <div className="space-y-3">
+            <h1 className="text-2xl font-bold tracking-tight">Monthly report</h1>
+            <p className="text-sm">{parsed.error}</p>
+          </div>
         )}
       </div>
     </ClientPageShell>
