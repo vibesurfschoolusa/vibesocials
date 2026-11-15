@@ -114,7 +114,12 @@ describe("POST /api/auth/change-email", () => {
     getCurrentUserMock.mockResolvedValue(user({ passwordHash: null }));
     const response = await POST(request(GOOD));
     expect(response.status).toBe(400);
-    expect((await response.json()).error).toContain("You sign in with Google");
+    const { error } = await response.json();
+    // R18 new-customer L2 follow-up: a signed-in person sees the notice on the
+    // sign-in page, not its Forgot password link, so the page itself is named.
+    expect(error).toBe(
+      "You sign in with Google, so your sign-in email is your Google account's address. To use another address, set a password at /forgot-password, then change it here.",
+    );
   });
 
   it("refuses an address that isn't one", async () => {

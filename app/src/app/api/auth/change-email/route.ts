@@ -62,8 +62,10 @@ export async function POST(request: Request) {
   if (!user.passwordHash) {
     return NextResponse.json(
       {
+        // R18 new-customer L2: the sign-in page shows a signed-in person the
+        // notice, not its Forgot password link, so the page itself is named.
         error:
-          "You sign in with Google, so your sign-in email is your Google account's address. To use another address, set a password with Forgot password on the sign-in page, then change it here.",
+          "You sign in with Google, so your sign-in email is your Google account's address. To use another address, set a password at /forgot-password, then change it here.",
       },
       { status: 400 },
     );

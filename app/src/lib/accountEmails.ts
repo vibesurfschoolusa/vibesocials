@@ -181,11 +181,13 @@ function renderNoticeEmail(heading: string, paragraphs: string[]): { html: strin
 
 /** Sent after a signed-in user changes their password in Settings. */
 export function buildPasswordChangedEmail(opts: { baseUrl: string }): AccountEmail {
-  const loginUrl = `${opts.baseUrl.replace(/\/+$/, "")}/login`;
+  // R18 new-customer L2: someone still signed in sees the notice on the sign-in
+  // page, not its Forgot password link, so the email names that page itself.
+  const forgotUrl = `${opts.baseUrl.replace(/\/+$/, "")}/forgot-password`;
   const subject = "Your Vibe Socials password was changed";
   const { html, text } = renderNoticeEmail("Your password was changed", [
     "The password for your Vibe Socials account was just changed, and every device was signed out. If you did this, there is nothing else to do.",
-    `If it was not you, choose "Forgot password" on the sign-in page (${loginUrl}) to set a new one, and write to ${SUPPORT_EMAIL}.`,
+    `If it was not you, set a new password on the Forgot password page (${forgotUrl}), and write to ${SUPPORT_EMAIL}.`,
   ]);
   return { subject, html, text };
 }

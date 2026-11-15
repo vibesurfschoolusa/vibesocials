@@ -102,12 +102,16 @@ describe("buildPasswordChangedEmail", () => {
     const { subject, html, text } = buildPasswordChangedEmail({ baseUrl: `${BASE_URL}/` });
 
     expect(subject).toBe("Your Vibe Socials password was changed");
+    // R18 new-customer L2 follow-up: someone still signed in sees the notice on
+    // the sign-in page, so the email names the Forgot password page itself.
     for (const body of [html, text]) {
-      expect(body).toContain("Forgot password");
-      expect(body).toContain(SUPPORT_EMAIL);
-      expect(body).toContain(`${BASE_URL}/login`);
+      expect(body).toContain(
+        `If it was not you, set a new password on the Forgot password page (${BASE_URL}/forgot-password), and write to ${SUPPORT_EMAIL}.`,
+      );
+      expect(body).not.toContain("on the sign-in page");
+      expect(body).not.toContain(`${BASE_URL}/login`);
     }
-    expect(text).not.toContain(`${BASE_URL}//login`);
+    expect(text).not.toContain(`${BASE_URL}//forgot-password`);
   });
 });
 
