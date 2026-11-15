@@ -21,13 +21,9 @@ const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and 
 /** R7-client-journey L5: under the list when it holds the first 100 of more. */
 export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} posts; more appear as these go out.`;
 
-/**
- * The cards the page shows: the first 100. The server sends one card more
- * when there are more (server/reviewLink.ts listReviewPosts), which is how
- * the page knows to say so; that card is never shown.
- */
-export function reviewListPage(posts: ReviewPostDTO[]): { shown: ReviewPostDTO[]; more: boolean } {
-  return { shown: posts.slice(0, REVIEW_LIST_MAX), more: posts.length > REVIEW_LIST_MAX };
+/** The sentence, when the server says cards were left out (server/reviewLink.ts listReviewPosts). */
+export function ReviewListMore({ more }: { more: boolean }) {
+  return more ? <p className="text-sm text-muted-foreground">{REVIEW_MORE_SENTENCE}</p> : null;
 }
 
 /**
@@ -268,6 +264,7 @@ export function ReviewPostCard({
 
 export function ReviewLinkView({ token }: { token: string }) {
   const [posts, setPosts] = useState<ReviewPostDTO[] | null>(null);
+  const [more, setMore] = useState(false);
   // A failed load: the server's sentence, or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
   // Why the list was just reloaded (a post changed, or left the schedule).
@@ -279,7 +276,7 @@ export function ReviewLinkView({ token }: { token: string }) {
         cache: "no-store",
       });
       const data = (await response.json().catch(() => null)) as
-        | { posts?: ReviewPostDTO[]; error?: string }
+        | { posts?: ReviewPostDTO[]; more?: boolean; error?: string }
         | null;
       if (!response.ok || !data?.posts) {
         setError(data?.error ?? "");
@@ -287,6 +284,7 @@ export function ReviewLinkView({ token }: { token: string }) {
       }
       setError(null);
       setPosts(data.posts);
+      setMore(data.more === true);
     } catch {
       setError("");
     }
@@ -348,7 +346,7 @@ export function ReviewLinkView({ token }: { token: string }) {
         <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
       ) : (
         <ul className="space-y-4">
-          {reviewListPage(posts).shown.map((post) => (
+          {posts.map((post) => (
             // Keyed on the id only, so a card keeps its sentence across a reload.
             <ReviewPostCard
               key={post.id}
@@ -360,7 +358,7 @@ export function ReviewLinkView({ token }: { token: string }) {
           ))}
         </ul>
       )}
-      {reviewListPage(posts).more ? <p className="text-sm text-muted-foreground">{REVIEW_MORE_SENTENCE}</p> : null}
+      <ReviewListMore more={more} />
     </div>
   );
 }

@@ -162,7 +162,7 @@ function alsoStoryLine(story: ReviewPostRow): string {
 
 /**
  * Rows each query reads: a card may hold two (a feed post and its folded
- * Story), and one card more than the page shows tells it there are more.
+ * Story), and one row more tells whether any card is left out.
  */
 const REVIEW_ROWS_TAKE = 2 * REVIEW_LIST_MAX + 1;
 
@@ -176,13 +176,16 @@ function cardOrder(a: { scheduledFor: string | null; id: string }, b: { schedule
  * 60 days and the drafts its client asked to change in the last 30 days,
  * merged in time order, at most 100 cards (R7-client-journey L5: counted
  * after a Story is folded into its feed post's card, so the cut never parts a
- * pair) plus one more when there are more, so the page can say so
- * (review-link-view.tsx shows the 100). Only drafts and scheduled
+ * pair). `more` says whether cards were left out, so the page can say so
+ * (review-link-view.tsx). Only drafts and scheduled
  * posts are ever asked for, so a published, failed or cancelled post cannot
  * appear. A change request is cleared when the post is scheduled again, so a
  * draft that still carries one was not.
  */
-export async function listReviewPosts(workspaceId: string, now: Date): Promise<ReviewCardDTO[]> {
+export async function listReviewPosts(
+  workspaceId: string,
+  now: Date,
+): Promise<{ posts: ReviewCardDTO[]; more: boolean }> {
   const scheduled = await prisma.postJob.findMany({
     where: {
       workspaceId,
@@ -204,14 +207,13 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     select: REVIEW_POST_SELECT,
   });
   const listed: ReviewPostRow[] = [...scheduled, ...changed];
-  if (listed.length === 0) return [];
+  if (listed.length === 0) return { posts: [], more: false };
   // F6: a Story folded into its feed post's card has no card of its own.
   const storyOf = foldStoryPairs(listed);
   const folded = new Set(Array.from(storyOf.values(), (row) => row.id));
-  const rows = listed
-    .filter((row) => !folded.has(row.id))
-    .sort((a, b) => cardOrder(cardKey(a), cardKey(b)))
-    .slice(0, REVIEW_LIST_MAX + 1);
+  const cards = listed.filter((row) => !folded.has(row.id)).sort((a, b) => cardOrder(cardKey(a), cardKey(b)));
+  const more = cards.length > REVIEW_LIST_MAX;
+  const rows = cards.slice(0, REVIEW_LIST_MAX);
 
   // As GET /api/posts: one grouped count for the posts with several photos.
   const photoCounts = await prisma.postJobMedia.groupBy({
@@ -284,7 +286,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     };
   });
 
-  return posts.sort(cardOrder);
+  return { posts: posts.sort(cardOrder), more };
 }
 
 function cardKey(row: ReviewPostRow): { scheduledFor: string | null; id: string } {

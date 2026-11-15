@@ -37,6 +37,8 @@ import { generateInviteToken, hashInviteToken } from "@/lib/inviteToken";
 import { findActiveReviewLink, listReviewPosts, notifyOwnersOfClientChange, storyPairWhere } from "./reviewLink";
 
 const NOW = new Date("2026-11-10T12:00:00Z");
+/** The cards listReviewPosts answers (R7: with `more` beside them). */
+const cards = async () => (await listReviewPosts("ws-1", NOW)).posts;
 const DAY = 24 * 60 * 60 * 1000;
 
 function linkRow(overrides: Record<string, unknown> = {}) {
@@ -162,7 +164,7 @@ describe("findActiveReviewLink", () => {
 
 describe("listReviewPosts", () => {
   it("asks only for the workspace's scheduled posts in the next 60 days, earliest first, at most 100", async () => {
-    await listReviewPosts("ws-1", NOW);
+    await cards();
 
     const scheduledQuery = postFindManyMock.mock.calls[0][0];
     expect(scheduledQuery.where).toEqual({
@@ -177,7 +179,7 @@ describe("listReviewPosts", () => {
   });
 
   it("asks for the drafts the client asked to change in the last 30 days, and nothing else", async () => {
-    await listReviewPosts("ws-1", NOW);
+    await cards();
 
     const changedQuery = postFindManyMock.mock.calls[1][0];
     expect(changedQuery.where).toEqual({
@@ -194,7 +196,7 @@ describe("listReviewPosts", () => {
   });
 
   it("selects no user, email, token or settings", async () => {
-    await listReviewPosts("ws-1", NOW);
+    await cards();
     for (const [query] of postFindManyMock.mock.calls) {
       const selected = JSON.stringify(query.select);
       expect(selected).not.toContain("user");
@@ -206,7 +208,7 @@ describe("listReviewPosts", () => {
   it("passes on only the documented fields of a scheduled post", async () => {
     postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts).toEqual([
       {
@@ -237,7 +239,7 @@ describe("listReviewPosts", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(post.platformCaptions).toEqual([{ label: "Instagram", text: "IG text" }]);
   });
@@ -246,7 +248,7 @@ describe("listReviewPosts", () => {
     postFindManyMock.mockResolvedValueOnce([postRow({ publishMetadata: null })]).mockResolvedValueOnce([]);
     connectionFindManyMock.mockResolvedValue([{ platform: "youtube" }, { platform: "tiktok" }]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(connectionFindManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1" },
@@ -261,7 +263,7 @@ describe("listReviewPosts", () => {
       .mockResolvedValueOnce([]);
     groupByMock.mockResolvedValue([{ postJobId: "post-1", _count: { _all: 3 } }]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(groupByMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { postJobId: { in: ["post-1"] } } }),
@@ -285,7 +287,7 @@ describe("listReviewPosts", () => {
         }),
       ]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts.map((post) => post.id)).toEqual(["changed", "later"]);
     expect(posts[0]).toMatchObject({ state: "change_requested", note: "Use the <b>other</b> photo" });
@@ -293,7 +295,7 @@ describe("listReviewPosts", () => {
   });
 
   it("selects the status and the version", async () => {
-    await listReviewPosts("ws-1", NOW);
+    await cards();
     for (const [query] of postFindManyMock.mock.calls) {
       expect(query.select.status).toBe(true);
       expect(query.select.updatedAt).toBe(true);
@@ -311,14 +313,14 @@ describe("listReviewPosts", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(post.state).toBe("none");
     expect(post.note).toBeNull();
   });
 
   it("does not ask for counts or connections when there is nothing to show", async () => {
-    expect(await listReviewPosts("ws-1", NOW)).toEqual([]);
+    expect(await cards()).toEqual([]);
     expect(groupByMock).not.toHaveBeenCalled();
     expect(connectionFindManyMock).not.toHaveBeenCalled();
   });
@@ -336,7 +338,7 @@ describe("listReviewPosts - the text that will be published", () => {
 
   it("reads only the footer fields of the link's workspace", async () => {
     postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
-    await listReviewPosts("ws-1", NOW);
+    await cards();
     expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
       where: { id: "ws-1" },
       select: { companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
@@ -348,7 +350,7 @@ describe("listReviewPosts - the text that will be published", () => {
       .mockResolvedValueOnce([postRow({ perPlatformOverrides: { instagram: "IG text" } })])
       .mockResolvedValueOnce([]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(post.caption).toBe(`Dawn patrol tomorrow${FOOTER}`);
     expect(post.platformCaptions).toEqual([{ label: "Instagram", text: `IG text${FOOTER}` }]);
@@ -364,7 +366,7 @@ describe("listReviewPosts - the text that will be published", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(post.platformCaptions).toEqual([{ label: "X", text: `Thanks for the lesson${FOOTER}` }]);
   });
@@ -386,7 +388,7 @@ describe("listReviewPosts - the text that will be published", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     const tagged = (source: string) =>
       `\n\nFor more info visit surfco.example/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials\n\n#surf #florida`;
 
@@ -402,7 +404,7 @@ describe("listReviewPosts - the text that will be published", () => {
   it("shows the caption as is when the workspace has no footer", async () => {
     workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: null, defaultHashtags: "  " });
     postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.caption).toBe("Dawn patrol tomorrow");
   });
 
@@ -415,7 +417,7 @@ describe("listReviewPosts - the text that will be published", () => {
       googleButtonUrl: "https://private.example",
     });
     postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
-    const text = JSON.stringify(await listReviewPosts("ws-1", NOW));
+    const text = JSON.stringify(await cards());
     expect(text).not.toContain("Secret Name");
     expect(text).not.toContain("private.example");
   });
@@ -524,7 +526,7 @@ describe("listReviewPosts with Stories", () => {
         },
       }),
     ]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.platforms).toEqual(["Instagram (Story)", "Facebook Page"]);
     expect(post.platformCaptions).toEqual([
       { label: "Instagram", text: "Story, no caption" },
@@ -540,7 +542,7 @@ describe("listReviewPosts with Stories", () => {
         publishMetadata: { targetPlatforms: ["instagram"], instagram: story("story") },
       }),
     ]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.platforms).toEqual(["Instagram (Story)"]);
     expect(post.caption).toBe("This goes out as a Story, with no caption.");
     expect(post.platformCaptions).toEqual([{ label: "Instagram", text: "Story, no caption" }]);
@@ -548,7 +550,7 @@ describe("listReviewPosts with Stories", () => {
 
   it("lists a post from before Stories as it did", async () => {
     postFindManyMock.mockResolvedValueOnce([postRow()]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.platforms).toEqual(["Instagram", "Facebook Page"]);
     expect(post.caption).toContain("Dawn patrol tomorrow");
     expect(post.platformCaptions).toEqual([]);
@@ -561,7 +563,7 @@ describe("listReviewPosts with Stories", () => {
         publishMetadata: { targetPlatforms: ["facebook_page"], instagram: story("story") },
       }),
     ]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.platforms).toEqual(["Facebook Page"]);
     expect(post.platformCaptions.map((e) => e.label)).not.toContain("Instagram");
   });
@@ -571,7 +573,7 @@ describe("listReviewPosts with Stories", () => {
     postFindManyMock.mockResolvedValueOnce([
       postRow({ publishMetadata: { instagram: story("story") } }),
     ]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.platforms).toEqual(["Instagram (Story)"]);
     expect(post.caption).toBe("This goes out as a Story, with no caption.");
   });
@@ -584,7 +586,7 @@ describe("listReviewPosts - a post without a file", () => {
       .mockResolvedValueOnce([]);
     connectionFindManyMock.mockResolvedValue([{ platform: "instagram" }, { platform: "x" }, { platform: "linkedin" }]);
 
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
 
     expect(postFindManyMock.mock.calls[0][0].select).toHaveProperty("mediaItemId", true);
     expect(post).toMatchObject({
@@ -613,7 +615,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
     });
 
   it("selects the pair's link", async () => {
-    await listReviewPosts("ws-1", NOW);
+    await cards();
     for (const [query] of postFindManyMock.mock.calls) {
       expect(query.select).toHaveProperty("storyOfPostJobId", true);
     }
@@ -622,7 +624,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
   it("shows the feed card with one line for its Story and no Story card", async () => {
     postFindManyMock.mockResolvedValueOnce([feed(), storyJob()]).mockResolvedValueOnce([]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts.map((p) => p.id)).toEqual(["feed-1"]);
     expect(posts[0]).toMatchObject({
@@ -639,7 +641,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
         storyJob({ publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } } }),
       ])
       .mockResolvedValueOnce([]);
-    const [post] = await listReviewPosts("ws-1", NOW);
+    const [post] = await cards();
     expect(post.alsoStory).toBe("Also as a Story on Instagram");
   });
 
@@ -648,12 +650,12 @@ describe("listReviewPosts - a Feed and Story pair", () => {
     postFindManyMock
       .mockResolvedValueOnce([feed({ clientApprovedAt: approved }), storyJob()])
       .mockResolvedValueOnce([]);
-    expect((await listReviewPosts("ws-1", NOW))[0].state).toBe("none");
+    expect((await cards())[0].state).toBe("none");
 
     postFindManyMock
       .mockResolvedValueOnce([feed({ clientApprovedAt: approved }), storyJob({ clientApprovedAt: approved })])
       .mockResolvedValueOnce([]);
-    expect((await listReviewPosts("ws-1", NOW))[0].state).toBe("approved");
+    expect((await cards())[0].state).toBe("approved");
   });
 
   it("shows a pair the client asked to change as one card with the note", async () => {
@@ -661,7 +663,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
     const changed = { status: "draft", clientChangeRequestedAt: asked, clientNote: "Other photo" };
     postFindManyMock.mockResolvedValueOnce([]).mockResolvedValueOnce([feed(changed), storyJob(changed)]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts).toHaveLength(1);
     expect(posts[0]).toMatchObject({ id: "feed-1", state: "change_requested", note: "Other photo" });
@@ -671,7 +673,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
   it("shows the Story on its own when its feed post is not listed (cancelled, published or deleted)", async () => {
     postFindManyMock.mockResolvedValueOnce([storyJob()]).mockResolvedValueOnce([]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts.map((p) => p.id)).toEqual(["story-1"]);
     expect(posts[0].caption).toBe("This goes out as a Story, with no caption.");
@@ -683,7 +685,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
       .mockResolvedValueOnce([feed(), storyJob({ scheduledFor: new Date("2026-11-13T15:00:00Z") })])
       .mockResolvedValueOnce([]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts.map((p) => p.id)).toEqual(["feed-1", "story-1"]);
     expect(posts[0]).not.toHaveProperty("alsoStory");
@@ -696,7 +698,7 @@ describe("listReviewPosts - a Feed and Story pair", () => {
         storyJob({ status: "draft", clientChangeRequestedAt: new Date("2026-11-10T08:00:00Z"), clientNote: "x" }),
       ]);
 
-    const posts = await listReviewPosts("ws-1", NOW);
+    const posts = await cards();
 
     expect(posts.map((p) => p.id).sort()).toEqual(["feed-1", "story-1"]);
     expect(posts.find((p) => p.id === "feed-1")).not.toHaveProperty("alsoStory");
@@ -704,34 +706,53 @@ describe("listReviewPosts - a Feed and Story pair", () => {
 });
 
 // R7-client-journey L5: the cap counts cards after pairs are folded, so a
-// feed card never loses its "Also as a Story" line at the cut; one card more
-// than the page shows tells it there are more (review-link-view.tsx).
+// pair is never parted at the cut, and `more` says whether cards were left
+// out (the page then says so, review-link-view.tsx).
 describe("listReviewPosts - the 100 cards", () => {
   const at = (i: number) => new Date(NOW.getTime() + (i + 1) * 60 * 60 * 1000);
+  const id = (i: number) => String(i).padStart(3, "0");
+  const single = (i: number) => postRow({ id: `feed-${id(i)}`, storyOfPostJobId: null, scheduledFor: at(i) });
   const pair = (i: number) => [
-    postRow({ id: `feed-${String(i).padStart(3, "0")}`, storyOfPostJobId: null, scheduledFor: at(i) }),
+    single(i),
     postRow({
-      id: `story-${String(i).padStart(3, "0")}`,
-      storyOfPostJobId: `feed-${String(i).padStart(3, "0")}`,
+      id: `story-${id(i)}`,
+      storyOfPostJobId: `feed-${id(i)}`,
       scheduledFor: at(i),
       publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
     }),
   ];
 
-  it("folds the pairs first, then keeps 100 cards and one more, earliest first, each feed card with its Story line", async () => {
-    postFindManyMock.mockResolvedValueOnce(Array.from({ length: 120 }, (_, i) => pair(i)).flat()).mockResolvedValueOnce([]);
-    const posts = await listReviewPosts("ws-1", NOW);
-    expect(posts).toHaveLength(101);
-    expect(posts[0].id).toBe("feed-000");
-    expect(posts[100].id).toBe("feed-100");
+  it("exactly 100 cards (200 rows of pairs): all of them, and no more", async () => {
+    postFindManyMock.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => pair(i)).flat()).mockResolvedValueOnce([]);
+    const { posts, more } = await listReviewPosts("ws-1", NOW);
+    expect(posts).toHaveLength(100);
     expect(posts.every((post) => post.id.startsWith("feed-") && post.alsoStory)).toBe(true);
-    // Only the kept cards' photos are counted.
-    expect(groupByMock.mock.calls[0][0].where.postJobId.in).toHaveLength(101);
+    expect(more).toBe(false);
   });
 
-  it("keeps every card when there are 100 or fewer", async () => {
-    postFindManyMock.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => pair(i)).flat()).mockResolvedValueOnce([]);
-    expect(await listReviewPosts("ws-1", NOW)).toHaveLength(100);
+  it("101 cards or more: the first 100, earliest first, and more", async () => {
+    postFindManyMock.mockResolvedValueOnce(Array.from({ length: 120 }, (_, i) => pair(i)).flat()).mockResolvedValueOnce([]);
+    const { posts, more } = await listReviewPosts("ws-1", NOW);
+    expect(posts).toHaveLength(100);
+    expect(posts[0].id).toBe("feed-000");
+    expect(posts[99].id).toBe("feed-099");
+    expect(more).toBe(true);
+    // Only the shown cards' photos are counted.
+    expect(groupByMock.mock.calls[0][0].where.postJobId.in).toHaveLength(100);
+  });
+
+  it("a pair at the cut stays whole: its feed card is the 100th with its Story line, and the Story is no card of its own", async () => {
+    const rows = [...Array.from({ length: 99 }, (_, i) => single(i)), ...pair(99), single(100), single(101)];
+    postFindManyMock.mockResolvedValueOnce(rows).mockResolvedValueOnce([]);
+    const { posts, more } = await listReviewPosts("ws-1", NOW);
+    expect(posts).toHaveLength(100);
+    expect(posts[99]).toMatchObject({ id: "feed-099", alsoStory: "Also as a Story on Instagram" });
+    expect(posts.some((post) => post.id.startsWith("story-"))).toBe(false);
+    expect(more).toBe(true);
+  });
+
+  it("nothing listed: no posts and no more", async () => {
+    await expect(listReviewPosts("ws-1", NOW)).resolves.toEqual({ posts: [], more: false });
   });
 });
 
