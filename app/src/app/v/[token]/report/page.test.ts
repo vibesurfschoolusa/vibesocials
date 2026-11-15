@@ -2,13 +2,16 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findActiveReviewLinkMock, viewPropsMock, buildMonthlyReportMock, findLogoMock } = vi.hoisted(() => ({
-  findLogoMock: vi.fn(),
-  findActiveReviewLinkMock: vi.fn(),
-  viewPropsMock: vi.fn(),
-  buildMonthlyReportMock: vi.fn(),
-}));
+const { findActiveReviewLinkMock, viewPropsMock, buildMonthlyReportMock, findLogoMock, workspaceFindUniqueMock } =
+  vi.hoisted(() => ({
+    workspaceFindUniqueMock: vi.fn(),
+    findLogoMock: vi.fn(),
+    findActiveReviewLinkMock: vi.fn(),
+    viewPropsMock: vi.fn(),
+    buildMonthlyReportMock: vi.fn(),
+  }));
 
+vi.mock("@/lib/db", () => ({ prisma: { workspace: { findUnique: workspaceFindUniqueMock } } }));
 vi.mock("@/lib/clientPageLogo", () => ({ findClientPageLogo: findLogoMock }));
 vi.mock("@/server/reviewLink", () => ({ findActiveReviewLink: findActiveReviewLinkMock }));
 // The page must never build the report itself: it reaches the client only
@@ -47,6 +50,8 @@ beforeEach(() => {
   findActiveReviewLinkMock.mockResolvedValue(LINK);
   findLogoMock.mockReset();
   findLogoMock.mockResolvedValue(null);
+  workspaceFindUniqueMock.mockReset();
+  workspaceFindUniqueMock.mockResolvedValue({ createdAt: new Date("2026-01-15T00:00:00Z") });
 });
 
 afterEach(() => {
@@ -88,6 +93,13 @@ describe("the client's report page", () => {
   it("defaults to the last full month", async () => {
     await render();
     expect(viewPropsMock).toHaveBeenCalledWith({ token: TOKEN, month: "2026-10" });
+  });
+
+  it("defaults to the month in progress for a workspace made this month (R5-new-customer L9)", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ createdAt: new Date("2026-11-02T00:00:00Z") });
+    await render();
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: { createdAt: true } });
+    expect(viewPropsMock).toHaveBeenCalledWith({ token: TOKEN, month: "2026-11" });
   });
 
   it("refuses a month outside the list without asking for a report", async () => {

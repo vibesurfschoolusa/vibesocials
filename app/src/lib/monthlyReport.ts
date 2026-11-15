@@ -198,17 +198,24 @@ export function reportMonths(now: Date): string[] {
   return Array.from({ length: REPORT_MONTHS_BACK + 1 }, (_, i) => shiftMonth(current, -i));
 }
 
-export function defaultReportMonth(now: Date): string {
-  return shiftMonth(monthOf(now), -1);
+/**
+ * The last full month; the month in progress when the workspace was made in it
+ * (R5-new-customer L9), as last month would be empty.
+ */
+export function defaultReportMonth(now: Date, workspaceCreatedAt?: Date | null): string {
+  const current = monthOf(now);
+  if (workspaceCreatedAt && workspaceCreatedAt >= monthBounds(current).start) return current;
+  return shiftMonth(current, -1);
 }
 
 export type ParsedReportMonth =
   | { ok: true; month: string; inProgress: boolean }
   | { ok: false; error: string };
 
-/** The month a request asks for: missing gives the last full month; anything not in the list is refused. */
-export function parseReportMonth(value: unknown, now: Date): ParsedReportMonth {
-  const month = value === undefined || value === null || value === "" ? defaultReportMonth(now) : value;
+/** The month a request asks for: missing gives defaultReportMonth; anything not in the list is refused. */
+export function parseReportMonth(value: unknown, now: Date, workspaceCreatedAt?: Date | null): ParsedReportMonth {
+  const month =
+    value === undefined || value === null || value === "" ? defaultReportMonth(now, workspaceCreatedAt) : value;
   if (typeof month !== "string" || !MONTH_PATTERN.test(month) || !reportMonths(now).includes(month)) {
     return { ok: false, error: REPORT_MONTH_INVALID_MESSAGE };
   }
