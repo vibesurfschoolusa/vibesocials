@@ -1967,59 +1967,52 @@ describe("publish functions - finalize through the locked recompute, notify with
     expect(publishCtxs[0].googleBusinessProfileMetadata).toEqual(GOOGLE);
   });
 
-  // R19 publishing L5: the location is read from the job's own snapshot, never
-  // from the event (an old event has none) or from a reused Media item.
-  describe("the post's location", () => {
+  // R21 publishing-flow L2: nothing reads a post's location, so it is neither
+  // handed to a client nor carried in a step's output, even for an old job
+  // whose snapshot or event still holds one (left as stored).
+  describe("no location reaches the clients or the step outputs", () => {
     function publishJob(publishMetadata: unknown, event: HandlerArgs["event"] = publishEvent) {
       db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id, publishMetadata });
       db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
       db.connectionFindMany.mockResolvedValue([{ id: "conn-youtube", platform: "youtube" }]);
       stubResults(["youtube"]);
-      return handlerOf(publishToAllPlatforms)({ event, step: fakeStep() });
+      const step = fakeStep();
+      return handlerOf(publishToAllPlatforms)({ event, step }).then(() => step);
     }
 
-    it("hands the job's location to the client", async () => {
-      await publishJob({ location: "Dania (26.05,-80.11)" });
-      expect(publishCtxs[0].location).toBe("Dania (26.05,-80.11)");
+    it("an old job with a stored location and an event with one: no location anywhere", async () => {
+      const step = await publishJob(
+        { location: "Dania (26.05,-80.11)" },
+        { ...publishEvent, data: { ...publishEvent.data, location: "Old place" } },
+      );
+      expect(publishCtxs[0]).not.toHaveProperty("location");
+      expect(JSON.stringify(step.outputs)).not.toContain("Dania");
+      expect(JSON.stringify(step.outputs)).not.toContain("Old place");
     });
 
-    it("a post with no location hands null, whatever the event says", async () => {
-      await publishJob({ location: null }, { ...publishEvent, data: { ...publishEvent.data, location: "Old place" } });
-      expect(publishCtxs[0]).toHaveProperty("location", null);
-    });
-
-    it("a job saved before the snapshot had a location leaves it unset (the client reads the Media item's)", async () => {
+    it("a job with no snapshot: no location", async () => {
       await publishJob(null);
       expect(publishCtxs[0]).not.toHaveProperty("location");
-      publishCtxs.length = 0;
-      await publishJob({ youtube: { privacyStatus: "public" } });
-      expect(publishCtxs[0]).not.toHaveProperty("location");
     });
 
-    it("a retry keeps the job's location, and an old job's stays unset", async () => {
-      for (const [publishMetadata, expected] of [
-        [{ location: "Pompano" }, "Pompano"],
-        [{ location: null }, null],
-        [null, undefined],
-      ] as const) {
-        publishCtxs.length = 0;
-        db.postJobFindUnique.mockResolvedValue({
-          id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
-          baseCaption: "c", perPlatformOverrides: null, publishMetadata,
-        });
-        db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
-        db.connectionFindMany.mockResolvedValue([{ id: "conn-youtube", platform: "youtube" }]);
-        stubResults(["youtube"]);
+    it("a retry of an old job with a stored location: no location anywhere", async () => {
+      db.postJobFindUnique.mockResolvedValue({
+        id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+        baseCaption: "c", perPlatformOverrides: null, publishMetadata: { location: "Pompano" },
+      });
+      db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
+      db.connectionFindMany.mockResolvedValue([{ id: "conn-youtube", platform: "youtube" }]);
+      stubResults(["youtube"]);
+      const step = fakeStep();
 
-        await handlerOf(retryPlatforms)({
-          event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["youtube"] } },
-          step: fakeStep(),
-        });
+      await handlerOf(retryPlatforms)({
+        event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["youtube"] } },
+        step,
+      });
 
-        expect(publishCtxs).toHaveLength(1);
-        if (expected === undefined) expect(publishCtxs[0]).not.toHaveProperty("location");
-        else expect(publishCtxs[0].location).toBe(expected);
-      }
+      expect(publishCtxs).toHaveLength(1);
+      expect(publishCtxs[0]).not.toHaveProperty("location");
+      expect(JSON.stringify(step.outputs)).not.toContain("Pompano");
     });
   });
 

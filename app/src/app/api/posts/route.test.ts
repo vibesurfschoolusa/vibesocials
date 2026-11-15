@@ -298,12 +298,14 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
         sizeBytes: 123,
       },
       baseCaption: "hello world",
-      location: "Miami",
       perPlatformOverrides: undefined,
       // Roadmap Phase 5 additive params; default immediate path unchanged.
       intent: "immediate",
       scheduledFor: null,
     });
+    // R21 publishing-flow L2: a location sent is accepted and ignored: nothing reads it.
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("location");
+    expect((inngestSendMock.mock.calls[0][0] as { data: object }).data).not.toHaveProperty("location");
     expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
 
     // 2026-11-01 scale audit (jobs H6 + H1): a stable event id (a duplicate send
@@ -319,9 +321,27 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
         immediate: true,
         mediaItemId: "media-1",
         baseCaption: "hello world",
-        location: "Miami",
       }),
     });
+  });
+
+  // R21 publishing-flow L2: a location of any length is no longer read or stored.
+  it("accepts a request with a very long location and ignores it", async () => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    const response = await POST(
+      jsonRequest({
+        blobUrl: "https://test.public.blob.vercel-storage.com/vid.mp4",
+        filename: "vid.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 123,
+        baseCaption: "hello world",
+        location: "x".repeat(100_000),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("location");
+    expect(JSON.stringify(inngestSendMock.mock.calls)).not.toContain("xxxxxxxxxx");
   });
 
   it("takes the event's workspaceId from the request's ACTIVE workspace, not from the user", async () => {
@@ -422,11 +442,11 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
       mediaItemId: "media-9",
       baseCaption: "reused caption",
       perPlatformOverrides: undefined,
-      location: "LA",
       // Roadmap Phase 5 additive params; default immediate reuse unchanged.
       intent: "immediate",
       scheduledFor: null,
     });
+    expect(createPostJobForExistingMediaMock.mock.calls[0][0]).not.toHaveProperty("location");
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
 
     expect(inngestSendMock).toHaveBeenCalledWith({
@@ -2866,14 +2886,15 @@ describe("POST /api/posts - Feed and Story (both)", () => {
     // Both events in one send, so either both start or neither does.
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     const [main, story] = inngestSendMock.mock.calls[0][0] as { id: string; data: Record<string, unknown> }[];
-    expect(main.data).toMatchObject({ postJobId: "job-1", location: "Miami" });
+    expect(main.data).toMatchObject({ postJobId: "job-1" });
+    expect(main.data).not.toHaveProperty("location");
+    expect(story.data).not.toHaveProperty("location");
     expect(main.data).not.toHaveProperty("instagramMetadata");
     expect(story.id).toBe("publish-job-s");
     expect(story.data).toMatchObject({
       postJobId: "job-s",
       mediaItemId: "media-1",
       baseCaption: "hi",
-      location: "Miami",
       instagramMetadata: STORY,
       immediate: true,
     });

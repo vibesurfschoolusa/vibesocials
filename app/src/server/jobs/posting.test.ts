@@ -82,7 +82,6 @@ import {
   createPostJobOnly,
   immediateStoryCanSend,
   MediaItemUnavailableError,
-  postLocationOf,
   resolvePlatformCaptions,
   resolvePostCaptionSource,
 } from "./posting";
@@ -498,7 +497,6 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
 
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       googleBusinessProfile: googleMetadata,
-      location: null,
     });
   });
 
@@ -529,7 +527,6 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       instagram: { placement: "story" },
       facebook: { placement: "story" },
-      location: null,
     });
   });
 
@@ -605,7 +602,6 @@ describe("createPostJobForExistingMedia", () => {
 
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       googleBusinessProfile: googleMetadata,
-      location: null,
     });
   });
 
@@ -639,7 +635,6 @@ describe("createPostJobForExistingMedia", () => {
 
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       instagram: { placement: "story" },
-      location: null,
     });
   });
 
@@ -739,8 +734,6 @@ describe("createPostJobForExistingMedia", () => {
         status: "in_progress",
         scheduledFor: null,
         baseCaption: "hello",
-        // R19 publishing L5: the post's location (none) is the job's own.
-        publishMetadata: { location: null },
         // Team Workspaces (Task 5) — the caller's explicit workspaceId param.
         workspaceId: "workspace-1",
       },
@@ -748,7 +741,7 @@ describe("createPostJobForExistingMedia", () => {
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
   });
 
-  it("stamps lastUsedAt = now on the existing row and does NOT touch metadata when location is omitted", async () => {
+  it("stamps lastUsedAt = now on the existing row and does NOT touch metadata", async () => {
     findUniqueMock.mockResolvedValue(makeMediaItem());
     findManyConnectionsMock.mockResolvedValue([makeConnection()]);
 
@@ -770,27 +763,6 @@ describe("createPostJobForExistingMedia", () => {
     expect(call.data.lastUsedAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(call.data.lastUsedAt.getTime()).toBeLessThanOrEqual(after);
     expect(call.data).not.toHaveProperty("metadata");
-  });
-
-  // R19 publishing L5: a location sent with a reuse is the new job's
-  // (publishMetadata.location), never written onto the shared item, so the
-  // item's metadata (a client upload's sender name and note too) is untouched.
-  it("a location sent with a reuse goes on the job and leaves the item's metadata untouched", async () => {
-    findUniqueMock.mockResolvedValue(
-      makeMediaItem({ metadata: { senderName: "Sam", location: { description: "Old place" } } as MediaItem["metadata"] }),
-    );
-    findManyConnectionsMock.mockResolvedValue([makeConnection()]);
-
-    await createPostJobForExistingMedia({
-      userId: "user-1",
-      workspaceId: "workspace-1",
-      mediaItemId: "media-1",
-      baseCaption: "hello",
-      location: "Miami Beach, FL",
-    });
-
-    expect((mediaItemUpdateMock.mock.calls[0][0] as { data: object }).data).not.toHaveProperty("metadata");
-    expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({ location: "Miami Beach, FL" });
   });
 
   it("passes the mediaItemId (not a new id) through as both the lookup key and the returned mediaItemId", async () => {
@@ -1510,10 +1482,10 @@ describe("buildPublishEvent", () => {
     expect(buildPublishEvent(data, { immediate: true }).data).toEqual({ ...data, immediate: true });
   });
 
-  it("passes extra fields (the posts route's location) through unchanged", () => {
-    const event = buildPublishEvent({ ...data, location: "Berlin" }, { immediate: true });
+  it("passes extra fields through unchanged", () => {
+    const event = buildPublishEvent({ ...data, extra: "kept" }, { immediate: true });
 
-    expect(event.data.location).toBe("Berlin");
+    expect(event.data.extra).toBe("kept");
   });
 
   it("does not mutate its input", () => {
@@ -1596,7 +1568,6 @@ describe("createPostJobOnly - several photos (07a)", () => {
       media: photo(1),
       extraMedia: [photo(2), photo(3)],
       baseCaption: "hello",
-      location: "Miami",
     });
 
     expect(mediaItemCreateMock).toHaveBeenCalledTimes(3);
@@ -1615,8 +1586,9 @@ describe("createPostJobOnly - several photos (07a)", () => {
         workspaceId: "workspace-1",
         mimeType: "image/jpeg",
         baseCaption: "hello",
-        metadata: { location: { description: "Miami" } },
       });
+      // R21 publishing-flow L2: no location is written onto the item.
+      expect(data.metadata).toBeUndefined();
       expect((data.lastUsedAt as Date).getTime()).toBeGreaterThanOrEqual(before);
     }
 
@@ -1647,7 +1619,6 @@ describe("createPostJobOnly - several photos (07a)", () => {
 
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       googleBusinessProfile: googleMetadata,
-      location: null,
     });
   });
 
@@ -1775,7 +1746,6 @@ describe("createPostJobOnly / createPostJobForExistingMedia - alt text (07d)", (
       [
         "baseCaption",
         "lastUsedAt",
-        "metadata",
         "mimeType",
         "originalFilename",
         "perPlatformOverrides",
@@ -2142,7 +2112,6 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
       media: photo,
       baseCaption: "Book your lesson",
       perPlatformOverrides: { x: "Book now" },
-      location: "Miami Beach",
       intent: "scheduled",
       scheduledFor: when,
       targetPlatforms: ["instagram", "x"],
@@ -2535,10 +2504,10 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a chosen platform 
   });
 });
 
-// R19 publishing L5: the location belongs to the post, not to the shared Media
-// item. Every job snapshots it (null for none), and a reused item is never
-// given a post's location.
-describe("the post's own location (R19 publishing L5)", () => {
+// R21 publishing-flow L2: nothing reads a post's location, so none is stored:
+// not on the Media item, not in any job's publishMetadata (Feed and Story,
+// Repeat), upload or reuse alike.
+describe("no location is stored (R21 publishing-flow L2)", () => {
   const video = {
     storageLocation: "https://example.public.blob.vercel-storage.com/v1.mp4",
     originalFilename: "v1.mp4",
@@ -2569,119 +2538,78 @@ describe("the post's own location (R19 publishing L5)", () => {
     mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
   });
 
-  const reuse = (location?: string, extra: object = {}) =>
+  const reuse = (extra: object = {}) =>
     createPostJobForExistingMedia({
       userId: "user-1",
       workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
-      ...(location !== undefined ? { location } : {}),
       ...extra,
     });
-
-  it("a reused video posted with Dania, then reused with no location: the second job has none and the item is untouched", async () => {
-    findUniqueMock.mockResolvedValue(
-      makeMediaItem({ mimeType: "video/mp4", metadata: { location: { description: "Dania Beach (26.05,-80.11)" } } }),
-    );
-
-    await reuse("Dania Beach (26.05,-80.11)");
-    await reuse();
-
-    expect(jobData().map((d) => d.publishMetadata)).toEqual([
-      { location: "Dania Beach (26.05,-80.11)" },
-      { location: null },
-    ]);
+  const noLocation = () => {
+    for (const data of jobData()) {
+      if (data.publishMetadata !== undefined) expect(data.publishMetadata).not.toHaveProperty("location");
+    }
+    for (const call of mediaItemCreateMock.mock.calls) {
+      expect((call[0] as { data: { metadata?: unknown } }).data.metadata).toBeUndefined();
+    }
     for (const call of mediaItemUpdateMock.mock.calls) {
       expect((call[0] as { data: object }).data).not.toHaveProperty("metadata");
     }
-  });
+  };
 
-  it("two scheduled posts on one video with different places: each job keeps its own", async () => {
-    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
-    const scheduled = { intent: "scheduled" as const, scheduledFor: times[0] };
-
-    await reuse("Dania", scheduled);
-    await reuse("Pompano", scheduled);
-
-    expect(jobData().map((d) => d.publishMetadata)).toEqual([{ location: "Dania" }, { location: "Pompano" }]);
-    expect(mediaItemUpdateMock.mock.calls.every((c) => !("metadata" in (c[0] as { data: object }).data))).toBe(true);
-  });
-
-  it("the lock re-check no longer reads the item's metadata", async () => {
-    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
-    await reuse("Dania");
-    expect((findUniqueMock.mock.calls[1][0] as { select: object }).select).toEqual({ workspaceId: true, deletedAt: true });
-  });
-
-  it("a new upload snapshots its location beside its other options, and none as null", async () => {
+  it("a new upload: its options only, and no publishMetadata when it has none", async () => {
     await createPostJobOnly({
       userId: "user-1",
       workspaceId: "workspace-1",
       media: video,
       baseCaption: "hello",
-      location: "Dania",
       intent: "draft",
       youtubeMetadata: { privacyStatus: "public" },
     });
     await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media: video, baseCaption: "hello", intent: "draft" });
 
-    expect(jobData().map((d) => d.publishMetadata)).toEqual([
-      { youtube: { privacyStatus: "public" }, location: "Dania" },
-      { location: null },
-    ]);
+    expect(jobData().map((d) => d.publishMetadata)).toEqual([{ youtube: { privacyStatus: "public" } }, undefined]);
+    noLocation();
   });
 
-  it("Feed and Story: both jobs carry the post's location, upload and reuse", async () => {
+  it("a reused item whose metadata holds an old location: the item is untouched and the job has none", async () => {
+    findUniqueMock.mockResolvedValue(
+      makeMediaItem({ mimeType: "video/mp4", metadata: { location: { description: "Dania Beach" } } }),
+    );
+
+    await reuse();
+
+    expect(jobData().map((d) => d.publishMetadata)).toEqual([undefined]);
+    noLocation();
+  });
+
+  it("the lock re-check does not read the item's metadata", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
+    await reuse();
+    expect((findUniqueMock.mock.calls[1][0] as { select: object }).select).toEqual({ workspaceId: true, deletedAt: true });
+  });
+
+  it("Feed and Story, and Repeat: no job carries a location, upload and reuse", async () => {
     findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
     const story = { targetPlatforms: ["instagram" as const], instagramMetadata: { placement: "story" as const } };
+    const series = { series: { seriesId: "series-1", times }, intent: "scheduled" as const, scheduledFor: times[0] };
 
     await createPostJobOnly({
       userId: "user-1",
       workspaceId: "workspace-1",
       media: video,
       baseCaption: "hello",
-      location: "Dania",
       intent: "scheduled",
       scheduledFor: times[0],
       story,
     });
-    await reuse("Pompano", { intent: "scheduled", scheduledFor: times[0], story });
+    await reuse({ intent: "scheduled", scheduledFor: times[0], story });
+    await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media: video, baseCaption: "hello", ...series });
+    await reuse(series);
 
-    expect(jobData().map((d) => (d.publishMetadata as { location?: unknown }).location)).toEqual([
-      "Dania",
-      "Dania",
-      "Pompano",
-      "Pompano",
-    ]);
-  });
-
-  it("Repeat: every occurrence carries the post's location, upload and reuse", async () => {
-    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
-    const series = { series: { seriesId: "series-1", times }, intent: "scheduled" as const, scheduledFor: times[0] };
-
-    await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media: video, baseCaption: "hello", location: "Dania", ...series });
-    await reuse(undefined, series);
-
-    expect(jobData().map((d) => (d.publishMetadata as { location?: unknown }).location)).toEqual([
-      "Dania",
-      "Dania",
-      null,
-      null,
-    ]);
+    expect(jobData()).toHaveLength(8);
+    noLocation();
   });
 });
 
-describe("postLocationOf (R19 publishing L5)", () => {
-  it("reads the post's location from its snapshot, null for none", () => {
-    expect(postLocationOf({ location: "Dania" })).toEqual({ location: "Dania" });
-    expect(postLocationOf({ location: null, youtube: { privacyStatus: "public" } })).toEqual({ location: null });
-  });
-
-  it("a job saved before the location was snapshotted gives nothing, so the Media item's place is used", () => {
-    expect(postLocationOf(null)).toEqual({});
-    expect(postLocationOf(undefined)).toEqual({});
-    expect(postLocationOf({ youtube: { privacyStatus: "public" } })).toEqual({});
-    expect(postLocationOf({ location: 3 })).toEqual({});
-    expect(postLocationOf(["odd"])).toEqual({});
-  });
-});

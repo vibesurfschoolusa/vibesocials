@@ -175,7 +175,6 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
    */
   extraMedia?: PostFileInfo[];
   baseCaption: string;
-  location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
   /**
    * Per-post platform publishing metadata (Roadmap Phase 5 review B1). Carried
@@ -219,30 +218,13 @@ export interface PublishMetadataSnapshot {
    */
   instagram?: InstagramPostMetadata;
   facebook?: FacebookPostMetadata;
-  /**
-   * R19 publishing L5: the post's location text, null for none. Written for
-   * every job since then, so the job, not the shared Media item a reuse points
-   * at, says where this post was. A job without the key was saved before and
-   * keeps reading the Media item's location (see {@link postLocationOf}).
-   */
-  location?: string | null;
-}
-
-/**
- * The location a job's publish hands the clients: `{ location }` from its
- * snapshot (null: none), or nothing for a job saved before the snapshot had
- * the key, whose clients read the Media item's place as they did.
- */
-export function postLocationOf(publishMetadata: unknown): { location?: string | null } {
-  if (typeof publishMetadata !== "object" || publishMetadata === null || Array.isArray(publishMetadata)) return {};
-  const location = (publishMetadata as { location?: unknown }).location;
-  return typeof location === "string" || location === null ? { location } : {};
+  // No `location` (R21 publishing-flow L2): nothing reads one, so none is
+  // written. Jobs saved before keep theirs, unread.
 }
 
 /**
  * Build the `publishMetadata` snapshot from the per-post metadata, or `undefined`
- * when none of the inputs has anything. buildPostJobCreateData adds the post's
- * location beside it, so every job created since R19 has one. Deferred jobs
+ * when none of the inputs has anything. Deferred jobs
  * persist this; immediate jobs don't (their metadata rides the event — Task 7's
  * `targetPlatforms` is the exception: immediate jobs apply it directly to the
  * result-row fan-out instead of persisting it).
@@ -545,8 +527,7 @@ const CREATE_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const
 export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
 ): Promise<PostJobCreated> {
-  const { userId, workspaceId, media, baseCaption, location, perPlatformOverrides, targetPlatforms } =
-    params;
+  const { userId, workspaceId, media, baseCaption, perPlatformOverrides, targetPlatforms } = params;
   const intent = params.intent ?? "immediate";
 
   // 2026-11-01 audit (Task 9): an EXPLICIT platform list is validated for every
@@ -593,11 +574,6 @@ export async function createPostJobOnly(
       ? immediateFanOut({ workspaceId, connections: socialConnections, targeted, targetPlatforms, story: params.story })
       : { rows: [], storyRows: [] };
 
-  const metadata: { location?: { description: string } } = {};
-  if (location) {
-    metadata.location = { description: location };
-  }
-
   // Roadmap Phase 1: this MediaItem is attached to a PostJob below, so stamp
   // `lastUsedAt` now. This drives age-based retention (set at attach time, not
   // just at run time, so a scheduled post that runs weeks later isn't treated
@@ -616,7 +592,6 @@ export async function createPostJobOnly(
         sizeBytes: file.sizeBytes,
         baseCaption,
         lastUsedAt: now,
-        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         perPlatformOverrides: perPlatformOverrides
           ? (perPlatformOverrides as unknown as Record<string, string>)
           : undefined,
@@ -658,7 +633,6 @@ export async function createPostJobOnly(
               facebookMetadata: params.facebookMetadata,
               targetPlatforms,
               cover: params.cover,
-              location: location ?? null,
             }),
             ...immediateJobStatus(intent, fanOut.rows),
             workspaceId,
@@ -707,7 +681,6 @@ export async function createPostJobOnly(
               facebookMetadata: params.story.facebookMetadata,
               targetPlatforms: params.story.targetPlatforms,
               cover: params.cover,
-              location: location ?? null,
             }),
             ...immediateJobStatus(intent, fanOut.storyRows),
             workspaceId,
@@ -776,8 +749,6 @@ export function buildPostJobCreateData(args: {
   targetPlatforms?: Platform[];
   /** V1: the video's cover; no columns are written without one. */
   cover?: PostCover;
-  /** R19 publishing L5: the post's location, null for none; snapshotted when given. */
-  location?: string | null;
   // This pure builder deliberately does NOT take/stamp workspaceId — both
   // callers below merge it in directly (from their own required
   // `workspaceId` param) right at their `prisma.postJob.create` call, so this
@@ -794,8 +765,7 @@ export function buildPostJobCreateData(args: {
     args.instagramMetadata,
     args.facebookMetadata,
   );
-  const publishMetadata: PublishMetadataSnapshot | undefined =
-    args.location !== undefined ? { ...options, location: args.location } : options;
+  const publishMetadata = options;
   return {
     userId: args.userId,
     mediaItemId: args.mediaItemId,
@@ -835,12 +805,6 @@ export interface CreatePostJobForExistingMediaParams
   baseCaption: string;
   /** See `baseCaption` above: snapshotted on the job + carried by the event. */
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
-  /**
-   * Snapshotted on the new job like the caption (R19 publishing L5), never
-   * written onto the shared, reused MediaItem: another post of the same item
-   * must not take this post's place. Omitted/empty: the post has none.
-   */
-  location?: string;
   /** See `baseCaption` above: carried by the event payload, not this helper. */
   tiktokMetadata?: TikTokPostMetadata;
   /** See `baseCaption` above: carried by the event payload, not this helper. */
@@ -883,7 +847,6 @@ export async function createPostJobForExistingMedia(
     userId,
     workspaceId,
     mediaItemId,
-    location,
     baseCaption,
     perPlatformOverrides,
     targetPlatforms,
@@ -978,7 +941,6 @@ export async function createPostJobForExistingMedia(
               facebookMetadata: params.facebookMetadata,
               targetPlatforms,
               cover: params.cover,
-              location: location ?? null,
             }),
             ...immediateJobStatus(intent, fanOut.rows),
             workspaceId,
@@ -1012,7 +974,6 @@ export async function createPostJobForExistingMedia(
             facebookMetadata: params.story.facebookMetadata,
             targetPlatforms: params.story.targetPlatforms,
             cover: params.cover,
-            location: location ?? null,
           }),
           ...immediateJobStatus(intent, fanOut.storyRows),
           workspaceId,
@@ -1193,8 +1154,8 @@ export interface PublishRequestedEventData {
  * That is right because a job is dispatched at most once: every dispatcher first
  * moves it out of draft / scheduled / new. `immediate` feeds the function's
  * priority (PUBLISH_PRIORITY): true for a user's "Post now", false for the
- * scheduled scanner. Fields beyond {@link PublishRequestedEventData} (the posts
- * route's `location`) pass through unchanged.
+ * scheduled scanner. Fields beyond {@link PublishRequestedEventData}
+ * pass through unchanged.
  */
 export function buildPublishEvent<T extends PublishRequestedEventData>(
   data: T,

@@ -36,7 +36,7 @@ import {
   syncYouTubeMetricsPage,
   type MetricsPageResult,
 } from "@/server/jobs/youtubeMetricsSync";
-import { postLocationOf, resolvePostCaptionSource } from "@/server/jobs/posting";
+import { resolvePostCaptionSource } from "@/server/jobs/posting";
 import {
   PUBLISH_PRIORITY,
   publishConcurrency,
@@ -197,8 +197,6 @@ interface PublishToPlatformArgs {
   facebookMetadata?: FacebookPostMetadata;
   /** The video's cover from the job row (V1); absent for none. */
   cover?: PostCover;
-  /** The post's location from its job's snapshot (postLocationOf); absent for an older job. */
-  location?: string | null;
 }
 
 /**
@@ -524,7 +522,6 @@ async function publishToPlatform({
   instagramMetadata,
   facebookMetadata,
   cover,
-  location,
 }: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
@@ -677,10 +674,6 @@ async function publishToPlatform({
     }
     if (cover && COVER_PLATFORMS.has(connection.platform)) {
       publishContext.cover = cover;
-    }
-    // R19 publishing L5: the post's own location (null: none); absent for an older job.
-    if (location !== undefined) {
-      publishContext.location = location;
     }
 
     // YouTube's `videos.insert` has its own daily budget (100 a day by default,
@@ -903,6 +896,17 @@ async function loadAvailablePhotos(postJobId: string): Promise<MediaItem[] | nul
  * `mediaItem` stays whole: runs saved by the previous code, and that code after
  * a rollback, read it.
  */
+/**
+ * A job's snapshot without the `location` jobs saved before R21 still hold
+ * (publishing-flow L2): nothing reads it, so it never rides a step's output.
+ */
+function withoutLocation<T extends object>(snapshot: T | null): T | null {
+  if (snapshot === null || !("location" in snapshot)) return snapshot;
+  const { location: _unread, ...rest } = snapshot as T & { location?: unknown };
+  void _unread;
+  return rest as T;
+}
+
 function mediaItemsForStepOutput(items: MediaItem[]): MediaItem[] {
   return items.map((item) => ({ ...item, baseCaption: "", perPlatformOverrides: null }));
 }
@@ -1177,8 +1181,6 @@ export const publishToAllPlatforms = inngest.createFunction(
         resultRecords,
         // V1: only when the post has a cover, so a post without one memoizes what it did before.
         ...withCover(postJob),
-        // R19 publishing L5: only when the job snapshotted one, as the cover.
-        ...postLocationOf(postJob.publishMetadata),
       };
     });
 
@@ -1295,8 +1297,6 @@ export const publishToAllPlatforms = inngest.createFunction(
             instagramMetadata,
             facebookMetadata,
             cover: setupData.cover,
-            // fetch-data carries `location` under the snapshot's own key.
-            ...postLocationOf(setupData),
           });
         },
       });
@@ -1657,7 +1657,9 @@ export const retryPlatforms = inngest.createFunction(
         photoUnavailable,
         connections: connections as ConnectionRef[],
         resultRecords,
-        publishMetadata,
+        // R21 publishing-flow L2: an old job's stored location stays out of the
+        // step output; nothing reads it.
+        publishMetadata: withoutLocation(publishMetadata),
         // V1: only when the post has a cover, as in fetch-data.
         ...withCover(postJob),
         // Job-first caption (the text typed for THIS post), media fallback.
@@ -1825,7 +1827,6 @@ export const retryPlatforms = inngest.createFunction(
             instagramMetadata: publishMetadata?.instagram,
             facebookMetadata: publishMetadata?.facebook,
             cover: setupData.cover,
-            ...postLocationOf(publishMetadata),
           });
         },
       });

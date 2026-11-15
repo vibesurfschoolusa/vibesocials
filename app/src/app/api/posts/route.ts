@@ -692,7 +692,8 @@ interface CreatePostBody {
   // V1: `{ timeMs?, imageUrl?, mimeType?, sizeBytes? }`, a video's cover (lib/videoCoverField.ts).
   cover?: unknown;
   baseCaption?: unknown;
-  location?: unknown;
+  // `location` is no longer read (R21 publishing-flow L2): no client used it,
+  // so a request that still sends one is accepted and the field ignored.
   perPlatformOverrides?: unknown;
   tiktokMetadata?: unknown;
   youtubeMetadata?: { privacyStatus?: unknown };
@@ -934,7 +935,6 @@ export async function POST(request: Request) {
   const coverArgs = coverField.value ? { cover: coverField.value } : {};
 
   const baseCaptionRaw = body?.baseCaption;
-  const locationRaw = body?.location;
   const overridesRaw = body?.perPlatformOverrides;
   const tiktokMetadataRaw = body?.tiktokMetadata;
   const youtubeMetadataRaw = body?.youtubeMetadata;
@@ -1141,8 +1141,6 @@ export async function POST(request: Request) {
     throw error;
   }
 
-  const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
-
   // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a
   // present `scheduledFor` means "schedule" (validated to be a real, future
   // time); otherwise it's an immediate post (today's path, byte-for-byte).
@@ -1306,7 +1304,6 @@ export async function POST(request: Request) {
         workspaceId: context.workspace.id,
         media: null,
         baseCaption: baseCaptionRaw,
-        location,
         perPlatformOverrides,
         intent: effectiveIntent,
         scheduledFor: scheduledForDate,
@@ -1332,7 +1329,6 @@ export async function POST(request: Request) {
         ...(firstAltText ? { altText: firstAltText } : {}),
         baseCaption: baseCaptionRaw,
         perPlatformOverrides,
-        location,
         intent: effectiveIntent,
         scheduledFor: scheduledForDate,
         // Persisted onto the job for scheduled/draft (review B1); ignored for
@@ -1377,7 +1373,6 @@ export async function POST(request: Request) {
         },
         ...(extraMedia ? { extraMedia } : {}),
         baseCaption: baseCaptionRaw,
-        location,
         perPlatformOverrides,
         intent: effectiveIntent,
         scheduledFor: scheduledForDate,
@@ -1484,7 +1479,6 @@ export async function POST(request: Request) {
             workspaceId: context.workspace.id,
             mediaItemId,
             baseCaption: baseCaptionRaw,
-            location,
             perPlatformOverrides: perPlatformOverrides ?? null,
             tiktokMetadata,
             youtubeMetadata,
@@ -1504,7 +1498,6 @@ export async function POST(request: Request) {
                   workspaceId: context.workspace.id,
                   mediaItemId,
                   baseCaption: baseCaptionRaw,
-                  location,
                   perPlatformOverrides: perPlatformOverrides ?? null,
                   ...(storyJob.instagramMetadata ? { instagramMetadata: storyJob.instagramMetadata } : {}),
                   ...(storyJob.facebookMetadata ? { facebookMetadata: storyJob.facebookMetadata } : {}),
