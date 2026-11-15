@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
+import { planIncludes } from "@/lib/planFeatures";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { QueueView } from "./queue-view";
 
@@ -29,5 +30,6 @@ export default async function QueuePage() {
       }
     : undefined;
 
-  return <QueueView footerSettings={footerSettings} />;
+  // R5-new-customer L6: the empty Queue offers Add many only where the plan includes it.
+  return <QueueView footerSettings={footerSettings} addManyIncluded={context ? planIncludes(context.workspace, "bulk") : true} />;
 }

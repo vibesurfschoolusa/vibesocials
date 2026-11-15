@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
+import { planIncludes } from "@/lib/planFeatures";
 import type { DashboardSummary } from "@/lib/needsYou";
 
 export const dynamic = "force-dynamic";
@@ -131,6 +132,8 @@ export async function GET() {
     clientChangesRequested,
     nextScheduled,
     chooseGoogleLocation,
+    // R5-new-customer L6: Needs you offers Add many only where the plan includes it.
+    addManyIncluded: planIncludes(context.workspace, "bulk"),
   };
   return NextResponse.json(body);
 }

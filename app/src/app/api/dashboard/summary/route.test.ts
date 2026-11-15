@@ -181,7 +181,23 @@ describe("GET /api/dashboard/summary", () => {
       clientChangesRequested: 0,
       nextScheduled: null,
       chooseGoogleLocation: null,
+      addManyIncluded: true,
     });
+  });
+
+  // R5-new-customer L6: Needs you offers Add many only where the plan includes it.
+  it("says Add many is not included on a plan without it (billing on)", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    const context = makeWorkspaceContext();
+    getWorkspaceContextMock.mockResolvedValue({
+      ...context,
+      workspace: { ...context.workspace, billingExempt: false, plan: "starter", planStatus: "active" },
+    });
+    try {
+      expect((await summary()).body.addManyIncluded).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   // F4 (R1 M4): a Google listing connected without a location fails every Google post.
