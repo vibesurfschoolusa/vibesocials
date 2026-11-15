@@ -156,7 +156,7 @@ describe("POST /api/workspaces/leave while the caller pays for the plan", () => 
   });
 
   it.each([
-    [409, 'You pay for the plan of "Acme", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.'],
+    [409, "You pay for Acme's plan. Cancel it under Settings, Plan first (it stays active until the end of the period); another owner can then start their own plan."],
   ])("answers %i with the sentence and leaves nothing", async (status, error) => {
     getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
     payerRefusalMock.mockResolvedValue({ status, error });

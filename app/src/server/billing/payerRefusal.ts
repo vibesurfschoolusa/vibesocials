@@ -15,7 +15,8 @@ import { isLiveSubscriptionStatus } from "./subscriptionSync";
  */
 
 export function payerLeavingMessage(workspaceName: string): string {
-  return `You pay for the plan of "${workspaceName}", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.`;
+  // No hand-over flow exists, so the way out is cancelling; another owner then starts their own plan.
+  return `You pay for ${workspaceName}'s plan. Cancel it under Settings, Plan first (it stays active until the end of the period); another owner can then start their own plan.`;
 }
 
 export type PayerRefusal = { status: 409; error: string };

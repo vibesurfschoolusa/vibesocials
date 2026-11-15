@@ -321,14 +321,14 @@ describe("DELETE /api/auth/account", () => {
     ];
     m.payerRefusal.mockResolvedValue({
       status: 409,
-      error: 'You pay for the plan of "Co-owned", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.',
+      error: "You pay for Co-owned's plan. Cancel it under Settings, Plan first (it stays active until the end of the period); another owner can then start their own plan.",
     });
 
     const response = await DELETE(request({ password: "right-password" }));
 
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
-      error: 'You pay for the plan of "Co-owned", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.',
+      error: "You pay for Co-owned's plan. Cancel it under Settings, Plan first (it stays active until the end of the period); another owner can then start their own plan.",
     });
     expect(m.payerRefusal).toHaveBeenCalledWith({ userId: USER_ID, workspaceIds: ["ws-co"] });
     nothingChanged();

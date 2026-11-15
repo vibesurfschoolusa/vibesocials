@@ -31,7 +31,7 @@ describe("payerRefusal", () => {
   it("refuses the person recorded as paying, naming the workspace", async () => {
     await expect(payerRefusal({ userId: "user-1", workspaceIds: ["ws_1"] }, ENV)).resolves.toEqual({
       status: 409,
-      error: 'You pay for the plan of "Name of ws_1", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.',
+      error: "You pay for Name of ws_1's plan. Cancel it under Settings, Plan first (it stays active until the end of the period); another owner can then start their own plan.",
     });
   });
 
