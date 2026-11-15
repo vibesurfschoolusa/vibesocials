@@ -1,8 +1,7 @@
 "use client";
 
 import { useContext, useEffect, useState, type ReactNode } from "react";
-import { getSession, SessionContext, signOut } from "next-auth/react";
-import type { Session } from "next-auth";
+import { SessionContext, signOut } from "next-auth/react";
 
 export type SignedInAccount = { name: string | null; email: string | null };
 
@@ -37,44 +36,56 @@ export function accountKey(account: SignedInAccount | null): string | null {
   return account ? `${account.email ?? ""}\n${account.name ?? ""}` : null;
 }
 
+/** What the server's session answer says: someone, nobody, or it could not be read. */
+export type ServerSession =
+  | { kind: "signedIn"; account: SignedInAccount }
+  | { kind: "signedOut" }
+  | { kind: "unknown" };
+
 /**
- * R18 new-customer L1: the server's own session, read now. In next-auth 4.24.15
- * getSession() fetches /api/auth/session and returns null for no session and
- * for a failed fetch alike, but it never updates this tab's context, and the
- * context's update() keeps the old session when the answer is empty; so the
- * answer is kept here. broadcast: false, so the other tabs do not refetch.
+ * R18 new-customer L1, R19: the server's own session, read now. Not next-auth's
+ * getSession(): in 4.24.15 it returns null for no session and for a failed
+ * fetch alike, and a failed read must never sign anyone out. Here only a 200
+ * with a JSON object counts; naming nobody ({} without a cookie, or
+ * {"expires":"1970-..."} for a session the server ended) is "signedOut", and
+ * offline, any other status or a body that is not a JSON object is "unknown".
+ * It does not touch this tab's context or the other tabs.
  */
-export async function readServerAccount(
-  read: () => Promise<Session | null> = () => getSession({ broadcast: false }),
-): Promise<SignedInAccount | null> {
+export async function readServerSession(fetchImpl: typeof fetch = fetch): Promise<ServerSession> {
   try {
-    return accountOf((await read())?.user);
+    const response = await fetchImpl("/api/auth/session", { credentials: "same-origin", cache: "no-store" });
+    if (response.status !== 200) return { kind: "unknown" };
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || Array.isArray(body)) return { kind: "unknown" };
+    const account = accountOf((body as { user?: { name?: string | null; email?: string | null } }).user);
+    return account ? { kind: "signedIn", account } : { kind: "signedOut" };
   } catch {
-    return null;
+    return { kind: "unknown" };
   }
 }
 
-export type ServerAnswer = { key: string; account: SignedInAccount | null };
+export type ServerAnswer = { key: string; session: ServerSession };
 
 /** Asks the server about the cached account; nothing to ask when it is signed out. Returns the effect's cleanup. */
 export function startServerCheck(
   key: string | null,
-  read: () => Promise<SignedInAccount | null>,
+  read: () => Promise<ServerSession>,
   onAnswer: (answer: ServerAnswer) => void,
 ): (() => void) | undefined {
   if (key === null) return undefined;
   let live = true;
-  void read().then((account) => {
-    if (live) onAnswer({ key, account });
+  void read().then((session) => {
+    if (live) onAnswer({ key, session });
   });
   return () => {
     live = false;
   };
 }
 
-/** The account to show as signed in: only the server's answer about the account the cache names now. */
+/** The account to show as signed in: only the server's "signed in" about the account the cache names now. */
 export function shownAccount(key: string | null, answer: ServerAnswer | null): SignedInAccount | null {
-  return key !== null && answer?.key === key ? answer.account : null;
+  if (key === null || answer?.key !== key || answer.session.kind !== "signedIn") return null;
+  return answer.session.account;
 }
 
 /**
@@ -82,14 +93,15 @@ export function shownAccount(key: string | null, answer: ServerAnswer | null): S
  * another device, ends the session on the server (sessionVersion, auth.ts),
  * but the cached client session is re-read only on page load and tab focus.
  * So the page says "already signed in" only once a fresh read of the server's
- * session says so; until it answers, or when it answers nobody, the form shows.
- * R19: an answer of nobody also signs the cached session out, so the header,
- * the app frame and the other tabs stop naming the person.
+ * session says so; until it answers, or when it answers nobody or could not be
+ * read, the form shows. R19: "signed out" also signs the cached session out,
+ * so the header, the app frame and the other tabs stop naming the person; a
+ * read that failed changes nothing.
  */
 export function useFreshSignedInAccount(): SignedInAccount | null {
   const key = accountKey(useSignedInAccount());
   const [answer, setAnswer] = useState<ServerAnswer | null>(null);
-  useEffect(() => startServerCheck(key, readServerAccount, showAndEndStale(setAnswer, endStaleSession)), [key]);
+  useEffect(() => startServerCheck(key, () => readServerSession(), showAndEndStale(setAnswer, endStaleSession)), [key]);
   return shownAccount(key, answer);
 }
 
@@ -104,11 +116,11 @@ export function endStaleSession(): void {
   signOut({ redirect: false }).catch(() => undefined);
 }
 
-/** Log in and Register: shows the server's answer and, when it names nobody, ends the cached session. */
+/** Log in and Register: shows the server's answer and, only when it is "signed out", ends the cached session. */
 export function showAndEndStale(show: (answer: ServerAnswer) => void, end: () => void): (answer: ServerAnswer) => void {
   return (answer) => {
     show(answer);
-    if (!answer.account) end();
+    if (answer.session.kind === "signedOut") end();
   };
 }
 
@@ -116,18 +128,19 @@ export function showAndEndStale(show: (answer: ServerAnswer) => void, end: () =>
  * Where the server rendered the signed-out page but the cached session names
  * someone: a fresh read naming nobody signs out; one naming the person means
  * the server's page saw a blip (the jwt callback keeps the token on a database
- * error, auth.ts), so the page is refreshed, once per account (`refreshed`).
+ * error, auth.ts), so the page is refreshed, once per account (`refreshed`); a
+ * read that failed changes nothing.
  */
 export function startSignedOutSync(
   key: string | null,
-  read: () => Promise<SignedInAccount | null>,
+  read: () => Promise<ServerSession>,
   actions: { signOut: () => void; refresh: () => void },
   refreshed: Set<string>,
 ): (() => void) | undefined {
-  return startServerCheck(key, read, ({ key: asked, account }) => {
-    if (!account) {
+  return startServerCheck(key, read, ({ key: asked, session }) => {
+    if (session.kind === "signedOut") {
       actions.signOut();
-    } else if (!refreshed.has(asked)) {
+    } else if (session.kind === "signedIn" && !refreshed.has(asked)) {
       refreshed.add(asked);
       actions.refresh();
     }
@@ -139,7 +152,7 @@ export function useFollowSignedOutServer(refresh: () => void): void {
   const key = accountKey(useSignedInAccount());
   const [refreshed] = useState(() => new Set<string>());
   useEffect(
-    () => startSignedOutSync(key, readServerAccount, { signOut: endStaleSession, refresh }, refreshed),
+    () => startSignedOutSync(key, () => readServerSession(), { signOut: endStaleSession, refresh }, refreshed),
     [key, refresh, refreshed],
   );
 }
