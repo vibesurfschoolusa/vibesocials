@@ -9,7 +9,20 @@ import { workspaceLink } from "@/server/notifications/links";
  * or leaves. The owners who remain are emailed that the person had them, and
  * the demote answer offers "Make new client links" (POST
  * /api/workspaces/client-links, which replaces both at once).
+ *
+ * R6 M2: the client connect link too. One another owner made keeps working
+ * and the former owner may have copied it ("works"); one the former owner
+ * made acts as them, so it stopped working with their ownership
+ * (server/connectLink/link.ts) and the client needs a new one ("stopped").
+ * The same button replaces it, with the same platforms.
  */
+
+/** The client connect link at the moment someone stopped being an owner. */
+export type FormerOwnerConnectLink = "works" | "stopped" | null;
+
+function listOf(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
 
 /** Settings, Team: where the owners make new client links. */
 export const CLIENT_LINKS_SETTINGS_PATH = "/settings#team";
@@ -30,17 +43,36 @@ export function buildFormerOwnerEmail(input: {
   formerOwnerName: string;
   uploadLink: boolean;
   reviewLink: boolean;
+  connectLink?: FormerOwnerConnectLink;
   appBaseUrl: string | null | undefined;
 }): { subject: string; html: string; text: string } {
   const { workspaceName, formerOwnerName } = input;
-  const both = input.uploadLink && input.reviewLink;
-  const links = both
-    ? "client upload link and client review link, and those links still work"
-    : `client ${input.uploadLink ? "upload" : "review"} link, and that link still works`;
-  const lines = [
-    `${formerOwnerName} is no longer an owner of ${workspaceName}. As an owner, ${formerOwnerName} had access to its ${links}.`,
-    `To stop ${both ? "them" : "it"} working, open Settings, Team and press "Make new client links". It replaces ${both ? "both at once" : "it"}; send the new ${both ? "links" : "link"} to your client.`,
-  ];
+  const working = [
+    input.uploadLink ? "client upload link" : null,
+    input.reviewLink ? "client review link" : null,
+    input.connectLink === "works" ? "client connect link" : null,
+  ].filter((name): name is string => name !== null);
+  const stopped = input.connectLink === "stopped";
+  const replaced = working.length + (stopped ? 1 : 0);
+
+  const lines: string[] = [];
+  const notOwner = `${formerOwnerName} is no longer an owner of ${workspaceName}.`;
+  lines.push(
+    working.length > 0
+      ? `${notOwner} As an owner, ${formerOwnerName} had access to its ${listOf(working)}, and ${working.length > 1 ? "those links still work" : "that link still works"}.`
+      : notOwner,
+  );
+  if (stopped) {
+    lines.push(
+      `The client connect link ${formerOwnerName} made stopped working when ${formerOwnerName} stopped being an owner, so your client can't connect accounts with it.`,
+    );
+  }
+  const replaces = replaced === 1 ? "it" : replaced === 2 ? "both at once" : "all three at once";
+  lines.push(
+    working.length === 0
+      ? 'To make a new one with the same platforms, open Settings, Team and press "Make new client links"; send the new link to your client.'
+      : `To stop ${working.length > 1 ? "them" : "it"} working, open Settings, Team and press "Make new client links". It replaces ${replaces}; send the new ${replaced > 1 ? "links" : "link"} to your client.`,
+  );
   const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
   return {
     subject: `Make new client links for ${workspaceName}`,
@@ -51,7 +83,7 @@ export function buildFormerOwnerEmail(input: {
 
 /**
  * After `formerOwner` stopped being an owner of the workspace (demoted, or
- * left): when a client upload or review link is on, emails each remaining
+ * left): when a client upload, review or connect link is on, emails each remaining
  * owner once and answers that the links should be replaced. Best-effort and
  * never throws: the change it follows has already been made.
  */
@@ -64,18 +96,34 @@ export async function noticeOwnersOfFormerOwner(input: {
   at: Date;
 }): Promise<{ clientLinksToReplace: boolean }> {
   const { workspaceId, formerOwnerId } = input;
-  let links: { uploadLink: boolean; reviewLink: boolean };
+  let links: { uploadLink: boolean; reviewLink: boolean; connectLink: FormerOwnerConnectLink };
   try {
-    const [upload, review] = await Promise.all([
+    const [upload, review, connect] = await Promise.all([
       prisma.workspaceUploadLink.findFirst({ where: { workspaceId, revokedAt: null }, select: { id: true } }),
       prisma.workspaceReviewLink.findFirst({ where: { workspaceId, revokedAt: null }, select: { id: true } }),
+      prisma.workspaceConnectLink.findFirst({
+        where: { workspaceId, revokedAt: null, expiresAt: { gt: new Date() } },
+        select: { createdById: true },
+      }),
     ]);
-    links = { uploadLink: upload !== null, reviewLink: review !== null };
+    let connectLink: FormerOwnerConnectLink = null;
+    if (connect?.createdById === formerOwnerId) {
+      connectLink = "stopped";
+    } else if (connect) {
+      // Made by someone still an owner: it works, and this person may have copied it.
+      // Made by an earlier former owner: it stopped then, and is not this notice's news.
+      const creator = await prisma.workspaceMember.findFirst({
+        where: { workspaceId, userId: connect.createdById, role: "owner" },
+        select: { id: true },
+      });
+      connectLink = creator ? "works" : null;
+    }
+    links = { uploadLink: upload !== null, reviewLink: review !== null, connectLink };
   } catch (error) {
     logger.error("[workspaces] Couldn't read the client links after an owner stepped down", { error, workspaceId });
     return { clientLinksToReplace: false };
   }
-  if (!links.uploadLink && !links.reviewLink) return { clientLinksToReplace: false };
+  if (!links.uploadLink && !links.reviewLink && !links.connectLink) return { clientLinksToReplace: false };
 
   try {
     const [former, owners] = await Promise.all([

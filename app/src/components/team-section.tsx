@@ -92,26 +92,113 @@ interface TeamSectionProps {
 /**
  * R5-security L1: the toast after "Make new client links", from POST
  * /api/workspaces/client-links's answer. The upload link is copied on the
- * Media page and the review link on the Queue page.
+ * Media page and the review link on the Queue page; R6 M2: the connect link
+ * below the button (Connections shows the old one until the page reloads).
  */
 export function clientLinksReplacedMessage(answer: unknown): string {
-  const made = (answer ?? {}) as { uploadLink?: unknown; reviewLink?: unknown };
-  const upload = Boolean(made.uploadLink);
-  const review = Boolean(made.reviewLink);
-  if (upload && review) {
-    return "New client links are on and the old ones no longer work. Copy the upload link on the Media page and the review link on the Queue page, and send them to your client.";
+  const made = (answer ?? {}) as {
+    uploadLink?: unknown;
+    reviewLink?: unknown;
+    connectLink?: unknown;
+    connectLinkTurnedOff?: unknown;
+  };
+  const places = [
+    made.uploadLink ? { name: "upload", where: "on the Media page" } : null,
+    made.reviewLink ? { name: "review", where: "on the Queue page" } : null,
+    made.connectLink ? { name: "connect", where: "below" } : null,
+  ].filter((place): place is { name: string; where: string } => place !== null);
+
+  const sentences: string[] = [];
+  if (places.length > 1) {
+    const parts = places.map((place) => `the ${place.name} link ${place.where}`);
+    const list = `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+    sentences.push(`New client links are on and the old ones no longer work. Copy ${list}, and send them to your client.`);
+  } else if (places.length === 1) {
+    const [place] = places;
+    sentences.push(
+      `A new client ${place.name} link is on and the old one no longer works. Copy it ${place.where} and send it to your client.`,
+    );
   }
-  if (upload || review) {
-    return `A new client ${upload ? "upload" : "review"} link is on and the old one no longer works. Copy it on the ${upload ? "Media" : "Queue"} page and send it to your client.`;
+  if (made.connectLinkTurnedOff === true) {
+    sentences.push(
+      "The client connect link is off: none of its platforms can be connected here any more. Make a new one under Connections if you need it.",
+    );
   }
-  return "No client link was on, so there was nothing to replace.";
+  return sentences.length > 0 ? sentences.join(" ") : "No client link was on, so there was nothing to replace.";
 }
 
-/** R5-security L1: the toast after a demotion; it points to the button while client links are on. */
-export function demotedMessage(answer: unknown): string {
-  return (answer as { clientLinksToReplace?: unknown } | null)?.clientLinksToReplace === true
+/**
+ * R5-security L1: the toast after a demotion; it points to the button while
+ * client links are on. R6-client-journey L3: not after demoting yourself, as
+ * the button went with your ownership.
+ */
+export function demotedMessage(answer: unknown, self = false): string {
+  return !self && (answer as { clientLinksToReplace?: unknown } | null)?.clientLinksToReplace === true
     ? "Role updated. They could copy the client links, which still work: press Make new client links below to replace them."
     : "Role updated.";
+}
+
+/** GET /api/workspaces/client-links: which client links are on, and whether the plan includes them. */
+export interface ClientLinksState {
+  included: boolean;
+  on: { upload: boolean; review: boolean; connect: boolean };
+}
+
+/** R6 L2: the button is offered only with something to replace, on a plan that includes client links. */
+export function clientLinksButtonShown(state: ClientLinksState | null): boolean {
+  return !!state && state.included && (state.on.upload || state.on.review || state.on.connect);
+}
+
+/**
+ * The Client links block of the owners' Team card. "Make new client links"
+ * asks first (R6 L2); after it, a new connect link is shown here to copy.
+ * `onReplace` follows the ConfirmDialog contract: it throws to keep the dialog open.
+ */
+export function ClientLinksPanel({
+  state,
+  freshConnectUrl,
+  onReplace,
+  onCopyConnect,
+}: {
+  state: ClientLinksState | null;
+  freshConnectUrl: string | null;
+  onReplace: () => Promise<void>;
+  onCopyConnect: () => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  if (!clientLinksButtonShown(state)) return null;
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-6">
+      <h3 className="text-sm font-medium text-foreground">Client links</h3>
+      <p className="text-sm text-muted-foreground">
+        Someone who stops being an owner can still use the client upload, review and connect links they copied. New
+        links stop the old ones working.
+      </p>
+      <div>
+        <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>
+          Make new client links
+        </Button>
+      </div>
+      {freshConnectUrl ? (
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input readOnly value={freshConnectUrl} aria-label="New client connect link" className="sm:max-w-md" />
+          <Button size="sm" variant="outline" className="shrink-0 sm:w-auto" onClick={onCopyConnect}>
+            <Copy aria-hidden className="size-4" />
+            Copy
+          </Button>
+        </div>
+      ) : null}
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        destructive
+        title="Make new client links?"
+        description="The client links that are on stop working, including any copies a former owner kept. Send your client the new ones afterwards."
+        confirmText="Make new links"
+        onConfirm={onReplace}
+      />
+    </div>
+  );
 }
 
 export function TeamSection({ workspaceId, role, workspaceName, deletion }: TeamSectionProps) {
@@ -386,7 +473,25 @@ function OwnerView({
   const [promoteTarget, setPromoteTarget] = useState<Member | null>(null);
   const [demoteTarget, setDemoteTarget] = useState<Member | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
-  const [replacingLinks, setReplacingLinks] = useState(false);
+  const [clientLinks, setClientLinks] = useState<ClientLinksState | null>(null);
+  const [freshConnectUrl, setFreshConnectUrl] = useState<string | null>(null);
+
+  // R6 L2: whether "Make new client links" has anything to replace.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/workspaces/client-links?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const data = (await response.json().catch(() => null)) as ClientLinksState | null;
+        if (!cancelled && response.ok && data?.on) setClientLinks(data);
+      } catch {
+        // No button then; each link's own Replace on its page still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -483,8 +588,9 @@ function OwnerView({
       toast.error(data?.error ?? "Couldn't update that member's role.");
       throw new Error("DEMOTE_FAILED");
     }
-    toast.success(demotedMessage(await response.json().catch(() => null)));
-    if (demoteTarget.userId === currentUserId) {
+    const self = demoteTarget.userId === currentUserId;
+    toast.success(demotedMessage(await response.json().catch(() => null), self));
+    if (self) {
       router.refresh();
       return;
     }
@@ -495,27 +601,46 @@ function OwnerView({
     );
   }, [demoteTarget, currentUserId, router, toast, workspaceId]);
 
-  // R5-security L1: one press replaces the client upload and review links.
+  // R5-security L1: one press, after a confirm (R6 L2), replaces every client
+  // link that is on. ConfirmDialog contract: throw to keep the dialog open.
   const replaceClientLinks = useCallback(async () => {
-    setReplacingLinks(true);
+    let response: Response;
     try {
-      const response = await fetch("/api/workspaces/client-links", {
+      response = await fetch("/api/workspaces/client-links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId }),
       });
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      if (!response.ok) {
-        toast.error(data?.error ?? "Couldn't make new client links. The old ones still work. Try again.");
-        return;
-      }
-      toast.success(clientLinksReplacedMessage(data));
     } catch {
       toast.error("Couldn't reach the server. The old client links still work. Check your connection and try again.");
-    } finally {
-      setReplacingLinks(false);
+      throw new Error("REPLACE_LINKS_FAILED");
     }
+    const data = (await response.json().catch(() => null)) as {
+      error?: string;
+      uploadLink?: unknown;
+      reviewLink?: unknown;
+      connectLink?: { url?: string | null } | null;
+    } | null;
+    if (!response.ok) {
+      toast.error(data?.error ?? "Couldn't make new client links. The old ones still work. Try again.");
+      throw new Error("REPLACE_LINKS_FAILED");
+    }
+    setFreshConnectUrl(data?.connectLink?.url ?? null);
+    setClientLinks((prev) =>
+      prev ? { ...prev, on: { upload: !!data?.uploadLink, review: !!data?.reviewLink, connect: !!data?.connectLink } } : prev,
+    );
+    toast.success(clientLinksReplacedMessage(data));
   }, [toast, workspaceId]);
+
+  async function copyConnectUrl() {
+    if (!freshConnectUrl) return;
+    try {
+      await navigator.clipboard.writeText(freshConnectUrl);
+      toast.success("Client connect link copied.");
+    } catch {
+      toast.error("Couldn't copy the link. Copy it manually instead.");
+    }
+  }
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Verbatim
   // MemberView.handleLeave — an owner may leave once another owner remains (the
@@ -691,19 +816,13 @@ function OwnerView({
         ) : null}
       </div>
 
-      {/* R5-security L1: a former owner's copies of the client links keep working until these are replaced. */}
-      <div className="flex flex-col gap-2 border-t border-border pt-6">
-        <h3 className="text-sm font-medium text-foreground">Client links</h3>
-        <p className="text-sm text-muted-foreground">
-          Someone who stops being an owner can still use the client upload and review links they copied. New links
-          stop the old ones working.
-        </p>
-        <div>
-          <Button size="sm" variant="outline" loading={replacingLinks} onClick={replaceClientLinks}>
-            Make new client links
-          </Button>
-        </div>
-      </div>
+      {/* R5-security L1 / R6 M2: a former owner's copies of the client links keep working until these are replaced. */}
+      <ClientLinksPanel
+        state={clientLinks}
+        freshConnectUrl={freshConnectUrl}
+        onReplace={replaceClientLinks}
+        onCopyConnect={copyConnectUrl}
+      />
 
       {/* Leave — an owner may step down once another owner exists. Disabled
           with an explanation until then (the server backstops with a 400). */}

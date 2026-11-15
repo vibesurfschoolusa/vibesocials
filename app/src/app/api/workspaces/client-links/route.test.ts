@@ -9,6 +9,9 @@ const m = vi.hoisted(() => ({
   reviewFindFirst: vi.fn(),
   reviewUpdateMany: vi.fn(),
   reviewCreate: vi.fn(),
+  connectFindFirst: vi.fn(),
+  connectUpdateMany: vi.fn(),
+  connectCreate: vi.fn(),
   executeRaw: vi.fn(),
   transaction: vi.fn(),
   requireOwnerContext: vi.fn(),
@@ -17,7 +20,14 @@ const m = vi.hoisted(() => ({
   calls: [] as string[],
 }));
 
-vi.mock("@/lib/db", () => ({ prisma: { $transaction: m.transaction } }));
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    $transaction: m.transaction,
+    workspaceUploadLink: { findFirst: m.uploadFindFirst },
+    workspaceReviewLink: { findFirst: m.reviewFindFirst },
+    workspaceConnectLink: { findFirst: m.connectFindFirst },
+  },
+}));
 vi.mock("@/lib/workspace", () => ({ requireOwnerContext: m.requireOwnerContext }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: m.checkRateLimit }));
 vi.mock("@/lib/inviteToken", async () => {
@@ -30,7 +40,7 @@ import { NextResponse } from "next/server";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { openSecret } from "@/lib/tokenCrypto";
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 /**
  * R5-security L1: "Make new client links" replaces the upload link and the
@@ -56,7 +66,10 @@ beforeEach(() => {
   process.env.TOKEN_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64");
   process.env.NEXTAUTH_URL = "https://app.example.com";
   vi.stubEnv("BILLING_ENABLED", "");
-  tokens = ["U".repeat(43), "V".repeat(43)];
+  tokens = ["U".repeat(43), "V".repeat(43), "C".repeat(43)];
+  vi.stubEnv("TIKTOK_CLIENT_KEY", "k");
+  vi.stubEnv("TIKTOK_CLIENT_SECRET", "s");
+  vi.stubEnv("TIKTOK_REDIRECT_URI", "r");
   m.generateInviteToken.mockImplementation(() => {
     const raw = tokens.shift()!;
     return { raw, hash: hashInviteToken(raw) };
@@ -84,12 +97,22 @@ beforeEach(() => {
     m.calls.push("create review");
     return { ...data, lastUsedAt: null, createdAt: CREATED };
   });
+  m.connectFindFirst.mockResolvedValue(null);
+  m.connectUpdateMany.mockImplementation(async () => {
+    m.calls.push("revoke connect");
+    return { count: 1 };
+  });
+  m.connectCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+    m.calls.push("create connect");
+    return { ...data, lastUsedAt: null, createdAt: CREATED };
+  });
   m.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => {
     m.calls.push("transaction");
     return callback({
       $executeRaw: m.executeRaw,
       workspaceUploadLink: { findFirst: m.uploadFindFirst, updateMany: m.uploadUpdateMany, create: m.uploadCreate },
       workspaceReviewLink: { findFirst: m.reviewFindFirst, updateMany: m.reviewUpdateMany, create: m.reviewCreate },
+      workspaceConnectLink: { findFirst: m.connectFindFirst, updateMany: m.connectUpdateMany, create: m.connectCreate },
     });
   });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -111,11 +134,13 @@ describe("POST /api/workspaces/client-links", () => {
     expect(body).toEqual({
       uploadLink: { url: `https://app.example.com/u/${"U".repeat(43)}`, uploadCount: 0, lastUsedAt: null, createdAt: CREATED.toISOString() },
       reviewLink: { url: `https://app.example.com/v/${"V".repeat(43)}`, lastUsedAt: null, createdAt: CREATED.toISOString() },
+      connectLink: null,
     });
     expect(m.calls).toEqual([
       "transaction",
       "lock ws-review-link:ws-1",
       "lock ws-upload-link:ws-1",
+      "lock ws-connect-link:ws-1",
       "revoke upload",
       "create upload",
       "revoke review",
@@ -128,6 +153,50 @@ describe("POST /api/workspaces/client-links", () => {
     const created = m.uploadCreate.mock.calls[0][0].data;
     expect(created).toMatchObject({ workspaceId: "ws-1", tokenHash: hashInviteToken("U".repeat(43)), createdById: "user-1" });
     expect(openSecret(created.tokenSealed)).toBe("U".repeat(43));
+  });
+
+  // R6 M2: the connect link is a client link too; a former owner could copy it.
+  it("replaces the connect link with the same platforms, for 14 days, made by the owner who pressed", async () => {
+    m.uploadFindFirst.mockResolvedValue(null);
+    m.reviewFindFirst.mockResolvedValue(null);
+    tokens = ["C".repeat(43)];
+    m.connectFindFirst.mockResolvedValue({ id: "con-old", platforms: ["tiktok", "linkedin"] });
+
+    const body = await (await POST(request())).json();
+
+    // Any working link, whoever made it (one a former owner made has stopped working).
+    expect(m.connectFindFirst).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", revokedAt: null, expiresAt: { gt: expect.any(Date) } },
+      select: { id: true, platforms: true },
+    });
+    expect(m.calls.slice(-2)).toEqual(["revoke connect", "create connect"]);
+    expect(m.connectUpdateMany).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+    const created = m.connectCreate.mock.calls[0][0].data;
+    // LinkedIn is not set up on this site, so only TikTok is offered again.
+    expect(created).toMatchObject({ workspaceId: "ws-1", tokenHash: hashInviteToken("C".repeat(43)), createdById: "user-1", platforms: ["tiktok"] });
+    expect(openSecret(created.tokenSealed)).toBe("C".repeat(43));
+    expect(created.expiresAt.getTime() - Date.now()).toBeGreaterThan(14 * 24 * 60 * 60 * 1000 - 60_000);
+    expect(body.connectLink).toEqual({
+      url: `https://app.example.com/c/${"C".repeat(43)}`,
+      platforms: ["tiktok"],
+      expiresAt: created.expiresAt.toISOString(),
+      lastUsedAt: null,
+      createdAt: CREATED.toISOString(),
+    });
+  });
+
+  it("turns the connect link off when none of its platforms can be offered any more", async () => {
+    m.connectFindFirst.mockResolvedValue({ id: "con-old", platforms: ["linkedin"] });
+
+    const body = await (await POST(request())).json();
+
+    expect(m.connectUpdateMany).toHaveBeenCalled();
+    expect(m.connectCreate).not.toHaveBeenCalled();
+    expect(body.connectLink).toBeNull();
+    expect(body.connectLinkTurnedOff).toBe(true);
   });
 
   it("only replaces a link that is on; one that is off stays off", async () => {
@@ -183,5 +252,40 @@ describe("POST /api/workspaces/client-links", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Couldn't make new client links. The old ones still work. Try again.",
     });
+  });
+});
+
+describe("GET /api/workspaces/client-links", () => {
+  const get = (query = "?workspaceId=ws-1") => GET(new Request(`http://localhost/api/workspaces/client-links${query}`));
+
+  it("says which client links are on and whether the plan includes them", async () => {
+    m.reviewFindFirst.mockResolvedValue(null);
+    m.connectFindFirst.mockResolvedValue({ id: "con-1", platforms: ["tiktok"] });
+
+    const response = await get();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ included: true, on: { upload: true, review: false, connect: true } });
+    expect(m.connectFindFirst).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", revokedAt: null, expiresAt: { gt: expect.any(Date) } },
+      select: { id: true, platforms: true },
+    });
+  });
+
+  it("with billing on, a plan without client links answers included: false", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.requireOwnerContext.mockResolvedValue({
+      ...OWNER_CONTEXT,
+      workspace: { ...OWNER_CONTEXT.workspace, billingExempt: false, plan: "starter", planStatus: "active" },
+    });
+    await expect((await get()).json()).resolves.toMatchObject({ included: false });
+  });
+
+  it("answers the gate's response for a member, and another workspace's id with 409", async () => {
+    m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
+    expect((await get()).status).toBe(403);
+    m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
+    expect((await get("?workspaceId=ws-other")).status).toBe(409);
+    expect(m.uploadFindFirst).not.toHaveBeenCalled();
   });
 });
