@@ -3,13 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // 2026-11-01 scale audit (W6): draft-response caps every prompt field, spends
 // the per-workspace daily quota, bounds the provider call and asks reasoning
 // models for low effort. `fetch` is stubbed - no provider is ever contacted.
-const { getWorkspaceContextMock, checkRateLimitMock } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, checkRateLimitMock, memberFindManyMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  memberFindManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+// R5-security M1: the owner budget reads the workspace's owners.
+vi.mock("@/lib/db", () => ({ prisma: { workspaceMember: { findMany: memberFindManyMock } } }));
 
 import { POST } from "./route";
 
@@ -49,6 +52,8 @@ function sentBody(): Record<string, unknown> {
 }
 
 beforeEach(() => {
+  memberFindManyMock.mockReset();
+  memberFindManyMock.mockResolvedValue([{ userId: "owner-1", user: { email: "owner@example.com", emailVerifiedAt: null } }]);
   vi.clearAllMocks();
   vi.stubEnv("XAI_API_KEY", "xai-key");
   vi.stubEnv("OPENAI_API_KEY", "");
@@ -159,6 +164,20 @@ describe("POST /api/reviews/draft-response", () => {
   });
 
   describe("per-workspace daily quota", () => {
+    // R5-security M1: one budget across all the workspaces a person owns.
+    it("returns 429 AI_WORKSPACE_DAILY_LIMIT when the owner's budget across their workspaces is spent", async () => {
+      checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
+        opts.userId.startsWith("ai:owner:") ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true },
+      );
+
+      const response = await post(validBody);
+
+      expect(response.status).toBe(429);
+      expect((await response.json()).code).toBe("AI_WORKSPACE_DAILY_LIMIT");
+      expect(memberFindManyMock).toHaveBeenCalledWith(expect.objectContaining({ where: { workspaceId: "ws-1", role: "owner" } }));
+      expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ userId: "ai:owner:owner-1" }));
+    });
+
     it("returns 429 AI_WORKSPACE_DAILY_LIMIT when the workspace quota is spent, without calling the provider", async () => {
       checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
         opts.userId.startsWith("ai:workspace:")
