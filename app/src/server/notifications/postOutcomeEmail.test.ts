@@ -4,16 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // connectionHealth.test.ts / settings route.test.ts). deliverPostOutcomeNotification
 // imports both `@/lib/db` and `@/server/notifications/email` at module scope, so
 // both must be mocked before postOutcomeEmail.ts is imported below.
-const { findUniqueUserMock, findUniquePostJobMock, sendEmailMock } = vi.hoisted(() => ({
+const { findUniqueUserMock, findUniquePostJobMock, findFirstPostJobMock, sendEmailMock } = vi.hoisted(() => ({
   findUniqueUserMock: vi.fn(),
   findUniquePostJobMock: vi.fn(),
+  findFirstPostJobMock: vi.fn(),
   sendEmailMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     user: { findUnique: findUniqueUserMock },
-    postJob: { findUnique: findUniquePostJobMock },
+    // findFirst: the Story job of a feed job (R5-client-journey L3).
+    postJob: { findUnique: findUniquePostJobMock, findFirst: findFirstPostJobMock },
   },
 }));
 
@@ -45,6 +47,8 @@ function jobRow<T extends object>(fields: T) {
 beforeEach(() => {
   findUniqueUserMock.mockReset();
   findUniquePostJobMock.mockReset();
+  findFirstPostJobMock.mockReset();
+  findFirstPostJobMock.mockResolvedValue(null);
   sendEmailMock.mockReset();
   sendEmailMock.mockResolvedValue(undefined);
 });
@@ -323,10 +327,12 @@ describe("deliverPostOutcomeNotification", () => {
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
     expect(findUniquePostJobMock.mock.calls[0][0].select.results.select).toEqual({
+      id: true,
       platform: true,
       status: true,
       errorCode: true,
       errorMessage: true,
+      claimRunId: true,
     });
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
@@ -599,5 +605,149 @@ describe("deliverPostOutcomeNotification - workspace and caption (F4)", () => {
     expect(sent.subject).toBe("Kite Club: your post published successfully");
     expect(sent.html).toContain("<p>Caption: From the library</p>");
     expect(sent.html).toContain("/go?w=ws_9&amp;to=%2Factivity");
+  });
+});
+
+// R5-client-journey L3: a "Feed and Story" post is two jobs (the Story job names
+// its feed job in storyOfPostJobId). Each sent its own email, and the Story's
+// did not say Story. Now the half that finishes last sends one email for both,
+// with the Story rows labelled.
+describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
+  const FEED_ID = "job-feed";
+  const STORY_ID = "job-story";
+  const feedJob = (fields: Record<string, unknown> = {}) =>
+    jobRow({
+      id: FEED_ID,
+      status: "completed",
+      storyOfPostJobId: null,
+      publishMetadata: { instagram: { placement: "feed" } },
+      results: [
+        { id: "r1", platform: "instagram", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-a" },
+        { id: "r2", platform: "facebook_page", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-a" },
+      ],
+      ...fields,
+    });
+  const storyJob = (fields: Record<string, unknown> = {}) =>
+    jobRow({
+      id: STORY_ID,
+      status: "completed",
+      storyOfPostJobId: FEED_ID,
+      baseCaption: "Dawn patrol tomorrow at 6",
+      publishMetadata: { instagram: { placement: "story" }, facebook: { placement: "story" } },
+      results: [
+        { id: "r3", platform: "instagram", status: "success", errorCode: null, errorMessage: null, claimRunId: "run-b" },
+        {
+          id: "r4",
+          platform: "facebook_page",
+          status: "failed",
+          errorCode: "X",
+          errorMessage: "Facebook refused the video.",
+          claimRunId: "run-b",
+        },
+      ],
+      ...fields,
+    });
+
+  /** The two jobs as the database holds them: findUnique by id, findFirst by storyOfPostJobId. */
+  function pair(feed: Record<string, unknown> | null, story: Record<string, unknown> | null) {
+    findUniquePostJobMock.mockImplementation(async (args: { where: { id: string } }) =>
+      args.where.id === FEED_ID ? feed : args.where.id === STORY_ID ? story : null,
+    );
+    findFirstPostJobMock.mockImplementation(async (args: { where: { storyOfPostJobId?: string } }) =>
+      args.where.storyOfPostJobId === FEED_ID ? story : null,
+    );
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+  });
+
+  it("the first half to finish sends nothing while the other is still publishing", async () => {
+    pair(feedJob(), storyJob({ status: "in_progress" }));
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+
+    pair(feedJob({ status: "pending" }), storyJob());
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("the last half sends ONE email for both, the Story rows labelled, about the feed post", async () => {
+    pair(feedJob(), storyJob());
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const sent = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
+    expect(sent.subject).toBe("Surf Co: your post and Story finished: 3 of 4 succeeded");
+    expect(sent.html).toContain(
+      "<ul><li>Instagram: Succeeded</li><li>Facebook Page: Succeeded</li><li>Instagram Story: Succeeded</li><li>Facebook Page Story: Failed — Facebook refused the video.</li></ul>",
+    );
+    expect(sent.html).toContain("<p>Caption: Dawn patrol tomorrow at 6</p>");
+  });
+
+  it("both halves seeing the pair finished send it under one key, so Resend delivers it once", async () => {
+    pair(feedJob(), storyJob());
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID, idempotencyKey: "post-outcome/run-1" });
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+
+    const keys = sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey as string);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).toMatch(/^post-outcome-pair\/job-feed\/[0-9a-f]{64}$/);
+  });
+
+  it("a retry with a new outcome is a new email (a different key)", async () => {
+    pair(feedJob(), storyJob());
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+    const retried = storyJob().results as Array<Record<string, unknown>>;
+    pair(feedJob(), storyJob({ results: [retried[0], { ...retried[1], status: "success", claimRunId: "run-c" }] }));
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+    const keys = sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey as string);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect((sendEmailMock.mock.calls[1][0] as { subject: string }).subject).toBe(
+      "Surf Co: your post and Story published successfully",
+    );
+  });
+
+  it.each(["draft", "scheduled", "cancelled"] as const)(
+    "a partner that is %s is not waited for: this half sends its own email, Story rows labelled",
+    async (status) => {
+      pair(feedJob({ status }), storyJob());
+
+      await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID, idempotencyKey: "post-outcome/run-2" });
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      const [sent, opts] = sendEmailMock.mock.calls[0] as [{ subject: string; html: string }, { idempotencyKey: string }];
+      expect(sent.subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
+      expect(sent.html).toContain("<li>Instagram Story: Succeeded</li>");
+      expect(sent.html).not.toContain("<li>Instagram: Succeeded</li>");
+      expect(opts.idempotencyKey).toBe("post-outcome/run-2");
+    },
+  );
+
+  it("a partner in another workspace, or gone, is no pair", async () => {
+    pair(feedJob({ workspaceId: "ws_other" }), storyJob());
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+    pair(null, storyJob());
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+    for (const call of sendEmailMock.mock.calls) {
+      expect((call[0] as { subject: string }).subject).toBe("Surf Co: your Story finished: 1 of 2 platforms succeeded");
+    }
+  });
+
+  it("a Story-only post (no pair) labels its rows too", async () => {
+    pair(null, storyJob({ storyOfPostJobId: null, results: [(storyJob().results as unknown[])[0]] }));
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
+
+    const sent = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
+    expect(sent.subject).toBe("Surf Co: your Story published successfully");
+    expect(sent.html).toContain("<li>Instagram Story: Succeeded</li>");
   });
 });
