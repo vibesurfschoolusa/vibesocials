@@ -39,7 +39,7 @@ import {
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
-import { withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
+import { FreeRunRefusedError, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
@@ -1591,6 +1591,12 @@ export async function POST(request: Request) {
       ...(upFront.allFailed ? { allFailed: true } : {}),
     });
   } catch (error: unknown) {
+    // Review of T1, item 1: a daily limit refused the post as it was reserved,
+    // inside the create transaction, so nothing was created.
+    if (error instanceof FreeRunRefusedError) {
+      await error.notifyOperator();
+      return NextResponse.json({ error: error.refusal.error, code: error.refusal.code }, { status: 429 });
+    }
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(
         {

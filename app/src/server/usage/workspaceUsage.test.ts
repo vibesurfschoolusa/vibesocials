@@ -562,21 +562,43 @@ describe("getWorkspaceUsage", () => {
       xPostsThisMonth: { used: 4, limit: 30, resetsAt: new Date("2026-12-01T00:00:00.000Z") },
       youtubeUploadsToday: { used: 1, limit: 10, resetsAt: new Date("2026-11-11T08:00:00.000Z") },
       storage: { used: 5 * MB, limit: 5120 * MB, resetsAt: null },
-      people: [],
     });
     // Settings reads the X count the publish check refuses by, without writing.
     expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW);
   });
 
-  // R8-pages M1: the per-person number that binds, beside the workspace's own.
-  it("carries each owner's count across their workspaces, for the person reading it", async () => {
-    const line = { userId: "owner-1", name: "Jane", isViewer: true, used: 6, limit: 15, reduced: null };
-    personalMock.mockResolvedValue([line]);
+  // R8-pages M1 and review of T1, item 4: an owner sees their own line and their co-owners'.
+  it("an owner reading it: every owner's count across their workspaces, theirs marked", async () => {
+    const mine = { userId: "owner-1", name: "Jane", isViewer: true, used: 6, limit: 15, reduced: null };
+    const theirs = { userId: "owner-2", name: "Lee", isViewer: false, used: 2, limit: 15, reduced: null };
+    personalMock.mockResolvedValue([mine, theirs]);
     const usage = await getWorkspaceUsage("ws-1", NOW, "owner-1");
     expect(personalMock).toHaveBeenCalledWith("ws-1", NOW, "owner-1");
-    expect(usage.people).toEqual([line]);
-    await expect(getWorkspaceUsageOrNull("ws-1", NOW, "owner-1")).resolves.toMatchObject({ people: [line] });
+    expect(usage.people).toEqual([mine, theirs]);
+    expect(usage).not.toHaveProperty("stillToday");
+    await expect(getWorkspaceUsageOrNull("ws-1", NOW, "owner-1")).resolves.toMatchObject({ people: [mine, theirs] });
   });
+
+  // Review of T1, item 4: a member sees no owner's details, only what the workspace can still send today.
+  it("a member reading it: only how many posts the workspace can still send today and which limit decides", async () => {
+    db.postJobCount.mockResolvedValue(3);
+    personalMock.mockResolvedValue([
+      { userId: "owner-1", name: "jane@example.com", isViewer: false, used: 12, limit: 15, reduced: null },
+      { userId: "owner-2", name: "Lee", isViewer: false, used: 2, limit: 15, reduced: null },
+    ]);
+    const usage = await getWorkspaceUsage("ws-1", NOW, "member-1");
+    expect(usage).not.toHaveProperty("people");
+    expect(usage.stillToday).toEqual({ remaining: 3, decidedBy: "owner", coOwned: true });
+    expect(JSON.stringify(usage)).not.toContain("jane@example.com");
+
+    // The workspace's own limit is the closer one: 20 - 19 = 1 left.
+    db.postJobCount.mockResolvedValue(19);
+    personalMock.mockResolvedValue([{ userId: "owner-1", name: "Jane", isViewer: false, used: 4, limit: 15, reduced: null }]);
+    await expect(getWorkspaceUsage("ws-1", NOW)).resolves.toMatchObject({
+      stillToday: { remaining: 1, decidedBy: "workspace", coOwned: false },
+    });
+  });
+
 });
 
 describe("getWorkspaceUsageOrNull", () => {

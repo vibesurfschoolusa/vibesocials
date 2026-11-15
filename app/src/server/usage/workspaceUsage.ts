@@ -70,11 +70,31 @@ export type WorkspaceUsage = {
   /** Bytes. */
   storage: UsageMeter;
   /**
-   * R8-pages M1: each owner's per-person count today across all their free
-   * workspaces, the number that binds; empty (or absent) where it does not apply.
+   * R8-pages M1 and review of T1, item 4: for an owner reading it, each
+   * owner's per-person count today across all their free workspaces (theirs
+   * and their co-owners'), the number that binds. Absent for anyone else, and
+   * where the per-person limit does not apply.
    */
   people?: PersonalUsage[];
+  /**
+   * For a member (or no known reader): only how many posts this workspace can
+   * still send today and which limit decides it, with no owner's details.
+   * Absent where the per-person limit does not apply.
+   */
+  stillToday?: StillToday;
 };
+
+/** What a member sees: posts this workspace can still send today, and whether its own limit or an owner's decides. */
+export type StillToday = { remaining: number; decidedBy: "workspace" | "owner"; coOwned: boolean };
+
+/** The fewer of what the workspace's own limit and its most-used owner's number leave. */
+function stillToday(postsToday: UsageMeter, people: readonly PersonalUsage[]): StillToday {
+  const workspaceLeft = Math.max(0, postsToday.limit - postsToday.used);
+  const ownerLeft = Math.max(0, Math.min(...people.map((person) => person.limit - person.used)));
+  return ownerLeft < workspaceLeft
+    ? { remaining: ownerLeft, decidedBy: "owner", coOwned: people.length > 1 }
+    : { remaining: workspaceLeft, decidedBy: "workspace", coOwned: people.length > 1 };
+}
 
 async function loadWorkspace(
   workspaceId: string,
@@ -433,7 +453,11 @@ export async function getWorkspaceUsage(workspaceId: string, now: Date, viewerUs
       resetsAt: pacificDayRange(now).end,
     },
     storage: { used: storage, limit: limits.storageBytes, resetsAt: null },
-    people,
+    ...(people.length === 0
+      ? {}
+      : people.some((person) => person.isViewer)
+        ? { people }
+        : { stillToday: stillToday({ used: postsToday, limit: limits.postsPerDay, resetsAt: null }, people) }),
   };
 }
 

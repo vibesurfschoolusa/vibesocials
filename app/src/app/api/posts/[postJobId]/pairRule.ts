@@ -173,6 +173,8 @@ export type DispatchResult = {
   reasons: Map<string, string>;
   /** Only when some went out and some did not: why each one in `notSent` did not, in a sentence. */
   whyNotSent: Map<string, string>;
+  /** Review of T1, item 1: posts a daily limit refused as they went out, with the sentence and code. */
+  limitRefusals: Map<string, { error: string; code: string }>;
   sendFailed: boolean;
 };
 
@@ -193,6 +195,7 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
     notSent: new Set(),
     reasons: new Map(),
     whyNotSent: new Map(),
+    limitRefusals: new Map(),
     sendFailed: false,
   };
   const prepared: string[] = [];
@@ -200,7 +203,9 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
   // Third review of K2: the sends prepare wrote, taken back if the hand-over fails.
   const sendsWritten: WrittenSends[] = [];
   for (const id of postJobIds) {
-    const prep = await prepareDeferredPostJobDispatch(id);
+    // Review of T1, item 1: reserved (counted, checked, written) under the
+    // service-wide lock as it goes out, so a press at the limit's edge is refused.
+    const prep = await prepareDeferredPostJobDispatch(id, { sendNow: true });
     if (prep.ok) {
       prepared.push(id);
       if (prep.sendsWritten) sendsWritten.push(prep.sendsWritten);
@@ -209,6 +214,9 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
     } else {
       result.notSent.add(id);
       result.reasons.set(id, prep.reason);
+      if (prep.reason === "LIMIT_REACHED" && prep.refusal) {
+        result.limitRefusals.set(id, { error: prep.refusal.errorMessage, code: prep.refusal.errorCode });
+      }
     }
   }
   if (events.length === 0) return result;

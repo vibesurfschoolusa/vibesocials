@@ -313,6 +313,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         { status: 503 },
       );
     }
+    // Review of T1, item 1: a daily limit refused it as it went out (its results say so).
+    const limited = dispatch.limitRefusals.get(postJobId);
+    if (limited && !partial) {
+      return NextResponse.json(
+        { error: `Approved, but not sent. ${limited.error}`, code: limited.code, ...(pair ? { otherHalf: pair } : {}) },
+        { status: 429 },
+      );
+    }
     if (dispatch.notSent.has(postJobId) && !partial) {
       // No chosen platform is connected (F1 H1): `prepare` gave each one a
       // failed result with its sentence and marked the job failed, so it never

@@ -1202,7 +1202,22 @@ describe("materializeAndDispatchChunk", () => {
       }
     });
 
+    // Review of T1, item 3: one per recipient, so a second author hears about their own post.
+    it("two authors in one workspace, same reason, same day: each gets one email", async () => {
+      prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+      findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+        userId: where.id.startsWith("jane") ? "jane" : "lee",
+        workspaceId: "ws-1",
+      }));
+
+      await materializeAndDispatchChunk(["jane-1", "lee-1", "jane-2"], { send, sleep });
+      await materializeAndDispatchChunk(["lee-2"], { send, sleep });
+
+      expect(deliverMock.mock.calls.map(([args]) => args.userId).sort()).toEqual(["jane", "lee"]);
+    });
+
     it("an email that throws changes nothing: the chunk's result and its events stand", async () => {
+
       prepareDeferredMock.mockImplementation(async (id: string) =>
         id === "job-1" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
       );

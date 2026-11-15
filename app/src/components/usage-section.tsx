@@ -2,6 +2,7 @@ import { Card } from "@/components/ui/card";
 import {
   formatStorageGb,
   personalUsageText,
+  stillTodayText,
   USAGE_UNAVAILABLE_MESSAGE,
   usageResetText,
   type UsageLimitKind,
@@ -16,6 +17,8 @@ interface UsageRow {
   note?: string;
   meter: UsageMeter;
   format: (value: number) => string;
+  /** Shown instead of "x of y" (a member's line: what is left). */
+  value?: string;
 }
 
 const plain = (value: number) => String(value);
@@ -25,9 +28,10 @@ const plain = (value: number) => String(value);
  * same counts the limits are enforced with; every member sees it, read-only.
  * `usage` is null when it could not be read: one line, and Settings still renders.
  *
- * R8-pages M1: where the per-person limit applies, each owner's count across
- * all their workspaces (retries included) is shown beside the workspace's own
- * line, since it is the number that binds first.
+ * R8-pages M1: where the per-person limit applies, an owner sees each owner's
+ * count across all their workspaces (retries included) beside the workspace's
+ * own line, since it is the number that binds first; a member sees only how
+ * many posts the workspace can still send today and why (review of T1, item 4).
  */
 export function UsageSection({ usage }: { usage: WorkspaceUsage | null }) {
   if (!usage) {
@@ -46,15 +50,29 @@ export function UsageSection({ usage }: { usage: WorkspaceUsage | null }) {
     meter: { used: person.used, limit: person.limit, resetsAt: usage.postsToday.resetsAt },
     format: plain,
   }));
+  // Review of T1, item 4: a member sees only what this workspace can still send today, and why.
+  const still: UsageRow[] = usage.stillToday
+    ? [
+        {
+          key: "stillToday",
+          kind: "postsPerDay",
+          ...stillTodayText(usage.stillToday),
+          meter: { used: 0, limit: 1, resetsAt: usage.postsToday.resetsAt },
+          format: plain,
+          value: `${usage.stillToday.remaining} left`,
+        },
+      ]
+    : [];
   const rows: UsageRow[] = [
     {
       key: "postsPerDay",
       kind: "postsPerDay",
-      label: people.length > 0 ? "Posts today (UTC), this workspace" : "Posts today (UTC)",
+      label: people.length > 0 || still.length > 0 ? "Posts today (UTC), this workspace" : "Posts today (UTC)",
       meter: usage.postsToday,
       format: plain,
     },
     ...personal,
+    ...still,
     { key: "xPostsPerMonth", kind: "xPostsPerMonth", label: "X posts this month", meter: usage.xPostsThisMonth, format: plain },
     {
       key: "youtubeUploadsPerDay",
@@ -70,7 +88,7 @@ export function UsageSection({ usage }: { usage: WorkspaceUsage | null }) {
     <Card className="p-6">
       <ul className="flex flex-col divide-y divide-border">
         {rows.map((row) => {
-          const reached = row.meter.used >= row.meter.limit;
+          const reached = row.value ? usage.stillToday?.remaining === 0 : row.meter.used >= row.meter.limit;
           return (
             <li
               key={row.key}
@@ -88,7 +106,7 @@ export function UsageSection({ usage }: { usage: WorkspaceUsage | null }) {
                   reached ? "text-sm font-semibold text-destructive" : "text-sm text-foreground"
                 }
               >
-                {row.format(row.meter.used)} of {row.format(row.meter.limit)}
+                {row.value ?? `${row.format(row.meter.used)} of ${row.format(row.meter.limit)}`}
               </p>
             </li>
           );

@@ -20,10 +20,11 @@ import { SERVICE_DAILY_POST_LIMIT_CODE } from "@/lib/usageLimits";
 import { BILLING_FIELDS_SELECT } from "@/lib/billing";
 import { blockedResultFailure, PLAN_ENDED_CODE, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
 import {
+  FreeRunRefusedError,
   recordSend,
+  reserveFreeRuns,
+  reserveFreeRunsIn,
   sendRecorded,
-  serviceCapRefusalAtSend,
-  withdrawSend,
   type WrittenSends,
 } from "@/server/usage/usageLog";
 import {
@@ -477,22 +478,39 @@ export async function immediateStoryCanSend(args: {
 }
 
 /**
- * R6 review of K2: a post going out now records its send for the day (the
- * daily caps count those), each job that has something to publish. After the
- * commit and never throwing (recordSend logs), so it cannot undo a post.
+ * Review of T1, item 1: a post going out now reserves its runs (each job
+ * that has something to publish; a pair as one unit) inside the create
+ * transaction, under the service-wide lock for a free workspace. Past a
+ * limit it throws FreeRunRefusedError, so the post and its results are
+ * rolled back and the route answers with the sentence. The route takes back
+ * the written runs if the hand-over then fails.
  */
-async function recordImmediateSends(
-  workspaceId: string,
-  intent: PostJobIntent,
-  jobs: Array<[string | undefined, readonly FanOutResultRow[]]>,
+async function reserveImmediateRuns(
+  tx: Prisma.TransactionClient,
+  args: {
+    workspaceId: string;
+    intent: PostJobIntent;
+    jobs: Array<[string | undefined, readonly FanOutResultRow[]]>;
+    viewerUserId: string;
+  },
 ): Promise<WrittenSends | undefined> {
-  if (intent !== "immediate") return undefined;
-  const sending = jobs.filter(([id, rows]) => id && hasPending(rows)).map(([id]) => id as string);
+  if (args.intent !== "immediate") return undefined;
+  const sending = args.jobs.filter(([id, rows]) => id && hasPending(rows)).map(([id]) => id as string);
   if (sending.length === 0) return undefined;
   const day = new Date();
-  const written = (await recordSend({ workspaceId, postJobIds: sending, at: day })) ?? [];
-  return written.length > 0 ? { postJobIds: written, day } : undefined;
+  const reservation = await reserveFreeRunsIn(tx, {
+    workspaceId: args.workspaceId,
+    postJobIds: sending,
+    at: day,
+    check: "now",
+    viewerUserId: args.viewerUserId,
+  });
+  if (!reservation.ok) throw new FreeRunRefusedError(reservation.refusal, reservation.ceiling ? day : null);
+  return reservation.written.length > 0 ? { postJobIds: reservation.written, day } : undefined;
 }
+
+/** A create transaction waits for the service-wide lock behind other reservations. */
+const CREATE_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
 export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
@@ -578,7 +596,7 @@ export async function createPostJobOnly(
 
   // Atomic media + job + results so a mid-path failure never leaves orphans
   // (mirrors createPostJobForExistingMedia).
-  const { postJob, postJobs, mediaItem, resultRecords, storyJob } = await prisma.$transaction(
+  const { postJob, postJobs, mediaItem, resultRecords, storyJob, sendsWritten } = await prisma.$transaction(
     async (tx) => {
       const mediaItemRow = media ? await createMediaItem(tx, media) : null;
       // One after another, so the rows are created in the post's order.
@@ -666,14 +684,23 @@ export async function createPostJobOnly(
         await createResults(storyJob.id, fanOut.storyRows);
       }
 
-      return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results, storyJob };
+      const sendsWritten = await reserveImmediateRuns(tx, {
+        workspaceId,
+        intent,
+        jobs: [
+          [job.id, fanOut.rows],
+          [storyJob?.id, fanOut.storyRows],
+        ],
+        viewerUserId: userId,
+      });
+      return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results, storyJob, sendsWritten };
     },
+    CREATE_TRANSACTION_OPTIONS,
   );
   const jobRows: Array<[string | undefined, readonly FanOutResultRow[]]> = [
     [postJob.id, fanOut.rows],
     [storyJob?.id, fanOut.storyRows],
   ];
-  const sendsWritten = await recordImmediateSends(workspaceId, intent, jobRows);
 
   return {
     postJobId: postJob.id,
@@ -874,7 +901,7 @@ export async function createPostJobForExistingMedia(
   // blob first, our post-lock re-check sees `deletedAt` and aborts; if we create
   // the job first, the sweep sees the new non-terminal job and skips. Closes the
   // check-then-act reuse race the Phase-1 review flagged.
-  const { postJob, postJobs, resultRecords, storyJob } = await prisma.$transaction(async (tx) => {
+  const { postJob, postJobs, resultRecords, storyJob, sendsWritten } = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${mediaItemId} FOR UPDATE`;
 
     // Re-assert under the row lock — a concurrent sweep may have soft-deleted the
@@ -970,13 +997,21 @@ export async function createPostJobForExistingMedia(
       await createResults(storyJob.id, fanOut.storyRows);
     }
 
-    return { postJob: job, postJobs: jobs, resultRecords: results, storyJob };
-  });
+    const sendsWritten = await reserveImmediateRuns(tx, {
+      workspaceId,
+      intent,
+      jobs: [
+        [job.id, fanOut.rows],
+        [storyJob?.id, fanOut.storyRows],
+      ],
+      viewerUserId: userId,
+    });
+    return { postJob: job, postJobs: jobs, resultRecords: results, storyJob, sendsWritten };
+  }, CREATE_TRANSACTION_OPTIONS);
   const jobRows: Array<[string | undefined, readonly FanOutResultRow[]]> = [
     [postJob.id, fanOut.rows],
     [storyJob?.id, fanOut.storyRows],
   ];
-  const sendsWritten = await recordImmediateSends(workspaceId, intent, jobRows);
 
   return {
     postJobId: postJob.id,
@@ -1168,7 +1203,7 @@ export function buildRetryEvent(
 
 /** Outcome of preparing a deferred (scheduled/draft) job for publishing. */
 export type DeferredDispatchResult =
-  // `sendsWritten`: the sends this call's recordSend wrote (itself, and the
+  // `sendsWritten`: the sends this call's reservation wrote (itself, and the
   // other half of a pair it reserved), with their day, for a caller whose
   // hand-over then fails to take back. Absent when it wrote none.
   | { ok: true; event: PublishRequestedEventData; sendsWritten?: WrittenSends }
@@ -1177,8 +1212,9 @@ export type DeferredDispatchResult =
   // say so, and nothing was checked against the caps or recorded.
   | { ok: false; reason: "BLOCKED" }
   // `noticeFor`: the post whose owner is told: the feed of a pair refused
-  // together (one notice for both), else the refused post itself.
-  | { ok: false; reason: "LIMIT_REACHED"; noticeFor: string };
+  // together (one notice for both), else the refused post itself. `refusal`:
+  // what its results say, for a route to answer with (absent on a re-run).
+  | { ok: false; reason: "LIMIT_REACHED"; noticeFor: string; refusal?: SendRefusal };
 
 type SendRefusal = { errorCode: string; errorMessage: string };
 
@@ -1348,21 +1384,30 @@ async function refusedWithPartner(job: { id: string; storyOfPostJobId: string | 
  * both as one unit (the review of K2: both go or neither). At the cap, every
  * platform that would have published gets a failed result that says why
  * (Retry is there from tomorrow), both halves of a pair, and the caller gets
- * LIMIT_REACHED. Post now and approvals pass none: their routes checked the
- * cap before the claim. Every post that goes out records its send for the
- * day (the caps count those), a pair's two at once.
+ * LIMIT_REACHED. Review of T1, item 1: the check and the write are one
+ * reservation (reserveFreeRuns, under the service-wide lock), and
+ * publish and approve now pass `sendNow`, which checks the per-person
+ * number too. Every post that goes out has its run for the day (the caps
+ * count those), a pair's two at once.
  *
  * A re-run that finds the results already failed by the cap (a step retried
  * after the rows were written) is refused again: nothing is published, and
  * the status and the notice are redone, both idempotent.
  *
  * Third review of K2: it never takes a send back itself. It answers the
- * sends its recordSend wrote, and only the caller, who knows what its own
+ * sends its reservation wrote, and only the caller, who knows what its own
+
  * attempt wrote (a feed reserves its Story's), takes them back.
  */
 export async function prepareDeferredPostJobDispatch(
   postJobId: string,
-  options: { serviceCapAt?: Date; unitRefusal?: SendRefusal } = {},
+  options: {
+    /** The scanner, as a scheduled post falls due: the ceiling and the pools, with the at-send sentences. */
+    serviceCapAt?: Date;
+    /** Review of T1, item 1: publish or approve now (dispatchNow): every check, the per-person number too. */
+    sendNow?: boolean;
+    unitRefusal?: SendRefusal;
+  } = {},
 ): Promise<DeferredDispatchResult> {
   const job = await prisma.postJob.findUnique({
     where: { id: postJobId },
@@ -1433,32 +1478,28 @@ export async function prepareDeferredPostJobDispatch(
 
   // The posts whose sends this one records: itself, or both halves of a pair.
   let sending = [postJobId];
-  // The runs this call recorded before the check below (R7 review, point 7).
+  // The runs this call's reservation wrote.
   let reserved: string[] = [];
+  const checked = Boolean(options.serviceCapAt || options.sendNow || options.unitRefusal);
   // A re-run that finds its results made has been past this check already.
-  if ((options.serviceCapAt || options.unitRefusal) && existingResults === 0 && rows.some((row) => row.status === "pending")) {
+  if (checked && existingResults === 0 && rows.some((row) => row.status === "pending")) {
     const partner = options.unitRefusal ? null : await unsentPairHalf(job, connections);
     if (partner) sending = [postJobId, partner];
     let refusal = options.unitRefusal ?? null;
-    // R8-publishing L1: a half whose run its other half recorded when the two
-    // passed together is not checked again, so a pair is never split inside
-    // one scan (a refused unit's runs are taken back, so a recorded run passed).
+    // R8-publishing L1: a half whose run its other half reserved when the two
+    // passed together is not checked again, so a pair is never split.
     const passedWithPartner = !refusal && !partner && (await sendRecorded(postJobId, sendDay));
     if (!refusal && !passedWithPartner) {
-      // R7 review, point 7: create, then check. The runs are recorded first
-      // and counted with them, so a Post now at the same moment sees them;
-      // past the cap, the ones this call wrote are taken back.
-      reserved = (await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: sendDay })) ?? [];
-      refusal = await serviceCapRefusalAtSend({
+      // Review of T1, item 1: counted, checked and written in one transaction
+      // under the service-wide lock; refused, nothing is written.
+      const reservation = await reserveFreeRuns({
         workspaceId: job.workspaceId,
         postJobIds: sending,
-        now: options.serviceCapAt!,
-        recorded: true,
+        at: sendDay,
+        check: options.serviceCapAt ? "atSend" : "now",
       });
-      if (refusal) {
-        await withdrawSend({ postJobIds: reserved, day: sendDay });
-        reserved = [];
-      }
+      if (reservation.ok) reserved = reservation.written;
+      else refusal = { errorCode: reservation.refusal.code, errorMessage: reservation.refusal.error };
     }
     if (refusal) {
       await prisma.postJobResult.createMany({
@@ -1467,7 +1508,7 @@ export async function prepareDeferredPostJobDispatch(
       await recomputeAndStorePostJobStatus(postJobId);
       // Its other half is refused with it; that half's own turn then finds it refused.
       if (partner) await prepareDeferredPostJobDispatch(partner, { unitRefusal: refusal });
-      return { ok: false, reason: "LIMIT_REACHED", noticeFor: partner ? feedId : postJobId };
+      return { ok: false, reason: "LIMIT_REACHED", noticeFor: partner ? feedId : postJobId, refusal };
     }
   }
 
@@ -1482,13 +1523,11 @@ export async function prepareDeferredPostJobDispatch(
     return { ok: false, reason: "NO_CONNECTIONS" };
   }
 
-  // R6 review of K2: the send the caps count, before the next post is checked.
-  const written = [
-    ...new Set([
-      ...reserved,
-      ...((await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: sendDay })) ?? []),
-    ]),
-  ];
+  // R6 review of K2: the send the caps count. Reserved above when checked;
+  // otherwise (a re-run whose results were made) written once, if missing.
+  const written = checked
+    ? reserved
+    : ((await recordSend({ workspaceId: job.workspaceId, postJobIds: sending, at: sendDay })) ?? []);
 
   const captionSource = resolvePostCaptionSource(job, job.mediaItem);
 

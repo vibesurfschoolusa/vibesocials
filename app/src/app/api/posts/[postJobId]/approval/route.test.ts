@@ -271,7 +271,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
         scheduledFor: expect.any(Date),
       },
     });
-    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
     // the shared concurrency key, and the Post-now priority flag.
@@ -303,7 +303,24 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // Review of T1, item 1: the approval stands; the reservation as it went out refused it.
+  it("approving to publish now at a daily limit: 429 with the limit's sentence, no event", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    const refusal = {
+      errorCode: "OWNER_DAILY_POST_LIMIT",
+      errorMessage: "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+    };
+    prepareDispatchMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1", refusal });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual({ error: `Approved, but not sent. ${refusal.errorMessage}`, code: refusal.errorCode });
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("publishes now when the chosen time passed while awaiting approval", async () => {
+
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: PAST }));
 
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));
@@ -614,7 +631,7 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
         scheduledFor: expect.any(Date),
       },
     });
-    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -931,7 +948,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledTimes(2);
-    expect(prepareDispatchMock.mock.calls).toEqual([["job-1"], ["story-1"]]);
+    expect(prepareDispatchMock.mock.calls).toEqual([["job-1", { sendNow: true }], ["story-1", { sendNow: true }]]);
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     expect(inngestSendMock).toHaveBeenCalledWith([
       expect.objectContaining({ id: "publish-job-1" }),

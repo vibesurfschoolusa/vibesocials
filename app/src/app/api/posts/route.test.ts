@@ -41,7 +41,11 @@ const {
 }));
 
 // Third review of K2: a send the create helper wrote is taken back when the hand-over fails.
-vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
+// Review of T1, item 1: the real refusal class, which the create helpers throw.
+vi.mock("@/server/usage/usageLog", async (importOriginal) => ({
+  FreeRunRefusedError: (await importOriginal<typeof import("@/server/usage/usageLog")>()).FreeRunRefusedError,
+  withdrawSend: withdrawSendMock,
+}));
 
 // Team Workspaces (Task 4) — route.ts now resolves the caller via
 // `getWorkspaceContext` instead of `getCurrentUser` (design doc §3/§4).
@@ -3320,7 +3324,25 @@ describe("POST /api/posts - platforms not sent at creation", () => {
     expect(body.notSent).toEqual([{ platform: "instagram", reason: "CONNECTION_GONE", message: gone }]);
   });
 
+  // Review of T1, item 1: the reservation in the create transaction refused, so nothing was created.
+  it("a daily limit refusing the reservation: 429 with its sentence, no event, nothing to take back", async () => {
+    const { FreeRunRefusedError } = await import("@/server/usage/usageLog");
+    const refusal = {
+      error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+      code: "SERVICE_DAILY_POST_LIMIT",
+    };
+    createPostJobOnlyMock.mockRejectedValue(new FreeRunRefusedError(refusal, null));
+
+    const response = await post({ platforms: ["x"] });
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual(refusal);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
   it("healthy: the response is unchanged", async () => {
+
     postJobResultFindManyMock.mockResolvedValue([pendingRow("job-1", "x")]);
 
     const body = (await (await post({ platforms: ["x"] })).json()) as Record<string, unknown>;

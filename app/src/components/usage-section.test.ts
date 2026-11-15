@@ -50,7 +50,25 @@ describe("UsageSection", () => {
     expect(html).toContain("Maria&#x27;s posts today (UTC), all their workspaces");
   });
 
+  // Review of T1, item 4: a member reads only what the workspace can still send, and why.
+  it("a member: how many posts the workspace can still send today and why, with no owner named", () => {
+    const html = render({ ...usage(undefined), stillToday: { remaining: 3, decidedBy: "owner", coOwned: true } });
+    expect(html).toContain("Posts today (UTC), this workspace");
+    expect(html).toContain("Posts this workspace can still send today (UTC)");
+    expect(html).toContain("3 left");
+    expect(html).toContain(
+      "The daily limit of one of its owners, counted across all the workspaces they own (retries too), leaves 3 posts.",
+    );
+    expect(html).not.toContain("all your workspaces");
+    expect(html).not.toContain("@");
+
+    const none = render({ ...usage(undefined), stillToday: { remaining: 0, decidedBy: "workspace", coOwned: false } });
+    expect(none).toContain("This workspace&#x27;s own daily limit leaves 0 posts.");
+    expect(none).toMatch(/text-destructive[^>]*>0 left</);
+  });
+
   it("no per-person line where the limit does not apply (paying, the operator's), and the plain label", () => {
+
     const html = render(usage([]));
     expect(html).toContain("Posts today (UTC)");
     expect(html).not.toContain("this workspace");

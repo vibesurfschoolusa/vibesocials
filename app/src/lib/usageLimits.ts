@@ -320,6 +320,10 @@ export const WORKSPACES_CREATED_LIMIT = 30;
 export const WORKSPACES_CREATED_WINDOW_DAYS = 30;
 
 export const OWNER_DAILY_POST_LIMIT_CODE = "OWNER_DAILY_POST_LIMIT";
+/** Review of T1, item 1: a free run whose limits could not be checked is not sent (the ceiling is hard). */
+export const LIMIT_CHECK_FAILED_CODE = "LIMIT_CHECK_FAILED";
+export const LIMIT_CHECK_FAILED_MESSAGE =
+  "Vibe Socials couldn't check today's limits just now, so nothing was sent. Try again in a minute.";
 export const SERVICE_DAILY_POST_LIMIT_CODE = "SERVICE_DAILY_POST_LIMIT";
 export const POST_RETRY_LIMIT_CODE = "POST_RETRY_LIMIT";
 export const WORKSPACE_CREATION_LIMIT_CODE = "WORKSPACE_CREATION_LIMIT";
@@ -458,6 +462,25 @@ export function personalUsageText(
           ? ` ${low} on the account's first day (UTC), ${full} from 00:00 UTC tomorrow once ${confirms}.`
           : "";
   return { label, note: `Retries count too.${why}` };
+}
+
+/**
+ * Review of T1, item 4: what a member reads instead of the owners' counts:
+ * how many posts this workspace can still send today, and which limit
+ * decides it, with no owner named.
+ */
+export function stillTodayText(still: { remaining: number; decidedBy: "workspace" | "owner"; coOwned: boolean }): {
+  label: string;
+  note: string;
+} {
+  const posts = `${still.remaining} ${countWord(still.remaining, "post", "posts")}`;
+  return {
+    label: "Posts this workspace can still send today (UTC)",
+    note:
+      still.decidedBy === "workspace"
+        ? `This workspace's own daily limit leaves ${posts}.`
+        : `The daily limit of ${still.coOwned ? "one of its owners" : "its owner"}, counted across all the workspaces they own (retries too), leaves ${posts}.`,
+  };
 }
 
 export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {

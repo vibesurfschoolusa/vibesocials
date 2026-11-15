@@ -279,7 +279,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
       data: { status: "in_progress", scheduledFor: expect.any(Date) },
     });
-    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
     // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
     // the shared concurrency key, and the Post-now priority flag.
     expect(inngestSendMock).toHaveBeenCalledWith({
@@ -360,7 +360,24 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // Review of T1, item 1: the reservation as it went out refused it (a press at the limit's edge).
+  it("429s with the limit's sentence when the reservation refuses it; no event", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    const refusal = {
+      errorCode: "SERVICE_DAILY_POST_LIMIT",
+      errorMessage: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+    };
+    prepareDispatchMock.mockResolvedValue({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1", refusal });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual({ error: refusal.errorMessage, code: refusal.errorCode });
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("409s when a connection vanished between the count and prepare (prepare NO_CONNECTIONS)", async () => {
+
     findFirstMock.mockResolvedValue({ status: "draft" });
     prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
 
@@ -397,7 +414,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
         where: { id: "job-1", workspaceId: "ws-1", status: "failed", results: { none: {} }, updatedAt: UPDATED },
         data: { status: "in_progress", scheduledFor: expect.any(Date), retriedAt: expect.any(Date) },
       });
-      expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+      expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
       expect(inngestSendMock).toHaveBeenCalledTimes(1);
     });
 
@@ -1190,7 +1207,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
         },
       ],
     ]);
-    expect(prepareDispatchMock.mock.calls).toEqual([["job-1"], ["story-1"]]);
+    expect(prepareDispatchMock.mock.calls).toEqual([["job-1", { sendNow: true }], ["story-1", { sendNow: true }]]);
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     expect(inngestSendMock).toHaveBeenCalledWith([
       expect.objectContaining({ id: "publish-job-1" }),

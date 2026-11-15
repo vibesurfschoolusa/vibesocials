@@ -361,8 +361,8 @@ export interface ChunkDispatchResult {
  * R8-security L1: the owners of the posts it did not send are told from this
  * step (`notifyNotSentAtScan`, which never throws), not through an event and
  * another function's run, so a post that never runs costs no execution. At
- * most one per workspace per reason per UTC day; a re-run of the step is
- * deduplicated by the same key.
+ * most one per workspace, recipient and reason a UTC day; a re-run of the step
+ * is deduplicated by the same key.
  */
 export async function materializeAndDispatchChunk(
   postJobIds: string[],
@@ -397,10 +397,10 @@ export async function materializeAndDispatchChunk(
     }
   }
 
-  // One per workspace and reason in this chunk; the daily key does the rest.
+  // One per workspace, recipient and reason in this chunk; the daily key does the rest.
   const told = new Set<string>();
   for (const notice of noConnections) {
-    const key = `${notice.workspaceId}:${notice.reason}`;
+    const key = `${notice.workspaceId}:${notice.userId}:${notice.reason}`;
     if (told.has(key)) continue;
     told.add(key);
     await notifyNotSentAtScan(notice);

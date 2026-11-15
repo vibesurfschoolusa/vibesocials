@@ -113,16 +113,19 @@ vi.mock("@/lib/db", () => {
       return { count: before - store.events.length };
     },
   };
-  // The retry route's per-post transaction lock (pg_advisory_xact_lock): a
-  // second transaction asking for the same key waits until the first ends.
+  // The transaction locks (pg_advisory_xact_lock): a post's (its id) and the
+  // service-wide one (no argument): a second transaction asking for the same
+  // key waits until the first ends. The transaction reads and writes the same
+  // tables as the client.
   const held = new Map<string, Promise<void>>();
+  let client: Record<string, unknown> = {};
   const $transaction = async <T>(work: (tx: unknown) => Promise<T>): Promise<T> => {
     const releases: Array<() => void> = [];
     const tx = {
-      usageEvent,
+      ...client,
       $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
-        store.locks.push({ sql: strings.join("?"), key: values[0] });
-        const key = String(values[0]);
+        const key = values.length > 0 ? String(values[0]) : "service";
+        store.locks.push({ sql: strings.join("?"), key });
         const before = held.get(key) ?? Promise.resolve();
         let release!: () => void;
         const mine = new Promise<void>((resolve) => (release = resolve));
@@ -138,9 +141,7 @@ vi.mock("@/lib/db", () => {
       for (const release of releases) release();
     }
   };
-  return {
-    prisma: {
-      $transaction,
+  client = {
       usageEvent,
       postJob: {
         findMany: async ({ where }: { where: Row }) => store.posts.filter((post) => matches(post, where)),
@@ -159,7 +160,7 @@ vi.mock("@/lib/db", () => {
           store.limits.set(where.key, count);
           return { key: where.key, count };
         },
-        deleteMany: async () => ({ count: 0 }),
+        deleteMany: async ({ where }: { where: { key: string } }) => ({ count: store.limits.delete(where.key) ? 1 : 0 }),
       },
       user: {
         findUnique: async ({ where }: { where: { id: string } }) => ({ timeZone: store.timeZones[where.id] ?? null }),
@@ -189,8 +190,8 @@ vi.mock("@/lib/db", () => {
             .filter((w) => where.id.in.includes(w.id))
             .map((w) => ({ id: w.id, ...billing(w), members: w.owners.map((owner) => ({ user: owner.user })) })),
       },
-    },
   };
+  return { prisma: { $transaction, ...client } };
 });
 
 
@@ -203,7 +204,7 @@ import {
   reserveRetry,
   retryRefusal,
   sendRecorded,
-  serviceCapRefusalAtSend,
+  reserveFreeRuns,
   withdrawRetry,
   withdrawSend,
 } from "./usageLog";
@@ -240,11 +241,18 @@ async function sentElsewhere(n: number, at: Date) {
   }
 }
 
-/** One post due in `workspaceId` at `at`: checked as the scanner does, and sent when allowed. */
+/** One post due in `workspaceId` at `at`: reserved as the scanner does (written when allowed); the refusal or null. */
 async function due(workspaceId: string, postJobId: string, at: Date = NOW): Promise<string | null> {
-  const refusal = await serviceCapRefusalAtSend({ workspaceId, postJobIds: [postJobId], now: at });
-  if (!refusal) await recordSend({ workspaceId, postJobIds: [postJobId], at });
-  return refusal?.errorMessage ?? null;
+  const reservation = await reserveFreeRuns({ workspaceId, postJobIds: [postJobId], at, check: "atSend" });
+  return reservation.ok ? null : reservation.refusal.error;
+}
+
+/** The scanner's check alone: reserved, then taken back, so nothing stays written. */
+async function atSendCheck(workspaceId: string, postJobIds: string[], at: Date = NOW): Promise<{ errorMessage: string } | null> {
+  const reservation = await reserveFreeRuns({ workspaceId, postJobIds, at, check: "atSend" });
+  if (!reservation.ok) return { errorMessage: reservation.refusal.error };
+  await withdrawSend({ postJobIds: reservation.written, day: at });
+  return null;
 }
 
 const runsIn = (pool: string | null) => store.events.filter((event) => event.kind === "send" && event.pool === pool).length;
@@ -372,11 +380,11 @@ describe("each confirmed person's first 3 runs a day", () => {
     await sentElsewhere(20, NOW);
     await due("ws-customer", "c-1");
     await expect(
-      serviceCapRefusalAtSend({ workspaceId: "ws-customer", postJobIds: ["feed", "story"], now: NOW }),
+      atSendCheck("ws-customer", ["feed", "story"]),
     ).resolves.toBeNull();
     await due("ws-customer", "c-2");
     expect(
-      (await serviceCapRefusalAtSend({ workspaceId: "ws-customer", postJobIds: ["feed", "story"], now: NOW }))?.errorMessage,
+      (await atSendCheck("ws-customer", ["feed", "story"]))?.errorMessage,
     ).toBe(FULL_AT_SEND);
   });
 
@@ -609,9 +617,9 @@ describe("the main pool counts one row per run", () => {
     workspace("ws-1");
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
     await sentElsewhere(15, NOW);
-    await expect(serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], now: NOW })).resolves.toBeNull();
+    await expect(atSendCheck("ws-1", ["feed", "story"])).resolves.toBeNull();
     await sentElsewhere(1, NOW);
-    expect((await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], now: NOW }))?.errorMessage).toBe(
+    expect((await atSendCheck("ws-1", ["feed", "story"]))?.errorMessage).toBe(
       FULL_AT_SEND,
     );
   });
@@ -640,7 +648,7 @@ describe("the main pool counts one row per run", () => {
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
     await sentElsewhere(15, NOW);
     await recordSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], at: NOW });
-    await expect(serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["story"], now: NOW })).resolves.toBeNull();
+    await expect(atSendCheck("ws-1", ["story"])).resolves.toBeNull();
   });
 
   // Rows written before this change carry no pool: they count by the old rule.
@@ -783,19 +791,27 @@ describe("retries", () => {
   });
 });
 
-describe("the checks fail open, and the operator is who the list says once verified", () => {
-  it("a read error logs and allows, at send and for a retry", async () => {
+describe("a read error, and the operator is who the list says once verified", () => {
+  // Review of T1, item 1: the ceiling is hard, so a free run whose limits
+  // cannot be counted is not reserved; the soft pre-check still allows.
+  it("a read error reserves nothing for a free run: the scanner's throws, a retry is told to try again", async () => {
     workspace("ws-1");
     store.down = true;
-    await expect(serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["a"], now: NOW })).resolves.toBeNull();
+    await expect(reserveFreeRuns({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW, check: "atSend" })).rejects.toThrow();
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "a", requestId: "r1", now: NOW })).resolves.toEqual({
+      code: "LIMIT_CHECK_FAILED",
+      error: "Vibe Socials couldn't check today's limits just now, so nothing was sent. Try again in a minute.",
+    });
     await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "a", now: NOW })).resolves.toBeNull();
+    store.down = false;
+    expect(store.events).toHaveLength(0);
   });
 
   it("an unverified address on the operator list is not the operator: it is a new account", async () => {
     workspace("ws-1", {}, [owner("x-1", { email: "ops@example.com", emailVerifiedAt: null, createdAt: LONG_AGO })]);
     workspace("ws-fresh", {}, [fresh("fresh-1")]);
     for (let p = 1; p <= 5; p += 1) await due("ws-fresh", `f-${p}`);
-    expect((await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["a"], now: NOW }))?.errorMessage).toBe(
+    expect((await atSendCheck("ws-1", ["a"]))?.errorMessage).toBe(
       SMALL_POOL_AT_SEND,
     );
   });
@@ -836,18 +852,23 @@ describe("withdrawing a send that was not handed to publishing", () => {
   });
 });
 
-// R7 review, point 7: a retry counts and records under the post's lock; the
-// scanner (no lock) records first, then counts.
+// R7 review, point 7, and review of T1, item 1: a retry counts and records
+// under the post's lock and then the service-wide lock.
+
 describe("two at once", () => {
   const reserve = (requestId: string) => reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW });
   const THREE_TIMES = "This post has been retried 3 times today, the most for one day. Try again tomorrow.";
 
   // Third look: the count and the record for one post run under a per-post
   // transaction lock, so two clicks run one after the other.
-  it("takes the post's transaction lock before counting", async () => {
+  // Review of T1, item 1: the post's lock first, then the service-wide one, always in that order.
+  it("takes the post's transaction lock, then the service-wide lock, before counting", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
     await reserve("r1");
-    expect(store.locks).toEqual([{ sql: "SELECT pg_advisory_xact_lock(hashtext(?))", key: "post-a" }]);
+    expect(store.locks).toEqual([
+      { sql: "SELECT pg_advisory_xact_lock(hashtext(?))", key: "post-a" },
+      { sql: "SELECT pg_advisory_xact_lock(7311, 1)", key: "service" },
+    ]);
   });
 
   it("two clicks at once with 2 used: one runs, the other reads the 3-times sentence", async () => {
@@ -881,10 +902,14 @@ describe("two at once", () => {
     expect(sendsOf("post-a")).toHaveLength(3);
   });
 
-  it("locks only the same post: another post's retry does not wait for it", async () => {
+  it("a post's lock is its own; both retries then take the service-wide lock, and both run", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    await Promise.all([reserve("r1"), reserveRetry({ workspaceId: "ws-1", postJobId: "post-b", requestId: "s1", now: NOW })]);
-    expect(store.locks.map((lock) => lock.key).sort()).toEqual(["post-a", "post-b"]);
+    const outcomes = await Promise.all([
+      reserve("r1"),
+      reserveRetry({ workspaceId: "ws-1", postJobId: "post-b", requestId: "s1", now: NOW }),
+    ]);
+    expect(outcomes).toEqual([null, null]);
+    expect(store.locks.map((lock) => lock.key).sort()).toEqual(["post-a", "post-b", "service", "service"]);
   });
 
   it("a reserved retry past the pool is refused and removed; within it, it stays", async () => {
@@ -898,18 +923,14 @@ describe("two at once", () => {
     expect(runsIn("main")).toBe(20);
   });
 
-  it("a run recorded before the check at send is counted once: the 20th goes, the 21st does not", async () => {
+  it("the scanner's reservation counts and writes at once: the 20th goes, the 21st does not and writes nothing", async () => {
     workspace("ws-1");
     for (let p = 1; p <= 3; p += 1) await due("ws-1", `one-${p}`);
     await sentElsewhere(16, NOW);
-    await recordSend({ workspaceId: "ws-1", postJobIds: ["p-20"], at: NOW });
-    await expect(
-      serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["p-20"], now: NOW, recorded: true }),
-    ).resolves.toBeNull();
-    await recordSend({ workspaceId: "ws-1", postJobIds: ["p-21"], at: NOW });
-    expect(
-      (await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["p-21"], now: NOW, recorded: true }))?.errorMessage,
-    ).toBe(FULL_AT_SEND);
+    await expect(due("ws-1", "p-20")).resolves.toBeNull();
+    await expect(due("ws-1", "p-21")).resolves.toBe(FULL_AT_SEND);
+    expect(sendsOf("p-20")).toHaveLength(1);
+    expect(sendsOf("p-21")).toHaveLength(0);
   });
 });
 
@@ -961,10 +982,10 @@ describe("one ceiling over every free run of the day", () => {
       for (let p = 1; p <= 3; p += 1) await due(`ws-${name}`, `${name}-${p}`);
     }
     expect(freeRuns()).toBe(29);
-    expect((await serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["feed", "story"], now: NOW }))?.errorMessage).toBe(
+    expect((await atSendCheck("ws-1", ["feed", "story"]))?.errorMessage).toBe(
       FULL_AT_SEND,
     );
-    await expect(serviceCapRefusalAtSend({ workspaceId: "ws-1", postJobIds: ["feed"], now: NOW })).resolves.toBeNull();
+    await expect(atSendCheck("ws-1", ["feed"])).resolves.toBeNull();
   });
 
   it("paying and operator workspaces are never refused or counted at it", async () => {
@@ -1022,7 +1043,7 @@ describe("one ceiling over every free run of the day", () => {
       const [message] = sendEmailMock.mock.calls[0];
       expect(message.to).toBe("ops@example.com");
       expect(message.subject).toBe("Vibe Socials reached its daily ceiling of 30 free posts (2026-11-14, UTC)");
-      expect(message.html).toContain("30 free posts went out today (UTC)");
+      expect(message.html).toContain("Free workspaces reached today's ceiling of 30 posts (UTC).");
       const top = ["owner-of-ws-others-1@example.com", "owner-of-ws-others-2@example.com", "a@example.com", "b@example.com", "c@example.com"];
       for (const email of top) expect(message.html).toContain(email);
       expect(message.html.indexOf(top[0])).toBeLessThan(message.html.indexOf(top[1]));
@@ -1045,10 +1066,15 @@ describe("one ceiling over every free run of the day", () => {
       expect(sendEmailMock.mock.calls[1][0].subject).toContain("2026-11-14");
     });
 
-    it("a failing email never changes the refusal", async () => {
+    // Review of T1, item 2: a failed email lets the day's key go, so a later refusal tries again.
+    it("a failing email never changes the refusal, and the next refusal tries again", async () => {
       await fillToCeiling();
-      sendEmailMock.mockRejectedValue(new Error("mail down"));
+      sendEmailMock.mockRejectedValueOnce(new Error("mail down"));
       await expect(due("ws-d", "d-2")).resolves.toBe(FULL_AT_SEND);
+      await expect(due("ws-d", "d-3")).resolves.toBe(FULL_AT_SEND);
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
+      await expect(due("ws-d", "d-4")).resolves.toBe(FULL_AT_SEND);
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
     });
   });
 });
@@ -1179,5 +1205,91 @@ describe("the per-person usage for Settings", () => {
     workspace("ws-ops", {}, [OPS]);
     await expect(ownersPersonalUsage("ws-paid", NOW)).resolves.toEqual([]);
     await expect(ownersPersonalUsage("ws-ops", NOW)).resolves.toEqual([]);
+  });
+});
+
+// Review of T1, item 1: every free run is counted, checked and written under one service-wide lock.
+describe("one reservation under one lock", () => {
+  const reserveNow = (workspaceId: string, postJobIds: string[], at: Date = NOW) =>
+    reserveFreeRuns({ workspaceId, postJobIds, at, check: "now" });
+  const freeRuns = () => store.events.filter((event) => event.kind === "send" && (event.pool === "main" || event.pool === "new")).length;
+
+  /** 29 free runs today: the 20 others, then 9 guaranteed runs past the full main pool. */
+  async function fillTo29() {
+    await sentElsewhere(20, NOW);
+    for (const name of ["a", "b", "c"]) {
+      workspace(`ws-${name}`, {}, [owner(name)]);
+      for (let p = 1; p <= 3; p += 1) await due(`ws-${name}`, `${name}-${p}`);
+    }
+    expect(freeRuns()).toBe(29);
+  }
+
+  it("50 Post now presses at once at 29 used: exactly 1 goes, and the ceiling is never passed", async () => {
+    await fillTo29();
+    for (let i = 0; i < 50; i += 1) workspace(`ws-p-${i}`, {}, [owner(`p-${i}`)]);
+    store.locks = [];
+    const outcomes = await Promise.all(Array.from({ length: 50 }, (_, i) => reserveNow(`ws-p-${i}`, [`now-${i}`])));
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+    expect(outcomes.filter((outcome) => !outcome.ok && outcome.refusal.code === "SERVICE_DAILY_POST_LIMIT")).toHaveLength(49);
+    expect(freeRuns()).toBe(30);
+    expect(store.locks.every((lock) => lock.key === "service")).toBe(true);
+    expect(store.locks).toHaveLength(50);
+  });
+
+  it("a pair at 29: refused whole, with the service sentence, and nothing written", async () => {
+    await fillTo29();
+    workspace("ws-pair", {}, [owner("pair-owner")]);
+    const outcome = await reserveNow("ws-pair", ["feed", "story"]);
+    expect(outcome).toEqual({
+      ok: false,
+      ceiling: true,
+      refusal: {
+        code: "SERVICE_DAILY_POST_LIMIT",
+        error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+      },
+    });
+    expect(sendsOf("feed")).toHaveLength(0);
+    expect(sendsOf("story")).toHaveLength(0);
+    expect(freeRuns()).toBe(29);
+  });
+
+  it("the hand-over fails: the caller takes back the rows it wrote, and the count is back where it was", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    await sentElsewhere(5, NOW);
+    const outcome = await reserveNow("ws-1", ["feed", "story"]);
+    expect(outcome).toEqual({ ok: true, written: ["feed", "story"] });
+    expect(freeRuns()).toBe(7);
+    if (outcome.ok) await withdrawSend({ postJobIds: outcome.written, day: NOW });
+    expect(freeRuns()).toBe(5);
+  });
+
+  it("a paying workspace at the ceiling goes, takes no lock and is in no pool", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    await fillTo29();
+    await due("ws-a", "a-extra-for-30");
+    workspace("ws-paid", PAID, [owner("payer")]);
+    store.locks = [];
+    await expect(reserveNow("ws-paid", ["paid-1"])).resolves.toEqual({ ok: true, written: ["paid-1"] });
+    expect(store.locks).toEqual([]);
+    expect(sendsOf("paid-1")[0]).toMatchObject({ pool: "none" });
+  });
+
+  it("Post now checks the per-person number in the same reservation, with its sentence", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (let p = 1; p <= 15; p += 1) await expect(reserveNow("ws-1", [`p-${p}`])).resolves.toMatchObject({ ok: true });
+    await expect(reserveNow("ws-1", ["p-16"])).resolves.toMatchObject({
+      ok: false,
+      ceiling: false,
+      refusal: { code: "OWNER_DAILY_POST_LIMIT" },
+    });
+    // The scanner's post was counted when it was given its day: no per-person check at send.
+    await expect(due("ws-1", "scheduled-16")).resolves.toBeNull();
+  });
+
+  it("a half its other half reserved is not written or counted twice", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    await reserveNow("ws-1", ["feed", "story"]);
+    await expect(reserveNow("ws-1", ["story"])).resolves.toEqual({ ok: true, written: [] });
+    expect(sendsOf("story")).toHaveLength(1);
   });
 });

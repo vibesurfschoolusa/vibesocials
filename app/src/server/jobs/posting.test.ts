@@ -17,7 +17,10 @@ const {
   executeRawMock,
   postJobMediaCreateManyMock,
   recordSendMock,
+  reserveInMock,
 } = vi.hoisted(() => ({
+  // Like the old recordSend mock: writes nothing unless a test says so.
+  reserveInMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: true, written: [] as string[] })),
   findUniqueMock: vi.fn(),
   mediaItemCreateMock: vi.fn(),
   mediaItemUpdateMock: vi.fn(),
@@ -29,8 +32,16 @@ const {
   recordSendMock: vi.fn(),
 }));
 
-// R6 review of K2: a post going out now records its send; usageLog.caps.test.ts covers the counting.
-vi.mock("@/server/usage/usageLog", () => ({ recordSend: recordSendMock, serviceCapRefusalAtSend: vi.fn(), withdrawSend: vi.fn() }));
+// Review of T1, item 1: a post going out now reserves its runs in the create
+// transaction; usageLog.caps.test.ts covers the counting and the lock.
+vi.mock("@/server/usage/usageLog", async (importOriginal) => ({
+  FreeRunRefusedError: (await importOriginal<typeof import("@/server/usage/usageLog")>()).FreeRunRefusedError,
+  recordSend: recordSendMock,
+  reserveFreeRunsIn: reserveInMock,
+  reserveFreeRuns: vi.fn(),
+  sendRecorded: vi.fn(),
+  withdrawSend: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => {
   // The reuse helper runs its writes inside `prisma.$transaction(cb)` after a
@@ -74,6 +85,8 @@ import {
   resolvePostCaptionSource,
 } from "./posting";
 import { PostTargetingError } from "@/lib/postTargets";
+import { FreeRunRefusedError } from "@/server/usage/usageLog";
+
 
 function makeMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
@@ -224,19 +237,24 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     );
   });
 
-  // R6 review of K2: the caps count the send written as a post goes out.
-  it("records the send of a post going out now, and none for a scheduled one or one with nothing to send", async () => {
-    recordSendMock.mockReset();
+  // Review of T1, item 1: the runs are reserved inside the create transaction, under the lock.
+  it("reserves the run of a post going out now in its create transaction; none for a scheduled one or one with nothing to send", async () => {
+    reserveInMock.mockClear();
+    reserveInMock.mockResolvedValueOnce({ ok: true, written: ["job-1"] });
     findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube" })]);
 
-    await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
-    expect(recordSendMock).toHaveBeenCalledWith({
+    const created = await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
+    expect(reserveInMock).toHaveBeenCalledWith(expect.anything(), {
       workspaceId: "workspace-1",
       postJobIds: ["job-1"],
       at: expect.any(Date),
+      check: "now",
+      viewerUserId: "user-1",
     });
+    expect(created.sendsWritten).toEqual({ postJobIds: ["job-1"], day: expect.any(Date) });
+    expect(recordSendMock).not.toHaveBeenCalled();
 
-    recordSendMock.mockReset();
+    reserveInMock.mockClear();
     await createPostJobOnly({
       userId: "user-1",
       workspaceId: "workspace-1",
@@ -245,11 +263,20 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
       intent: "scheduled",
       scheduledFor: new Date("2030-01-01T10:00:00Z"),
     });
-    expect(recordSendMock).not.toHaveBeenCalled();
+    expect(reserveInMock).not.toHaveBeenCalled();
 
     findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube", needsReconnect: true })]);
     await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
-    expect(recordSendMock).not.toHaveBeenCalled();
+    expect(reserveInMock).not.toHaveBeenCalled();
+  });
+
+  it("a refused reservation throws FreeRunRefusedError, so the create transaction rolls back", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube" })]);
+    const refusal = { error: "Vibe Socials has reached its daily limit of posts for the whole service.", code: "SERVICE_DAILY_POST_LIMIT" };
+    reserveInMock.mockResolvedValueOnce({ ok: false, refusal, ceiling: true } as never);
+    const attempt = createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
+    await expect(attempt).rejects.toBeInstanceOf(FreeRunRefusedError);
+    await expect(attempt).rejects.toMatchObject({ refusal });
   });
 
   // R8-publishing M1: a Post now with nothing it can send needs no publish run.

@@ -11,7 +11,7 @@ const {
   resultCreateManyMock,
   recomputeMock,
   finishMock,
-  serviceCapMock,
+  reserveMock,
   recordSendMock,
   postJobFindFirstMock,
   resultFindManyMock,
@@ -25,7 +25,7 @@ const {
   resultCreateManyMock: vi.fn(),
   recomputeMock: vi.fn(),
   finishMock: vi.fn(),
-  serviceCapMock: vi.fn(),
+  reserveMock: vi.fn(),
   recordSendMock: vi.fn(),
   postJobFindFirstMock: vi.fn(),
   resultFindManyMock: vi.fn(),
@@ -54,13 +54,20 @@ vi.mock("./failPendingResults", async (importOriginal) => ({
 
 // R6-security M2: the service's cap at send has its own suite (usageLog.test.ts).
 vi.mock("@/server/usage/usageLog", () => ({
-  serviceCapRefusalAtSend: serviceCapMock,
+  reserveFreeRuns: reserveMock,
   recordSend: recordSendMock,
   withdrawSend: withdrawSendMock,
   sendRecorded: sendRecordedMock,
 }));
 
 import { deferredPostCanSend, prepareDeferredPostJobDispatch } from "./posting";
+
+/** What reserveFreeRuns answers when a limit refuses, from the result fields it then writes. */
+const refusedBy = (full: { errorCode: string; errorMessage: string }) => ({
+  ok: false as const,
+  refusal: { error: full.errorMessage, code: full.errorCode },
+  ceiling: false,
+});
 
 function makeJob(overrides: Record<string, unknown> = {}) {
   return {
@@ -89,8 +96,8 @@ beforeEach(() => {
   recomputeMock.mockResolvedValue({ status: "failed", successCount: 0 });
   resultCountMock.mockResolvedValue(0);
   resultCreateManyMock.mockResolvedValue({ count: 0 });
-  serviceCapMock.mockReset();
-  serviceCapMock.mockResolvedValue(null);
+  reserveMock.mockReset();
+  reserveMock.mockResolvedValue({ ok: true, written: [] });
   recordSendMock.mockReset();
   recordSendMock.mockResolvedValue(undefined);
   postJobFindFirstMock.mockReset();
@@ -635,29 +642,36 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
     );
   }
 
-  it("sends below the cap, alone, and records the send before the next post is checked", async () => {
+  // Review of T1, item 1: one reservation counts, checks and writes, before the results are made.
+  it("sends below the cap, alone, its run reserved before the results are made", async () => {
     jobs({ "job-1": {} });
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+    reserveMock.mockResolvedValue({ ok: true, written: ["job-1"] });
 
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
-    // R7 review, point 7: the run is recorded first, then counted with it.
-    expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: NOW });
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW, recorded: true });
-    expect(recordSendMock.mock.invocationCallOrder[0]).toBeLessThan(serviceCapMock.mock.invocationCallOrder[0]);
-    expect(result.ok).toBe(true);
+    expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: NOW, check: "atSend" });
+    expect(reserveMock.mock.invocationCallOrder[0]).toBeLessThan(resultCreateManyMock.mock.invocationCallOrder[0]);
+    expect(recordSendMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, sendsWritten: { postJobIds: ["job-1"], day: NOW } });
   });
 
-  it("past the cap, the run it recorded is taken back, and only that one", async () => {
+  it("past the cap, the reservation wrote nothing, so nothing is taken back", async () => {
     jobs({ "job-1": {} });
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
-    recordSendMock.mockResolvedValue(["job-1"]);
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
 
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
-    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-1"], day: NOW });
-    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1", refusal: FULL });
+  });
+
+  it("publish or approve now (sendNow) reserves with every check, the per-person number too", async () => {
+    jobs({ "job-1": {} });
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+    await prepareDeferredPostJobDispatch("job-1", { sendNow: true });
+    expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: expect.any(Date), check: "now" });
   });
 
   it("at the cap, every platform gets a failed result that says why, nothing is sent or recorded", async () => {
@@ -666,7 +680,7 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       { id: "c-x", platform: "x", needsReconnect: false },
       { id: "c-ig", platform: "instagram", needsReconnect: true },
     ]);
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
 
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
@@ -677,8 +691,8 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       ],
     });
     expect(recomputeMock).toHaveBeenCalledWith("job-1");
-    expect(recordSendMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+    expect(recordSendMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1", refusal: FULL });
   });
 
   // Point 3: a Feed and Story pair passes or fails the cap together.
@@ -697,20 +711,19 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
         where: { storyOfPostJobId: "job-1" },
         select: PAIR_HALF_SELECT,
       });
-      expect(serviceCapMock).toHaveBeenCalledWith({
+      expect(reserveMock).toHaveBeenCalledWith({
         workspaceId: "workspace-1",
         postJobIds: ["job-1", "story-1"],
-        now: NOW,
-        recorded: true,
+        at: NOW,
+        check: "atSend",
       });
-      expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1", "story-1"], at: NOW });
       expect(result.ok).toBe(true);
     });
 
     it("when they do not fit, fails both halves with the at-send sentence and asks for one notice, the feed's", async () => {
       jobs({ "job-1": {}, "story-1": { storyOfPostJobId: "job-1" } });
       postJobFindFirstMock.mockResolvedValue(half("story-1"));
-      serviceCapMock.mockResolvedValue(FULL);
+      reserveMock.mockResolvedValue(refusedBy(FULL));
 
       const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
@@ -720,10 +733,10 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
         expect(args.data.every((row: { status: string; errorCode: string }) => row.status === "failed" && row.errorCode === FULL.errorCode)).toBe(true);
       }
       expect(recomputeMock.mock.calls.map(([id]) => id)).toEqual(["job-1", "story-1"]);
-      // Checked once, for the pair; its runs were recorded for the check and taken back.
-      expect(serviceCapMock).toHaveBeenCalledTimes(1);
-      expect(recordSendMock).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+      // Reserved once, for the pair, and refused whole.
+      expect(reserveMock).toHaveBeenCalledTimes(1);
+      expect(recordSendMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1", refusal: FULL });
     });
 
     it("from the story half, the unit is the same and the notice is the feed's", async () => {
@@ -733,23 +746,23 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
           ? half("job-1")
           : makeJob({ id: where.id, ...(where.id === "story-1" ? { storyOfPostJobId: "job-1" } : {}) }),
       );
-      serviceCapMock.mockResolvedValue(FULL);
+      reserveMock.mockResolvedValue(refusedBy(FULL));
 
       const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-      expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW, recorded: true });
-      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
+      expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], at: NOW, check: "atSend" });
+      expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1", refusal: FULL });
     });
 
     it("the partner already sent or cancelled: the remaining half is checked alone", async () => {
       jobs({ "job-1": {} });
       postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "completed", _count: { results: 1 } });
       await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
-      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW, recorded: true });
+      expect(reserveMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: NOW, check: "atSend" });
 
       postJobFindFirstMock.mockResolvedValue({ id: "story-1", status: "cancelled", _count: { results: 0 } });
       await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
-      expect(serviceCapMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], now: NOW, recorded: true });
+      expect(reserveMock).toHaveBeenLastCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: NOW, check: "atSend" });
     });
   });
 
@@ -765,14 +778,14 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
 
       expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "job-1" });
       expect(resultCreateManyMock).not.toHaveBeenCalled();
-      expect(serviceCapMock).not.toHaveBeenCalled();
+      expect(reserveMock).not.toHaveBeenCalled();
       expect(recomputeMock).toHaveBeenCalledWith("job-1");
     });
 
     it("results written, the recompute threw, the re-run: refused, failed, no publish event", async () => {
       jobs({ "job-1": {} });
       connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
-      serviceCapMock.mockResolvedValue(FULL);
+      reserveMock.mockResolvedValue(refusedBy(FULL));
       recomputeMock.mockRejectedValueOnce(new Error("lock timeout"));
 
       await expect(prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW })).rejects.toThrow("lock timeout");
@@ -791,11 +804,11 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
       connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
       resultCountMock.mockResolvedValue(1);
       resultFindManyMock.mockResolvedValue([{ status: "pending", errorCode: null }]);
-      serviceCapMock.mockResolvedValue(FULL);
+      reserveMock.mockResolvedValue(refusedBy(FULL));
 
       const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
-      expect(serviceCapMock).not.toHaveBeenCalled();
+      expect(reserveMock).not.toHaveBeenCalled();
       expect(result.ok).toBe(true);
     });
   });
@@ -803,10 +816,10 @@ describe("prepareDeferredPostJobDispatch with the service's cap at send (the sca
   it("Post now and approvals (no option) are not checked here, but their send is recorded", async () => {
     jobs({ "job-1": {} });
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
 
     expect((await prepareDeferredPostJobDispatch("job-1")).ok).toBe(true);
-    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(reserveMock).not.toHaveBeenCalled();
     expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["job-1"], at: expect.any(Date) });
   });
 });
@@ -853,22 +866,23 @@ describe("prepareDeferredPostJobDispatch - who is told, and the sends it wrote",
   // Point 1: the feed's notice only when both halves were refused together.
   it("a Story refused alone (its feed cancelled) gets its own notice", async () => {
     pair({ status: "cancelled", _count: { results: 0 } });
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
 
     const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
     expect(postJobFindUniqueMock).toHaveBeenCalledWith({ where: { id: "job-1" }, select: PARTNER_SELECT });
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
-    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1" });
+    expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], at: NOW, check: "atSend" });
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1", refusal: FULL });
   });
 
   it("a Story refused alone (its feed already sent) gets its own notice too", async () => {
     pair({ status: "completed", _count: { results: 2 } });
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
     expect(await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW })).toEqual({
       ok: false,
       reason: "LIMIT_REACHED",
       noticeFor: "story-1",
+      refusal: FULL,
     });
   });
 
@@ -904,19 +918,19 @@ describe("prepareDeferredPostJobDispatch - who is told, and the sends it wrote",
     });
   });
 
-  // Point 2: what this call's recordSend wrote travels with the answer.
-  it("answers the sends its recordSend wrote, with their day, for the caller to take back", async () => {
+  // Point 2: what this call's reservation wrote travels with the answer.
+  it("answers the sends its reservation wrote, with their day, for the caller to take back", async () => {
     pair(null);
-    recordSendMock.mockResolvedValue(["job-1"]);
+    reserveMock.mockResolvedValue({ ok: true, written: ["job-1"] });
 
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
 
     expect(result).toMatchObject({ ok: true, sendsWritten: { postJobIds: ["job-1"], day: NOW } });
   });
 
-  it("answers no sends when recordSend wrote none (a send already there for the day)", async () => {
+  it("answers no sends when the reservation wrote none (a send already there for the day)", async () => {
     pair(null);
-    recordSendMock.mockResolvedValue([]);
+    reserveMock.mockResolvedValue({ ok: true, written: [] });
     const result = await prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW });
     expect(result.ok && result.sendsWritten).toBeFalsy();
   });
@@ -959,7 +973,7 @@ describe("prepareDeferredPostJobDispatch for a blocked workspace", () => {
     // A platform already failed for its own reason keeps it.
     expect(rows[1]).toMatchObject({ platform: "instagram", errorCode: "RECONNECT_REQUIRED" });
     expect(recomputeMock).toHaveBeenCalledWith("job-1");
-    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(reserveMock).not.toHaveBeenCalled();
     expect(recordSendMock).not.toHaveBeenCalled();
   });
 
@@ -977,7 +991,7 @@ describe("prepareDeferredPostJobDispatch for a blocked workspace", () => {
       errorCode: "PLAN_ENDED",
       errorMessage: "Not published: this workspace has no active plan.",
     });
-    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(reserveMock).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
   });
 
@@ -1002,7 +1016,7 @@ describe("prepareDeferredPostJobDispatch for a blocked workspace", () => {
     connectionFindManyMock.mockResolvedValue(connections);
 
     await expect(prepareDeferredPostJobDispatch("job-1", { serviceCapAt: NOW })).resolves.toMatchObject({ ok: true });
-    expect(serviceCapMock).toHaveBeenCalledTimes(1);
+    expect(reserveMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1026,8 +1040,7 @@ describe("a pair whose other half has nothing to send", () => {
 
     const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
-    expect(recordSendMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], at: NOW });
+    expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], at: NOW, check: "atSend" });
     expect(result.ok).toBe(true);
   });
 
@@ -1041,7 +1054,7 @@ describe("a pair whose other half has nothing to send", () => {
 
     await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW, recorded: true });
+    expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], at: NOW, check: "atSend" });
   });
 });
 
@@ -1067,12 +1080,12 @@ describe("a pair half whose run its partner recorded", () => {
   it("is not checked again, even when the pool filled up between the halves", async () => {
     storyAfterFeedPassed();
     sendRecordedMock.mockResolvedValue(true);
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
 
     const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
     expect(sendRecordedMock).toHaveBeenCalledWith("story-1", NOW);
-    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(reserveMock).not.toHaveBeenCalled();
     expect(withdrawSendMock).not.toHaveBeenCalled();
     expect(resultCreateManyMock).toHaveBeenCalledWith({
       data: [{ postJobId: "story-1", workspaceId: "workspace-1", platform: "instagram", socialConnectionId: "c-ig", status: "pending" }],
@@ -1082,14 +1095,15 @@ describe("a pair half whose run its partner recorded", () => {
 
   it("a half with no run recorded yet is checked alone, as before", async () => {
     storyAfterFeedPassed();
-    serviceCapMock.mockResolvedValue(FULL);
+    reserveMock.mockResolvedValue(refusedBy(FULL));
 
     const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
-    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
-    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1" });
+    expect(reserveMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], at: NOW, check: "atSend" });
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1", refusal: FULL });
   });
 });
+
 
 // R8-publishing L2: the rule unsentPairHalf uses, for the limit check of a pair going out now.
 describe("deferredPostCanSend", () => {
