@@ -9,6 +9,7 @@ const {
   handshakeFindUniqueMock,
   handshakeDeleteMock,
   upsertMock,
+  connectionFindUniqueMock,
   fetchMock,
 } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
@@ -16,6 +17,7 @@ const {
   handshakeFindUniqueMock: vi.fn(),
   handshakeDeleteMock: vi.fn(),
   upsertMock: vi.fn(),
+  connectionFindUniqueMock: vi.fn(),
   fetchMock: vi.fn(),
 }));
 
@@ -33,7 +35,7 @@ vi.mock("@/lib/db", () => ({
       findUnique: handshakeFindUniqueMock,
       delete: handshakeDeleteMock,
     },
-    socialConnection: { upsert: upsertMock },
+    socialConnection: { upsert: upsertMock, findUnique: connectionFindUniqueMock },
   },
 }));
 
@@ -85,10 +87,12 @@ beforeEach(() => {
     handshakeFindUniqueMock,
     handshakeDeleteMock,
     upsertMock,
+    connectionFindUniqueMock,
     fetchMock,
   ]) {
     m.mockReset();
   }
+  connectionFindUniqueMock.mockResolvedValue(null);
   vi.stubEnv("NEXTAUTH_URL", ORIGIN);
   vi.stubEnv("X_CONSUMER_KEY", "ck");
   vi.stubEnv("X_CONSUMER_SECRET", "cs");
@@ -228,5 +232,35 @@ describe("X OAuth callback: unexpected errors redirect to x_connect_failed inste
     const res = await GET(callbackRequest());
 
     expect(location(res).searchParams.get("error")).toBe("x_connect_failed");
+  });
+});
+
+// R6 review low 1: a reconnect only ever replaces the same X account.
+describe("X OAuth callback: a reconnect keeps the same account", () => {
+  it("the same account (user id 42) is replaced in place", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STARTER });
+    fetchMock.mockResolvedValue(accessTokenResponse());
+    connectionFindUniqueMock.mockResolvedValue({ platform: "x", needsReconnect: true, accountIdentifier: "42", metadata: { username: "brand" } });
+
+    const res = await GET(callbackRequest());
+
+    expect(location(res).searchParams.get("success")).toBe("x_connected");
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a different account leaves the connection unchanged and names the one signed in to", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STARTER });
+    fetchMock.mockResolvedValue(accessTokenResponse());
+    connectionFindUniqueMock.mockResolvedValue({ platform: "x", needsReconnect: true, accountIdentifier: "77", metadata: { username: "surfco" } });
+
+    const res = await GET(callbackRequest());
+
+    const loc = location(res);
+    expect(loc.pathname).toBe("/settings");
+    expect(loc.searchParams.get("error")).toBe("x_different_account");
+    expect(loc.searchParams.get("signed_in_as")).toBe("@brand");
+    expect(upsertMock).not.toHaveBeenCalled();
+    // The one-time handshake is used up either way.
+    expect(handshakeDeleteMock).toHaveBeenCalledWith({ where: { token: "req-token" } });
   });
 });

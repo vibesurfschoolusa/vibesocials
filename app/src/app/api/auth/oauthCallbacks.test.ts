@@ -1081,3 +1081,103 @@ describe("choosing which account to connect", () => {
     });
   });
 });
+
+// R6 review low 1: a reconnect only ever replaces the connection with the same
+// platform account (server/connections/saveConnection.ts saveSocialConnection).
+describe("a reconnect keeps the same account", () => {
+  /** The stored connection for the account each fake provider signs in to, and one for another. */
+  const STORED: Record<string, { same: Record<string, unknown>; other: Record<string, unknown>; signedInAs: string }> = {
+    tiktok: {
+      same: { accountIdentifier: "open-1", metadata: { username: "Surf TT" } },
+      other: { accountIdentifier: "open-9", metadata: { username: "Surf TT" } },
+      signedInAs: "a different TikTok account",
+    },
+    youtube: {
+      same: { accountIdentifier: "My Channel", metadata: { channelId: "chan-1" } },
+      other: { accountIdentifier: "Surf Channel", metadata: { channelId: "chan-9" } },
+      signedInAs: "My Channel",
+    },
+    instagram: {
+      same: { accountIdentifier: "ig-1", metadata: { username: "brand" } },
+      other: { accountIdentifier: "ig-9", metadata: { username: "surfco" } },
+      signedInAs: "@brand",
+    },
+    facebook_page: {
+      same: { accountIdentifier: "page-1", metadata: { pageName: "Page" } },
+      other: { accountIdentifier: "page-9", metadata: { pageName: "Surf Co" } },
+      signedInAs: "Page",
+    },
+    linkedin: {
+      same: { accountIdentifier: "member-1", metadata: { username: "Org", organizations: [{ id: "101" }] } },
+      other: { accountIdentifier: "member-1", metadata: { username: "Surf Co page", organizations: [{ id: "999" }] } },
+      signedInAs: "Org",
+    },
+    pinterest: {
+      same: { accountIdentifier: "brand", metadata: { username: "brand" } },
+      other: { accountIdentifier: "surfco", metadata: { username: "surfco" } },
+      signedInAs: "brand",
+    },
+  };
+
+  const accountCases = CASES.filter((c) => c.platform in STORED);
+
+  it.each(accountCases)("$platform: the same account is replaced in place", async ({ platform, GET, provider }) => {
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+    fetchMock.mockImplementation(async (input: string | URL) => provider(String(input)));
+    findUniqueMock.mockResolvedValue({ platform, needsReconnect: true, ...STORED[platform].same });
+
+    const res = await GET(callbackRequest(platform, signedState()));
+
+    expect(location(res).searchParams.get("success")).toBe(`${platform}_connected`);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(accountCases)(
+    "$platform: a different account leaves the connection unchanged and says which was signed in to",
+    async ({ platform, GET, provider }) => {
+      getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+      fetchMock.mockImplementation(async (input: string | URL) => provider(String(input)));
+      findUniqueMock.mockResolvedValue({ platform, needsReconnect: true, ...STORED[platform].other });
+
+      const res = await GET(callbackRequest(platform, signedState()));
+
+      const loc = location(res);
+      expect(loc.pathname).toBe("/settings");
+      expect(loc.searchParams.get("error")).toBe(`${platform}_different_account`);
+      expect(loc.searchParams.get("signed_in_as")).toBe(STORED[platform].signedInAs);
+      expect(loc.searchParams.get("success")).toBeNull();
+      expectNoConnectionWrites();
+    },
+  );
+
+  it("google_business_profile: a different Google account leaves the connection unchanged", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+    const idToken = `x.${Buffer.from(JSON.stringify({ sub: "g-sub-2", email: "other@example.com" })).toString("base64url")}.y`;
+    fetchMock.mockImplementation(async () => json({ access_token: "gbp-access", token_type: "Bearer", id_token: idToken }));
+    findUniqueMock.mockResolvedValue({
+      platform: "google_business_profile",
+      needsReconnect: true,
+      accountIdentifier: "g-sub-1",
+      metadata: { locationTitle: "Surf Co Dania" },
+    });
+
+    const res = await gbpGET(callbackRequest("google_business_profile", signedState()));
+
+    const loc = location(res);
+    expect(loc.searchParams.get("error")).toBe("google_business_profile_different_account");
+    expect(loc.searchParams.get("signed_in_as")).toBe("other@example.com");
+    expectNoConnectionWrites();
+  });
+
+  it("google_business_profile: the same Google account is replaced in place", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+    const idToken = `x.${Buffer.from(JSON.stringify({ sub: "g-sub-1", email: "owner@example.com" })).toString("base64url")}.y`;
+    fetchMock.mockImplementation(async () => json({ access_token: "gbp-access", token_type: "Bearer", id_token: idToken }));
+    findUniqueMock.mockResolvedValue({ platform: "google_business_profile", needsReconnect: true, accountIdentifier: "g-sub-1", metadata: {} });
+
+    const res = await gbpGET(callbackRequest("google_business_profile", signedState()));
+
+    expect(location(res).searchParams.get("success")).toBe("google_business_profile_connected");
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+});

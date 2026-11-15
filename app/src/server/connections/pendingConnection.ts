@@ -224,7 +224,9 @@ export type ConnectPendingResult =
   /** `candidateId` is not one of this pending connect's accounts. */
   | { ok: false; reason: "unknown_candidate" }
   /** The platform wouldn't describe the chosen account (Instagram only). */
-  | { ok: false; reason: "provider_failed" };
+  | { ok: false; reason: "provider_failed" }
+  /** R6 review low 1: not the account already connected; nothing was saved. */
+  | { ok: false; reason: "different_account"; connectedName: string; signedInName: string };
 
 /**
  * Connects the chosen account exactly as the OAuth callback connects a lone
@@ -242,12 +244,11 @@ export async function connectPendingCandidate(
       const page = payload.pages.find((p) => p.id === candidateId);
       if (!page) return { ok: false, reason: "unknown_candidate" };
 
-      await saveFacebookPageConnection({
+      return saveFacebookPageConnection({
         ...owner,
         page,
         expiresAt: new Date(payload.expiresAt),
       });
-      return { ok: true };
     }
 
     case "instagram": {
@@ -260,7 +261,7 @@ export async function connectPendingCandidate(
       );
       if (!details) return { ok: false, reason: "provider_failed" };
 
-      await saveInstagramConnection({
+      return saveInstagramConnection({
         ...owner,
         igAccountId: account.igAccountId,
         pageId: account.pageId,
@@ -268,14 +269,13 @@ export async function connectPendingCandidate(
         details,
         expiresAt: new Date(payload.expiresAt),
       });
-      return { ok: true };
     }
 
     case "linkedin": {
       const organization = payload.organizations.find((org) => String(org.id) === candidateId);
       if (!organization) return { ok: false, reason: "unknown_candidate" };
 
-      await saveLinkedInConnection({
+      return saveLinkedInConnection({
         ...owner,
         token: {
           accessToken: payload.token.accessToken,
@@ -286,14 +286,13 @@ export async function connectPendingCandidate(
         profile: payload.profile,
         organization,
       });
-      return { ok: true };
     }
 
     case "pinterest": {
       const board = payload.boards.find((b) => b.id === candidateId);
       if (!board) return { ok: false, reason: "unknown_candidate" };
 
-      await savePinterestConnection({
+      return savePinterestConnection({
         ...owner,
         token: {
           accessToken: payload.token.accessToken,
@@ -304,7 +303,6 @@ export async function connectPendingCandidate(
         account: payload.account,
         board,
       });
-      return { ok: true };
     }
   }
 }

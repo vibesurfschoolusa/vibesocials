@@ -411,3 +411,28 @@ describe("SettingsPage — connections about to end", () => {
     expect(sectionProps.ConnectionsSection.reconnectSoon).toEqual([]);
   });
 });
+
+// R6 review low 1: a reconnect that came back with a different account changed nothing.
+describe("SettingsPage — a reconnect with a different account", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  it("names the account signed in to and the one connected, and both ways forward", async () => {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "linkedin", accountIdentifier: "member-1", metadata: { username: "Surf Co page" }, needsReconnect: true, expiresAt: null, refreshToken: null },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = renderToStaticMarkup(
+      (await SettingsPage({
+        searchParams: Promise.resolve({ error: "linkedin_different_account", signed_in_as: "Other Co" }),
+      })) as ReactElement,
+    );
+
+    expect(html).toContain(
+      "You signed in to Other Co, not Surf Co page. Sign in to Surf Co page to reconnect it, or use Switch account to change to Other Co.",
+    );
+  });
+});

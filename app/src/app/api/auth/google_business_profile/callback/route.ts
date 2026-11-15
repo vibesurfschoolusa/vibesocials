@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db";
+import { saveSocialConnection } from "@/server/connections/saveConnection";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -107,12 +108,14 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       : null;
 
     let accountIdentifier = "google_business_profile";
+    let signedInEmail: string | null = null;
 
     if (tokenJson.id_token) {
       try {
         const [, payloadSegment] = tokenJson.id_token.split(".");
         const payloadJson = Buffer.from(payloadSegment, "base64url").toString("utf8");
         const payload = JSON.parse(payloadJson) as { sub?: string; email?: string };
+        signedInEmail = payload.email ?? null;
         if (payload.sub) {
           accountIdentifier = payload.sub;
         } else if (payload.email) {
@@ -123,17 +126,12 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       }
     }
 
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: Platform.google_business_profile,
-        },
-      },
+    const saved = await saveSocialConnection({
+      userId,
+      workspaceId,
+      platform: Platform.google_business_profile,
+      signedInName: signedInEmail,
       create: {
-        userId,
-        workspaceId,
-        platform: Platform.google_business_profile,
         accessToken: tokenJson.access_token,
         refreshToken: tokenJson.refresh_token ?? null,
         expiresAt,
@@ -161,6 +159,10 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         refreshFailedAt: null,
       },
     });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing changed.
+      return NextResponse.redirect(differentAccountSettingsUrl(url.origin, Platform.google_business_profile, saved.signedInName));
+    }
 
     settingsUrl.searchParams.set("success", "google_business_profile_connected");
     return NextResponse.redirect(settingsUrl);

@@ -9,6 +9,7 @@ import {
   describeConnectLinkResult,
 } from "@/lib/connectLink";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
+import { connectedAccountName, differentAccountPlatform, linkDifferentAccountMessage } from "@/lib/differentAccount";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
 
@@ -76,7 +77,14 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const succeeded = PLATFORM_ORDER.find((platform) => success === `${platform}_connected`);
   const working = succeeded ? byPlatform.get(succeeded) : undefined;
   if (success && working && !working.needsReconnect && !working.reconnectSoon) outcome.set("success", success);
-  const result = describeConnectLinkResult(outcome);
+  // R6 review low 1: the sign-in came back with another account than the one
+  // connected, and nothing changed. Named by the connected account only.
+  const differentPlatform = differentAccountPlatform(outcome.get("error"));
+  const differentFrom = differentPlatform ? byPlatform.get(differentPlatform) : undefined;
+  const result =
+    differentPlatform && differentFrom
+      ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
+      : describeConnectLinkResult(outcome);
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 

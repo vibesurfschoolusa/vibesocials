@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { saveSocialConnection } from "@/server/connections/saveConnection";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
@@ -186,13 +188,11 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       userIdFromX,
     });
 
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: Platform.x,
-        },
-      },
+    const saved = await saveSocialConnection({
+      userId,
+      workspaceId,
+      platform: Platform.x,
+      signedInName: screenName ? `@${screenName}` : null,
       update: {
         accountIdentifier: userIdFromX || screenName || "",
         accessToken: accessToken,
@@ -208,9 +208,6 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         refreshFailedAt: null,
       },
       create: {
-        userId,
-        workspaceId,
-        platform: Platform.x,
         accountIdentifier: userIdFromX || screenName || "",
         accessToken: accessToken,
         refreshToken: accessTokenSecret,
@@ -225,6 +222,12 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         refreshFailedAt: null,
       },
     });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing
+      // changed. The one-time handshake is used up all the same.
+      await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
+      return NextResponse.redirect(differentAccountSettingsUrl(process.env.NEXTAUTH_URL!, Platform.x, saved.signedInName));
+    }
     console.log("[X OAuth 1.0a] Connection saved", { userId, workspaceId });
 
     // One-time handshake — delete after successful exchange.

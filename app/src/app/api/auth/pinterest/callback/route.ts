@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import { Platform } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
@@ -185,7 +186,11 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       return NextResponse.redirect(settingsUrl);
     }
 
-    await savePinterestConnection({ userId, workspaceId, token, account, board: boards[0] });
+    const saved = await savePinterestConnection({ userId, workspaceId, token, account, board: boards[0] });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing changed.
+      return NextResponse.redirect(differentAccountSettingsUrl(url.origin, Platform.pinterest, saved.signedInName));
+    }
 
     settingsUrl.searchParams.set("success", "pinterest_connected");
     return NextResponse.redirect(settingsUrl);

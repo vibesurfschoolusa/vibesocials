@@ -1,6 +1,9 @@
 import { Platform, Prisma } from "@prisma/client";
 
+import { toConnectionSummary } from "@/lib/connectionSummary";
 import { prisma } from "@/lib/db";
+import { connectedAccountName } from "@/lib/differentAccount";
+import { platformLabel } from "@/lib/platforms";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
@@ -35,6 +38,85 @@ interface ConnectionOwner {
   workspaceId: string;
 }
 
+/**
+ * What a connection posts as, compared when a sign-in comes back for a
+ * platform the workspace already has (R6 review low 1). Null when it can't be
+ * told (an old row without the id), and then the save is not refused.
+ *  - LinkedIn: the company page posts go to (`metadata.organizations[0]`),
+ *    not the member who signed in.
+ *  - YouTube: the channel id (`accountIdentifier` is the channel's title).
+ *  - Google Business Profile: the Google account, unless the old placeholder.
+ *  - Every other platform: the stored account or page id.
+ */
+export function connectionAccountKey(row: { platform: Platform; accountIdentifier: string; metadata: unknown }): string | null {
+  const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  if (row.platform === Platform.linkedin) {
+    const organizations = Array.isArray(metadata.organizations) ? metadata.organizations : [];
+    const id = (organizations[0] as { id?: unknown } | undefined)?.id;
+    return id === undefined || id === null || id === "" ? null : String(id);
+  }
+  if (row.platform === Platform.youtube && typeof metadata.channelId === "string" && metadata.channelId) {
+    return metadata.channelId;
+  }
+  if (row.platform === Platform.google_business_profile && row.accountIdentifier === "google_business_profile") {
+    return null;
+  }
+  return row.accountIdentifier || null;
+}
+
+export type SaveConnectionResult =
+  | { ok: true }
+  /** A connection with another account is there; nothing was written. */
+  | { ok: false; reason: "different_account"; connectedName: string; signedInName: string };
+
+/**
+ * The one save every connect goes through (each OAuth callback, and the
+ * account chosen in a waiting choice, in Settings or on /c). R6 review low 1:
+ * a sign-in replaces the workspace's connection for that platform only with
+ * the same account (connectionAccountKey), on the same row, so its post
+ * numbers stay. A different account leaves the row and its tokens as they
+ * are; changing account is Switch account, which disconnects first, so there
+ * is no row and the new account is simply saved.
+ */
+export async function saveSocialConnection({
+  userId,
+  workspaceId,
+  platform,
+  signedInName,
+  create,
+  update,
+}: ConnectionOwner & {
+  platform: Platform;
+  /** The name of the account the person signed in to, for the refusal sentence. */
+  signedInName: string | null;
+  create: Omit<Prisma.SocialConnectionUncheckedCreateInput, "userId" | "workspaceId" | "platform">;
+  update: Prisma.SocialConnectionUncheckedUpdateInput;
+}): Promise<SaveConnectionResult> {
+  const where = { workspaceId_platform: { workspaceId, platform } };
+  const existing = await prisma.socialConnection.findUnique({
+    where,
+    select: { platform: true, accountIdentifier: true, metadata: true, needsReconnect: true },
+  });
+  if (existing) {
+    const stored = connectionAccountKey(existing);
+    const incoming = connectionAccountKey({ platform, accountIdentifier: create.accountIdentifier, metadata: create.metadata });
+    if (stored !== null && incoming !== null && stored !== incoming) {
+      return {
+        ok: false,
+        reason: "different_account",
+        connectedName: connectedAccountName(toConnectionSummary(existing)),
+        signedInName: signedInName?.trim() || `a different ${platformLabel(platform)} account`,
+      };
+    }
+  }
+  await prisma.socialConnection.upsert({
+    where,
+    create: { userId, workspaceId, platform, ...create },
+    update,
+  });
+  return { ok: true };
+}
+
 export interface FacebookPageAccount {
   id: string;
   name: string;
@@ -47,7 +129,7 @@ export async function saveFacebookPageConnection({
   workspaceId,
   page,
   expiresAt,
-}: ConnectionOwner & { page: FacebookPageAccount; expiresAt: Date }): Promise<void> {
+}: ConnectionOwner & { page: FacebookPageAccount; expiresAt: Date }): Promise<SaveConnectionResult> {
   const fields = {
     accessToken: page.accessToken,
     refreshToken: null,
@@ -59,20 +141,13 @@ export async function saveFacebookPageConnection({
     ...HEALTHY,
   };
 
-  await prisma.socialConnection.upsert({
-    where: {
-      workspaceId_platform: {
-        workspaceId,
-        platform: Platform.facebook_page,
-      },
-    },
+  return saveSocialConnection({
+    userId,
+    workspaceId,
+    platform: Platform.facebook_page,
+    signedInName: page.name,
+    create: fields,
     update: fields,
-    create: {
-      userId,
-      workspaceId,
-      platform: Platform.facebook_page,
-      ...fields,
-    },
   });
 }
 
@@ -127,7 +202,7 @@ export async function saveInstagramConnection({
   pageAccessToken: string;
   details: InstagramAccountDetails;
   expiresAt: Date;
-}): Promise<void> {
+}): Promise<SaveConnectionResult> {
   const fields = {
     accessToken: pageAccessToken,
     refreshToken: null,
@@ -141,20 +216,13 @@ export async function saveInstagramConnection({
     ...HEALTHY,
   };
 
-  await prisma.socialConnection.upsert({
-    where: {
-      workspaceId_platform: {
-        workspaceId,
-        platform: Platform.instagram,
-      },
-    },
+  return saveSocialConnection({
+    userId,
+    workspaceId,
+    platform: Platform.instagram,
+    signedInName: details.username ? `@${details.username}` : null,
+    create: fields,
     update: fields,
-    create: {
-      userId,
-      workspaceId,
-      platform: Platform.instagram,
-      ...fields,
-    },
   });
 }
 
@@ -195,7 +263,7 @@ export async function saveLinkedInConnection({
   token: LinkedInToken;
   profile: LinkedInProfile;
   organization: LinkedInOrganization;
-}): Promise<void> {
+}): Promise<SaveConnectionResult> {
   const organizations = [organization];
   const fields = {
     accessToken: token.accessToken,
@@ -217,20 +285,12 @@ export async function saveLinkedInConnection({
     ...HEALTHY,
   };
 
-  await prisma.socialConnection.upsert({
-    where: {
-      workspaceId_platform: {
-        workspaceId,
-        platform: Platform.linkedin,
-      },
-    },
-    create: {
-      userId,
-      workspaceId,
-      platform: Platform.linkedin,
-      ...fields,
-      accountIdentifier: profile.sub,
-    },
+  return saveSocialConnection({
+    userId,
+    workspaceId,
+    platform: Platform.linkedin,
+    signedInName: organization.name ?? null,
+    create: { ...fields, accountIdentifier: profile.sub },
     update: fields,
   });
 }
@@ -261,7 +321,7 @@ export async function savePinterestConnection({
   token: PinterestToken;
   account: PinterestAccount;
   board: PinterestBoard;
-}): Promise<void> {
+}): Promise<SaveConnectionResult> {
   const fields = {
     accessToken: token.accessToken,
     refreshToken: token.refreshToken,
@@ -278,19 +338,12 @@ export async function savePinterestConnection({
     ...HEALTHY,
   };
 
-  await prisma.socialConnection.upsert({
-    where: {
-      workspaceId_platform: {
-        workspaceId,
-        platform: Platform.pinterest,
-      },
-    },
+  return saveSocialConnection({
+    userId,
+    workspaceId,
+    platform: Platform.pinterest,
+    signedInName: account.username,
+    create: fields,
     update: fields,
-    create: {
-      userId,
-      workspaceId,
-      platform: Platform.pinterest,
-      ...fields,
-    },
   });
 }

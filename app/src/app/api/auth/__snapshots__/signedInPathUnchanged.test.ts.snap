@@ -109,6 +109,23 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "facebook_page",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
       "prisma.socialConnection.upsert",
       {
         "create": {
@@ -264,6 +281,23 @@ exports[`'google_business_profile' callback, signed in: unchanged > success 1`] 
       "fetch",
       "POST",
       "https://oauth2.googleapis.com/token",
+    ],
+    [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "google_business_profile",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
     ],
     [
       "prisma.socialConnection.upsert",
@@ -443,6 +477,23 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
       "fetch",
       "GET",
       "https://graph.facebook.com/v26.0/ig-1?fields=username%2Cprofile_picture_url&access_token=page-token",
+    ],
+    [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "instagram",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
     ],
     [
       "prisma.socialConnection.upsert",
@@ -686,6 +737,23 @@ exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "linkedin",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
       "prisma.socialConnection.upsert",
       {
         "create": {
@@ -872,6 +940,23 @@ exports[`'pinterest' callback, signed in: unchanged > success 1`] = `
       "https://api.pinterest.com/v5/boards?page_size=250",
     ],
     [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "pinterest",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
       "prisma.socialConnection.upsert",
       {
         "create": {
@@ -1056,6 +1141,23 @@ exports[`'tiktok' callback, signed in: unchanged > success 1`] = `
       "fetch",
       "GET",
       "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
+    ],
+    [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "tiktok",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
     ],
     [
       "prisma.socialConnection.upsert",
@@ -1282,6 +1384,23 @@ exports[`'x' callback, signed in: unchanged > success 1`] = `
       },
     ],
     [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "x",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
       "prisma.socialConnection.upsert",
       {
         "create": {
@@ -1472,6 +1591,23 @@ exports[`'youtube' callback, signed in: unchanged > success 1`] = `
       "fetch",
       "GET",
       "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+    ],
+    [
+      "prisma.socialConnection.findUnique",
+      {
+        "select": {
+          "accountIdentifier": true,
+          "metadata": true,
+          "needsReconnect": true,
+          "platform": true,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "youtube",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
     ],
     [
       "prisma.socialConnection.upsert",

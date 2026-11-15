@@ -32,6 +32,13 @@ import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices"
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
+import {
+  SIGNED_IN_AS_PARAM,
+  connectedAccountName,
+  differentAccountPlatform,
+  settingsDifferentAccountMessage,
+  signedInNameFromQuery,
+} from "@/lib/differentAccount";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { platformHelpHref } from "@/lib/platformGuides";
 import { platformLabel } from "@/lib/platforms";
@@ -53,7 +60,7 @@ export const metadata: Metadata = {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; success?: string; billing?: string }>;
+  searchParams: Promise<{ error?: string; success?: string; billing?: string; signed_in_as?: string }>;
 }) {
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
   // (null when unauthenticated, same as a bare getCurrentUser() check) and
@@ -68,7 +75,7 @@ export default async function SettingsPage({
   }
 
   const params = await searchParams;
-  const oauthResult = describeOAuthResult({
+  let oauthResult = describeOAuthResult({
     error: params.error ?? null,
     success: params.success ?? null,
   });
@@ -109,6 +116,21 @@ export default async function SettingsPage({
   });
 
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
+
+  // R6 review low 1: a reconnect came back with another account and nothing
+  // changed; the sentence names both, the connected one from this workspace.
+  const differentPlatform = differentAccountPlatform(params.error);
+  const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
+  if (differentPlatform && differentFrom) {
+    oauthResult = {
+      variant: "danger",
+      platform: differentPlatform,
+      message: settingsDifferentAccountMessage(
+        signedInNameFromQuery(params[SIGNED_IN_AS_PARAM], differentPlatform),
+        connectedAccountName(differentFrom),
+      ),
+    };
+  }
   const now = new Date();
   const reconnectSoon = rows.filter((row) => inExpiryWarningWindow(row, now)).map((row) => row.platform);
   const endedAt = Object.fromEntries(

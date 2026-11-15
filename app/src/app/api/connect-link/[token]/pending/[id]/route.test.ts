@@ -103,7 +103,7 @@ beforeEach(() => {
   h.pendingDeleteMany.mockResolvedValue({ count: 1 });
   h.connectionFind.mockResolvedValue(null);
   h.linkUpdate.mockResolvedValue({});
-  h.saveFacebookPage.mockResolvedValue(undefined);
+  h.saveFacebookPage.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -181,6 +181,26 @@ describe("POST: the visitor's choice", () => {
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe("Facebook Page is already connected. Ask the person who sent you this link if it should be changed.");
     expect(h.saveFacebookPage).not.toHaveBeenCalled();
+  });
+
+  // R6 review low 1: a reconnect through the link only ever replaces the same account.
+  it("a different account than the one connected is a 409 naming it, and nothing changes or is told", async () => {
+    h.saveFacebookPage.mockResolvedValue({
+      ok: false,
+      reason: "different_account",
+      connectedName: "My Surf School",
+      signedInName: "Client Cafe",
+    });
+
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(
+      "You signed in to a different Facebook Page account than the one connected (My Surf School). Sign in to that account, or ask the workspace owner to switch it.",
+    );
+    expect(h.pendingDeleteMany).not.toHaveBeenCalled();
+    expect(h.linkUpdate).not.toHaveBeenCalled();
+    expect(h.notifyConnect).not.toHaveBeenCalled();
   });
 
   it("a choice that is not one of the accounts is a 400 with the owner route's sentence", async () => {

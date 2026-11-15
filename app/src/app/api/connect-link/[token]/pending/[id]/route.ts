@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { linkDifferentAccountMessage } from "@/lib/differentAccount";
 import {
   CONNECT_LINK_CHOICES_PER_HOUR,
   CONNECT_LINK_INACTIVE_MESSAGE,
@@ -126,6 +127,13 @@ export async function POST(request: Request, context: RouteContext) {
       workspaceId: link.workspaceId,
       userId: link.createdById,
     });
+    if (!result.ok && result.reason === "different_account") {
+      // R6 review low 1: the connection stays as it was, and so does the choice.
+      return NextResponse.json(
+        { error: linkDifferentAccountMessage(pending.platform, result.connectedName) },
+        { status: 409 },
+      );
+    }
     if (!result.ok) {
       return result.reason === "unknown_candidate"
         ? NextResponse.json({ error: "That account isn't one of the choices." }, { status: 400 })

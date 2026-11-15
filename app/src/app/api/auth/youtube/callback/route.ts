@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db";
+import { saveSocialConnection } from "@/server/connections/saveConnection";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -149,18 +150,13 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       ? new Date(Date.now() + tokenJson.expires_in * 1000)
       : null;
 
-    // Upsert social connection
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: "youtube",
-        },
-      },
+    // Upsert social connection (R6 review low 1: only for the same channel)
+    const saved = await saveSocialConnection({
+      userId,
+      workspaceId,
+      platform: "youtube",
+      signedInName: channel.snippet?.title || channel.id,
       create: {
-        userId,
-        workspaceId,
-        platform: "youtube",
         accessToken: tokenJson.access_token,
         refreshToken: tokenJson.refresh_token ?? null,
         expiresAt,
@@ -188,6 +184,10 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         refreshFailedAt: null,
       },
     });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing changed.
+      return NextResponse.redirect(differentAccountSettingsUrl(request.url, "youtube", saved.signedInName));
+    }
 
     console.log("[YouTube OAuth] Successfully connected channel:", accountIdentifier);
 

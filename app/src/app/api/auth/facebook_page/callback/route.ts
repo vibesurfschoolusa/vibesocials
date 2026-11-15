@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
@@ -183,7 +184,11 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     const pageId = page.id;
     const pageName = page.name;
 
-    await saveFacebookPageConnection({ userId, workspaceId, page, expiresAt });
+    const saved = await saveFacebookPageConnection({ userId, workspaceId, page, expiresAt });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing changed.
+      return NextResponse.redirect(differentAccountSettingsUrl(request.url, Platform.facebook_page, saved.signedInName));
+    }
 
     console.log("[FacebookPage OAuth] Connection successful", {
       userId,

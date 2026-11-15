@@ -158,6 +158,18 @@ describe("the connect link page", () => {
     expect(html).toMatch(/value="instagram"[\s\S]*?Reconnect/);
   });
 
+  // R6 review low 1: the reconnect came back with another account; nothing changed.
+  it("a different account than the one connected: says so, naming the connected one", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
+    ]);
+    const html = await render({ error: "facebook_page_different_account", signed_in_as: "Client Cafe" });
+    expect(html).toContain(
+      "You signed in to a different Facebook Page account than the one connected (Surf Co). Sign in to that account, or ask the workspace owner to switch it.",
+    );
+    expect(html).not.toContain("Client Cafe");
+  });
+
   it("a typed-in success is not told for a connection in its warning window", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true },

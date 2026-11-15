@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { settingsDifferentAccountMessage } from "@/lib/differentAccount";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -127,6 +128,13 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
     }
 
     const result = await connectPendingCandidate(pending, candidateId, owner);
+    if (!result.ok && result.reason === "different_account") {
+      // R6 review low 1: the connection stays as it was, and so does the choice.
+      return NextResponse.json(
+        { error: settingsDifferentAccountMessage(result.signedInName, result.connectedName) },
+        { status: 409 },
+      );
+    }
     if (!result.ok) {
       return result.reason === "unknown_candidate"
         ? NextResponse.json(

@@ -198,10 +198,11 @@ beforeEach(() => {
   requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   deleteManyMock.mockResolvedValue({ count: 1 });
-  saveFacebookPageConnectionMock.mockResolvedValue(undefined);
-  saveInstagramConnectionMock.mockResolvedValue(undefined);
-  saveLinkedInConnectionMock.mockResolvedValue(undefined);
-  savePinterestConnectionMock.mockResolvedValue(undefined);
+  // The shared save answers whether it saved (R6 review low 1).
+  saveFacebookPageConnectionMock.mockResolvedValue({ ok: true });
+  saveInstagramConnectionMock.mockResolvedValue({ ok: true });
+  saveLinkedInConnectionMock.mockResolvedValue({ ok: true });
+  savePinterestConnectionMock.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -529,6 +530,26 @@ describe("POST /api/connections/pending/[id]", () => {
 
     expect(response.status).toBe(400);
     expectNothingSaved();
+  });
+
+  // R6 review low 1: a reconnect only ever replaces the same account.
+  it("409s with both names when the chosen account is not the one connected, keeping the choice and the connection", async () => {
+    findUniqueMock.mockResolvedValue(row(FACEBOOK));
+    saveFacebookPageConnectionMock.mockResolvedValue({
+      ok: false,
+      reason: "different_account",
+      connectedName: "My Surf School",
+      signedInName: "Client Cafe",
+    });
+
+    const response = await POST(postReq({ candidateId: "page-2" }), ctx());
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "You signed in to Client Cafe, not My Surf School. Sign in to My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+    });
+    expect(deleteManyMock).not.toHaveBeenCalled();
   });
 
   it("500s without logging the error's message when the save fails, keeping the pending connect", async () => {

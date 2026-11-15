@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db";
+import { saveSocialConnection } from "@/server/connections/saveConnection";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
@@ -147,17 +148,12 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     const displayName = await fetchTikTokDisplayName(tokenJson.access_token);
     const metadata = { username: displayName } as Prisma.InputJsonValue;
 
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: Platform.tiktok,
-        },
-      },
+    const saved = await saveSocialConnection({
+      userId,
+      workspaceId,
+      platform: Platform.tiktok,
+      signedInName: displayName,
       create: {
-        userId,
-        workspaceId,
-        platform: Platform.tiktok,
         accessToken: tokenJson.access_token,
         refreshToken: tokenJson.refresh_token ?? null,
         expiresAt,
@@ -183,6 +179,10 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         refreshFailedAt: null,
       },
     });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing changed.
+      return NextResponse.redirect(differentAccountSettingsUrl(url.origin, Platform.tiktok, saved.signedInName));
+    }
 
     settingsUrl.searchParams.set("success", "tiktok_connected");
     return NextResponse.redirect(settingsUrl);

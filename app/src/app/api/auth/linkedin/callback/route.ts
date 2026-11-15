@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { differentAccountSettingsUrl } from "@/lib/differentAccount";
 import { prisma } from "@/lib/db";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
@@ -312,13 +313,17 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     }
 
     // Upsert social connection
-    await saveLinkedInConnection({
+    const saved = await saveLinkedInConnection({
       userId,
       workspaceId,
       token: { accessToken: tokenData.access_token, refreshToken, expiresAt, scope },
       profile,
       organization: organizations[0],
     });
+    if (!saved.ok) {
+      // R6 review low 1: a different account than the one connected; nothing changed.
+      return NextResponse.redirect(differentAccountSettingsUrl(process.env.NEXTAUTH_URL!, Platform.linkedin, saved.signedInName));
+    }
 
     console.log("[LinkedIn OAuth] Connection saved successfully", { userId });
 
