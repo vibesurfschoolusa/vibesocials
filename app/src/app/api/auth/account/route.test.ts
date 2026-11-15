@@ -32,6 +32,7 @@ const m = vi.hoisted(() => {
     queueCreate: fn(),
     queueDeleteMany: fn(),
     copyUsage: fn(),
+    payerRefusal: fn(),
   };
 });
 
@@ -82,6 +83,8 @@ vi.mock("@/lib/db", () => {
 
 // R5-security M1: the copy itself is tested in server/usage/usageLog.test.ts.
 vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: m.copyUsage }));
+// R5-security L2: the Stripe side is tested in server/billing/payerRefusal.test.ts.
+vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: m.payerRefusal }));
 
 import { DELETE } from "./route";
 
@@ -124,6 +127,7 @@ beforeEach(() => {
   }
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
+  m.payerRefusal.mockResolvedValue(null);
   m.copyUsage.mockImplementation(async (_tx: unknown, input: { workspaceIds: string[]; userId: string }) => {
     m.callLog.push(`copy usage ${JSON.stringify({ workspaceIds: input.workspaceIds, userId: input.userId })}`);
   });
@@ -298,6 +302,42 @@ describe("DELETE /api/auth/account", () => {
     expect(m.postJobFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ workspaceId: { in: ["ws-personal"] } }) }),
     );
+    nothingChanged();
+  });
+
+  // R5-security L2: the card of a person who pays for a surviving workspace's
+  // plan would keep paying after the account is gone.
+  it("refuses while the person pays for the plan of a workspace that survives, asking about those only", async () => {
+    memberships = [
+      { role: "owner", workspace: { id: "ws-personal", name: "Personal", members: [] } },
+      {
+        role: "owner",
+        workspace: {
+          id: "ws-co",
+          name: "Co-owned",
+          members: [{ userId: "u-early", role: "owner", createdAt: day(1) }],
+        },
+      },
+    ];
+    m.payerRefusal.mockResolvedValue({
+      status: 409,
+      error: 'You pay for the plan of "Co-owned", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.',
+    });
+
+    const response = await DELETE(request({ password: "right-password" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'You pay for the plan of "Co-owned", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.',
+    });
+    expect(m.payerRefusal).toHaveBeenCalledWith({ email: "me@example.com", workspaceIds: ["ws-co"] });
+    nothingChanged();
+  });
+
+  it("answers 502 and changes nothing when who pays cannot be checked", async () => {
+    m.payerRefusal.mockResolvedValue({ status: 502, error: "We could not check." });
+    const response = await DELETE(request({ password: "right-password" }));
+    expect(response.status).toBe(502);
     nothingChanged();
   });
 

@@ -6,6 +6,7 @@ import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { payerRefusal } from "@/server/billing/payerRefusal";
 
 /**
  * POST /api/workspaces/leave
@@ -62,6 +63,13 @@ export async function POST(request: Request) {
       { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
       { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
     );
+  }
+
+  // R5-security L2: the workspace carries on without the caller, so a card of
+  // theirs paying for its plan would keep paying. Asked before any write.
+  const payer = await payerRefusal({ email: context.user.email, workspaceIds: [context.workspace.id] });
+  if (payer) {
+    return NextResponse.json({ error: payer.error }, { status: payer.status });
   }
 
   if (context.role === "owner") {

@@ -17,7 +17,9 @@ const {
   checkRateLimitMock,
   cookieSetMock,
   cookiesMock,
+  payerRefusalMock,
 } = vi.hoisted(() => ({
+  payerRefusalMock: vi.fn(),
   deleteManyMock: vi.fn(),
   countMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -60,6 +62,8 @@ vi.mock("@/lib/rateLimit", () => ({
 vi.mock("next/headers", () => ({
   cookies: cookiesMock,
 }));
+// R5-security L2: the Stripe side is tested in server/billing/payerRefusal.test.ts.
+vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: payerRefusalMock }));
 
 import { POST } from "./route";
 
@@ -106,6 +110,40 @@ beforeEach(() => {
   deleteMock.mockResolvedValue({ id: "member-row-1" });
   executeRawMock.mockResolvedValue(1);
   cookiesMock.mockResolvedValue({ set: cookieSetMock });
+  payerRefusalMock.mockReset();
+  payerRefusalMock.mockResolvedValue(null);
+});
+
+// R5-security L2: a person whose card pays for this workspace's plan must hand
+// it over or cancel it before going, or the card keeps paying.
+describe("POST /api/workspaces/leave while the caller pays for the plan", () => {
+  it("asks about this workspace and the caller's email", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    await POST(leaveReq());
+    expect(payerRefusalMock).toHaveBeenCalledWith({ email: "owner@example.com", workspaceIds: ["ws-1"] });
+  });
+
+  it.each([
+    [409, 'You pay for the plan of "Acme", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.'],
+    [502, "We could not check who pays for a plan you are part of, so nothing was changed. Try again in a minute."],
+  ])("answers %i with the sentence and leaves nothing", async (status, error) => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    payerRefusalMock.mockResolvedValue({ status, error });
+
+    const response = await POST(leaveReq());
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("holds back a member who pays too", async () => {
+    payerRefusalMock.mockResolvedValue({ status: 409, error: "pays" });
+    expect((await POST(leaveReq())).status).toBe(409);
+    expect(deleteManyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/workspaces/leave", () => {

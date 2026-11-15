@@ -25,6 +25,7 @@ import {
   CANCELLED_ACCOUNT_KEPT_PREFIX,
   cancelSubscriptionsBeforeDelete,
 } from "@/server/billing/cancelOnDelete";
+import { payerRefusal } from "@/server/billing/payerRefusal";
 import { copyUsageBeforeDeletion } from "@/server/usage/usageLog";
 
 // Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
@@ -92,6 +93,13 @@ export async function DELETE(request: Request) {
   const { plan } = await loadAccountDeletion(user.id);
   if (plan.blocked.length > 0) {
     return NextResponse.json({ error: blockedMessage(plan.blocked) }, { status: 409 });
+  }
+
+  // R5-security L2: a card of theirs paying for a workspace that survives
+  // would keep paying after the account is gone. Asked before any cancel.
+  const payer = await payerRefusal({ email: user.email, workspaceIds: plan.reassign.map((r) => r.workspaceId) });
+  if (payer) {
+    return NextResponse.json({ error: payer.error }, { status: payer.status });
   }
 
   // 21b: cancel the deleted workspaces' plans at Stripe first; a no-op with payments not configured.

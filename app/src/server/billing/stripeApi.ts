@@ -239,6 +239,18 @@ export function createPortalSession(
   });
 }
 
+/**
+ * GET /v1/customers/:id. R5-security L2 reads only the email: the person it
+ * belongs to pays for the plan. A deleted customer answers `deleted: true`.
+ */
+export function retrieveCustomer(
+  id: string,
+  env: BillingEnv = process.env,
+  timeoutMs?: number,
+): Promise<{ id: string; email?: string | null; deleted?: boolean }> {
+  return stripeRequest("GET", `/customers/${segment(id)}`, { env, timeoutMs });
+}
+
 /** GET /v1/subscriptions/:id: what Stripe says about the subscription now. */
 export function retrieveSubscription(
   id: string,
