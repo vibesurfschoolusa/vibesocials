@@ -7,7 +7,15 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next-auth/react", () => ({ signOut: vi.fn() }));
 
-import { AccountSection, ChangeEmailForm, UndoLinkNotice, emailChangeSentMessage, undoLinkSentence } from "./account-section";
+import {
+  AccountSection,
+  ChangeEmailForm,
+  FormError,
+  UndoLinkNotice,
+  emailChangeRefusal,
+  emailChangeSentMessage,
+  undoLinkSentence,
+} from "./account-section";
 
 const deletion = { deleteWorkspaces: [], leaveWorkspaces: [], refusal: null };
 
@@ -69,5 +77,46 @@ describe("Settings, Account: undo link", () => {
   it("is part of a password account's sign-in email section", () => {
     const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
     expect(source).toMatch(/<ChangeEmailForm email=\{email\} \/>\s*<UndoLinkNotice \/>/);
+  });
+});
+
+// R6-security M1: a new change is refused while the last one can be undone;
+// the form writes the date in the viewer's own time zone.
+describe("Settings, Account: a change refused during the undo window", () => {
+  it("writes the refusal from the date the server sends", () => {
+    expect(
+      emailChangeRefusal({ error: "server sentence", until: "2026-11-17T12:00:00.000Z" }, "fallback"),
+    ).toBe("You changed your email recently; you can change it again after November 17, 2026.");
+  });
+
+  it("shows any other refusal as the server wrote it, or the fallback", () => {
+    expect(emailChangeRefusal({ error: "Your current password is not correct." }, "fallback")).toBe(
+      "Your current password is not correct.",
+    );
+    expect(emailChangeRefusal(null, "fallback")).toBe("fallback");
+  });
+});
+
+// R6-pages L10: every form error in Account is announced, as Change email's is.
+describe("Settings, Account: errors are announced", () => {
+  it("renders an error as an alert", () => {
+    expect(renderToStaticMarkup(createElement(FormError, { message: "Something failed." }))).toBe(
+      '<p role="alert" class="text-sm text-destructive">Something failed.</p>',
+    );
+  });
+
+  it("uses it for Change email, Change password and Delete account", () => {
+    const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+    expect(source.match(/<FormError message=\{error\} \/>/g)).toHaveLength(3);
+    expect(source).not.toMatch(/<p className="text-sm text-destructive">/);
+  });
+});
+
+// R6-pages L8: the same date format as the team and connect-link lines.
+describe("Settings, Account: dates", () => {
+  it("writes the undo date with the shared formatter", () => {
+    const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+    expect(source).toContain("formatDisplayDate(untilIso)");
+    expect(source).not.toContain("toLocaleDateString");
   });
 });

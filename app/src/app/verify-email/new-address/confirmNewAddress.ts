@@ -23,7 +23,7 @@ export type NewAddressView = {
 const SETTINGS = { href: "/settings", label: "Go to Settings" };
 const LOG_IN = { href: "/login", label: "Log in" };
 
-type ConfirmAnswer = { viewer?: string; email?: string; error?: string };
+type ConfirmAnswer = { viewer?: string; email?: string; error?: string; used?: boolean };
 
 export async function confirmNewAddress(fetchImpl: typeof fetch, token: string): Promise<NewAddressView> {
   const notChanged = { changed: false, signOutHere: false, next: SETTINGS, offerRetry: false };
@@ -73,6 +73,11 @@ export async function confirmNewAddress(fetchImpl: typeof fetch, token: string):
       title,
       message: `You now sign in with ${data?.email ?? "your new address"}. Every device was signed out, so log in again with the new address.`,
     };
+  }
+  // R6-pages L1: most likely opened again by whoever just used it, so the
+  // title doesn't say the email is unchanged.
+  if (data?.used === true && data.error) {
+    return { ...notChanged, title: "This link was already used", message: data.error };
   }
   const serverFailed = response.status >= 500;
   return {

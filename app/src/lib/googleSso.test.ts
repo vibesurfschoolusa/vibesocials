@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { findOrCreateGoogleSsoUser, googleSsoConfig, planGoogleSsoLink } from "./googleSso";
 
-const { findUniqueMock, createMock, updateMock, transactionMock, provisionMock } =
+const { findUniqueMock, createMock, updateMock, transactionMock, provisionMock, addressHeldUntilMock } =
   vi.hoisted(() => ({
+    addressHeldUntilMock: vi.fn(),
     findUniqueMock: vi.fn(),
     createMock: vi.fn(),
     updateMock: vi.fn(),
@@ -25,6 +26,8 @@ vi.mock("@/lib/workspace", () => ({
   provisionPersonalWorkspace: provisionMock,
 }));
 
+vi.mock("@/server/auth/undoWindow", () => ({ addressHeldUntil: addressHeldUntilMock }));
+
 // The $transaction mock hands the callback a tx whose user.create is
 // createMock — mirroring how the register route uses the same shape.
 const tx = { user: { create: createMock } };
@@ -35,6 +38,8 @@ beforeEach(() => {
   updateMock.mockReset();
   provisionMock.mockReset();
   provisionMock.mockResolvedValue({ workspaceId: "ws-1" });
+  addressHeldUntilMock.mockReset();
+  addressHeldUntilMock.mockResolvedValue(null);
   transactionMock.mockReset();
   transactionMock.mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
 });
@@ -274,6 +279,20 @@ describe("findOrCreateGoogleSsoUser", () => {
     expect(arg.data.googleLinkedAt).toBeInstanceOf(Date);
     // Workspace provisioned inside the SAME transaction, with the created row.
     expect(provisionMock).toHaveBeenCalledWith(tx, created);
+  });
+
+  // R6-security M1: an address an email change replaced stays free for that
+  // change's undo while it is open, so Google sign-in creates no account on it.
+  it("refuses (address_held) to create an account on an address an undo may still put back", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    addressHeldUntilMock.mockResolvedValue(new Date(Date.now() + 60_000));
+
+    const result = await findOrCreateGoogleSsoUser({ email: "Old@Example.com", emailVerified: true });
+
+    expect(result).toEqual({ ok: false, reason: "address_held" });
+    expect(addressHeldUntilMock).toHaveBeenCalledWith(expect.anything(), "old@example.com", expect.any(Date));
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("re-resolves on a unique-email race (P2002) so the winner's row still passes the linking rules", async () => {

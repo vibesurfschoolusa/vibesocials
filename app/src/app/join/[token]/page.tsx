@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { hashInviteToken } from "@/lib/inviteToken";
 import { JoinView } from "./join-view";
 
 export const metadata: Metadata = {
@@ -18,6 +20,23 @@ interface JoinPageProps {
 // the dashboard. `getCurrentUser` (not `getWorkspaceContext`) — the token
 // names the TARGET workspace, not the caller's active one; workspace
 // resolution happens entirely in the invite API routes.
+//
+// R6-pages L4: whether the invite's workspace asks for approval, so the page
+// says so. Read by the same token the preview route reads, and only the one
+// flag; a dead or unreadable invite reads false, and the view then shows the
+// preview route's answer instead.
+async function requiresApprovalFor(token: string): Promise<boolean> {
+  try {
+    const invite = await prisma.workspaceInvite.findUnique({
+      where: { tokenHash: hashInviteToken(token) },
+      select: { workspace: { select: { requireApproval: true } } },
+    });
+    return invite?.workspace.requireApproval === true;
+  } catch {
+    return false;
+  }
+}
+
 export default async function JoinPage({ params }: JoinPageProps) {
   const { token } = await params;
   const user = await getCurrentUser();
@@ -26,5 +45,5 @@ export default async function JoinPage({ params }: JoinPageProps) {
     redirect(`/login?callbackUrl=${encodeURIComponent(`/join/${token}`)}`);
   }
 
-  return <JoinView token={token} />;
+  return <JoinView token={token} requiresApproval={await requiresApprovalFor(token)} />;
 }

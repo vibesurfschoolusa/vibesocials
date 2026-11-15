@@ -56,12 +56,25 @@ describe("verifyView", () => {
     "This link has expired or was already used. If it is for another account, sign in to that account first.";
 
   it("a dead link is answered about the link, whoever reads it", () => {
-    for (const account of all) {
+    for (const account of ["unverified", "signed_out", "unknown"] as const) {
       const view = verifyView("invalid", account);
       expect(view.title).toBe("This link isn't valid");
       expect(view.message).toBe(DEAD);
       expect(view.message).not.toContain("already verified");
     }
+  });
+
+  // R6-new-customer L6: a verified person who opens a used link again (most
+  // likely their own) is told there is nothing left to do. The sentence about
+  // the link stays, since it may be another account's.
+  it("tells a signed-in, verified person that their email is already verified", () => {
+    const view = verifyView("invalid", "verified");
+    expect(view.title).toBe("Your email is already verified");
+    expect(view.message).toBe(
+      "This link has expired or was already used, but the account you're signed in to is already verified, so there's nothing more to do. If the link is for another account, sign in to that account first.",
+    );
+    expect(view).toMatchObject({ verified: false, offerResend: false, offerRetry: false });
+    expect(view.next).toEqual({ href: "/", label: "Continue to Vibe Socials" });
   });
 
   it("offers a new link only when the signed-in account itself is unverified", () => {

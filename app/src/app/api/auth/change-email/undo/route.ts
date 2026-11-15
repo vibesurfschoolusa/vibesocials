@@ -13,7 +13,9 @@ const RATE_LIMIT = { route: "auth/change-email-undo", limit: 10, windowMs: 15 * 
 
 const refuse = (status: number, error: string) => NextResponse.json({ error }, { status });
 
-const NOT_VALID = `This link isn't valid. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
+// R6-pages L6: a link's record is cleared once its 72 hours have passed
+// (server/auth/undoWindow.ts), so a link not found may be an expired one.
+const NOT_VALID = `This link isn't valid, or it has expired: undo links work for 72 hours. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const USED = `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`;
 const EXPIRED = `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const CHANGED_AGAIN = `The sign-in email has changed again since this email was sent, so this link can't undo it. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
@@ -38,6 +40,10 @@ class ChangedAgain extends Error {}
  * password only for a Google account on that same address
  * (lib/googleSso.ts). Anonymous and rate limited by network, like the other
  * account links.
+ *
+ * R6-security M1: while the window is open no other change can be made and
+ * no other account can take the previous address (server/auth/undoWindow.ts),
+ * so the "changed again" and "address taken" refusals below are backstops.
  */
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";

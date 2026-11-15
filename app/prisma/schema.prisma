@@ -365,6 +365,8 @@ model EmailChangeRequest {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  // R6-security M1: is this address held by an open undo window?
+  @@index([previousEmail])
 }
 
 model SocialConnection {

@@ -273,7 +273,19 @@ describe("getWorkspacesOverview", () => {
     const busy = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-busy");
 
     expect(busy?.waitingForApproval).toBe(1);
-    expect(busy?.needsAttention).toBe(true);
+  });
+
+  // R6-client-journey L4: only an owner decides approvals, so, as Needs you,
+  // posts waiting for one are not a member's to act on.
+  it("marks waiting for approval as needing attention for an owner only", async () => {
+    servePostJobGroups({ approval: [count("ws-calm", 2), count("ws-busy", 3)] });
+
+    const overview = await getWorkspacesOverview("user-1", NOW);
+    const calm = overview.find((entry) => entry.workspaceId === "ws-calm");
+    const busy = overview.find((entry) => entry.workspaceId === "ws-busy");
+
+    expect(calm).toMatchObject({ role: "owner", waitingForApproval: 2, needsAttention: true });
+    expect(busy).toMatchObject({ role: "member", waitingForApproval: 3, needsAttention: false });
   });
 
   it("counts posts this month from successful results inside the current UTC month", async () => {

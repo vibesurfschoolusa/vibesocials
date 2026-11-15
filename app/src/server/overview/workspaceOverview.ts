@@ -37,7 +37,7 @@ export interface WorkspaceOverviewEntry {
   needsReconnect: Platform[];
   /** Connected platforms, including any that need reconnecting. */
   connected: number;
-  /** Anything above that the owner has to act on. */
+  /** Anything above that this person has to act on (approvals: owners only). */
   needsAttention: boolean;
 }
 
@@ -234,7 +234,9 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
       needsAttention:
         failedLast7Days > 0 ||
         needsReconnect.length > 0 ||
-        waiting > 0 ||
+        // R6-client-journey L4: only an owner decides approvals (Needs you
+        // gives a member no approvals row either).
+        (role === "owner" && waiting > 0) ||
         clientChangesRequested > 0 ||
         chooseGoogleLocation,
     };

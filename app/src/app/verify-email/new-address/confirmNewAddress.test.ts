@@ -49,6 +49,20 @@ describe("confirmNewAddress", () => {
     }
   });
 
+  // R6-pages L1: a used link opened again (most likely by whoever just used
+  // it) is answered about the link, not with "Your email wasn't changed".
+  it("titles a used link as used, with the route's sentence and no retry", async () => {
+    const sentence = "This link was already used. If you just confirmed it, your email has changed.";
+    const view = await confirmNewAddress(respond(400, { error: sentence, used: true }), "tok");
+    expect(view).toMatchObject({
+      changed: false,
+      signOutHere: false,
+      offerRetry: false,
+      title: "This link was already used",
+      message: sentence,
+    });
+  });
+
   it("offers a retry after a server failure", async () => {
     const view = await confirmNewAddress(respond(500, { error: "Server sentence." }), "tok");
     expect(view).toMatchObject({ changed: false, message: "Server sentence.", offerRetry: true });

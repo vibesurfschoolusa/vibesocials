@@ -258,6 +258,10 @@ export default function PrivacyPage() {
           </li>
           <li>Your account, posts and publishing history are kept until you delete your account.</li>
           <li>
+            When you change your sign-in email, we keep your previous address for 72 hours, so that a
+            link sent to it can undo the change; after that it is deleted.
+          </li>
+          <li>
             Deleting a workspace deletes everything in it: its posts, media, connections, post and
             listing numbers, and what clients sent through its links.
           </li>

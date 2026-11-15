@@ -4,9 +4,11 @@ import { buildEmailChangedNoticeEmail, deliverAccountEmail } from "@/lib/account
 import { generateAccountToken, hashAccountToken } from "@/lib/accountToken";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { accountUndoWindowUntil, addressHeldUntil } from "@/server/auth/undoWindow";
 import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
 
 /**
@@ -29,6 +31,15 @@ const deadLinkResponse = () =>
     { status: 400 },
   );
 
+// R6-pages L1: about the link, since whoever opens it again most likely just used it.
+const usedLinkResponse = () =>
+  NextResponse.json(
+    { error: "This link was already used. If you just confirmed it, your email has changed.", used: true },
+    { status: 400 },
+  );
+
+type Outcome = { kind: "changed" } | { kind: "used" } | { kind: "locked"; until: Date } | { kind: "held"; until: Date };
+
 /**
  * POST /api/auth/change-email/confirm { token } (R5 new-customer L4)
  *
@@ -48,6 +59,13 @@ const deadLinkResponse = () =>
  * whether this browser is signed in to the account that changed (the page
  * then signs it out), to another account (left signed in, and told only that
  * the change was made), or to none.
+ *
+ * R6-security M1: nothing may leave an open undo window (./undo) without an
+ * address to put back. So the change is refused while this account's last
+ * change can still be undone (the request route refuses that too; this
+ * covers a link asked for before it), and when the new address is another
+ * account's previous one that its undo may still restore. Both are read in
+ * the transaction that makes the change.
  */
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
@@ -80,11 +98,19 @@ export async function POST(request: Request) {
       where: { tokenHash },
       include: { user: { select: { email: true } } },
     });
-    if (!record || record.usedAt || record.expiresAt <= now) {
+    if (record?.usedAt) {
+      return usedLinkResponse();
+    }
+    if (!record || record.expiresAt <= now) {
       return deadLinkResponse();
     }
 
-    const changed = await prisma.$transaction(async (tx) => {
+    const outcome = await prisma.$transaction(async (tx): Promise<Outcome> => {
+      const lockedUntil = await accountUndoWindowUntil(tx, record.userId, now);
+      if (lockedUntil) return { kind: "locked", until: lockedUntil };
+      const heldUntil = await addressHeldUntil(tx, record.newEmail, now);
+      if (heldUntil) return { kind: "held", until: heldUntil };
+
       const { count } = await tx.emailChangeRequest.updateMany({
         where: { tokenHash, usedAt: null, expiresAt: { gt: now } },
         data: {
@@ -94,7 +120,9 @@ export async function POST(request: Request) {
           undoExpiresAt: new Date(now.getTime() + UNDO_TTL_MS),
         },
       });
-      if (count === 0) return false;
+      // The same `now` as the read above, so the link can't have expired
+      // since: it was used in the meantime.
+      if (count === 0) return { kind: "used" };
       await tx.user.update({
         where: { id: record.userId },
         data: {
@@ -106,10 +134,24 @@ export async function POST(request: Request) {
       });
       await tx.accountToken.deleteMany({ where: { userId: record.userId, usedAt: null } });
       await tx.emailChangeRequest.deleteMany({ where: { userId: record.userId, usedAt: null } });
-      return true;
+      return { kind: "changed" };
     });
-    if (!changed) {
-      return deadLinkResponse();
+    if (outcome.kind === "used") {
+      return usedLinkResponse();
+    }
+    if (outcome.kind === "locked") {
+      return NextResponse.json(
+        { error: emailChangeLockedSentence(outcome.until), until: outcome.until.toISOString() },
+        { status: 409 },
+      );
+    }
+    if (outcome.kind === "held") {
+      return NextResponse.json(
+        {
+          error: `This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until ${formatDisplayDate(outcome.until)}, so your email is unchanged. After that, ask for the change again in Settings, Account.`,
+        },
+        { status: 409 },
+      );
     }
 
     // Best-effort: deliverAccountEmail logs and returns false on any failure.

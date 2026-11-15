@@ -27,7 +27,9 @@ const {
   buildVerifyEmailMock,
   deliverAccountEmailMock,
   checkRateLimitMock,
+  addressHeldUntilMock,
 } = vi.hoisted(() => ({
+  addressHeldUntilMock: vi.fn(),
   findUniqueMock: vi.fn(),
   createMock: vi.fn(),
   workspaceCreateMock: vi.fn(),
@@ -62,6 +64,8 @@ vi.mock("@/lib/accountEmails", () => ({
   deliverAccountEmail: deliverAccountEmailMock,
 }));
 
+vi.mock("@/server/auth/undoWindow", () => ({ addressHeldUntil: addressHeldUntilMock }));
+
 import { POST } from "./route";
 
 function jsonRequest(body: unknown): Request {
@@ -92,8 +96,10 @@ beforeEach(() => {
   buildVerifyEmailMock.mockReset();
   deliverAccountEmailMock.mockReset();
   checkRateLimitMock.mockReset();
+  addressHeldUntilMock.mockReset();
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
+  addressHeldUntilMock.mockResolvedValue(null);
   issueAccountTokenMock.mockResolvedValue("raw-verify-token");
   buildVerifyEmailMock.mockReturnValue({ subject: "Verify your email address", html: "<html>", text: "text" });
   deliverAccountEmailMock.mockResolvedValue(true);
@@ -159,6 +165,26 @@ describe("POST /api/auth/register", () => {
       email: "user@example.com",
       name: "Hacker",
     });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  // R6-security M1: while an email change can be undone, the address it
+  // replaced stays free for the undo, so no new account can take it.
+  it("creates nothing for an address an undo may still put back, with the same 201 shape (no oracle)", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    addressHeldUntilMock.mockResolvedValue(new Date(Date.now() + 60_000));
+
+    const response = await POST(
+      jsonRequest({ email: "User@Example.com", password: "goodpassword", name: "Hacker" }),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      id: "ok",
+      email: "user@example.com",
+      name: "Hacker",
+    });
+    expect(addressHeldUntilMock).toHaveBeenCalledWith(expect.anything(), "user@example.com", expect.any(Date));
     expect(createMock).not.toHaveBeenCalled();
   });
 
