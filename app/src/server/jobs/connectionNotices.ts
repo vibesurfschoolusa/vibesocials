@@ -29,6 +29,14 @@ export const CONNECTION_EXPIRED_CODE = "CONNECTION_SIGN_IN_EXPIRED";
  */
 export const CONNECTION_NOTICES_BATCH = 100;
 
+/**
+ * Flagged connections read per day, newest flag first, to find the ones not yet
+ * told (three small columns each). A new flag is always among the newest, so it
+ * is missed only if more than this many newer flags are waiting too, and then it
+ * is reached as those are told on the following days.
+ */
+export const CONNECTION_FLAG_SCAN_LIMIT = 500;
+
 type Stamp = Date | string | null;
 
 /** Was the reconnect email already sent for the connection's current flag? */
@@ -151,8 +159,10 @@ async function warnOwnersOfExpiry(connection: {
  *  2. one that has ended: the connection is flagged, only while it is the row
  *     that was read (same `expiresAt`: a reconnect writes a new one), so posts
  *     stop being sent with a dead token and Settings says to reconnect;
- *  3. every flagged connection whose flag has not had its email (step 2's, a
- *     failed post's, a backlog from before this existed): the reconnect email.
+ *  3. every flagged connection whose flag has not had its email (step 2's, or a
+ *     failed post's): the reconnect email. What was flagged or due at release
+ *     was marked told by the migration (20261114530000_connection_notices), so
+ *     old and test connections send nothing.
  * The cron runs at 04:45 UTC, the evening before in the US, so the lapse email
  * goes out on the day the sign-in ended there, or within the next day.
  *
@@ -190,18 +200,17 @@ export async function sendConnectionNotices(
     }
   }
 
-  const unannounced = await prisma.socialConnection.findMany({
-    where: {
-      needsReconnect: true,
-      OR: [
-        { reconnectEmailedAt: null },
-        { reconnectEmailedAt: { lt: prisma.socialConnection.fields.refreshFailedAt } },
-      ],
-    },
-    select: { id: true },
-    orderBy: { id: "asc" },
-    take: CONNECTION_NOTICES_BATCH,
+  // The newest flags first, compared with their email time here: a plain WHERE
+  // and sort, no column-to-column comparison. A flag is written with its time
+  // (connectionHealth.ts), so one without is from before that existed, and the
+  // release migration marked every flag present then as told.
+  const flagged = await prisma.socialConnection.findMany({
+    where: { needsReconnect: true, refreshFailedAt: { not: null } },
+    select: { id: true, refreshFailedAt: true, reconnectEmailedAt: true },
+    orderBy: { refreshFailedAt: "desc" },
+    take: CONNECTION_FLAG_SCAN_LIMIT,
   });
+  const unannounced = flagged.filter((row) => !reconnectAlreadyEmailed(row)).slice(0, CONNECTION_NOTICES_BATCH);
   let reconnectEmails = 0;
   for (const { id } of unannounced) {
     reconnectEmails += (await notifyOwnersToReconnect(id, utcDay)).emailed;

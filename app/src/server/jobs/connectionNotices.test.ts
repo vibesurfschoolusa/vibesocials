@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // stands in for SocialConnection; no database, Resend or Inngest is reached.
 const {
   table,
-  REFRESH_FAILED_AT_REF,
   findManyMock,
   findUniqueMock,
   updateManyMock,
@@ -17,8 +16,6 @@ const {
   sendEmailMock,
 } = vi.hoisted(() => ({
     table: new Map<string, Record<string, unknown>>(),
-    // Stands in for `prisma.socialConnection.fields.refreshFailedAt` (a column reference).
-    REFRESH_FAILED_AT_REF: { name: "refreshFailedAt", modelName: "SocialConnection" },
     findManyMock: vi.fn(),
     findUniqueMock: vi.fn(),
     updateManyMock: vi.fn(),
@@ -33,7 +30,6 @@ vi.mock("@/lib/db", () => ({
       findMany: findManyMock,
       findUnique: findUniqueMock,
       updateMany: updateManyMock,
-      fields: { refreshFailedAt: REFRESH_FAILED_AT_REF },
     },
     workspace: { findUnique: workspaceFindUniqueMock },
     workspaceMember: { findMany: membersFindManyMock },
@@ -48,6 +44,7 @@ import { EmailRetryableError } from "@/server/notifications/email";
 import { expiryNoticeWhere } from "./connectionHealthSweep";
 import {
   CONNECTION_EXPIRED_CODE,
+  CONNECTION_FLAG_SCAN_LIMIT,
   CONNECTION_NOTICES_BATCH,
   notifyOwnersToReconnect,
   sendConnectionNotices,
@@ -91,10 +88,7 @@ function matches(r: Record<string, unknown>, where: Record<string, unknown>): bo
     if ("not" in c && c.not === null && value === null) return false;
     if (c.notIn && c.notIn.includes(value)) return false;
     if (c.lte !== undefined && !(value !== null && time(value)! <= time(c.lte)!)) return false;
-    if (c.lt !== undefined) {
-      const bound = c.lt === REFRESH_FAILED_AT_REF ? r.refreshFailedAt : c.lt;
-      if (value === null || bound === null || !(time(value)! < time(bound)!)) return false;
-    }
+    if (c.lt !== undefined && !(value !== null && time(value)! < time(c.lt)!)) return false;
   }
   return true;
 }
@@ -116,11 +110,21 @@ beforeEach(() => {
     mock.mockReset();
   }
   findManyMock.mockImplementation(
-    async (args: { where: Record<string, unknown>; select: Record<string, boolean>; take: number }) =>
-      [...table.values()]
-        .filter((r) => matches(r, args.where))
-        .slice(0, args.take)
-        .map((r) => pick(r, args.select)),
+    async (args: {
+      where: Record<string, unknown>;
+      select: Record<string, boolean>;
+      orderBy?: Record<string, "asc" | "desc">;
+      take: number;
+    }) => {
+      const rows = [...table.values()].filter((r) => matches(r, args.where));
+      // One-key orderBy on a date or id column, as the module sends it.
+      const [key, direction] = Object.entries(args.orderBy ?? {})[0] ?? [];
+      if (key) {
+        const sign = direction === "desc" ? -1 : 1;
+        rows.sort((a, b) => sign * (key === "id" ? String(a.id).localeCompare(String(b.id)) : time(a[key])! - time(b[key])!));
+      }
+      return rows.slice(0, args.take).map((r) => pick(r, args.select));
+    },
   );
   findUniqueMock.mockImplementation(async (args: { where: { id: string }; select: Record<string, boolean> }) => {
     const r = table.get(args.where.id);
@@ -320,16 +324,49 @@ describe("sendConnectionNotices", () => {
       "Action needed: reconnect Instagram in Acme",
       "Action needed: reconnect Instagram in Acme",
     ]);
+    // A plain WHERE and a plain sort (no column reference): newest flags first,
+    // compared with their email time in code.
     const call = findManyMock.mock.calls.find((c) => c[0].where.needsReconnect === true)![0];
     expect(call).toEqual({
-      where: {
-        needsReconnect: true,
-        OR: [{ reconnectEmailedAt: null }, { reconnectEmailedAt: { lt: REFRESH_FAILED_AT_REF } }],
-      },
-      select: { id: true },
-      orderBy: { id: "asc" },
-      take: CONNECTION_NOTICES_BATCH,
+      where: { needsReconnect: true, refreshFailedAt: { not: null } },
+      select: { id: true, refreshFailedAt: true, reconnectEmailedAt: true },
+      orderBy: { refreshFailedAt: "desc" },
+      take: CONNECTION_FLAG_SCAN_LIMIT,
     });
+  });
+
+  it("finds a new flag behind a full page of older flags that were already told", async () => {
+    for (let i = 0; i < CONNECTION_FLAG_SCAN_LIMIT; i++) {
+      row(`old-${String(i).padStart(4, "0")}`, {
+        needsReconnect: true,
+        refreshFailedAt: new Date(NOW.getTime() - (10 + i) * DAY_MS),
+        reconnectEmailedAt: new Date(NOW.getTime() - (9 + i) * DAY_MS),
+      });
+    }
+    row("new", { needsReconnect: true, refreshFailedAt: new Date(NOW.getTime() - 60_000) });
+
+    expect(await run()).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 2 });
+    expect(sendEmailMock.mock.calls.map((c) => c[1].idempotencyKey)).toEqual([
+      "reconnect/new/2026-11-14/user-a",
+      "reconnect/new/2026-11-14/user-b",
+    ]);
+  });
+
+  it("emails at most CONNECTION_NOTICES_BATCH flags a day; the rest go tomorrow", async () => {
+    for (let i = 0; i < CONNECTION_NOTICES_BATCH + 5; i++) {
+      row(`n-${String(i).padStart(4, "0")}`, { needsReconnect: true, refreshFailedAt: new Date(NOW.getTime() - i * 1000) });
+    }
+    membersFindManyMock.mockResolvedValue([OWNERS[0]]);
+
+    expect((await run()).reconnectEmails).toBe(CONNECTION_NOTICES_BATCH);
+    sendEmailMock.mockClear();
+    expect((await run()).reconnectEmails).toBe(5);
+  });
+
+  it("a flag with no recorded time (from before the time existed) is not scanned: the release marked those told", async () => {
+    row("legacy", { needsReconnect: true, refreshFailedAt: null, reconnectEmailedAt: null });
+
+    expect(await run()).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 0 });
   });
 
   it("a retryable send error fails the step; the retry skips what was already recorded", async () => {
