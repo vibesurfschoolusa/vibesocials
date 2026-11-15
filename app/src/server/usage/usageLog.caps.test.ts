@@ -800,7 +800,7 @@ describe("a read error, and the operator is who the list says once verified", ()
     await expect(reserveFreeRuns({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW, check: "atSend" })).rejects.toThrow();
     await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "a", requestId: "r1", now: NOW })).resolves.toEqual({
       code: "LIMIT_CHECK_FAILED",
-      error: "Vibe Socials couldn't check today's limits just now, so nothing was sent. Try again in a minute.",
+      error: "We couldn't check today's limits. Try again in a minute.",
     });
     await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "a", now: NOW })).resolves.toBeNull();
     store.down = false;

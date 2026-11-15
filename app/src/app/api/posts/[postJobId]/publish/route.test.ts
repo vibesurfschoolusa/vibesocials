@@ -19,7 +19,11 @@ const {
   checkDailyPostLimitMock,
   transactionMock,
   resultFindFirstMock,
+  reserveSendNowMock,
+  releaseMock,
 } = vi.hoisted(() => ({
+  reserveSendNowMock: vi.fn(),
+  releaseMock: vi.fn(),
   transactionMock: vi.fn(),
   resultFindFirstMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
@@ -54,7 +58,14 @@ vi.mock("@/server/jobs/posting", async () => {
   );
   return { ...actual, prepareDeferredPostJobDispatch: prepareDispatchMock };
 });
+// Second look at T1, item 1: the reservation before the claim has its own suite (pairRule.test.ts).
+vi.mock("../pairRule", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pairRule")>()),
+  reserveSendNow: reserveSendNowMock,
+  releaseReservation: releaseMock,
+}));
 // Usage limits (2026-11-10): the count has its own suite (workspaceUsage.test.ts).
+
 vi.mock("@/server/usage/workspaceUsage", () => ({
   checkDailyPostLimit: checkDailyPostLimitMock,
 }));
@@ -123,8 +134,16 @@ beforeEach(() => {
   failPendingMock.mockReset();
   checkDailyPostLimitMock.mockReset();
   checkDailyPostLimitMock.mockResolvedValue(null);
+  reserveSendNowMock.mockReset();
+  reserveSendNowMock.mockImplementation(async ({ postJobIds }: { postJobIds: string[] }) => ({
+    ok: true,
+    reserved: { postJobIds, day: new Date("2026-11-14T15:00:00Z") },
+  }));
+  releaseMock.mockReset();
+  releaseMock.mockResolvedValue(undefined);
 
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+
   notifyOwnersMock.mockResolvedValue(undefined);
   failPendingMock.mockResolvedValue({ failedCount: 2, status: "failed" });
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -279,7 +298,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
       data: { status: "in_progress", scheduledFor: expect.any(Date) },
     });
-    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { reserved: true });
     // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
     // the shared concurrency key, and the Post-now priority flag.
     expect(inngestSendMock).toHaveBeenCalledWith({
@@ -414,7 +433,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
         where: { id: "job-1", workspaceId: "ws-1", status: "failed", results: { none: {} }, updatedAt: UPDATED },
         data: { status: "in_progress", scheduledFor: expect.any(Date), retriedAt: expect.any(Date) },
       });
-      expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
+      expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { reserved: true });
       expect(inngestSendMock).toHaveBeenCalledTimes(1);
     });
 
@@ -1207,7 +1226,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
         },
       ],
     ]);
-    expect(prepareDispatchMock.mock.calls).toEqual([["job-1", { sendNow: true }], ["story-1", { sendNow: true }]]);
+    expect(prepareDispatchMock.mock.calls).toEqual([["job-1", { reserved: true }], ["story-1", { reserved: true }]]);
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     expect(inngestSendMock).toHaveBeenCalledWith([
       expect.objectContaining({ id: "publish-job-1" }),
@@ -1461,5 +1480,120 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(transactionMock).not.toHaveBeenCalled();
     expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-job-1" }));
+  });
+});
+
+// Second look at T1, item 1: the run is reserved before the claim, so a refusal changes nothing.
+describe("POST /api/posts/[postJobId]/publish - reserved before the claim", () => {
+  const FULL = {
+    error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+    code: "SERVICE_DAILY_POST_LIMIT",
+  };
+  const CHECK_FAILED = { error: "We couldn't check today's limits. Try again in a minute.", code: "LIMIT_CHECK_FAILED" };
+
+  it("a draft at the ceiling stays a draft: 429 with the sentence, nothing claimed or prepared", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    reserveSendNowMock.mockResolvedValue({ ok: false, status: 429, body: FULL });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual(FULL);
+    expect(reserveSendNowMock).toHaveBeenCalledWith({ workspaceId: "ws-1", postJobIds: ["job-1"], viewerUserId: expect.any(String) });
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("the limits cannot be checked (a lock timeout): the draft is unchanged, 503", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    reserveSendNowMock.mockResolvedValue({ ok: false, status: 503, body: CHECK_FAILED });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual(CHECK_FAILED);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("reserved, then the claim misses: the reservation is let go and no run is left", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(releaseMock).toHaveBeenCalledWith({ postJobIds: ["job-1"], day: expect.any(Date) });
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("reserved and claimed: prepare uses the reservation instead of reserving again", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    const res = await POST(req({}), ctx("job-1"));
+    expect(res.status).toBe(202);
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { reserved: true });
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("prepare throws after the claim: its pending results are failed, the run taken back, 503", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    prepareDispatchMock.mockRejectedValue(new Error("pool timeout"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", expect.objectContaining({ errorCode: "DISPATCH_FAILED" }));
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts/[postJobId]/publish - a pair, reserved before the claim", () => {
+  function storyRow() {
+    return {
+      id: "story-1",
+      storyOfPostJobId: "job-1",
+      status: "draft",
+      scheduledFor: null,
+      createdAt: new Date(),
+      updatedAt: new Date("2026-11-01T09:31:00Z"),
+      submittedForApprovalAt: null,
+      approvedAt: null,
+      baseCaption: "Caption",
+      perPlatformOverrides: null,
+      publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+      coverImageUrl: null,
+      mediaItem: null,
+    };
+  }
+
+  beforeEach(() => {
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+  });
+
+  it("a pair at 29: both halves reserved together, refused whole, neither changes", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    reserveSendNowMock.mockResolvedValue({
+      ok: false,
+      status: 429,
+      body: { error: "Vibe Socials has reached its daily limit of posts for the whole service.", code: "SERVICE_DAILY_POST_LIMIT" },
+    });
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    expect(reserveSendNowMock).toHaveBeenCalledWith(expect.objectContaining({ postJobIds: ["job-1", "story-1"] }));
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("the claim takes this post but not its other half: the half's run is let go", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    updateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(releaseMock).toHaveBeenCalledWith({ postJobIds: ["job-1", "story-1"], day: expect.any(Date) }, ["job-1"]);
   });
 });

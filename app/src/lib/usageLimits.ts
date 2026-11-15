@@ -322,8 +322,7 @@ export const WORKSPACES_CREATED_WINDOW_DAYS = 30;
 export const OWNER_DAILY_POST_LIMIT_CODE = "OWNER_DAILY_POST_LIMIT";
 /** Review of T1, item 1: a free run whose limits could not be checked is not sent (the ceiling is hard). */
 export const LIMIT_CHECK_FAILED_CODE = "LIMIT_CHECK_FAILED";
-export const LIMIT_CHECK_FAILED_MESSAGE =
-  "Vibe Socials couldn't check today's limits just now, so nothing was sent. Try again in a minute.";
+export const LIMIT_CHECK_FAILED_MESSAGE = "We couldn't check today's limits. Try again in a minute.";
 export const SERVICE_DAILY_POST_LIMIT_CODE = "SERVICE_DAILY_POST_LIMIT";
 export const POST_RETRY_LIMIT_CODE = "POST_RETRY_LIMIT";
 export const WORKSPACE_CREATION_LIMIT_CODE = "WORKSPACE_CREATION_LIMIT";

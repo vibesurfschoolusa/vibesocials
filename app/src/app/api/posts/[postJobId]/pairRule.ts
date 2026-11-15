@@ -5,8 +5,10 @@ import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import { withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
-import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import { LIMIT_CHECK_FAILED_CODE, LIMIT_CHECK_FAILED_MESSAGE } from "@/lib/usageLimits";
+import { reserveFreeRuns, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
+import { buildPublishEvent, deferredPostCanSend, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+
 
 /**
  * R3-client-journey M1 (third finding of one cause, after R1 H1 and R2 M1): a
@@ -189,7 +191,57 @@ const NO_PLATFORM_CONNECTED = "none of its platforms is connected. Activity show
  * per platform); if the send fails, every prepared post's pending results are
  * failed so none hangs.
  */
-export async function dispatchNow(postJobIds: readonly string[], log: { route: string }): Promise<DispatchResult> {
+/**
+ * Second look at T1, item 1: what a route's reservation before its claim
+ * gave: the runs it wrote, or the answer to give with nothing changed (429
+ * with the limit's sentence, or 503 when the limits could not be checked).
+ */
+export type SendNowReservation =
+  | { ok: true; reserved: WrittenSends }
+  | { ok: false; status: 429 | 503; body: { error: string; code: string } };
+
+/**
+ * Publish and approve now reserve the runs before they claim anything: this
+ * post and the other half the action takes, those with something to send, in
+ * one reservation (both or neither), under the service-wide lock for a free
+ * workspace. Refused, or unable to check, nothing has changed yet. Never throws.
+ */
+export async function reserveSendNow(args: {
+  workspaceId: string;
+  postJobIds: readonly string[];
+  viewerUserId: string;
+}): Promise<SendNowReservation> {
+  const day = new Date();
+  try {
+    const sendable: string[] = [];
+    for (const id of args.postJobIds) if (await deferredPostCanSend(id)) sendable.push(id);
+    const reservation = await reserveFreeRuns({
+      workspaceId: args.workspaceId,
+      postJobIds: sendable,
+      at: day,
+      check: "now",
+      viewerUserId: args.viewerUserId,
+    });
+    if (!reservation.ok) return { ok: false, status: 429, body: reservation.refusal };
+    return { ok: true, reserved: { postJobIds: reservation.written, day } };
+  } catch (error) {
+    logger.error("[posts] Couldn't reserve a post going out now", { error, workspaceId: args.workspaceId });
+    return { ok: false, status: 503, body: { error: LIMIT_CHECK_FAILED_MESSAGE, code: LIMIT_CHECK_FAILED_CODE } };
+  }
+}
+
+/** Takes back the reserved runs of the posts the claim did not take (`kept`: those it did). Never throws. */
+export async function releaseReservation(reserved: WrittenSends, kept: readonly string[] = []): Promise<void> {
+  const unclaimed = reserved.postJobIds.filter((id) => !kept.includes(id));
+  if (unclaimed.length > 0) await withdrawSend({ postJobIds: unclaimed, day: reserved.day });
+}
+
+export async function dispatchNow(
+  postJobIds: readonly string[],
+  log: { route: string },
+  /** Second look at T1, item 1: the route's reservation; prepare then reserves nothing itself. */
+  options: { reserved?: WrittenSends } = {},
+): Promise<DispatchResult> {
   const result: DispatchResult = {
     sent: new Set(),
     notSent: new Set(),
@@ -201,11 +253,32 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
   const prepared: string[] = [];
   const events: ReturnType<typeof buildPublishEvent>[] = [];
   // Third review of K2: the sends prepare wrote, taken back if the hand-over fails.
-  const sendsWritten: WrittenSends[] = [];
+  const sendsWritten: WrittenSends[] = options.reserved ? [options.reserved] : [];
+  // Second look at T1, item 2: every post here is claimed; one that throws
+  // fails them all (none is left in_progress without results), takes back
+  // the runs, and the route answers 503.
+  const failAll = async (error: unknown) => {
+    logger.error(`[${log.route}] Couldn't prepare a claimed post; failing it`, { error, postJobIds });
+    for (const id of postJobIds) {
+      try {
+        await failPendingPostJobResults(id, DISPATCH_FAILURE);
+      } catch (failError) {
+        logger.error(`[${log.route}] Couldn't fail a claimed post (the stuck-job sweep will)`, { error: failError, postJobId: id });
+      }
+    }
+    for (const written of sendsWritten) await withdrawSend(written);
+    result.sendFailed = true;
+    return result;
+  };
   for (const id of postJobIds) {
-    // Review of T1, item 1: reserved (counted, checked, written) under the
-    // service-wide lock as it goes out, so a press at the limit's edge is refused.
-    const prep = await prepareDeferredPostJobDispatch(id, { sendNow: true });
+    let prep: Awaited<ReturnType<typeof prepareDeferredPostJobDispatch>>;
+    try {
+      // Review of T1, item 1: reserved under the service-wide lock, by the
+      // route before its claim (reserved) or here as it goes out (sendNow).
+      prep = await prepareDeferredPostJobDispatch(id, options.reserved ? { reserved: true } : { sendNow: true });
+    } catch (error) {
+      return failAll(error);
+    }
     if (prep.ok) {
       prepared.push(id);
       if (prep.sendsWritten) sendsWritten.push(prep.sendsWritten);
@@ -218,6 +291,13 @@ export async function dispatchNow(postJobIds: readonly string[], log: { route: s
         result.limitRefusals.set(id, { error: prep.refusal.errorMessage, code: prep.refusal.errorCode });
       }
     }
+  }
+  // A reserved post with nothing to send after all makes no run.
+  if (options.reserved && result.notSent.size > 0) {
+    await withdrawSend({
+      postJobIds: options.reserved.postJobIds.filter((id) => result.notSent.has(id)),
+      day: options.reserved.day,
+    });
   }
   if (events.length === 0) return result;
   try {

@@ -22,14 +22,18 @@ import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import {
   applyToPair,
   dispatchNow,
+  isLiveHalf,
   notSentNote,
   pairLimitArgs,
   partialSendMessage,
   pairStoryPlatforms,
   readPairHalf,
+  releaseReservation,
+  reserveSendNow,
   takenFeedHalf,
   wantsPair,
   type PairHalf,
+  type SendNowReservation,
 } from "../pairRule";
 
 interface PostJobRouteContext {
@@ -228,6 +232,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
+  // Second look at T1, item 1: approving to publish now reserves the runs
+  // (this post and the other half it takes, as one unit) before the decision
+  // is written, so at a limit the post stays pending: the approver reads the
+  // sentence and the submitter is told nothing, because nothing changed.
+  let reservation: Extract<SendNowReservation, { ok: true }> | null = null;
+  if (approving && outcome === "publish_now") {
+    const takenHalf = half && isLiveHalf(half) && !blocker(half) ? half : null;
+    const reserved = await reserveSendNow({
+      workspaceId,
+      postJobIds: [postJobId, ...(takenHalf ? [takenHalf.id] : [])],
+      viewerUserId: workspaceContext.user.id,
+    });
+    if (!reserved.ok) return NextResponse.json(reserved.body, { status: reserved.status });
+    reservation = reserved;
+  }
+
   // Atomic claim: only a still-undecided submission (draft, or a scheduled row
   // left submitted-but-unapproved — ruling R10 backstop) at the version just
   // read transitions, so a concurrent decision, publish or cancel can't
@@ -271,6 +291,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!result.ok) {
+    // Nothing was decided: the reservation goes.
+    if (reservation) await releaseReservation(reservation.reserved);
     // Lost the write: if the post is still undecided, it was edited mid-request.
     const current = await prisma.postJob.findFirst({
       where: { id: postJobId, workspaceId },
@@ -297,9 +319,24 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Publish-now path: materialize results from current connections and fire the
   // publish events (one per half of a pair), exactly like the publish route.
   if (outcome === "publish_now") {
-    const dispatch = await dispatchNow([postJobId, ...(half && pairDecided ? [half.id] : [])], {
-      route: "POST /api/posts/[postJobId]/approval",
-    });
+    const claimed = [postJobId, ...(half && pairDecided ? [half.id] : [])];
+    // A half the write did not take gives its run back.
+    if (reservation && claimed.length < reservation.reserved.postJobIds.length) {
+      await releaseReservation(reservation.reserved, claimed);
+    }
+    const dispatch = await dispatchNow(
+      claimed,
+      { route: "POST /api/posts/[postJobId]/approval" },
+      reservation
+        ? {
+            reserved: {
+              ...reservation.reserved,
+              postJobIds: reservation.reserved.postJobIds.filter((id) => claimed.includes(id)),
+            },
+          }
+        : {},
+    );
+
     if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
     partial = partialSendMessage(postJobId, half, dispatch);
     // Same contract as the publish route: if the events can't be handed to

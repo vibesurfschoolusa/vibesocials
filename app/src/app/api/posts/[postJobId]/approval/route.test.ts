@@ -23,7 +23,11 @@ const {
   transactionMock,
   resultFindFirstMock,
   memberFindUniqueMock,
+  reserveSendNowMock,
+  releaseMock,
 } = vi.hoisted(() => ({
+  reserveSendNowMock: vi.fn(),
+  releaseMock: vi.fn(),
   memberFindUniqueMock: vi.fn(),
   transactionMock: vi.fn(),
   resultFindFirstMock: vi.fn(),
@@ -65,6 +69,12 @@ vi.mock("@/server/jobs/posting", async () => {
   return { ...actual, prepareDeferredPostJobDispatch: prepareDispatchMock };
 });
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+// Second look at T1, item 1: the reservation before the claim has its own suite (pairRule.test.ts).
+vi.mock("../pairRule", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pairRule")>()),
+  reserveSendNow: reserveSendNowMock,
+  releaseReservation: releaseMock,
+}));
 // Usage limits (2026-11-10): the count has its own suite (workspaceUsage.test.ts).
 vi.mock("@/server/usage/workspaceUsage", () => ({
   checkDailyPostLimit: checkDailyPostLimitMock,
@@ -142,7 +152,15 @@ beforeEach(() => {
   failPendingMock.mockReset();
   checkDailyPostLimitMock.mockReset();
   checkDailyPostLimitMock.mockResolvedValue(null);
+  reserveSendNowMock.mockReset();
+  reserveSendNowMock.mockImplementation(async ({ postJobIds }: { postJobIds: string[] }) => ({
+    ok: true,
+    reserved: { postJobIds, day: new Date("2026-11-14T15:00:00Z") },
+  }));
+  releaseMock.mockReset();
+  releaseMock.mockResolvedValue(undefined);
   stampJobFindUniqueMock.mockReset();
+
   mediaUpdateManyMock.mockReset();
   stampJobFindUniqueMock.mockResolvedValue({ mediaItemId: "m1", media: [] });
   mediaUpdateManyMock.mockResolvedValue({ count: 1 });
@@ -271,7 +289,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
         scheduledFor: expect.any(Date),
       },
     });
-    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { reserved: true });
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
     // the shared concurrency key, and the Post-now priority flag.
@@ -631,7 +649,7 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
         scheduledFor: expect.any(Date),
       },
     });
-    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { sendNow: true });
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1", { reserved: true });
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -948,7 +966,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledTimes(2);
-    expect(prepareDispatchMock.mock.calls).toEqual([["job-1", { sendNow: true }], ["story-1", { sendNow: true }]]);
+    expect(prepareDispatchMock.mock.calls).toEqual([["job-1", { reserved: true }], ["story-1", { reserved: true }]]);
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     expect(inngestSendMock).toHaveBeenCalledWith([
       expect.objectContaining({ id: "publish-job-1" }),
@@ -1136,5 +1154,57 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     expect(body.otherHalf).toBeUndefined();
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(transactionMock).not.toHaveBeenCalled();
+  });
+});
+
+// Second look at T1, item 1: approving to publish now reserves before the decision is written.
+describe("POST /api/posts/[postJobId]/approval - reserved before the claim", () => {
+  const FULL = {
+    error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+    code: "SERVICE_DAILY_POST_LIMIT",
+  };
+
+  it("pending approval at the ceiling: it stays pending, the approver reads the sentence, the submitter hears nothing", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    reserveSendNowMock.mockResolvedValue({ ok: false, status: 429, body: FULL });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual(FULL);
+    expect(reserveSendNowMock).toHaveBeenCalledWith({ workspaceId: "ws-1", postJobIds: ["job-1"], viewerUserId: "user-1" });
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("the limits cannot be checked: nothing decided, 503 with the try-again sentence", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    const failed = { error: "We couldn't check today's limits. Try again in a minute.", code: "LIMIT_CHECK_FAILED" };
+    reserveSendNowMock.mockResolvedValue({ ok: false, status: 503, body: failed });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual(failed);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("reserved, then the decision write misses: the reservation is let go", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(releaseMock).toHaveBeenCalledWith({ postJobIds: ["job-1"], day: expect.any(Date) });
+  });
+
+  it("approving for a later time or rejecting reserves nothing", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: new Date(Date.now() + 86_400_000) }));
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    await POST(req({ decision: "reject" }), ctx("job-1"));
+    expect(reserveSendNowMock).not.toHaveBeenCalled();
   });
 });

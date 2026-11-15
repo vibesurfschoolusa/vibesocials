@@ -1406,6 +1406,11 @@ export async function prepareDeferredPostJobDispatch(
     serviceCapAt?: Date;
     /** Review of T1, item 1: publish or approve now (dispatchNow): every check, the per-person number too. */
     sendNow?: boolean;
+    /**
+     * Second look at T1, item 1: the route reserved this post's run before its
+     * claim, so nothing is reserved or written here; the route takes it back.
+     */
+    reserved?: boolean;
     unitRefusal?: SendRefusal;
   } = {},
 ): Promise<DeferredDispatchResult> {
@@ -1480,9 +1485,10 @@ export async function prepareDeferredPostJobDispatch(
   let sending = [postJobId];
   // The runs this call's reservation wrote.
   let reserved: string[] = [];
-  const checked = Boolean(options.serviceCapAt || options.sendNow || options.unitRefusal);
+  const checked = Boolean(options.serviceCapAt || options.sendNow || options.unitRefusal || options.reserved);
   // A re-run that finds its results made has been past this check already.
-  if (checked && existingResults === 0 && rows.some((row) => row.status === "pending")) {
+  if (checked && !options.reserved && existingResults === 0 && rows.some((row) => row.status === "pending")) {
+
     const partner = options.unitRefusal ? null : await unsentPairHalf(job, connections);
     if (partner) sending = [postJobId, partner];
     let refusal = options.unitRefusal ?? null;

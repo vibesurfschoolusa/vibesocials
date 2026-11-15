@@ -24,11 +24,14 @@ import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/schedulin
 import {
   applyToPair,
   dispatchNow,
+  isLiveHalf,
   notSentNote,
   pairLimitArgs,
   partialSendMessage,
   pairStoryPlatforms,
   readPairHalf,
+  releaseReservation,
+  reserveSendNow,
   takenFeedHalf,
   wantsPair,
   type PairHalf,
@@ -427,6 +430,19 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
   }
 
+  // Second look at T1, item 1: the runs (this post and the other half the
+  // claim takes, as one unit) are reserved before the claim, so a refusal at
+  // a limit, or limits that cannot be checked, leaves the draft as it is.
+  const takenHalf = half && isLiveHalf(half) && !blocker(half) ? half : null;
+  const reservation = await reserveSendNow({
+    workspaceId,
+    postJobIds: [postJobId, ...(takenHalf ? [takenHalf.id] : [])],
+    viewerUserId: workspaceContext.user.id,
+  });
+  if (!reservation.ok) {
+    return NextResponse.json(reservation.body, { status: reservation.status });
+  }
+
   // Atomic claim {draft|scheduled} → in_progress. Only one caller wins — this
   // also blocks the cron from double-claiming a scheduled job we're publishing.
   // Pinned to the exact version read (updatedAt): the approval decision above
@@ -465,6 +481,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!result.ok) {
+    // Nothing was claimed: the reservation goes.
+    await releaseReservation(reservation.reserved);
     return NextResponse.json(
       { error: "This post is no longer available to publish.", code: "NOT_PUBLISHABLE" },
       { status: 409 },
@@ -474,9 +492,15 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Materialize results from current connections + hand the publish events
   // (one per claimed half) to Inngest in one send.
   let pair = result.pair;
-  const dispatch = await dispatchNow([postJobId, ...(half && pair?.changed ? [half.id] : [])], {
-    route: "POST /api/posts/[postJobId]/publish",
-  });
+  const claimed = [postJobId, ...(half && pair?.changed ? [half.id] : [])];
+  // A half the claim did not take (it changed in the meantime) gives its run back.
+  if (claimed.length < reservation.reserved.postJobIds.length) await releaseReservation(reservation.reserved, claimed);
+  const dispatch = await dispatchNow(
+    claimed,
+    { route: "POST /api/posts/[postJobId]/publish" },
+    { reserved: { ...reservation.reserved, postJobIds: reservation.reserved.postJobIds.filter((id) => claimed.includes(id)) } },
+  );
+
   if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
   const pairAnswer = pair ? { otherHalf: pair } : {};
   // One half went out and the other had nothing to send: a success that says both.

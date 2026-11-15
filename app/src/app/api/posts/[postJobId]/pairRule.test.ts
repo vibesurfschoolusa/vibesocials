@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findFirstMock, transactionMock, prepareMock, sendMock, failPendingMock, withdrawSendMock, resultFindFirstMock } =
+const {
+  findFirstMock,
+  transactionMock,
+  prepareMock,
+  sendMock,
+  failPendingMock,
+  withdrawSendMock,
+  resultFindFirstMock,
+  reserveMock,
+  canSendMock,
+} =
   vi.hoisted(() => ({
+    reserveMock: vi.fn(),
+    canSendMock: vi.fn(),
     findFirstMock: vi.fn(),
     transactionMock: vi.fn(),
     prepareMock: vi.fn(),
@@ -24,13 +36,14 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/server/jobs/posting", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
   prepareDeferredPostJobDispatch: prepareMock,
+  deferredPostCanSend: canSendMock,
 }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: sendMock } }));
 vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/failPendingResults")>()),
   failPendingPostJobResults: failPendingMock,
 }));
-vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock }));
+vi.mock("@/server/usage/usageLog", () => ({ withdrawSend: withdrawSendMock, reserveFreeRuns: reserveMock }));
 
 import { prisma } from "@/lib/db";
 
@@ -40,6 +53,9 @@ import {
   PAIR_HALF_SELECT,
   pairLimitArgs,
   readPairHalf,
+  releaseReservation,
+  reserveSendNow,
+
   takenFeedHalf,
   wantsPair,
   type PairHalf,
@@ -295,5 +311,137 @@ describe("dispatchNow - the sends of a failed hand-over", () => {
     sendMock.mockResolvedValue({ ids: [] });
     await dispatchNow(["feed-1"], { route: "test" });
     expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+});
+
+// Second look at T1, item 1: publish and approve now reserve before they claim.
+describe("reserveSendNow", () => {
+  const CHECK_FAILED = { error: "We couldn't check today's limits. Try again in a minute.", code: "LIMIT_CHECK_FAILED" };
+  const FULL = {
+    error: "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+    code: "SERVICE_DAILY_POST_LIMIT",
+  };
+  const args = { workspaceId: "ws-1", postJobIds: ["feed-1", "story-1"], viewerUserId: "owner-1" };
+
+  beforeEach(() => {
+    reserveMock.mockReset();
+    canSendMock.mockReset();
+    canSendMock.mockResolvedValue(true);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("reserves every half that can send in one reservation: both or neither", async () => {
+    reserveMock.mockResolvedValue({ ok: true, written: ["feed-1", "story-1"] });
+    const outcome = await reserveSendNow(args);
+    expect(reserveMock).toHaveBeenCalledTimes(1);
+    expect(reserveMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      postJobIds: ["feed-1", "story-1"],
+      at: expect.any(Date),
+      check: "now",
+      viewerUserId: "owner-1",
+    });
+    expect(outcome).toEqual({ ok: true, reserved: { postJobIds: ["feed-1", "story-1"], day: expect.any(Date) } });
+  });
+
+  it("a half with nothing it can send is not reserved (it makes no run)", async () => {
+    canSendMock.mockImplementation(async (id: string) => id === "feed-1");
+    reserveMock.mockResolvedValue({ ok: true, written: ["feed-1"] });
+    await reserveSendNow(args);
+    expect(reserveMock).toHaveBeenCalledWith(expect.objectContaining({ postJobIds: ["feed-1"] }));
+  });
+
+  it("refused: 429 with the limit's sentence", async () => {
+    reserveMock.mockResolvedValue({ ok: false, refusal: FULL, ceiling: true });
+    await expect(reserveSendNow(args)).resolves.toEqual({ ok: false, status: 429, body: FULL });
+  });
+
+  it("a reservation that throws (a lock timeout, the database): 503 with the try-again sentence", async () => {
+    reserveMock.mockRejectedValue(new Error("Transaction already closed: timeout"));
+    await expect(reserveSendNow(args)).resolves.toEqual({ ok: false, status: 503, body: CHECK_FAILED });
+  });
+});
+
+describe("releaseReservation", () => {
+  const DAY = new Date("2026-11-14T15:00:00Z");
+  beforeEach(() => {
+    withdrawSendMock.mockReset();
+    withdrawSendMock.mockResolvedValue(undefined);
+  });
+
+  it("takes back the runs of the halves the claim did not take, and only those", async () => {
+    await releaseReservation({ postJobIds: ["feed-1", "story-1"], day: DAY }, ["feed-1"]);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["story-1"], day: DAY });
+    withdrawSendMock.mockClear();
+    await releaseReservation({ postJobIds: ["feed-1", "story-1"], day: DAY });
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["feed-1", "story-1"], day: DAY });
+    withdrawSendMock.mockClear();
+    await releaseReservation({ postJobIds: ["feed-1"], day: DAY }, ["feed-1"]);
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchNow - with the route's reservation", () => {
+  const DAY = new Date("2026-11-14T15:00:00Z");
+  const reserved = { postJobIds: ["feed-1", "story-1"], day: DAY };
+  const ok = (id: string) => ({
+    ok: true,
+    event: { postJobId: id, userId: "u", workspaceId: "ws", mediaItemId: null, baseCaption: "c", perPlatformOverrides: null },
+  });
+
+  beforeEach(() => {
+    prepareMock.mockReset();
+    sendMock.mockReset();
+    sendMock.mockResolvedValue({ ids: [] });
+    failPendingMock.mockReset();
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "failed" });
+    withdrawSendMock.mockReset();
+    withdrawSendMock.mockResolvedValue(undefined);
+    resultFindFirstMock.mockReset();
+    resultFindFirstMock.mockResolvedValue(null);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("uses it: prepare does not reserve again, and nothing is taken back on success", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" }, { reserved });
+    expect(prepareMock.mock.calls).toEqual([
+      ["feed-1", { reserved: true }],
+      ["story-1", { reserved: true }],
+    ]);
+    expect(result.sendFailed).toBe(false);
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+  });
+
+  it("prepare throws on the second half: both failed, the reservation taken back, no event, 503", async () => {
+    prepareMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("pool timeout");
+      return ok(id);
+    });
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" }, { reserved });
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(failPendingMock.mock.calls.map(([id]) => id).sort()).toEqual(["feed-1", "story-1"]);
+    expect(failPendingMock).toHaveBeenCalledWith("story-1", {
+      errorCode: "DISPATCH_FAILED",
+      errorMessage: "Couldn't start publishing. Please try again.",
+    });
+    expect(withdrawSendMock).toHaveBeenCalledWith(reserved);
+    expect(result.sendFailed).toBe(true);
+  });
+
+  it("the hand-over fails: the reservation is taken back, as before", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" }, { reserved });
+    expect(result.sendFailed).toBe(true);
+    expect(withdrawSendMock).toHaveBeenCalledWith(reserved);
+  });
+
+  it("without a reservation (no other caller today) prepare reserves as it goes out", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    await dispatchNow(["feed-1"], { route: "test" });
+    expect(prepareMock).toHaveBeenCalledWith("feed-1", { sendNow: true });
   });
 });
