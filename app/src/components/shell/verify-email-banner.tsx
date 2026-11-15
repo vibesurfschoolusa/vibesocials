@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 
@@ -39,8 +40,45 @@ export function verifyEmailBannerShown(accountSaysShow: boolean, suppressed: boo
   return accountSaysShow && !suppressed;
 }
 
+/**
+ * R8-new-customer L3: the nudge names the address (with billing off it is the
+ * only one, and a mistyped address never gets the link) and where to change
+ * it, as the workspace banner does (workspace-paused-banner.tsx).
+ */
+export function VerifyEmailNotice({
+  email,
+  sending,
+  onResend,
+}: {
+  email: string | null;
+  sending: boolean;
+  onResend: () => void;
+}) {
+  return (
+    <div className="px-4 pt-4 md:px-6">
+      <Alert variant="warning" className="items-center p-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-foreground">
+            {email ? `Verify your email: we sent a link to ${email}.` : "Verify your email: we sent you a link."}
+          </span>
+          <Button size="sm" variant="outline" loading={sending} onClick={onResend}>
+            Resend email
+          </Button>
+          <span className="text-foreground">
+            Wrong address?{" "}
+            <Link href="/settings#account" className="font-medium text-primary underline-offset-4 hover:underline">
+              Change it in Settings, Account
+            </Link>
+            .
+          </span>
+        </div>
+      </Alert>
+    </div>
+  );
+}
+
 export function VerifyEmailBanner({ suppressed = false }: { suppressed?: boolean }) {
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const { success, error } = useToast();
   const [show, setShow] = useState(false);
   const [sending, setSending] = useState(false);
@@ -86,16 +124,5 @@ export function VerifyEmailBanner({ suppressed = false }: { suppressed?: boolean
 
   if (!verifyEmailBannerShown(show, suppressed)) return null;
 
-  return (
-    <div className="px-4 pt-4 md:px-6">
-      <Alert variant="warning" className="items-center p-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="text-foreground">Verify your email — check your inbox.</span>
-          <Button size="sm" variant="outline" loading={sending} onClick={handleResend}>
-            Resend email
-          </Button>
-        </div>
-      </Alert>
-    </div>
-  );
+  return <VerifyEmailNotice email={session?.user?.email ?? null} sending={sending} onResend={handleResend} />;
 }
