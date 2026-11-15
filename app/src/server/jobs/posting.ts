@@ -219,12 +219,30 @@ export interface PublishMetadataSnapshot {
    */
   instagram?: InstagramPostMetadata;
   facebook?: FacebookPostMetadata;
+  /**
+   * R19 publishing L5: the post's location text, null for none. Written for
+   * every job since then, so the job, not the shared Media item a reuse points
+   * at, says where this post was. A job without the key was saved before and
+   * keeps reading the Media item's location (see {@link postLocationOf}).
+   */
+  location?: string | null;
+}
+
+/**
+ * The location a job's publish hands the clients: `{ location }` from its
+ * snapshot (null: none), or nothing for a job saved before the snapshot had
+ * the key, whose clients read the Media item's place as they did.
+ */
+export function postLocationOf(publishMetadata: unknown): { location?: string | null } {
+  if (typeof publishMetadata !== "object" || publishMetadata === null || Array.isArray(publishMetadata)) return {};
+  const location = (publishMetadata as { location?: unknown }).location;
+  return typeof location === "string" || location === null ? { location } : {};
 }
 
 /**
  * Build the `publishMetadata` snapshot from the per-post metadata, or `undefined`
- * when none of the three inputs has anything (so an immediate job / a job with
- * no per-post privacy or targeting leaves the column null). Deferred jobs
+ * when none of the inputs has anything. buildPostJobCreateData adds the post's
+ * location beside it, so every job created since R19 has one. Deferred jobs
  * persist this; immediate jobs don't (their metadata rides the event — Task 7's
  * `targetPlatforms` is the exception: immediate jobs apply it directly to the
  * result-row fan-out instead of persisting it).
@@ -637,6 +655,7 @@ export async function createPostJobOnly(
               facebookMetadata: params.facebookMetadata,
               targetPlatforms,
               cover: params.cover,
+              location: location ?? null,
             }),
             ...immediateJobStatus(intent, fanOut.rows),
             workspaceId,
@@ -685,6 +704,7 @@ export async function createPostJobOnly(
               facebookMetadata: params.story.facebookMetadata,
               targetPlatforms: params.story.targetPlatforms,
               cover: params.cover,
+              location: location ?? null,
             }),
             ...immediateJobStatus(intent, fanOut.storyRows),
             workspaceId,
@@ -753,6 +773,8 @@ export function buildPostJobCreateData(args: {
   targetPlatforms?: Platform[];
   /** V1: the video's cover; no columns are written without one. */
   cover?: PostCover;
+  /** R19 publishing L5: the post's location, null for none; snapshotted when given. */
+  location?: string | null;
   // This pure builder deliberately does NOT take/stamp workspaceId — both
   // callers below merge it in directly (from their own required
   // `workspaceId` param) right at their `prisma.postJob.create` call, so this
@@ -761,7 +783,7 @@ export function buildPostJobCreateData(args: {
   // Always snapshot privacy + targeting when present so retry can replay the
   // user's compose-time choice (review S6). Immediate jobs still put privacy
   // on the event payload; the column is no longer deferred-only dead data.
-  const publishMetadata = buildPublishMetadataSnapshot(
+  const options = buildPublishMetadataSnapshot(
     args.tiktokMetadata,
     args.youtubeMetadata,
     args.targetPlatforms,
@@ -769,6 +791,8 @@ export function buildPostJobCreateData(args: {
     args.instagramMetadata,
     args.facebookMetadata,
   );
+  const publishMetadata: PublishMetadataSnapshot | undefined =
+    args.location !== undefined ? { ...options, location: args.location } : options;
   return {
     userId: args.userId,
     mediaItemId: args.mediaItemId,
@@ -809,12 +833,9 @@ export interface CreatePostJobForExistingMediaParams
   /** See `baseCaption` above: snapshotted on the job + carried by the event. */
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
   /**
-   * Unlike caption/overrides, location IS read from the persisted
-   * `MediaItem.metadata.location` at publish time (platform clients read it
-   * off the refetched MediaItem — see `instagramClient.ts` /
-   * `youtubeClient.ts`), so a new location for this reuse must be written
-   * onto the existing row. Omitted/falsy leaves the row's existing location
-   * untouched.
+   * Snapshotted on the new job like the caption (R19 publishing L5), never
+   * written onto the shared, reused MediaItem: another post of the same item
+   * must not take this post's place. Omitted/empty: the post has none.
    */
   location?: string;
   /** See `baseCaption` above: carried by the event payload, not this helper. */
@@ -920,26 +941,15 @@ export async function createPostJobForExistingMedia(
     // item between the initial check above and our acquiring the lock.
     const locked = await tx.mediaItem.findUnique({
       where: { id: mediaItemId },
-      // metadata too: a new location is merged into it below, under this lock.
-      select: { workspaceId: true, deletedAt: true, metadata: true },
+      select: { workspaceId: true, deletedAt: true },
     });
     assertMediaItemReusable(locked, workspaceId);
-    // Merged, not replaced: the metadata also holds a client upload's sender
-    // name and note (lib/mediaDto.ts), which a location must not drop.
-    const currentMetadata =
-      locked?.metadata && typeof locked.metadata === "object" && !Array.isArray(locked.metadata)
-        ? (locked.metadata as Prisma.JsonObject)
-        : {};
 
     await tx.mediaItem.update({
       where: { id: mediaItemId },
       data: {
         // Attach-time stamp, same rationale as createPostJobOnly.
         lastUsedAt: now,
-        // Only touch metadata when a new location was actually supplied, so a
-        // reuse call that omits `location` doesn't clobber the item's existing
-        // one (platform clients read it fresh from this row at publish time).
-        ...(location ? { metadata: { ...currentMetadata, location: { description: location } } } : {}),
         // 07d: the item was checked to be in this workspace under the lock above.
         ...(params.altText && mediaItem.mimeType.startsWith("image/") ? { altText: params.altText } : {}),
       },
@@ -965,6 +975,7 @@ export async function createPostJobForExistingMedia(
               facebookMetadata: params.facebookMetadata,
               targetPlatforms,
               cover: params.cover,
+              location: location ?? null,
             }),
             ...immediateJobStatus(intent, fanOut.rows),
             workspaceId,
@@ -998,6 +1009,7 @@ export async function createPostJobForExistingMedia(
             facebookMetadata: params.story.facebookMetadata,
             targetPlatforms: params.story.targetPlatforms,
             cover: params.cover,
+            location: location ?? null,
           }),
           ...immediateJobStatus(intent, fanOut.storyRows),
           workspaceId,

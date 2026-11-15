@@ -118,6 +118,12 @@ export interface PublishContext {
   /** Facebook Page feed or Story. Absent: feed. */
   facebookMetadata?: FacebookPostMetadata;
   /**
+   * The post's location text from its job's snapshot (R19 publishing L5); null:
+   * the post has none. Absent: a job saved before the snapshot had it, whose
+   * client reads `mediaItem.metadata.location` as before.
+   */
+  location?: string | null;
+  /**
    * The video's chosen cover (V1, lib/videoCover.ts). Set only for YouTube,
    * Instagram, Facebook Page and LinkedIn. Absent: the platform picks its own.
    * A client never fails or repeats a post over its cover.

@@ -36,7 +36,7 @@ import {
   syncYouTubeMetricsPage,
   type MetricsPageResult,
 } from "@/server/jobs/youtubeMetricsSync";
-import { resolvePostCaptionSource } from "@/server/jobs/posting";
+import { postLocationOf, resolvePostCaptionSource } from "@/server/jobs/posting";
 import {
   PUBLISH_PRIORITY,
   publishConcurrency,
@@ -197,6 +197,8 @@ interface PublishToPlatformArgs {
   facebookMetadata?: FacebookPostMetadata;
   /** The video's cover from the job row (V1); absent for none. */
   cover?: PostCover;
+  /** The post's location from its job's snapshot (postLocationOf); absent for an older job. */
+  location?: string | null;
 }
 
 /**
@@ -522,6 +524,7 @@ async function publishToPlatform({
   instagramMetadata,
   facebookMetadata,
   cover,
+  location,
 }: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
@@ -674,6 +677,10 @@ async function publishToPlatform({
     }
     if (cover && COVER_PLATFORMS.has(connection.platform)) {
       publishContext.cover = cover;
+    }
+    // R19 publishing L5: the post's own location (null: none); absent for an older job.
+    if (location !== undefined) {
+      publishContext.location = location;
     }
 
     // YouTube's `videos.insert` has its own daily budget (100 a day by default,
@@ -1170,6 +1177,8 @@ export const publishToAllPlatforms = inngest.createFunction(
         resultRecords,
         // V1: only when the post has a cover, so a post without one memoizes what it did before.
         ...withCover(postJob),
+        // R19 publishing L5: only when the job snapshotted one, as the cover.
+        ...postLocationOf(postJob.publishMetadata),
       };
     });
 
@@ -1286,6 +1295,8 @@ export const publishToAllPlatforms = inngest.createFunction(
             instagramMetadata,
             facebookMetadata,
             cover: setupData.cover,
+            // fetch-data carries `location` under the snapshot's own key.
+            ...postLocationOf(setupData),
           });
         },
       });
@@ -1814,6 +1825,7 @@ export const retryPlatforms = inngest.createFunction(
             instagramMetadata: publishMetadata?.instagram,
             facebookMetadata: publishMetadata?.facebook,
             cover: setupData.cover,
+            ...postLocationOf(publishMetadata),
           });
         },
       });

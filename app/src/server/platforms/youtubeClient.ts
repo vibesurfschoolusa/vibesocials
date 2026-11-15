@@ -305,9 +305,14 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   const tags = fitYouTubeTags(hashtagMatches.map((tag) => tag.substring(1))); // Remove # prefix
 
   // A location with coordinates becomes recordingDetails; YouTube takes none without.
-  const locationMetadata = (mediaItem.metadata as { location?: { description?: string } } | null)?.location;
-  const locationData = locationMetadata?.description ? parseYouTubeLocation(locationMetadata.description) : null;
-  if (locationMetadata?.description && !locationData) {
+  // The post's own location; the Media item's only for a job saved before the
+  // snapshot had one (R19 publishing L5).
+  const locationText =
+    ctx.location !== undefined
+      ? ctx.location
+      : (mediaItem.metadata as { location?: { description?: string } } | null)?.location?.description;
+  const locationData = locationText ? parseYouTubeLocation(locationText) : null;
+  if (locationText && !locationData) {
     console.log("[YouTube] Location text has no coordinates; the video is sent without a location");
   }
 

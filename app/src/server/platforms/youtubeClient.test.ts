@@ -2315,3 +2315,37 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
     expect(resourceFor({ youtubeMetadata: { privacyStatus: "unlisted" } }).status.privacyStatus).toBe("unlisted");
   });
 });
+
+// R19 publishing L5: the location is the post's own (ctx.location, from its
+// job's snapshot); the shared Media item's place is read only for a job saved
+// before the snapshot had the key (ctx.location absent).
+describe("buildYouTubeVideoResource — the post's location", () => {
+  const withItemPlace = (overrides: Partial<PublishContext>) =>
+    buildYouTubeVideoResource(
+      ytCtx({
+        mediaItem: {
+          ...ytCtx().mediaItem,
+          metadata: { location: { description: "Dania Beach (26.05, -80.11)" } },
+        } as unknown as MediaItem,
+        ...overrides,
+      }),
+    );
+
+  it("sends the post's own place, not the one stored on the Media item", () => {
+    const { locationData, apiParts } = withItemPlace({ location: "Pompano Beach (26.23, -80.09)" });
+    expect(locationData).toEqual({ latitude: 26.23, longitude: -80.09, description: "Pompano Beach" });
+    expect(apiParts).toContain("recordingDetails");
+  });
+
+  it("a post with no location sends none, even when the Media item has an old one", () => {
+    const { metadata, locationData, apiParts } = withItemPlace({ location: null });
+    expect(locationData).toBeNull();
+    expect(metadata).not.toHaveProperty("recordingDetails");
+    expect(apiParts).not.toContain("recordingDetails");
+  });
+
+  it("an old job without the key reads the Media item's place, as before", () => {
+    const { locationData } = withItemPlace({});
+    expect(locationData).toEqual({ latitude: 26.05, longitude: -80.11, description: "Dania Beach" });
+  });
+});
