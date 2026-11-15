@@ -332,6 +332,17 @@ describe("PostJobCard - what a member reads", () => {
     expect(failureSentence(failedInstagram, "member")).toBe("The workspace owner can reconnect Instagram; then retry.");
   });
 
+  // R19 publishing L6: the Business Profile location is chosen on an owner-only page.
+  it("a Business Profile without a location: the owner chooses it in Settings, a member is told the owner can", () => {
+    const owner = "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.";
+    const member = "Google Business Profile location is not configured. The workspace owner can choose the Business Profile location; then retry.";
+    for (const stored of [owner, "Google Business Profile location is not configured. Set it from the Connections page."]) {
+      const failed = result({ platform: "google_business_profile", status: "failed", externalPostId: null, errorMessage: stored });
+      expect(failureSentence(failed, "owner")).toBe(owner);
+      expect(failureSentence(failed, "member")).toBe(member);
+    }
+  });
+
   it("the reconnect step: a Settings link for an owner, the owner's step and no link for a member", () => {
     const owner = renderToStaticMarkup(createElement(ReconnectStep, { platform: "instagram", role: "owner" })).replace(/<!-- -->/g, "");
     expect(owner).toContain("Reconnect Instagram in");

@@ -382,7 +382,8 @@ async function ensureLocationName(
 
   if (typeof raw !== "string" || !raw.trim()) {
     const error = new Error(
-      "Google Business Profile location is not configured. Set it from the Connections page.",
+      // R19 publishing L6: the location is chosen in Settings; a member reads the owner's step (publishFailureText).
+      "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.",
     ) as Error & { code: string };
     error.code = "GBP_NO_LOCATION_NAME";
     throw error;

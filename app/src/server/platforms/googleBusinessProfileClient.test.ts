@@ -1080,7 +1080,7 @@ describe("googleBusinessProfileClient: no location chosen", () => {
     const error = await failure(googleBusinessProfileClient.publishVideo(context));
 
     expect(error?.code).toBe("GBP_NO_LOCATION_NAME");
-    expect(error?.message).toBe("Google Business Profile location is not configured. Set it from the Connections page.");
+    expect(error?.message).toBe("Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

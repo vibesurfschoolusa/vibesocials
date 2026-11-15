@@ -1256,4 +1256,23 @@ describe("deliverPostOutcomeNotification - reconnect sentence for the recipient"
     await deliverPostOutcomeNotification({ userId: "owner-1", postJobId: "job-1" });
     expect(html()).toContain("<li>Instagram: Failed — Reconnect Instagram in Settings, then retry.</li>");
   });
+
+  // R19 publishing L6: the Business Profile location is chosen on an owner-only page.
+  it.each([
+    ["owner", "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry."],
+    ["member", "Google Business Profile location is not configured. The workspace owner can choose the Business Profile location; then retry."],
+  ] as const)("a Business Profile without a location: the %s's sentence", async (role, expected) => {
+    findUniquePostJobMock.mockResolvedValue(
+      jobRow({
+        status: "failed",
+        results: [
+          { platform: "google_business_profile", status: "failed", errorCode: "GBP_NO_LOCATION_NAME", errorMessage: "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry." },
+        ],
+      }),
+    );
+    findUniqueMemberMock.mockResolvedValue({ id: "m", role });
+    await deliverPostOutcomeNotification({ userId: `${role}-1`, postJobId: "job-1" });
+    expect(html()).toContain(`Failed — ${expected}</li>`);
+    if (role === "member") expect(html()).not.toContain("location in Settings");
+  });
 });

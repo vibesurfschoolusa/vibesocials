@@ -44,6 +44,8 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
       "The workspace owner can check the store code for Google Business Profile; then retry.",
     ],
     [LINKEDIN_NOT_SUPER_ADMIN, linkedinNotSuperAdminMember],
+    // R19 publishing L6: the Business Profile location is chosen on an owner-only page.
+    [GBP_NO_LOCATION, "Google Business Profile location is not configured. The workspace owner can choose the Business Profile location; then retry."],
     [
       "The Pinterest board this connection posts to no longer exists. Reconnect Pinterest in Settings and choose a board.",
       `The Pinterest board this connection posts to no longer exists. ${chooseBoard}`,
@@ -59,6 +61,9 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
 const LINKEDIN_NOT_SUPER_ADMIN =
   "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
 
+/** googleBusinessProfileClient's sentence for a connection with no location chosen. */
+const GBP_NO_LOCATION = "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.";
+
 /**
  * Sentences posts that failed earlier still carry, and the sentence written
  * for the same failure now, for every reader (R11-pages L1, R12-pages L5): a
@@ -69,6 +74,8 @@ const SUPERSEDED: ReadonlyMap<string, string> = new Map([
     "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
     LINKEDIN_NOT_SUPER_ADMIN,
   ],
+  // R19 publishing L6: "Connections page" named no page a member (or anyone) can find.
+  ["Google Business Profile location is not configured. Set it from the Connections page.", GBP_NO_LOCATION],
 ]);
 
 /** The clients' "Your <Platform> connection has expired / is no longer valid" sentences. */
