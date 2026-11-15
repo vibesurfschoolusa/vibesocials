@@ -50,12 +50,13 @@ import { prisma } from "@/lib/db";
 import {
   applyToPair,
   dispatchNow,
+  notSentNote,
+  partialSendMessage,
   PAIR_HALF_SELECT,
   pairLimitArgs,
   readPairHalf,
   releaseReservation,
   reserveSendNow,
-
   takenFeedHalf,
   wantsPair,
   type PairHalf,
@@ -443,5 +444,72 @@ describe("dispatchNow - with the route's reservation", () => {
     prepareMock.mockImplementation(async (id: string) => ok(id));
     await dispatchNow(["feed-1"], { route: "test" });
     expect(prepareMock).toHaveBeenCalledWith("feed-1", { sendNow: true });
+  });
+});
+
+// R11-publishing L1: the answer to Publish now / Send again is worded for its reader.
+describe("partialSendMessage and notSentNote - worded for the viewer's role", () => {
+  const dispatch = (why: Map<string, { errorMessage: string; platform: "facebook_page" } | null>) => ({
+    sent: new Set(["feed-1"]),
+    notSent: new Set(["story-1"]),
+    reasons: new Map([["story-1", "NO_CONNECTIONS"]]),
+    whyNotSent: why,
+    limitRefusals: new Map(),
+    sendFailed: false,
+  });
+  const reconnect = new Map([["story-1", { errorMessage: "Reconnect Facebook Page in Settings, then retry.", platform: "facebook_page" as const }]]);
+
+  it("owner: the stored sentence as it is", () => {
+    expect(partialSendMessage("feed-1", half(), dispatch(reconnect), "owner")).toBe(
+      "The feed post is being sent. The Story was not: Reconnect Facebook Page in Settings, then retry.",
+    );
+  });
+
+  it("member: the stored sentence's member form (only the owner can reconnect)", () => {
+    expect(partialSendMessage("feed-1", half(), dispatch(reconnect), "member")).toBe(
+      "The feed post is being sent. The Story was not: The workspace owner can reconnect Facebook Page; then retry.",
+    );
+  });
+
+  it("no stored sentence: owner is pointed at Activity to reconnect; member is told the owner can", () => {
+    const none = new Map([["story-1", null]]);
+    expect(partialSendMessage("feed-1", half(), dispatch(none), "owner")).toBe(
+      "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what to reconnect.",
+    );
+    expect(partialSendMessage("feed-1", half(), dispatch(none), "member")).toBe(
+      "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+    );
+  });
+
+  it("notSentNote: owner and member forms", () => {
+    expect(notSentNote("story", "owner")).toBe(
+      "Its Story was not sent: none of its platforms is connected. Activity shows what to reconnect.",
+    );
+    expect(notSentNote("story", "member")).toBe(
+      "Its Story was not sent: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+    );
+  });
+
+  it("dispatchNow keeps the platform of the first failed result with its sentence", async () => {
+    prepareMock.mockReset();
+    sendMock.mockReset();
+    sendMock.mockResolvedValue({ ids: [] });
+    resultFindFirstMock.mockReset();
+    resultFindFirstMock.mockResolvedValue({ errorMessage: "Reconnect Facebook Page in Settings, then retry.", platform: "facebook_page" });
+    prepareMock.mockImplementation(async (id: string) =>
+      id === "story-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "u", workspaceId: "ws", mediaItemId: null, baseCaption: "c", perPlatformOverrides: null } },
+    );
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+
+    expect(result.whyNotSent.get("story-1")).toEqual({
+      errorMessage: "Reconnect Facebook Page in Settings, then retry.",
+      platform: "facebook_page",
+    });
+    expect(resultFindFirstMock).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { errorMessage: true, platform: true } }),
+    );
   });
 });

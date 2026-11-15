@@ -384,6 +384,22 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: "NO_CONNECTIONS" });
   });
+
+  // R11-publishing L1: only the owner can connect; a member reads who can.
+  it("NO_CONNECTIONS: the owner is told to connect, a member that the owner can", async () => {
+    createPostJobOnlyMock.mockRejectedValue(new Error("NO_CONNECTIONS"));
+    const body = { blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" };
+
+    await expect((await POST(jsonRequest(body))).json()).resolves.toMatchObject({
+      message: "Connect at least one platform before creating a post.",
+    });
+
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+    await expect((await POST(jsonRequest(body))).json()).resolves.toMatchObject({
+      code: "NO_CONNECTIONS",
+      message: "The workspace owner can connect a platform for this workspace.",
+    });
+  });
 });
 
 describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {

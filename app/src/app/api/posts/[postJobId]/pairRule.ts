@@ -3,6 +3,7 @@ import type { Platform, PostJobStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
+import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { LIMIT_CHECK_FAILED_CODE, LIMIT_CHECK_FAILED_MESSAGE } from "@/lib/usageLimits";
@@ -160,9 +161,12 @@ export async function applyToPair<R>(args: {
   });
 }
 
+/** Who reads an answer: only an owner can connect or reconnect (R11-publishing L1). */
+type ViewerRole = "owner" | "member";
+
 /** The note for a half that was claimed but had no connected platform to go to. */
-export function notSentNote(kind: PairHalf["kind"]): string {
-  return `Its ${halfName(kind)} was not sent: none of its platforms is connected. Activity shows what to reconnect.`;
+export function notSentNote(kind: PairHalf["kind"], role: ViewerRole = "owner"): string {
+  return `Its ${halfName(kind)} was not sent: ${noPlatformConnected(role)}`;
 }
 
 /** What `dispatchNow` did with each claimed post. */
@@ -173,14 +177,21 @@ export type DispatchResult = {
   notSent: Set<string>;
   /** prepare's reason code for each post in `notSent`. */
   reasons: Map<string, string>;
-  /** Only when some went out and some did not: why each one in `notSent` did not, in a sentence. */
-  whyNotSent: Map<string, string>;
+  /**
+   * Only when some went out and some did not: each one in `notSent`'s first
+   * failed result (its sentence as stored, and its platform), or null if none.
+   */
+  whyNotSent: Map<string, { errorMessage: string; platform: Platform } | null>;
   /** Review of T1, item 1: posts a daily limit refused as they went out, with the sentence and code. */
   limitRefusals: Map<string, { error: string; code: string }>;
   sendFailed: boolean;
 };
 
-const NO_PLATFORM_CONNECTED = "none of its platforms is connected. Activity shows what to reconnect.";
+function noPlatformConnected(role: ViewerRole): string {
+  return role === "member"
+    ? "none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it."
+    : "none of its platforms is connected. Activity shows what to reconnect.";
+}
 
 /**
  * Publish now for posts this request just claimed (status in_progress): this
@@ -315,14 +326,14 @@ export async function dispatchNow(
   // why, with the first platform's own sentence (e.g. "Reconnect Facebook Page
   // in Settings, then retry.").
   for (const id of result.notSent) {
-    let why = NO_PLATFORM_CONNECTED;
+    let why: { errorMessage: string; platform: Platform } | null = null;
     try {
       const failed = await prisma.postJobResult.findFirst({
         where: { postJobId: id, status: "failed" },
         orderBy: { createdAt: "asc" },
-        select: { errorMessage: true },
+        select: { errorMessage: true, platform: true },
       });
-      if (failed?.errorMessage) why = failed.errorMessage;
+      if (failed?.errorMessage) why = { errorMessage: failed.errorMessage, platform: failed.platform };
     } catch (error) {
       logger.error(`[${log.route}] Couldn't read why a post was not sent`, { error, postJobId: id });
     }
@@ -339,9 +350,15 @@ function capitalized(text: string): string {
  * Review of R3: the answer's sentence when one half of a pair went out and the
  * other had nothing it could send, e.g. "The Story is being sent. The feed post
  * was not: Reconnect Facebook Page in Settings." Null otherwise (both went,
- * neither went, not a pair, or the send failed).
+ * neither went, not a pair, or the send failed). A member reads the stored
+ * sentence's member form (R11-publishing L1).
  */
-export function partialSendMessage(postJobId: string, half: PairHalf | null, dispatch: DispatchResult): string | null {
+export function partialSendMessage(
+  postJobId: string,
+  half: PairHalf | null,
+  dispatch: DispatchResult,
+  role: ViewerRole = "owner",
+): string | null {
   if (!half || dispatch.sendFailed) return null;
   const mainKind: PairHalf["kind"] = half.kind === "story" ? "feed" : "story";
   const [sentKind, notKind, notId] = dispatch.sent.has(postJobId) && dispatch.notSent.has(half.id)
@@ -350,7 +367,10 @@ export function partialSendMessage(postJobId: string, half: PairHalf | null, dis
       ? [half.kind, mainKind, postJobId]
       : [null, null, null];
   if (!sentKind || !notKind || !notId) return null;
-  const why = dispatch.whyNotSent.get(notId) ?? NO_PLATFORM_CONNECTED;
+  const stored = dispatch.whyNotSent.get(notId) ?? null;
+  const why = stored
+    ? (sentenceForRecipient(stored.errorMessage, stored.platform, role) ?? stored.errorMessage)
+    : noPlatformConnected(role);
   return `The ${halfName(sentKind)} is being sent. ${capitalized(`the ${halfName(notKind)}`)} was not: ${why}`;
 }
 

@@ -1291,7 +1291,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     expect(resultFindFirstMock).toHaveBeenCalledWith({
       where: { postJobId: "job-1", status: "failed" },
       orderBy: { createdAt: "asc" },
-      select: { errorMessage: true },
+      select: { errorMessage: true, platform: true },
     });
     expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-story-1" }));
   });
@@ -1322,6 +1322,81 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     expect(res.status).toBe(409);
     expect((await res.json()).error).toMatch(/^Nothing was posted/);
     expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  // R11-publishing L1: a member (approval off) pressing Publish now reads who can fix it.
+  describe("a member publishing now", () => {
+    const member = () => makeWorkspaceContext({ userId: "member-1", role: "member", requireApproval: false });
+    const storySendable = async (id: string) =>
+      id === "job-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } };
+
+    it("one half not sendable: the stored reconnect sentence in its member form", async () => {
+      getWorkspaceContextMock.mockResolvedValue(member());
+      findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+      prepareDispatchMock.mockImplementation(storySendable);
+      resultFindFirstMock.mockResolvedValue({ errorMessage: "Reconnect Facebook Page in Settings, then retry.", platform: "facebook_page" });
+
+      const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+      expect(res.status).toBe(202);
+      expect((await res.json()).message).toBe(
+        "The Story is being sent. The feed post was not: The workspace owner can reconnect Facebook Page; then retry.",
+      );
+    });
+
+    it("the other half not sendable: its note says the owner can reconnect", async () => {
+      getWorkspaceContextMock.mockResolvedValue(member());
+      findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+      prepareDispatchMock.mockImplementation(async (id: string) =>
+        id === "story-1"
+          ? { ok: false, reason: "NO_CONNECTIONS" }
+          : { ok: true, event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } },
+      );
+      resultFindFirstMock.mockResolvedValue(null);
+
+      const body = await (await POST(req({ includePair: true }), ctx("job-1"))).json();
+
+      expect(body.message).toBe(
+        "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      );
+      expect(body.otherHalf.note).toBe(
+        "Its Story was not sent: none of its platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      );
+    });
+
+    it("nothing sendable at all: Nothing was posted, the owner can reconnect", async () => {
+      getWorkspaceContextMock.mockResolvedValue(member());
+      findFirstMock.mockResolvedValue({ status: "draft" });
+      prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe(
+        "Nothing was posted: none of this post's platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it.",
+      );
+    });
+
+    it("nothing connected in the workspace: the owner can connect one (owner keeps its own sentence)", async () => {
+      findFirstMock.mockResolvedValue({ status: "draft" });
+      connectionCountMock.mockResolvedValue(0);
+
+      getWorkspaceContextMock.mockResolvedValue(member());
+      const memberRes = await POST(req({}), ctx("job-1"));
+      expect(memberRes.status).toBe(400);
+      await expect(memberRes.json()).resolves.toEqual({
+        error: "The workspace owner can connect a platform for this workspace.",
+        code: "NO_CONNECTIONS",
+      });
+
+      getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+      await expect((await POST(req({}), ctx("job-1"))).json()).resolves.toEqual({
+        error: "Connect at least one platform before publishing.",
+        code: "NO_CONNECTIONS",
+      });
+    });
   });
 
   it("member submit holds both halves and the owners get ONE email with the Story line", async () => {

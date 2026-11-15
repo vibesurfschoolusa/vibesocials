@@ -406,7 +406,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (connectionCount === 0) {
     return NextResponse.json(
       {
-        error: "Connect at least one platform before publishing.",
+        // R11-publishing L1: only the owner can connect one.
+        error:
+          workspaceContext.role === "member"
+            ? "The workspace owner can connect a platform for this workspace."
+            : "Connect at least one platform before publishing.",
         code: "NO_CONNECTIONS",
       },
       { status: 400 },
@@ -501,10 +505,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     { reserved: { ...reservation.reserved, postJobIds: reservation.reserved.postJobIds.filter((id) => claimed.includes(id)) } },
   );
 
-  if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
+  if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind, workspaceContext.role) };
   const pairAnswer = pair ? { otherHalf: pair } : {};
   // One half went out and the other had nothing to send: a success that says both.
-  const partial = partialSendMessage(postJobId, half, dispatch);
+  const partial = partialSendMessage(postJobId, half, dispatch, workspaceContext.role);
 
   // The job is already committed `in_progress` with pending results: if the
   // event can't be handed to Inngest, those results were failed (job → failed)
@@ -529,7 +533,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // hangs in_progress and Activity shows what to reconnect.
     return NextResponse.json(
       {
-        error: "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+        error:
+          workspaceContext.role === "member"
+            ? "Nothing was posted: none of this post's platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it."
+            : "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
         code: dispatch.reasons.get(postJobId),
         ...pairAnswer,
       },
