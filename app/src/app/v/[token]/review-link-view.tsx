@@ -141,7 +141,14 @@ export function ReviewPostCard({
       <div className="space-y-3 p-4 sm:p-5">
         <div>
           <p className="text-sm font-medium">
-            {post.scheduledFor ? <time dateTime={post.scheduledFor}>{formatWhen(post.scheduledFor)}</time> : formatWhen(null)}
+            {/* R5-pages L6: a change request holds the post back, so its old time would mislead. */}
+            {post.state === "change_requested" ? (
+              "Not scheduled: waiting for your changes"
+            ) : post.scheduledFor ? (
+              <time dateTime={post.scheduledFor}>{formatWhen(post.scheduledFor)}</time>
+            ) : (
+              formatWhen(null)
+            )}
           </p>
           {post.platforms.length > 0 ? (
             <p className="mt-0.5 text-sm text-muted-foreground">{post.platforms.join(", ")}</p>
