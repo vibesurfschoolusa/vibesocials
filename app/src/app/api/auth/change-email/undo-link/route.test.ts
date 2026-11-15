@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Settings, Account says until when the previous address can undo the last
 // email change; this is where it reads that date.
-const { getCurrentUserMock, findFirstMock } = vi.hoisted(() => ({
+const { getCurrentUserMock, findFirstMock, clearPassedUndoWindowsMock } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
   findFirstMock: vi.fn(),
+  clearPassedUndoWindowsMock: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
@@ -12,12 +13,15 @@ vi.mock("@/lib/db", () => ({
   prisma: { emailChangeRequest: { findFirst: findFirstMock } },
 }));
 
+vi.mock("@/server/auth/undoWindow", () => ({ clearPassedUndoWindows: clearPassedUndoWindowsMock }));
+
 import { GET } from "./route";
 
 const UNTIL = new Date("2026-11-21T12:00:00.000Z");
 
 beforeEach(() => {
-  for (const mock of [getCurrentUserMock, findFirstMock]) mock.mockReset();
+  for (const mock of [getCurrentUserMock, findFirstMock, clearPassedUndoWindowsMock]) mock.mockReset();
+  clearPassedUndoWindowsMock.mockResolvedValue(undefined);
   getCurrentUserMock.mockResolvedValue({ id: "user-1", email: "new@example.com" });
   findFirstMock.mockResolvedValue({ undoExpiresAt: UNTIL });
 });
@@ -44,6 +48,13 @@ describe("GET /api/auth/change-email/undo-link", () => {
     const response = await GET();
     await expect(response.json()).resolves.toEqual({ until: UNTIL.toISOString() });
     expectLiveWhere(findFirstMock.mock.calls[0][0].where);
+  });
+
+  // R6-pages L6: read on every visit to Settings, Account, so passed windows
+  // (their previous address and undo link) are cleared here.
+  it("clears the undo windows that have passed", async () => {
+    await GET();
+    expect(clearPassedUndoWindowsMock).toHaveBeenCalledWith(expect.anything(), expect.any(Date));
   });
 
   it("answers null when there is no live undo link", async () => {

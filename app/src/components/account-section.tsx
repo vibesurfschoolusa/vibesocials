@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
@@ -47,6 +48,31 @@ function scheduledNote(count: number): string {
 async function errorFrom(response: Response, fallback: string): Promise<string> {
   const data = (await response.json().catch(() => null)) as { error?: string } | null;
   return data?.error ?? fallback;
+}
+
+/**
+ * R6-security M1: while the last change can be undone the route refuses with
+ * `until`, and the sentence is written again here so its date is in the
+ * viewer's time zone, not the server's.
+ */
+export function emailChangeRefusal(data: { error?: string; until?: string } | null, fallback: string): string {
+  if (typeof data?.until === "string") return emailChangeLockedSentence(data.until);
+  return data?.error ?? fallback;
+}
+
+/** R6 review: deletion waits for the undo window; the date in the viewer's zone, as above. */
+export function accountDeleteRefusal(data: { error?: string; until?: string } | null, fallback: string): string {
+  if (typeof data?.until === "string") return accountDeleteLockedSentence(data.until);
+  return data?.error ?? fallback;
+}
+
+/** R6-pages L10: a form's error, announced to screen readers as it appears. */
+export function FormError({ message }: { message: string }) {
+  return (
+    <p role="alert" className="text-sm text-destructive">
+      {message}
+    </p>
+  );
 }
 
 /** Settings → Account: sign-in email (and changing it), change password, delete account. */
@@ -109,8 +135,9 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
         body: JSON.stringify({ newEmail, currentPassword }),
       });
       if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string; until?: string } | null;
         setError(
-          await errorFrom(response, "We couldn't start the change. Your email is unchanged. Please try again in a minute."),
+          emailChangeRefusal(data, "We couldn't start the change. Your email is unchanged. Please try again in a minute."),
         );
         return;
       }
@@ -164,11 +191,7 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
           onChange={(event) => setCurrentPassword(event.target.value)}
         />
       </div>
-      {error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      ) : null}
+      {error ? <FormError message={error} /> : null}
       <div className="flex flex-wrap gap-2">
         <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
           Send confirmation link
@@ -183,8 +206,7 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
 
 /** Review 2: until when the previous address can undo the last email change. */
 export function undoLinkSentence(untilIso: string): string {
-  const until = new Date(untilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-  return `Your previous address can undo this change until ${until}.`;
+  return `Your previous address can undo this change until ${formatDisplayDate(untilIso)}.`;
 }
 
 /**
@@ -285,7 +307,7 @@ function ChangePasswordForm() {
         />
         <p className="text-xs text-muted-foreground">At least 8 characters.</p>
       </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <FormError message={error} /> : null}
       <div>
         <Button
           type="submit"
@@ -325,7 +347,8 @@ function DeleteAccount({
         body: JSON.stringify(hasPassword ? { password: confirmValue } : { confirmEmail: confirmValue }),
       });
       if (!response.ok) {
-        setError(await errorFrom(response, "Could not delete your account. Try again."));
+        const data = (await response.json().catch(() => null)) as { error?: string; until?: string } | null;
+        setError(accountDeleteRefusal(data, "Could not delete your account. Try again."));
         setBusy(false);
         return;
       }
@@ -399,7 +422,7 @@ function DeleteAccount({
               />
             </div>
           )}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <FormError message={error} /> : null}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>

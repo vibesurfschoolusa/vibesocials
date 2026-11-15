@@ -7,7 +7,9 @@ const {
   transactionMock,
   checkRateLimitMock,
   deliverAccountEmailMock,
+  changeRequestDeleteManyMock,
 } = vi.hoisted(() => ({
+  changeRequestDeleteManyMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
   userUpdateMock: vi.fn(),
   transactionMock: vi.fn(),
@@ -57,12 +59,14 @@ beforeEach(() => {
   transactionMock.mockReset();
   checkRateLimitMock.mockReset();
   deliverAccountEmailMock.mockReset();
+  changeRequestDeleteManyMock.mockReset();
+  changeRequestDeleteManyMock.mockResolvedValue({ count: 0 });
   getCurrentUserMock.mockResolvedValue(user());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   deliverAccountEmailMock.mockResolvedValue(false);
   userUpdateMock.mockResolvedValue({});
   transactionMock.mockImplementation((cb: (tx: unknown) => unknown) =>
-    cb({ user: { update: userUpdateMock } }),
+    cb({ user: { update: userUpdateMock }, emailChangeRequest: { deleteMany: changeRequestDeleteManyMock } }),
   );
 });
 
@@ -152,6 +156,14 @@ describe("POST /api/auth/change-password", () => {
       "owner@example.com",
       expect.objectContaining({ subject: "Your Vibe Socials password was changed" }),
     );
+  });
+
+  // R6-security L2: a link asked for before the password changed may have
+  // been asked for by whoever the change locks out.
+  it("deletes unused email-change requests (and so their links) in the same transaction", async () => {
+    const response = await POST(request({ currentPassword: "old-password", newPassword: "new-password" }));
+    expect(response.status).toBe(200);
+    expect(changeRequestDeleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1", usedAt: null } });
   });
 
   it("still succeeds when the email is not sent", async () => {

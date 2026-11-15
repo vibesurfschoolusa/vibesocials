@@ -121,6 +121,9 @@ export async function POST(request: Request) {
       await tx.accountToken.deleteMany({
         where: { userId: record.userId, type: "password_reset", usedAt: null },
       });
+      // R6-security L2: so is a pending email change, which may be the work
+      // of whoever the reset locks out.
+      await tx.emailChangeRequest.deleteMany({ where: { userId: record.userId, usedAt: null } });
 
       return true;
     });

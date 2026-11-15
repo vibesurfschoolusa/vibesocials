@@ -134,3 +134,20 @@ describe("WorkspacesPage", () => {
     expect(await render()).toContain("A client asked for changes on 1 post.");
   });
 });
+
+// R6-client-journey L4: only an owner decides approvals, so the number is red
+// for an owner only (as Needs you, which gives a member no approvals row).
+describe("WorkspacesPage: waiting for approval", () => {
+  it("shows the number in red to an owner, plainly to a member", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([
+      entry({ workspaceId: "ws-owner", name: "Owner Co", role: "owner", waitingForApproval: 3, needsAttention: true }),
+      entry({ workspaceId: "ws-member", name: "Member Co", role: "member", waitingForApproval: 2 }),
+    ]);
+
+    const html = await render();
+
+    expect(html).toMatch(/text-danger-ontint">3</);
+    expect(html).not.toMatch(/text-danger-ontint">2</);
+    expect(html).toMatch(/text-foreground">2</);
+  });
+});

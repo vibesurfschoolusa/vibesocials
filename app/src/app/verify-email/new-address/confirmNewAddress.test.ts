@@ -49,6 +49,37 @@ describe("confirmNewAddress", () => {
     }
   });
 
+  // R6-pages L1: a used link opened again (most likely by whoever just used
+  // it) is answered about the link, not with "Your email wasn't changed".
+  it("titles a used link as used, with the route's sentence and no retry", async () => {
+    const sentence = "This link was already used. If you just confirmed it, your email has changed.";
+    const view = await confirmNewAddress(respond(400, { error: sentence, used: true }), "tok");
+    expect(view).toMatchObject({
+      changed: false,
+      signOutHere: false,
+      offerRetry: false,
+      title: "This link was already used",
+      message: sentence,
+    });
+  });
+
+  // The server writes its dates in its own zone; the page writes these two
+  // refusals again from `until`, in the viewer's.
+  it("writes the undo-window refusals from the date the server sends", async () => {
+    const until = "2026-11-17T12:00:00.000Z";
+    const locked = await confirmNewAddress(respond(409, { error: "server", reason: "locked", until }), "tok");
+    expect(locked).toMatchObject({
+      changed: false,
+      offerRetry: false,
+      title: "Your email wasn't changed",
+      message: "You changed your email recently; you can change it again after November 17, 2026.",
+    });
+    const held = await confirmNewAddress(respond(409, { error: "server", reason: "held", until }), "tok");
+    expect(held.message).toBe(
+      "This address was another Vibe Socials account's sign-in email until recently, and that account can take it back until November 17, 2026, so your email is unchanged. After that, ask for the change again in Settings, Account.",
+    );
+  });
+
   it("offers a retry after a server failure", async () => {
     const view = await confirmNewAddress(respond(500, { error: "Server sentence." }), "tok");
     expect(view).toMatchObject({ changed: false, message: "Server sentence.", offerRetry: true });

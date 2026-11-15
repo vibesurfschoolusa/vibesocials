@@ -3,6 +3,7 @@ import type { User } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
+import { addressHeldUntil } from "@/server/auth/undoWindow";
 
 /**
  * Google SSO is env-gated exactly like email (RESEND_API_KEY): with no
@@ -83,7 +84,12 @@ export type GoogleSsoRefusal =
   /** No email, or Google doesn't attest it (`email_verified` !== true). */
   | "unverified_email"
   /** The email belongs to a password account never linked to Google. */
-  | "password_account";
+  | "password_account"
+  /**
+   * R6-security M1: no account has the email, but an email change replaced
+   * it and that change's undo may still put it back, so none is created.
+   */
+  | "address_held";
 
 export type GoogleSsoResult =
   | { ok: true; user: User }
@@ -97,6 +103,8 @@ export type GoogleSsoResult =
  *   Linking by email is only safe because Google attests mailbox ownership.
  * - Otherwise the linking rules of `planGoogleSsoLink`, applied to the row
  *   that owns the normalized email (`password_account` when it refuses).
+ * - No row, but an open email-change undo may put the address back on its
+ *   account → refused (`address_held`), never created.
  * - New user: created with `passwordHash: null` (SSO-only until they run the
  *   forgot-password flow), atomically with their personal workspace — same
  *   transaction shape as the register route (design doc §2), so
@@ -127,6 +135,10 @@ export async function findOrCreateGoogleSsoUser(input: {
       data: plan.data,
     });
     return { ok: true, user: linked };
+  }
+
+  if (await addressHeldUntil(prisma, email, now)) {
+    return { ok: false, reason: "address_held" };
   }
 
   const plan = planGoogleSsoLink(null, now);

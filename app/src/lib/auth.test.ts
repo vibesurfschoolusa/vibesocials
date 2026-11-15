@@ -50,7 +50,7 @@ import {
   LOGIN_DUMMY_PASSWORD_HASH,
   serverSessionAuthOptions,
 } from "./auth";
-import { GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
+import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
@@ -282,6 +282,15 @@ describe("authOptions.callbacks.signIn — Google SSO refusals", () => {
       name: "A",
       emailVerified: true,
     });
+  });
+
+  // R6-security M1: an address an open email-change undo may restore.
+  it("redirects a refusal on an address an undo may restore to the login page's own copy", async () => {
+    findOrCreateGoogleSsoUserMock.mockResolvedValue({ ok: false, reason: "address_held" });
+
+    const result = await signIn({ user: { id: "google-sub" }, account: google, profile });
+
+    expect(result).toBe(`/login?error=${GOOGLE_ADDRESS_HELD_ERROR}`);
   });
 
   it("refuses an unverified Google email with plain false (generic AccessDenied copy)", async () => {

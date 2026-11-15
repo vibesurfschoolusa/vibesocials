@@ -210,9 +210,14 @@ describe("POST /api/auth/change-email/undo", () => {
     await expect(response.json()).resolves.toEqual({
       error: `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
     });
+    // R6-pages L6: once the window has passed the link's record is cleared,
+    // so an unknown link may be an expired one; the answer covers both.
     findUniqueMock.mockResolvedValue(null);
     response = await POST(request({ token: "undo-token" }));
     expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: `This link isn't valid, or it has expired: undo links work for 72 hours. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
+    });
     response = await POST(request({}));
     expect(response.status).toBe(400);
     expect(userUpdateManyMock).not.toHaveBeenCalled();

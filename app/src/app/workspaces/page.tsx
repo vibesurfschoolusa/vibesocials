@@ -50,7 +50,8 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
         <Stat
           label="Waiting for approval"
           value={entry.waitingForApproval}
-          alert={entry.waitingForApproval > 0}
+          // R6-client-journey L4: only an owner decides approvals.
+          alert={entry.role === "owner" && entry.waitingForApproval > 0}
         />
         <Stat
           label="Failed in the last 7 days"

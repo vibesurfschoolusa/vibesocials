@@ -4,6 +4,7 @@ import { guardBlobKey } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
+import { clearPassedUndoWindows } from "@/server/auth/undoWindow";
 import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
 import { pruneUsageEvents } from "@/server/usage/usageLog";
 
@@ -255,10 +256,14 @@ export const orphanBlobSweep = inngest.createFunction(
   { cron: "25 6 * * *" },
   async ({ step }) => {
     // Review of R5-security M1: the usage log's old rows go in this same step,
-    // so they cost no new function and no new execution.
+    // so they cost no new function and no new execution. R6-pages L6: so do
+    // the previous addresses of passed email-change undo windows, which the
+    // privacy page says are deleted after 72 hours.
     const summary = await step.run("sweep", async () => {
-      const usageEventsPruned = await pruneUsageEvents(new Date());
-      return { ...(await sweepOrphanBlobs()), usageEventsPruned };
+      const now = new Date();
+      const usageEventsPruned = await pruneUsageEvents(now);
+      const undoWindowsCleared = await clearPassedUndoWindows(prisma, now);
+      return { ...(await sweepOrphanBlobs()), usageEventsPruned, undoWindowsCleared };
     });
     logger.info("[Inngest] Unregistered uploads swept", summary);
     return summary;

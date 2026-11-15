@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { clearPassedUndoWindows } from "@/server/auth/undoWindow";
 
 /**
  * The undo links that still work for this person: made by a change to the
@@ -23,7 +24,9 @@ function liveUndoLinks(user: { id: string; email: string }, now: Date) {
  *
  * Until when the previous address can undo the last email change
  * (../undo), for the line in Settings, Account. `until` is null when it
- * can't. Read-only: the link can't be turned off (see ../confirm).
+ * can't. The link can't be turned off (see ../confirm). Settings, Account
+ * reads this on every visit, so it is also where the previous addresses of
+ * passed undo windows are cleared (R6-pages L6).
  */
 export async function GET() {
   const user = await getCurrentUser();
@@ -31,8 +34,10 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
+    const now = new Date();
+    await clearPassedUndoWindows(prisma, now);
     const live = await prisma.emailChangeRequest.findFirst({
-      where: liveUndoLinks(user, new Date()),
+      where: liveUndoLinks(user, now),
       orderBy: { undoExpiresAt: "desc" },
       select: { undoExpiresAt: true },
     });
