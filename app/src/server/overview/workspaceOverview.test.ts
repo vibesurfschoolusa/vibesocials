@@ -32,8 +32,6 @@ const postJobKind = (args: GroupArgs): PostJobKind =>
     : "clientChangeRequestedAt" in args.where
       ? "clientChanges"
       : "approval";
-/** The one `postJobResult.groupBy` call: posts this month. */
-const resultKind = (): ResultKind => "month";
 
 type FindArgs = { where: Record<string, unknown> };
 /** Which `postJob.findMany` call it is: the failed posts, the Story jobs, or their feed jobs. */
@@ -66,7 +64,8 @@ function servePostJobGroups(rows: Partial<Record<PostJobKind, unknown[]>>) {
   db.postJobGroupBy.mockImplementation(async (args: GroupArgs) => rows[postJobKind(args)] ?? []);
 }
 function serveResultGroups(rows: Partial<Record<ResultKind, unknown[]>>) {
-  db.resultGroupBy.mockImplementation(async (args: GroupArgs) => rows[resultKind(args)] ?? []);
+  // The one result query: posts this month.
+  db.resultGroupBy.mockImplementation(async () => rows.month ?? []);
 }
 
 function postJobCall(kind: PostJobKind): GroupArgs {
@@ -75,7 +74,7 @@ function postJobCall(kind: PostJobKind): GroupArgs {
   return call[0];
 }
 function resultCall(kind: ResultKind): GroupArgs {
-  const call = db.resultGroupBy.mock.calls.find(([args]) => resultKind(args) === kind);
+  const call = db.resultGroupBy.mock.calls[0];
   if (!call) throw new Error(`no ${kind} query`);
   return call[0];
 }
