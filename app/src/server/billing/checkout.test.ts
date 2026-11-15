@@ -473,7 +473,11 @@ describe("openPortal", () => {
     const result = await openPortal({ workspaceId: "ws_1", now: NOW, baseUrl: BASE }, ENV);
     expect(result).toEqual({ ok: true, url: "https://billing.stripe.com/p/session/x" });
     const [args, key] = m.createPortalSession.mock.calls[0];
-    expect(args).toEqual({ customer: "cus_1", returnUrl: "https://app.example/settings#plan" });
+    // R8-security L3: back through /go, so another tab's workspace switch can't land it elsewhere.
+    expect(args).toEqual({
+      customer: "cus_1",
+      returnUrl: `https://app.example/go?w=ws_1&to=${encodeURIComponent("/settings#plan")}`,
+    });
     expect(key).toMatch(/^vs-portal-ws_1-\d+$/);
   });
 

@@ -237,7 +237,9 @@ export async function openPortal(
 
   try {
     const session = await createPortalSession(
-      { customer: workspace.stripeCustomerId, returnUrl: `${input.baseUrl}/settings#plan` },
+      // R8-security L3: through /go, as checkout returns, so it lands on this
+      // workspace even when another tab switched the active one meanwhile.
+      { customer: workspace.stripeCustomerId, returnUrl: workspaceLink(input.workspaceId, "/settings#plan", input.baseUrl) },
       stripeIdempotencyKey(["portal", input.workspaceId], PORTAL_KEY_BUCKET_MS, input.now.getTime()),
       env,
     );
