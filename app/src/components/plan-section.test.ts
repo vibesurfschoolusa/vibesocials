@@ -107,32 +107,56 @@ const USAGE = {
   storage: { used: 0, limit: 1024 ** 3, resetsAt: null },
 };
 
-// R8-new-customer L1: the workspace's daily number is not the only one; a free person's own number is shown beside it.
+// R8-new-customer L1: beside the workspace's number, the viewer's own one where it applies.
 describe("PlanSection: posts per day", () => {
-  it("adds the per-person number while free, from the shared constant", () => {
-    const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE }));
-    expect(html).toContain(
+  const render = (personalPostNote: { limit: number; reduced: "unconfirmed" | "first_day" | null } | null) =>
+    renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: "Free trial", usage: USAGE, personalPostNote }));
+
+  it("15: up to 15 a day per person across all your workspaces while free", () => {
+    expect(render({ limit: OWNER_DAILY_POST_LIMIT, reduced: null })).toContain(
       `20 (up to ${OWNER_DAILY_POST_LIMIT} a day per person across all your workspaces while free)`,
     );
+  });
+
+  it("5 until the email is confirmed, with the reason", () => {
+    expect(render({ limit: 5, reduced: "unconfirmed" })).toContain(
+      `20 (up to 5 a day for you across all your workspaces until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`,
+    );
+  });
+
+  it("5 on the account's first UTC day, with the reason", () => {
+    expect(render({ limit: 5, reduced: "first_day" })).toContain(
+      `20 (up to 5 a day for you across all your workspaces on your account&#x27;s first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`,
+    );
+  });
+
+  it("no note (a paying workspace): the workspace's number alone", () => {
+    const html = render(null);
+    expect(html).toMatch(/<dd>20<\/dd>/);
+    expect(html).not.toContain("a day per person");
+    expect(html).not.toContain("for you");
   });
 });
 
 // R8-new-customer L4: a workspace made while billing was off keeps posting on the free limits only until it buys a plan.
 describe("PlanSection: before the first plan", () => {
   const offers = [{ plan: "starter" as const, name: "Starter", price: "$19 a month" }];
+  const LINE = "If you cancel the plan later, this workspace stops posting until it has a plan again.";
 
   it("no plan and no trial, with the plan buttons: says what cancelling later means", () => {
-    const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", label: NO_PLAN_YET_LABEL, usage: USAGE, offers }));
-    expect(html).toContain("If you cancel the plan later, this workspace stops posting until it has a plan again.");
+    const html = renderToStaticMarkup(
+      createElement(PlanSection, { workspaceId: "ws-1", label: "Any label", usage: USAGE, offers, noPlanYet: true }),
+    );
+    expect(html).toContain(LINE);
   });
 
-  it("a trial, or no plan buttons: no such line", () => {
+  it("not flagged, or no plan buttons: no such line, whatever the label", () => {
     for (const props of [
-      { label: "Free trial until November 21, 2026", offers },
-      { label: NO_PLAN_YET_LABEL, offers: [] },
+      { label: NO_PLAN_YET_LABEL, offers, noPlanYet: false },
+      { label: NO_PLAN_YET_LABEL, offers: [], noPlanYet: true },
     ]) {
       const html = renderToStaticMarkup(createElement(PlanSection, { workspaceId: "ws-1", usage: USAGE, ...props }));
-      expect(html).not.toContain("If you cancel the plan later");
+      expect(html).not.toContain(LINE);
     }
   });
 });

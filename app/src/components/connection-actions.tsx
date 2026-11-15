@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import type { Platform } from "@prisma/client";
 import { useRouter } from "next/navigation";
 
@@ -16,7 +16,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
-import { sameEndAddress } from "@/lib/differentAccount";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { platformLabel } from "@/lib/platforms";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
@@ -55,13 +54,15 @@ interface Props {
   readOnly?: boolean;
   /** The connected account's name: LinkedIn's Reconnect says to sign in to it. */
   accountName?: string;
+  /**
+   * R8-pages L5: with reconnectSoon, the end date (ISO) a reconnect just
+   * kept (Settings' same-end warning applies): the row says so instead of
+   * "Ends soon".
+   */
+  sameEndAt?: string | null;
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
-
-function noSubscription(): () => void {
-  return () => {};
-}
 
 /**
  * G4 (R2-security L2): disconnecting deletes the post numbers read from the
@@ -175,6 +176,7 @@ export function ConnectionActions({
   endedAt = null,
   readOnly = false,
   accountName,
+  sameEndAt = null,
 }: Props) {
   const router = useRouter();
   const toast = useToast();
@@ -186,9 +188,6 @@ export function ConnectionActions({
 
   const isTikTok = platform === "tiktok";
   const isLinkedIn = platform === "linkedin";
-  // R8-pages L5: just reconnected and LinkedIn kept the end date (Settings'
-  // warning says what to do); the row's Reconnect steps back meanwhile.
-  const sameEnd = useSyncExternalStore(noSubscription, () => sameEndAddress(window.location.search), () => false);
   const authUrl = withWorkspaceId(`/api/auth/${platform}/start`, workspaceId);
 
   // Read each time the Disconnect dialog opens, from no number, so it never
@@ -329,10 +328,15 @@ export function ConnectionActions({
               <span className="basis-full text-sm text-muted-foreground">
                 Ended {formatDisplayDate(endedAt)}. Reconnect to keep posting.
               </span>
+            ) : sameEndAt ? (
+              // R8-pages L5: Settings' warning says what to do; no call to reconnect here.
+              <span className="basis-full text-sm text-muted-foreground">
+                Ends {formatDisplayDate(sameEndAt)}. LinkedIn kept this end date.
+              </span>
             ) : (
               <Badge variant="warning">Ends soon</Badge>
             )}
-            {reconnectButton(isLinkedIn && !endedAt && sameEnd ? "outline" : "primary")}
+            {reconnectButton(sameEndAt && !endedAt ? "outline" : "primary")}
           </>
         ) : (
           <Badge variant="success">Connected</Badge>

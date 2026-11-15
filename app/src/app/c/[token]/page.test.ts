@@ -380,7 +380,7 @@ describe("LinkedIn on the client's page", () => {
     expect(html).not.toContain("is connected");
     const row = linkedInRow(html);
     expect(row).not.toContain("press Reconnect to keep it posting");
-    expect(row).toContain("Connected: Surf Co page. It ends on November 16, 2026.");
+    expect(row).toContain("Connected: Surf Co page. Ends November 16, 2026. LinkedIn kept this end date.");
     expect(h.findConnection).toHaveBeenCalledWith({
       where: { workspaceId_platform: { workspaceId: "ws-1", platform: "linkedin" } },
       select: { expiresAt: true },

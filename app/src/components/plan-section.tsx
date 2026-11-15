@@ -5,9 +5,20 @@ import { GROWTH_ADDS_LINE, planIncludesLine } from "@/lib/plans";
 import { formatStorageGb, OWNER_DAILY_POST_LIMIT } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
-import { NO_PLAN_CANCEL_LATER_LINE, noPlanCancelLaterShown } from "./planSectionView";
+import { NO_PLAN_CANCEL_LATER_LINE, type PersonalPostNote } from "./planSectionView";
 
 export const PLAN_SWITCH_LINE = "To switch plans, use Manage plan, card and invoices.";
+
+/** R8-new-customer L1: the viewer's own number beside the workspace's, with its reason when lower. */
+function personalPostNoteText(note: PersonalPostNote): string {
+  if (note.reduced === "unconfirmed") {
+    return `(up to ${note.limit} a day for you across all your workspaces until you confirm your email address, then ${OWNER_DAILY_POST_LIMIT})`;
+  }
+  if (note.reduced === "first_day") {
+    return `(up to ${note.limit} a day for you across all your workspaces on your account's first day, then ${OWNER_DAILY_POST_LIMIT} from 00:00 UTC)`;
+  }
+  return `(up to ${note.limit} a day per person across all your workspaces while free)`;
+}
 
 /**
  * Settings → Plan (21a): the plan state in words and the limits that apply.
@@ -27,6 +38,8 @@ export function PlanSection({
   manage = false,
   workspaceNote = false,
   growthAdds = false,
+  noPlanYet = false,
+  personalPostNote = null,
 }: {
   /** The workspace this page was rendered for; the plan buttons send it (F3). */
   workspaceId: string;
@@ -44,6 +57,10 @@ export function PlanSection({
   workspaceNote?: boolean;
   /** P1: say what Growth adds (an owner on Starter). */
   growthAdds?: boolean;
+  /** R8-new-customer L4: no plan and no trial yet (planNoPlanYet). */
+  noPlanYet?: boolean;
+  /** R8-new-customer L1: the viewer's own number, where the per-person limit applies (planPersonalPostNote). */
+  personalPostNote?: PersonalPostNote | null;
 }) {
   return (
     <Card className="flex flex-col gap-3 p-6">
@@ -54,10 +71,8 @@ export function PlanSection({
         <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
           <div className="flex justify-between gap-2 sm:block">
             <dt className="text-muted-foreground">Posts per day</dt>
-            {/* R8-new-customer L1: the per-person number binds first while free (lib/usageLimits.ts). */}
             <dd>
-              {usage.postsToday.limit} (up to {OWNER_DAILY_POST_LIMIT} a day per person across all your workspaces while
-              free)
+              {personalPostNote ? `${usage.postsToday.limit} ${personalPostNoteText(personalPostNote)}` : usage.postsToday.limit}
             </dd>
           </div>
           <div className="flex justify-between gap-2 sm:block">
@@ -89,7 +104,7 @@ export function PlanSection({
       {growthAdds ? <p className="text-sm text-muted-foreground">{GROWTH_ADDS_LINE}</p> : null}
       {/* Q1: an owner on a plan switches in the Stripe portal, which lists every price. */}
       {growthAdds && manage ? <p className="text-sm text-muted-foreground">{PLAN_SWITCH_LINE}</p> : null}
-      {noPlanCancelLaterShown(label, offers.length > 0 || yearlyOffers.length > 0) ? (
+      {noPlanYet && (offers.length > 0 || yearlyOffers.length > 0) ? (
         <p className="text-sm text-muted-foreground">{NO_PLAN_CANCEL_LATER_LINE}</p>
       ) : null}
       {offers.length > 0 || yearlyOffers.length > 0 || manage ? (

@@ -13,7 +13,6 @@ import {
   linkChoiceDifferentAccountMessage,
   linkedInReconnectSignInStep,
   locationClearedSettingsMessage,
-  sameEndAddress,
   reconnectDifferentAccountMessage,
   settingsDifferentAccountMessage,
 } from "./differentAccount";
@@ -190,13 +189,10 @@ describe("a refused choice from a list", () => {
   });
 });
 
-// R8-pages L5: while Settings shows the same-end warning, the row does not ask for the Reconnect that changed nothing.
-describe("sameEndAddress", () => {
-  it("is true only for the LinkedIn success address with the flag", () => {
-    expect(sameEndAddress("?success=linkedin_connected&same_end=1")).toBe(true);
-    expect(sameEndAddress("?success=linkedin_connected")).toBe(false);
-    expect(sameEndAddress("?same_end=1")).toBe(false);
-    expect(sameEndAddress("?success=youtube_connected&same_end=1")).toBe(false);
-    expect(sameEndAddress("")).toBe(false);
+
+// R8-pages L5: the row reads the kept end date from a prop, never from the address.
+describe("no address reading for the same-end row", () => {
+  it("has no sameEndAddress", () => {
+    expect("sameEndAddress" in differentAccount).toBe(false);
   });
 });

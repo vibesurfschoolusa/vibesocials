@@ -22,11 +22,14 @@ import { isWorkspacePayer } from "@/server/billing/payerRefusal";
 import {
   PLAN_PORTAL_ONLY_LABEL,
   planGrowthAddsShown,
+  planNoPlanYet,
+  planPersonalPostNote,
   planReturnNotice,
   planSectionActions,
   planSectionLabel,
 } from "@/components/planSectionView";
 import { billingEnabled, paymentsConfigured, stripeReachable } from "@/lib/billing";
+import { isOperatorUser } from "@/lib/operator";
 import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
@@ -186,6 +189,8 @@ export default async function SettingsPage({
   const endedAt = Object.fromEntries(
     rows.filter((row) => expiryEnded(row, now)).map((row) => [row.platform, new Date(row.expiresAt!).toISOString()]),
   );
+  // R8-pages L5: the row says LinkedIn kept the date while that warning shows.
+  const sameEndAt = sameEndRow ? { linkedin: new Date(sameEndRow.expiresAt!).toISOString() } : {};
 
   // Posting times (brief 11): read here, not carried in every route's context.
   const slotRow = await prisma.workspace.findUnique({
@@ -233,6 +238,17 @@ export default async function SettingsPage({
   const yearlyPlanOffers =
     planActions && planActions.choose.length > 0 ? await getYearlyPlanOffers(planActions.choose) : [];
   const planNotice = paymentsConfigured() ? planReturnNotice(params.billing, planWorkspace, new Date()) : null;
+  // R8-new-customer L1: the viewer's own daily number, where the per-person
+  // limit counts this workspace; never for one an operator owns (usageLog.ts).
+  const planOwners = planLabel
+    ? await prisma.workspaceMember.findMany({
+        where: { workspaceId: context.workspace.id, role: "owner" },
+        select: { user: { select: { email: true, emailVerifiedAt: true } } },
+      })
+    : [];
+  const personalPostNote = planLabel
+    ? planPersonalPostNote(planWorkspace, context.user, planOwners.some((owner) => isOperatorUser(owner.user)), new Date())
+    : null;
 
   // What the two delete confirmations say, computed with the same functions
   // the delete routes use, so the dialog shows the sentence the route would
@@ -342,6 +358,7 @@ export default async function SettingsPage({
               connections={connections}
               reconnectSoon={reconnectSoon}
               endedAt={endedAt}
+              sameEndAt={sameEndAt}
               readOnly={context.role !== "owner"}
               // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
               unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}
@@ -406,6 +423,8 @@ export default async function SettingsPage({
                 manage={planActions?.manage ?? false}
                 workspaceNote={workspacePlanNoteShown(planWorkspace, new Date())}
                 growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}
+                noPlanYet={planNoPlanYet(context.role, planWorkspace, new Date())}
+                personalPostNote={personalPostNote}
               />
             </section>
           ) : null}

@@ -220,7 +220,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                         ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
                         : // R8-pages L5: just reconnected with the same end date; the warning says what to do.
                           sameEndOn?.platform === platform
-                          ? `${connected}. It ends on ${formatDisplayDate(sameEndOn.expiresAt)}.`
+                          ? `${connected}. Ends ${formatDisplayDate(sameEndOn.expiresAt)}. LinkedIn kept this end date.`
                           : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
                     </span>
                     {button}

@@ -210,14 +210,3 @@ export function connectedSuccessQuery(platform: string, sameEnd: boolean): strin
   if (sameEnd) query.set(SAME_END_PARAM, "1");
   return query.toString();
 }
-
-/**
- * R8-pages L5: whether this address is the LinkedIn success that carries the
- * same-end flag. Settings then shows the same-end warning (the page checks the
- * stored date), and the row's Reconnect steps back, since the same sign-in
- * gives the same date again (components/connection-actions.tsx).
- */
-export function sameEndAddress(search: string): boolean {
-  const query = new URLSearchParams(search);
-  return query.get("success") === "linkedin_connected" && query.has(SAME_END_PARAM);
-}
