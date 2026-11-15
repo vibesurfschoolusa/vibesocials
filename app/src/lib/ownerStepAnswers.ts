@@ -37,3 +37,16 @@ export function retryReconnectMessage(platforms: readonly Platform[], role: Answ
     ? `The workspace owner can reconnect ${platformList(platforms)}; then retry.`
     : `Reconnect ${platformList(platforms)} in Settings before retrying.`;
 }
+
+/**
+ * The Connections section's intro in Settings (R12 L3): an owner is asked to
+ * connect; a member (`readOnly`, the page's role from the server) reads who
+ * does. Here, not in connections-section.tsx: settings/page.tsx is a server
+ * component, and a plain function exported from a "use client" file cannot be
+ * called on the server (#161 crashed Settings; app/clientBoundary.guard.test.ts).
+ */
+export function connectionsSectionIntro(readOnly: boolean): string {
+  return readOnly
+    ? "The accounts Vibe Socials publishes to for this workspace. The workspace owner connects and reconnects them."
+    : "Connect your social accounts so Vibe Socials can publish on your behalf.";
+}

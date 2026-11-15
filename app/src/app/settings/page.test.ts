@@ -78,8 +78,6 @@ vi.mock("@/components/posting-slots-form", () => ({
   },
 }));
 vi.mock("@/components/connections-section", () => ({
-  // R12 L3: the intro is the section's own (tested beside it); here, who it is asked for.
-  connectionsSectionIntro: (readOnly: boolean) => (readOnly ? "[intro for a member]" : "[intro for an owner]"),
   ConnectionsSection: (props: Record<string, unknown>) => {
     sectionProps.ConnectionsSection = props;
     return null;
@@ -178,12 +176,13 @@ describe("SettingsPage — words and jump links", () => {
   });
 
   it("words the Connections intro for the viewer's role", async () => {
+    // The real function runs on the server here (lib/ownerStepAnswers.ts), as in production.
     const owner = await render("owner");
-    expect(owner).toContain("[intro for an owner]");
-    expect(owner).not.toContain("[intro for a member]");
+    expect(owner).toContain("Connect your social accounts so Vibe Socials can publish on your behalf.");
+    expect(owner).not.toContain("The workspace owner connects and reconnects them.");
     const member = await render("member");
-    expect(member).toContain("[intro for a member]");
-    expect(member).not.toContain("[intro for an owner]");
+    expect(member).toContain("The workspace owner connects and reconnects them.");
+    expect(member).not.toContain("Connect your social accounts");
   });
 
   it("names the first section for all it holds, not only captions", async () => {

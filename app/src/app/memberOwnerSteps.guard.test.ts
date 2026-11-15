@@ -57,7 +57,7 @@ vi.mock("@/server/platforms/tiktokClient", () => ({
 
 import { NothingConnectedState } from "@/components/create-post-form";
 import { ConnectionActions } from "@/components/connection-actions";
-import { ConnectionsSection, connectionsSectionIntro } from "@/components/connections-section";
+import { ConnectionsSection } from "@/components/connections-section";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
 import { ReconnectStep } from "@/components/activity/post-job-card";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
@@ -70,7 +70,12 @@ import { accessBlock } from "@/lib/workspaceStatus";
 import { reviewLinkReason, reviewsErrorBody, type ReviewLinkProblem } from "@/server/googleReviews";
 import { NoPlatformConnectedLine } from "@/app/posts/bulk/bulk-posts-form";
 import { GET as tiktokCreatorInfo } from "@/app/api/tiktok/creator-info/route";
-import { noConnectionsMessage, nothingSentMessage, retryReconnectMessage } from "@/lib/ownerStepAnswers";
+import {
+  connectionsSectionIntro,
+  noConnectionsMessage,
+  nothingSentMessage,
+  retryReconnectMessage,
+} from "@/lib/ownerStepAnswers";
 
 type Role = "owner" | "member";
 

@@ -19,7 +19,7 @@ vi.mock("./google-business-location-form", () => ({ GoogleBusinessLocationForm: 
 import type { ConnectionSummary } from "@/lib/connectionSummary";
 import { PLATFORM_GUIDES } from "@/lib/platformGuides";
 
-import { ConnectionsSection, connectionsSectionIntro } from "./connections-section";
+import { ConnectionsSection } from "./connections-section";
 
 /** S1 item 1: a platform's open review is said on its card before Connect. */
 
@@ -187,18 +187,5 @@ describe("ConnectionsSection, Google Business Profile without a location", () =>
     const html = render({ readOnly: true, connections: [gbp] });
     expect(html).toContain("Connected. The workspace owner chooses the Maps location.");
     expect(html).not.toContain("Choose the Maps location");
-  });
-});
-
-// R12 L3: the Connections section's intro, for whoever reads it.
-describe("connectionsSectionIntro", () => {
-  it("the owner: as before", () => {
-    expect(connectionsSectionIntro(false)).toBe("Connect your social accounts so Vibe Socials can publish on your behalf.");
-  });
-
-  it("a member: who connects them", () => {
-    expect(connectionsSectionIntro(true)).toBe(
-      "The accounts Vibe Socials publishes to for this workspace. The workspace owner connects and reconnects them.",
-    );
   });
 });

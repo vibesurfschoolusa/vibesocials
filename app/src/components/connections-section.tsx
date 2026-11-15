@@ -141,16 +141,6 @@ interface ConnectionsSectionProps {
   sameEndAt?: Partial<Record<Platform, string>>;
 }
 
-/**
- * The Connections section's intro in Settings (R12 L3): an owner is asked to
- * connect; a member (`readOnly`, the page's role from the server) reads who does.
- */
-export function connectionsSectionIntro(readOnly: boolean): string {
-  return readOnly
-    ? "The accounts Vibe Socials publishes to for this workspace. The workspace owner connects and reconnects them."
-    : "Connect your social accounts so Vibe Socials can publish on your behalf.";
-}
-
 export function ConnectionsSection({
   workspaceId,
   connections,
