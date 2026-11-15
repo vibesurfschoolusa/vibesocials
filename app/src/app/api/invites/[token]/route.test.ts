@@ -7,12 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // route.ts is imported below. `@/lib/inviteToken`'s `hashInviteToken` is kept
 // REAL (pure sha256) so the test can assert the exact hash the route looks
 // up by.
-const { getCurrentUserMock, checkRateLimitMock, findUniqueInviteMock, findFirstMembershipMock } =
+const { getCurrentUserMock, checkRateLimitMock, findUniqueInviteMock, findFirstMembershipMock, countOwnerMock } =
   vi.hoisted(() => ({
     getCurrentUserMock: vi.fn(),
     checkRateLimitMock: vi.fn(),
     findUniqueInviteMock: vi.fn(),
     findFirstMembershipMock: vi.fn(),
+    countOwnerMock: vi.fn(),
   }));
 
 vi.mock("@/lib/auth", () => ({
@@ -26,7 +27,7 @@ vi.mock("@/lib/rateLimit", () => ({
 vi.mock("@/lib/db", () => ({
   prisma: {
     workspaceInvite: { findUnique: findUniqueInviteMock },
-    workspaceMember: { findFirst: findFirstMembershipMock },
+    workspaceMember: { findFirst: findFirstMembershipMock, count: countOwnerMock },
   },
 }));
 
@@ -60,6 +61,9 @@ beforeEach(() => {
   checkRateLimitMock.mockReset();
   findUniqueInviteMock.mockReset();
   findFirstMembershipMock.mockReset();
+  // The link's maker is still an owner by default.
+  countOwnerMock.mockReset();
+  countOwnerMock.mockResolvedValue(1);
 
   getCurrentUserMock.mockResolvedValue(USER);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -172,5 +176,21 @@ describe("GET /api/invites/[token]", () => {
 
     expect(response.status).toBe(200);
     expect(body).toEqual({ workspaceName: "Acme", alreadyMember: true });
+  });
+
+  // R9-client-journey L6: as Join does, so the join page shows the dead-link state before Join is pressed.
+  it("404s with the no-longer-active sentence when the link's maker is no longer an owner", async () => {
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-9", createdById: "former-owner" }));
+    countOwnerMock.mockResolvedValue(0);
+
+    const response = await GET(new Request("http://localhost"), ctx(RAW_TOKEN));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "This invite link is no longer active. Ask an owner for a new one.",
+    });
+    expect(countOwnerMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-9", userId: "former-owner", role: "owner" },
+    });
   });
 });

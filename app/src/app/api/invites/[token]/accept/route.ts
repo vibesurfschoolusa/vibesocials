@@ -9,6 +9,8 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/workspace";
 import { notifyOwnersOfMemberJoined } from "@/server/notifications/memberJoinedEmail";
 
+import { MAKER_NOT_OWNER_MESSAGE } from "../inviteMaker";
+
 interface AcceptRouteContext {
   params: Promise<{ token: string }>;
 }
@@ -19,14 +21,8 @@ const RATE_LIMIT = { route: "invites/accept", limit: 10, windowMs: 5 * 60 * 1000
 const invalidInviteResponse = () =>
   NextResponse.json({ error: "This invite link is invalid or has expired." }, { status: 404 });
 
-/**
- * R9-client-journey L6: the link's maker is no longer an owner of the
- * workspace. Demoting or leaving revokes their links now, but links made
- * before that (#151) were never revoked, so the maker is checked here too.
- * A 404 like a dead link, so the join page shows its invalid-link state.
- */
-const makerNotOwnerResponse = () =>
-  NextResponse.json({ error: "This invite link is no longer active. Ask an owner for a new one." }, { status: 404 });
+/** R9-client-journey L6: the link's maker is no longer an owner (inviteMaker.ts). */
+const makerNotOwnerResponse = () => NextResponse.json({ error: MAKER_NOT_OWNER_MESSAGE }, { status: 404 });
 
 /**
  * POST /api/invites/[token]/accept

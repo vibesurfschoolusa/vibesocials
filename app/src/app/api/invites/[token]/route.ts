@@ -5,6 +5,8 @@ import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { checkRateLimit } from "@/lib/rateLimit";
 
+import { MAKER_NOT_OWNER_MESSAGE } from "./inviteMaker";
+
 interface InviteRouteContext {
   params: Promise<{ token: string }>;
 }
@@ -58,6 +60,14 @@ export async function GET(_request: Request, { params }: InviteRouteContext) {
 
   if (!invite || invite.revokedAt || invite.expiresAt <= new Date()) {
     return INVALID_INVITE_RESPONSE();
+  }
+
+  // R9-client-journey L6: the same rule as Join (inviteMaker.ts).
+  const makerIsOwner = await prisma.workspaceMember.count({
+    where: { workspaceId: invite.workspaceId, userId: invite.createdById, role: "owner" },
+  });
+  if (makerIsOwner === 0) {
+    return NextResponse.json({ error: MAKER_NOT_OWNER_MESSAGE }, { status: 404 });
   }
 
   const membership = await prisma.workspaceMember.findFirst({
