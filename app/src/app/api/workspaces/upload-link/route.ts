@@ -12,7 +12,7 @@ import {
   uploadLinkUrl,
 } from "@/lib/uploadLink";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
-import { pausedByPlan } from "@/lib/planFeatures";
+import { clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
 import { requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
@@ -76,7 +76,7 @@ export async function GET(request: Request) {
     where: { workspaceId, revokedAt: null },
     orderBy: { createdAt: "desc" },
   });
-  return NextResponse.json({ link: link ? toLinkDto(link, workspaceId) : null, ...pausedByPlan(contextOrError.workspace, "clientLinks") });
+  return NextResponse.json({ link: link ? toLinkDto(link, workspaceId) : null, ...clientLinkPanelStatus(contextOrError.workspace) });
 }
 
 /**

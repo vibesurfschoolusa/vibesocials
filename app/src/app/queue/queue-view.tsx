@@ -718,6 +718,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
   const [changedMessage, setChangedMessage] = useState("");
   const [pausedByPlan, setPausedByPlan] = useState(false);
+  const [workspaceBlocked, setWorkspaceBlocked] = useState<string | null>(null);
   const [link, setLink] = useState<ReviewLinkDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
@@ -730,7 +731,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
           `/api/workspaces/review-link?workspaceId=${encodeURIComponent(workspaceId)}`,
         );
         const data = (await response.json().catch(() => null)) as
-          | { link?: ReviewLinkDto | null; error?: string; pausedByPlan?: boolean }
+          | { link?: ReviewLinkDto | null; error?: string; pausedByPlan?: boolean; workspaceBlocked?: string }
           | null;
         if (cancelled) return;
         if (response.status === 409) {
@@ -744,6 +745,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
         }
         setLink(data?.link ?? null);
         setPausedByPlan(data?.pausedByPlan === true);
+        setWorkspaceBlocked(typeof data?.workspaceBlocked === "string" ? data.workspaceBlocked : null);
         setState("ready");
       } catch {
         if (!cancelled) setState("hidden");
@@ -827,6 +829,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
       onReplace={() => setConfirm("replace")}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
+      workspaceBlocked={workspaceBlocked}
       dialog={
         <ConfirmDialog
           open={confirm !== null}
@@ -859,6 +862,8 @@ export interface ReviewLinkPanelViewProps {
   dialog?: React.ReactNode;
   /** P1: the owner GET's pausedByPlan: the plan does not include client links. */
   pausedByPlan?: boolean;
+  /** R21: the owner GET's sentence when the workspace is paused or its plan has ended. */
+  workspaceBlocked?: string | null;
 }
 
 /** The panel as it renders, from its state (P1 fix round 1: testable without a browser). */
@@ -871,6 +876,7 @@ export function ReviewLinkPanelView({
   onTurnOff,
   dialog = null,
   pausedByPlan = false,
+  workspaceBlocked = null,
 }: ReviewLinkPanelViewProps) {
   return (
     <Card>
@@ -884,7 +890,9 @@ export function ReviewLinkPanelView({
       </CardHeader>
       <CardContent className="space-y-3">
         {link === null ? (
-          pausedByPlan ? (
+          workspaceBlocked ? (
+            <p className="text-sm text-muted-foreground">{workspaceBlocked}</p>
+          ) : pausedByPlan ? (
             <ClientLinkPlanNotice paused={false} />
           ) : (
             <Button type="button" loading={busy} onClick={onCreate}>
@@ -893,8 +901,10 @@ export function ReviewLinkPanelView({
           )
         ) : (
           <>
-            {/* P1: a paused link's address answers "not active", so it is not offered to copy. */}
-            {pausedByPlan ? (
+            {/* P1 and R21: a paused link's address answers "not active", so it is not offered to copy. */}
+            {workspaceBlocked ? (
+              <p className="text-sm text-muted-foreground">{workspaceBlocked}</p>
+            ) : pausedByPlan ? (
               <ClientLinkPlanNotice paused />
             ) : link.url ? (
               <div className="flex gap-2">
@@ -915,7 +925,7 @@ export function ReviewLinkPanelView({
               </p>
             )}
             <div className="flex flex-wrap gap-2">
-              {pausedByPlan ? null : (
+              {workspaceBlocked || pausedByPlan ? null : (
                 <Button type="button" variant="outline" size="sm" onClick={onReplace}>
                   Replace link
                 </Button>

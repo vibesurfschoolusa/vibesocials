@@ -16,7 +16,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
-import { pausedByPlan } from "@/lib/planFeatures";
+import { clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
@@ -65,7 +65,8 @@ function toLinkDto(row: LinkRow, workspaceId: string) {
 
 /**
  * GET → `{ link, available }`: the working link (or null) and the platforms this site can offer;
- * P1: plus `pausedByPlan: true` when the plan does not include client links.
+ * P1: plus `pausedByPlan: true` when the plan does not include client links;
+ * R21: or `workspaceBlocked` (a sentence) when the workspace is paused or its plan has ended.
  */
 export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
@@ -84,7 +85,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     link: link ? toLinkDto(link, workspaceId) : null,
     available: configuredConnectLinkPlatforms(),
-    ...pausedByPlan(contextOrError.workspace, "clientLinks"),
+    ...clientLinkPanelStatus(contextOrError.workspace),
   });
 }
 

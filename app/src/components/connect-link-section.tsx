@@ -68,6 +68,8 @@ export interface ConnectLinkViewProps {
   dialog?: ReactNode;
   /** P1: the owner GET's pausedByPlan: the plan does not include client links. */
   pausedByPlan?: boolean;
+  /** R21: the owner GET's sentence when the workspace is paused or its plan has ended. */
+  workspaceBlocked?: string | null;
 }
 
 export function ConnectLinkSectionView({
@@ -82,6 +84,7 @@ export function ConnectLinkSectionView({
   onTurnOff,
   dialog = null,
   pausedByPlan = false,
+  workspaceBlocked = null,
 }: ConnectLinkViewProps) {
   return (
     <Card>
@@ -95,8 +98,10 @@ export function ConnectLinkSectionView({
       <CardContent className="space-y-3">
         {link ? (
           <>
-            {/* P1: a paused link's address answers "not active", so it is not offered to copy. */}
-            {pausedByPlan ? (
+            {/* P1 and R21: a paused link's address answers "not active", so it is not offered to copy. */}
+            {workspaceBlocked ? (
+              <p className="text-sm text-muted-foreground">{workspaceBlocked}</p>
+            ) : pausedByPlan ? (
               <ClientLinkPlanNotice paused expires />
             ) : link.url ? (
               <div className="flex gap-2">
@@ -124,7 +129,7 @@ export function ConnectLinkSectionView({
               {link.lastUsedAt ? `Last used ${formatDisplayDate(link.lastUsedAt)}` : "Not used yet"}
             </p>
             <div className="flex flex-wrap gap-2">
-              {pausedByPlan ? null : (
+              {workspaceBlocked || pausedByPlan ? null : (
                 <Button type="button" variant="outline" size="sm" onClick={onReplace}>
                   Replace link
                 </Button>
@@ -134,6 +139,8 @@ export function ConnectLinkSectionView({
               </Button>
             </div>
           </>
+        ) : workspaceBlocked ? (
+          <p className="text-sm text-muted-foreground">{workspaceBlocked}</p>
         ) : pausedByPlan ? (
           <ClientLinkPlanNotice paused={false} />
         ) : available.length === 0 ? (
@@ -174,6 +181,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [available, setAvailable] = useState<Platform[]>([]);
   const [link, setLink] = useState<ConnectLinkDto | null>(null);
   const [pausedByPlan, setPausedByPlan] = useState(false);
+  const [workspaceBlocked, setWorkspaceBlocked] = useState<string | null>(null);
   const [selected, setSelected] = useState<Platform[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
@@ -184,7 +192,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       try {
         const response = await fetch(`/api/workspaces/connect-link?workspaceId=${encodeURIComponent(workspaceId)}`);
         const data = (await response.json().catch(() => null)) as
-          | { link?: ConnectLinkDto | null; available?: Platform[]; pausedByPlan?: boolean }
+          | { link?: ConnectLinkDto | null; available?: Platform[]; pausedByPlan?: boolean; workspaceBlocked?: string }
           | null;
         if (cancelled) return;
         if (!response.ok || !data) {
@@ -194,6 +202,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
         setAvailable(data.available ?? []);
         setLink(data.link ?? null);
         setPausedByPlan(data.pausedByPlan === true);
+        setWorkspaceBlocked(typeof data.workspaceBlocked === "string" ? data.workspaceBlocked : null);
         setState("ready");
       } catch {
         if (!cancelled) setState("hidden");
@@ -284,6 +293,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       onReplace={() => setConfirm("replace")}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
+      workspaceBlocked={workspaceBlocked}
       dialog={
         <ConfirmDialog
           open={confirm !== null}
