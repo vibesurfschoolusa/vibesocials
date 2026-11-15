@@ -917,7 +917,29 @@ export function ReviewLinkPanelView({
 }
 
 /** Client-rendered Queue: scheduled + draft posts with edit/cancel/publish/delete. */
-export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUser } = {}) {
+/**
+ * The empty Queue's buttons. R5-new-customer L6: Add many only when the plan
+ * includes it (always with billing off); absent means included, as before.
+ */
+export function QueueEmptyActions({ addManyIncluded = true }: { addManyIncluded?: boolean }) {
+  return (
+    <div className="flex flex-wrap justify-center gap-2">
+      <Link href="/posts/new" className={buttonVariants({ variant: "primary" })}>
+        Create a post
+      </Link>
+      {addManyIncluded ? (
+        <Link href="/posts/bulk" className={buttonVariants({ variant: "outline" })}>
+          Add many
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+export function QueueView({
+  footerSettings,
+  addManyIncluded = true,
+}: { footerSettings?: CaptionFooterUser; addManyIncluded?: boolean } = {}) {
   const toast = useToast();
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1276,22 +1298,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
             icon={<CalendarClock />}
             title="Nothing queued"
             description="Schedule a post or save a draft from the composer and it'll show up here."
-            action={
-              <div className="flex flex-wrap justify-center gap-2">
-                <Link
-                  href="/posts/new"
-                  className={buttonVariants({ variant: "primary" })}
-                >
-                  Create a post
-                </Link>
-                <Link
-                  href="/posts/bulk"
-                  className={buttonVariants({ variant: "outline" })}
-                >
-                  Add many
-                </Link>
-              </div>
-            }
+            action={<QueueEmptyActions addManyIncluded={addManyIncluded} />}
           />
         ) : !jobs || jobs.length === 0 ? (
           // N3: an empty Queue's calendar still shows the month to plan in.

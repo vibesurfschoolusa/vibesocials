@@ -37,6 +37,15 @@ describe("needsYouRows", () => {
     ]);
   });
 
+  // R5-new-customer L6: with billing on, Add many is offered only when the plan includes it.
+  it("offers Create a post instead of Add many when the plan does not include Add many", () => {
+    const result = rows({ addManyIncluded: false }, 0);
+    expect(result.rows).toEqual([
+      { kind: "next_post", text: "Nothing scheduled yet. Create a post to plan the next one.", href: "/posts/new" },
+    ]);
+    expect(rows({ addManyIncluded: true }, 0).rows.map((row) => row.kind)).toEqual(["add_many"]);
+  });
+
   it("shows the next post row, in the given time format, with its platform count", () => {
     const result = rows({ nextScheduled: { scheduledFor: "2026-11-18T23:00:00.000Z", platformCount: 5 } }, 0);
     expect(result.title).toBe("You're all caught up");

@@ -16,6 +16,11 @@ export interface DashboardSummary {
    * answer has no such field.
    */
   chooseGoogleLocation?: string | null;
+  /**
+   * R5-new-customer L6: false when billing is on and the workspace's plan does
+   * not include Add many. Optional: absent (an older server) keeps Add many.
+   */
+  addManyIncluded?: boolean;
 }
 
 export type NeedsYouRowKind =
@@ -123,6 +128,13 @@ export function needsYouRows(
       kind: "next_post",
       text: `Next post: ${formatTime(next.scheduledFor)}, to ${count} ${count === 1 ? "platform" : "platforms"}`,
       href: "/queue",
+    });
+  } else if (summary.addManyIncluded === false) {
+    // The next-post row's kind (and icon): the two never show together.
+    rows.push({
+      kind: "next_post",
+      text: "Nothing scheduled yet. Create a post to plan the next one.",
+      href: "/posts/new",
     });
   } else {
     rows.push({
