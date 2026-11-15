@@ -84,7 +84,7 @@ describe("clearPassedUndoWindows", () => {
     const fake = {
       emailChangeRequest: {
         findFirst: vi.fn(),
-        deleteMany: vi.fn(async ({ where }: { where: { OR: Cond[] } }) => {
+        deleteMany: vi.fn().mockImplementation(async ({ where }: { where: { OR: Cond[] } }) => {
           const before = rows.length;
           rows = rows.filter((row) => !where.OR.some((cond) => matches(row, cond)));
           return { count: before - rows.length };
