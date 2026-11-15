@@ -11,6 +11,7 @@ import {
   platformAcceptsMedia,
   unsupportedMediaReason,
 } from "./platformLimits";
+import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
 
 describe("PLATFORM_CAPTION_LIMITS", () => {
   // Locks the exact values so a future accidental edit (e.g. someone "fixing"
@@ -163,6 +164,64 @@ describe("unsupportedMediaReason", () => {
     expect(platformAcceptsMedia("x", "image/webp")).toBe(true);
     expect(platformAcceptsMedia("facebook_page", "video/webm")).toBe(true);
   });
+});
+
+// R17 CC2: formats the platforms' docs refuse, checked by the lead 2026-11-15.
+// Instagram Reels and video Stories: "Container: MOV or MP4". Google Business
+// Profile photos: "Format: JPG or PNG". Every answer for every platform and
+// every type the upload token allows is pinned, so nothing else moved.
+describe("media answers over every platform and every uploadable type (R17)", () => {
+  const OK = null;
+  const expected: Record<Platform, Record<string, string | null>> = {
+    youtube: {
+      "image/jpeg": "Video only", "image/png": "Video only", "image/gif": "Video only", "image/webp": "Video only",
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
+    },
+    tiktok: {
+      "image/jpeg": "Video only", "image/png": "Video only", "image/gif": "Video only", "image/webp": "Video only",
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
+    },
+    facebook_page: {
+      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": OK,
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
+    },
+    instagram: {
+      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": OK,
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": "MP4 or MOV only",
+    },
+    x: {
+      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": OK,
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
+    },
+    linkedin: {
+      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": "JPG, PNG or GIF only",
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": "MP4 or MOV only",
+    },
+    google_business_profile: {
+      "image/jpeg": OK, "image/png": OK, "image/gif": "JPG or PNG only", "image/webp": "JPG or PNG only",
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": OK,
+    },
+    pinterest: {
+      "image/jpeg": OK, "image/png": OK, "image/gif": OK, "image/webp": OK,
+      "video/mp4": OK, "video/quicktime": OK, "video/webm": "MP4 or MOV only",
+    },
+  };
+
+  it("covers every platform and every type the upload allows", () => {
+    expect(Object.keys(expected).sort()).toEqual(Object.keys(PLATFORM_CAPTION_LIMITS).sort());
+    for (const answers of Object.values(expected)) {
+      expect(Object.keys(answers).sort()).toEqual([...UPLOAD_ALLOWED_CONTENT_TYPES].sort());
+    }
+  });
+
+  for (const [platform, answers] of Object.entries(expected) as Array<[Platform, Record<string, string | null>]>) {
+    for (const [mimeType, reason] of Object.entries(answers)) {
+      it(`${platform} + ${mimeType}: ${reason ?? "accepted"}`, () => {
+        expect(unsupportedMediaReason(platform, mimeType)).toBe(reason);
+        expect(platformAcceptsMedia(platform, mimeType)).toBe(reason === null);
+      });
+    }
+  }
 });
 
 describe("TEXT_ONLY_PLATFORMS (posts without a photo)", () => {

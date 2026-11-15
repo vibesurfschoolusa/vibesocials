@@ -337,6 +337,30 @@ describe("prepareDeferredPostJobDispatch", () => {
     expect(result.ok).toBe(true);
   });
 
+  // R17 CC2: a post scheduled before Instagram refused WebM, or Google WebP and
+  // GIF, keeps its chosen platforms at run time: it is sent, and a refusal comes
+  // back as the client's plain failure text, never a silent drop.
+  it.each([
+    ["video/webm", "instagram"],
+    ["image/webp", "google_business_profile"],
+    ["image/gif", "google_business_profile"],
+  ] as const)("a scheduled %s post chosen for %s still gets its pending result", async (mimeType, platform) => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({
+        publishMetadata: { targetPlatforms: [platform] },
+        mediaItem: { baseCaption: "Media caption", perPlatformOverrides: null, mimeType },
+      }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-1", platform }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [{ postJobId: "job-1", workspaceId: "workspace-1", platform, socialConnectionId: "c-1", status: "pending" }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
   // F1 H1: a chosen platform whose connection was removed gets a failed result
   // that says so (no connection to point at), never silently nothing.
   it("gives a chosen platform with no connection a CONNECTION_GONE result and fails the job", async () => {

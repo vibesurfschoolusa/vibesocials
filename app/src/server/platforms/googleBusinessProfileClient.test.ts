@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { publishErrorMessage } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   buildLocalPostBody,
@@ -207,6 +208,46 @@ describe("googleBusinessProfileClient.publishVideo — what is posted", () => {
       sourceUrl: "https://blob.example.com/clip.mp4",
       locationAssociation: { category: "ADDITIONAL" },
     });
+  });
+
+  // R17 CC2: Google's photo and video guidelines (support.google.com/business/answer/6103862,
+  // checked 2026-11-15). A 400 on the create call says what Google accepts.
+  const PHOTO_REFUSED =
+    "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption and button link.";
+  const VIDEO_REFUSED =
+    "Google could not add this video to your Business Profile, so nothing was posted. Google takes videos up to 30 seconds long and 75 MB, at 720p or higher.";
+
+  it("a photo post Google refuses with 400 says what Google accepts, keeping the code and status", async () => {
+    stubAny(() => new Response(JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT" } }), { status: 400 }));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.code).toBe("GBP_CREATE_POST_FAILED");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe(PHOTO_REFUSED);
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(PHOTO_REFUSED);
+  });
+
+  it("a video Google refuses with 400 says what Google accepts, keeping the code and status", async () => {
+    stubAny(() => new Response(JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT" } }), { status: 400 }));
+    const base = makeContext();
+
+    const error = await failure(
+      googleBusinessProfileClient.publishVideo({ ...base, mediaItem: { ...base.mediaItem, mimeType: "video/mp4" } }),
+    );
+
+    expect(error?.code).toBe("GBP_CREATE_MEDIA_FAILED");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe(VIDEO_REFUSED);
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(VIDEO_REFUSED);
+  });
+
+  it("a 403 keeps today's sanitized message (not about the media)", async () => {
+    stubAny(() => new Response("denied", { status: 403 }));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.message).toBe("Failed to create the Google Business Profile post (status 403)");
   });
 
   it("keeps GBP_CREATE_MEDIA_FAILED for a refused video", async () => {

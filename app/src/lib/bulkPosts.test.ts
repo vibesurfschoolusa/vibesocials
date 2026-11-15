@@ -286,6 +286,18 @@ describe("moveRow", () => {
 });
 
 describe("platformsForRow", () => {
+  // R17 CC2: Add many skips (and lists) the formats Instagram and Google refuse.
+  it("skips Instagram for a WebM and Google for a WebP", () => {
+    expect(platformsForRow(["instagram", "google_business_profile"], "video/webm")).toEqual({
+      platforms: ["google_business_profile"],
+      skipped: ["instagram"],
+    });
+    expect(platformsForRow(["instagram", "google_business_profile"], "image/webp")).toEqual({
+      platforms: ["instagram"],
+      skipped: ["google_business_profile"],
+    });
+  });
+
   it("sends a photo to every chosen platform but YouTube, and says it skips YouTube", () => {
     expect(platformsForRow(["youtube", "instagram", "x"], "image/jpeg")).toEqual({
       platforms: ["instagram", "x"],

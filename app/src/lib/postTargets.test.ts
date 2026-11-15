@@ -209,6 +209,28 @@ describe("deriveComposerPlatforms", () => {
   const connected: Platform[] = ["tiktok", "youtube", "x", "facebook_page"];
   const none = new Set<Platform>();
 
+  // R17 CC2: the formats Instagram and Google refuse show their reason beside
+  // the disabled platform; the others stay chosen.
+  it("disables Instagram for a WebM and Google for a WebP or GIF, with the reason", () => {
+    const both: Platform[] = ["instagram", "google_business_profile", "x"];
+    const webm = deriveComposerPlatforms(both, none, "video/webm");
+    expect(webm.choices.find((c) => c.platform === "instagram")).toEqual({
+      platform: "instagram",
+      checked: false,
+      disabledReason: "MP4 or MOV only",
+    });
+    expect(webm.selected).toEqual(["google_business_profile", "x"]);
+    for (const image of ["image/webp", "image/gif"]) {
+      const picked = deriveComposerPlatforms(both, none, image);
+      expect(picked.choices.find((c) => c.platform === "google_business_profile")).toEqual({
+        platform: "google_business_profile",
+        checked: false,
+        disabledReason: "JPG or PNG only",
+      });
+      expect(picked.selected).toEqual(["instagram", "x"]);
+    }
+  });
+
   it("selects every connected platform while no media is chosen", () => {
     const { choices, selected } = deriveComposerPlatforms(connected, none, null);
     expect(selected).toEqual(connected);

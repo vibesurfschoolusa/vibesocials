@@ -35,6 +35,16 @@ import type {
 // caller branches on that code — the job runner records whatever `error.code`
 // is present for per-platform failure isolation.
 
+// Google's photo and video guidelines (support.google.com/business/answer/6103862,
+// checked 2026-11-15): photos "Format: JPG or PNG", "Size: Between 10 KB and
+// 5 MB", 250 px minimum; videos "Up to 30 seconds long", "Up to 75 MB", "720p
+// or higher". A photo post's 400 may also be its caption or button, so that
+// text names them last.
+const GBP_PHOTO_REFUSED_TEXT =
+  "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption and button link.";
+const GBP_VIDEO_REFUSED_TEXT =
+  "Google could not add this video to your Business Profile, so nothing was posted. Google takes videos up to 30 seconds long and 75 MB, at 720p or higher.";
+
 export const googleBusinessProfileClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
@@ -91,6 +101,7 @@ export const googleBusinessProfileClient: PlatformClient = {
             code: "GBP_CREATE_POST_FAILED",
             prefix: "Failed to create the Google Business Profile post",
           },
+          refused: GBP_PHOTO_REFUSED_TEXT,
         }
       : {
           url: `https://mybusiness.googleapis.com/v4/${locationName}/media`,
@@ -104,6 +115,7 @@ export const googleBusinessProfileClient: PlatformClient = {
             code: "GBP_CREATE_MEDIA_FAILED",
             prefix: "Failed to create media item in Google Business Profile",
           },
+          refused: GBP_VIDEO_REFUSED_TEXT,
         };
 
     const createRes = await commitRequest("google_business_profile", () =>
@@ -126,7 +138,12 @@ export const googleBusinessProfileClient: PlatformClient = {
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
 
-    await assertOk(createRes, request.failure);
+    // A 400 (INVALID_ARGUMENT) is Google refusing what was sent: say what it
+    // accepts. Code and status are kept, so retrying stays exactly as before.
+    await assertOk(createRes, request.failure).catch((error: Error & { status?: number }) => {
+      if (error.status === 400) error.message = request.refused;
+      throw error;
+    });
 
     // The create answered 2xx, so the post or item may exist: an unreadable body
     // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a

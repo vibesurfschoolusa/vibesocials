@@ -123,7 +123,7 @@ export type MediaKind = "image" | "video";
  * - google_business_profile — both: a photo becomes a post (localPosts), a
  *                    video is added to the gallery (media, "VIDEO")
  *                    (server/platforms/googleBusinessProfileClient.ts, `isPhoto`);
- *                    it never rejects, so neither does this map.
+ *                    the formats Google's docs refuse are in PLATFORM_REFUSED_FORMATS.
  * - pinterest      — both: a photo becomes a Pin by URL, a video is uploaded and
  *                    processed first; anything else is
  *                    PINTEREST_UNSUPPORTED_MEDIA_TYPE
@@ -154,6 +154,14 @@ const PLATFORM_REFUSED_FORMATS: Partial<Record<Platform, Readonly<Record<string,
   // Pinterest's video Pins take .mp4, .mov and .m4v (H.264 / H.265); a WebM
   // upload fails its processing, so it is refused up front.
   pinterest: { "video/webm": "MP4 or MOV only" },
+  // Instagram's content-publishing docs (checked 2026-11-15): Reels and video
+  // Stories take "Container: MOV or MP4". A WebM failed Instagram's processing
+  // after the post was sent; now it is refused before.
+  instagram: { "video/webm": "MP4 or MOV only" },
+  // Google's photo guidelines (support.google.com/business/answer/6103862,
+  // checked 2026-11-15): "Format: JPG or PNG". A scheduled post made before
+  // this rule still runs and fails with the client's plain refusal text.
+  google_business_profile: { "image/webp": "JPG or PNG only", "image/gif": "JPG or PNG only" },
 };
 
 /**
