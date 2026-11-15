@@ -57,6 +57,7 @@ export async function POST(request: Request) {
   const result = await startCheckout({
     workspaceId: context.workspace.id,
     ownerEmail: context.user.email,
+    ownerUserId: context.user.id,
     plan: body.plan,
     // Absent: startCheckout's monthly default, so the call is today's.
     ...(body.interval === undefined ? {} : { interval: interval as BillingInterval }),

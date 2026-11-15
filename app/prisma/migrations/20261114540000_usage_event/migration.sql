@@ -2,7 +2,10 @@
 -- deleting a workspace (src/server/usage/usageLog.ts). Additive: one new table
 -- with no foreign keys, its indexes, and rows for the workspaces created in the
 -- last 30 days, so the per-person creation limit counts them from the start.
+-- R5-security L2: one nullable column naming who pays for a workspace's plan.
 SET lock_timeout = '5s';
+
+ALTER TABLE "Workspace" ADD COLUMN "billingUserId" TEXT;
 
 CREATE TABLE "UsageEvent" (
     "id" TEXT NOT NULL,

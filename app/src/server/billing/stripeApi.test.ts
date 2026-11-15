@@ -13,7 +13,6 @@ import {
   listCheckoutSessions,
   listAllCustomerSubscriptions,
   listCustomerSubscriptions,
-  retrieveCustomer,
   retrievePrice,
   retrieveSubscription,
   stripeIdempotencyKey,
@@ -326,13 +325,3 @@ describe("stripeIdempotencyKey", () => {
   });
 });
 
-// R5-security L2: who pays for a plan, by the customer's email.
-describe("retrieveCustomer", () => {
-  it("GETs the customer by its escaped id and returns its email", async () => {
-    fetchMock.mockResolvedValue(ok({ id: "cus_1", object: "customer", email: "payer@example.com" }));
-    await expect(retrieveCustomer("cus_1", ENV)).resolves.toMatchObject({ id: "cus_1", email: "payer@example.com" });
-    const { url, init } = lastCall();
-    expect(url).toBe("https://api.stripe.com/v1/customers/cus_1");
-    expect(init.method).toBe("GET");
-  });
-});

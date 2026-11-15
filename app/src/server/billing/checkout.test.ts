@@ -13,6 +13,7 @@ type Row = {
 const m = vi.hoisted(() => ({
   row: null as Row | null,
   writes: [] as unknown[],
+  payerWrites: [] as unknown[],
   createCustomer: vi.fn(),
   createCheckoutSession: vi.fn(),
   createPortalSession: vi.fn(),
@@ -42,6 +43,12 @@ vi.mock("@/lib/db", () => ({
         if (!m.row || m.row.stripeCustomerId !== where.stripeCustomerId) return { count: 0 };
         m.row = { ...m.row, ...data };
         return { count: 1 };
+      },
+      // R5-security L2: who pays, recorded once the session is made.
+      update: async (args: unknown) => {
+        m.order.push("record payer");
+        m.payerWrites.push(args);
+        return {};
       },
     },
   },
@@ -85,6 +92,7 @@ function trialRow(overrides: Partial<Row> = {}): Row {
 beforeEach(() => {
   m.row = trialRow();
   m.writes = [];
+  m.payerWrites = [];
   m.createCustomer.mockReset();
   m.createCustomer.mockResolvedValue({ id: "cus_1" });
   m.createCheckoutSession.mockReset();
@@ -105,6 +113,27 @@ beforeEach(() => {
 });
 
 describe("startCheckout", () => {
+  // R5-security L2: the person who starts the checkout is the one who pays:
+  // starting one expires every other open session, and none starts while a
+  // plan is live, so the last starter is the only one who can have paid.
+  it("records the owner who starts the checkout as the workspace's payer, once the session is made", async () => {
+    m.createCheckoutSession.mockImplementation(async () => {
+      m.order.push("session");
+      return { id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" };
+    });
+    await startCheckout({ ...input(), ownerUserId: "user-1" }, ENV);
+    expect(m.payerWrites).toEqual([{ where: { id: "ws_1" }, data: { billingUserId: "user-1" } }]);
+    expect(m.order).toEqual(["session", "record payer"]);
+  });
+
+  it("records no payer when no session is made, or when no user is named", async () => {
+    m.createCheckoutSession.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
+    await startCheckout({ ...input(), ownerUserId: "user-1" }, ENV);
+    m.createCheckoutSession.mockResolvedValue({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" });
+    await startCheckout(input(), ENV);
+    expect(m.payerWrites).toEqual([]);
+  });
+
   it("creates the customer, saves it, then a subscription session with the reference, metadata and trial end", async () => {
     const result = await startCheckout(input(), ENV);
     expect(result).toEqual({ ok: true, url: "https://checkout.stripe.com/c/pay/cs_1" });

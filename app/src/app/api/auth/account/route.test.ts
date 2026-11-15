@@ -330,14 +330,7 @@ describe("DELETE /api/auth/account", () => {
     await expect(response.json()).resolves.toEqual({
       error: 'You pay for the plan of "Co-owned", which carries on after you go. Hand over or cancel the plan under Settings, Plan first.',
     });
-    expect(m.payerRefusal).toHaveBeenCalledWith({ email: "me@example.com", workspaceIds: ["ws-co"] });
-    nothingChanged();
-  });
-
-  it("answers 502 and changes nothing when who pays cannot be checked", async () => {
-    m.payerRefusal.mockResolvedValue({ status: 502, error: "We could not check." });
-    const response = await DELETE(request({ password: "right-password" }));
-    expect(response.status).toBe(502);
+    expect(m.payerRefusal).toHaveBeenCalledWith({ userId: USER_ID, workspaceIds: ["ws-co"] });
     nothingChanged();
   });
 

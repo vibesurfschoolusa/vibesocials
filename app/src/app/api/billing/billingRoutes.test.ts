@@ -102,6 +102,8 @@ describe("POST /api/billing/checkout", () => {
     expect(m.startCheckout).toHaveBeenCalledWith({
       workspaceId: "ws_1",
       ownerEmail: "owner@example.com",
+      // R5-security L2: the owner starting checkout is recorded as the payer.
+      ownerUserId: "user-1",
       plan: "starter",
       now: expect.any(Date),
       baseUrl: "https://app.example",

@@ -71,7 +71,16 @@ function logStripeFailure(what: string, workspaceId: string, error: unknown) {
  */
 export async function startCheckout(
   // P1: interval is optional and monthly by default, so a request without it is today's.
-  input: { workspaceId: string; ownerEmail: string; plan: PlanKey; interval?: BillingInterval; now: Date; baseUrl: string },
+  // R5-security L2: ownerUserId, the owner starting it, is recorded as the payer.
+  input: {
+    workspaceId: string;
+    ownerEmail: string;
+    ownerUserId?: string;
+    plan: PlanKey;
+    interval?: BillingInterval;
+    now: Date;
+    baseUrl: string;
+  },
   env: BillingEnv = process.env,
 ): Promise<CheckoutResult> {
   reportDuplicatePriceIds("checkout", env);
@@ -183,6 +192,11 @@ export async function startCheckout(
       env,
     );
     if (!session.url) return stripeDown();
+    // R5-security L2: this session is now the only one that can be paid (the
+    // others were expired above), so its starter is who pays.
+    if (input.ownerUserId) {
+      await prisma.workspace.update({ where: { id: input.workspaceId }, data: { billingUserId: input.ownerUserId } });
+    }
     return { ok: true, url: session.url };
   } catch (error) {
     if (!(error instanceof StripeApiError)) throw error;

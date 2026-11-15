@@ -69,7 +69,7 @@ export async function POST(request: Request) {
 
   // R5-security L2: the workspace carries on without the caller, so a card of
   // theirs paying for its plan would keep paying. Asked before any write.
-  const payer = await payerRefusal({ email: context.user.email, workspaceIds: [context.workspace.id] });
+  const payer = await payerRefusal({ userId: context.user.id, workspaceIds: [context.workspace.id] });
   if (payer) {
     return NextResponse.json({ error: payer.error }, { status: payer.status });
   }

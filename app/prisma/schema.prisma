@@ -259,6 +259,12 @@ model Workspace {
   trialEndedEmailSentAt DateTime?
   // When a plan set to cancel stops (null while it renews).
   planEndsAt            DateTime?
+  // R5-security L2 (2026-11-14): the person who pays, recorded as they start
+  // checkout (src/server/billing/checkout.ts): starting one expires every other
+  // open session and none starts while a plan is live, so the last starter is
+  // the one who paid. No foreign key: kept as a plain id like createdById.
+  // Null: never recorded (plans bought before it existed).
+  billingUserId         String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

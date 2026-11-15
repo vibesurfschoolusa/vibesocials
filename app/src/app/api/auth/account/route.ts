@@ -97,7 +97,7 @@ export async function DELETE(request: Request) {
 
   // R5-security L2: a card of theirs paying for a workspace that survives
   // would keep paying after the account is gone. Asked before any cancel.
-  const payer = await payerRefusal({ email: user.email, workspaceIds: plan.reassign.map((r) => r.workspaceId) });
+  const payer = await payerRefusal({ userId: user.id, workspaceIds: plan.reassign.map((r) => r.workspaceId) });
   if (payer) {
     return NextResponse.json({ error: payer.error }, { status: payer.status });
   }

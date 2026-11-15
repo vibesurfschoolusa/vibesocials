@@ -31,6 +31,11 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("POST /api/billing/checkout", () => {
+  it("names the owner who starts it, who becomes the workspace's payer (R5-security L2)", async () => {
+    await POST(post({ plan: "starter" }));
+    expect(h.startCheckout.mock.calls[0][0]).toMatchObject({ ownerUserId: "user-1" });
+  });
+
   it("without an interval asks for the monthly price, as old clients do", async () => {
     const response = await POST(post({ plan: "starter" }));
     expect(response.status).toBe(200);
