@@ -326,9 +326,9 @@ export function PostJobCard({
 
   // R7-security L1 and its review: what "Retry all failed" sends, by the rule
   // the retry route uses too (lib/retryAll.ts): never a platform that may
-  // already be live, nor one the server said needs reconnecting. Shown when
-  // the rule covers at least one and more than one platform failed (with
-  // one, its own Retry button is the same request).
+  // already be live, nor one the server said needs reconnecting. Shown only
+  // when the rule covers 2 or more platforms (R8-pages L6): with one, that
+  // platform's own Retry button is the same request.
   const retryAllPlatforms = retryAllPlan(results, (platform) => reconnect.has(platform)).included;
 
   const retry = useCallback(
@@ -564,7 +564,7 @@ export function PostJobCard({
               </Button>
             ),
           )}
-          {retryAllPlatforms.length >= 1 && failedPlatforms.length >= 2 ? (
+          {retryAllPlatforms.length >= 2 ? (
             <Button
               size="sm"
               variant="outline"

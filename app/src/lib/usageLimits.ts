@@ -433,6 +433,33 @@ export function ownerDailyPostLimitMessage(
   return reduced ? `${sentence} ${reducedNote(reduced, holder, named, time)}` : sentence;
 }
 
+/**
+ * R8-pages M1: Settings, Usage's line for one owner's per-person number, the
+ * one that binds a free workspace: whose it is, and why it is the lower one.
+ */
+export function personalUsageText(
+  person: { name: string; isViewer: boolean; reduced: ReducedReason | null },
+  coOwned: boolean,
+): { label: string; note: string } {
+  const label = person.isViewer
+    ? "Your posts today (UTC), all your workspaces"
+    : `${coOwned ? `${person.name}'s` : "The owner's"} posts today (UTC), all their workspaces`;
+  const confirms = person.isViewer
+    ? "you confirm your email address"
+    : `${coOwned ? person.name : "the owner"} confirms their email address`;
+  const low = NEW_ACCOUNT_DAILY_POST_LIMIT;
+  const full = OWNER_DAILY_POST_LIMIT;
+  const why =
+    person.reduced === "unconfirmed"
+      ? ` ${low} until ${confirms}, then ${full}.`
+      : person.reduced === "first_day"
+        ? ` ${low} on the account's first day (UTC), ${full} from 00:00 UTC tomorrow.`
+        : person.reduced === "first_day_unconfirmed"
+          ? ` ${low} on the account's first day (UTC), ${full} from 00:00 UTC tomorrow once ${confirms}.`
+          : "";
+  return { label, note: `Retries count too.${why}` };
+}
+
 export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {
   if (mode === "now") {
     return `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.`;
@@ -472,12 +499,12 @@ export function newAccountPoolAtSendMessage(): string {
 
 /**
  * R7-security L1: the retry runs of one post. It points to Retry all failed,
- * which is one run, only when the post has the button: 2 or more failed
- * platforms (R8-publishing L3).
+ * which is one run, only when the post's card has the button: it covers 2 or
+ * more failed platforms (R8-publishing L3, R8-pages L6).
  */
-export function postRetryLimitMessage(limit: number, failedPlatforms: number): string {
+export function postRetryLimitMessage(limit: number, retryAllPlatforms: number): string {
   const sentence = `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow.`;
-  return failedPlatforms >= 2
+  return retryAllPlatforms >= 2
     ? `${sentence} Retry all failed retries every failed platform of a post at once and counts as one retry.`
     : sentence;
 }

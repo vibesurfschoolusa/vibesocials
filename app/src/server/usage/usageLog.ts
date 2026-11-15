@@ -4,6 +4,8 @@ import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState, 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
+import { isUnconfirmedResult } from "@/lib/postsDto";
+import { retryAllPlan } from "@/lib/retryAll";
 import { notifyOperatorOfFreeRunCeiling, type CeilingOwner } from "@/server/notifications/freeRunCeilingEmail";
 import {
   FREE_RUNS_DAILY_CEILING,
@@ -573,6 +575,37 @@ async function ownerCountOnDay(ownerId: string, day: Date, unit: readonly string
   return runs + waiting.length;
 }
 
+/** R8-pages M1: one owner's per-person count today, as Settings, Usage shows it. */
+export type PersonalUsage = {
+  userId: string;
+  name: string;
+  isViewer: boolean;
+  used: number;
+  limit: number;
+  reduced: ReducedReason | null;
+};
+
+/**
+ * R8-pages M1: each owner's per-person count today and their number, counted
+ * as the limit counts it (runs, retries included, and posts still to go
+ * today across their free workspaces). Empty where the per-person limit does
+ * not apply: a paying, grandfathered (billing on) or operator's workspace.
+ * Throws on a database error; Settings reads it through getWorkspaceUsageOrNull.
+ */
+export async function ownersPersonalUsage(workspaceId: string, now: Date, viewerUserId?: string): Promise<PersonalUsage[]> {
+  const who = await runAttribution(workspaceId, now);
+  if (who.operator || !personalPostLimitApplies(await ownBillingFields(workspaceId), process.env, now)) return [];
+  return Promise.all(
+    who.owners.map(async (owner) => ({
+      userId: owner.userId,
+      name: owner.user.name?.trim() || owner.user.email,
+      isViewer: viewerUserId === owner.userId,
+      used: await ownerCountOnDay(owner.userId, now, []),
+      ...ownerDailyPostLimit(owner.user, now),
+    })),
+  );
+}
+
 /**
  * The runs on the UTC day of `day` in each pool, other than `unit`'s. A row
  * says its pool; one written before pools counts in the main pool when its
@@ -854,17 +887,30 @@ async function retryRunsToday(
 
 /**
  * R8-publishing L3: the 3-times sentence, pointing to Retry all failed only
- * when the post has the button (2 or more failed platforms). Read only when
- * refusing; unreadable counts as none.
+ * when the post's card shows it: the shared rule (lib/retryAll.ts, as the card
+ * and the retry route apply it) covers 2 or more of its failed platforms.
+ * Read only when refusing; unreadable counts as none.
  */
-async function retryLimitRefusal(postJobId: string): Promise<LimitRefusal> {
-  let failed = 0;
+async function retryLimitRefusal(workspaceId: string, postJobId: string): Promise<LimitRefusal> {
+  let covered = 0;
   try {
-    failed = await prisma.postJobResult.count({ where: { postJobId, status: "failed" } });
+    const failed = await prisma.postJobResult.findMany({
+      where: { postJobId, status: "failed" },
+      select: { platform: true, status: true, errorCode: true },
+    });
+    const connections = await prisma.socialConnection.findMany({
+      where: { workspaceId, platform: { in: failed.map((result) => result.platform) } },
+      select: { platform: true, needsReconnect: true },
+    });
+    const healthy = new Set(connections.filter((c) => !c.needsReconnect).map((c) => c.platform));
+    covered = retryAllPlan(
+      failed.map((result) => ({ ...result, unconfirmed: isUnconfirmedResult(result) })),
+      (platform) => !healthy.has(platform),
+    ).included.length;
   } catch (error) {
-    logger.error("[usage] Couldn't count a post's failed platforms (sentence without Retry all)", { error, postJobId });
+    logger.error("[usage] Couldn't read a post's failed platforms (sentence without Retry all)", { error, postJobId });
   }
-  return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY, failed), code: POST_RETRY_LIMIT_CODE };
+  return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY, covered), code: POST_RETRY_LIMIT_CODE };
 }
 
 /**
@@ -887,7 +933,7 @@ export async function retryRefusal(input: {
     const who = await runAttribution(workspaceId, now);
     if (who.operator) return null;
     if ((await retryRunsToday(workspaceId, postJobId, now)) >= RETRIES_PER_POST_PER_DAY) {
-      return await retryLimitRefusal(postJobId);
+      return await retryLimitRefusal(workspaceId, postJobId);
     }
     return await refusalFor(
       who,
@@ -958,7 +1004,7 @@ export async function reserveRetry(input: {
     return null;
   }
   // The sentence is read after the lock is let go.
-  return limited ? await retryLimitRefusal(postJobId) : null;
+  return limited ? await retryLimitRefusal(workspaceId, postJobId) : null;
 }
 
 

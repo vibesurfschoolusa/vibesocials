@@ -285,6 +285,19 @@ describe("PostJobCard - Retry all failed", () => {
     expect(retryAllToast(["x"], undefined)).toBe("Retrying X.");
   });
 
+  // R8-pages L6: X unconfirmed and YouTube failed: Retry all would retry only YouTube,
+  // the same request as YouTube's own Retry.
+  it("no Retry all failed when it would cover only one platform", () => {
+    const html = render(
+      job({
+        status: "failed",
+        results: [result({ platform: "x", status: "failed", unconfirmed: true }), failed("youtube")],
+      }),
+    ).replace(/<!-- -->/g, "");
+    expect(html).toContain("Retry YouTube</button>");
+    expect(html).not.toContain("Retry all failed");
+  });
+
   it("shows no Retry all failed for a single failed platform", () => {
     const html = render(job({ status: "failed", results: [failed("x"), result({ platform: "instagram" })] }));
     expect(html).not.toContain("Retry all failed");

@@ -17,8 +17,9 @@ const store = vi.hoisted(() => ({
   /** The transaction locks taken: the SQL and the key. */
   locks: [] as Array<{ sql: string; key: unknown }>,
   posts: [] as Record<string, unknown>[],
-  /** Failed results per post (R8-publishing L3: the retry sentence). */
-  failedResults: {} as Record<string, number>,
+  /** Results per post (R8-publishing L3: the retry sentence), and the platforms that need reconnecting. */
+  results: {} as Record<string, Array<{ platform: string; status: string; errorCode: string | null }>>,
+  deadPlatforms: [] as string[],
   /** RateLimitEntry rows by key (the once-a-day emails). */
   limits: new Map<string, number>(),
   /** User.timeZone by user id. */
@@ -145,9 +146,12 @@ vi.mock("@/lib/db", () => {
         findMany: async ({ where }: { where: Row }) => store.posts.filter((post) => matches(post, where)),
       },
       postJobResult: {
-        findMany: async () => [],
-        count: async ({ where }: { where: { postJobId: string; status: string } }) =>
-          where.status === "failed" ? (store.failedResults[where.postJobId] ?? 0) : 0,
+        findMany: async ({ where }: { where: { postJobId?: string; status?: string } }) =>
+          where.postJobId ? (store.results[where.postJobId] ?? []).filter((row) => row.status === where.status) : [],
+      },
+      socialConnection: {
+        findMany: async ({ where }: { where: { platform: { in: string[] } } }) =>
+          where.platform.in.map((platform) => ({ platform, needsReconnect: store.deadPlatforms.includes(platform) })),
       },
       rateLimitEntry: {
         upsert: async ({ where }: { where: { key: string } }) => {
@@ -193,6 +197,7 @@ vi.mock("@/lib/db", () => {
 import {
   copyUsageBeforeDeletion,
   crossWorkspacePostRefusal,
+  ownersPersonalUsage,
   recordRetry,
   recordSend,
   reserveRetry,
@@ -259,7 +264,8 @@ beforeEach(() => {
   store.posts = [];
   store.workspaces = [];
   store.down = false;
-  store.failedResults = {};
+  store.results = {};
+  store.deadPlatforms = [];
   store.limits = new Map();
   store.timeZones = {};
   sendEmailMock.mockReset();
@@ -690,20 +696,28 @@ describe("retries", () => {
     await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-b", now: NOW })).resolves.toBeNull();
   });
 
-  // R8-publishing L3: Retry all failed shows only on a post with 2 or more failed platforms.
-  it("points to Retry all failed only when the post has 2 or more failed platforms", async () => {
+  // R8-publishing L3 with R8-pages L6: the sentence points to Retry all failed
+  // only when the card shows it: the shared rule covers 2 or more platforms.
+  it("points to Retry all failed only when it covers 2 or more of the post's failed platforms", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
     for (const requestId of ["r1", "r2", "r3"]) {
       await recordRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, at: NOW });
     }
-    store.failedResults["post-a"] = 2;
-    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(
-      "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.",
-    );
-    store.failedResults["post-a"] = 1;
-    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(
-      "This post has been retried 3 times today, the most for one day. Try again tomorrow.",
-    );
+    const failed = (platform: string, errorCode: string | null = "PLATFORM_ERROR") => ({ platform, status: "failed", errorCode });
+    const WITH_POINTER =
+      "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.";
+    const WITHOUT = "This post has been retried 3 times today, the most for one day. Try again tomorrow.";
+    store.results["post-a"] = [failed("x"), failed("youtube"), { platform: "linkedin", status: "success", errorCode: null }];
+    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(WITH_POINTER);
+    // X may already be live: Retry all would cover only YouTube, so the card has no such button.
+    store.results["post-a"] = [failed("x", "PUBLISH_UNCONFIRMED"), failed("youtube")];
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(WITHOUT);
+    store.results["post-a"] = [failed("x"), failed("youtube")];
+    store.deadPlatforms = ["x"];
+    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(WITHOUT);
+    store.results["post-a"] = [failed("youtube")];
+    store.deadPlatforms = [];
+    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(WITHOUT);
   });
 
   it("retries recorded per platform before this change count once per request", async () => {
@@ -1131,5 +1145,39 @@ describe("whether a post's run for the day is already recorded", () => {
     await expect(sendRecorded("other", NOW)).resolves.toBe(false);
     store.down = true;
     await expect(sendRecorded("story", NOW)).resolves.toBe(false);
+  });
+});
+
+// R8-pages M1: Settings, Usage shows each owner's per-person count, counted as the limit counts it.
+describe("the per-person usage for Settings", () => {
+  it("counts runs today (retries too) and posts still to go today, across the owner's free workspaces", async () => {
+    workspace("ws-1", {}, [owner("owner-1", { name: "Jane" })]);
+    workspace("ws-2", {}, [owner("owner-1", { name: "Jane" })]);
+    for (let p = 1; p <= 3; p += 1) await due("ws-2", `b-${p}`);
+    await recordRetry({ workspaceId: "ws-2", postJobId: "b-1", requestId: "r1", at: NOW });
+    store.posts.push({ id: "later-today", workspaceId: "ws-1", status: "scheduled", scheduledFor: new Date("2026-11-14T20:00:00Z"), createdAt: LONG_AGO });
+    store.posts.push({ id: "tomorrow", workspaceId: "ws-1", status: "scheduled", scheduledFor: new Date("2026-11-15T09:00:00Z"), createdAt: LONG_AGO });
+
+    await expect(ownersPersonalUsage("ws-1", NOW, "owner-1")).resolves.toEqual([
+      { userId: "owner-1", name: "Jane", isViewer: true, used: 5, limit: 15, reduced: null },
+    ]);
+    // The workspace's own line would read 1 here: the binding number is the person's.
+  });
+
+  it("a new or unconfirmed owner reads 5 with its reason, one line per owner of a co-owned workspace", async () => {
+    workspace("ws-team", {}, [owner("lead"), owner("maria", { name: "Maria", createdAt: new Date(NOW.getTime() - 3_600_000), emailVerifiedAt: null })]);
+    const lines = await ownersPersonalUsage("ws-team", NOW, "lead");
+    expect(lines.map(({ name, isViewer, limit, reduced }) => ({ name, isViewer, limit, reduced }))).toEqual([
+      { name: "lead@example.com", isViewer: true, limit: 15, reduced: null },
+      { name: "Maria", isViewer: false, limit: 5, reduced: "first_day_unconfirmed" },
+    ]);
+  });
+
+  it("is empty where the per-person limit does not apply: a paying or the operator's workspace", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    workspace("ws-paid", PAID, [owner("payer")]);
+    workspace("ws-ops", {}, [OPS]);
+    await expect(ownersPersonalUsage("ws-paid", NOW)).resolves.toEqual([]);
+    await expect(ownersPersonalUsage("ws-ops", NOW)).resolves.toEqual([]);
   });
 });

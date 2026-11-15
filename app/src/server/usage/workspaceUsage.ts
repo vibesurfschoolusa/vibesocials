@@ -27,7 +27,15 @@ import { pacificDayKey } from "@/server/platforms/rateLimited";
 import { buildLimitReachedEmail } from "@/server/notifications/limitReachedEmail";
 import { sendEmail } from "@/server/notifications/email";
 
-import { crossWorkspacePostRefusal, postsOnUtcDayWhere, xPostsThisMonth } from "./usageLog";
+import {
+  crossWorkspacePostRefusal,
+  ownersPersonalUsage,
+  postsOnUtcDayWhere,
+  xPostsThisMonth,
+  type PersonalUsage,
+} from "./usageLog";
+
+export type { PersonalUsage } from "./usageLog";
 
 /**
  * Per-workspace usage limits (2026-11-10): the counts behind them, one check per
@@ -61,6 +69,11 @@ export type WorkspaceUsage = {
   youtubeUploadsToday: UsageMeter;
   /** Bytes. */
   storage: UsageMeter;
+  /**
+   * R8-pages M1: each owner's per-person count today across all their free
+   * workspaces, the number that binds; empty (or absent) where it does not apply.
+   */
+  people?: PersonalUsage[];
 };
 
 async function loadWorkspace(
@@ -397,14 +410,19 @@ export async function checkStorageLimit(
   }
 }
 
-/** Used and limit for all four. Throws on a database error; Settings reads it through getWorkspaceUsageOrNull. */
-export async function getWorkspaceUsage(workspaceId: string, now: Date): Promise<WorkspaceUsage> {
-  const [limits, postsToday, xPosts, youtubeUploads, storage] = await Promise.all([
+/**
+ * Used and limit for all four, and each owner's per-person count
+ * (`viewerUserId`: who reads it, so their own line says "Your"). Throws on a
+ * database error; Settings reads it through getWorkspaceUsageOrNull.
+ */
+export async function getWorkspaceUsage(workspaceId: string, now: Date, viewerUserId?: string): Promise<WorkspaceUsage> {
+  const [limits, postsToday, xPosts, youtubeUploads, storage, people] = await Promise.all([
     getWorkspaceLimits(workspaceId),
     countPostsOnUtcDay(workspaceId, now),
     xPostsThisMonth(workspaceId, now),
     countYoutubeUploadsToday(workspaceId, now),
     storageBytesUsed(workspaceId),
+    ownersPersonalUsage(workspaceId, now, viewerUserId),
   ]);
   return {
     postsToday: { used: postsToday, limit: limits.postsPerDay, resetsAt: utcDayRange(now).end },
@@ -415,13 +433,18 @@ export async function getWorkspaceUsage(workspaceId: string, now: Date): Promise
       resetsAt: pacificDayRange(now).end,
     },
     storage: { used: storage, limit: limits.storageBytes, resetsAt: null },
+    people,
   };
 }
 
 /** For Settings: the usage, or null (logged) when it cannot be read, so the page still renders. */
-export async function getWorkspaceUsageOrNull(workspaceId: string, now: Date): Promise<WorkspaceUsage | null> {
+export async function getWorkspaceUsageOrNull(
+  workspaceId: string,
+  now: Date,
+  viewerUserId?: string,
+): Promise<WorkspaceUsage | null> {
   try {
-    return await getWorkspaceUsage(workspaceId, now);
+    return await getWorkspaceUsage(workspaceId, now, viewerUserId);
   } catch (error) {
     logger.error("[usage] Couldn't read the workspace's usage for Settings", { error, workspaceId });
     return null;

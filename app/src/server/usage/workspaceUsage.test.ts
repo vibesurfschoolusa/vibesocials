@@ -7,8 +7,9 @@ const db = vi.hoisted(() => ({
   queryRaw: vi.fn(),
   memberFindMany: vi.fn(),
 }));
-const { consumeFixedWindowMock, sendEmailMock, crossWorkspaceMock, xPostsMock, canSendMock } = vi.hoisted(() => ({
+const { consumeFixedWindowMock, sendEmailMock, crossWorkspaceMock, xPostsMock, canSendMock, personalMock } = vi.hoisted(() => ({
   canSendMock: vi.fn(),
+  personalMock: vi.fn(),
   consumeFixedWindowMock: vi.fn(),
   sendEmailMock: vi.fn(),
   crossWorkspaceMock: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("./usageLog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./usageLog")>()),
   crossWorkspacePostRefusal: crossWorkspaceMock,
   xPostsThisMonth: xPostsMock,
+  ownersPersonalUsage: personalMock,
 }));
 
 import {
@@ -67,6 +69,8 @@ beforeEach(() => {
   crossWorkspaceMock.mockResolvedValue(null);
   canSendMock.mockReset();
   canSendMock.mockResolvedValue(true);
+  personalMock.mockReset();
+  personalMock.mockResolvedValue([]);
   xPostsMock.mockReset();
   xPostsMock.mockResolvedValue(0);
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -558,9 +562,20 @@ describe("getWorkspaceUsage", () => {
       xPostsThisMonth: { used: 4, limit: 30, resetsAt: new Date("2026-12-01T00:00:00.000Z") },
       youtubeUploadsToday: { used: 1, limit: 10, resetsAt: new Date("2026-11-11T08:00:00.000Z") },
       storage: { used: 5 * MB, limit: 5120 * MB, resetsAt: null },
+      people: [],
     });
     // Settings reads the X count the publish check refuses by, without writing.
     expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW);
+  });
+
+  // R8-pages M1: the per-person number that binds, beside the workspace's own.
+  it("carries each owner's count across their workspaces, for the person reading it", async () => {
+    const line = { userId: "owner-1", name: "Jane", isViewer: true, used: 6, limit: 15, reduced: null };
+    personalMock.mockResolvedValue([line]);
+    const usage = await getWorkspaceUsage("ws-1", NOW, "owner-1");
+    expect(personalMock).toHaveBeenCalledWith("ws-1", NOW, "owner-1");
+    expect(usage.people).toEqual([line]);
+    await expect(getWorkspaceUsageOrNull("ws-1", NOW, "owner-1")).resolves.toMatchObject({ people: [line] });
   });
 });
 

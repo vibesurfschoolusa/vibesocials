@@ -16,6 +16,7 @@ import {
   isNewAccount,
   pacificDayRange,
   personalPostLimitApplies,
+  personalUsageText,
   postRetryLimitMessage,
   RETRIES_PER_POST_PER_DAY,
   SERVICE_DAILY_POST_LIMIT,
@@ -484,6 +485,28 @@ describe("limits across workspaces", () => {
     );
     expect(postRetryLimitMessage(3, 1)).toBe("This post has been retried 3 times today, the most for one day. Try again tomorrow.");
     expect(postRetryLimitMessage(3, 0)).toBe("This post has been retried 3 times today, the most for one day. Try again tomorrow.");
+  });
+
+  // R8-pages M1: Settings, Usage shows the per-person number that binds, beside the workspace's own.
+  it("the per-person usage line: whose, across which workspaces, and why it is 5", () => {
+    expect(personalUsageText({ name: "Jane", isViewer: true, reduced: null }, false)).toEqual({
+      label: "Your posts today (UTC), all your workspaces",
+      note: "Retries count too.",
+    });
+    expect(personalUsageText({ name: "Jane", isViewer: false, reduced: null }, false)).toEqual({
+      label: "The owner's posts today (UTC), all their workspaces",
+      note: "Retries count too.",
+    });
+    expect(personalUsageText({ name: "Jane", isViewer: false, reduced: "unconfirmed" }, true)).toEqual({
+      label: "Jane's posts today (UTC), all their workspaces",
+      note: "Retries count too. 5 until Jane confirms their email address, then 15.",
+    });
+    expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day" }, true).note).toBe(
+      "Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow.",
+    );
+    expect(personalUsageText({ name: "Jane", isViewer: true, reduced: "first_day_unconfirmed" }, false).note).toBe(
+      "Retries count too. 5 on the account's first day (UTC), 15 from 00:00 UTC tomorrow once you confirm your email address.",
+    );
   });
 
   it("the workspace creation sentence names the day it opens again", () => {
