@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
 import { PublicFooter, PublicHeader } from "@/components/public-shell";
+import { getCurrentUser } from "@/lib/auth";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
@@ -49,6 +50,13 @@ export default async function PricingPage({
     : await getPlanOffers(offeredPlans());
   // Never a made-up price: a plan whose price Stripe did not give shows without one.
   const pricesMissing = offers.some((offer) => offer.price === null);
+  // R5-new-customer L7: someone signed in already has an account, and plans are
+  // chosen in Settings, Plan; the sign-up form would only turn them away. A
+  // failed session read keeps the signed-out page.
+  const signedIn = Boolean(await getCurrentUser().catch(() => null));
+  const cardButton = signedIn
+    ? { href: "/settings#plan", label: "Choose a plan in Settings" }
+    : { href: "/register", label: "Start your free trial" };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -108,8 +116,8 @@ export default async function PricingPage({
                   <li key={line}>{line}</li>
                 ))}
               </ul>
-              <Link href="/register" className={buttonVariants({ variant: "primary", className: "mt-5 w-full" })}>
-                Start your free trial
+              <Link href={cardButton.href} className={buttonVariants({ variant: "primary", className: "mt-5 w-full" })}>
+                {cardButton.label}
               </Link>
             </li>
           ))}

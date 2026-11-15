@@ -2,7 +2,8 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getPlanOffersMock, getYearlyPlanOffersMock, notFoundMock } = vi.hoisted(() => ({
+const { getPlanOffersMock, getYearlyPlanOffersMock, notFoundMock, getCurrentUserMock } = vi.hoisted(() => ({
+  getCurrentUserMock: vi.fn(),
   getPlanOffersMock: vi.fn(),
   getYearlyPlanOffersMock: vi.fn(),
   notFoundMock: vi.fn(() => {
@@ -16,6 +17,7 @@ vi.mock("@/server/billing/planPrices", () => ({
   getYearlyPlanOffers: getYearlyPlanOffersMock,
 }));
 vi.mock("next/navigation", () => ({ notFound: notFoundMock }));
+vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 
 import PricingPage, { generateMetadata } from "./page";
 
@@ -45,6 +47,8 @@ function configurePayments() {
 }
 
 beforeEach(() => {
+  getCurrentUserMock.mockReset();
+  getCurrentUserMock.mockResolvedValue(null);
   getPlanOffersMock.mockReset();
   getYearlyPlanOffersMock.mockReset();
   notFoundMock.mockClear();
@@ -138,6 +142,22 @@ describe("/pricing with payments configured", () => {
     const html = await render();
     const buttons = html.match(/<a [^>]*href="\/register"[^>]*>Start your free trial<\/a>/g) ?? [];
     expect(buttons).toHaveLength(2);
+  });
+
+  // R5-new-customer L7: a signed-in person already has an account; the trial
+  // button would send them to the sign-up form.
+  it("sends a signed-in person to Settings, Plan instead of the sign-up form", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-1", email: "owner@example.com" });
+    const html = await render();
+    expect(html).not.toContain('href="/register"');
+    const buttons = html.match(/<a [^>]*href="\/settings#plan"[^>]*>Choose a plan in Settings<\/a>/g) ?? [];
+    expect(buttons).toHaveLength(2);
+  });
+
+  it("still offers the trial when the session cannot be read", async () => {
+    getCurrentUserMock.mockRejectedValue(new Error("session store down"));
+    const html = await render();
+    expect(html.match(/<a [^>]*href="\/register"[^>]*>Start your free trial<\/a>/g) ?? []).toHaveLength(2);
   });
 
   it("shows the plans without prices, and says so, when Stripe cannot be reached", async () => {

@@ -16,6 +16,8 @@ vi.mock("@/server/billing/planPrices", async (importOriginal) => ({
   getPlanOffers: getPlanOffersMock,
 }));
 vi.mock("next/navigation", () => ({ notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }) }));
+// Signed out, as the pinned page was.
+vi.mock("@/lib/auth", () => ({ getCurrentUser: vi.fn(async () => null) }));
 
 import PricingPage from "./page";
 
