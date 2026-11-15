@@ -72,10 +72,9 @@ export default function DataDeletionPage() {
               </li>
               <li>
                 <strong>Delete your account:</strong> go to <strong>Account</strong> and choose{" "}
-                <strong>Delete account</strong>. Workspaces only you use are deleted with it. If you
-                changed your sign-in email in the last 72 hours, deleting your account waits until
-                those 72 hours have passed, because a link sent to your previous address can still
-                undo the change.
+                <strong>Delete account</strong>. Workspaces only you use are deleted with it.
+                Deleting your account waits while a change of your sign-in email can still be
+                undone: up to 72 hours after you changed it from a confirmed address.
               </li>
             </ul>
             <p>Deleting a workspace, or an account with its workspaces, permanently removes:</p>

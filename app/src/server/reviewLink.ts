@@ -174,10 +174,11 @@ function cardOrder(a: { scheduledFor: string | null; id: string }, b: { schedule
 /**
  * What the public page lists for a workspace: its scheduled posts in the next
  * 60 days and the drafts its client asked to change in the last 30 days,
- * merged in time order, at most 100 cards (R7-client-journey L5: counted
- * after a Story is folded into its feed post's card, so the cut never parts a
- * pair). `more` says whether cards were left out, so the page can say so
- * (review-link-view.tsx). Only drafts and scheduled
+ * merged in time order. At most 100 scheduled cards (R7-client-journey L5:
+ * counted after a Story is folded into its feed post's card, so the cut
+ * never parts a pair); every change-requested draft is shown and none
+ * counts. `more` says whether scheduled cards were left out, so the page
+ * can say so (review-link-view.tsx). Only drafts and scheduled
  * posts are ever asked for, so a published, failed or cancelled post cannot
  * appear. A change request is cleared when the post is scheduled again, so a
  * draft that still carries one was not.
@@ -211,9 +212,15 @@ export async function listReviewPosts(
   // F6: a Story folded into its feed post's card has no card of its own.
   const storyOf = foldStoryPairs(listed);
   const folded = new Set(Array.from(storyOf.values(), (row) => row.id));
-  const cards = listed.filter((row) => !folded.has(row.id)).sort((a, b) => cardOrder(cardKey(a), cardKey(b)));
-  const more = cards.length > REVIEW_LIST_MAX;
-  const rows = cards.slice(0, REVIEW_LIST_MAX);
+  const cards = listed.filter((row) => !folded.has(row.id));
+  // Only scheduled cards are cut and counted: a draft the client asked to
+  // change always shows, so the client sees their request is still open.
+  // A pair folds only within one status, so the cut parts no pair.
+  const scheduledCards = cards
+    .filter((row) => row.status === "scheduled")
+    .sort((a, b) => cardOrder(cardKey(a), cardKey(b)));
+  const more = scheduledCards.length > REVIEW_LIST_MAX;
+  const rows = [...scheduledCards.slice(0, REVIEW_LIST_MAX), ...cards.filter((row) => row.status !== "scheduled")];
 
   // As GET /api/posts: one grouped count for the posts with several photos.
   const photoCounts = await prisma.postJobMedia.groupBy({

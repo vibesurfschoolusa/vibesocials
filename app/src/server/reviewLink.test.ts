@@ -751,6 +751,39 @@ describe("listReviewPosts - the 100 cards", () => {
     expect(more).toBe(true);
   });
 
+  // Review of the round: the 100 is for scheduled cards only; a draft the
+  // client asked to change is always shown and never counted.
+  const draft = (overrides: Record<string, unknown> = {}) =>
+    postRow({
+      id: "draft-1",
+      status: "draft",
+      storyOfPostJobId: null,
+      scheduledFor: new Date(NOW.getTime() + 50 * DAY),
+      clientChangeRequestedAt: new Date(NOW.getTime() - DAY),
+      clientNote: "Other photo, please",
+      ...overrides,
+    });
+
+  it("100+ scheduled cards and a change-requested draft at day 50: the draft shows beside the first 100", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce(Array.from({ length: 120 }, (_, i) => pair(i)).flat())
+      .mockResolvedValueOnce([draft()]);
+    const { posts, more } = await listReviewPosts("ws-1", NOW);
+    expect(posts).toHaveLength(101);
+    expect(posts.filter((post) => post.id.startsWith("feed-"))).toHaveLength(100);
+    expect(posts.find((post) => post.id === "draft-1")).toMatchObject({ state: "change_requested" });
+    expect(more).toBe(true);
+  });
+
+  it("change-requested drafts don't count toward the 100: 100 scheduled cards and 3 drafts, all shown, no more", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => pair(i)).flat())
+      .mockResolvedValueOnce([draft({ id: "draft-1" }), draft({ id: "draft-2" }), draft({ id: "draft-3", scheduledFor: null })]);
+    const { posts, more } = await listReviewPosts("ws-1", NOW);
+    expect(posts).toHaveLength(103);
+    expect(more).toBe(false);
+  });
+
   it("nothing listed: no posts and no more", async () => {
     await expect(listReviewPosts("ws-1", NOW)).resolves.toEqual({ posts: [], more: false });
   });
