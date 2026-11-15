@@ -155,7 +155,17 @@ export async function finalizeClaimedResult(
           error: batchError,
         });
       }
-      await prisma.postJobResult.update(update);
+      try {
+        await prisma.postJobResult.update(update);
+      } catch (fallbackError) {
+        // Third review: a batch can commit and still report an error; the row
+        // then already reads success, which is no lost success.
+        if (!isRecordNotFound(fallbackError) || !(await alreadySucceeded(resultId))) throw fallbackError;
+        logger.warn("[Inngest] X success: the batch reported an error after commit; success already recorded", {
+          resultId,
+          runId,
+        });
+      }
       await recordLiveXUsage(resultId, usageRow);
       return true;
     }
@@ -177,6 +187,16 @@ export async function finalizeClaimedResult(
       return false;
     }
     throw error;
+  }
+}
+
+/** Whether the result already reads success; false when it cannot be read. */
+async function alreadySucceeded(resultId: string): Promise<boolean> {
+  try {
+    const row = await prisma.postJobResult.findUnique({ where: { id: resultId }, select: { status: true } });
+    return row?.status === "success";
+  } catch {
+    return false;
   }
 }
 

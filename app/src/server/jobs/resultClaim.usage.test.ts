@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { logger } from "@/lib/logger";
+
 const m = vi.hoisted(() => ({
   update: vi.fn(),
   findUnique: vi.fn(),
@@ -93,6 +95,47 @@ describe("finalizeClaimedResult with an X post's usage", () => {
     expect(m.calls).toEqual(["result", "result"]);
     expect(m.transaction).not.toHaveBeenCalled();
     expect(m.createMany).not.toHaveBeenCalled();
+  });
+
+  // Third review: a batch can commit and still report an error. The success
+  // write that follows then finds the row already a success: that is a
+  // warning, not a lost success.
+  it("when the batch committed but reported an error, warns that the success is already recorded", async () => {
+    m.transaction.mockRejectedValueOnce(new Error("Connection reset after commit"));
+    m.update
+      .mockImplementationOnce((args: unknown) => Promise.resolve(args))
+      .mockImplementationOnce(() => Promise.reject(Object.assign(new Error("No record"), { code: "P2025" })));
+    m.findUnique.mockResolvedValue({ status: "success", platform: "x", postJobId: "job-1" });
+    const warn = vi.spyOn(logger, "warn");
+    const error = vi.spyOn(logger, "error");
+
+    await expect(
+      finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "tw-1" }, USAGE),
+    ).resolves.toBe(true);
+
+    expect(m.findUnique).toHaveBeenCalledWith({ where: { id: "r1" }, select: { status: true } });
+    expect(warn).toHaveBeenCalledWith(
+      "[Inngest] X success: the batch reported an error after commit; success already recorded",
+      expect.objectContaining({ resultId: "r1" }),
+    );
+    const lost = error.mock.calls.filter(([message]) => String(message).includes("Post is live but its result was not recorded"));
+    expect(lost).toEqual([]);
+  });
+
+  it("when the fallback finds the row not a success, it is still a lost success", async () => {
+    m.transaction.mockRejectedValueOnce(new Error("Connection reset"));
+    m.update
+      .mockImplementationOnce((args: unknown) => Promise.resolve(args))
+      .mockImplementationOnce(() => Promise.reject(Object.assign(new Error("No record"), { code: "P2025" })));
+    m.findUnique.mockResolvedValue({ status: "failed", platform: "x", postJobId: "job-1" });
+    const error = vi.spyOn(logger, "error");
+
+    await expect(
+      finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "tw-1" }, USAGE),
+    ).resolves.toBe(false);
+    expect(
+      error.mock.calls.some(([message]) => String(message).includes("Post is live but its result was not recorded")),
+    ).toBe(true);
   });
 
   it("still counts a post that is live when its result could not be recorded (claim lost)", async () => {
