@@ -20,6 +20,15 @@ const invalidInviteResponse = () =>
   NextResponse.json({ error: "This invite link is invalid or has expired." }, { status: 404 });
 
 /**
+ * R9-client-journey L6: the link's maker is no longer an owner of the
+ * workspace. Demoting or leaving revokes their links now, but links made
+ * before that (#151) were never revoked, so the maker is checked here too.
+ * A 404 like a dead link, so the join page shows its invalid-link state.
+ */
+const makerNotOwnerResponse = () =>
+  NextResponse.json({ error: "This invite link is no longer active. Ask an owner for a new one." }, { status: 404 });
+
+/**
  * POST /api/invites/[token]/accept
  *
  * Auth-only (see GET /api/invites/[token] for why this uses `getCurrentUser`
@@ -73,10 +82,18 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
     return invalidInviteResponse();
   }
 
-  let joined = false;
+  let joined: boolean | "maker_not_owner" = false;
   let added = false;
   try {
     joined = await prisma.$transaction(async (tx) => {
+      const maker = await tx.workspaceMember.findFirst({
+        where: { workspaceId: invite.workspaceId, userId: invite.createdById, role: "owner" },
+        select: { id: true },
+      });
+      if (!maker) {
+        return "maker_not_owner" as const;
+      }
+
       // Atomic re-validation + use-count bump in one statement (see the
       // route doc comment). Matching nothing mutates nothing, so the early
       // return commits an empty transaction — no rollback bookkeeping.
@@ -106,6 +123,9 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
     return NextResponse.json({ error: "Failed to join workspace" }, { status: 500 });
   }
 
+  if (joined === "maker_not_owner") {
+    return makerNotOwnerResponse();
+  }
   if (!joined) {
     return invalidInviteResponse();
   }

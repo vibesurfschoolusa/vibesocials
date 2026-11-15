@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +35,7 @@ import {
   ClientLinksPanel,
   clientLinksReplacedMessage,
   demotedMessage,
+  demotionOutcome,
   TeamSection,
 } from "./team-section";
 
@@ -279,5 +283,29 @@ describe("Turn off client links", () => {
       "Couldn't reach the server. The client links are unchanged. Check your connection and try again.",
     );
     expect(announce).not.toHaveBeenCalled();
+  });
+});
+
+// R9-client-journey L1: a demotion that turned off the invite link the card shows.
+describe("demotionOutcome", () => {
+  it("clears the invite link and says so when the demotion turned links off", () => {
+    expect(demotionOutcome({ ok: true, role: "member", joinLinksRevoked: 1 })).toEqual({
+      clearInvite: true,
+      notice: "Invite link reset — create a new one to invite more people.",
+    });
+  });
+
+  it("keeps it when none was turned off, or the answer doesn't say", () => {
+    const keep = { clearInvite: false, notice: null };
+    expect(demotionOutcome({ ok: true, role: "member", joinLinksRevoked: 0 })).toEqual(keep);
+    expect(demotionOutcome({ ok: true, role: "member" })).toEqual(keep);
+    expect(demotionOutcome(null)).toEqual(keep);
+  });
+
+  it("is what confirmDemote acts on", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    const demote = source.slice(source.indexOf("const confirmDemote"), source.indexOf("const replaceClientLinks"));
+    expect(demote).toContain("demotionOutcome(");
+    expect(demote).toContain("setInvite(null)");
   });
 });

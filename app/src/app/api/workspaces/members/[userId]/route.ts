@@ -244,5 +244,6 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     joinLinksRevoked: outcome.joinLinksRevoked,
     demoted: true,
   });
-  return NextResponse.json({ ok: true, role }, { status: 200 });
+  // R9-client-journey L1: the Team card drops the invite link it shows when it was turned off.
+  return NextResponse.json({ ok: true, role, joinLinksRevoked: outcome.joinLinksRevoked }, { status: 200 });
 }

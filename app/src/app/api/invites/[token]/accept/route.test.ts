@@ -12,6 +12,7 @@ const {
   findUniqueInviteMock,
   updateManyInviteMock,
   createMemberMock,
+  makerMock,
   transactionMock,
   cookieSetMock,
   cookiesMock,
@@ -23,6 +24,7 @@ const {
   findUniqueInviteMock: vi.fn(),
   updateManyInviteMock: vi.fn(),
   createMemberMock: vi.fn(),
+  makerMock: vi.fn(),
   transactionMock: vi.fn(),
   cookieSetMock: vi.fn(),
   cookiesMock: vi.fn(),
@@ -93,6 +95,9 @@ beforeEach(() => {
   notifyJoinedMock.mockResolvedValue(undefined);
   // A brand-new member by default: the insert added one row.
   createMemberMock.mockResolvedValue({ count: 1 });
+  // The link's maker is still an owner by default.
+  makerMock.mockReset();
+  makerMock.mockResolvedValue({ id: "owner-row" });
 
   getCurrentUserMock.mockResolvedValue(USER);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -103,7 +108,7 @@ beforeEach(() => {
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
       workspaceInvite: { updateMany: updateManyInviteMock },
-      workspaceMember: { createMany: createMemberMock },
+      workspaceMember: { createMany: createMemberMock, findFirst: makerMock },
     }),
   );
 });
@@ -321,5 +326,36 @@ describe("POST /api/invites/[token]/accept", () => {
     expect(cookieSetMock).not.toHaveBeenCalled();
 
     consoleSpy.mockRestore();
+  });
+
+  // R9-client-journey L6: a link made by someone who is no longer an owner of
+  // the workspace (demoted or gone, also before demotion revoked links) adds nobody.
+  it("refuses a link whose maker is no longer an owner: 404 with its own sentence, nothing written, no cookie", async () => {
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-7", createdById: "former-owner" }));
+    makerMock.mockResolvedValue(null);
+
+    const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "This invite link is no longer active. Ask an owner for a new one.",
+    });
+    expect(makerMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-7", userId: "former-owner", role: "owner" },
+      select: { id: true },
+    });
+    expect(updateManyInviteMock).not.toHaveBeenCalled();
+    expect(createMemberMock).not.toHaveBeenCalled();
+    expect(notifyJoinedMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("checks the maker inside the transaction, before the link is used", async () => {
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow());
+
+    const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(response.status).toBe(200);
+    expect(makerMock.mock.invocationCallOrder[0]).toBeLessThan(updateManyInviteMock.mock.invocationCallOrder[0]);
   });
 });

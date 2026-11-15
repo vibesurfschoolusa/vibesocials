@@ -24,7 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDisplayDate } from "@/lib/displayDate";
-import { memberRemovalOutcome } from "@/lib/memberRemoval";
+import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 
 import { FormError } from "./account-section";
@@ -150,6 +150,19 @@ export interface ClientLinksState {
  * stopped, and points to the button. R6-client-journey L3: after demoting
  * yourself only "Role updated.", as the button went with your ownership.
  */
+/**
+ * R9-client-journey L1: a demotion turns off the invite links the demoted
+ * owner made (PATCH answers `joinLinksRevoked`). There is one active link per
+ * workspace, so any turned off is the one the card shows: it goes, as on removal.
+ */
+export function demotionOutcome(body: unknown): MemberRemovalOutcome {
+  const revoked =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as { joinLinksRevoked?: unknown }).joinLinksRevoked
+      : undefined;
+  return memberRemovalOutcome({ invitesRevoked: revoked });
+}
+
 export function demotedMessage(links: ClientLinksState | null, self = false): string {
   if (self || !links || !links.included) return "Role updated.";
   const working = [
@@ -742,11 +755,17 @@ function OwnerView({
       router.refresh();
       return;
     }
+    const revoked = demotionOutcome(await response.json().catch(() => null));
+    if (revoked.clearInvite) {
+      setInvite(null);
+      setFreshUrl(null);
+    }
     // Check 4: read the links after the demotion, so the toast names only the
     // ones that really still work (a connect link they made has stopped).
     const links = await fetchClientLinks(workspaceId);
     if (links) setClientLinks(links);
     toast.success(demotedMessage(links));
+    if (revoked.notice) toast.info(revoked.notice);
     setMembers((prev) =>
       prev
         ? prev.map((m): Member => (m.userId === demoteTarget.userId ? { ...m, role: "member" } : m))

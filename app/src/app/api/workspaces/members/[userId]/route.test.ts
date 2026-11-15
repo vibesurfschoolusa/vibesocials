@@ -475,7 +475,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
 
     expect(response.status).toBe(200);
     // The Team card reads the client links itself after a demotion (Check 4).
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", joinLinksRevoked: 1 });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-2", role: "owner" },
       data: { role: "member" },
@@ -490,7 +490,8 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-2"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
+    // R9-client-journey L1: how many invite links it turned off, so the Team card drops the one it shows.
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", joinLinksRevoked: 1 });
     expect(noticeMock).toHaveBeenCalledWith({
       workspaceId: "ws-1",
       workspaceName: "Acme",
@@ -551,7 +552,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
 
     expect(response.status).toBe(200);
     // The Team card reads the client links itself after a demotion (Check 4).
-    await expect(response.json()).resolves.toEqual({ ok: true, role: "member" });
+    await expect(response.json()).resolves.toEqual({ ok: true, role: "member", joinLinksRevoked: 1 });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-1", role: "owner" },
       data: { role: "member" },
