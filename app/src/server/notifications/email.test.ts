@@ -168,7 +168,7 @@ describe("sendEmail", () => {
 
     expect(loggerErrorMock).toHaveBeenCalledTimes(1);
     expect(loggerErrorMock).toHaveBeenCalledWith("[Notifications] Resend rejected email", {
-      subject: "Hi",
+      kind: "unlabelled",
       error: { name: "daily_quota_exceeded", message: "Daily quota exceeded.", statusCode: 429 },
     });
     expect(JSON.stringify(loggerErrorMock.mock.calls)).not.toContain("user@example.com");
@@ -228,7 +228,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
       expect(loggerErrorMock).toHaveBeenCalledWith(
         "[Notifications] Resend rejected email",
         expect.objectContaining({
-          subject: "Hi",
+          kind: "unlabelled",
           error: expect.objectContaining({ name, statusCode: 429 }),
         }),
       );
@@ -398,7 +398,8 @@ describe("isRetryableEmailError", () => {
 
 // Final review F9 (M5): an email address is personal data and must not end up in
 // log aggregation (Sentry, Vercel logs). No log line of email.ts may carry the
-// recipient, not as a field and not echoed inside an error message; the subject
+// recipient, not as a field and not echoed inside an error message; the email's
+// kind (R21 client-journey L2: never the subject, which can carry a client's name)
 // (and an error's name or status) is what identifies the send.
 describe("sendEmail - no recipient address in any log line", () => {
   const RECIPIENT = "Jane.Doe+news@example.com";
@@ -446,7 +447,7 @@ describe("sendEmail - no recipient address in any log line", () => {
     headers: null,
   });
 
-  it("a Resend constructor error logs the subject, not the recipient", async () => {
+  it("a Resend constructor error logs the kind, not the subject or the recipient", async () => {
     ResendMock.mockImplementationOnce(function () {
       throw new Error(echoing);
     });
@@ -454,21 +455,23 @@ describe("sendEmail - no recipient address in any log line", () => {
     await sendEmail(params);
 
     expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(consoleError.mock.calls)).toContain("Your post went live");
+    expect(JSON.stringify(consoleError.mock.calls)).toContain('"kind":"unlabelled"');
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("Your post went live");
     expectNoRecipient();
   });
 
-  it("a thrown send error (swallowed) logs the subject, not the recipient", async () => {
+  it("a thrown send error (swallowed) logs the kind, not the subject or the recipient", async () => {
     sendMock.mockRejectedValueOnce(new Error(echoing));
 
     await sendEmail(params);
 
     expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(consoleError.mock.calls)).toContain("Your post went live");
+    expect(JSON.stringify(consoleError.mock.calls)).toContain('"kind":"unlabelled"');
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("Your post went live");
     expectNoRecipient();
   });
 
-  it("a thrown send error that the step will retry logs the subject, not the recipient", async () => {
+  it("a thrown send error that the step will retry logs the kind, not the subject or the recipient", async () => {
     sendMock.mockRejectedValueOnce(new Error(echoing));
 
     await expect(sendEmail(params, { throwOnRetryable: true })).rejects.toBeInstanceOf(EmailRetryableError);
@@ -491,24 +494,26 @@ describe("sendEmail - no recipient address in any log line", () => {
     expectNoRecipient();
   });
 
-  it("an already-sent idempotency key (409) logs the subject, not the recipient", async () => {
+  it("an already-sent idempotency key (409) logs the kind, not the subject or the recipient", async () => {
     sendMock.mockResolvedValueOnce(resolvedRejection(409, "invalid_idempotent_request"));
 
     await sendEmail(params, { throwOnRetryable: true, idempotencyKey: "k" });
 
     expect(loggerWarnMock).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(loggerWarnMock.mock.calls)).toContain("Your post went live");
+    expect(JSON.stringify(loggerWarnMock.mock.calls)).toContain('"kind":"k"');
+    expect(JSON.stringify(loggerWarnMock.mock.calls)).not.toContain("Your post went live");
     expectNoRecipient();
   });
 
-  it("a rejected email (422) logs the subject and the error name and status, not the recipient", async () => {
+  it("a rejected email (422) logs the kind and the error name and status, not the subject or the recipient", async () => {
     sendMock.mockResolvedValueOnce(resolvedRejection(422, "validation_error"));
 
     await sendEmail(params);
 
     expect(loggerErrorMock).toHaveBeenCalledTimes(1);
-    const [, context] = loggerErrorMock.mock.calls[0] as [string, { subject: string; error: { name: string; statusCode: number } }];
-    expect(context.subject).toBe("Your post went live");
+    const [, context] = loggerErrorMock.mock.calls[0] as [string, { kind: string; subject?: string; error: { name: string; statusCode: number } }];
+    expect(context.kind).toBe("unlabelled");
+    expect(context).not.toHaveProperty("subject");
     expect(context.error).toMatchObject({ name: "validation_error", statusCode: 422 });
     expectNoRecipient();
   });
@@ -558,5 +563,67 @@ describe("sendEmail - no recipient address in any log line", () => {
 
     expect(consoleLog).toHaveBeenCalledTimes(1);
     expectNoRecipient();
+  });
+});
+
+// R21 client-journey L2: the client upload email's subject carries the name a
+// client typed ("Maria Lopez sent files to Surf Co"), and logger.error reaches
+// Sentry. No log line carries any subject: the kind (the idempotency key's first
+// segment, a fixed label every keyed caller writes) identifies the send.
+describe("sendEmail - no subject in any log line", () => {
+  const SUBJECT = "Maria Lopez sent files to Surf Co";
+  const params = { to: "owner@example.com", subject: SUBJECT, html: "<p>hi</p>" };
+  const KEY = "client-upload/link-1/2026-11-15T10/user-1";
+
+  let spies: MockInstance[];
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    spies = [
+      vi.spyOn(console, "error").mockImplementation(() => {}),
+      vi.spyOn(console, "warn").mockImplementation(() => {}),
+      vi.spyOn(console, "log").mockImplementation(() => {}),
+    ];
+  });
+
+  function logged(): string {
+    return JSON.stringify([
+      ...spies.flatMap((spy) => spy.mock.calls),
+      ...loggerErrorMock.mock.calls,
+      ...loggerWarnMock.mock.calls,
+      ...loggerInfoMock.mock.calls,
+      ...loggerDebugMock.mock.calls,
+    ]);
+  }
+  const rejection = (statusCode: number | null, name: string) => ({
+    data: null,
+    error: { name, message: "Resend said no", statusCode },
+    headers: null,
+  });
+
+  const cases: Array<[string, () => void, boolean]> = [
+    ["a Resend constructor error", () => ResendMock.mockImplementationOnce(function () { throw new Error("bad key"); }), false],
+    ["a swallowed thrown send", () => sendMock.mockRejectedValueOnce(new Error("network")), false],
+    ["a thrown send the step retries", () => sendMock.mockRejectedValueOnce(new Error("network")), true],
+    ["an already-sent key", () => sendMock.mockResolvedValueOnce(rejection(409, "invalid_idempotent_request")), true],
+    ["a retried 503", () => sendMock.mockResolvedValueOnce(rejection(503, "application_error")), true],
+    ["a rejected 422", () => sendMock.mockResolvedValueOnce(rejection(422, "validation_error")), false],
+    ["a quota 429", () => sendMock.mockResolvedValueOnce(rejection(429, "daily_quota_exceeded")), true],
+  ];
+
+  it.each(cases)("%s logs the kind, never the subject", async (_label, arrange, throwOnRetryable) => {
+    arrange();
+    await sendEmail(params, { idempotencyKey: KEY, throwOnRetryable }).catch(() => {});
+    const text = logged();
+    expect(text).not.toBe("[]");
+    expect(text).not.toContain("Maria");
+    expect(text).not.toContain("Surf Co");
+    expect(text).toContain('"kind":"client-upload"');
+  });
+
+  it("a key whose first part is not a plain label is not logged as the kind", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+    await sendEmail(params, { idempotencyKey: "Maria Lopez/1" });
+    expect(logged()).not.toContain("Maria");
+    expect(logged()).toContain('"kind":"unlabelled"');
   });
 });

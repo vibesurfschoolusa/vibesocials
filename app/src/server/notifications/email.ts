@@ -148,11 +148,24 @@ function loggableError(error: unknown, to: string): { name: string; message: str
     : { name: typeof error, message: withoutRecipient(String(error), to) };
 }
 
+/**
+ * R21 client-journey L2: what the log lines name the send by. Never the subject:
+ * the client upload email's carries the name a client typed, and logger.error
+ * reaches Sentry. Every keyed caller starts its idempotency key with a fixed
+ * label ("client-upload/...", "post-outcome/..."), so that first part is the kind;
+ * anything else is "unlabelled".
+ */
+function emailKind(idempotencyKey: string | undefined): string {
+  const first = idempotencyKey?.split("/")[0] ?? "";
+  return /^[a-z][a-z0-9-]{0,40}$/.test(first) ? first : "unlabelled";
+}
+
 export async function sendEmail(
   { to, subject, html, text }: SendEmailParams,
   { idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
 ): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
+  const kind = emailKind(idempotencyKey);
 
   if (!apiKey) {
     console.log(
@@ -169,7 +182,7 @@ export async function sendEmail(
   } catch (error) {
     // A bad key is configuration, not a transient failure: never retried.
     // No log line here carries the recipient address (final review F9).
-    console.error("[Notifications] Failed to send email", { subject, error: loggableError(error, to) });
+    console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
     return;
   }
 
@@ -181,13 +194,13 @@ export async function sendEmail(
       : await resend.emails.send(payload);
   } catch (error) {
     if (throwOnRetryable) {
-      logger.warn("[Notifications] Resend request threw; the step will retry", { subject });
+      logger.warn("[Notifications] Resend request threw; the step will retry", { kind });
       throw new EmailRetryableError("Resend request failed before a response (network error)");
     }
     // Best-effort: swallow + log. Never throw — the caller (a post-outcome
     // notification) must complete regardless of whether the email actually
     // went out. The recipient address is never logged (final review F9).
-    console.error("[Notifications] Failed to send email", { subject, error: loggableError(error, to) });
+    console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
     return;
   }
 
@@ -202,7 +215,7 @@ export async function sendEmail(
     // The key was already used for a send: the email went out on an earlier
     // attempt whose ack was lost. Treated as sent.
     logger.warn("[Notifications] Resend already accepted this idempotency key; treating as sent", {
-      subject,
+      kind,
     });
     return;
   }
@@ -213,7 +226,7 @@ export async function sendEmail(
   // limit, burning the step's retries against a quota that cannot reset in time.
   if (throwOnRetryable && failure !== "rejected" && failure !== "quota_exceeded") {
     logger.warn("[Notifications] Resend send failed; the step will retry", {
-      subject,
+      kind,
       error: { name: error.name, statusCode: error.statusCode },
     });
     const detail = `status ${error.statusCode ?? "none"}, ${error.name}`;
@@ -224,7 +237,7 @@ export async function sendEmail(
   }
 
   logger.error("[Notifications] Resend rejected email", {
-    subject,
+    kind,
     // Resend's message is its own text, but strip the recipient in case it echoes it.
     // 2026-11-02 phase 2 final review: a JSON error body can carry no string `message`
     // at all, so coerce it; the logging path must never throw out of `sendEmail`.
