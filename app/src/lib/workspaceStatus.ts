@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { billingEnabled, planState, type BillingFields } from "./billing";
+import { formatDisplayDate } from "./displayDate";
 import { SUPPORT_EMAIL } from "./siteInfo";
-import { utcDayMonthLabel } from "./usageLimits";
 
 /**
  * Whether a workspace may create or move work (2026-11-10). Two causes: the
@@ -115,7 +115,8 @@ export function trialEndingNotice(
   // planState is "trial" only with a valid trialEndsAt.
   const endsAt = new Date(workspace.trialEndsAt as Date | string);
   if (endsAt.getTime() - now.getTime() > TRIAL_NOTICE_MS) return null;
-  return `Your free trial ends on ${utcDayMonthLabel(endsAt)}. Choose a plan in Settings.`;
+  // R7-pages L5: written like every other Settings date (displayDate.ts).
+  return `Your free trial ends on ${formatDisplayDate(endsAt)}. Choose a plan in Settings.`;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

@@ -9,9 +9,9 @@ import {
   type BillingEnv,
   type BillingFields,
 } from "@/lib/billing";
+import { formatDisplayDate } from "@/lib/displayDate";
 import { PLAN_FEATURES, planIncludes } from "@/lib/planFeatures";
 import { isPlanKey, PLANS, type PlanKey } from "@/lib/plans";
-import { utcDayMonthLabel } from "@/lib/usageLimits";
 
 /**
  * What Settings → Plan says (21a): the workspace's plan state in words. Null
@@ -19,6 +19,14 @@ import { utcDayMonthLabel } from "@/lib/usageLimits";
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** R7-new-customer M1: a workspace with no plan and no trial that is not flagged exempt. */
+export const NO_PLAN_YET_LABEL = "This workspace has no plan yet. The free limits apply until it has one.";
+
+/** Unflagged and never on a trial or a plan: made while billing was off, and free to buy one. */
+function withoutPlanOrTrial(workspace: BillingFields, now: Date): boolean {
+  return !workspace.billingExempt && planState(workspace, now) === "exempt";
+}
 
 export function planSectionLabel(
   role: "owner" | "member",
@@ -31,27 +39,30 @@ export function planSectionLabel(
 
   const state = planState(workspace, now);
   // Not "billed by invoice": a customer's own workspace can be exempt only because it predates billing.
-  if (state === "exempt") return "No plan is needed for this workspace.";
+  if (state === "exempt" && workspace.billingExempt) return "No plan is needed for this workspace.";
+  // R7-new-customer M1: made while billing was off. The free limits hold it
+  // (usageLog.ts), so it is offered the plans (planSectionActions).
+  if (state === "exempt") return NO_PLAN_YET_LABEL;
   if (state === "ended") return workspace.plan ? "Your plan has ended" : "Your free trial has ended";
 
   if (state === "trial") {
     // planState is "trial" only with a valid trialEndsAt.
-    return `Free trial until ${utcDayMonthLabel(toBillingDate(workspace.trialEndsAt) as Date)}`;
+    return `Free trial until ${formatDisplayDate(toBillingDate(workspace.trialEndsAt) as Date)}`;
   }
 
   const name = isPlanKey(workspace.plan) ? `${PLANS[workspace.plan].name} plan` : "Your plan";
   const periodEnd = toBillingDate(workspace.currentPeriodEnd);
   if (workspace.planStatus === "past_due" && periodEnd) {
     const stops = new Date(periodEnd.getTime() + PAST_DUE_GRACE_DAYS * DAY_MS);
-    return `${name}. The last payment did not go through; posting stops on ${utcDayMonthLabel(stops)}.`;
+    return `${name}. The last payment did not go through; posting stops on ${formatDisplayDate(stops)}.`;
   }
   const endsAt = toBillingDate(workspace.planEndsAt);
-  if (endsAt) return `${name}, ends on ${utcDayMonthLabel(endsAt)}`;
+  if (endsAt) return `${name}, ends on ${formatDisplayDate(endsAt)}`;
   if (!periodEnd) return name;
   // A plan chosen during the free trial is "trialing" at Stripe until the trial
   // ends: nothing has been charged, so its period end is the first payment.
-  if (workspace.planStatus === "trialing") return `${name}, first payment on ${utcDayMonthLabel(periodEnd)}`;
-  return `${name}, renews ${utcDayMonthLabel(periodEnd)}`;
+  if (workspace.planStatus === "trialing") return `${name}, first payment on ${formatDisplayDate(periodEnd)}`;
+  return `${name}, renews ${formatDisplayDate(periodEnd)}`;
 }
 
 /** 21b fix round 1: the Plan section's line with billing off, when only the portal button shows. */
@@ -62,7 +73,8 @@ export const PLAN_RETURN_NOTICE = "Thanks. Your plan appears here within a minut
 
 /**
  * 21b: the Plan section's buttons, for owners. One per plan that has a price,
- * in a trial or ended, only with payments configured. The customer portal
+ * in a trial, ended or never on either (made while billing was off; not one
+ * flagged exempt), only with payments configured. The customer portal
  * whenever the Stripe key is set and the workspace has a plan or a Stripe
  * customer, whatever its state and whether billing is on (fix round 1), so an
  * owner can always reach their card, invoices and cancel. Null: no buttons.
@@ -75,7 +87,9 @@ export function planSectionActions(
 ): { choose: PlanKey[]; manage: boolean } | null {
   if (role !== "owner" || !stripeReachable(env)) return null;
   const state = planState(workspace, now);
-  const choose = paymentsConfigured(env) && (state === "trial" || state === "ended") ? offeredPlans(env) : [];
+  // R7-new-customer M1: and one made while billing was off, as checkout allows.
+  const choosable = state === "trial" || state === "ended" || withoutPlanOrTrial(workspace, now);
+  const choose = paymentsConfigured(env) && choosable ? offeredPlans(env) : [];
   const manage = Boolean(workspace.plan || workspace.stripeCustomerId);
   if (choose.length === 0 && !manage) return null;
   return { choose, manage };

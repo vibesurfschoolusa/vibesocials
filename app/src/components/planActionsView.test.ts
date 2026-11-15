@@ -52,17 +52,27 @@ describe("planSectionActions", () => {
     expect(planSectionActions("owner", CANCELED, NOW, CONFIGURED)).toEqual({ choose: ["starter", "pro"], manage: true });
   });
 
-  it("exempt with no plan and no customer: no buttons", () => {
+  it("exempt by its flag, with no plan and no customer: no buttons", () => {
     expect(planSectionActions("owner", { ...TRIAL, billingExempt: true }, NOW, CONFIGURED)).toBeNull();
-    expect(planSectionActions("owner", { ...TRIAL, trialEndsAt: null }, NOW, CONFIGURED)).toBeNull();
+  });
+
+  // R7-new-customer M1: made while billing was off, it is held to the free limits and may buy a plan.
+  it("no plan and no trial, not flagged: the plans", () => {
+    expect(planSectionActions("owner", { ...TRIAL, trialEndsAt: null }, NOW, CONFIGURED)).toEqual({
+      choose: ["starter", "pro"],
+      manage: false,
+    });
   });
 
   it("a plan or a Stripe customer always gets Manage, whatever the state, exempt included (fix round 1)", () => {
     expect(planSectionActions("owner", { ...ACTIVE, billingExempt: true }, NOW, CONFIGURED)).toEqual({ choose: [], manage: true });
     expect(planSectionActions("owner", { ...TRIAL, trialEndsAt: null, stripeCustomerId: "cus_1" }, NOW, CONFIGURED)).toEqual({
-      choose: [],
+      choose: ["starter", "pro"],
       manage: true,
     });
+    expect(
+      planSectionActions("owner", { ...TRIAL, billingExempt: true, trialEndsAt: null, stripeCustomerId: "cus_1" }, NOW, CONFIGURED),
+    ).toEqual({ choose: [], manage: true });
     expect(planSectionActions("owner", { ...TRIAL, stripeCustomerId: "cus_1" }, NOW, CONFIGURED)).toEqual({
       choose: ["starter", "pro"],
       manage: true,
@@ -88,11 +98,11 @@ describe("planSectionLabel with planEndsAt (fix round 1)", () => {
   const ON = { BILLING_ENABLED: "true" };
   it("a plan set to cancel says when it ends, not that it renews", () => {
     const endsAt = new Date(NOW.getTime() + 20 * DAY);
-    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: endsAt }, NOW, ON)).toBe("Starter plan, ends on 30 December");
+    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: endsAt }, NOW, ON)).toBe("Starter plan, ends on December 30, 2026");
   });
 
   it("without planEndsAt it still renews", () => {
-    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: null }, NOW, ON)).toBe("Starter plan, renews 30 December");
+    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: null }, NOW, ON)).toBe("Starter plan, renews December 30, 2026");
   });
 });
 

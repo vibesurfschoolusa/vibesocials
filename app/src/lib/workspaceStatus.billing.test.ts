@@ -222,10 +222,10 @@ describe("with billing on", () => {
 
     it("tells owners in the last 3 days of a trial", () => {
       expect(trialEndingNotice(inTrial(3 * DAY), "owner", NOW)).toBe(
-        "Your free trial ends on 13 December. Choose a plan in Settings.",
+        "Your free trial ends on December 13, 2026. Choose a plan in Settings.",
       );
       expect(trialEndingNotice(inTrial(60 * 1000), "owner", NOW)).toBe(
-        "Your free trial ends on 10 December. Choose a plan in Settings.",
+        "Your free trial ends on December 10, 2026. Choose a plan in Settings.",
       );
     });
 

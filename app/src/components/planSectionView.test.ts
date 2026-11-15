@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { planGrowthAddsShown, planSectionLabel } from "./planSectionView";
+import { planGrowthAddsShown, planSectionActions, planSectionLabel } from "./planSectionView";
 
 /** 21a: what Settings → Plan says, and when it is there at all. */
 
@@ -13,6 +13,26 @@ const NEW = {
   trialEndsAt: null,
   currentPeriodEnd: null,
 };
+
+// R7-new-customer M1: checkout already lets such a workspace buy a plan.
+describe("planSectionActions for a workspace made while billing was off", () => {
+  const CONFIGURED = {
+    BILLING_ENABLED: "true",
+    STRIPE_SECRET_KEY: "sk_test_example",
+    STRIPE_WEBHOOK_SECRET: "whsec_example",
+    STRIPE_PRICE_STARTER: "price_example_starter",
+    STRIPE_PRICE_PRO: "price_example_pro",
+  };
+
+  it("offers the plans to one with no plan and no trial", () => {
+    expect(planSectionActions("owner", NEW, NOW, CONFIGURED)).toEqual({ choose: ["starter", "pro"], manage: false });
+  });
+
+  it("offers none to one exempt by its flag, or to a member", () => {
+    expect(planSectionActions("owner", { ...NEW, billingExempt: true }, NOW, CONFIGURED)).toBeNull();
+    expect(planSectionActions("member", NEW, NOW, CONFIGURED)).toBeNull();
+  });
+});
 
 describe("planSectionLabel", () => {
   it("is absent with billing off, whatever the workspace", () => {
@@ -27,45 +47,54 @@ describe("planSectionLabel", () => {
     expect(planSectionLabel("member", { ...NEW, billingExempt: true }, NOW, ON)).toBeNull();
   });
 
+  // R7-pages L5: the dates read like every other Settings date (displayDate.ts).
   it("a trial", () => {
-    expect(planSectionLabel("owner", { ...NEW, trialEndsAt: new Date("2026-12-24T09:00:00Z") }, NOW, ON)).toBe(
-      "Free trial until 24 December",
+    expect(planSectionLabel("owner", { ...NEW, trialEndsAt: new Date("2026-12-24T12:00:00Z") }, NOW, ON)).toBe(
+      "Free trial until December 24, 2026",
     );
   });
 
   it("an active plan, with and without a renewal date", () => {
-    const growth = { ...NEW, plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2027-01-03T00:00:00Z") };
-    expect(planSectionLabel("owner", growth, NOW, ON)).toBe("Growth plan, renews 3 January");
+    const growth = { ...NEW, plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2027-01-03T12:00:00Z") };
+    expect(planSectionLabel("owner", growth, NOW, ON)).toBe("Growth plan, renews January 3, 2027");
     expect(planSectionLabel("owner", { ...growth, currentPeriodEnd: null }, NOW, ON)).toBe("Growth plan");
-    expect(planSectionLabel("owner", { ...growth, plan: "custom" }, NOW, ON)).toBe("Your plan, renews 3 January");
+    expect(planSectionLabel("owner", { ...growth, plan: "custom" }, NOW, ON)).toBe("Your plan, renews January 3, 2027");
   });
 
   // Live billing test 2026-11-13: a plan chosen during the free trial is "trialing"
   // at Stripe until the trial ends, and nothing has been charged yet, so its
   // period end is the first payment, not a renewal.
   it("a plan still in Stripe's trial: the period end is the first payment", () => {
-    const trialing = { ...NEW, plan: "starter", planStatus: "trialing", currentPeriodEnd: new Date("2026-12-24T04:00:00Z") };
-    expect(planSectionLabel("owner", trialing, NOW, ON)).toBe("Starter plan, first payment on 24 December");
-    expect(planSectionLabel("owner", { ...trialing, plan: "custom" }, NOW, ON)).toBe("Your plan, first payment on 24 December");
+    const trialing = { ...NEW, plan: "starter", planStatus: "trialing", currentPeriodEnd: new Date("2026-12-24T12:00:00Z") };
+    expect(planSectionLabel("owner", trialing, NOW, ON)).toBe("Starter plan, first payment on December 24, 2026");
+    expect(planSectionLabel("owner", { ...trialing, plan: "custom" }, NOW, ON)).toBe(
+      "Your plan, first payment on December 24, 2026",
+    );
     // Cancelled during the trial: it ends then and is never charged.
-    expect(planSectionLabel("owner", { ...trialing, planEndsAt: new Date("2026-12-24T04:00:00Z") }, NOW, ON)).toBe(
-      "Starter plan, ends on 24 December",
+    expect(planSectionLabel("owner", { ...trialing, planEndsAt: new Date("2026-12-24T12:00:00Z") }, NOW, ON)).toBe(
+      "Starter plan, ends on December 24, 2026",
     );
     expect(planSectionLabel("owner", { ...trialing, currentPeriodEnd: null }, NOW, ON)).toBe("Starter plan");
     // Once Stripe has charged it, the same plan renews as before.
-    expect(planSectionLabel("owner", { ...trialing, planStatus: "active" }, NOW, ON)).toBe("Starter plan, renews 24 December");
-  });
-
-  it("a plan whose payment failed, still in its week", () => {
-    const pastDue = { ...NEW, plan: "pro", planStatus: "past_due", currentPeriodEnd: new Date("2026-12-08T00:00:00Z") };
-    expect(planSectionLabel("owner", pastDue, NOW, ON)).toBe(
-      "Pro plan. The last payment did not go through; posting stops on 15 December.",
+    expect(planSectionLabel("owner", { ...trialing, planStatus: "active" }, NOW, ON)).toBe(
+      "Starter plan, renews December 24, 2026",
     );
   });
 
-  it("exempt, by its flag or by never having had a trial or a plan", () => {
+  it("a plan whose payment failed, still in its week", () => {
+    const pastDue = { ...NEW, plan: "pro", planStatus: "past_due", currentPeriodEnd: new Date("2026-12-08T12:00:00Z") };
+    expect(planSectionLabel("owner", pastDue, NOW, ON)).toBe(
+      "Pro plan. The last payment did not go through; posting stops on December 15, 2026.",
+    );
+  });
+
+  // R7-new-customer M1: only the flag means no plan is needed. A workspace
+  // made while billing was off has the free limits until it has a plan.
+  it("exempt by its flag needs no plan; one that never had a trial or a plan is told the free limits apply", () => {
     expect(planSectionLabel("owner", { ...NEW, billingExempt: true }, NOW, ON)).toBe("No plan is needed for this workspace.");
-    expect(planSectionLabel("owner", NEW, NOW, ON)).toBe("No plan is needed for this workspace.");
+    expect(planSectionLabel("owner", NEW, NOW, ON)).toBe(
+      "This workspace has no plan yet. The free limits apply until it has one.",
+    );
   });
 
   it("ended: a plan, or a trial", () => {

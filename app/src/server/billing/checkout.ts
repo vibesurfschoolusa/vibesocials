@@ -4,6 +4,7 @@ import { planState, priceIdForPlan, toBillingDate, type BillingEnv, type Billing
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { PlanKey } from "@/lib/plans";
+import { workspaceLink } from "@/server/notifications/links";
 
 import {
   createCheckoutSession,
@@ -200,8 +201,11 @@ export async function startCheckout(
         priceId,
         workspaceId: input.workspaceId,
         trialEnd: keepTrial ? Math.floor(trialEndsAt!.getTime() / 1000) : null,
-        successUrl: `${input.baseUrl}/settings?billing=success#plan`,
-        cancelUrl: `${input.baseUrl}/settings#plan`,
+        // R7-new-customer L1: back through /go, which makes the workspace paid
+        // for the active one, so the thanks line and the plan are that
+        // workspace's even if another tab switched workspace meanwhile.
+        successUrl: workspaceLink(input.workspaceId, "/settings?billing=success#plan", input.baseUrl),
+        cancelUrl: workspaceLink(input.workspaceId, "/settings#plan", input.baseUrl),
       },
       stripeIdempotencyKey(keyParts, CHECKOUT_KEY_BUCKET_MS, input.now.getTime()),
       env,

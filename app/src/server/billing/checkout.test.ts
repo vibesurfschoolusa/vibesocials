@@ -208,8 +208,9 @@ describe("startCheckout", () => {
       priceId: "price_example_starter",
       workspaceId: "ws_1",
       trialEnd: Math.floor((NOW.getTime() + 10 * DAY) / 1000),
-      successUrl: "https://app.example/settings?billing=success#plan",
-      cancelUrl: "https://app.example/settings#plan",
+      // R7-new-customer L1: back through /go, to the workspace that was paid for.
+      successUrl: `https://app.example/go?w=ws_1&to=${encodeURIComponent("/settings?billing=success#plan")}`,
+      cancelUrl: `https://app.example/go?w=ws_1&to=${encodeURIComponent("/settings#plan")}`,
     });
     expect(key).toMatch(/^vs-checkout-ws_1-starter-n0-[0-9a-f]{16}-\d+$/);
   });

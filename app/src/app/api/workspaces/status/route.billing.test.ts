@@ -61,7 +61,7 @@ describe("GET /api/workspaces/status with billing on", () => {
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }));
     expect(await (await GET()).json()).toEqual({
       blockedMessage: null,
-      trialNotice: "Your free trial ends on 12 December. Choose a plan in Settings.",
+      trialNotice: "Your free trial ends on December 12, 2026. Choose a plan in Settings.",
     });
   });
 

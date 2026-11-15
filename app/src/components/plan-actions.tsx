@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { planChoiceView, type BillingChoice } from "@/components/planChoiceButtons";
@@ -34,6 +34,23 @@ async function openStripe(url: string, body?: unknown): Promise<string | null> {
   }
 }
 
+/**
+ * Unconfirmed in R7-new-customer: Back from Stripe Checkout can restore this
+ * page from the browser's back-forward cache with the buttons still busy (the
+ * page was leaving when they were pressed). `reset` runs when the page is
+ * shown again that way. Answers the function that stops listening.
+ */
+export function onReturnFromCache(
+  target: Pick<Window, "addEventListener" | "removeEventListener">,
+  reset: () => void,
+): () => void {
+  const listener = (event: PageTransitionEvent) => {
+    if (event.persisted) reset();
+  };
+  target.addEventListener("pageshow", listener);
+  return () => target.removeEventListener("pageshow", listener);
+}
+
 export function PlanActions({
   workspaceId,
   offers,
@@ -55,6 +72,8 @@ export function PlanActions({
   // Q1: Monthly first, as on the pricing page.
   const [interval, setBillingInterval] = useState<BillingChoice>("month");
   const choice = planChoiceView(offers, yearlyOffers, interval);
+
+  useEffect(() => onReturnFromCache(window, () => setBusy(null)), []);
 
   async function run(key: string, url: string, body?: unknown) {
     setBusy(key);
