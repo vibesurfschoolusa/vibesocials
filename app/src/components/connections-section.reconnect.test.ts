@@ -81,3 +81,19 @@ describe("Settings, Connections: a LinkedIn connection about to end", () => {
     expect(html).toContain("Connected");
   });
 });
+
+// R13-pages L3: the end time Settings passes reaches a member's Ends soon row.
+describe("Settings, Connections: a member's LinkedIn about to end", () => {
+  it("says when it ends, in UTC, and who can reconnect it", () => {
+    const html = renderToStaticMarkup(
+      createElement(ConnectionsSection, {
+        workspaceId: "ws-1",
+        connections: [LINKEDIN],
+        readOnly: true,
+        reconnectSoon: ["linkedin"],
+        endsAt: { linkedin: "2026-11-21T01:00:00.000Z" },
+      }),
+    );
+    expect(html).toContain("Ends November 21, 2026, 01:00 UTC. The workspace owner can reconnect it.");
+  });
+});

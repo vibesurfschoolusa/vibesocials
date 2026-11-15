@@ -89,7 +89,9 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
           {entry.needsReconnect.length > 0 ? (
             <p className="text-muted-foreground">
               <span className="font-medium text-foreground">Needs reconnecting:</span>{" "}
-              {platformList(entry.needsReconnect)}
+              {platformList(entry.needsReconnect)}.{" "}
+              {/* R13-pages L3: who fixes it, as on the Ended and Ends soon lines. */}
+              {connectionEndNextStep(entry.role, entry.needsReconnect.length)}
             </p>
           ) : null}
           {/* R7-pages L4: can't be renewed, so it needs a Reconnect too; R8

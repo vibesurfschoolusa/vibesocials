@@ -189,3 +189,22 @@ describe("ConnectionsSection, Google Business Profile without a location", () =>
     expect(html).not.toContain("Choose the Maps location");
   });
 });
+
+// R13 L2: a location chosen (pasted, or picked before titles were saved) but no title read yet.
+describe("ConnectionsSection, Google Business Profile with a chosen location but no title", () => {
+  const gbp = {
+    ...connected("google_business_profile"),
+    username: null,
+    accountIdentifier: "",
+    locationName: "locations/123",
+  } as ConnectionSummary;
+
+  for (const readOnly of [false, true]) {
+    it(readOnly ? "a member: posts go to it" : "the owner: posts go to it", () => {
+      const html = render({ readOnly, connections: [gbp] });
+      expect(html).toContain("Connected. Posts go to the chosen Maps location.");
+      expect(html).not.toContain("Choose the Maps location");
+      expect(html).not.toContain("chooses the Maps location");
+    });
+  }
+});

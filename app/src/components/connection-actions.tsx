@@ -73,6 +73,11 @@ interface Props {
    * "Ends soon".
    */
   sameEndAt?: string | null;
+  /**
+   * R13-pages L3: with reconnectSoon, the end date (ISO) still ahead: a
+   * member's "Ends soon" row says when, as the Ended row does.
+   */
+  endsAt?: string | null;
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
@@ -190,6 +195,7 @@ export function ConnectionActions({
   readOnly = false,
   accountName,
   sameEndAt = null,
+  endsAt = null,
 }: Props) {
   const router = useRouter();
   const toast = useToast();
@@ -315,7 +321,18 @@ export function ConnectionActions({
         </span>
       );
     }
-    if (reconnectSoon) return <Badge variant="warning">Ends soon</Badge>;
+    if (reconnectSoon) {
+      // R13-pages L3: when, and who can reconnect it.
+      const when = endsAt ? endsAtText(endsAt) : "";
+      return (
+        <>
+          <Badge variant="warning">Ends soon</Badge>
+          <span className="basis-full text-sm text-muted-foreground">
+            {when ? `Ends ${when}. ` : ""}The workspace owner can reconnect it.
+          </span>
+        </>
+      );
+    }
     return <Badge variant="success">Connected</Badge>;
   }
 

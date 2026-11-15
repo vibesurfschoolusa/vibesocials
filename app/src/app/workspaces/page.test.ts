@@ -189,3 +189,18 @@ describe("WorkspacesPage: connections that end", () => {
     expect(html).not.toContain("Ended:");
   });
 });
+
+// R13-pages L3: the Needs reconnecting line says who fixes it, as Ended and Ends soon do.
+describe("WorkspacesPage: connections that need reconnecting", () => {
+  it("an owner: reconnect in Settings; a member: the owner can", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([
+      entry({ needsReconnect: ["facebook_page"], needsAttention: true }),
+      entry({ workspaceId: "ws-2", role: "member", needsReconnect: ["facebook_page", "x"], needsAttention: true }),
+    ]);
+
+    const html = await render();
+
+    expect(html).toContain("Needs reconnecting:</span> Facebook Page. Reconnect it in Settings, Connections.");
+    expect(html).toContain("Needs reconnecting:</span> Facebook Page, X. The workspace owner can reconnect them.");
+  });
+});

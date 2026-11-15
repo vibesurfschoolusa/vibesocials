@@ -37,6 +37,7 @@ function row(
     reconnectSoon?: boolean;
     endedAt?: string | null;
     sameEndAt?: string | null;
+    endsAt?: string | null;
     readOnly?: boolean;
   } = {},
 ): string {
@@ -190,4 +191,26 @@ describe("Settings connection row, Ended in UTC", () => {
       );
     });
   }
+});
+
+// R13-pages L3: a member's Ends soon row says when (UTC, endsAtText) and who reconnects it.
+describe("Settings connection row, a member's Ends soon", () => {
+  it("with the end time: the badge, the end in UTC and who can reconnect it", () => {
+    const html = row({ readOnly: true, reconnectSoon: true, endsAt: "2026-11-21T01:00:00.000Z" });
+    expect(html).toContain("Ends soon");
+    expect(html).toContain("Ends November 21, 2026, 01:00 UTC. The workspace owner can reconnect it.");
+    expect(html).not.toContain("<button");
+  });
+
+  it("without the end time: still names who can reconnect it", () => {
+    const html = row({ readOnly: true, reconnectSoon: true });
+    expect(html).toContain("Ends soon");
+    expect(html).toContain("The workspace owner can reconnect it.");
+  });
+
+  it("the owner's row is unchanged (its Reconnect button says what to do)", () => {
+    const html = row({ reconnectSoon: true, endsAt: "2026-11-21T01:00:00.000Z" });
+    expect(html).toContain("Ends soon");
+    expect(html).not.toContain("The workspace owner");
+  });
 });

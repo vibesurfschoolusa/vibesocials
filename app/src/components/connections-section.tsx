@@ -139,6 +139,8 @@ interface ConnectionsSectionProps {
   endedAt?: Partial<Record<Platform, string>>;
   /** R8-pages L5: of those, one a reconnect just left with the same end date: platform -> end date (ISO). */
   sameEndAt?: Partial<Record<Platform, string>>;
+  /** R13-pages L3: of those, the ones still ahead: platform -> end date (ISO). */
+  endsAt?: Partial<Record<Platform, string>>;
 }
 
 export function ConnectionsSection({
@@ -149,6 +151,7 @@ export function ConnectionsSection({
   reconnectSoon = [],
   endedAt = {},
   sameEndAt = {},
+  endsAt = {},
 }: ConnectionsSectionProps) {
   return (
     <>
@@ -201,10 +204,13 @@ export function ConnectionsSection({
                         ? username
                           ? `Connected as ${username}`
                           : isGoogleBusinessProfile
-                            ? readOnly
-                              ? // R12 L2: the location form below is the owner's only.
-                                "Connected. The workspace owner chooses the Maps location."
-                              : "Connected. Choose the Maps location to post to below."
+                            ? locationName
+                              ? // R13 L2: chosen, but its title isn't read yet (gbpLocationTitle.ts).
+                                "Connected. Posts go to the chosen Maps location."
+                              : readOnly
+                                ? // R12 L2: the location form below is the owner's only.
+                                  "Connected. The workspace owner chooses the Maps location."
+                                : "Connected. Choose the Maps location to post to below."
                             : "Connected"
                         : readOnly
                           ? // R11-pages L2: a member can't connect; say who can.
@@ -248,6 +254,7 @@ export function ConnectionsSection({
                       reconnectSoon={reconnectSoon.includes(key)}
                       endedAt={endedAt[key] ?? null}
                       sameEndAt={sameEndAt[key] ?? null}
+                      endsAt={endsAt[key] ?? null}
                       readOnly={readOnly}
                       accountName={username ?? undefined}
                     />
