@@ -89,6 +89,31 @@ interface TeamSectionProps {
  * Settings → Team card (design doc §7). Owners get full management (rename,
  * invite link, member list + removal); members get a read-only summary.
  */
+/**
+ * R5-security L1: the toast after "Make new client links", from POST
+ * /api/workspaces/client-links's answer. The upload link is copied on the
+ * Media page and the review link on the Queue page.
+ */
+export function clientLinksReplacedMessage(answer: unknown): string {
+  const made = (answer ?? {}) as { uploadLink?: unknown; reviewLink?: unknown };
+  const upload = Boolean(made.uploadLink);
+  const review = Boolean(made.reviewLink);
+  if (upload && review) {
+    return "New client links are on and the old ones no longer work. Copy the upload link on the Media page and the review link on the Queue page, and send them to your client.";
+  }
+  if (upload || review) {
+    return `A new client ${upload ? "upload" : "review"} link is on and the old one no longer works. Copy it on the ${upload ? "Media" : "Queue"} page and send it to your client.`;
+  }
+  return "No client link was on, so there was nothing to replace.";
+}
+
+/** R5-security L1: the toast after a demotion; it points to the button while client links are on. */
+export function demotedMessage(answer: unknown): string {
+  return (answer as { clientLinksToReplace?: unknown } | null)?.clientLinksToReplace === true
+    ? "Role updated. They could copy the client links, which still work: press Make new client links below to replace them."
+    : "Role updated.";
+}
+
 export function TeamSection({ workspaceId, role, workspaceName, deletion }: TeamSectionProps) {
   if (role !== "owner") {
     return <MemberView workspaceId={workspaceId} workspaceName={workspaceName} />;
@@ -361,6 +386,7 @@ function OwnerView({
   const [promoteTarget, setPromoteTarget] = useState<Member | null>(null);
   const [demoteTarget, setDemoteTarget] = useState<Member | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [replacingLinks, setReplacingLinks] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -457,7 +483,7 @@ function OwnerView({
       toast.error(data?.error ?? "Couldn't update that member's role.");
       throw new Error("DEMOTE_FAILED");
     }
-    toast.success("Role updated.");
+    toast.success(demotedMessage(await response.json().catch(() => null)));
     if (demoteTarget.userId === currentUserId) {
       router.refresh();
       return;
@@ -468,6 +494,28 @@ function OwnerView({
         : prev,
     );
   }, [demoteTarget, currentUserId, router, toast, workspaceId]);
+
+  // R5-security L1: one press replaces the client upload and review links.
+  const replaceClientLinks = useCallback(async () => {
+    setReplacingLinks(true);
+    try {
+      const response = await fetch("/api/workspaces/client-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) {
+        toast.error(data?.error ?? "Couldn't make new client links. The old ones still work. Try again.");
+        return;
+      }
+      toast.success(clientLinksReplacedMessage(data));
+    } catch {
+      toast.error("Couldn't reach the server. The old client links still work. Check your connection and try again.");
+    } finally {
+      setReplacingLinks(false);
+    }
+  }, [toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Verbatim
   // MemberView.handleLeave — an owner may leave once another owner remains (the
@@ -641,6 +689,20 @@ function OwnerView({
             ))}
           </ul>
         ) : null}
+      </div>
+
+      {/* R5-security L1: a former owner's copies of the client links keep working until these are replaced. */}
+      <div className="flex flex-col gap-2 border-t border-border pt-6">
+        <h3 className="text-sm font-medium text-foreground">Client links</h3>
+        <p className="text-sm text-muted-foreground">
+          Someone who stops being an owner can still use the client upload and review links they copied. New links
+          stop the old ones working.
+        </p>
+        <div>
+          <Button size="sm" variant="outline" loading={replacingLinks} onClick={replaceClientLinks}>
+            Make new client links
+          </Button>
+        </div>
       </div>
 
       {/* Leave — an owner may step down once another owner exists. Disabled
