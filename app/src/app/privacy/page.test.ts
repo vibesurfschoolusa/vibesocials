@@ -122,11 +122,12 @@ describe("Privacy: unchanged parts", () => {
   });
 });
 
-// R6-pages L6: how long the address an email change replaced is kept.
+// R6-pages L6, R7-pages L1: how long the address an email change replaced is
+// kept. The daily sweep deletes it, so "within a day after" is what is true.
 describe("Privacy: a previous sign-in email", () => {
-  it("says it is kept 72 hours for the undo link, then deleted", () => {
+  it("says it is kept 72 hours for the undo link, then deleted within a day", () => {
     expect(text()).toContain(
-      "When you change your sign-in email, we keep your previous address for 72 hours, so that a link sent to it can undo the change; after that it is deleted.",
+      "When you change your sign-in email, we keep your previous address for 72 hours, so that a link sent to it can undo the change; it is deleted within a day after the 72 hours.",
     );
   });
 });

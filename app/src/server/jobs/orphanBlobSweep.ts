@@ -256,9 +256,10 @@ export const orphanBlobSweep = inngest.createFunction(
   { cron: "25 6 * * *" },
   async ({ step }) => {
     // Review of R5-security M1: the usage log's old rows go in this same step,
-    // so they cost no new function and no new execution. R6-pages L6: so do
-    // the previous addresses of passed email-change undo windows, which the
-    // privacy page says are deleted after 72 hours.
+    // so they cost no new function and no new execution. R6-pages L6, R7-pages
+    // L1: so do the email-change rows no longer needed (passed undo windows,
+    // expired links), which the privacy page says go within a day after the
+    // 72 hours.
     const summary = await step.run("sweep", async () => {
       const now = new Date();
       const usageEventsPruned = await pruneUsageEvents(now);

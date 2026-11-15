@@ -60,3 +60,18 @@ describe("Data deletion: footer", () => {
     }
   });
 });
+
+// R7-pages L2: deleting the account waits while an email change can be undone
+// (api/auth/account refuses until then), so the page says so.
+describe("Data deletion: after an email change", () => {
+  it("says deleting the account waits until the 72-hour undo window ends", () => {
+    const page = text();
+    expect(page).toContain(
+      "If you changed your sign-in email in the last 72 hours, deleting your account waits until those 72 hours have passed, because a link sent to your previous address can still undo the change.",
+    );
+  });
+
+  it("no longer promises deletion at any time", () => {
+    expect(text()).not.toContain("at any time");
+  });
+});
