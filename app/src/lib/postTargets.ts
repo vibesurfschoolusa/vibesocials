@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import {
+  mediaKindOf,
   PLATFORM_ACCEPTED_MEDIA,
   platformAcceptsMedia,
   platformAcceptsTextOnly,
@@ -53,9 +54,14 @@ export function incompatibleMediaMessage(
   incompatible: readonly Platform[],
   mimeType: string | null | undefined,
 ): string {
-  const named = incompatible
-    .map((platform) => `${platformLabel(platform)} (${acceptedMediaWords(platform)})`)
-    .join(", ");
+  const kind = mimeType == null ? null : mediaKindOf(mimeType);
+  // A platform that takes this kind but refuses the format (a WebM for
+  // Instagram) names the formats it takes, as the composer does.
+  const words = (platform: Platform) =>
+    kind !== null && PLATFORM_ACCEPTED_MEDIA[platform].includes(kind)
+      ? (unsupportedMediaReason(platform, mimeType) ?? acceptedMediaWords(platform))
+      : acceptedMediaWords(platform);
+  const named = incompatible.map((platform) => `${platformLabel(platform)} (${words(platform)})`).join(", ");
   const subject =
     mimeType && mimeType.startsWith("video/")
       ? "a video"

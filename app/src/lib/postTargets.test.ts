@@ -45,6 +45,35 @@ describe("splitPlatformsByMedia", () => {
 });
 
 describe("incompatibleMediaMessage", () => {
+  // R17 CC2 follow-up: a platform that takes the kind but refuses the format
+  // names the formats it takes, never "(images or video)".
+  it.each([
+    ["instagram", "video/webm", "These platforms can't publish a video: Instagram (MP4 or MOV only)."],
+    ["linkedin", "video/webm", "These platforms can't publish a video: LinkedIn (MP4 or MOV only)."],
+    ["pinterest", "video/webm", "These platforms can't publish a video: Pinterest (MP4 or MOV only)."],
+    ["linkedin", "image/webp", "These platforms can't publish an image: LinkedIn (JPG, PNG or GIF only)."],
+    [
+      "google_business_profile",
+      "image/webp",
+      "These platforms can't publish an image: Google Business Profile (JPG or PNG only).",
+    ],
+    [
+      "google_business_profile",
+      "image/gif",
+      "These platforms can't publish an image: Google Business Profile (JPG or PNG only).",
+    ],
+  ] as const)("%s with %s names the formats it takes", (platform, mimeType, start) => {
+    expect(incompatibleMediaMessage([platform], mimeType)).toBe(
+      `${start.slice(0, -1)}. Remove them from platforms or choose different media.`,
+    );
+  });
+
+  it("a kind mismatch keeps its words (YouTube with an image)", () => {
+    expect(incompatibleMediaMessage(["youtube"], "image/jpeg")).toBe(
+      "These platforms can't publish an image: YouTube (video only). Remove them from platforms or choose different media.",
+    );
+  });
+
   it("names each platform with what it accepts", () => {
     const message = incompatibleMediaMessage(["youtube", "tiktok"], "image/png");
     expect(message).toContain("YouTube (video only)");
