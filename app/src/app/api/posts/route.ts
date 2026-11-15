@@ -1188,6 +1188,7 @@ export async function POST(request: Request) {
       // Q1: the Story job is a second post on the same day, so Feed and Story
       // is refused wherever two separate posts would be.
       ...(storyJob ? { alsoOnDay: 1 } : {}),
+      viewerUserId: context.user.id,
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -1209,6 +1210,7 @@ export async function POST(request: Request) {
         day: time,
         mode: "schedule",
         alsoOnDay,
+        viewerUserId: context.user.id,
       });
       if (refusal) {
         // The limit counts UTC days, so the UTC date is the one that is full.

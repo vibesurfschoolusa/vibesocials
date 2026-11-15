@@ -733,6 +733,7 @@ describe("PATCH /api/posts/[postJobId] — daily post limit (usage limits)", () 
       day: OTHER_DAY,
       mode: "schedule",
       excludePostJobId: "job-1",
+      viewerUserId: expect.any(String),
     });
   });
 
@@ -927,6 +928,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
       mode: "schedule",
       excludePostJobId: ["job-1", "story-1"],
       alsoOnDay: 1,
+      viewerUserId: expect.any(String),
     });
   });
 

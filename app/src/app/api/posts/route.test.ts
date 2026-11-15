@@ -1973,6 +1973,7 @@ describe("POST /api/posts — daily post limit (usage limits)", () => {
       workspaceId: "ws-1",
       day: new Date(FUTURE),
       mode: "schedule",
+      viewerUserId: expect.any(String),
     });
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toEqual({

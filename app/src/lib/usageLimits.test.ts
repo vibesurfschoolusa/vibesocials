@@ -13,6 +13,7 @@ import {
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
   isNewAccount,
+  RETRY_IN_PROGRESS_MESSAGE,
   pacificDayRange,
   personalPostLimitApplies,
   postRetryLimitMessage,
@@ -376,20 +377,29 @@ describe("limits across workspaces", () => {
     expect(ownerDailyPostLimitMessage(5, "now", "first_day")).toBe(
       "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 from tomorrow.",
     );
-    expect(ownerDailyPostLimitMessage(5, "retry", "unconfirmed")).toBe(
+    // Second look, point 1: "you" only for the unconfirmed owner reading it.
+    expect(ownerDailyPostLimitMessage(5, "retry", "unconfirmed", { name: "Jane", coOwned: false, isViewer: true })).toBe(
       "This workspace's owner has reached the limit of 5 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day. The limit is 15 once you confirm your email address.",
+    );
+    expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", { name: "Jane", coOwned: false, isViewer: false })).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once Jane confirms their email address.",
     );
   });
 
   // R7 review, point 6: a workspace held to 5 by a new or unconfirmed co-owner names them.
   it("names the co-owner whose lower number holds the workspace", () => {
-    expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", "Maria")).toBe(
-      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. Their limit is 15 once they confirm their email address.",
+    const maria = { name: "Maria", coOwned: true, isViewer: false };
+    expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", maria)).toBe(
+      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once Maria confirms their email address.",
     );
-    expect(ownerDailyPostLimitMessage(5, "schedule", "first_day", "Maria")).toBe(
+    // Maria herself reads it about herself.
+    expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", { ...maria, isViewer: true })).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
+    );
+    expect(ownerDailyPostLimitMessage(5, "schedule", "first_day", maria)).toBe(
       "Maria, an owner of this workspace, already has 5 posts that day across the workspaces they own, which is the daily limit for one person. Pick another day. Their limit is 15 from tomorrow.",
     );
-    expect(ownerDailyPostLimitMessage(5, "retry", "first_day", "Maria")).toBe(
+    expect(ownerDailyPostLimitMessage(5, "retry", "first_day", maria)).toBe(
       "Maria, an owner of this workspace, has reached the limit of 5 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day. Their limit is 15 from tomorrow.",
     );
   });
@@ -423,6 +433,13 @@ describe("limits across workspaces", () => {
     );
     expect(serviceDailyPostLimitAtSendMessage()).toBe(
       "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
+    );
+  });
+
+  // Second look, point 2: a request refused because another click took the place.
+  it("the sentence for a retry that another click just started", () => {
+    expect(RETRY_IN_PROGRESS_MESSAGE).toBe(
+      "Another retry of this post just started. Wait for it to finish, then try again if needed.",
     );
   });
 

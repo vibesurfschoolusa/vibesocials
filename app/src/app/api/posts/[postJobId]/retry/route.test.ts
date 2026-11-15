@@ -856,6 +856,8 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
       postJobId: "job-1",
       requestId: expect.any(String),
       now: expect.any(Date),
+      // Second look, point 1: so an owner held back by their own number reads "you".
+      viewerUserId: "user-1",
     });
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();

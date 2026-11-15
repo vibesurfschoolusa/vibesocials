@@ -306,6 +306,10 @@ export const WORKSPACES_CREATED_WINDOW_DAYS = 30;
 export const OWNER_DAILY_POST_LIMIT_CODE = "OWNER_DAILY_POST_LIMIT";
 export const SERVICE_DAILY_POST_LIMIT_CODE = "SERVICE_DAILY_POST_LIMIT";
 export const POST_RETRY_LIMIT_CODE = "POST_RETRY_LIMIT";
+/** Second look, point 2: a retry refused because another click of the same post took the place. */
+export const RETRY_IN_PROGRESS_CODE = "RETRY_IN_PROGRESS";
+export const RETRY_IN_PROGRESS_MESSAGE =
+  "Another retry of this post just started. Wait for it to finish, then try again if needed.";
 export const WORKSPACE_CREATION_LIMIT_CODE = "WORKSPACE_CREATION_LIMIT";
 
 /** The limits across workspaces also refuse a retry (R6-security M3). */
@@ -355,36 +359,43 @@ export function ownerDailyPostLimit(
   return { limit: reduced ? NEW_ACCOUNT_DAILY_POST_LIMIT : OWNER_DAILY_POST_LIMIT, reduced };
 }
 
-/** When the lower number ends, said to the owner, or about a named co-owner. */
-function reducedNote(reduced: ReducedReason, coOwner: boolean): string {
-  const whose = coOwner ? "Their" : "The";
-  return reduced === "first_day"
-    ? `${whose} limit is ${OWNER_DAILY_POST_LIMIT} from tomorrow.`
-    : `${whose} limit is ${OWNER_DAILY_POST_LIMIT} once ${coOwner ? "they confirm their" : "you confirm your"} email address.`;
+/**
+ * The owner whose number held the post back, as the sentence needs them
+ * (second look, point 1): their name (else email), whether the workspace has
+ * other owners, and whether they are the person reading it.
+ */
+export type LimitHolder = { name: string; coOwned: boolean; isViewer: boolean };
+
+/** When the lower number ends: "you" only to the owner themself, anyone else reads their name. */
+function reducedNote(reduced: ReducedReason, holder: LimitHolder | null, named: boolean): string {
+  if (reduced === "first_day") return `${named ? "Their" : "The"} limit is ${OWNER_DAILY_POST_LIMIT} from tomorrow.`;
+  if (holder?.isViewer) return `The limit is ${OWNER_DAILY_POST_LIMIT} once you confirm your email address.`;
+  return `The limit is ${OWNER_DAILY_POST_LIMIT} once ${holder?.name ?? "the owner"} confirms their email address.`;
 }
 
 /**
  * The per-person sentence (posting now, scheduling by slot day, a retry).
- * `coOwnerName`: R7 review, point 6, the co-owner whose lower number holds the
- * workspace, named so the others know who it is.
+ * R7 review, point 6: a co-owner whose lower number holds the workspace is
+ * named, unless they are the one reading it.
  */
 export function ownerDailyPostLimitMessage(
   limit: number,
   mode: CrossWorkspaceLimitMode,
   reduced: ReducedReason | null = null,
-  coOwnerName: string | null = null,
+  holder: LimitHolder | null = null,
 ): string {
   const posts = `${limit} ${countWord(limit, "post", "posts")}`;
-  const who = coOwnerName ? `${coOwnerName}, an owner of this workspace,` : "This workspace's owner";
+  const named = reduced !== null && holder !== null && holder.coOwned && !holder.isViewer;
+  const who = named ? `${holder.name}, an owner of this workspace,` : "This workspace's owner";
   const sentence =
     mode === "now"
       ? `${who} has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
       : mode === "retry"
         ? `${who} has reached the limit of ${posts} a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
-        : coOwnerName
+        : named
           ? `${who} already has ${posts} that day across the workspaces they own, which is the daily limit for one person. Pick another day.`
           : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`;
-  return reduced ? `${sentence} ${reducedNote(reduced, coOwnerName !== null)}` : sentence;
+  return reduced ? `${sentence} ${reducedNote(reduced, holder, named)}` : sentence;
 }
 
 export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {

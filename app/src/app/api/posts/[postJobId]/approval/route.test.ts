@@ -727,6 +727,7 @@ describe("POST /api/posts/[postJobId]/approval — daily post limit (usage limit
       day: FUTURE,
       mode: "schedule",
       excludePostJobId: "job-1",
+      viewerUserId: expect.any(String),
     });
   });
 

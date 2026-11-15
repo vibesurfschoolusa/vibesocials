@@ -17,6 +17,8 @@ import {
   POST_RETRY_LIMIT_CODE,
   postRetryLimitMessage,
   RETRIES_PER_POST_PER_DAY,
+  RETRY_IN_PROGRESS_CODE,
+  RETRY_IN_PROGRESS_MESSAGE,
   SERVICE_DAILY_POST_LIMIT,
   SERVICE_DAILY_POST_LIMIT_CODE,
   serviceDailyPostLimitAtSendMessage,
@@ -653,6 +655,8 @@ type CrossWorkspaceCheck = {
    * check), so it is in the counts already and adds nothing more.
    */
   recorded?: boolean;
+  /** Second look, point 1: who will read the answer, so the owner held back reads "you". */
+  viewerUserId?: string;
 };
 
 /**
@@ -682,9 +686,14 @@ async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: 
       // day, and every day until its email is confirmed.
       const { limit, reduced } = ownerDailyPostLimit(owner.user, day);
       if ((await ownerCountOnDay(owner.userId, day, unit)) + size > limit) {
-        // Point 6: a co-owner whose lower number holds the workspace is named.
-        const coOwner = reduced && who.owners.length > 1 ? owner.user.name?.trim() || owner.user.email : null;
-        return { error: ownerDailyPostLimitMessage(limit, mode, reduced, coOwner), code: OWNER_DAILY_POST_LIMIT_CODE };
+        // Point 6: a co-owner whose lower number holds the workspace is named,
+        // unless they are the one reading it.
+        const holder = {
+          name: owner.user.name?.trim() || owner.user.email,
+          coOwned: who.owners.length > 1,
+          isViewer: input.viewerUserId === owner.userId,
+        };
+        return { error: ownerDailyPostLimitMessage(limit, mode, reduced, holder), code: OWNER_DAILY_POST_LIMIT_CODE };
       }
     }
   }
@@ -737,28 +746,59 @@ export async function serviceCapRefusalAtSend(input: {
   }
 }
 
-/**
- * The retry runs of a post on the UTC day of `now`: its retry rows, and the
- * per-platform rows written before R7-security L1, once per request.
- */
-async function retryRunsToday(workspaceId: string, postJobId: string, now: Date): Promise<number> {
+/** Older per-platform retry rows (before R7-security L1) of a post today, once per request. */
+async function olderRetryRequestsToday(workspaceId: string, postJobId: string, now: Date): Promise<number> {
   const { start, end } = utcDayRange(now);
-  const [runs, older] = await Promise.all([
-    prisma.usageEvent.count({
-      where: { kind: USAGE_KIND.send, sourceId: { startsWith: retryRunPrefix(postJobId) }, at: { gte: start, lt: end } },
-    }),
-    prisma.usageEvent.findMany({
-      where: {
-        kind: USAGE_KIND.retry,
-        workspaceId,
-        sourceId: { startsWith: `${USAGE_KIND.retry}:${postJobId}:` },
-        at: { gte: start, lt: end },
-      },
-      select: { sourceId: true },
-    }),
-  ]);
-  const requests = new Set(older.map((row) => row.sourceId?.split(":").pop()).filter(Boolean));
-  return runs + requests.size;
+  const older = await prisma.usageEvent.findMany({
+    where: {
+      kind: USAGE_KIND.retry,
+      workspaceId,
+      sourceId: { startsWith: `${USAGE_KIND.retry}:${postJobId}:` },
+      at: { gte: start, lt: end },
+    },
+    select: { sourceId: true },
+  });
+  return new Set(older.map((row) => row.sourceId?.split(":").pop()).filter(Boolean)).size;
+}
+
+/** The retry runs of a post on the UTC day of `now`, in the order they were recorded. */
+async function retryRunsToday(postJobId: string, now: Date): Promise<Array<{ sourceId: string; createdAt: Date }>> {
+  const { start, end } = utcDayRange(now);
+  const rows = await prisma.usageEvent.findMany({
+    where: { kind: USAGE_KIND.send, sourceId: { startsWith: retryRunPrefix(postJobId) }, at: { gte: start, lt: end } },
+    select: { sourceId: true, createdAt: true },
+  });
+  return rows
+    .filter((row): row is { sourceId: string; createdAt: Date } => row.sourceId !== null)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sourceId.localeCompare(b.sourceId));
+}
+
+/** Second look, point 2: a retry recorded this close after the one ahead of it was started by a click at the same time. */
+const RETRY_JUST_STARTED_MS = 60_000;
+
+/**
+ * Why the post may have no more retry runs today, or null. `requestId`: the
+ * request's own run is recorded already (reserveRetry). The runs are taken
+ * in the order they were recorded, so of two clicks at once exactly the
+ * first fits; the other was refused only because that one just started, and
+ * is told so rather than that the post was retried 3 times.
+ */
+async function retryGuardRefusal(
+  workspaceId: string,
+  postJobId: string,
+  now: Date,
+  requestId: string | undefined,
+): Promise<LimitRefusal | null> {
+  const older = await olderRetryRequestsToday(workspaceId, postJobId, now);
+  const runs = await retryRunsToday(postJobId, now);
+  const own = requestId ? runs.findIndex((row) => row.sourceId === retrySourceId(postJobId, requestId)) : -1;
+  const ahead = own >= 0 ? runs.slice(0, own) : runs;
+  if (older + ahead.length < RETRIES_PER_POST_PER_DAY) return null;
+  const mine = own >= 0 ? runs[own].createdAt.getTime() : now.getTime();
+  const justStarted = ahead.some((row) => mine - row.createdAt.getTime() < RETRY_JUST_STARTED_MS);
+  return justStarted && own >= 0
+    ? { error: RETRY_IN_PROGRESS_MESSAGE, code: RETRY_IN_PROGRESS_CODE }
+    : { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
 }
 
 /**
@@ -774,20 +814,25 @@ export async function retryRefusal(input: {
   workspaceId: string;
   postJobId: string;
   now: Date;
-  /** The request's own run is recorded already (reserveRetry) and is in the counts. */
-  recorded?: boolean;
+  /** The request whose own run is recorded already (reserveRetry) and is in the counts. */
+  recordedRequestId?: string;
+  viewerUserId?: string;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, postJobId, now } = input;
   try {
     const who = await runAttribution(workspaceId, now);
     if (who.operator) return null;
-    const allowed = RETRIES_PER_POST_PER_DAY + (input.recorded ? 1 : 0);
-    if ((await retryRunsToday(workspaceId, postJobId, now)) >= allowed) {
-      return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
-    }
+    const guard = await retryGuardRefusal(workspaceId, postJobId, now, input.recordedRequestId);
+    if (guard) return guard;
     return await refusalFor(
       who,
-      { workspace: await ownBillingFields(workspaceId), day: now, mode: "retry", recorded: input.recorded },
+      {
+        workspace: await ownBillingFields(workspaceId),
+        day: now,
+        mode: "retry",
+        recorded: input.recordedRequestId !== undefined,
+        viewerUserId: input.viewerUserId,
+      },
       now,
     );
   } catch (error) {
@@ -799,19 +844,27 @@ export async function retryRefusal(input: {
 /**
  * R7 review, point 7: the retry route's check, made safe against two clicks
  * at once. The request's run is recorded first, then counted with it; when
- * that is past a limit, that same row is removed and the request refused. Two
- * requests at the same moment both see each other, so neither can make a
- * 4th run (at worst both are refused). Null: the run stays recorded, and the
- * caller takes it back with withdrawRetry if its hand-over then fails.
+ * that is past a limit, that same row is removed and the request refused.
+ * For the 3-a-day guard the runs go in the order they were recorded, so of
+ * two clicks at once one goes and the other is told the first just started.
+ * Null: the run stays recorded, and the caller takes it back with
+ * withdrawRetry if its hand-over then fails.
  */
 export async function reserveRetry(input: {
   workspaceId: string;
   postJobId: string;
   requestId: string;
   now: Date;
+  viewerUserId?: string;
 }): Promise<LimitRefusal | null> {
   await recordRetry({ workspaceId: input.workspaceId, postJobId: input.postJobId, requestId: input.requestId, at: input.now });
-  const refusal = await retryRefusal({ workspaceId: input.workspaceId, postJobId: input.postJobId, now: input.now, recorded: true });
+  const refusal = await retryRefusal({
+    workspaceId: input.workspaceId,
+    postJobId: input.postJobId,
+    now: input.now,
+    recordedRequestId: input.requestId,
+    viewerUserId: input.viewerUserId,
+  });
   if (refusal) await withdrawRetry({ postJobId: input.postJobId, requestId: input.requestId });
   return refusal;
 }

@@ -221,6 +221,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       day: outcome === "schedule" && job.scheduledFor ? job.scheduledFor : now,
       mode: outcome === "schedule" ? "schedule" : "now",
       ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
+      viewerUserId: workspaceContext.user.id,
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });

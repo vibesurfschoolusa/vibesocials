@@ -226,6 +226,7 @@ describe("checkDailyPostLimit - across workspaces", () => {
       mode: "schedule",
       excludePostJobId: "job-9",
       alsoOnDay: 2,
+      viewerUserId: "user-7",
     });
 
     expect(crossWorkspaceMock).toHaveBeenCalledWith({
@@ -235,6 +236,8 @@ describe("checkDailyPostLimit - across workspaces", () => {
       mode: "schedule",
       excludePostJobId: "job-9",
       alsoOnDay: 2,
+      // Second look, point 1: who reads the refusal.
+      viewerUserId: "user-7",
     });
   });
 

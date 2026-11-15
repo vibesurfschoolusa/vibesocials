@@ -292,6 +292,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       day: validation.date,
       mode: "schedule",
       ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
+      viewerUserId: workspaceContext.user.id,
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -420,6 +421,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     day: publishedAt,
     mode: "now",
     ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
+    viewerUserId: workspaceContext.user.id,
   });
   if (refusal) {
     return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });

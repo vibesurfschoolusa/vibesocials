@@ -993,6 +993,7 @@ describe("POST /api/posts/[postJobId]/publish — daily post limit (usage limits
       day: new Date(FUTURE),
       mode: "schedule",
       excludePostJobId: "job-1",
+      viewerUserId: expect.any(String),
     });
   });
 

@@ -239,6 +239,8 @@ export async function checkDailyPostLimit(args: {
    * yet: the earlier posts of a repeating post that fall on the same day.
    */
   alsoOnDay?: number;
+  /** Second look, point 1: who reads the refusal, so an owner held back by their own lower number reads "you". */
+  viewerUserId?: string;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, day, mode, excludePostJobId } = args;
   try {
@@ -255,6 +257,7 @@ export async function checkDailyPostLimit(args: {
         mode,
         excludePostJobId,
         alsoOnDay: args.alsoOnDay,
+        viewerUserId: args.viewerUserId,
       });
     }
 

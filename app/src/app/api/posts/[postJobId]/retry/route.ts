@@ -276,6 +276,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     postJobId,
     requestId,
     now: new Date(),
+    viewerUserId: workspaceContext.user.id,
   });
   if (budget) {
     return NextResponse.json({ error: budget.error, code: budget.code }, { status: 429 });

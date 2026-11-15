@@ -410,8 +410,16 @@ describe("the per-person number", () => {
   it("an unconfirmed or new owner gets 5, and is told how it rises", async () => {
     workspace("ws-1", {}, [owner("owner-1", { emailVerifiedAt: null })]);
     scheduled("ws-1", 5);
-    expect((await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(
+    // Second look, point 1: the owner reads "you"; anyone else reads the owner's name.
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", viewerUserId: "owner-1" }))?.error,
+    ).toBe(
       "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
+    );
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-1", workspace: {}, day: NOW, mode: "now", viewerUserId: "a-member" }))?.error,
+    ).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once owner-1@example.com confirms their email address.",
     );
   });
 
@@ -429,6 +437,16 @@ describe("the per-person number", () => {
   });
 
   // R7 review, point 6: a workspace held to 5 by a new co-owner names them.
+  it("a confirmed co-owner reads the unconfirmed co-owner's name, twice", async () => {
+    workspace("ws-team", {}, [owner("lead"), owner("jane", { name: "Jane", emailVerifiedAt: null })]);
+    scheduled("ws-team", 5, NOW);
+    expect(
+      (await crossWorkspacePostRefusal({ workspaceId: "ws-team", workspace: {}, day: NOW, mode: "now", viewerUserId: "lead" }))?.error,
+    ).toBe(
+      "Jane, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once Jane confirms their email address.",
+    );
+  });
+
   it("a workspace held to 5 by a new or unconfirmed co-owner names that owner", async () => {
     workspace("ws-team", {}, [owner("lead"), owner("maria", { name: "Maria", createdAt: new Date(NOW.getTime() - 3_600_000), emailVerifiedAt: NOW })]);
     scheduled("ws-team", 5, NOW);
@@ -723,27 +741,42 @@ describe("withdrawing a send that was not handed to publishing", () => {
 
 // R7 review, point 7: record first, then count; a run past a limit is removed again.
 describe("create, then check", () => {
-  it("two retry clicks at once cannot make a 4th retry run of a post", async () => {
+  const minutesAgo = (n: number) => new Date(NOW.getTime() - n * 60_000);
+
+  async function retriedAt(requestId: string, at: Date) {
+    vi.setSystemTime(at);
+    const outcome = await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: at });
+    vi.setSystemTime(NOW);
+    return outcome;
+  }
+
+  // Second look, point 2: two clicks with 2 used: one goes, the other is told another just started.
+  it("two retry clicks at once with 2 used: one goes, the other reads the concurrent sentence", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    for (const requestId of ["r1", "r2"]) await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW });
+    await retriedAt("r1", minutesAgo(30));
+    await retriedAt("r2", minutesAgo(20));
     const outcomes = await Promise.all(
       ["r3", "r4"].map((requestId) => reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW })),
     );
-    expect(outcomes.filter((outcome) => outcome === null).length).toBeLessThanOrEqual(1);
-    expect(sendsOf("post-a").length).toBeLessThanOrEqual(3);
-    // A request refused leaves no row behind.
-    const refused = ["r3", "r4"].filter((_, i) => outcomes[i] !== null);
-    for (const requestId of refused) expect(sendsOf("post-a").some((e) => e.sourceId === `send:post-a:retry:${requestId}`)).toBe(false);
+    expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(1);
+    expect(outcomes.find((outcome) => outcome !== null)).toEqual({
+      code: "RETRY_IN_PROGRESS",
+      error: "Another retry of this post just started. Wait for it to finish, then try again if needed.",
+    });
+    // Never a 4th run, and the refused request leaves no row.
+    expect(sendsOf("post-a")).toHaveLength(3);
   });
 
-  it("the 4th retry is refused with the sentence and its row is removed", async () => {
+  it("a real 4th retry, the others long started, reads the 3-times sentence and its row is removed", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    for (const requestId of ["r1", "r2", "r3"]) {
-      await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW })).resolves.toBeNull();
+    for (const [requestId, minutes] of [["r1", 30], ["r2", 20], ["r3", 10]] as const) {
+      await expect(retriedAt(requestId, minutesAgo(minutes))).resolves.toBeNull();
     }
-    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.code).toBe(
-      "POST_RETRY_LIMIT",
-    );
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW })).resolves.toEqual({
+      code: "POST_RETRY_LIMIT",
+      error:
+        "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.",
+    });
     expect(sendsOf("post-a").map((event) => event.sourceId)).toEqual([
       "send:post-a:retry:r1",
       "send:post-a:retry:r2",

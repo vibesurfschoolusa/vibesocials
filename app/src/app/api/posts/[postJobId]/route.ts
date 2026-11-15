@@ -346,6 +346,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       mode: "schedule",
       // A Feed and Story card moves both halves: two posts on that day.
       ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
+      viewerUserId: workspaceContext.user.id,
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
