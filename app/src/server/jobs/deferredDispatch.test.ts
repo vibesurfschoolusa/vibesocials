@@ -16,6 +16,7 @@ const {
   postJobFindFirstMock,
   resultFindManyMock,
   withdrawSendMock,
+  sendRecordedMock,
 } = vi.hoisted(() => ({
   postJobFindUniqueMock: vi.fn(),
   postJobUpdateMock: vi.fn(),
@@ -29,6 +30,7 @@ const {
   postJobFindFirstMock: vi.fn(),
   resultFindManyMock: vi.fn(),
   withdrawSendMock: vi.fn(),
+  sendRecordedMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -55,6 +57,7 @@ vi.mock("@/server/usage/usageLog", () => ({
   serviceCapRefusalAtSend: serviceCapMock,
   recordSend: recordSendMock,
   withdrawSend: withdrawSendMock,
+  sendRecorded: sendRecordedMock,
 }));
 
 import { prepareDeferredPostJobDispatch } from "./posting";
@@ -96,6 +99,8 @@ beforeEach(() => {
   resultFindManyMock.mockResolvedValue([]);
   withdrawSendMock.mockReset();
   withdrawSendMock.mockResolvedValue(undefined);
+  sendRecordedMock.mockReset();
+  sendRecordedMock.mockResolvedValue(false);
 });
 
 describe("prepareDeferredPostJobDispatch", () => {
@@ -1037,5 +1042,51 @@ describe("a pair whose other half has nothing to send", () => {
     await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
 
     expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1", "job-1"], now: NOW, recorded: true });
+  });
+});
+
+// R8-publishing L1: no split inside one scan.
+describe("a pair half whose run its partner recorded", () => {
+  const NOW = new Date("2026-11-14T15:00:00Z");
+  const FULL = {
+    errorCode: "SERVICE_DAILY_POST_LIMIT",
+    errorMessage:
+      "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
+  };
+
+  /** The Story's turn after its feed passed: the feed has its results, the Story's run is already there. */
+  function storyAfterFeedPassed() {
+    postJobFindUniqueMock.mockImplementation(async ({ where, select }: { where: { id: string }; select?: unknown }) =>
+      select
+        ? { id: "job-1", status: "in_progress", publishMetadata: null, mediaItem: { mimeType: "image/jpeg" }, _count: { results: 1 } }
+        : makeJob({ id: where.id, storyOfPostJobId: "job-1" }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: false }]);
+  }
+
+  it("is not checked again, even when the pool filled up between the halves", async () => {
+    storyAfterFeedPassed();
+    sendRecordedMock.mockResolvedValue(true);
+    serviceCapMock.mockResolvedValue(FULL);
+
+    const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
+
+    expect(sendRecordedMock).toHaveBeenCalledWith("story-1", NOW);
+    expect(serviceCapMock).not.toHaveBeenCalled();
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [{ postJobId: "story-1", workspaceId: "workspace-1", platform: "instagram", socialConnectionId: "c-ig", status: "pending" }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("a half with no run recorded yet is checked alone, as before", async () => {
+    storyAfterFeedPassed();
+    serviceCapMock.mockResolvedValue(FULL);
+
+    const result = await prepareDeferredPostJobDispatch("story-1", { serviceCapAt: NOW });
+
+    expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
+    expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1" });
   });
 });

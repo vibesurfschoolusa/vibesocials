@@ -4,6 +4,7 @@ import {
   DEFAULT_WORKSPACE_LIMITS,
   dailyPostLimitMessage,
   formatStorageGb,
+  FREE_RUNS_DAILY_CEILING,
   GUARANTEED_RUNS_PER_PERSON,
   NEW_ACCOUNT_DAILY_POST_LIMIT,
   NEW_ACCOUNT_POOL_DAILY_LIMIT,
@@ -218,8 +219,9 @@ describe("sentences", () => {
   });
 
   it("says when each limit starts again", () => {
+    // R8-pages L8: the date as Settings writes its other dates, the time in UTC.
     expect(usageResetText("postsPerDay", new Date("2026-11-11T00:00:00Z"))).toBe(
-      "Starts again at 00:00 UTC on 11 November.",
+      "Starts again at 00:00 UTC on November 11, 2026.",
     );
     expect(usageResetText("xPostsPerMonth", new Date("2027-01-01T00:00:00Z"))).toBe(
       "Starts again on 1 January.",
@@ -282,6 +284,9 @@ describe("limits across workspaces", () => {
     expect(OWNER_DAILY_POST_LIMIT).toBe(15);
     expect(NEW_ACCOUNT_DAILY_POST_LIMIT).toBe(5);
     expect(RETRIES_PER_POST_PER_DAY).toBe(3);
+    // R8-security M1: one hard ceiling over both pools and the guaranteed runs.
+    expect(FREE_RUNS_DAILY_CEILING).toBe(30);
+    expect(FREE_RUNS_DAILY_CEILING).toBeGreaterThan(SERVICE_DAILY_POST_LIMIT + NEW_ACCOUNT_POOL_DAILY_LIMIT);
     expect(WORKSPACES_CREATED_LIMIT).toBe(30);
     expect(WORKSPACES_CREATED_WINDOW_DAYS).toBe(30);
     // One confirmed person cannot take the whole main pool.
@@ -320,6 +325,13 @@ describe("limits across workspaces", () => {
     expect(525 + freeRunsAtCap).toBe(825);
     // About 194 a day left for paying workspaces, the operator and the guaranteed runs past a full pool.
     expect(perDay - (525 + freeRunsAtCap)).toBe(194);
+
+    // R8-security M1: whatever happens below it, free runs never pass the
+    // ceiling, so the worst free day is idle + ceiling x 12 and still leaves
+    // room for paying workspaces and the operator.
+    const worstFreeDay = 525 + FREE_RUNS_DAILY_CEILING * perRun;
+    expect(worstFreeDay).toBe(885);
+    expect(perDay - worstFreeDay).toBe(134);
   });
 
   it("the per-person posts apply with billing off, and with it on to every workspace not on a running plan", () => {
@@ -341,82 +353,111 @@ describe("limits across workspaces", () => {
 
   // R7 review, point 5: the lower number holds the account's first UTC day,
   // and every day until the email is confirmed.
-  it("the lower per-person number: on the day the account was made, or until the email is confirmed", () => {
-    const created = new Date("2026-11-14T20:00:00Z");
+  // R8-new-customer M1: one definition of a new account, for the pools and the
+  // per-person number: the account's creation UTC day, or until its email is confirmed.
+  it("a new account: on the UTC day it was made, or until its email is confirmed", () => {
+    // Registers and confirms at 20:00 UTC on Monday 16 November.
+    const created = new Date("2026-11-16T20:00:00Z");
     const confirmed = { emailVerifiedAt: created, createdAt: created };
-    expect(ownerDailyPostLimit(confirmed, new Date("2026-11-14T23:30:00Z"))).toEqual({ limit: 5, reduced: "first_day" });
-    // Three hours old, but a new UTC day: the full number.
-    expect(ownerDailyPostLimit(confirmed, new Date("2026-11-15T01:00:00Z"))).toEqual({ limit: 15, reduced: null });
-    const unconfirmed = { emailVerifiedAt: null, createdAt: new Date("2026-10-01T00:00:00Z") };
-    expect(ownerDailyPostLimit(unconfirmed, new Date("2026-11-20T09:00:00Z"))).toEqual({ limit: 5, reduced: "unconfirmed" });
-  });
+    const mondayLate = new Date("2026-11-16T23:30:00Z");
+    const tuesdayEarly = new Date("2026-11-17T01:00:00Z");
+    expect(isNewAccount(confirmed, mondayLate)).toBe(true);
+    expect(ownerDailyPostLimit(confirmed, mondayLate)).toEqual({ limit: 5, reduced: "first_day" });
+    // Five hours old, but a new UTC day: the main pool and the full number, both.
+    expect(isNewAccount(confirmed, tuesdayEarly)).toBe(false);
+    expect(ownerDailyPostLimit(confirmed, tuesdayEarly)).toEqual({ limit: 15, reduced: null });
 
-  // The pools still go by age: a new account is under a day old or unconfirmed.
-  it("a new account, for the pools: under a day old or unconfirmed", () => {
-    const now = new Date("2026-11-14T12:00:00Z");
+    // Unconfirmed: 5 and the new pool on every day until it confirms.
+    const unconfirmed = { emailVerifiedAt: null, createdAt: created };
+    expect(ownerDailyPostLimit(unconfirmed, mondayLate)).toEqual({ limit: 5, reduced: "first_day_unconfirmed" });
+    const later = new Date("2026-11-20T09:00:00Z");
+    expect(isNewAccount(unconfirmed, later)).toBe(true);
+    expect(ownerDailyPostLimit(unconfirmed, later)).toEqual({ limit: 5, reduced: "unconfirmed" });
+
     const old = new Date("2026-11-01T00:00:00Z");
-    expect(isNewAccount({ emailVerifiedAt: old, createdAt: old }, now)).toBe(false);
-    expect(isNewAccount({ emailVerifiedAt: null, createdAt: old }, now)).toBe(true);
-    expect(isNewAccount({ emailVerifiedAt: now, createdAt: new Date(now.getTime() - 23 * 3_600_000) }, now)).toBe(true);
-    expect(isNewAccount({ emailVerifiedAt: now, createdAt: new Date(now.getTime() - 24 * 3_600_000) }, now)).toBe(false);
+    expect(isNewAccount({ emailVerifiedAt: old, createdAt: old }, later)).toBe(false);
   });
 
-  it("the per-person daily post sentences", () => {
+  it("the per-person daily post sentences say retries count", () => {
     expect(ownerDailyPostLimitMessage(15, "now")).toBe(
-      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.",
+      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
     );
     expect(ownerDailyPostLimitMessage(15, "schedule")).toBe(
-      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.",
+      "That day already has 15 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.",
     );
     // R7-security L1: a retry is a run like a post.
     expect(ownerDailyPostLimitMessage(15, "retry")).toBe(
       "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.",
-    );
-    // R7 review, point 5: when the lower number ends.
-    expect(ownerDailyPostLimitMessage(5, "now", "first_day")).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 from tomorrow.",
     );
     // Second look, point 1: "you" only for the unconfirmed owner reading it.
     expect(ownerDailyPostLimitMessage(5, "retry", "unconfirmed", { name: "Jane", coOwned: false, isViewer: true })).toBe(
       "This workspace's owner has reached the limit of 5 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day. The limit is 15 once you confirm your email address.",
     );
     expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", { name: "Jane", coOwned: false, isViewer: false })).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once Jane confirms their email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once Jane confirms their email address.",
     );
   });
 
-  // R7 review, point 6: a workspace held to 5 by a new or unconfirmed co-owner names them.
-  it("names the co-owner whose lower number holds the workspace", () => {
+  // R8-new-customer L2: on the first day both conditions, and the UTC time with the viewer's own.
+  it("on the account's first day, says when the full number starts and what it needs", () => {
+    const firstDayEnds = new Date("2026-11-17T00:00:00Z");
+    const you = { name: "Jane", coOwned: false, isViewer: true };
+    expect(
+      ownerDailyPostLimitMessage(5, "now", "first_day", you, { firstDayEnds, timeZone: "America/New_York" }),
+    ).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST).",
+    );
+    expect(
+      ownerDailyPostLimitMessage(5, "now", "first_day_unconfirmed", you, { firstDayEnds, timeZone: "America/New_York" }),
+    ).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 from 00:00 UTC tomorrow (Monday, 7:00 PM EST), once you confirm your email address.",
+    );
+    // No known zone: the UTC time alone.
+    expect(ownerDailyPostLimitMessage(5, "retry", "first_day_unconfirmed", { ...you, isViewer: false }, { firstDayEnds })).toBe(
+      "This workspace's owner has reached the limit of 5 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day. The limit is 15 from 00:00 UTC tomorrow, once Jane confirms their email address.",
+    );
+  });
+
+  // R7 review, point 6, and R8-pages L3: a co-owned workspace names the owner
+  // who holds it whenever the reader is someone else, reduced or not.
+  it("names the co-owner whose number holds the workspace", () => {
     const maria = { name: "Maria", coOwned: true, isViewer: false };
     expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", maria)).toBe(
-      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once Maria confirms their email address.",
+      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once Maria confirms their email address.",
     );
     // Maria herself reads it about herself.
     expect(ownerDailyPostLimitMessage(5, "now", "unconfirmed", { ...maria, isViewer: true })).toBe(
-      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
+      "This workspace's owner has reached the limit of 5 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow. The limit is 15 once you confirm your email address.",
     );
     expect(ownerDailyPostLimitMessage(5, "schedule", "first_day", maria)).toBe(
-      "Maria, an owner of this workspace, already has 5 posts that day across the workspaces they own, which is the daily limit for one person. Pick another day. Their limit is 15 from tomorrow.",
+      "Maria, an owner of this workspace, already has 5 posts that day across the workspaces they own, which is the daily limit for one person (retries count toward it). Pick another day. Their limit is 15 from 00:00 UTC tomorrow.",
     );
     expect(ownerDailyPostLimitMessage(5, "retry", "first_day", maria)).toBe(
-      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day. Their limit is 15 from tomorrow.",
+      "Maria, an owner of this workspace, has reached the limit of 5 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day. Their limit is 15 from 00:00 UTC tomorrow.",
+    );
+    // At the full number too.
+    expect(ownerDailyPostLimitMessage(15, "now", null, maria)).toBe(
+      "Maria, an owner of this workspace, has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
+    );
+    expect(ownerDailyPostLimitMessage(15, "now", null, { ...maria, coOwned: false })).toBe(
+      "This workspace's owner has reached the limit of 15 posts a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.",
     );
   });
 
   // R7-security M1: the small pool's own sentences say who shares it and how to leave it.
   it("the new-account pool's sentences", () => {
-    const leave = "It stops applying once the owner has confirmed their email address and the account is a day old.";
+    const leave = "It stops applying from the day after the account was made (00:00 UTC), once the owner's email address is confirmed.";
     expect(newAccountPoolMessage("now")).toBe(
-      `Vibe Socials has reached today's limit of 5 posts shared by accounts under a day old or with an unconfirmed email address. Schedule this post for another day, or try again tomorrow. ${leave}`,
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address. Schedule this post for another day, or try again tomorrow. ${leave}`,
     );
     expect(newAccountPoolMessage("schedule")).toBe(
-      `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts under a day old or with an unconfirmed email address. Pick another day. ${leave}`,
+      `That day is full: Vibe Socials has reached the limit of 5 posts a day shared by accounts made today (UTC) or with an unconfirmed email address. Pick another day. ${leave}`,
     );
     expect(newAccountPoolMessage("retry")).toBe(
-      `Vibe Socials has reached today's limit of 5 posts shared by accounts under a day old or with an unconfirmed email address, and retries count toward it. Retry tomorrow. ${leave}`,
+      `Vibe Socials has reached today's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address, and retries count toward it. Retry tomorrow. ${leave}`,
     );
     expect(newAccountPoolAtSendMessage()).toBe(
-      `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts under a day old or with an unconfirmed email address when this post was due. Retry it tomorrow, or schedule it again. ${leave}`,
+      `Not sent: Vibe Socials had reached the day's limit of 5 posts shared by accounts made today (UTC) or with an unconfirmed email address when this post was due. Retry it tomorrow, or schedule it again. ${leave}`,
     );
   });
 
@@ -436,10 +477,13 @@ describe("limits across workspaces", () => {
   });
 
   // R7-security L1: retries are counted per post, all platforms together, and Retry all failed is one.
-  it("the retry sentence points to Retry all failed", () => {
-    expect(postRetryLimitMessage(3)).toBe(
+  // R8-publishing L3: only a post with 2 or more failed platforms has the button.
+  it("the retry sentence points to Retry all failed only when the post has 2 or more failed platforms", () => {
+    expect(postRetryLimitMessage(3, 2)).toBe(
       "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.",
     );
+    expect(postRetryLimitMessage(3, 1)).toBe("This post has been retried 3 times today, the most for one day. Try again tomorrow.");
+    expect(postRetryLimitMessage(3, 0)).toBe("This post has been retried 3 times today, the most for one day. Try again tomorrow.");
   });
 
   it("the workspace creation sentence names the day it opens again", () => {

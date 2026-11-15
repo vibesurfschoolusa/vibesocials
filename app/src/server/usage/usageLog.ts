@@ -4,7 +4,9 @@ import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState, 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
+import { notifyOperatorOfFreeRunCeiling, type CeilingOwner } from "@/server/notifications/freeRunCeilingEmail";
 import {
+  FREE_RUNS_DAILY_CEILING,
   GUARANTEED_RUNS_PER_PERSON,
   isNewAccount,
   NEW_ACCOUNT_POOL_DAILY_LIMIT,
@@ -29,6 +31,7 @@ import {
   WORKSPACES_CREATED_WINDOW_DAYS,
   workspaceCreationLimitMessage,
   type CrossWorkspaceLimitMode,
+  type ReducedReason,
 } from "@/lib/usageLimits";
 
 import type { LimitRefusal } from "./workspaceUsage";
@@ -140,7 +143,7 @@ async function ownBillingFields(workspaceId: string): Promise<BillingFields> {
   return (await prisma.workspace.findUnique({ where: { id: workspaceId }, select: BILLING_FIELDS_SELECT })) ?? {};
 }
 
-/** Confirmed and a day old at `at`: draws from the main pool, with its guaranteed share. */
+/** Not a new account at `at` (isNewAccount): draws from the main pool, with its guaranteed share. */
 function established(owner: OwnerRow, at: Date): boolean {
   return !isNewAccount(owner.user, at);
 }
@@ -149,8 +152,8 @@ function established(owner: OwnerRow, at: Date): boolean {
  * R7-security M1: who a run of a workspace at a moment is: its owners then,
  * the pool it draws from, and whose per-person number it counts toward. The
  * operator's workspaces and those the pools leave out (serviceCapApplies)
- * draw from none; one with at least one confirmed, day-old owner from the
- * main pool; any other from the new-account pool.
+ * draw from none; one with at least one established owner from the main
+ * pool; any other from the new-account pool.
  */
 type RunAttribution = { owners: OwnerRow[]; operator: boolean; pool: RunPool; ownerIds: string[] };
 
@@ -499,6 +502,22 @@ async function ownerFreeWorkspaceIds(ownerId: string): Promise<string[]> {
     .map((workspace) => workspace.id);
 }
 
+/**
+ * R8-publishing L1: whether this post's run for the UTC day of `day` is
+ * already recorded: its pair's other half reserved it when the two passed the
+ * check together (a refused unit's runs are taken back). Such a half is not
+ * checked again, so a pair is never split inside one scan. False when it
+ * cannot be read: the check then runs, as before.
+ */
+export async function sendRecorded(postJobId: string, day: Date): Promise<boolean> {
+  try {
+    return (await prisma.usageEvent.count({ where: { kind: USAGE_KIND.send, sourceId: sendSourceId(postJobId, day) } })) > 0;
+  } catch (error) {
+    logger.error("[usage] Couldn't read whether a run is recorded (checking it)", { error, postJobId });
+    return false;
+  }
+}
+
 /** A unit's own runs on `day`, which never count against it (a half its pair reserved). */
 function unitSourceIds(unit: readonly string[], day: Date): string[] {
   return unit.map((id) => sendSourceId(id, day));
@@ -610,14 +629,39 @@ async function poolRunsOnDay(
 }
 
 /**
- * R7-security M1: the one rule for the pools, shared by Post now (the
- * routes), the scanner and a retry: whether `size` runs (both halves of a
- * pair: 2) on the UTC day of `day` would go past this workspace's pool, and
- * which. The new-account pool is its own. The main pool never refuses runs
- * that fit inside the first GUARANTEED_RUNS_PER_PERSON of the day of any of
- * the workspace's confirmed, day-old owners. `unit` are the posts' ids when
+ * R8-security M1: the owners with the most free runs on the UTC day of
+ * `day`, most first, for the operator's email. Read only when it goes.
+ */
+async function topFreeRunOwners(day: Date): Promise<CeilingOwner[]> {
+  const { start, end } = utcDayRange(day);
+  const rows = await prisma.usageEvent.findMany({
+    where: { kind: USAGE_KIND.send, at: { gte: start, lt: end }, pool: { in: [RUN_POOL.main, RUN_POOL.newAccounts] } },
+    select: { ownerIds: true },
+  });
+  const runs = new Map<string, number>();
+  for (const row of rows) for (const id of row.ownerIds ?? []) runs.set(id, (runs.get(id) ?? 0) + 1);
+  if (runs.size === 0) return [];
+  const users = await prisma.user.findMany({ where: { id: { in: [...runs.keys()] } }, select: { id: true, email: true } });
+  return users
+    .map((user) => ({ email: user.email, runs: runs.get(user.id) ?? 0 }))
+    .sort((a, b) => b.runs - a.runs || a.email.localeCompare(b.email))
+    .slice(0, 5);
+}
+
+/**
+ * R7-security M1 and R8-security M1: the one rule for the pools, shared by
+ * Post now (the routes), the scanner and a retry: whether `size` runs (both
+ * halves of a pair: 2) on the UTC day of `day` would go past this
+ * workspace's pool, and which. First the ceiling: every free run of the day,
+ * both pools and the guaranteed runs together, stops at
+ * FREE_RUNS_DAILY_CEILING (the operator is emailed the first time that day).
+ * Below it the new-account pool is its own, and the main pool never refuses
+ * runs that fit inside the first GUARANTEED_RUNS_PER_PERSON of the day of any
+ * of the workspace's established owners. `unit` are the posts' ids when
  * known; their own runs that day are not counted against them, so a half
- * reserved by its pair adds nothing. A day still ahead has no runs.
+ * reserved by its pair adds nothing. `recorded`: runs already written for
+ * this check (create, then check), which are in the counts. A day still ahead
+ * has no runs.
  */
 async function poolRefusal(input: {
   who: RunAttribution;
@@ -625,11 +669,21 @@ async function poolRefusal(input: {
   unit: readonly string[];
   size: number;
   now: Date;
-}): Promise<"main" | "new" | null> {
+  recorded?: number;
+}): Promise<"main" | "new" | "ceiling" | null> {
   const { who, day, unit, size, now } = input;
   // `size` 0 with no unit: the runs were recorded first and are in the counts.
   if (who.pool === RUN_POOL.none) return null;
   const used = await poolRunsOnDay(day, unit, now);
+  const free = used.main + used.newAccounts;
+  if (free + size > FREE_RUNS_DAILY_CEILING) {
+    await notifyOperatorOfFreeRunCeiling({
+      day,
+      runs: free - (input.recorded ?? 0),
+      topOwners: () => topFreeRunOwners(day),
+    });
+    return "ceiling";
+  }
   if (who.pool === RUN_POOL.newAccounts) {
     return used.newAccounts + size > NEW_ACCOUNT_POOL_DAILY_LIMIT ? "new" : null;
   }
@@ -667,6 +721,18 @@ export async function crossWorkspacePostRefusal(
   return refusalFor(await runAttribution(input.workspaceId, now), input, now);
 }
 
+/** The reader's own time zone (User.timeZone), for the first-day sentence; null when unknown or unreadable. */
+async function viewerTimeZone(viewerUserId: string | undefined): Promise<string | null> {
+  if (!viewerUserId) return null;
+  try {
+    return (await prisma.user.findUnique({ where: { id: viewerUserId }, select: { timeZone: true } }))?.timeZone ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const FIRST_DAY_REASONS: readonly ReducedReason[] = ["first_day", "first_day_unconfirmed"];
+
 async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: Date): Promise<LimitRefusal | null> {
   const { day, mode } = input;
   if (who.operator) return null;
@@ -675,18 +741,26 @@ async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: 
 
   if (personalPostLimitApplies(input.workspace)) {
     for (const owner of who.owners) {
-      // R7 review, point 5: the lower number holds the account's first UTC
-      // day, and every day until its email is confirmed.
+      // R8-new-customer M1: the lower number for a new account (isNewAccount),
+      // the same definition the pools use.
       const { limit, reduced } = ownerDailyPostLimit(owner.user, day);
       if ((await ownerCountOnDay(owner.userId, day, unit)) + size > limit) {
-        // Point 6: a co-owner whose lower number holds the workspace is named,
-        // unless they are the one reading it.
+        // In a co-owned workspace the owner holding it is named, unless they
+        // are the one reading it (R8-pages L3).
         const holder = {
           name: owner.user.name?.trim() || owner.user.email,
           coOwned: who.owners.length > 1,
           isViewer: input.viewerUserId === owner.userId,
         };
-        return { error: ownerDailyPostLimitMessage(limit, mode, reduced, holder), code: OWNER_DAILY_POST_LIMIT_CODE };
+        // R8-new-customer L2: on the first day the sentence names when it ends, in UTC and the reader's zone.
+        const time =
+          reduced && FIRST_DAY_REASONS.includes(reduced)
+            ? { firstDayEnds: utcDayRange(owner.user.createdAt).end, timeZone: await viewerTimeZone(input.viewerUserId) }
+            : {};
+        return {
+          error: ownerDailyPostLimitMessage(limit, mode, reduced, holder, time),
+          code: OWNER_DAILY_POST_LIMIT_CODE,
+        };
       }
     }
   }
@@ -696,7 +770,9 @@ async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: 
   const sending = mode === "schedule" ? 1 : size;
   const pool = await poolRefusal({ who, day, unit, size: sending, now });
   if (pool === "new") return { error: newAccountPoolMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
-  if (pool === "main") return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
+  if (pool === "main" || pool === "ceiling") {
+    return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
+  }
   return null;
 }
 
@@ -727,9 +803,10 @@ export async function serviceCapRefusalAtSend(input: {
       unit: input.recorded ? [] : input.postJobIds,
       size: input.recorded ? 0 : input.postJobIds.length,
       now: input.now,
+      recorded: input.recorded ? input.postJobIds.length : 0,
     });
     if (pool === "new") return { errorCode: SERVICE_DAILY_POST_LIMIT_CODE, errorMessage: newAccountPoolAtSendMessage() };
-    if (pool === "main") {
+    if (pool === "main" || pool === "ceiling") {
       return { errorCode: SERVICE_DAILY_POST_LIMIT_CODE, errorMessage: serviceDailyPostLimitAtSendMessage() };
     }
     return null;
@@ -776,6 +853,21 @@ async function retryRunsToday(
 }
 
 /**
+ * R8-publishing L3: the 3-times sentence, pointing to Retry all failed only
+ * when the post has the button (2 or more failed platforms). Read only when
+ * refusing; unreadable counts as none.
+ */
+async function retryLimitRefusal(postJobId: string): Promise<LimitRefusal> {
+  let failed = 0;
+  try {
+    failed = await prisma.postJobResult.count({ where: { postJobId, status: "failed" } });
+  } catch (error) {
+    logger.error("[usage] Couldn't count a post's failed platforms (sentence without Retry all)", { error, postJobId });
+  }
+  return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY, failed), code: POST_RETRY_LIMIT_CODE };
+}
+
+/**
  * R7-security L1: why this retry may not run, or null. A retry request is one
  * run, however many platforms it includes (Retry all failed is one). Each post
  * may have RETRIES_PER_POST_PER_DAY a UTC day, in every workspace but the
@@ -795,7 +887,7 @@ export async function retryRefusal(input: {
     const who = await runAttribution(workspaceId, now);
     if (who.operator) return null;
     if ((await retryRunsToday(workspaceId, postJobId, now)) >= RETRIES_PER_POST_PER_DAY) {
-      return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
+      return await retryLimitRefusal(postJobId);
     }
     return await refusalFor(
       who,
@@ -817,10 +909,13 @@ const RETRY_LOCK_TIMEOUT_MS = 10_000;
  * and the pools). Then, inside one transaction that first takes the post's
  * transaction lock (pg_advisory_xact_lock on its id), the post's retry runs
  * are counted again on that transaction and, when one is still allowed, the
- * run is recorded. A second click on the same post waits for the first's
- * transaction to end, so it sees the true count: with 2 used it gets the 3rd
- * only if the first did not record one, else the 3-times sentence, now true.
- * Everything inside the lock reads through the transaction's own connection.
+ * run is recorded on it. A second click on the same post waits for the
+ * first's transaction to end, so it sees the true count: with 2 used it gets
+ * the 3rd only if the first did not record one, else the 3-times sentence,
+ * now true. The count and the write go through the transaction's own
+ * connection; the run's owners and pool (runRows) and the operator check are
+ * read on the shared client, outside the transaction, so while the lock is
+ * held a retry briefly uses a second connection of the pool.
  * Null: the run is recorded, and the caller takes it back with withdrawRetry
  * if its hand-over then fails. When the lock cannot be had, it records
  * without it (fails open, like every usage check).
@@ -843,17 +938,17 @@ export async function reserveRetry(input: {
     logger.error("[usage] Couldn't read the retry's owners (allowing)", { error, workspaceId });
   }
   const record = { workspaceId, postJobId, requestId: input.requestId, at: now };
-  const limited = { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
+  let limited = false;
   try {
-    return await prisma.$transaction(
+    limited = await prisma.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${postJobId}))`;
         // Only the guard can have changed while this request waited.
         if (!operator && (await retryRunsToday(workspaceId, postJobId, now, tx)) >= RETRIES_PER_POST_PER_DAY) {
-          return limited;
+          return true;
         }
         await recordRetry(record, tx);
-        return null;
+        return false;
       },
       { maxWait: RETRY_LOCK_TIMEOUT_MS, timeout: RETRY_LOCK_TIMEOUT_MS },
     );
@@ -862,7 +957,10 @@ export async function reserveRetry(input: {
     await recordRetry(record);
     return null;
   }
+  // The sentence is read after the lock is let go.
+  return limited ? await retryLimitRefusal(postJobId) : null;
 }
+
 
 type RetryRecordClient = { usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "createMany"> };
 

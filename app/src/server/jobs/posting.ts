@@ -17,7 +17,13 @@ import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import { SERVICE_DAILY_POST_LIMIT_CODE } from "@/lib/usageLimits";
 import { BILLING_FIELDS_SELECT } from "@/lib/billing";
 import { blockedResultFailure, PLAN_ENDED_CODE, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
-import { recordSend, serviceCapRefusalAtSend, withdrawSend, type WrittenSends } from "@/server/usage/usageLog";
+import {
+  recordSend,
+  sendRecorded,
+  serviceCapRefusalAtSend,
+  withdrawSend,
+  type WrittenSends,
+} from "@/server/usage/usageLog";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -1352,7 +1358,11 @@ export async function prepareDeferredPostJobDispatch(
     const partner = options.unitRefusal ? null : await unsentPairHalf(job, connections);
     if (partner) sending = [postJobId, partner];
     let refusal = options.unitRefusal ?? null;
-    if (!refusal) {
+    // R8-publishing L1: a half whose run its other half recorded when the two
+    // passed together is not checked again, so a pair is never split inside
+    // one scan (a refused unit's runs are taken back, so a recorded run passed).
+    const passedWithPartner = !refusal && !partner && (await sendRecorded(postJobId, sendDay));
+    if (!refusal && !passedWithPartner) {
       // R7 review, point 7: create, then check. The runs are recorded first
       // and counted with them, so a Post now at the same moment sees them;
       // past the cap, the ones this call wrote are taken back.

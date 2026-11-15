@@ -1,6 +1,8 @@
 import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/rateLimited";
+import { usableTimeZone } from "@/server/notifications/emailTime";
 
 import { billingEnabled, planState, type BillingFields } from "./billing";
+import { formatDisplayDate } from "./displayDate";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
 import { countWord } from "./plural";
 import { PRODUCT_NAME } from "./siteInfo";
@@ -215,7 +217,9 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
     return "Frees up when media is deleted on the Media page.";
   }
   if (kind === "postsPerDay") {
-    return `Starts again at 00:00 UTC on ${resetsAt.getUTCDate()} ${utcMonthName(resetsAt)}.`;
+    // R8-pages L8: written like Settings' other dates. Noon of that UTC date in
+    // the zone it is rendered in, so the date shown is the UTC date wherever.
+    return `Starts again at 00:00 UTC on ${formatDisplayDate(`${utcDayKey(resetsAt)}T12:00:00`)}.`;
   }
   if (kind === "xPostsPerMonth") {
     return `Starts again on 1 ${utcMonthName(resetsAt)}.`;
@@ -260,41 +264,53 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
  *   operator's own posts and the guaranteed runs below that go past a full
  *   pool (3 x 12 = 36 each). From December (31 days): (525 + 300) x 31 =
  *   25,575, about half the plan.
+ * - The guaranteed runs are bounded by FREE_RUNS_DAILY_CEILING below.
  */
 export const SERVICE_DAILY_POST_LIMIT = 20;
 
 /**
+ * R8-security M1: the one hard ceiling of free runs a UTC day: every run the
+ * pools count (main and new-account, guaranteed runs included), together.
+ * Below it the pools, the per-person numbers and the guaranteed share apply as
+ * they are; at it every free run is refused with the service sentence, and
+ * the operator is emailed once that day. Paying workspaces and the operator's
+ * are never counted or refused. Sized so the worst free day still fits: idle
+ * 525 + 30 x 12 = 885 a day against the ~1,019 left, leaving ~134 a day for
+ * paying workspaces and the operator. It allows the full pools (25) and five
+ * guaranteed runs past them.
+ */
+export const FREE_RUNS_DAILY_CEILING = 30;
+
+/**
  * R7-security M1 (a): the runs a UTC day, across the whole service, of
- * workspaces none of whose owners is a confirmed, day-old account (email not
- * confirmed, or signed up less than NEW_ACCOUNT_HOURS ago). They draw only
- * from this pool and never from the main one, so throwaway registrations can
- * use up only this.
+ * workspaces none of whose owners is an established account (isNewAccount:
+ * email not confirmed, or made that UTC day). They draw only from this pool
+ * and never from the main one, so throwaway registrations can use up only this.
  */
 export const NEW_ACCOUNT_POOL_DAILY_LIMIT = 5;
 
 /**
- * R7-security M1 (b): each confirmed, day-old person's first runs a UTC day
- * are never refused by the main pool (they still count in it), so strangers
- * filling the pool cannot stop a customer's day. Bounded by the number of
- * confirmed, day-old accounts with free workspaces.
+ * R7-security M1 (b): each established person's first runs a UTC day are
+ * never refused by the main pool (they still count in it), so strangers
+ * filling the pool cannot stop a customer's day. Bounded by
+ * FREE_RUNS_DAILY_CEILING (R8-security M1).
  */
 export const GUARANTEED_RUNS_PER_PERSON = 3;
 
 /**
- * The most runs one confirmed, day-old owner's free workspaces take in one
- * UTC day, together, counting the posts still scheduled for later that day:
+ * The most runs one established owner's free workspaces take in one UTC day,
+ * together, counting the posts still scheduled for later that day:
  * with billing off every workspace, with it on every workspace the pools
  * count. Below the main pool, so one person cannot take all of it.
  */
 export const OWNER_DAILY_POST_LIMIT = 15;
 
 /**
- * R6-security M2 and the R7 review: the per-person number on the UTC day an
- * account was made, and on every day until its email address is confirmed.
- * Enough to try the app on the first day.
+ * R6-security M2 and the R7 review: the per-person number of a new account
+ * (isNewAccount: the UTC day it was made, and every day until its email
+ * address is confirmed). Enough to try the app on the first day.
  */
 export const NEW_ACCOUNT_DAILY_POST_LIMIT = 5;
-export const NEW_ACCOUNT_HOURS = 24;
 
 /** R7-security L1: the retry runs one post may have in one UTC day, all its platforms together. */
 export const RETRIES_PER_POST_PER_DAY = 3;
@@ -327,32 +343,30 @@ export function personalPostLimitApplies(
 }
 
 /**
- * R7-security M1: a new account, for the pools: its email address is not
- * confirmed, or it is less than NEW_ACCOUNT_HOURS old at `at`. Such accounts
- * draw from the new-account pool and have no guaranteed share.
+ * R8-new-customer M1: the one definition of a new account, for the pools and
+ * the per-person number alike: on the UTC day it was made, and on every day
+ * until its email address is confirmed. A new account draws from the
+ * new-account pool, has no guaranteed share and the lower per-person number.
  */
 export function isNewAccount(owner: { emailVerifiedAt: Date | null; createdAt: Date }, at: Date): boolean {
-  return !owner.emailVerifiedAt || at.getTime() - owner.createdAt.getTime() < NEW_ACCOUNT_HOURS * 60 * 60 * 1000;
+  return !owner.emailVerifiedAt || utcDayKey(owner.createdAt) === utcDayKey(at);
 }
 
-/** Why an owner has the lower per-person number: the email is unconfirmed, or the day is the account's first. */
-export type ReducedReason = "unconfirmed" | "first_day";
-
 /**
- * One owner's per-person number for the UTC day of `day`, and why it is the
- * lower one when it is (R7 review, point 5): the email is not confirmed, or
- * `day` is the UTC day the account was made.
+ * Why an owner has the lower per-person number: the email is unconfirmed, the
+ * day is the account's first, or both (the first day of an unconfirmed account).
  */
+export type ReducedReason = "unconfirmed" | "first_day" | "first_day_unconfirmed";
+
+/** One owner's per-person number for the UTC day of `day` (isNewAccount), and why it is the lower one. */
 export function ownerDailyPostLimit(
   owner: { emailVerifiedAt: Date | null; createdAt: Date },
   day: Date,
 ): { limit: number; reduced: ReducedReason | null } {
-  const reduced: ReducedReason | null = !owner.emailVerifiedAt
-    ? "unconfirmed"
-    : utcDayKey(owner.createdAt) === utcDayKey(day)
-      ? "first_day"
-      : null;
-  return { limit: reduced ? NEW_ACCOUNT_DAILY_POST_LIMIT : OWNER_DAILY_POST_LIMIT, reduced };
+  if (!isNewAccount(owner, day)) return { limit: OWNER_DAILY_POST_LIMIT, reduced: null };
+  const firstDay = utcDayKey(owner.createdAt) === utcDayKey(day);
+  const reduced: ReducedReason = !firstDay ? "unconfirmed" : owner.emailVerifiedAt ? "first_day" : "first_day_unconfirmed";
+  return { limit: NEW_ACCOUNT_DAILY_POST_LIMIT, reduced };
 }
 
 /**
@@ -362,36 +376,61 @@ export function ownerDailyPostLimit(
  */
 export type LimitHolder = { name: string; coOwned: boolean; isViewer: boolean };
 
-/** When the lower number ends: "you" only to the owner themself, anyone else reads their name. */
-function reducedNote(reduced: ReducedReason, holder: LimitHolder | null, named: boolean): string {
-  if (reduced === "first_day") return `${named ? "Their" : "The"} limit is ${OWNER_DAILY_POST_LIMIT} from tomorrow.`;
-  if (holder?.isViewer) return `The limit is ${OWNER_DAILY_POST_LIMIT} once you confirm your email address.`;
-  return `The limit is ${OWNER_DAILY_POST_LIMIT} once ${holder?.name ?? "the owner"} confirms their email address.`;
+/**
+ * When the first day ends, for the sentence: 00:00 UTC, and the same moment
+ * in the reader's own zone when it is known (R8-new-customer L2).
+ */
+export type ReducedNoteTime = { firstDayEnds?: Date; timeZone?: string | null };
+
+function firstDayEndsText(time: ReducedNoteTime): string {
+  const zone = usableTimeZone(time.timeZone);
+  if (!time.firstDayEnds || !zone) return "from 00:00 UTC tomorrow";
+  const local = time.firstDayEnds.toLocaleString("en-US", {
+    timeZone: zone,
+    weekday: "long",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+  return `from 00:00 UTC tomorrow (${local})`;
+}
+
+/** When the lower number ends, both conditions on the first day: "you" only to the owner themself. */
+function reducedNote(reduced: ReducedReason, holder: LimitHolder | null, named: boolean, time: ReducedNoteTime): string {
+  const confirms = holder?.isViewer
+    ? "you confirm your email address"
+    : `${holder?.name ?? "the owner"} confirms their email address`;
+  const full = `${named ? "Their" : "The"} limit is ${OWNER_DAILY_POST_LIMIT}`;
+  if (reduced === "first_day") return `${full} ${firstDayEndsText(time)}.`;
+  if (reduced === "first_day_unconfirmed") return `${full} ${firstDayEndsText(time)}, once ${confirms}.`;
+  return `The limit is ${OWNER_DAILY_POST_LIMIT} once ${confirms}.`;
 }
 
 /**
  * The per-person sentence (posting now, scheduling by slot day, a retry).
- * R7 review, point 6: a co-owner whose lower number holds the workspace is
- * named, unless they are the one reading it.
+ * Retries count toward the number, so every mode says so (R8-pages L2). In a
+ * co-owned workspace the owner whose number holds it is named, unless they
+ * are the one reading it (R7 review point 6, R8-pages L3).
  */
 export function ownerDailyPostLimitMessage(
   limit: number,
   mode: CrossWorkspaceLimitMode,
   reduced: ReducedReason | null = null,
   holder: LimitHolder | null = null,
+  time: ReducedNoteTime = {},
 ): string {
   const posts = `${limit} ${countWord(limit, "post", "posts")}`;
-  const named = reduced !== null && holder !== null && holder.coOwned && !holder.isViewer;
+  const named = holder !== null && holder.coOwned && !holder.isViewer;
   const who = named ? `${holder.name}, an owner of this workspace,` : "This workspace's owner";
   const sentence =
     mode === "now"
-      ? `${who} has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
+      ? `${who} has reached the limit of ${posts} a day across all the workspaces they own, and retries count toward it. Schedule this post for another day, or try again tomorrow.`
       : mode === "retry"
         ? `${who} has reached the limit of ${posts} a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.`
         : named
-          ? `${who} already has ${posts} that day across the workspaces they own, which is the daily limit for one person. Pick another day.`
-          : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`;
-  return reduced ? `${sentence} ${reducedNote(reduced, holder, named)}` : sentence;
+          ? `${who} already has ${posts} that day across the workspaces they own, which is the daily limit for one person (retries count toward it). Pick another day.`
+          : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person (retries count toward it). Pick another day.`;
+  return reduced ? `${sentence} ${reducedNote(reduced, holder, named, time)}` : sentence;
 }
 
 export function serviceDailyPostLimitMessage(mode: CrossWorkspaceLimitMode): string {
@@ -410,8 +449,8 @@ export function serviceDailyPostLimitAtSendMessage(): string {
 }
 
 const LEAVE_NEW_ACCOUNT_POOL =
-  "It stops applying once the owner has confirmed their email address and the account is a day old.";
-const NEW_ACCOUNT_POOL_WHO = "shared by accounts under a day old or with an unconfirmed email address";
+  "It stops applying from the day after the account was made (00:00 UTC), once the owner's email address is confirmed.";
+const NEW_ACCOUNT_POOL_WHO = "shared by accounts made today (UTC) or with an unconfirmed email address";
 
 /** R7-security M1: the new-account pool, when posting, scheduling or retrying. */
 export function newAccountPoolMessage(mode: CrossWorkspaceLimitMode): string {
@@ -431,10 +470,18 @@ export function newAccountPoolAtSendMessage(): string {
   return `Not sent: ${PRODUCT_NAME} had reached the day's limit of ${posts} ${NEW_ACCOUNT_POOL_WHO} when this post was due. Retry it tomorrow, or schedule it again. ${LEAVE_NEW_ACCOUNT_POOL}`;
 }
 
-/** R7-security L1: the retry runs of one post, pointing to Retry all failed, which is one. */
-export function postRetryLimitMessage(limit: number): string {
-  return `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.`;
+/**
+ * R7-security L1: the retry runs of one post. It points to Retry all failed,
+ * which is one run, only when the post has the button: 2 or more failed
+ * platforms (R8-publishing L3).
+ */
+export function postRetryLimitMessage(limit: number, failedPlatforms: number): string {
+  const sentence = `This post has been retried ${limit} ${countWord(limit, "time", "times")} today, the most for one day. Try again tomorrow.`;
+  return failedPlatforms >= 2
+    ? `${sentence} Retry all failed retries every failed platform of a post at once and counts as one retry.`
+    : sentence;
 }
+
 
 /** `openAt`: when the oldest creation in the window leaves it. */
 export function workspaceCreationLimitMessage(limit: number, openAt: Date): string {
