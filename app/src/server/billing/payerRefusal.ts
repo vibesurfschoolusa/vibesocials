@@ -25,16 +25,24 @@ export function payerLeavingMessage(workspaceName: string, isOwner = true): stri
 }
 
 /**
- * Whether `userId` is the recorded payer of the workspace's plan, with a
- * Stripe customer to manage (review of L2): such a person may open the
+ * Whether `userId` is the recorded payer of a plan that is still running, with
+ * a Stripe customer to manage (reviews of L2): such a person may open the
  * customer portal even when no longer an owner, to cancel or change the card.
+ * Once the subscription has ended there is nothing left to pay, so the payer's
+ * Settings entry and portal access go with it (billingUserId stays, unread).
  */
 export async function isWorkspacePayer(workspaceId: string, userId: string): Promise<boolean> {
   const row = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { billingUserId: true, stripeCustomerId: true },
+    select: { billingUserId: true, stripeCustomerId: true, stripeSubscriptionId: true, planStatus: true },
   });
-  return Boolean(row?.stripeCustomerId) && row?.billingUserId === userId;
+  return (
+    row !== null &&
+    row.billingUserId === userId &&
+    Boolean(row.stripeCustomerId) &&
+    Boolean(row.stripeSubscriptionId) &&
+    isLiveSubscriptionStatus(row.planStatus)
+  );
 }
 
 export type PayerRefusal = { status: 409; error: string };

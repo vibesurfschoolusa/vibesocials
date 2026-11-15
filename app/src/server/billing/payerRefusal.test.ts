@@ -29,21 +29,37 @@ beforeEach(() => {
 });
 
 describe("isWorkspacePayer", () => {
-  it("is true for the person recorded as paying, while the workspace has a Stripe customer", async () => {
-    m.findUnique.mockResolvedValue({ billingUserId: "user-1", stripeCustomerId: "cus_1" });
+  const RUNNING = { billingUserId: "user-1", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1", planStatus: "active" };
+
+  it("is true for the person recorded as paying, while their plan is running", async () => {
+    m.findUnique.mockResolvedValue(RUNNING);
     await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(true);
     expect(m.findUnique).toHaveBeenCalledWith({
       where: { id: "ws_1" },
-      select: { billingUserId: true, stripeCustomerId: true },
+      select: { billingUserId: true, stripeCustomerId: true, stripeSubscriptionId: true, planStatus: true },
     });
+    // Set to end at the period's close still runs (and still charges until then).
+    m.findUnique.mockResolvedValue({ ...RUNNING, planStatus: "past_due" });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(true);
+  });
+
+  // Second review: once the plan has ended there is nothing to pay or cancel,
+  // so neither the "You pay for this workspace's plan" line nor the portal shows.
+  it("is false once the subscription has ended, or when there is none", async () => {
+    m.findUnique.mockResolvedValue({ ...RUNNING, planStatus: "canceled" });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
+    m.findUnique.mockResolvedValue({ ...RUNNING, planStatus: "incomplete_expired" });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
+    m.findUnique.mockResolvedValue({ ...RUNNING, stripeSubscriptionId: null });
+    await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
   });
 
   it("is false for anyone else, with no payer recorded, or with no customer", async () => {
-    m.findUnique.mockResolvedValue({ billingUserId: "user-1", stripeCustomerId: "cus_1" });
+    m.findUnique.mockResolvedValue(RUNNING);
     await expect(isWorkspacePayer("ws_1", "user-2")).resolves.toBe(false);
-    m.findUnique.mockResolvedValue({ billingUserId: null, stripeCustomerId: "cus_1" });
+    m.findUnique.mockResolvedValue({ ...RUNNING, billingUserId: null });
     await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
-    m.findUnique.mockResolvedValue({ billingUserId: "user-1", stripeCustomerId: null });
+    m.findUnique.mockResolvedValue({ ...RUNNING, stripeCustomerId: null });
     await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
     m.findUnique.mockResolvedValue(null);
     await expect(isWorkspacePayer("ws_1", "user-1")).resolves.toBe(false);
