@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { signOut } from "next-auth/react";
 
 import { Alert } from "@/components/ui/alert";
@@ -56,7 +56,10 @@ export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan =
         <h3 className="text-sm font-medium text-foreground">Sign-in email</h3>
         <p className="text-sm text-muted-foreground">{email}</p>
         {hasPassword ? (
-          <ChangeEmailForm email={email} />
+          <>
+            <ChangeEmailForm email={email} />
+            <UndoLinkNotice />
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">{GOOGLE_ONLY_EMAIL}</p>
         )}
@@ -174,6 +177,121 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
         </Button>
       </div>
     </form>
+  );
+}
+
+/** Review 2: until when the previous address can undo the last email change. */
+export function undoLinkSentence(untilIso: string): string {
+  const until = new Date(untilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  return `Your previous address can undo this change until ${until}.`;
+}
+
+/**
+ * After an email change, the old address gets a 7-day undo link
+ * (api/auth/change-email/undo). Someone moving away from a lost or hacked
+ * mailbox turns it off here (api/auth/change-email/undo-link), with their
+ * current password. Shows nothing while no link is live. `initialUntil` and
+ * `startConfirming` set the first state without a fetch (tests).
+ */
+export function UndoLinkNotice({
+  initialUntil,
+  startConfirming = false,
+}: {
+  initialUntil?: string | null;
+  startConfirming?: boolean;
+}) {
+  const [until, setUntil] = useState<string | null>(initialUntil ?? null);
+  const [confirming, setConfirming] = useState(startConfirming);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [turnedOff, setTurnedOff] = useState(false);
+
+  useEffect(() => {
+    if (initialUntil !== undefined) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/change-email/undo-link");
+        const data = (await response.json().catch(() => null)) as { until?: string | null } | null;
+        if (!cancelled && response.ok && typeof data?.until === "string") setUntil(data.until);
+      } catch {
+        // Nothing shown: the link stays as it is, and the email that carries it says how long it works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialUntil]);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/auth/change-email/undo-link", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword }),
+      });
+      if (!response.ok) {
+        setError(await errorFrom(response, "The undo link is still on: we couldn't turn it off. Please try again in a minute."));
+        return;
+      }
+      setTurnedOff(true);
+    } catch {
+      setError("We couldn't reach Vibe Socials, so the undo link is still on. Check your internet connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (turnedOff) {
+    return <Alert variant="success">Turned off. Your previous address can no longer undo the change.</Alert>;
+  }
+  if (!until) return null;
+
+  return (
+    <div className="flex max-w-sm flex-col gap-2">
+      <p className="text-sm text-muted-foreground">{undoLinkSentence(until)}</p>
+      {confirming ? (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            Turn it off if you no longer use that address or someone else can read it.
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="undo-off-password">Current password</Label>
+            <Input
+              id="undo-off-password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </div>
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!currentPassword}>
+              Turn off
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div>
+          <Button size="sm" variant="outline" onClick={() => setConfirming(true)}>
+            Turn this off
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
