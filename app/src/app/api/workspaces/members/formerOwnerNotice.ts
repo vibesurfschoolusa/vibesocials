@@ -59,6 +59,8 @@ export async function noticeOwnersOfFormerOwner(input: {
   workspaceId: string;
   workspaceName: string;
   formerOwnerId: string;
+  /** Given when the person is being deleted, so their row cannot be read. */
+  formerOwnerName?: string;
   at: Date;
 }): Promise<{ clientLinksToReplace: boolean }> {
   const { workspaceId, formerOwnerId } = input;
@@ -77,7 +79,9 @@ export async function noticeOwnersOfFormerOwner(input: {
 
   try {
     const [former, owners] = await Promise.all([
-      prisma.user.findUnique({ where: { id: formerOwnerId }, select: { name: true, email: true } }),
+      input.formerOwnerName
+        ? Promise.resolve({ name: input.formerOwnerName, email: input.formerOwnerName })
+        : prisma.user.findUnique({ where: { id: formerOwnerId }, select: { name: true, email: true } }),
       prisma.workspaceMember.findMany({
         where: { workspaceId, role: "owner", userId: { not: formerOwnerId } },
         select: { user: { select: { id: true, email: true } } },

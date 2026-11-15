@@ -2,10 +2,16 @@
 -- deleting a workspace (src/server/usage/usageLog.ts). Additive: one new table
 -- with no foreign keys, its indexes, and rows for the workspaces created in the
 -- last 30 days, so the per-person creation limit counts them from the start.
--- R5-security L2: one nullable column naming who pays for a workspace's plan.
+-- R5-security L2: one nullable column naming who pays for a workspace's plan,
+-- and two PostJob indexes for the service's daily cap.
 SET lock_timeout = '5s';
 
 ALTER TABLE "Workspace" ADD COLUMN "billingUserId" TEXT;
+
+-- The service's daily post cap counts posts across every workspace by their
+-- day (scheduledFor, else createdAt); no index led with either column.
+CREATE INDEX "PostJob_scheduledFor_idx" ON "PostJob"("scheduledFor");
+CREATE INDEX "PostJob_createdAt_idx" ON "PostJob"("createdAt");
 
 CREATE TABLE "UsageEvent" (
     "id" TEXT NOT NULL,

@@ -33,6 +33,7 @@ const m = vi.hoisted(() => {
     queueDeleteMany: fn(),
     copyUsage: fn(),
     payerRefusal: fn(),
+    notice: fn(),
   };
 });
 
@@ -85,6 +86,8 @@ vi.mock("@/lib/db", () => {
 vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: m.copyUsage }));
 // R5-security L2: the Stripe side is tested in server/billing/payerRefusal.test.ts.
 vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: m.payerRefusal }));
+// R5-security L1 (review): the email itself is tested in formerOwnerNotice.test.ts.
+vi.mock("@/app/api/workspaces/members/formerOwnerNotice", () => ({ noticeOwnersOfFormerOwner: m.notice }));
 
 import { DELETE } from "./route";
 
@@ -128,6 +131,7 @@ beforeEach(() => {
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
   m.payerRefusal.mockResolvedValue(null);
+  m.notice.mockResolvedValue({ clientLinksToReplace: true });
   m.copyUsage.mockImplementation(async (_tx: unknown, input: { workspaceIds: string[]; userId: string }) => {
     m.callLog.push(`copy usage ${JSON.stringify({ workspaceIds: input.workspaceIds, userId: input.userId })}`);
   });
@@ -425,6 +429,19 @@ describe("DELETE /api/auth/account", () => {
       "unqueue q0",
     ]);
     expect(m.del).toHaveBeenCalledWith([FILE("mine")], expect.anything());
+    // Review: the copy knows whether an operator is deleting (their posts count toward no limit).
+    expect(m.copyUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ operator: false }));
+    // R5-security L1 (review): the owners left in a co-owned workspace hear
+    // that the deleted owner had its client links; not for a workspace the
+    // user was only a member of.
+    expect(m.notice).toHaveBeenCalledTimes(1);
+    expect(m.notice).toHaveBeenCalledWith({
+      workspaceId: "ws-co",
+      workspaceName: expect.any(String),
+      formerOwnerId: USER_ID,
+      formerOwnerName: "me@example.com",
+      at: expect.any(Date),
+    });
     expect(m.deliverAccountEmail).toHaveBeenCalledWith(
       "me@example.com",
       expect.objectContaining({ subject: "Your Vibe Socials account was deleted" }),

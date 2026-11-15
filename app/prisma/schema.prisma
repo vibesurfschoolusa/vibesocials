@@ -583,6 +583,11 @@ model PostJob {
   @@index([gaveUpAt])
   // F6: finding the Story job of a feed job (the review link, the Queue, the reports).
   @@index([storyOfPostJobId])
+  // R5-security M1 (review): the service's daily post cap counts posts across
+  // every workspace by their day: scheduledFor, else createdAt. The other
+  // indexes lead with workspaceId or status, so the cross-workspace count needs these.
+  @@index([scheduledFor])
+  @@index([createdAt])
 }
 
 // Several photos in one post (2026-11-10). `PostJob.mediaItemId` stays the first

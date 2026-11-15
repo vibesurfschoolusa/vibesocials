@@ -110,6 +110,19 @@ describe("noticeOwnersOfFormerOwner", () => {
     expect(m.sendEmail).not.toHaveBeenCalled();
   });
 
+  // Account deletion: the person is gone by the time the email is built.
+  it("uses the name it is given without reading the person", async () => {
+    await noticeOwnersOfFormerOwner({
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      formerOwnerId: "user-2",
+      formerOwnerName: "Sam Gone",
+      at: new Date(),
+    });
+    expect(m.userFindUnique).not.toHaveBeenCalled();
+    expect(m.sendEmail.mock.calls[0][0].text).toContain("Sam Gone is no longer an owner of Surf Co.");
+  });
+
   it("uses the email address when the former owner has no name", async () => {
     m.userFindUnique.mockResolvedValue({ name: "  ", email: "sam@example.com" });
     await noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() });

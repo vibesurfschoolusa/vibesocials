@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import {
   ACTIVE_WORKSPACE_COOKIE,
@@ -145,7 +146,7 @@ export async function DELETE(request: Request) {
 
   let queued: QueuedFile[];
   try {
-    queued = await deleteInTransaction(workspaceId, context.user.id);
+    queued = await deleteInTransaction(workspaceId, context.user.id, isOperatorUser(context.user));
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
       const message = cancelled ? `${CANCELLED_WORKSPACE_KEPT_PREFIX} ${error.message}` : error.message;
@@ -173,7 +174,7 @@ export async function DELETE(request: Request) {
   return NextResponse.json({ deleted: true }, { status: 200 });
 }
 
-async function deleteInTransaction(workspaceId: string, userId: string): Promise<QueuedFile[]> {
+async function deleteInTransaction(workspaceId: string, userId: string, operator: boolean): Promise<QueuedFile[]> {
   return prisma.$transaction(
     async (tx) => {
       await lockWorkspaceOwners(tx, workspaceId);
@@ -189,7 +190,7 @@ async function deleteInTransaction(workspaceId: string, userId: string): Promise
 
       const queued = await queueWorkspaceFiles(tx, [workspaceId]);
       // R5-security M1: what still counts toward the limits outlives the rows.
-      await copyUsageBeforeDeletion(tx, { workspaceIds: [workspaceId], userId, now: new Date() });
+      await copyUsageBeforeDeletion(tx, { workspaceIds: [workspaceId], userId, operator, now: new Date() });
       await deleteWorkspaceRows(tx, [workspaceId]);
 
       // getWorkspaceContext would also self-heal a member with no workspace

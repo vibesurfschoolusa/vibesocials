@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { accountDeletionRefusal, blockedMessage, loadAccountDeletion } from "@/server/account/accountDeletion";
 import {
@@ -26,6 +27,7 @@ import {
   cancelSubscriptionsBeforeDelete,
 } from "@/server/billing/cancelOnDelete";
 import { payerRefusal } from "@/server/billing/payerRefusal";
+import { noticeOwnersOfFormerOwner } from "@/app/api/workspaces/members/formerOwnerNotice";
 import { copyUsageBeforeDeletion } from "@/server/usage/usageLog";
 
 // Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
@@ -90,7 +92,7 @@ export async function DELETE(request: Request) {
   }
 
   // Read-only: what the transaction below must confirm under its locks.
-  const { plan } = await loadAccountDeletion(user.id);
+  const { plan, workspaces } = await loadAccountDeletion(user.id);
   if (plan.blocked.length > 0) {
     return NextResponse.json({ error: blockedMessage(plan.blocked) }, { status: 409 });
   }
@@ -113,7 +115,7 @@ export async function DELETE(request: Request) {
 
   let queued: QueuedFile[];
   try {
-    queued = await deleteInTransaction(user.id, plan);
+    queued = await deleteInTransaction(user.id, plan, isOperatorUser(user));
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
       const message = cancelled ? `${CANCELLED_ACCOUNT_KEPT_PREFIX} ${error.message}` : error.message;
@@ -129,6 +131,23 @@ export async function DELETE(request: Request) {
   // Never throws; what it cannot finish stays queued for the hourly drain.
   await deleteQueuedFiles(queued);
 
+  // R5-security L1 (review): in each co-owned workspace that carries on, the
+  // owners left are told the deleted owner had its client links. After the
+  // commit; never throws. The name is passed: the person's row is gone.
+  const survives = new Set(plan.reassign.map((r) => r.workspaceId));
+  const formerOwnerName = user.name?.trim() || user.email;
+  const at = new Date();
+  for (const workspace of workspaces) {
+    if (workspace.role !== "owner" || !survives.has(workspace.workspaceId)) continue;
+    await noticeOwnersOfFormerOwner({
+      workspaceId: workspace.workspaceId,
+      workspaceName: workspace.name,
+      formerOwnerId: user.id,
+      formerOwnerName,
+      at,
+    });
+  }
+
   // Best-effort: deliverAccountEmail logs and returns false on any failure.
   await deliverAccountEmail(user.email, buildAccountDeletedEmail());
 
@@ -140,7 +159,11 @@ export async function DELETE(request: Request) {
  * again from fresh rows, queue the stored files, reassign, delete. Any failed
  * check throws DeletionRefusedError and the transaction rolls back.
  */
-async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): Promise<QueuedFile[]> {
+async function deleteInTransaction(
+  userId: string,
+  plan: AccountDeletionPlan,
+  operator: boolean,
+): Promise<QueuedFile[]> {
   return prisma.$transaction(
     async (tx) => {
       // The same ws-owners lock the leave and demote paths take, on the union
@@ -189,7 +212,7 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
       }
 
       // R5-security M1: what still counts toward the limits outlives the rows.
-      await copyUsageBeforeDeletion(tx, { workspaceIds: plan.deleteWorkspaceIds, userId, now: new Date() });
+      await copyUsageBeforeDeletion(tx, { workspaceIds: plan.deleteWorkspaceIds, userId, operator, now: new Date() });
       await deleteWorkspaceRows(tx, plan.deleteWorkspaceIds);
 
       // Keyed by userId with no foreign key, so nothing cascades them. Both

@@ -41,6 +41,9 @@ vi.mock("@/lib/accountEmails", async (importOriginal) => ({
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 // R5-security M1: copied before the rows go; tested in server/usage/usageLog.test.ts.
+vi.mock("@/app/api/workspaces/members/formerOwnerNotice", () => ({
+  noticeOwnersOfFormerOwner: vi.fn(async () => ({ clientLinksToReplace: false })),
+}));
 vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: vi.fn(async () => null) }));
 vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: vi.fn(async () => undefined) }));
 vi.mock("@/server/billing/cancelOnDelete", async (importOriginal) => ({

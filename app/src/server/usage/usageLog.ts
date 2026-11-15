@@ -1,9 +1,9 @@
 import type { Prisma } from "@prisma/client";
 
-import { billingFieldsSelect, type BillingFields } from "@/lib/billing";
+import { billingEnabled, billingFieldsSelect, PAST_DUE_GRACE_DAYS, planState, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { isOperatorUser } from "@/lib/operator";
+import { isOperatorUser, parseAdminEmails } from "@/lib/operator";
 import {
   OWNER_DAILY_POST_LIMIT,
   OWNER_DAILY_POST_LIMIT_CODE,
@@ -40,6 +40,44 @@ export const USAGE_KIND = {
 } as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the service's daily cap applies to a workspace (review of
+ * R5-security M1): it protects the Inngest budget from free use, so a paying
+ * workspace (billing on, plan active) is bounded by its plan's limits only,
+ * and free accounts filling a day cannot block it. The operator's workspaces
+ * are left out by the caller.
+ */
+function serviceCapApplies(workspace: BillingFields, now: Date): boolean {
+  return !billingEnabled() || planState(workspace, now) !== "active";
+}
+
+/**
+ * planState's "active", as a query: the workspaces that pay for a plan. Kept
+ * in step with src/lib/billing.ts planState (not exempt by flag; a plan that is
+ * active or trialing, or past_due within the grace after its period end).
+ */
+function payingWorkspaceWhere(now: Date): Prisma.WorkspaceWhereInput {
+  return {
+    billingExempt: false,
+    plan: { not: null },
+    OR: [
+      { planStatus: { in: ["active", "trialing"] } },
+      { planStatus: "past_due", currentPeriodEnd: { gt: new Date(now.getTime() - PAST_DUE_GRACE_DAYS * DAY_MS) } },
+    ],
+  };
+}
+
+/** The workspaces the service's cap counts: no verified operator among the owners, and (billing on) not paying. */
+function serviceCapWorkspaceWhere(now: Date): Prisma.WorkspaceWhereInput {
+  const operators = [...parseAdminEmails(process.env.ADMIN_EMAILS)];
+  return {
+    ...(operators.length > 0
+      ? { members: { none: { role: "owner", user: { email: { in: operators }, emailVerifiedAt: { not: null } } } } }
+      : {}),
+    ...(billingEnabled() ? { NOT: payingWorkspaceWhere(now) } : {}),
+  };
+}
 
 /**
  * The posts that count toward the UTC day of `day`: by scheduledFor, else by
@@ -214,22 +252,42 @@ type DeletionCopyClient = XCopyClient & {
  */
 export async function copyUsageBeforeDeletion(
   tx: DeletionCopyClient,
-  input: { workspaceIds: string[]; userId: string; now: Date },
+  // `operator`: the deleting person is an operator, whose posts count toward no limit.
+  input: { workspaceIds: string[]; userId: string; operator: boolean; now: Date },
 ): Promise<void> {
   const { workspaceIds, userId, now } = input;
   if (workspaceIds.length === 0) return;
 
-  const today = postsOnUtcDayWhere(now);
-  const [workspaces, posts] = await Promise.all([
-    tx.workspace.findMany({ where: { id: { in: workspaceIds } }, select: { id: true, ...billingFieldsSelect() } }),
-    tx.postJob.findMany({
-      where: { workspaceId: { in: workspaceIds }, status: { notIn: ["draft", "cancelled", "scheduled"] }, OR: today.OR },
-      select: { id: true, workspaceId: true, scheduledFor: true, createdAt: true },
-    }),
-  ]);
+  if (!input.operator) {
+    await copyPostsBeforeDeletion(tx, workspaceIds, userId, now);
+  }
+  await copyXPosts(tx, workspaceIds, now);
+}
+
+/** Today's posts of the deleted workspaces the service's cap counts (paying ones count toward no free limit). */
+async function copyPostsBeforeDeletion(
+  tx: DeletionCopyClient,
+  workspaceIds: string[],
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const workspaces = await tx.workspace.findMany({
+    where: { id: { in: workspaceIds } },
+    select: { id: true, ...billingFieldsSelect() },
+  });
+  const capped = workspaces.filter((workspace) => serviceCapApplies(workspace, now));
+  if (capped.length === 0) return;
   const personal = new Set(
-    workspaces.filter((workspace) => personalPostLimitApplies(workspace, process.env, now)).map((w) => w.id),
+    capped.filter((workspace) => personalPostLimitApplies(workspace, process.env, now)).map((w) => w.id),
   );
+  const posts = await tx.postJob.findMany({
+    where: {
+      workspaceId: { in: capped.map((workspace) => workspace.id) },
+      status: { notIn: ["draft", "cancelled", "scheduled"] },
+      OR: postsOnUtcDayWhere(now).OR,
+    },
+    select: { id: true, workspaceId: true, scheduledFor: true, createdAt: true },
+  });
   if (posts.length > 0) {
     await tx.usageEvent.createMany({
       data: posts.map((post) => ({
@@ -242,7 +300,6 @@ export async function copyUsageBeforeDeletion(
       skipDuplicates: true,
     });
   }
-  await copyXPosts(tx, workspaceIds, now);
 }
 
 /** Posts on the day in the owner's workspaces that count toward their own total, live and deleted. */
@@ -267,11 +324,11 @@ async function ownerPostsOnDay(
   return live + deleted;
 }
 
-/** Every workspace's posts on the day, live and deleted. */
+/** The posts on the day the service's cap counts, live and deleted (deletion copies only those). */
 async function servicePostsOnDay(day: Date, exclude: string | readonly string[] | undefined): Promise<number> {
   const { start, end } = utcDayRange(day);
   const [live, deleted] = await Promise.all([
-    prisma.postJob.count({ where: postsOnUtcDayWhere(day, exclude) }),
+    prisma.postJob.count({ where: { ...postsOnUtcDayWhere(day, exclude), workspace: serviceCapWorkspaceWhere(new Date()) } }),
     prisma.usageEvent.count({ where: { kind: USAGE_KIND.post, at: { gte: start, lt: end } } }),
   ]);
   return live + deleted;
@@ -309,7 +366,10 @@ export async function crossWorkspacePostRefusal(input: {
     }
   }
 
-  if ((await servicePostsOnDay(day, excludePostJobId)) + alsoOnDay >= SERVICE_DAILY_POST_LIMIT) {
+  if (
+    serviceCapApplies(input.workspace, new Date()) &&
+    (await servicePostsOnDay(day, excludePostJobId)) + alsoOnDay >= SERVICE_DAILY_POST_LIMIT
+  ) {
     return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
   }
   return null;
