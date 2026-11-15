@@ -65,7 +65,8 @@ export function ReviewCard({
           />
         ) : (
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground">
-            {review.reviewer.displayName[0]?.toUpperCase()}
+            {/* Array.from so an emoji or other surrogate pair counts as one character (lib/clientPage.ts). */}
+            {Array.from(review.reviewer.displayName)[0]?.toUpperCase()}
           </div>
         )}
 
