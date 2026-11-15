@@ -40,6 +40,8 @@ vi.mock("@/lib/accountEmails", async (importOriginal) => ({
 }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+// R5-security M1: copied before the rows go; tested in server/usage/usageLog.test.ts.
+vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: vi.fn(async () => undefined) }));
 vi.mock("@/server/billing/cancelOnDelete", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/billing/cancelOnDelete")>()),
   cancelSubscriptionsBeforeDelete: m.cancel,

@@ -877,3 +877,35 @@ model StripeEvent {
   type       String
   receivedAt DateTime @default(now())
 }
+
+// R5-security M1 (2026-11-14): the usage the limits count that must outlive a
+// workspace, so deleting one (and its posts and results, which cascade) or
+// moving an X account to another workspace starts nothing again
+// (src/server/usage/usageLog.ts). Deliberately no foreign keys: a row stays
+// when its workspace, connection or person is deleted. Rows are only inserted:
+// a workspace's creation as it is created; a post that counted toward today,
+// and an X post that published this month, copied from their rows before a
+// deletion can take them (and X posts at each X publish check). `sourceId` is
+// the PostJob or PostJobResult a row was copied from, so each is copied once.
+model UsageEvent {
+  id          String    @id @default(cuid())
+  // "workspace_created" | "post" | "x_post"
+  kind        String
+  // Who it counts against: the person who created the workspace, or the owner
+  // whose per-person daily posts include the post. Null: nobody's own total.
+  userId      String?
+  workspaceId String?
+  platform    Platform?
+  // The connected account's id at the platform (SocialConnection.accountIdentifier).
+  accountId   String?
+  sourceId    String?   @unique
+  // When it counts: the creation, the post's day (scheduledFor, else
+  // createdAt), or when the X post published.
+  at          DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([kind, at])
+  @@index([userId, kind, at])
+  @@index([accountId, kind, at])
+  @@index([workspaceId, kind, at])
+}

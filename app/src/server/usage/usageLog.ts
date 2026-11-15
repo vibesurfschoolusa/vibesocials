@@ -1,0 +1,299 @@
+import type { Prisma } from "@prisma/client";
+
+import { billingFieldsSelect, type BillingFields } from "@/lib/billing";
+import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { isOperatorUser } from "@/lib/operator";
+import {
+  OWNER_DAILY_POST_LIMIT,
+  OWNER_DAILY_POST_LIMIT_CODE,
+  ownerDailyPostLimitMessage,
+  personalPostLimitApplies,
+  SERVICE_DAILY_POST_LIMIT,
+  SERVICE_DAILY_POST_LIMIT_CODE,
+  serviceDailyPostLimitMessage,
+  utcDayRange,
+  utcMonthRange,
+  WORKSPACE_CREATION_LIMIT_CODE,
+  WORKSPACES_CREATED_LIMIT,
+  WORKSPACES_CREATED_WINDOW_DAYS,
+  workspaceCreationLimitMessage,
+  type DailyPostLimitMode,
+} from "@/lib/usageLimits";
+
+import type { LimitRefusal } from "./workspaceUsage";
+
+/**
+ * R5-security M1 (2026-11-14): the limits that must not multiply with
+ * workspaces or start again when one is deleted. A workspace's posts and
+ * results cascade with it, so what still counts is copied into UsageEvent
+ * (no foreign keys) before it can go: inside the deleting transaction, and,
+ * for X posts, at each X publish check, which also keeps an X account's posts
+ * after it is disconnected (its results then lose their connection). Counts
+ * read the live rows and the log together. The numbers and sentences are in
+ * src/lib/usageLimits.ts.
+ */
+
+export const USAGE_KIND = {
+  workspaceCreated: "workspace_created",
+  post: "post",
+  xPost: "x_post",
+} as const;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The posts that count toward the UTC day of `day`: by scheduledFor, else by
+ * createdAt, drafts and cancelled posts left out. `exclude` is the post (or
+ * both halves of a pair) being moved or published, which must not count
+ * against itself. The one rule every daily post count uses.
+ */
+export function postsOnUtcDayWhere(
+  day: Date,
+  exclude?: string | readonly string[],
+): Prisma.PostJobWhereInput {
+  const { start, end } = utcDayRange(day);
+  return {
+    status: { notIn: ["draft", "cancelled"] },
+    ...(typeof exclude === "string" ? { id: { not: exclude } } : {}),
+    ...(Array.isArray(exclude) ? { id: { notIn: [...exclude] } } : {}),
+    OR: [
+      { scheduledFor: { gte: start, lt: end } },
+      { scheduledFor: null, createdAt: { gte: start, lt: end } },
+    ],
+  };
+}
+
+type CreationLogClient = { usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "create"> };
+
+/** In the creating transaction: the workspace counts toward its creator's creations from now on. */
+export async function recordWorkspaceCreated(
+  tx: CreationLogClient,
+  input: { userId: string; workspaceId: string; at: Date },
+): Promise<void> {
+  await tx.usageEvent.create({
+    data: {
+      kind: USAGE_KIND.workspaceCreated,
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      sourceId: `${USAGE_KIND.workspaceCreated}:${input.workspaceId}`,
+      at: input.at,
+    },
+  });
+}
+
+/**
+ * Why `userId` may not create another workspace now, or null. Every creation
+ * in the last WORKSPACES_CREATED_WINDOW_DAYS counts, deleted workspaces too.
+ * Fails open, like the usage checks: a read error logs and allows.
+ */
+export async function workspaceCreationRefusal(userId: string, now: Date): Promise<LimitRefusal | null> {
+  try {
+    const windowMs = WORKSPACES_CREATED_WINDOW_DAYS * DAY_MS;
+    const created = await prisma.usageEvent.findMany({
+      where: { kind: USAGE_KIND.workspaceCreated, userId, at: { gt: new Date(now.getTime() - windowMs) } },
+      select: { at: true },
+      orderBy: { at: "asc" },
+    });
+    if (created.length < WORKSPACES_CREATED_LIMIT) return null;
+    // The next creation is allowed once enough of the oldest have left the window.
+    const openAt = new Date(created[created.length - WORKSPACES_CREATED_LIMIT].at.getTime() + windowMs);
+    return {
+      error: workspaceCreationLimitMessage(WORKSPACES_CREATED_LIMIT, openAt),
+      code: WORKSPACE_CREATION_LIMIT_CODE,
+    };
+  } catch (error) {
+    logger.error("[usage] Workspace creation limit check failed; allowing", { error, userId });
+    return null;
+  }
+}
+
+type XCopyClient = {
+  postJobResult: Pick<Prisma.TransactionClient["postJobResult"], "findMany">;
+  usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "createMany">;
+};
+
+/**
+ * Copies these workspaces' X posts that published this UTC month into the
+ * log, each once (by result id), with the X account that published it when its
+ * connection is still there.
+ */
+async function copyXPosts(db: XCopyClient, workspaceIds: string[], now: Date): Promise<void> {
+  const results = await db.postJobResult.findMany({
+    where: {
+      postJob: { workspaceId: { in: workspaceIds } },
+      platform: "x",
+      status: "success",
+      updatedAt: { gte: utcMonthRange(now).start },
+    },
+    select: {
+      id: true,
+      updatedAt: true,
+      postJob: { select: { workspaceId: true, userId: true } },
+      socialConnection: { select: { accountIdentifier: true } },
+    },
+  });
+  if (results.length === 0) return;
+  await db.usageEvent.createMany({
+    data: results.map((result) => ({
+      kind: USAGE_KIND.xPost,
+      userId: result.postJob.userId,
+      workspaceId: result.postJob.workspaceId,
+      platform: "x" as const,
+      accountId: result.socialConnection?.accountIdentifier ?? null,
+      sourceId: result.id,
+      at: result.updatedAt,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+/**
+ * X posts this UTC month for the workspace's X account: every post that X
+ * account published from any workspace (logged, or live on its connection),
+ * and every X post of this workspace, each counted once. `copyToLog` (the
+ * publish check) first copies this workspace's X posts into the log, so they
+ * still count after a disconnect or a deletion; Settings only reads.
+ */
+export async function xPostsThisMonth(
+  workspaceId: string,
+  now: Date,
+  opts: { copyToLog: boolean },
+): Promise<number> {
+  const connection = await prisma.socialConnection.findUnique({
+    where: { workspaceId_platform: { workspaceId, platform: "x" } },
+    select: { accountIdentifier: true },
+  });
+  const accountId = connection?.accountIdentifier || null;
+  if (opts.copyToLog) await copyXPosts(prisma, [workspaceId], now);
+
+  const start = utcMonthRange(now).start;
+  const rows = await prisma.$queryRaw<{ count: bigint | number }[]>`
+    SELECT COUNT(*) AS "count" FROM (
+      SELECT "sourceId" AS "id" FROM "UsageEvent"
+      WHERE "kind" = 'x_post' AND "at" >= ${start}
+        AND ("workspaceId" = ${workspaceId} OR "accountId" = ${accountId})
+      UNION
+      SELECT r."id" FROM "PostJobResult" r
+      LEFT JOIN "SocialConnection" c ON c."id" = r."socialConnectionId"
+      WHERE r."platform" = 'x' AND r."status" = 'success' AND r."updatedAt" >= ${start}
+        AND (r."workspaceId" = ${workspaceId} OR c."accountIdentifier" = ${accountId})
+    ) AS "posts"`;
+  return Number(rows[0]?.count ?? 0);
+}
+
+type DeletionCopyClient = XCopyClient & {
+  postJob: Pick<Prisma.TransactionClient["postJob"], "findMany">;
+  workspace: Pick<Prisma.TransactionClient["workspace"], "findMany">;
+  usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "createMany">;
+};
+
+/**
+ * Inside the deleting transaction, before the rows go: copies what still
+ * counts into the log. Today's posts that went out (or tried to) count for the
+ * service's cap, and toward `userId`'s own total when that applied to their
+ * workspace; this month's X posts count for their X account. Scheduled posts
+ * are left out: deleted with the workspace, they never publish.
+ */
+export async function copyUsageBeforeDeletion(
+  tx: DeletionCopyClient,
+  input: { workspaceIds: string[]; userId: string; now: Date },
+): Promise<void> {
+  const { workspaceIds, userId, now } = input;
+  if (workspaceIds.length === 0) return;
+
+  const today = postsOnUtcDayWhere(now);
+  const [workspaces, posts] = await Promise.all([
+    tx.workspace.findMany({ where: { id: { in: workspaceIds } }, select: { id: true, ...billingFieldsSelect() } }),
+    tx.postJob.findMany({
+      where: { workspaceId: { in: workspaceIds }, status: { notIn: ["draft", "cancelled", "scheduled"] }, OR: today.OR },
+      select: { id: true, workspaceId: true, scheduledFor: true, createdAt: true },
+    }),
+  ]);
+  const personal = new Set(
+    workspaces.filter((workspace) => personalPostLimitApplies(workspace, process.env, now)).map((w) => w.id),
+  );
+  if (posts.length > 0) {
+    await tx.usageEvent.createMany({
+      data: posts.map((post) => ({
+        kind: USAGE_KIND.post,
+        userId: personal.has(post.workspaceId) ? userId : null,
+        workspaceId: post.workspaceId,
+        sourceId: post.id,
+        at: post.scheduledFor ?? post.createdAt,
+      })),
+      skipDuplicates: true,
+    });
+  }
+  await copyXPosts(tx, workspaceIds, now);
+}
+
+/** Posts on the day in the owner's workspaces that count toward their own total, live and deleted. */
+async function ownerPostsOnDay(
+  ownerId: string,
+  day: Date,
+  exclude: string | readonly string[] | undefined,
+): Promise<number> {
+  const owned = await prisma.workspaceMember.findMany({
+    where: { userId: ownerId, role: "owner" },
+    select: { workspace: { select: { id: true, ...billingFieldsSelect() } } },
+  });
+  const ids = owned
+    .map((membership) => membership.workspace)
+    .filter((workspace: BillingFields & { id: string }) => personalPostLimitApplies(workspace))
+    .map((workspace) => workspace.id);
+  const { start, end } = utcDayRange(day);
+  const [live, deleted] = await Promise.all([
+    ids.length > 0 ? prisma.postJob.count({ where: { workspaceId: { in: ids }, ...postsOnUtcDayWhere(day, exclude) } }) : 0,
+    prisma.usageEvent.count({ where: { kind: USAGE_KIND.post, userId: ownerId, at: { gte: start, lt: end } } }),
+  ]);
+  return live + deleted;
+}
+
+/** Every workspace's posts on the day, live and deleted. */
+async function servicePostsOnDay(day: Date, exclude: string | readonly string[] | undefined): Promise<number> {
+  const { start, end } = utcDayRange(day);
+  const [live, deleted] = await Promise.all([
+    prisma.postJob.count({ where: postsOnUtcDayWhere(day, exclude) }),
+    prisma.usageEvent.count({ where: { kind: USAGE_KIND.post, at: { gte: start, lt: end } } }),
+  ]);
+  return live + deleted;
+}
+
+/**
+ * The daily post limits across workspaces, for a post committed to the UTC day
+ * of `day` in `workspaceId` (whose billing columns are `workspace`): each
+ * owner's own total while billing is off or the workspace is on its trial, then
+ * the service's cap. A workspace any operator owns is never refused here.
+ * Throws on a database error; checkDailyPostLimit fails open around it.
+ */
+export async function crossWorkspacePostRefusal(input: {
+  workspaceId: string;
+  workspace: BillingFields;
+  day: Date;
+  mode: DailyPostLimitMode;
+  excludePostJobId?: string | readonly string[];
+  alsoOnDay?: number;
+}): Promise<LimitRefusal | null> {
+  const { workspaceId, day, mode, excludePostJobId } = input;
+  const alsoOnDay = input.alsoOnDay ?? 0;
+
+  const owners = await prisma.workspaceMember.findMany({
+    where: { workspaceId, role: "owner" },
+    select: { userId: true, user: { select: { email: true, emailVerifiedAt: true } } },
+  });
+  if (owners.some((owner) => isOperatorUser(owner.user))) return null;
+
+  if (personalPostLimitApplies(input.workspace)) {
+    for (const owner of owners) {
+      if ((await ownerPostsOnDay(owner.userId, day, excludePostJobId)) + alsoOnDay >= OWNER_DAILY_POST_LIMIT) {
+        return { error: ownerDailyPostLimitMessage(OWNER_DAILY_POST_LIMIT, mode), code: OWNER_DAILY_POST_LIMIT_CODE };
+      }
+    }
+  }
+
+  if ((await servicePostsOnDay(day, excludePostJobId)) + alsoOnDay >= SERVICE_DAILY_POST_LIMIT) {
+    return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
+  }
+  return null;
+}

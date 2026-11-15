@@ -31,6 +31,7 @@ const m = vi.hoisted(() => {
     userDelete: fn(),
     queueCreate: fn(),
     queueDeleteMany: fn(),
+    copyUsage: fn(),
   };
 });
 
@@ -79,6 +80,9 @@ vi.mock("@/lib/db", () => {
   return { prisma };
 });
 
+// R5-security M1: the copy itself is tested in server/usage/usageLog.test.ts.
+vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: m.copyUsage }));
+
 import { DELETE } from "./route";
 
 const USER_ID = "user-1";
@@ -120,6 +124,9 @@ beforeEach(() => {
   }
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
+  m.copyUsage.mockImplementation(async (_tx: unknown, input: { workspaceIds: string[]; userId: string }) => {
+    m.callLog.push(`copy usage ${JSON.stringify({ workspaceIds: input.workspaceIds, userId: input.userId })}`);
+  });
   memberships = [{ role: "owner", workspace: { id: "ws-personal", name: "Personal", members: [] } }];
   media = [];
   freshMemberships = null;
@@ -374,6 +381,8 @@ describe("DELETE /api/auth/account", () => {
       reassign("mediaItem", "ws-joined", "u-boss"),
       reassign("postJob", "ws-joined", "u-boss"),
       reassign("postMetric", "ws-joined", "u-boss"),
+      // R5-security M1: in the same transaction, before the rows go.
+      `copy usage ${JSON.stringify({ workspaceIds: ["ws-personal"], userId: USER_ID })}`,
       `delete workspaces ${JSON.stringify({ where: { id: { in: ["ws-personal"] } } })}`,
       `delete pendingConnection ${JSON.stringify({ where: { userId: USER_ID } })}`,
       `delete oAuthHandshake ${JSON.stringify({ where: { userId: USER_ID } })}`,

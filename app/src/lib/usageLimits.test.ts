@@ -4,7 +4,15 @@ import {
   DEFAULT_WORKSPACE_LIMITS,
   dailyPostLimitMessage,
   formatStorageGb,
+  OWNER_DAILY_POST_LIMIT,
+  ownerDailyPostLimitMessage,
   pacificDayRange,
+  personalPostLimitApplies,
+  SERVICE_DAILY_POST_LIMIT,
+  serviceDailyPostLimitMessage,
+  WORKSPACES_CREATED_LIMIT,
+  WORKSPACES_CREATED_WINDOW_DAYS,
+  workspaceCreationLimitMessage,
   resolveWorkspaceLimits,
   storageFullMessage,
   usageResetText,
@@ -168,19 +176,19 @@ describe("sentences", () => {
 
   it("X monthly limit names this month and the next", () => {
     expect(xMonthlyLimitMessage(30, new Date("2026-11-10T12:00:00Z"))).toBe(
-      "This workspace has used its 30 X posts for November. X posts start again on 1 December.",
+      "This X account has used its 30 X posts for November, counted across every workspace it posts from. X posts start again on 1 December.",
     );
   });
 
   it("X monthly limit in December names January", () => {
     expect(xMonthlyLimitMessage(30, new Date("2026-12-31T23:59:59Z"))).toBe(
-      "This workspace has used its 30 X posts for December. X posts start again on 1 January.",
+      "This X account has used its 30 X posts for December, counted across every workspace it posts from. X posts start again on 1 January.",
     );
   });
 
   it("X monthly limit uses the UTC month, not the local one", () => {
     expect(xMonthlyLimitMessage(5, new Date("2026-12-01T00:00:00Z"))).toBe(
-      "This workspace has used its 5 X posts for December. X posts start again on 1 January.",
+      "This X account has used its 5 X posts for December, counted across every workspace it posts from. X posts start again on 1 January.",
     );
   });
 
@@ -239,7 +247,7 @@ describe("limit messages agree with their number", () => {
     [10, "X posts"],
   ])("X posts: %i %s", (n, words) => {
     expect(xMonthlyLimitMessage(n, new Date("2026-11-10T12:00:00Z"))).toBe(
-      `This workspace has used its ${n} ${words} for November. X posts start again on 1 December.`,
+      `This X account has used its ${n} ${words} for November, counted across every workspace it posts from. X posts start again on 1 December.`,
     );
   });
 
@@ -250,6 +258,62 @@ describe("limit messages agree with their number", () => {
   ])("YouTube uploads: %i %s", (n, words) => {
     expect(youtubeWorkspaceDailyLimitMessage(n)).toBe(
       `This workspace has reached its limit of ${n} ${words} for today. Retry this upload tomorrow.`,
+    );
+  });
+});
+
+// R5-security M1: the limits that do not multiply with workspaces.
+describe("limits across workspaces", () => {
+  it("holds the numbers, sized so the owner's own agency use fits", () => {
+    expect(SERVICE_DAILY_POST_LIMIT).toBe(80);
+    expect(OWNER_DAILY_POST_LIMIT).toBe(60);
+    expect(WORKSPACES_CREATED_LIMIT).toBe(30);
+    expect(WORKSPACES_CREATED_WINDOW_DAYS).toBe(30);
+    // Several client workspaces at a few posts a day each (8 x 4) fits.
+    expect(8 * 4).toBeLessThan(OWNER_DAILY_POST_LIMIT);
+    expect(OWNER_DAILY_POST_LIMIT).toBeLessThan(SERVICE_DAILY_POST_LIMIT);
+  });
+
+  it("keeps a month at the service cap inside the 50,000 Inngest executions", () => {
+    const idlePerDay = 500;
+    // About 6 per post plus 1 per platform; even every post at 6 platforms.
+    const perPost = 6 + 6;
+    expect((SERVICE_DAILY_POST_LIMIT * perPost + idlePerDay) * 31).toBeLessThan(50_000);
+  });
+
+  it("the per-person posts apply with billing off, and with it on only during a trial", () => {
+    const now = new Date("2026-11-14T12:00:00Z");
+    const off = {};
+    const on = { BILLING_ENABLED: "true" };
+    const trial = { billingExempt: false, trialEndsAt: new Date("2026-11-20T00:00:00Z") };
+    const paid = { billingExempt: false, plan: "starter", planStatus: "active", currentPeriodEnd: new Date("2026-12-14T00:00:00Z") };
+    expect(personalPostLimitApplies(paid, off, now)).toBe(true);
+    expect(personalPostLimitApplies(trial, on, now)).toBe(true);
+    expect(personalPostLimitApplies(paid, on, now)).toBe(false);
+    expect(personalPostLimitApplies({ billingExempt: true }, on, now)).toBe(false);
+  });
+
+  it("the per-person daily post sentences", () => {
+    expect(ownerDailyPostLimitMessage(60, "now")).toBe(
+      "This workspace's owner has reached the limit of 60 posts a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.",
+    );
+    expect(ownerDailyPostLimitMessage(60, "schedule")).toBe(
+      "That day already has 60 posts across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.",
+    );
+  });
+
+  it("the service's daily post sentences say the service's limit was reached", () => {
+    expect(serviceDailyPostLimitMessage("now")).toBe(
+      "Vibe Socials has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.",
+    );
+    expect(serviceDailyPostLimitMessage("schedule")).toBe(
+      "That day is full: Vibe Socials has reached its daily limit of posts for the whole service. Pick another day.",
+    );
+  });
+
+  it("the workspace creation sentence names the day it opens again", () => {
+    expect(workspaceCreationLimitMessage(30, new Date("2026-12-03T09:00:00Z"))).toBe(
+      "You have created 30 workspaces in the last 30 days, the most allowed. Deleted workspaces count too. You can create another from 3 December 2026.",
     );
   });
 });

@@ -25,6 +25,7 @@ import {
   CANCELLED_ACCOUNT_KEPT_PREFIX,
   cancelSubscriptionsBeforeDelete,
 } from "@/server/billing/cancelOnDelete";
+import { copyUsageBeforeDeletion } from "@/server/usage/usageLog";
 
 // Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
 // most 20 s of file deletion.
@@ -179,6 +180,8 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
         await tx.postMetric.updateMany(args);
       }
 
+      // R5-security M1: what still counts toward the limits outlives the rows.
+      await copyUsageBeforeDeletion(tx, { workspaceIds: plan.deleteWorkspaceIds, userId, now: new Date() });
       await deleteWorkspaceRows(tx, plan.deleteWorkspaceIds);
 
       // Keyed by userId with no foreign key, so nothing cascades them. Both

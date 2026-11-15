@@ -36,6 +36,8 @@ vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: async () => ({ allowed: true
 vi.mock("next/headers", () => ({ cookies: async () => ({ set: vi.fn() }) }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+// R5-security M1: copied before the rows go; tested in server/usage/usageLog.test.ts.
+vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: vi.fn(async () => undefined) }));
 vi.mock("@/server/billing/cancelOnDelete", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/billing/cancelOnDelete")>()),
   cancelSubscriptionsBeforeDelete: m.cancel,

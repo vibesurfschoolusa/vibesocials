@@ -3,6 +3,7 @@ import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/
 import { billingEnabled, planState, type BillingFields } from "./billing";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
 import { countWord } from "./plural";
+import { PRODUCT_NAME } from "./siteInfo";
 
 /**
  * Per-workspace usage limits (2026-11-10). Pure: no database. The numbers, the
@@ -194,7 +195,7 @@ export function dailyPostLimitMessage(limit: number, mode: DailyPostLimitMode): 
 
 export function xMonthlyLimitMessage(limit: number, now: Date): string {
   const next = utcMonthRange(now).end;
-  return `This workspace has used its ${limit} ${countWord(limit, "X post", "X posts")} for ${utcMonthName(now)}. X posts start again on 1 ${utcMonthName(next)}.`;
+  return `This X account has used its ${limit} ${countWord(limit, "X post", "X posts")} for ${utcMonthName(now)}, counted across every workspace it posts from. X posts start again on 1 ${utcMonthName(next)}.`;
 }
 
 export function youtubeWorkspaceDailyLimitMessage(limit: number): string {
@@ -220,4 +221,67 @@ export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): str
     return `Starts again on 1 ${utcMonthName(resetsAt)}.`;
   }
   return "Starts again at midnight Pacific time.";
+}
+
+/*
+ * R5-security M1 (2026-11-14): limits that do not multiply with workspaces.
+ * The per-workspace limits above stay; these count across workspaces and
+ * survive a workspace's deletion (src/server/usage/usageLog.ts).
+ */
+
+/**
+ * The most posts the whole service takes for one UTC day, so a month at the cap
+ * stays inside the Inngest plan's 50,000 executions. Idle work (scanners,
+ * sweeps, syncs) runs about 500 executions a day: 15,500 in a 31-day month. A
+ * post costs about 6 executions plus 1 per platform, so about 10 for a post to
+ * 4 platforms; an Instagram Reel adds about 10 more. 80 posts a day at 10 is
+ * 800, plus 500 idle, 1,300 a day: 40,300 in a 31-day month, which leaves about
+ * 9,700 (19%) for Reels, retries and posts to more platforms. Even with every
+ * post at 6 platforms (12 each) the month is 45,260. The operator's own posts
+ * count toward it but are never refused by it.
+ */
+export const SERVICE_DAILY_POST_LIMIT = 80;
+
+/**
+ * The most posts one owner's workspaces take for one UTC day, together, while
+ * billing is off or the workspace is on its free trial (a paying workspace has
+ * its plan's own limit). Sized for an agency like the operator's own: several
+ * client workspaces at a few posts a day each (8 workspaces x 4 posts = 32)
+ * fits with room. Below the service cap, so one person cannot take all of it.
+ */
+export const OWNER_DAILY_POST_LIMIT = 60;
+
+/** Workspaces one person may create in WORKSPACES_CREATED_WINDOW_DAYS, deleted ones included. */
+export const WORKSPACES_CREATED_LIMIT = 30;
+export const WORKSPACES_CREATED_WINDOW_DAYS = 30;
+
+export const OWNER_DAILY_POST_LIMIT_CODE = "OWNER_DAILY_POST_LIMIT";
+export const SERVICE_DAILY_POST_LIMIT_CODE = "SERVICE_DAILY_POST_LIMIT";
+export const WORKSPACE_CREATION_LIMIT_CODE = "WORKSPACE_CREATION_LIMIT";
+
+/** Whether a workspace's posts count toward its owners' per-person daily total. */
+export function personalPostLimitApplies(
+  workspace: BillingFields,
+  env: Record<string, string | undefined> = process.env,
+  now: Date = new Date(),
+): boolean {
+  return !billingEnabled(env) || planState(workspace, now) === "trial";
+}
+
+export function ownerDailyPostLimitMessage(limit: number, mode: DailyPostLimitMode): string {
+  const posts = `${limit} ${countWord(limit, "post", "posts")}`;
+  return mode === "now"
+    ? `This workspace's owner has reached the limit of ${posts} a day across all the workspaces they own. Schedule this post for another day, or try again tomorrow.`
+    : `That day already has ${posts} across all the workspaces this workspace's owner owns, which is the daily limit for one person. Pick another day.`;
+}
+
+export function serviceDailyPostLimitMessage(mode: DailyPostLimitMode): string {
+  return mode === "now"
+    ? `${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Schedule this post for another day, or try again tomorrow.`
+    : `That day is full: ${PRODUCT_NAME} has reached its daily limit of posts for the whole service. Pick another day.`;
+}
+
+/** `openAt`: when the oldest creation in the window leaves it. */
+export function workspaceCreationLimitMessage(limit: number, openAt: Date): string {
+  return `You have created ${limit} ${countWord(limit, "workspace", "workspaces")} in the last ${WORKSPACES_CREATED_WINDOW_DAYS} days, the most allowed. Deleted workspaces count too. You can create another from ${utcDateLabel(openAt)}.`;
 }

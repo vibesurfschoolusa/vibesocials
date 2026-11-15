@@ -1,5 +1,5 @@
 import { planSectionActions } from "@/components/planSectionView";
-import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect } from "@/lib/billing";
+import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
@@ -25,6 +25,8 @@ import {
 import { pacificDayKey } from "@/server/platforms/rateLimited";
 import { buildLimitReachedEmail } from "@/server/notifications/limitReachedEmail";
 import { sendEmail } from "@/server/notifications/email";
+
+import { crossWorkspacePostRefusal, postsOnUtcDayWhere, xPostsThisMonth } from "./usageLog";
 
 /**
  * Per-workspace usage limits (2026-11-10): the counts behind them, one check per
@@ -60,7 +62,9 @@ export type WorkspaceUsage = {
   storage: UsageMeter;
 };
 
-async function loadWorkspace(workspaceId: string): Promise<{ name: string; limits: WorkspaceLimits }> {
+async function loadWorkspace(
+  workspaceId: string,
+): Promise<{ name: string; limits: WorkspaceLimits; billing: BillingFields }> {
   const row = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     select: {
@@ -73,7 +77,7 @@ async function loadWorkspace(workspaceId: string): Promise<{ name: string; limit
       ...billingFieldsSelect(),
     },
   });
-  return { name: row?.name ?? "Your workspace", limits: resolveWorkspaceLimits(row ?? {}) };
+  return { name: row?.name ?? "Your workspace", limits: resolveWorkspaceLimits(row ?? {}), billing: row ?? {} };
 }
 
 export async function getWorkspaceLimits(workspaceId: string): Promise<WorkspaceLimits> {
@@ -86,30 +90,7 @@ function countPostsOnUtcDay(
   day: Date,
   excludePostJobId?: string | readonly string[],
 ): Promise<number> {
-  const { start, end } = utcDayRange(day);
-  return prisma.postJob.count({
-    where: {
-      workspaceId,
-      status: { notIn: ["draft", "cancelled"] },
-      ...(typeof excludePostJobId === "string" ? { id: { not: excludePostJobId } } : {}),
-      ...(Array.isArray(excludePostJobId) ? { id: { notIn: [...excludePostJobId] } } : {}),
-      OR: [
-        { scheduledFor: { gte: start, lt: end } },
-        { scheduledFor: null, createdAt: { gte: start, lt: end } },
-      ],
-    },
-  });
-}
-
-function countXPostsThisMonth(workspaceId: string, now: Date): Promise<number> {
-  return prisma.postJobResult.count({
-    where: {
-      workspaceId,
-      platform: "x",
-      status: "success",
-      updatedAt: { gte: utcMonthRange(now).start },
-    },
-  });
+  return prisma.postJob.count({ where: { workspaceId, ...postsOnUtcDayWhere(day, excludePostJobId) } });
 }
 
 function countYoutubeUploadsToday(workspaceId: string, now: Date): Promise<number> {
@@ -261,9 +242,21 @@ export async function checkDailyPostLimit(args: {
 }): Promise<LimitRefusal | null> {
   const { workspaceId, day, mode, excludePostJobId } = args;
   try {
-    const { name, limits } = await loadWorkspace(workspaceId);
+    const { name, limits, billing } = await loadWorkspace(workspaceId);
     const used = (await countPostsOnUtcDay(workspaceId, day, excludePostJobId)) + (args.alsoOnDay ?? 0);
-    if (used < limits.postsPerDay) return null;
+    // R5-security M1: then the limits a person cannot multiply by making
+    // workspaces: their own total, and the service's cap. No email: the
+    // refusal says what to do.
+    if (used < limits.postsPerDay) {
+      return await crossWorkspacePostRefusal({
+        workspaceId,
+        workspace: billing,
+        day,
+        mode,
+        excludePostJobId,
+        alsoOnDay: args.alsoOnDay,
+      });
+    }
 
     const { end } = utcDayRange(day);
     await notifyOwnersOfLimitReached({
@@ -283,14 +276,17 @@ export async function checkDailyPostLimit(args: {
   }
 }
 
-/** Refuse an X publish once the workspace's X posts this UTC month reach its limit. */
+/**
+ * Refuse an X publish once the X posts this UTC month reach the workspace's
+ * limit, counted for its X account across every workspace (R5-security M1).
+ */
 export async function checkXMonthlyLimit(
   workspaceId: string,
   now: Date = new Date(),
 ): Promise<ResultLimitRefusal | null> {
   try {
     const { name, limits } = await loadWorkspace(workspaceId);
-    const used = await countXPostsThisMonth(workspaceId, now);
+    const used = await xPostsThisMonth(workspaceId, now, { copyToLog: true });
     if (used < limits.xPostsPerMonth) return null;
 
     const { end } = utcMonthRange(now);
@@ -380,7 +376,7 @@ export async function getWorkspaceUsage(workspaceId: string, now: Date): Promise
   const [limits, postsToday, xPosts, youtubeUploads, storage] = await Promise.all([
     getWorkspaceLimits(workspaceId),
     countPostsOnUtcDay(workspaceId, now),
-    countXPostsThisMonth(workspaceId, now),
+    xPostsThisMonth(workspaceId, now, { copyToLog: false }),
     countYoutubeUploadsToday(workspaceId, now),
     storageBytesUsed(workspaceId),
   ]);

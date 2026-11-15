@@ -26,6 +26,7 @@ import {
   CANCELLED_WORKSPACE_KEPT_PREFIX,
   cancelSubscriptionsBeforeDelete,
 } from "@/server/billing/cancelOnDelete";
+import { copyUsageBeforeDeletion } from "@/server/usage/usageLog";
 
 // The transaction is capped at 15 s and the file deletion after it at 20 s
 // (AFTER_COMMIT_BUDGET_MS), so this leaves room for both.
@@ -187,6 +188,8 @@ async function deleteInTransaction(workspaceId: string, userId: string): Promise
       });
 
       const queued = await queueWorkspaceFiles(tx, [workspaceId]);
+      // R5-security M1: what still counts toward the limits outlives the rows.
+      await copyUsageBeforeDeletion(tx, { workspaceIds: [workspaceId], userId, now: new Date() });
       await deleteWorkspaceRows(tx, [workspaceId]);
 
       // getWorkspaceContext would also self-heal a member with no workspace

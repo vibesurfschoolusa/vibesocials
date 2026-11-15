@@ -7,9 +7,11 @@ const db = vi.hoisted(() => ({
   queryRaw: vi.fn(),
   memberFindMany: vi.fn(),
 }));
-const { consumeFixedWindowMock, sendEmailMock } = vi.hoisted(() => ({
+const { consumeFixedWindowMock, sendEmailMock, crossWorkspaceMock, xPostsMock } = vi.hoisted(() => ({
   consumeFixedWindowMock: vi.fn(),
   sendEmailMock: vi.fn(),
+  crossWorkspaceMock: vi.fn(),
+  xPostsMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -23,6 +25,12 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeFixedWindowMock }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+// R5-security M1: the counts across workspaces have their own suite (usageLog.test.ts).
+vi.mock("./usageLog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./usageLog")>()),
+  crossWorkspacePostRefusal: crossWorkspaceMock,
+  xPostsThisMonth: xPostsMock,
+}));
 
 import {
   checkDailyPostLimit,
@@ -52,6 +60,10 @@ beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
   consumeFixedWindowMock.mockReset();
   sendEmailMock.mockReset();
+  crossWorkspaceMock.mockReset();
+  crossWorkspaceMock.mockResolvedValue(null);
+  xPostsMock.mockReset();
+  xPostsMock.mockResolvedValue(0);
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
@@ -195,6 +207,57 @@ describe("checkDailyPostLimit", () => {
   });
 });
 
+// R5-security M1: after the workspace's own limit, the limits across workspaces.
+describe("checkDailyPostLimit - across workspaces", () => {
+  it("asks for the per-person and service limits with the workspace's billing columns and the same exclusions", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    const billing = {
+      billingExempt: false,
+      plan: null,
+      planStatus: null,
+      trialEndsAt: new Date("2026-11-20T00:00:00Z"),
+      currentPeriodEnd: null,
+    };
+    db.workspaceFindUnique.mockResolvedValue({ ...workspaceRow(), ...billing });
+
+    await checkDailyPostLimit({
+      workspaceId: "ws-1",
+      day: NOW,
+      mode: "schedule",
+      excludePostJobId: "job-9",
+      alsoOnDay: 2,
+    });
+
+    expect(crossWorkspaceMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      workspace: expect.objectContaining(billing),
+      day: NOW,
+      mode: "schedule",
+      excludePostJobId: "job-9",
+      alsoOnDay: 2,
+    });
+  });
+
+  it("returns their refusal as it is, and emails nobody about it", async () => {
+    const refusal = { error: "service full", code: "SERVICE_DAILY_POST_LIMIT" };
+    crossWorkspaceMock.mockResolvedValue(refusal);
+
+    await expect(checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" })).resolves.toEqual(refusal);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("is not asked once the workspace's own limit refuses", async () => {
+    db.postJobCount.mockResolvedValue(20);
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+    expect(crossWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  it("fails open when they cannot be read", async () => {
+    crossWorkspaceMock.mockRejectedValue(new Error("db down"));
+    await expect(checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" })).resolves.toBeNull();
+  });
+});
+
 describe("the limit-reached email", () => {
   it("emails every owner once per window, through a limit-1 counter that resets at the window's end", async () => {
     db.postJobCount.mockResolvedValue(20);
@@ -277,7 +340,7 @@ describe("the limit-reached email", () => {
   it("an owner lookup that hangs is cut off after 5 seconds too", async () => {
     vi.useFakeTimers();
     try {
-      db.resultCount.mockResolvedValue(30);
+      xPostsMock.mockResolvedValue(30);
       db.memberFindMany.mockReturnValue(new Promise(() => {}));
 
       const refusal = await checkXMonthlyLimit("ws-1", NOW);
@@ -298,7 +361,7 @@ describe("the limit-reached email", () => {
   });
 
   it("X: the check sends nothing itself; notifyOwners does, with the UTC month as the window", async () => {
-    db.resultCount.mockResolvedValue(30);
+    xPostsMock.mockResolvedValue(30);
 
     const refusal = await checkXMonthlyLimit("ws-1", NOW);
     expect(consumeFixedWindowMock).not.toHaveBeenCalled();
@@ -341,33 +404,28 @@ describe("the limit-reached email", () => {
 });
 
 describe("checkXMonthlyLimit", () => {
-  it("counts the workspace's successful X results since the start of the UTC month", async () => {
-    db.resultCount.mockResolvedValue(29);
+  // R5-security M1: the X account's posts across workspaces, copied into the
+  // log so a deletion or a disconnect does not start them again.
+  it("counts the X account's posts this month across workspaces, copying the workspace's into the log", async () => {
+    xPostsMock.mockResolvedValue(29);
 
     await expect(checkXMonthlyLimit("ws-1", NOW)).resolves.toBeNull();
-    expect(db.resultCount).toHaveBeenCalledWith({
-      where: {
-        workspaceId: "ws-1",
-        platform: "x",
-        status: "success",
-        updatedAt: { gte: new Date("2026-11-01T00:00:00.000Z") },
-      },
-    });
+    expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW, { copyToLog: true });
   });
 
-  it("refuses at the limit with X_MONTHLY_LIMIT and the month sentence", async () => {
-    db.resultCount.mockResolvedValue(30);
+  it("refuses at the workspace's limit with X_MONTHLY_LIMIT and the month sentence", async () => {
+    xPostsMock.mockResolvedValue(30);
 
     await expect(checkXMonthlyLimit("ws-1", NOW)).resolves.toEqual({
       errorCode: "X_MONTHLY_LIMIT",
       errorMessage:
-        "This workspace has used its 30 X posts for November. X posts start again on 1 December.",
+        "This X account has used its 30 X posts for November, counted across every workspace it posts from. X posts start again on 1 December.",
       notifyOwners: expect.any(Function),
     });
   });
 
   it("fails open when the count cannot be read", async () => {
-    db.resultCount.mockRejectedValue(new Error("db down"));
+    xPostsMock.mockRejectedValue(new Error("db down"));
     await expect(checkXMonthlyLimit("ws-1", NOW)).resolves.toBeNull();
   });
 });
@@ -445,9 +503,8 @@ describe("checkStorageLimit", () => {
 describe("getWorkspaceUsage", () => {
   it("returns used and limit for all four, with when each starts again", async () => {
     db.postJobCount.mockResolvedValue(3);
-    db.resultCount.mockImplementation(({ where }: { where: { platform: string } }) =>
-      Promise.resolve(where.platform === "x" ? 4 : 1),
-    );
+    db.resultCount.mockResolvedValue(1);
+    xPostsMock.mockResolvedValue(4);
     db.queryRaw.mockResolvedValue([{ total: BigInt(5 * MB) }]);
 
     await expect(getWorkspaceUsage("ws-1", NOW)).resolves.toEqual({
@@ -456,6 +513,8 @@ describe("getWorkspaceUsage", () => {
       youtubeUploadsToday: { used: 1, limit: 10, resetsAt: new Date("2026-11-11T08:00:00.000Z") },
       storage: { used: 5 * MB, limit: 5120 * MB, resetsAt: null },
     });
+    // Settings reads the X count the publish check refuses by, without writing.
+    expect(xPostsMock).toHaveBeenCalledWith("ws-1", NOW, { copyToLog: false });
   });
 });
 
@@ -598,7 +657,7 @@ describe("the limit-reached email - dates in each owner's zone", () => {
       { user: { id: "owner-1", email: "one@example.com", timeZone: "America/New_York" } },
       { user: { id: "owner-2", email: "two@example.com", timeZone: null } },
     ]);
-    db.resultCount.mockResolvedValue(30);
+    xPostsMock.mockResolvedValue(30);
 
     const refusal = await checkXMonthlyLimit("ws-1", NOW);
     await refusal?.notifyOwners();

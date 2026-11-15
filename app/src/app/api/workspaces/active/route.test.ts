@@ -29,6 +29,7 @@ const m = vi.hoisted(() => ({
   executeRaw: vi.fn(),
   queueCreate: vi.fn(),
   queueDeleteMany: vi.fn(),
+  copyUsage: vi.fn(),
   callLog: [] as string[],
 }));
 const updateMock = m.update;
@@ -74,6 +75,8 @@ vi.mock("@vercel/blob", () => ({ del: m.del }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+// R5-security M1: the copy itself is tested in server/usage/usageLog.test.ts.
+vi.mock("@/server/usage/usageLog", () => ({ copyUsageBeforeDeletion: m.copyUsage }));
 
 import { DELETE, PATCH } from "./route";
 
@@ -281,9 +284,13 @@ describe("DELETE /api/workspaces/active", () => {
       m.executeRaw,
       m.queueCreate,
       m.queueDeleteMany,
+      m.copyUsage,
     ]) {
       mock.mockReset();
     }
+    m.copyUsage.mockImplementation(async (_tx: unknown, input: { workspaceIds: string[]; userId: string }) => {
+      m.callLog.push(`copy usage ${input.workspaceIds.join(",")} for ${input.userId}`);
+    });
     m.checkRateLimit.mockResolvedValue({ allowed: true });
     refusalCounts();
     m.postJobFindFirst.mockResolvedValue(null);
@@ -436,6 +443,8 @@ describe("DELETE /api/workspaces/active", () => {
       `lock ${FILE("a")}`,
       `lock ${FILE("b")}`,
       `queue ${FILE("a")},${FILE("b")}`,
+      // R5-security M1: in the same transaction, before the rows go.
+      "copy usage ws-1 for user-1",
       "delete-workspace",
       "commit",
       `del ${FILE("a")},${FILE("b")}`,
