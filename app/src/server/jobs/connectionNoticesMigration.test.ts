@@ -15,7 +15,7 @@ import { CONNECTION_EXPIRED_CODE } from "./connectionNotices";
  */
 const SQL = readFileSync(
   fileURLToPath(
-    new URL("../../../prisma/migrations/20261114530000_connection_notices/migration.sql", import.meta.url),
+    new URL("../../../prisma/migrations/20261114570000_connection_notices/migration.sql", import.meta.url),
   ),
   "utf8",
 );
@@ -37,7 +37,7 @@ function unrenewableClauses(): string[] {
   ];
 }
 
-describe("20261114530000_connection_notices", () => {
+describe("20261114570000_connection_notices", () => {
   it("sets the lock timeout first, adds the two nullable columns, then two UPDATEs and nothing else", () => {
     expect(statements[0]).toBe("SET lock_timeout = '5s'");
     expect(statements.slice(1, 3)).toEqual([
