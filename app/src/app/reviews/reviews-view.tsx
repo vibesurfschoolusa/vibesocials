@@ -1,10 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { CheckCircle2, MessageSquare } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -13,6 +11,7 @@ import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { readApiError, shownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
+import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
@@ -27,7 +26,6 @@ import {
   singleLocationName,
 } from "@/components/reviews/reviews-page";
 import type { GoogleReview, Location } from "@/components/reviews/types";
-import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 import { ReviewLinkPanel } from "./review-link-panel";
 
@@ -41,8 +39,10 @@ const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yo
  * Client-rendered reviews view. The parent server component gates access.
  * `savedLocation`: the Google location Settings saved for posts; the view
  * opens on it when Google lists it. Picking another one is not saved.
+ * `isMember` (from the page's workspace context): a member is told who can
+ * connect or reconnect Google, never sent to Settings (R12 L1).
  */
-export function ReviewsView({ savedLocation }: { savedLocation: string | null }) {
+export function ReviewsView({ savedLocation, isMember }: { savedLocation: string | null; isMember: boolean }) {
   const toast = useToast();
 
   const [reviews, setReviews] = useState<GoogleReview[]>([]);
@@ -307,6 +307,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
           title="Couldn't load reviews"
           message={locationsError.message}
           settingsLink={locationsError.settingsLink}
+          isMember={isMember}
           onRetry={loadLocations}
         />
       </div>
@@ -382,35 +383,13 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
 
       {/* Reviews List */}
       {!selectedLocation ? (
-        <EmptyState
-          icon={<MessageSquare />}
-          title={
-            locations.length > 0
-              ? "Select a location"
-              : gbpConnected
-                ? "No locations found"
-                : "Connect Google Business Profile"
-          }
-          description={
-            locations.length > 0
-              ? "Choose a location above to view and reply to reviews"
-              : gbpConnected
-                ? "Your connected Google Business Profile doesn't have any locations yet. Add one in Google Business Profile, then refresh this page."
-                : "Reviews come from your Google Business Profile listing. Connect it in Settings to see and reply to reviews here."
-          }
-          action={
-            locations.length === 0 && !gbpConnected ? (
-              <Link href={SETTINGS_CONNECTIONS_HREF} className={buttonVariants({ variant: "primary" })}>
-                Go to connections
-              </Link>
-            ) : undefined
-          }
-        />
+        <ReviewsEmptyState locationsCount={locations.length} gbpConnected={gbpConnected} isMember={isMember} />
       ) : reviewsError ? (
         <ErrorState
           title="Couldn't load reviews"
           message={reviewsError.message}
           settingsLink={reviewsError.settingsLink}
+          isMember={isMember}
           onRetry={loadReviews}
         />
       ) : loading ? (

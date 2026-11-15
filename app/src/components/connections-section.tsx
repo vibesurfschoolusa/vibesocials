@@ -141,6 +141,16 @@ interface ConnectionsSectionProps {
   sameEndAt?: Partial<Record<Platform, string>>;
 }
 
+/**
+ * The Connections section's intro in Settings (R12 L3): an owner is asked to
+ * connect; a member (`readOnly`, the page's role from the server) reads who does.
+ */
+export function connectionsSectionIntro(readOnly: boolean): string {
+  return readOnly
+    ? "The accounts Vibe Socials publishes to for this workspace. The workspace owner connects and reconnects them."
+    : "Connect your social accounts so Vibe Socials can publish on your behalf.";
+}
+
 export function ConnectionsSection({
   workspaceId,
   connections,
@@ -201,7 +211,10 @@ export function ConnectionsSection({
                         ? username
                           ? `Connected as ${username}`
                           : isGoogleBusinessProfile
-                            ? "Connected. Choose the Maps location to post to below."
+                            ? readOnly
+                              ? // R12 L2: the location form below is the owner's only.
+                                "Connected. The workspace owner chooses the Maps location."
+                              : "Connected. Choose the Maps location to post to below."
                             : "Connected"
                         : readOnly
                           ? // R11-pages L2: a member can't connect; say who can.

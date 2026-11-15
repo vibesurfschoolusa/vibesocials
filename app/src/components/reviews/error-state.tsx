@@ -11,6 +11,11 @@ interface ErrorStateProps {
   onRetry: () => void;
   /** Google refused the request (F7): the way out is reconnecting in Settings. */
   settingsLink?: boolean;
+  /**
+   * R12 L1: a member's Settings is read-only, so a member never gets the link;
+   * the routes word a member's message for them (who can reconnect).
+   */
+  isMember?: boolean;
 }
 
 /**
@@ -19,8 +24,8 @@ interface ErrorStateProps {
  * like a missing connection, it also surfaces a link to /settings (where
  * connection management now lives).
  */
-export function ErrorState({ title, message, onRetry, settingsLink = false }: ErrorStateProps) {
-  const showConnectionsLink = settingsLink || message.includes("not configured");
+export function ErrorState({ title, message, onRetry, settingsLink = false, isMember = false }: ErrorStateProps) {
+  const showConnectionsLink = !isMember && (settingsLink || message.includes("not configured"));
 
   return (
     <Alert variant="danger" title={title}>

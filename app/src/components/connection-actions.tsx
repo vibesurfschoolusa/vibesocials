@@ -16,7 +16,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
-import { formatDisplayDate } from "@/lib/displayDate";
 import { platformLabel } from "@/lib/platforms";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
@@ -26,6 +25,7 @@ import { LinkedInAccountDialog } from "./linkedin-account-dialog";
  * R11 review: "November 21, 2026, 01:00 UTC", the end LinkedIn kept, in the
  * same words as the client's page (/c), so the two can't name different days.
  * UTC, not the viewer's zone: the server and the browser render the same text.
+ * R12-pages L4: the "Ended" line uses it too.
  */
 export function endsAtText(value: string): string {
   const at = new Date(value);
@@ -299,11 +299,19 @@ export function ConnectionActions({
 
   if (readOnly) {
     // R7-pages L4: a member sees the end as the owner does, without the buttons.
-    if (needsReconnect) return <Badge variant="danger">Needs reconnect</Badge>;
+    // R12-pages L3: and who can reconnect a flagged one.
+    if (needsReconnect) {
+      return (
+        <>
+          <Badge variant="danger">Needs reconnect</Badge>
+          <span className="basis-full text-sm text-muted-foreground">The workspace owner can reconnect it.</span>
+        </>
+      );
+    }
     if (reconnectSoon && endedAt) {
       return (
         <span className="basis-full text-sm text-muted-foreground">
-          Ended {formatDisplayDate(endedAt)}. The workspace owner can reconnect it.
+          Ended {endsAtText(endedAt)}. The workspace owner can reconnect it.
         </span>
       );
     }
@@ -339,7 +347,7 @@ export function ConnectionActions({
             {endedAt ? (
               // R7-pages L7: on its own line, so the row never overflows.
               <span className="basis-full text-sm text-muted-foreground">
-                Ended {formatDisplayDate(endedAt)}. Reconnect to keep posting.
+                Ended {endsAtText(endedAt)}. Reconnect to keep posting.
               </span>
             ) : sameEndAt ? (
               // R8-pages L5: Settings' warning says what to do; no call to reconnect here.

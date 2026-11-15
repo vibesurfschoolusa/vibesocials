@@ -64,7 +64,7 @@ describe("Settings, Connections: a LinkedIn connection about to end", () => {
 
   it("its end date has passed (not flagged yet): Ended <date>", () => {
     const html = linkedInRow(["linkedin"], { linkedin: "2026-11-12T12:00:00.000Z" });
-    expect(html).toContain("Ended November 12, 2026. Reconnect to keep posting.");
+    expect(html).toContain("Ended November 12, 2026, 12:00 UTC. Reconnect to keep posting.");
     expect(html).toMatch(RECONNECT);
   });
 

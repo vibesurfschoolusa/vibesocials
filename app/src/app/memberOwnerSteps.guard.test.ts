@@ -1,0 +1,274 @@
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Platform } from "@prisma/client";
+
+/**
+ * X1 (R10, R11, R12): a member is never told to take a step only an owner can
+ * take. Members reading owner-only steps came back three rounds running, each
+ * time on a new page, so this one test renders every surface a member can
+ * reach that has such a step, for an owner and for a member:
+ * - the owner's version must still carry the owner step (so the case really
+ *   is exercised, and the owners' wording stays);
+ * - the member's must carry none of OWNER_STEPS and must name the owner.
+ * A new surface with an owner-only step belongs in SURFACES.
+ */
+
+const h = vi.hoisted(() => ({
+  getWorkspaceContext: vi.fn(),
+  findFirst: vi.fn(),
+  ensureFreshTikTokToken: vi.fn(),
+  getTikTokCreatorInfo: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/settings",
+  useSearchParams: () => new URLSearchParams(),
+}));
+vi.mock("@/components/ui/toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/toast")>()),
+  useToast: () => ({ success: vi.fn(), error: vi.fn() }),
+}));
+vi.mock("@/components/ui/dialog", () => ({
+  Dialog: () => null,
+  DialogBody: () => null,
+  DialogDescription: () => null,
+  DialogFooter: () => null,
+  DialogHeader: () => null,
+  DialogTitle: () => null,
+  ConfirmDialog: () => null,
+}));
+vi.mock("@/components/linkedin-account-dialog", () => ({ LinkedInAccountDialog: () => null, LinkedInConnectButton: () => null }));
+vi.mock("@/components/linkedin-setup-dialog", () => ({ LinkedInSetupDialog: () => null }));
+vi.mock("@/components/pending-connection-dialog", () => ({ PendingConnectionDialog: () => null }));
+vi.mock("@/components/google-business-location-form", () => ({
+  GoogleBusinessLocationForm: () => createElement("p", null, "Choose the Maps location to post to"),
+}));
+vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: h.getWorkspaceContext }));
+vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: h.findFirst } } }));
+vi.mock("@/server/platforms/tiktokClient", () => ({
+  TIKTOK_CREATOR_CANNOT_POST: "TIKTOK_CREATOR_CANNOT_POST",
+  ensureFreshTikTokToken: h.ensureFreshTikTokToken,
+  getTikTokCreatorInfo: h.getTikTokCreatorInfo,
+}));
+
+import { NothingConnectedState } from "@/components/create-post-form";
+import { ConnectionActions } from "@/components/connection-actions";
+import { ConnectionsSection, connectionsSectionIntro } from "@/components/connections-section";
+import { ConnectionHealth } from "@/components/dashboard/connection-health";
+import { ReconnectStep } from "@/components/activity/post-job-card";
+import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
+import { ErrorState } from "@/components/reviews/error-state";
+import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
+import { WorkspaceStatusAlert } from "@/components/shell/workspace-paused-banner";
+import type { ConnectionSummary } from "@/lib/connectionSummary";
+import type { ConnectionStatus } from "@/lib/connectionsDto";
+import { accessBlock } from "@/lib/workspaceStatus";
+import { reviewLinkReason, reviewsErrorBody, type ReviewLinkProblem } from "@/server/googleReviews";
+import { NoPlatformConnectedLine } from "@/app/posts/bulk/bulk-posts-form";
+import { GET as tiktokCreatorInfo } from "@/app/api/tiktok/creator-info/route";
+
+type Role = "owner" | "member";
+
+/** Sentences and links that ask the reader to do what only an owner can. */
+const OWNER_STEPS: RegExp[] = [
+  /\bConnect (it|one|at least one|Google Business Profile|a platform|your)\b/,
+  /\bReconnect\b/,
+  /\bChoose (a plan|the Maps location|your Maps location)\b/,
+  /\bSet your posting times\b/,
+  /\bGo to (connections|Settings)\b/,
+  /\bAdd one in Google Business Profile\b/,
+  /\bCheck that the listing is verified\b/,
+  /href="\/settings#(connections|plan|posting-times|connect-link|team)"/,
+  /href="\/api\/auth\//,
+];
+
+function decoded(html: string): string {
+  return html
+    .replace(/<!-- -->/g, "")
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+const render = (element: ReactElement) => decoded(renderToStaticMarkup(element));
+
+const NOW = new Date("2026-12-10T12:00:00Z");
+const DAY = 24 * 60 * 60 * 1000;
+const ENDED_TRIAL = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: new Date(NOW.getTime() - DAY) };
+const ENDED_PLAN = {
+  billingExempt: false,
+  plan: "growth",
+  planStatus: "canceled",
+  currentPeriodEnd: new Date(NOW.getTime() - 3 * DAY),
+};
+const PERSON = { email: "someone@example.com", emailVerifiedAt: NOW, googleLinkedAt: null };
+
+function banner(workspace: Record<string, unknown>, role: Role): string {
+  const block = accessBlock({ user: PERSON, workspace, role }, NOW);
+  return render(
+    createElement(WorkspaceStatusAlert, {
+      status: {
+        message: block?.message ?? null,
+        notice: null,
+        emailUnconfirmed: false,
+        daysLeft: null,
+        // As GET /api/workspaces/status sets it: an owner's ended plan only.
+        planLink: role === "owner",
+      },
+      sending: false,
+      onResend: () => {},
+    }),
+  );
+}
+
+function gbpWithoutLocation(): ConnectionSummary {
+  return {
+    platform: "google_business_profile",
+    accountIdentifier: "",
+    username: null,
+    locationName: null,
+    needsReconnect: false,
+  } as unknown as ConnectionSummary;
+}
+
+function healthRow(over: Partial<ConnectionStatus>): ConnectionStatus {
+  return { platform: "instagram", connected: true, needsReconnect: false, expiry: null, ...over } as ConnectionStatus;
+}
+
+async function tiktokReconnectAnswer(role: Role): Promise<string> {
+  h.getWorkspaceContext.mockResolvedValue({ user: { id: "u1" }, workspace: { id: "ws-1" }, role });
+  h.findFirst.mockResolvedValue({ id: "c1", platform: "tiktok", accessToken: "t" });
+  h.ensureFreshTikTokToken.mockRejectedValue(Object.assign(new Error("expired"), { code: "TIKTOK_RECONNECT_REQUIRED" }));
+  const response = await tiktokCreatorInfo();
+  return JSON.stringify(await response.json());
+}
+
+function reviewsRefused(role: Role): string {
+  const body = reviewsErrorBody({ status: 403 }, "Couldn't load your Google reviews.", role);
+  return render(
+    createElement(ErrorState, {
+      title: "Couldn't load reviews",
+      message: body.error,
+      settingsLink: body.reconnect === true,
+      isMember: role === "member",
+      onRetry: () => {},
+    }),
+  );
+}
+
+const LINK_PROBLEMS: ReviewLinkProblem[] = ["not_connected", "no_location", "needs_reconnect", "google_has_none"];
+
+/** Each surface: what an owner and a member read in the same state. */
+const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
+  "Reviews, nothing connected": (role) =>
+    render(createElement(ReviewsEmptyState, { locationsCount: 0, gbpConnected: false, isMember: role === "member" })),
+  "Reviews, connected with no locations": (role) =>
+    render(createElement(ReviewsEmptyState, { locationsCount: 0, gbpConnected: true, isMember: role === "member" })),
+  "Reviews, Google refused (error card)": reviewsRefused,
+  ...Object.fromEntries(
+    LINK_PROBLEMS.map((problem) => [`Reviews, Get more reviews (${problem})`, (role: Role) => reviewLinkReason(problem, role)]),
+  ),
+  "Settings, Connections intro": (role) => connectionsSectionIntro(role === "member"),
+  "Settings, Google Business Profile without a location": (role) =>
+    render(
+      createElement(ConnectionsSection, {
+        workspaceId: "ws-1",
+        connections: [gbpWithoutLocation()],
+        readOnly: role === "member",
+      }),
+    ),
+  "Settings, a row that needs reconnecting": (role) =>
+    render(
+      createElement(ConnectionActions, {
+        platform: "instagram",
+        workspaceId: "ws-1",
+        isConnected: true,
+        needsReconnect: true,
+        readOnly: role === "member",
+      }),
+    ),
+  "Settings, a row that ended": (role) =>
+    render(
+      createElement(ConnectionActions, {
+        platform: "linkedin",
+        workspaceId: "ws-1",
+        isConnected: true,
+        reconnectSoon: true,
+        endedAt: "2026-11-21T01:00:00.000Z",
+        readOnly: role === "member",
+      }),
+    ),
+  "Create and Add many, no posting times": (role) =>
+    render(createElement(SetPostingTimesPrompt, { isMember: role === "member" })),
+  "Create, nothing connected": (role) => render(createElement(NothingConnectedState, { isMember: role === "member" })),
+  "Add many, nothing connected": (role) =>
+    render(createElement(NoPlatformConnectedLine, { isMember: role === "member", onlyTikTok: false })),
+  "Add many, only TikTok connected": (role) =>
+    render(createElement(NoPlatformConnectedLine, { isMember: role === "member", onlyTikTok: true })),
+  "Create, publish, retry and the banner, trial ended": (role) => banner(ENDED_TRIAL, role),
+  "Create, publish, retry and the banner, plan ended": (role) => banner(ENDED_PLAN, role),
+  "Create, TikTok needs reconnecting (creator info answer)": tiktokReconnectAnswer,
+  "Dashboard, Connections card": (role) =>
+    render(
+      createElement(ConnectionHealth, {
+        connections: [healthRow({ needsReconnect: true }), healthRow({ platform: "x" as Platform, connected: false })],
+        loading: false,
+        error: null,
+        isMember: role === "member",
+      }),
+    ),
+  "Activity, a result that needs reconnecting": (role) =>
+    render(createElement(ReconnectStep, { platform: "instagram", role })),
+};
+
+beforeEach(() => {
+  vi.stubEnv("BILLING_ENABLED", "true");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+describe("members are never told to take an owner-only step", () => {
+  for (const [surface, read] of Object.entries(SURFACES)) {
+    it(`${surface}: the owner reads the step, a member reads who can take it`, async () => {
+      const owner = await read("owner");
+      const member = await read("member");
+
+      expect(
+        OWNER_STEPS.some((step) => step.test(owner)),
+        `${surface}: the owner's version has lost its step:\n${owner}`,
+      ).toBe(true);
+      for (const step of OWNER_STEPS) {
+        expect(member, `${surface}: a member reads ${step}`).not.toMatch(step);
+      }
+      expect(member, `${surface}: a member's version names the owner`).toMatch(/workspace owner/i);
+    });
+  }
+});
+
+describe("the member sentences", () => {
+  it("say exactly what the brief asks", async () => {
+    expect(await SURFACES["Settings, Google Business Profile without a location"]("member")).toContain(
+      "Connected. The workspace owner chooses the Maps location.",
+    );
+    expect(await SURFACES["Settings, a row that needs reconnecting"]("member")).toContain(
+      "The workspace owner can reconnect it.",
+    );
+    expect(await SURFACES["Create, publish, retry and the banner, plan ended"]("member")).toContain(
+      "This workspace's plan has ended. The workspace owner can choose a plan in Settings, Plan, or contact hello@vibesocials.wtf.",
+    );
+    expect(await SURFACES["Create, publish, retry and the banner, trial ended"]("member")).toContain(
+      "This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact hello@vibesocials.wtf.",
+    );
+    expect(await SURFACES["Add many, only TikTok connected"]("owner")).toContain(
+      "Add many posts to every platform except TikTok, and none of those is connected yet.",
+    );
+    expect(await SURFACES["Add many, only TikTok connected"]("member")).toContain(
+      "Add many posts to every platform except TikTok, and none of those is connected yet.",
+    );
+  });
+});

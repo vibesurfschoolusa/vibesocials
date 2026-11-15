@@ -885,3 +885,15 @@ describe("NothingConnectedState", () => {
     expect(html).not.toContain("Settings");
   });
 });
+
+// R12-pages L2: with no posting times saved, Create's prompt knows a member
+// (posting-times-prompt.tsx), and nothing else of the form changed for it.
+describe("Create's posting-times prompt", () => {
+  it("is the shared prompt, given the viewer's role", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const source = readFileSync(path.join(__dirname, "create-post-form.tsx"), "utf8");
+    expect(source).toContain("<SetPostingTimesPrompt isMember={isMember} />");
+    expect(source).not.toContain("Set your posting times");
+  });
+});

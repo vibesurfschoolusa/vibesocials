@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { SettingsForm } from "@/components/settings-form";
 import { PostingSlotsForm } from "@/components/posting-slots-form";
 import { readPostingSlots } from "@/lib/postingSlots";
-import { ConnectionsSection } from "@/components/connections-section";
+import { ConnectionsSection, connectionsSectionIntro } from "@/components/connections-section";
 import { ConnectLinkSection } from "@/components/connect-link-section";
 import { RemountOnClientLinksReplaced } from "@/components/client-links-refresh";
 import { TeamSection, type WorkspaceDeletionInfo } from "@/components/team-section";
@@ -347,7 +347,7 @@ export default async function SettingsPage({
             <div className="mb-4">
               <h2 id="connections" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Connections</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Connect your social accounts so Vibe Socials can publish on your behalf.
+                {connectionsSectionIntro(context.role !== "owner")}
               </p>
             </div>
             {/* key: remount on a switch, like SettingsForm; workspaceId: every
