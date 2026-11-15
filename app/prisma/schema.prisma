@@ -355,6 +355,9 @@ model EmailChangeRequest {
   undoTokenHash String?   @unique
   undoExpiresAt DateTime?
   undoneAt      DateTime?
+  // The account holder turned the undo link off in Settings, Account, when
+  // the previous mailbox is lost or no longer theirs.
+  undoTurnedOffAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

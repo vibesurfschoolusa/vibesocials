@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import { buildEmailChangedNoticeEmail, deliverAccountEmail } from "@/lib/accountEmails";
 import { generateAccountToken, hashAccountToken } from "@/lib/accountToken";
@@ -115,10 +115,14 @@ export async function POST(request: Request) {
         baseUrl: process.env.NEXTAUTH_URL ?? "",
       }),
     );
-    // Best effort too; it logs and never throws, but a surprise must not
-    // turn a made change into an error answer.
-    await followEmailChangeInStripe({ userId: record.userId, from: record.user.email, to: record.newEmail }).catch(
-      (error: unknown) => logger.error("[POST /api/auth/change-email/confirm] Stripe follow-up failed", { error }),
+    // After the answer is sent, never on its path: Stripe can be slow or
+    // down, and the change is already made. It logs and never throws; the
+    // catch is for a surprise.
+    const change = { userId: record.userId, from: record.user.email, to: record.newEmail };
+    after(() =>
+      followEmailChangeInStripe(change).catch((error: unknown) =>
+        logger.error("[POST /api/auth/change-email/confirm] Stripe follow-up failed", { error }),
+      ),
     );
 
     if (caller && caller.id !== record.userId) {

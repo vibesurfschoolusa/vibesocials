@@ -13,7 +13,9 @@ const {
   deliverAccountEmailMock,
   getCurrentUserMock,
   followMock,
+  afterMock,
 } = vi.hoisted(() => ({
+  afterMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
   followMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -25,6 +27,10 @@ const {
   deliverAccountEmailMock: vi.fn(),
 }));
 
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: afterMock,
+}));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 vi.mock("@/server/billing/customerEmail", () => ({ followEmailChangeInStripe: followMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
@@ -84,9 +90,11 @@ beforeEach(() => {
     deliverAccountEmailMock,
     getCurrentUserMock,
     followMock,
+    afterMock,
   ]) {
     mock.mockReset();
   }
+  afterMock.mockImplementation(() => undefined);
   getCurrentUserMock.mockResolvedValue(null);
   followMock.mockResolvedValue(undefined);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -162,15 +170,35 @@ describe("POST /api/auth/change-email/confirm", () => {
     expect(hashAccountToken(raw!)).toBe(claimMock.mock.calls[0][0].data.undoTokenHash);
   });
 
-  // Review item 5: Stripe follows, best effort.
-  it("passes the change on to the Stripe customers", async () => {
+  // Review item 5: Stripe follows, best effort, after the answer is sent.
+  it("passes the change on to the Stripe customers after the response", async () => {
     await POST(request({ token: "raw-token" }));
+    expect(followMock).not.toHaveBeenCalled();
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    await afterMock.mock.calls[0][0]();
     expect(followMock).toHaveBeenCalledWith({ userId: "user-1", from: "old@example.com", to: "new@example.com" });
+  });
+
+  it("answers success at once while Stripe hangs", async () => {
+    followMock.mockImplementation(() => new Promise(() => {}));
+    // Run the deferred work right away, as a platform would once the answer
+    // is out, and do not wait for it: the answer must not depend on it.
+    afterMock.mockImplementation((task: () => unknown) => {
+      void task();
+    });
+    const started = Date.now();
+    const response = await POST(request({ token: "raw-token" }));
+    expect(response.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(followMock).toHaveBeenCalledTimes(1);
   });
 
   it("still answers success when the Stripe update fails", async () => {
     followMock.mockRejectedValue(new Error("Stripe down"));
     vi.spyOn(console, "error").mockImplementation(() => {});
+    afterMock.mockImplementation((task: () => unknown) => {
+      void task();
+    });
     expect((await POST(request({ token: "raw-token" }))).status).toBe(200);
   });
 

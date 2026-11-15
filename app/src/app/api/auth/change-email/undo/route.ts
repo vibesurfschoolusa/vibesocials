@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
-import { hashAccountToken } from "@/lib/accountToken";
+import { buildPasswordResetEmail, deliverAccountEmail } from "@/lib/accountEmails";
+import { hashAccountToken, issueAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -15,6 +16,7 @@ const refuse = (status: number, error: string) => NextResponse.json({ error }, {
 const NOT_VALID = `This link isn't valid. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const USED = `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`;
 const EXPIRED = `This link has expired: it worked for 7 days. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
+const TURNED_OFF = `The account holder turned this link off in Settings, so it can't undo the change. If that wasn't you, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 const CHANGED_AGAIN = `The sign-in email has changed again since this email was sent, so this link can't undo it. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 
 /** Thrown inside the transaction so the claim rolls back with it. */
@@ -29,10 +31,15 @@ class ChangedAgain extends Error {}
  * It puts the previous address back, once, within 7 days, and only while the
  * account still signs in with the address that change set: after a later
  * change it would hand the account to an address its owner has since left.
- * Like the change itself it signs out every session and drops unused account
- * links; whoever made the change may know the password, so the page then
- * says to reset it. Anonymous and rate limited by network, like the other
- * account links.
+ * Whoever made the change knows the password, so the undo locks them out in
+ * the same write: the password is cleared, every session ends
+ * (sessionVersion), and unused account links and pending changes are
+ * dropped. A fresh password-reset link then goes to the restored address, the
+ * only way back in besides Google sign-in, which links an account without a
+ * password only for a Google account on that same address
+ * (lib/googleSso.ts). The account holder can turn the link off in Settings,
+ * Account (../undo-link). Anonymous and rate limited by network, like the
+ * other account links.
  */
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
@@ -65,34 +72,52 @@ export async function POST(request: Request) {
     });
     if (!record || !record.previousEmail || !record.undoExpiresAt) return refuse(400, NOT_VALID);
     if (record.undoneAt) return refuse(400, USED);
+    if (record.undoTurnedOffAt) return refuse(400, TURNED_OFF);
     if (record.undoExpiresAt <= now) return refuse(400, EXPIRED);
     if (record.user.email !== record.newEmail) return refuse(409, CHANGED_AGAIN);
     const previousEmail = record.previousEmail;
 
-    const undone = await prisma.$transaction(async (tx) => {
+    const resetToken = await prisma.$transaction(async (tx) => {
       const { count } = await tx.emailChangeRequest.updateMany({
-        where: { undoTokenHash, undoneAt: null, undoExpiresAt: { gt: now } },
+        where: { undoTokenHash, undoneAt: null, undoTurnedOffAt: null, undoExpiresAt: { gt: now } },
         data: { undoneAt: now },
       });
-      if (count === 0) return false;
+      if (count === 0) return null;
       // Guarded on the address this change set, against a change made
       // between the read above and now.
       const restored = await tx.user.updateMany({
         where: { id: record.userId, email: record.newEmail },
-        data: { email: previousEmail, emailVerifiedAt: now, sessionVersion: { increment: 1 } },
+        data: {
+          email: previousEmail,
+          emailVerifiedAt: now,
+          passwordHash: null,
+          googleLinkedAt: null,
+          sessionVersion: { increment: 1 },
+        },
       });
       if (restored.count === 0) throw new ChangedAgain();
       await tx.accountToken.deleteMany({ where: { userId: record.userId, usedAt: null } });
       await tx.emailChangeRequest.deleteMany({ where: { userId: record.userId, usedAt: null } });
-      return true;
+      return issueAccountToken(tx, record.userId, "password_reset", now);
     });
-    if (!undone) return refuse(400, USED);
+    if (!resetToken) return refuse(400, USED);
 
-    await followEmailChangeInStripe({ userId: record.userId, from: record.newEmail, to: previousEmail }).catch(
-      (error: unknown) => logger.error("[POST /api/auth/change-email/undo] Stripe follow-up failed", { error }),
+    // deliverAccountEmail logs and returns false on any failure; the page
+    // then points to Forgot password instead.
+    const resetSent = await deliverAccountEmail(
+      previousEmail,
+      buildPasswordResetEmail({ to: previousEmail, rawToken: resetToken, baseUrl: process.env.NEXTAUTH_URL ?? "" }),
     );
 
-    return NextResponse.json({ ok: true, email: previousEmail }, { status: 200 });
+    // After the answer is sent: Stripe can be slow, and the undo is made.
+    const { userId, newEmail } = record;
+    after(() =>
+      followEmailChangeInStripe({ userId, from: newEmail, to: previousEmail }).catch((error: unknown) =>
+        logger.error("[POST /api/auth/change-email/undo] Stripe follow-up failed", { error }),
+      ),
+    );
+
+    return NextResponse.json({ ok: true, email: previousEmail, resetSent }, { status: 200 });
   } catch (error) {
     if (error instanceof ChangedAgain) return refuse(409, CHANGED_AGAIN);
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";

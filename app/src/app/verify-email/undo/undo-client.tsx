@@ -52,7 +52,8 @@ export function UndoClient() {
           <>
             <p className="text-sm text-muted-foreground">
               Press the button to put your previous sign-in email back. Every device signed in to the account is
-              signed out, and you then reset your password.
+              signed out and the password stops working; we then send a password reset link to your previous
+              address.
             </p>
             <Button className="mt-4" loading={busy} onClick={() => void undo()}>
               Undo the change

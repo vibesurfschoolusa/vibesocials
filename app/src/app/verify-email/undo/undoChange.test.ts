@@ -8,8 +8,8 @@ function respond(status: number, body: unknown) {
 
 // Review item 1: the page the "This wasn't me: undo" link opens.
 describe("undoEmailChange", () => {
-  it("posts the token and, on success, names the restored address and says to reset the password", async () => {
-    const ok = respond(200, { ok: true, email: "old@example.com" });
+  it("posts the token and, on success, says the email is back and a reset link went there", async () => {
+    const ok = respond(200, { ok: true, email: "old@example.com", resetSent: true });
     const view = await undoEmailChange(ok, "tok");
     expect(ok).toHaveBeenCalledWith(
       "/api/auth/change-email/undo",
@@ -17,7 +17,15 @@ describe("undoEmailChange", () => {
     );
     expect(view).toMatchObject({ undone: true, title: "The change was undone", offerRetry: false });
     expect(view.message).toBe(
-      "Your account signs in with old@example.com again, and every device was signed out. Reset your password now: whoever changed the email may know it.",
+      "Your email is back to old@example.com. We sent a password reset link there; set a new password to sign in.",
+    );
+    expect(view.next).toEqual({ href: "/forgot-password", label: "Send another reset link" });
+  });
+
+  it("says to use Forgot password when the reset link could not be sent", async () => {
+    const view = await undoEmailChange(respond(200, { ok: true, email: "old@example.com", resetSent: false }), "tok");
+    expect(view.message).toBe(
+      "Your email is back to old@example.com. We couldn't send a password reset link just now: press Reset your password below to get one, then set a new password to sign in.",
     );
     expect(view.next).toEqual({ href: "/forgot-password", label: "Reset your password" });
   });

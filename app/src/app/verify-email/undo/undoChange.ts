@@ -40,14 +40,24 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
       message: "Nothing was changed, and this link still works. Check your internet connection, then press Try again.",
     };
   }
-  const data = (await response.json().catch(() => null)) as { email?: string; error?: string } | null;
+  const data = (await response.json().catch(() => null)) as
+    | { email?: string; resetSent?: boolean; error?: string }
+    | null;
   if (response.ok) {
+    // The undo cleared the password (the person who made the change knew
+    // it), so the way back in is the reset link sent to this address.
+    const address = data?.email ?? "your previous address";
+    const resetSent = data?.resetSent === true;
     return {
       undone: true,
       offerRetry: false,
-      next: { href: "/forgot-password", label: "Reset your password" },
+      next: resetSent
+        ? { href: "/forgot-password", label: "Send another reset link" }
+        : { href: "/forgot-password", label: "Reset your password" },
       title: "The change was undone",
-      message: `Your account signs in with ${data?.email ?? "your previous address"} again, and every device was signed out. Reset your password now: whoever changed the email may know it.`,
+      message: resetSent
+        ? `Your email is back to ${address}. We sent a password reset link there; set a new password to sign in.`
+        : `Your email is back to ${address}. We couldn't send a password reset link just now: press Reset your password below to get one, then set a new password to sign in.`,
     };
   }
   const serverFailed = response.status >= 500;

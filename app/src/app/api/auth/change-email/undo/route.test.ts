@@ -12,7 +12,13 @@ const {
   accountTokenDeleteManyMock,
   requestDeleteManyMock,
   followMock,
+  afterMock,
+  issueAccountTokenMock,
+  deliverAccountEmailMock,
 } = vi.hoisted(() => ({
+  afterMock: vi.fn(),
+  issueAccountTokenMock: vi.fn(),
+  deliverAccountEmailMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueMock: vi.fn(),
   claimMock: vi.fn(),
@@ -23,6 +29,18 @@ const {
 }));
 
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: afterMock,
+}));
+vi.mock("@/lib/accountToken", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/accountToken")>()),
+  issueAccountToken: issueAccountTokenMock,
+}));
+vi.mock("@/lib/accountEmails", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/accountEmails")>()),
+  deliverAccountEmail: deliverAccountEmailMock,
+}));
 vi.mock("@/server/billing/customerEmail", () => ({ followEmailChangeInStripe: followMock }));
 vi.mock("@/lib/db", () => {
   const tx = {
@@ -59,6 +77,7 @@ function record(overrides: Record<string, unknown> = {}) {
     undoTokenHash: hashAccountToken("undo-token"),
     undoExpiresAt: new Date(NOW + 60_000),
     undoneAt: null,
+    undoTurnedOffAt: null,
     user: { email: "new@example.com" },
     ...overrides,
   };
@@ -73,9 +92,16 @@ beforeEach(() => {
     accountTokenDeleteManyMock,
     requestDeleteManyMock,
     followMock,
+    afterMock,
+    issueAccountTokenMock,
+    deliverAccountEmailMock,
   ]) {
     mock.mockReset();
   }
+  afterMock.mockImplementation(() => undefined);
+  issueAccountTokenMock.mockResolvedValue("raw-reset-token");
+  deliverAccountEmailMock.mockResolvedValue(true);
+  vi.stubEnv("NEXTAUTH_URL", "https://app.example.com");
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   findUniqueMock.mockResolvedValue(record());
   claimMock.mockResolvedValue({ count: 1 });
@@ -95,23 +121,64 @@ describe("POST /api/auth/change-email/undo", () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
-  it("puts the previous address back, signs out every session and passes it on to Stripe", async () => {
+  it("puts the previous address back and locks the person who made the change out", async () => {
     const response = await POST(request({ token: "undo-token" }));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, email: "old@example.com" });
+    await expect(response.json()).resolves.toEqual({ ok: true, email: "old@example.com", resetSent: true });
     expect(findUniqueMock.mock.calls[0][0].where).toEqual({ undoTokenHash: hashAccountToken("undo-token") });
     expect(claimMock.mock.calls[0][0].where).toMatchObject({
       undoTokenHash: hashAccountToken("undo-token"),
       undoneAt: null,
+      undoTurnedOffAt: null,
     });
     const update = userUpdateManyMock.mock.calls[0][0];
     // Only while the account still signs in with the address this change set.
     expect(update.where).toEqual({ id: "user-1", email: "new@example.com" });
-    expect(update.data).toMatchObject({ email: "old@example.com", sessionVersion: { increment: 1 } });
+    // Review 2: the changer's password stops working, every session ends.
+    expect(update.data).toMatchObject({
+      email: "old@example.com",
+      passwordHash: null,
+      googleLinkedAt: null,
+      sessionVersion: { increment: 1 },
+    });
     expect(accountTokenDeleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1", usedAt: null } });
     expect(requestDeleteManyMock).toHaveBeenCalledWith({ where: { userId: "user-1", usedAt: null } });
+  });
+
+  it("emails a fresh password-reset link to the restored address", async () => {
+    await POST(request({ token: "undo-token" }));
+    expect(issueAccountTokenMock.mock.calls[0].slice(1, 3)).toEqual(["user-1", "password_reset"]);
+    const [to, email] = deliverAccountEmailMock.mock.calls[0];
+    expect(to).toBe("old@example.com");
+    expect(email.text).toContain("https://app.example.com/reset-password#raw-reset-token");
+  });
+
+  it("still answers success, and says so, when the reset email could not be sent", async () => {
+    deliverAccountEmailMock.mockResolvedValue(false);
+    const response = await POST(request({ token: "undo-token" }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, email: "old@example.com", resetSent: false });
+  });
+
+  // Review 2 item 2: Stripe runs after the answer is sent.
+  it("passes the change back to Stripe only after the response", async () => {
+    await POST(request({ token: "undo-token" }));
+    expect(followMock).not.toHaveBeenCalled();
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    await afterMock.mock.calls[0][0]();
     expect(followMock).toHaveBeenCalledWith({ userId: "user-1", from: "new@example.com", to: "old@example.com" });
+  });
+
+  // Review 2 item 3.
+  it("is refused when the account holder turned the link off", async () => {
+    findUniqueMock.mockResolvedValue(record({ undoTurnedOffAt: new Date(NOW - 1000) }));
+    const response = await POST(request({ token: "undo-token" }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: `The account holder turned this link off in Settings, so it can't undo the change. If that wasn't you, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
+    });
+    expect(userUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("works once: a used link is refused and changes nothing", async () => {
@@ -144,7 +211,8 @@ describe("POST /api/auth/change-email/undo", () => {
     userUpdateManyMock.mockResolvedValue({ count: 0 });
     const response = await POST(request({ token: "undo-token" }));
     expect(response.status).toBe(409);
-    expect(followMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
+    expect(deliverAccountEmailMock).not.toHaveBeenCalled();
   });
 
   it("is refused when expired, unknown or missing", async () => {
