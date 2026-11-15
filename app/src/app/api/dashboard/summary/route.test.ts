@@ -81,15 +81,17 @@ vi.mock("@/lib/db", () => ({
           .sort((a, b) => (a.scheduledFor as Date).getTime() - (b.scheduledFor as Date).getTime());
         return hits[0] ?? null;
       },
-      // Only the Story halves a client marked (R2-client-journey L1); never every job.
+      // Only the matching Story halves, or the feed jobs they name (R2-client-journey L1);
+      // never every job, and only the pair columns.
       findMany: async ({ where, select }: { where: Row; select: Row }) => {
-        if (!where?.storyOfPostJobId || JSON.stringify(select) !== JSON.stringify({ storyOfPostJobId: true })) {
+        const bounded = Boolean(where?.storyOfPostJobId) || Array.isArray((where?.id as Row | undefined)?.in);
+        if (!bounded || JSON.stringify(select) !== JSON.stringify({ id: true, storyOfPostJobId: true })) {
           throw new Error("the summary must not load every job");
         }
         state.calls.push("postJob.findMany");
         return state.jobs
           .filter((job) => matches(job, where))
-          .map((job) => ({ storyOfPostJobId: job.storyOfPostJobId }));
+          .map((job) => ({ id: job.id, storyOfPostJobId: job.storyOfPostJobId }));
       },
     },
     socialConnection: {

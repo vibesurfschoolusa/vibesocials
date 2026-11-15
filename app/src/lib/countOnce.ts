@@ -6,8 +6,8 @@
  * month), a Story job whose feed job matches too is left out. A Story whose feed
  * job does not match stands alone and counts.
  *
- * The dashboard's Needs you card applies the same rule with queries
- * (api/dashboard/summary countPostsOnce); every other count uses this.
+ * Every count uses this: the dashboard's Needs you card, the Workspaces page,
+ * the daily digest and the monthly report.
  */
 
 export interface PairableJob {
