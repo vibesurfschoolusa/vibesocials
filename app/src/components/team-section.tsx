@@ -27,6 +27,7 @@ import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
+import { personLabel } from "@/lib/usageLimits";
 
 import { FormError } from "./account-section";
 import { announceClientLinksReplaced, subscribeClientLinksReplaced } from "./client-links-refresh";
@@ -38,6 +39,15 @@ interface Member {
   name: string | null;
   role: WorkspaceRole;
   joinedAt: string;
+}
+
+/**
+ * A Team card row (owners' view): the one label rule (personLabel, owner
+ * reader), so a blank or spaces-only name shows the address, and the address
+ * goes under a real name only.
+ */
+export function teamMemberLines(member: Pick<Member, "name" | "email">): { label: string; email: string | null } {
+  return { label: personLabel(member, true), email: member.name?.trim() ? member.email : null };
 }
 
 /**
@@ -696,7 +706,7 @@ function OwnerView({
       throw new Error("REMOVE_FAILED");
     }
     setMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
-    toast.success(`Removed ${removeTarget.name ?? removeTarget.email}.`);
+    toast.success(`Removed ${personLabel(removeTarget, true)}.`);
 
     // The server revokes the workspace's active invite links on removal (so the
     // removed member can't rejoin with the link they hold): drop the link we're
@@ -939,9 +949,9 @@ function OwnerView({
               <li key={member.userId} className="flex items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">
-                    {member.name ?? member.email}
+                    {teamMemberLines(member).label}
                   </p>
-                  {member.name ? (
+                  {teamMemberLines(member).email ? (
                     <p className="truncate text-xs text-muted-foreground">{member.email}</p>
                   ) : null}
                 </div>
@@ -1028,7 +1038,7 @@ function OwnerView({
           if (!open) setRemoveTarget(null);
         }}
         destructive
-        title={`Remove ${removeTarget?.name ?? removeTarget?.email ?? "this member"}?`}
+        title={`Remove ${removeTarget ? personLabel(removeTarget, true) : "this member"}?`}
         description="They'll lose access to this workspace's accounts and posts. Their own account keeps working."
         confirmText="Remove"
         onConfirm={confirmRemove}
@@ -1039,7 +1049,7 @@ function OwnerView({
         onOpenChange={(open) => {
           if (!open) setPromoteTarget(null);
         }}
-        title={`Make ${promoteTarget?.name ?? promoteTarget?.email ?? "this member"} an owner?`}
+        title={`Make ${promoteTarget ? personLabel(promoteTarget, true) : "this member"} an owner?`}
         description="They'll be able to manage members, connections, and settings."
         confirmText="Make owner"
         onConfirm={confirmPromote}
@@ -1051,7 +1061,7 @@ function OwnerView({
           if (!open) setDemoteTarget(null);
         }}
         destructive
-        title={`Make ${demoteTarget?.name ?? demoteTarget?.email ?? "this member"} a member?`}
+        title={`Make ${demoteTarget ? personLabel(demoteTarget, true) : "this member"} a member?`}
         description="They'll no longer manage members, connections, or settings."
         confirmText="Make member"
         onConfirm={confirmDemote}
