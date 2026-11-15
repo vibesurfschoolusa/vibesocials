@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { noConnectionsMessage, nothingSentMessage } from "@/lib/ownerStepAnswers";
 import { prisma } from "@/lib/db";
 import {
   holdForApprovalData,
@@ -407,10 +408,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json(
       {
         // R11-publishing L1: only the owner can connect one.
-        error:
-          workspaceContext.role === "member"
-            ? "The workspace owner can connect a platform for this workspace."
-            : "Connect at least one platform before publishing.",
+        error: noConnectionsMessage("publish", workspaceContext.role),
         code: "NO_CONNECTIONS",
       },
       { status: 400 },
@@ -530,13 +528,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (dispatch.notSent.has(postJobId) && !partial) {
     // No chosen platform is connected (F1 H1): prepare gave each one a failed
     // result with its own sentence and marked the job `failed`, so it never
-    // hangs in_progress and Activity shows what to reconnect.
+    // hangs in_progress and Activity lists what did not go out.
     return NextResponse.json(
       {
-        error:
-          workspaceContext.role === "member"
-            ? "Nothing was posted: none of this post's platforms is connected. Activity shows what didn't go out; the workspace owner can reconnect it."
-            : "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+        error: nothingSentMessage(workspaceContext.role),
         code: dispatch.reasons.get(postJobId),
         ...pairAnswer,
       },

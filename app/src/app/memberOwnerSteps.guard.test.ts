@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,6 +70,7 @@ import { accessBlock } from "@/lib/workspaceStatus";
 import { reviewLinkReason, reviewsErrorBody, type ReviewLinkProblem } from "@/server/googleReviews";
 import { NoPlatformConnectedLine } from "@/app/posts/bulk/bulk-posts-form";
 import { GET as tiktokCreatorInfo } from "@/app/api/tiktok/creator-info/route";
+import { noConnectionsMessage, nothingSentMessage, retryReconnectMessage } from "@/lib/ownerStepAnswers";
 
 type Role = "owner" | "member";
 
@@ -82,6 +85,21 @@ const OWNER_STEPS: RegExp[] = [
   /\bCheck that the listing is verified\b/,
   /href="\/settings#(connections|plan|posting-times|connect-link|team)"/,
   /href="\/api\/auth\//,
+  // Review of X1: owner-only steps other pages say, so a leak of any of them to a member fails here.
+  /\bSee Settings, Plan\b/,
+  /\bMake new client links\b/,
+  /\bTurn off client links\b/,
+  /\bChoose the Google business location\b/,
+  /\bpress Connect\b/i,
+  /\bclick Connect\b/i,
+  /\bConnect at least one platform\b/,
+  /\bManage plan, card and invoices\b/,
+  /\bInvite teammates\b/,
+  /\bSwitch account\b/,
+  /\bDisconnect\b/,
+  /\bHow to connect\b/,
+  /\bChoose (which|the board|a board)\b/,
+  /\bshows what to reconnect\b/,
 ];
 
 function decoded(html: string): string {
@@ -220,7 +238,23 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
     ),
   "Activity, a result that needs reconnecting": (role) =>
     render(createElement(ReconnectStep, { platform: "instagram", role })),
+  // The server answers the pages show as is (R11-publishing L1, R10-client-journey L1).
+  "Create, nothing connected (POST /api/posts NO_CONNECTIONS)": (role) => noConnectionsMessage("create", role),
+  "Publish now, nothing connected (publish NO_CONNECTIONS)": (role) => noConnectionsMessage("publish", role),
+  "Publish now, none of the post's platforms connected (publish 409)": (role) => nothingSentMessage(role),
+  "Retry, the platform needs reconnecting (retry RECONNECT_REQUIRED)": (role) =>
+    retryReconnectMessage(["instagram", "facebook_page"], role),
 };
+
+/** Each route words its answer with the helper and the role of its own workspace context. */
+const ROUTES_USING_THE_HELPERS: Array<[string, string[]]> = [
+  ["api/posts/route.ts", ['noConnectionsMessage("create", context.role)']],
+  [
+    "api/posts/[postJobId]/publish/route.ts",
+    ['noConnectionsMessage("publish", workspaceContext.role)', "nothingSentMessage(workspaceContext.role)"],
+  ],
+  ["api/posts/[postJobId]/retry/route.ts", ["retryReconnectMessage(dead, workspaceContext.role)"]],
+];
 
 /**
  * The one exclusion, frozen for TikTok's audit: Create's TikTok panel shows
@@ -256,6 +290,25 @@ describe("members are never told to take an owner-only step", () => {
       expect(member, `${surface}: a member's version names the owner`).toMatch(/workspace owner/i);
     });
   }
+});
+
+describe("the routes word those answers through the helpers, with their context's role", () => {
+  for (const [file, calls] of ROUTES_USING_THE_HELPERS) {
+    it(file, () => {
+      const source = readFileSync(path.join(__dirname, file), "utf8");
+      for (const call of calls) expect(source).toContain(call);
+      expect(source).not.toMatch(/Connect at least one platform|Activity shows what to reconnect|in Settings before retrying/);
+    });
+  }
+});
+
+// The reviews error card can't be used without saying who reads it (review of X1).
+describe("ErrorState needs the viewer's role", () => {
+  it("is a type error without isMember", () => {
+    // @ts-expect-error isMember is required: a caller that forgets it must not compile.
+    const element = createElement(ErrorState, { title: "t", message: "m", onRetry: () => {} });
+    expect(element).toBeTruthy();
+  });
 });
 
 describe("excluded: frozen for TikTok's audit", () => {

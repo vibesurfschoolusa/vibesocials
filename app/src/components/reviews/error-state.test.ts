@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import { ErrorState } from "./error-state";
 
 const render = (props: { message: string; settingsLink?: boolean; isMember?: boolean }) =>
-  renderToStaticMarkup(createElement(ErrorState, { title: "Couldn't load reviews", onRetry: () => {}, ...props }));
+  renderToStaticMarkup(
+    createElement(ErrorState, { title: "Couldn't load reviews", onRetry: () => {}, ...props, isMember: props.isMember ?? false }),
+  );
 
 // F7 (R1 M5): a refused Google request offers the way to reconnect.
 describe("ErrorState", () => {
