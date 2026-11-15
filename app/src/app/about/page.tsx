@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
+import { SignedInSwap } from "@/components/signed-in-swap";
 import { TrialPriceLine } from "@/components/trial-offer";
 import { buttonVariants } from "@/components/ui/button";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
@@ -87,15 +88,31 @@ export default async function AboutPage() {
         </div>
       </LegalSection>
 
-      {payments ? <TrialPriceLine price={price} className="pt-2 text-sm text-muted-foreground" /> : null}
-      <div className="flex flex-wrap gap-3 pt-2">
-        <Link href="/register" className={buttonVariants({ variant: "primary" })}>
-          {payments ? trialButtonLabel(trialDays()) : "Create free account"}
-        </Link>
-        <Link href="/login" className={buttonVariants({ variant: "outline" })}>
-          Log in
-        </Link>
-      </div>
+      {/* R17-pages L1: a signed-in owner pressed the trial button and made a
+          second account. The page stays static, so the client session swaps
+          the buttons once it is read; the server's HTML is the signed-out one. */}
+      <SignedInSwap
+        signedIn={
+          <div className="flex flex-wrap gap-3 pt-2">
+            <Link href="/" className={buttonVariants({ variant: "primary" })}>
+              Go to your dashboard
+            </Link>
+          </div>
+        }
+        signedOut={
+          <>
+            {payments ? <TrialPriceLine price={price} className="pt-2 text-sm text-muted-foreground" /> : null}
+            <div className="flex flex-wrap gap-3 pt-2">
+              <Link href="/register" className={buttonVariants({ variant: "primary" })}>
+                {payments ? trialButtonLabel(trialDays()) : "Create free account"}
+              </Link>
+              <Link href="/login" className={buttonVariants({ variant: "outline" })}>
+                Log in
+              </Link>
+            </div>
+          </>
+        }
+      />
     </LegalPage>
   );
 }

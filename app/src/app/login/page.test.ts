@@ -8,7 +8,11 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(search.value),
 }));
-vi.mock("next-auth/react", () => ({ signIn: vi.fn(), getProviders: vi.fn(async () => null) }));
+// R17-pages L1: the pages read the session through next-auth's own context.
+vi.mock("next-auth/react", async () => {
+  const { createContext } = await import("react");
+  return { signIn: vi.fn(), signOut: vi.fn(), getProviders: vi.fn(async () => null), SessionContext: createContext(undefined) };
+});
 
 import LoginPage from "./page";
 
@@ -46,5 +50,54 @@ describe("login page after sign-up", () => {
 describe("login page landmarks", () => {
   it("has a main landmark", () => {
     expect(render()).toMatch(/<main[ >]/);
+  });
+});
+
+// R17-pages L1: someone already signed in is told so before any form, so no
+// second account or sign-in happens by accident.
+describe("login page for a signed-in visitor", () => {
+  async function renderWith(status: "authenticated" | "unauthenticated" | "loading"): Promise<string> {
+    const { SessionContext } = await import("next-auth/react");
+    const { createElement } = await import("react");
+    const value =
+      status === "authenticated"
+        ? { status, data: { user: { name: "Owner", email: "owner@example.com" }, expires: "2099-01-01T00:00:00Z" }, update: async () => null }
+        : { status, data: null, update: async () => null };
+    return renderToStaticMarkup(
+      createElement(SessionContext.Provider, { value: value as never }, LoginPage() as ReactElement),
+    );
+  }
+
+  it("says who is signed in and offers the dashboard and Sign out, not the form", async () => {
+    const html = await renderWith("authenticated");
+    expect(text(html)).toContain("You're already signed in");
+    expect(text(html)).toContain("You're signed in as owner@example.com.");
+    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Go to your dashboard<\/a>/);
+    expect(html).toMatch(/<button[^>]*>Sign out<\/button>/);
+    expect(html).not.toContain('id="password"');
+    expect(html).not.toContain(">Sign in</button>");
+  });
+
+  it("lets a signed-in invitee continue to the invite", async () => {
+    search.value = "callbackUrl=%2Fjoin%2Fabc";
+    const html = await renderWith("authenticated");
+    expect(html).toMatch(/<a [^>]*href="\/join\/abc"[^>]*>Continue<\/a>/);
+    expect(html).toMatch(/<button[^>]*>Sign out<\/button>/);
+    expect(html).not.toContain('id="password"');
+  });
+
+  it("shows the form once signed out, and while the session is still loading", async () => {
+    for (const status of ["unauthenticated", "loading"] as const) {
+      const html = await renderWith(status);
+      expect(html).toContain('id="password"');
+      expect(html).not.toContain("already signed in");
+    }
+  });
+
+  it("keeps a signed-out invitee's way back to the invite", async () => {
+    search.value = "callbackUrl=%2Fjoin%2Fabc";
+    const html = await renderWith("unauthenticated");
+    expect(html).toContain('id="password"');
+    expect(html).toContain('href="/register?callbackUrl=%2Fjoin%2Fabc"');
   });
 });

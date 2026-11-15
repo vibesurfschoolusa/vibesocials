@@ -161,6 +161,16 @@ describe("/pricing with payments configured", () => {
 
   // R6-pages L7 / new-customer L7: a member has no Plan section in Settings,
   // so the button would lead nowhere; the page says who chooses instead.
+  // R17-pages L1: the header offered "Log in" to someone already signed in.
+  it("offers a signed-in visitor Go to your dashboard in the header, not Log in", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: "user-1", email: "owner@example.com" });
+    getWorkspaceContextMock.mockResolvedValue({ role: "owner" });
+    const html = await render();
+    expect(html).toMatch(/<nav aria-label="Main"[^>]*>[\s\S]*>Go to your dashboard<\/a>[\s\S]*<\/nav>/);
+    expect(html).not.toContain('href="/login"');
+    expect(html).not.toContain(">Log in<");
+  });
+
   it("tells a signed-in member that an owner chooses the plan, with no dead link and no sign-up", async () => {
     getCurrentUserMock.mockResolvedValue({ id: "user-2", email: "member@example.com" });
     getWorkspaceContextMock.mockResolvedValue({ role: "member" });

@@ -43,3 +43,31 @@ describe("About with payments configured", () => {
     expect(html).not.toContain("after the trial");
   });
 });
+
+// R17-pages L1: a paying owner pressed the trial button and made a second account.
+describe("About for a signed-in visitor", () => {
+  it("offers only Go to your dashboard: no trial, no sign-up, no log in", async () => {
+    const { SessionContext } = await import("next-auth/react");
+    const { createElement } = await import("react");
+    getPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: "$19 a month" }]);
+    const page = (await AboutPage()) as ReactElement;
+    const html = renderToStaticMarkup(
+      createElement(
+        SessionContext.Provider,
+        {
+          value: {
+            status: "authenticated",
+            data: { user: { email: "owner@example.com" }, expires: "2099-01-01T00:00:00Z" },
+            update: async () => null,
+          },
+        },
+        page,
+      ),
+    );
+    expect(html).toMatch(/<a [^>]*href="\/"[^>]*>Go to your dashboard<\/a>/);
+    expect(html).not.toContain('href="/register"');
+    expect(html).not.toContain('href="/login"');
+    expect(html).not.toContain("free trial");
+    expect(html).not.toContain("No card needed");
+  });
+});

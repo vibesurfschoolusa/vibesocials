@@ -16,7 +16,11 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
-vi.mock("next-auth/react", () => ({ signIn: vi.fn(), getProviders: vi.fn(async () => null) }));
+// R17-pages L1: the pages read the session through next-auth's own context.
+vi.mock("next-auth/react", async () => {
+  const { createContext } = await import("react");
+  return { signIn: vi.fn(), signOut: vi.fn(), getProviders: vi.fn(async () => null), SessionContext: createContext(undefined) };
+});
 
 const BILLING_VARS = [
   "BILLING_ENABLED",

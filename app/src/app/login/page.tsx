@@ -13,9 +13,11 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
+import { useSignedInAccount } from "@/components/signed-in-swap";
 import { loginOAuthErrorMessage } from "@/lib/loginOAuthError";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
+import { SignedInNotice, showSignedInNotice } from "./signed-in-notice";
 import { signInWithPassword } from "./signInWithPassword";
 
 function LoginPageInner() {
@@ -37,6 +39,8 @@ function LoginPageInner() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // R17-pages L1: a signed-in visitor sees who they are, not this form.
+  const account = useSignedInAccount();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -75,6 +79,9 @@ function LoginPageInner() {
           </Link>
         </div>
 
+        {account && showSignedInNotice(account, loading) ? (
+          <SignedInNotice account={account} callbackUrl={callbackUrl} purpose="login" />
+        ) : (
         <Card>
           <CardHeader>
             <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">
@@ -168,6 +175,7 @@ function LoginPageInner() {
             </p>
           </CardContent>
         </Card>
+        )}
       </div>
     </main>
   );

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { BrandMark } from "@/components/brand-mark";
+import { SignedInSwap } from "@/components/signed-in-swap";
 import { buttonVariants } from "@/components/ui/button";
 import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
@@ -13,6 +14,7 @@ import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 export function PublicHeader({
   showPricing,
   brandHref,
+  signedIn = false,
 }: {
   showPricing: boolean;
   /**
@@ -21,6 +23,11 @@ export function PublicHeader({
    * billing-off HTML is unchanged.
    */
   brandHref?: string;
+  /**
+   * R17-pages L1: a page that already read the session on the server (Pricing)
+   * says so; elsewhere the client session swaps "Log in" once it is read.
+   */
+  signedIn?: boolean;
 }) {
   const brand = (
     <>
@@ -29,6 +36,13 @@ export function PublicHeader({
         Vibe Socials
       </span>
     </>
+  );
+  // R17-pages L1: someone signed in already has an account; "Log in" would
+  // only lead to a second sign-in.
+  const dashboardLink = (
+    <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+      Go to your dashboard
+    </Link>
   );
   return (
     <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5 md:px-6">
@@ -55,12 +69,21 @@ export function PublicHeader({
         >
           About
         </Link>
-        <Link
-          href="/login"
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
-        >
-          Log in
-        </Link>
+        {signedIn ? (
+          dashboardLink
+        ) : (
+          <SignedInSwap
+            signedIn={dashboardLink}
+            signedOut={
+              <Link
+                href="/login"
+                className={buttonVariants({ variant: "ghost", size: "sm" })}
+              >
+                Log in
+              </Link>
+            }
+          />
+        )}
       </nav>
     </header>
   );
