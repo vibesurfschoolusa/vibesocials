@@ -14,7 +14,9 @@ const {
   noPlanYetMock,
   personalNoteMock,
   findOwnersMock,
+  usageMock,
 } = vi.hoisted(() => ({
+  usageMock: vi.fn<(...args: unknown[]) => Promise<null>>(async () => null),
   getWorkspaceContextMock: vi.fn(),
   noPlanYetMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
   personalNoteMock: vi.fn<(...args: unknown[]) => { limit: number; reduced: string | null } | null>(() => null),
@@ -51,7 +53,7 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/server/account/accountDeletion", () => ({ accountDeletionPreview: async () => null }));
 vi.mock("@/server/account/deleteWorkspace", () => ({ workspaceDeletionRefusal: async () => null }));
-vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: async () => null }));
+vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: usageMock }));
 vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [], getYearlyPlanOffers: async () => [] }));
 // The plan section shows for an owner with a plan and billing on; never for a member.
 vi.mock("@/components/planSectionView", () => ({
@@ -372,6 +374,13 @@ describe("SettingsPage — the rendered workspace", () => {
     for (const name of ["SettingsForm", "PostingSlotsForm", "ConnectionsSection", "TeamSection"]) {
       expect(sectionProps[name]?.workspaceId, name).toBe("ws-1");
     }
+  });
+
+  // R8-pages M1: the Usage section's per-person line says "Your" to the owner reading it.
+  it.each(["owner", "member"] as const)("reads the usage for the person viewing it, for an %s", async (role) => {
+    usageMock.mockClear();
+    await render(role);
+    expect(usageMock).toHaveBeenCalledWith("ws-1", expect.any(Date), context(role).user.id);
   });
 
   it("gives the Plan section the page's workspace id, for its Stripe buttons", async () => {

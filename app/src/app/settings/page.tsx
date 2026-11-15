@@ -206,7 +206,8 @@ export default async function SettingsPage({
 
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
   // Null when they cannot be read: the section says so and the page still renders.
-  const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
+  // R8-pages M1: who reads it, so their own per-person line says "Your".
+  const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date(), context.user.id);
   // 21b: the Stripe columns, read only for owners and only when Stripe is set up.
   const stripeRow =
     context.role === "owner" && stripeReachable()
