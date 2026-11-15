@@ -2,8 +2,9 @@ import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps, isPayerMock, findConnectionsMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  findConnectionsMock: vi.fn(async (_args?: unknown): Promise<unknown[]> => []),
   isPayerMock: vi.fn(async () => false),
   // What the Plan section offers (planSectionActions); null: no plan action.
   planActionsMock: vi.fn<(role: string) => { choose: string[]; manage: boolean } | null>(() => null),
@@ -25,7 +26,7 @@ vi.mock("@/lib/workspace", () => ({
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    socialConnection: { findMany: async () => [] },
+    socialConnection: { findMany: findConnectionsMock },
     workspace: { findUnique: async () => null },
     postJob: { count: async () => 0 },
   },
@@ -355,5 +356,47 @@ describe("SettingsPage — the rendered workspace", () => {
     planSectionMock.mockClear();
     await render("owner");
     expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ workspaceId: "ws-1" });
+  });
+});
+
+// R6-pages M1: inside the warning window (lib/connectionExpiry.ts) the
+// Connections card shows Reconnect; only the platform list reaches the client.
+describe("SettingsPage — connections about to end", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const linkedIn = (fields: Record<string, unknown>) => ({
+    platform: "linkedin",
+    accountIdentifier: "li-1",
+    metadata: { username: "Surf Co page" },
+    needsReconnect: false,
+    refreshToken: null,
+    ...fields,
+  });
+
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  it("an in-window LinkedIn is passed on as reconnectSoon; a far one, or a renewable one, is not", async () => {
+    findConnectionsMock.mockResolvedValue([
+      linkedIn({ expiresAt: new Date(Date.now() + 3 * DAY) }),
+      { ...linkedIn({ expiresAt: new Date(Date.now() + 3 * DAY), refreshToken: "sealed-secret-token" }), platform: "youtube" },
+      { ...linkedIn({ expiresAt: new Date(Date.now() + 40 * DAY) }), platform: "pinterest" },
+    ]);
+
+    await render("owner");
+
+    expect(sectionProps.ConnectionsSection.reconnectSoon).toEqual(["linkedin"]);
+    const select = (findConnectionsMock.mock.calls[0][0] as { select: Record<string, boolean> }).select;
+    expect(select).toMatchObject({ expiresAt: true, refreshToken: true, needsReconnect: true });
+    // The token itself never reaches the client, only whether one exists.
+    expect(JSON.stringify(sectionProps.ConnectionsSection)).not.toContain("sealed-secret-token");
+    expect(JSON.stringify(sectionProps.ConnectionsSection.connections)).not.toContain("expiresAt");
+  });
+
+  it("nothing about to end: an empty list", async () => {
+    findConnectionsMock.mockResolvedValue([linkedIn({ expiresAt: new Date(Date.now() + 40 * DAY) })]);
+    await render("owner");
+    expect(sectionProps.ConnectionsSection.reconnectSoon).toEqual([]);
   });
 });

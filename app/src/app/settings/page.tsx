@@ -35,6 +35,7 @@ import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { platformHelpHref } from "@/lib/platformGuides";
 import { platformLabel } from "@/lib/platforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
+import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectionExpiry";
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -99,13 +100,18 @@ export default async function SettingsPage({
       accountIdentifier: true,
       metadata: true,
       // Roadmap Phase 4: the connection-health flag itself — still never
-      // accessToken/refreshToken/scopes/raw metadata beyond the display
-      // fields toConnectionSummary reads.
-      needsReconnect: true,
+      // accessToken/scopes/raw metadata beyond the display fields
+      // toConnectionSummary reads.
+      // R6-pages M1: the expiry columns the warning-window rule reads. The
+      // refresh token is only tested for presence here, on the server; only
+      // the resulting platform list is passed on.
+      ...CONNECTION_EXPIRY_SELECT,
     },
   });
 
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
+  const now = new Date();
+  const reconnectSoon = rows.filter((row) => inExpiryWarningWindow(row, now)).map((row) => row.platform);
 
   // Posting times (brief 11): read here, not carried in every route's context.
   const slotRow = await prisma.workspace.findUnique({
@@ -260,6 +266,7 @@ export default async function SettingsPage({
               key={`connections-${context.workspace.id}`}
               workspaceId={context.workspace.id}
               connections={connections}
+              reconnectSoon={reconnectSoon}
               readOnly={context.role !== "owner"}
               // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
               unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}

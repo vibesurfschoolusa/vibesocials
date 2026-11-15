@@ -129,6 +129,12 @@ interface ConnectionsSectionProps {
    * workspace already has that connection, which stays visible and removable.
    */
   unavailablePlatforms?: readonly Platform[];
+  /**
+   * R6-pages M1: connected platforms inside their expiry warning window
+   * (lib/connectionExpiry.ts, decided on the server): their row offers
+   * Reconnect in place.
+   */
+  reconnectSoon?: readonly Platform[];
 }
 
 export function ConnectionsSection({
@@ -136,6 +142,7 @@ export function ConnectionsSection({
   connections,
   readOnly = false,
   unavailablePlatforms = [],
+  reconnectSoon = [],
 }: ConnectionsSectionProps) {
   return (
     <>
@@ -221,6 +228,7 @@ export function ConnectionsSection({
                       workspaceId={workspaceId}
                       isConnected
                       needsReconnect={connection.needsReconnect}
+                      reconnectSoon={reconnectSoon.includes(key)}
                       readOnly={readOnly}
                     />
                   ) : readOnly ? null : key === "linkedin" ? (
