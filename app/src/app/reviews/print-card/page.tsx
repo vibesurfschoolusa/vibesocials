@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
@@ -41,8 +42,17 @@ export default async function ReviewPrintCardPage({
     return (
       <div className="mx-auto max-w-xl px-4 py-8">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Review card</h1>
+        {/* R28 pages L5: a browser opens the card in a new tab, which has no
+            Back; the installed app opens it in the same view, where the link
+            is the way back to a freshly drawn Reviews page. */}
         <p className="mt-2 text-sm text-muted-foreground">
-          This page was opened for another workspace. Go back, reload that page, then open Print card again.
+          This page was opened for another workspace. Close this tab and reload Reviews, or open Reviews here; then
+          open Print card again.
+        </p>
+        <p className="mt-4 text-sm">
+          <Link href="/reviews" className="font-medium text-primary underline underline-offset-4">
+            Open Reviews
+          </Link>
         </p>
       </div>
     );

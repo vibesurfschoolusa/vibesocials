@@ -17,7 +17,9 @@ vi.mock("next/navigation", () => ({ redirect: h.redirect }));
 
 import ReviewPrintCardPage, { metadata } from "./page";
 
-const WRONG_WORKSPACE = "This page was opened for another workspace. Go back, reload that page, then open Print card again.";
+// R28 pages L5: a browser opens the card in a new tab, which has no Back.
+const WRONG_WORKSPACE =
+  "This page was opened for another workspace. Close this tab and reload Reviews, or open Reviews here; then open Print card again.";
 
 async function render(query: Record<string, string> = {}): Promise<string> {
   return renderToStaticMarkup(await ReviewPrintCardPage({ searchParams: Promise.resolve(query) }));
@@ -51,6 +53,9 @@ describe("print card page: the page's workspace", () => {
     const html = await render({ workspaceId: "ws-other" });
 
     expect(html).toContain(WRONG_WORKSPACE);
+    expect(html).not.toMatch(/Go back/);
+    // The installed app opens the card in the same view: the link is its way back.
+    expect(html).toMatch(/<a [^>]*href="\/reviews"[^>]*>Open Reviews<\/a>/);
     expect(html).toContain("<h1");
     expect(html).not.toContain("Surf Co Dania");
     expect(h.findFirst).not.toHaveBeenCalled();
