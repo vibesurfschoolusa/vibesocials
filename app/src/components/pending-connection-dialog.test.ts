@@ -70,10 +70,39 @@ describe("PendingConnectionDialog failure sentences", () => {
   it("both presses go through fetchOrNoAnswer, and no answer gets the may-have sentence", () => {
     const source = readFileSync(join(__dirname, "pending-connection-dialog.tsx"), "utf8");
     const connect = source.slice(source.indexOf("async function handleConnect"), source.indexOf("async function handleCancel"));
-    expect(connect).toMatch(/await fetchOrNoAnswer\(endpoint, \{\s+method: "POST"/);
+    expect(connect).toMatch(/await fetchOrNoAnswer\(choiceAddress\(endpoint, [^)]*\), \{\s+method: "POST"/);
     expect(connect).toMatch(/catch \{\s+setConnectError\(PENDING_CONNECT_MAYBE\);/);
     expect(connect).toMatch(/setConnectError\(pendingConnectFailureText\(response\.status, data\)\)/);
     const cancel = source.slice(source.indexOf("async function handleCancel"), source.indexOf("const handleClose"));
     expect(cancel).toMatch(/await fetchOrNoAnswer\(endpoint, \{\s+method: "DELETE"/);
+  });
+});
+
+// R29 lead follow-up (as /c): a gone choice said "This choice expired —
+// connect again." although Settings may show the account connected, or a
+// Reconnect button. The dialog shows the route's sentence (which follows the
+// row) and asks with the platform once known, kept for the tab as /c does.
+describe("PendingConnectionDialog: a choice that is gone", () => {
+  it("shows the route's sentence; without one, a sentence that names no button", async () => {
+    const { pendingGoneText } = await import("./pending-connection-dialog");
+    expect(pendingGoneText({ error: "This choice was already used: Facebook Page is connected." })).toBe(
+      "This choice was already used: Facebook Page is connected.",
+    );
+    for (const data of [null, {}, { error: "" }]) {
+      expect(pendingGoneText(data)).toBe(
+        "This choice has ended: it expired, or an account was already chosen. Close this to see your connections.",
+      );
+    }
+  });
+
+  it("asks with the platform, shows the sentence, and no longer says connect again", () => {
+    const source = readFileSync(join(__dirname, "pending-connection-dialog.tsx"), "utf8");
+    expect(source).toMatch(/await fetch\(choiceAddress\(endpoint, rememberedChoicePlatform\(pendingId\)\)\)/);
+    expect(source).toMatch(/rememberChoicePlatform\(pendingId, data\.platform\)/);
+    expect(source).toMatch(/await fetchOrNoAnswer\(choiceAddress\(endpoint, load\.status === "ready" \? load\.platform : null\), \{/);
+    expect(source).toMatch(/setLoad\(\{ status: "expired", message: pendingGoneText\(data\) \}\)/);
+    expect(source).toMatch(/<Alert variant="warning">\{load\.message\}<\/Alert>/);
+    expect(source).not.toContain("connect again.</Alert>");
+    expect(source).not.toContain("Close this and connect again");
   });
 });

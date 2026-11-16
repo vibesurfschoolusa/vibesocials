@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { answerLostText } from "@/lib/answerLost";
+import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
@@ -27,37 +28,6 @@ export const CHOICE_MAYBE_CONNECTED_MESSAGE = answerLostText("the account may ha
 
 const LOAD_FAILED_MESSAGE = "Couldn't load the accounts. Reload this page.";
 const CHOOSE_FAILED_MESSAGE = "Couldn't connect that account. Try again.";
-
-/**
- * R29 client-journey L3: the platform the choice was for, kept for this tab,
- * so after a reload a gone choice can still be asked about with it (the route
- * then says the platform is connected instead of naming a button). A
- * convenience only: without storage the route answers a neutral sentence.
- */
-function platformKey(pendingId: string): string {
-  return `vs-connect-choice:${pendingId}`;
-}
-
-function rememberedPlatform(pendingId: string): string | null {
-  try {
-    return window.sessionStorage.getItem(platformKey(pendingId));
-  } catch {
-    return null;
-  }
-}
-
-function rememberPlatform(pendingId: string, platform: string): void {
-  try {
-    window.sessionStorage.setItem(platformKey(pendingId), platform);
-  } catch {
-    // Private mode or blocked storage: the neutral sentence still reads true.
-  }
-}
-
-/** The choice's address, with the platform it was for once known. */
-export function choiceAddress(base: string, platform: string | null): string {
-  return platform ? `${base}?platform=${encodeURIComponent(platform)}` : base;
-}
 
 type ChoiceAnswer = { platform?: string; candidates?: Candidate[]; error?: string; connected?: boolean } | null;
 
@@ -92,11 +62,11 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(choiceAddress(base, rememberedPlatform(pendingId)), { cache: "no-store" });
+        const response = await fetch(choiceAddress(base, rememberedChoicePlatform(pendingId)), { cache: "no-store" });
         const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
         const outcome = loadOutcome(response.ok, data);
-        if (outcome.status === "ready") rememberPlatform(pendingId, outcome.platform);
+        if (outcome.status === "ready") rememberChoicePlatform(pendingId, outcome.platform);
         setState(outcome);
       } catch {
         if (!cancelled) setState({ status: "gone", message: LOAD_FAILED_MESSAGE });

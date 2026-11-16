@@ -1,4 +1,6 @@
 import { createElement } from "react";
+
+import { choiceAddress } from "@/lib/choicePlatform";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,7 +9,6 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 import {
   CHOICE_MAYBE_CONNECTED_MESSAGE,
   ConnectLinkChoiceView,
-  choiceAddress,
   chooseFailure,
   loadOutcome,
   type ConnectLinkChoiceViewProps,

@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { accountCheckFailedMessage, choiceDifferentAccountMessage } from "@/lib/differentAccount";
+import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectionExpiry";
+import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { shownControl } from "@/lib/oauthResult";
+import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
@@ -31,9 +35,42 @@ interface PendingRouteContext {
  * a stale tab is told to reload instead of "This choice expired".
  */
 
-function notFound(): NextResponse {
+/** The platforms whose connect can end in a choice (server/connections/pendingConnection.ts). */
+const CHOOSABLE = ["facebook_page", "instagram", "linkedin", "pinterest"] as const;
+
+/**
+ * R29 (as /c, client-journey L3): the choice is gone, expired or already
+ * used (maybe on a press whose answer was lost), and its row is deleted
+ * either way. The dialog passes `?platform=` once known; the sentence
+ * follows the row Settings shows for it (shownControl): connected, or the
+ * button that row offers. Without a platform it names no button. Only the
+ * caller's own workspace is read, and only an owner gets here.
+ */
+async function notFound(request: Request, workspaceId: string): Promise<NextResponse> {
+  const hint = new URL(request.url).searchParams.get("platform");
+  const platform = CHOOSABLE.find((choosable) => choosable === hint);
+  if (!platform) {
+    return NextResponse.json(
+      { error: "This choice has ended: it expired, or an account was already chosen. Close this to see your connections." },
+      { status: 404 },
+    );
+  }
+  const row = await prisma.socialConnection.findUnique({
+    where: { workspaceId_platform: { workspaceId, platform } },
+    select: CONNECTION_EXPIRY_SELECT,
+  });
+  const label = PLATFORM_LABELS[platform];
+  const shown = shownControl(row ? { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row) } : null);
+  if (shown === "connected") {
+    return NextResponse.json({ error: `This choice was already used: ${label} is connected.`, connected: true }, { status: 404 });
+  }
   return NextResponse.json(
-    { error: "This choice expired. Connect again." },
+    {
+      error:
+        shown === "reconnect"
+          ? `This choice has ended: it expired, or an account was already chosen. To choose again, press Reconnect on ${label}.`
+          : `This choice expired. To start again, press Connect on ${label}.`,
+    },
     { status: 404 },
   );
 }
@@ -54,7 +91,7 @@ function errorKind(error: unknown): { name: string; code?: string } {
 }
 
 /** GET → `{ platform, candidates: [{ id, name, detail? }] }`. Never tokens. */
-export async function GET(_request: Request, { params }: PendingRouteContext) {
+export async function GET(request: Request, { params }: PendingRouteContext) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
@@ -65,7 +102,7 @@ export async function GET(_request: Request, { params }: PendingRouteContext) {
   try {
     const pending = await loadPendingConnection(id, ownerOf(contextOrError));
     if (!pending) {
-      return notFound();
+      return await notFound(request, contextOrError.workspace.id);
     }
 
     return NextResponse.json({
@@ -125,7 +162,7 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
   try {
     const pending = await loadPendingConnection(id, owner);
     if (!pending) {
-      return notFound();
+      return await notFound(request, contextOrError.workspace.id);
     }
 
     const result = await connectPendingCandidate(pending, candidateId, owner);
@@ -186,7 +223,7 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
   try {
     const pending = await loadPendingConnection(id, ownerOf(contextOrError));
     if (!pending) {
-      return notFound();
+      return await notFound(request, contextOrError.workspace.id);
     }
 
     await deletePendingConnection(pending.id);

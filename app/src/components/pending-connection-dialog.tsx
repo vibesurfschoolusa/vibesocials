@@ -5,6 +5,7 @@ import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { answerLostText } from "@/lib/answerLost";
+import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { cn } from "@/lib/cn";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { Alert } from "@/components/ui/alert";
@@ -54,7 +55,7 @@ const COPY: Record<ChoosablePlatform, { title: string; description: string }> = 
 type LoadState =
   | { status: "loading" }
   | { status: "ready"; platform: ChoosablePlatform; candidates: Candidate[] }
-  | { status: "expired" }
+  | { status: "expired"; message: string }
   | { status: "error" };
 
 const noSubscription = () => () => {};
@@ -70,6 +71,16 @@ export const PENDING_CONNECT_MAYBE = answerLostText(
   "the account may have been connected",
   "Press Cancel, then look for it in your connections before you connect again.",
 );
+
+/**
+ * R29 (as /c): a gone choice shows the route's sentence, which follows the
+ * row Settings shows; without one, a sentence that names no button.
+ */
+export function pendingGoneText(data: { error?: unknown } | null): string {
+  return typeof data?.error === "string" && data.error
+    ? data.error
+    : "This choice has ended: it expired, or an account was already chosen. Close this to see your connections.";
+}
 
 /** What a refused or unreadable Connect answer says. */
 export function pendingConnectFailureText(status: number, data: { error?: string } | null): string {
@@ -110,19 +121,20 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(endpoint);
+        const response = await fetch(choiceAddress(endpoint, rememberedChoicePlatform(pendingId)));
         const data = (await response.json().catch(() => null)) as
-          | { platform?: ChoosablePlatform; candidates?: Candidate[] }
+          | { platform?: ChoosablePlatform; candidates?: Candidate[]; error?: string }
           | null;
         if (cancelled) return;
         if (response.status === 404) {
-          setLoad({ status: "expired" });
+          setLoad({ status: "expired", message: pendingGoneText(data) });
         } else if (
           response.ok &&
           data?.platform &&
           data.platform in COPY &&
           Array.isArray(data.candidates)
         ) {
+          rememberChoicePlatform(pendingId, data.platform);
           setLoad({ status: "ready", platform: data.platform, candidates: data.candidates });
         } else {
           setLoad({ status: "error" });
@@ -134,7 +146,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     return () => {
       cancelled = true;
     };
-  }, [endpoint]);
+  }, [endpoint, pendingId]);
 
   // Drops ?choose= so the dialog stays closed.
   const leave = () => router.replace("/settings");
@@ -145,7 +157,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     setConnectError(null);
 
     try {
-      const response = await fetchOrNoAnswer(endpoint, {
+      const response = await fetchOrNoAnswer(choiceAddress(endpoint, load.status === "ready" ? load.platform : null), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId: selectedId, workspaceId }),
@@ -155,7 +167,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
         | null;
 
       if (response.status === 404) {
-        setLoad({ status: "expired" });
+        setLoad({ status: "expired", message: pendingGoneText(data) });
         setBusy(null);
         return;
       }
@@ -222,9 +234,9 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
             <Skeleton className="h-14 w-full" />
           </div>
         ) : load.status === "expired" ? (
-          <Alert variant="warning">This choice expired — connect again.</Alert>
+          <Alert variant="warning">{load.message}</Alert>
         ) : load.status === "error" ? (
-          <Alert variant="danger">Couldn&apos;t load your accounts. Close this and connect again.</Alert>
+          <Alert variant="danger">Couldn&apos;t load your accounts. Close this and reload the page to try again.</Alert>
         ) : (
           <fieldset className="flex flex-col gap-2" disabled={busy !== null}>
             <legend className="sr-only">{title}</legend>

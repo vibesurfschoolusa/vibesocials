@@ -736,3 +736,85 @@ describe("POST: the same-end flag on a LinkedIn choice", () => {
     await expect(response.json()).resolves.toEqual({ ok: true, platform: "linkedin", sameEnd: true });
   });
 });
+
+// R29 lead follow-up (as /c, client-journey L3): a gone choice said "This
+// choice expired. Connect again." even when the account was already chosen
+// and the Settings row showed it connected, with no Connect button. The
+// dialog passes `?platform=` once known; the answer follows the row Settings
+// shows for it (shownControl), and without it names no button.
+describe("pending/[id]: a choice that is gone", () => {
+  const hinted = (method: string, platform: string) =>
+    new Request(`http://localhost/api/connections/pending/pending-1?platform=${platform}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify({ workspaceId: "ws-1", candidateId: "page-2" }),
+    });
+  const working = { platform: "facebook_page", needsReconnect: false, expiresAt: null, refreshToken: null };
+
+  beforeEach(() => {
+    findUniqueMock.mockResolvedValue(null);
+    connectionFindUniqueMock.mockReset();
+  });
+
+  it("connected: says the choice was already used and the platform is connected, on GET and POST", async () => {
+    connectionFindUniqueMock.mockResolvedValue(working);
+    for (const response of [await GET(hinted("GET", "facebook_page"), ctx()), await POST(hinted("POST", "facebook_page"), ctx())]) {
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: "This choice was already used: Facebook Page is connected.",
+        connected: true,
+      });
+    }
+    expect(connectionFindUniqueMock.mock.calls[0][0].where).toEqual({
+      workspaceId_platform: { workspaceId: "ws-1", platform: "facebook_page" },
+    });
+    expectNothingSaved();
+  });
+
+  it("flagged, or about to end: names Reconnect, the button its row shows", async () => {
+    connectionFindUniqueMock.mockResolvedValue({ ...working, needsReconnect: true });
+    const flagged = await GET(hinted("GET", "facebook_page"), ctx());
+    await expect(flagged.json()).resolves.toEqual({
+      error: "This choice has ended: it expired, or an account was already chosen. To choose again, press Reconnect on Facebook Page.",
+    });
+    // LinkedIn's sign-in can't be renewed: inside its warning window the row shows Reconnect.
+    connectionFindUniqueMock.mockResolvedValue({
+      platform: "linkedin",
+      needsReconnect: false,
+      refreshToken: null,
+      expiresAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+    });
+    const soon = await GET(hinted("GET", "linkedin"), ctx());
+    expect((await soon.json()).error).toContain("press Reconnect on LinkedIn");
+  });
+
+  it("no row: names Connect", async () => {
+    connectionFindUniqueMock.mockResolvedValue(null);
+    const response = await GET(hinted("GET", "instagram"), ctx());
+    await expect(response.json()).resolves.toEqual({
+      error: "This choice expired. To start again, press Connect on Instagram.",
+    });
+  });
+
+  it("no platform named, or one that never ends in a choice: names no button, looks nothing up", async () => {
+    for (const request of [getReq(), hinted("GET", "youtube"), hinted("GET", "nonsense")]) {
+      const response = await GET(request, ctx());
+      expect(response.status).toBe(404);
+      const body = await response.json();
+      expect(body).toEqual({
+        error: "This choice has ended: it expired, or an account was already chosen. Close this to see your connections.",
+      });
+      expect(body.error).not.toMatch(/Connect again/i);
+    }
+    expect(connectionFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("a member still gets the owner gate's 403, with no step", async () => {
+    requireOwnerContextMock.mockResolvedValue(
+      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+    );
+    const response = await GET(hinted("GET", "facebook_page"), ctx());
+    expect(response.status).toBe(403);
+    expect(connectionFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
