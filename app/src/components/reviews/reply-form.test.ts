@@ -9,7 +9,7 @@ import { ReplyForm } from "./reply-form";
 const TOO_LONG =
   "Your reply is too long for Google. Google allows 4,096 bytes, about 4,000 characters (emoji and accented letters count more). Shorten it and try again.";
 
-function render(value: string): string {
+function render(value: string, generatingAI = false): string {
   return renderToStaticMarkup(
     createElement(ReplyForm, {
       value,
@@ -18,9 +18,15 @@ function render(value: string): string {
       onCancel: () => {},
       onDraftAI: () => {},
       submitting: false,
-      generatingAI: false,
+      generatingAI,
     }),
   );
+}
+
+function textarea(html: string): string {
+  const match = html.match(/<textarea[^>]*>/);
+  expect(match, "reply box").not.toBeNull();
+  return match![0];
 }
 
 function postButton(html: string): string {
@@ -56,5 +62,27 @@ describe("ReplyForm and Google's length limit", () => {
     const html = render("é".repeat(2100));
     expect(html).toContain("4,200 of 4,096 bytes used.");
     expect(postButton(html)).toMatch(/disabled=""/);
+  });
+});
+
+// R23 client-journey L3: the AI draft fills the box when it arrives, so the box
+// takes no typing meanwhile and says why; nothing typed is overwritten.
+describe("ReplyForm while an AI draft is being written", () => {
+  const STATUS = "Writing a draft. You can edit it here as soon as it is ready.";
+
+  it("locks the box, says why and holds Post until the draft is in", () => {
+    const html = render("Thanks", true);
+    expect(textarea(html)).toMatch(/readOnly=""/i);
+    expect(textarea(html)).toContain('aria-busy="true"');
+    expect(html).toContain(STATUS);
+    expect(html).toMatch(/role="status"/);
+    expect(postButton(html)).toMatch(/disabled=""/);
+  });
+
+  it("an open box takes typing and says nothing when no draft is being written", () => {
+    const html = render("Thanks");
+    expect(textarea(html)).not.toMatch(/readOnly/i);
+    expect(textarea(html)).not.toContain("aria-busy");
+    expect(html).not.toContain(STATUS);
   });
 });

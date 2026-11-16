@@ -77,3 +77,18 @@ describe("ReviewCard: the review and reply text", () => {
     expect(html).toContain('class="min-w-0 flex-1"');
   });
 });
+
+// R23 pages L2 and L3: the action row wraps on a 375 px screen, and screen
+// readers announce the stars.
+describe("ReviewCard: small screens and screen readers", () => {
+  it("the Reply and Draft buttons sit in a row that wraps", () => {
+    const html = card("Maria Lopez");
+    const row = html.match(/<div class="([^"]*)"><button[^>]*id="[^"]*"[^>]*>(?:(?!<\/button>).)*Reply to review/);
+    expect(row, "action row").not.toBeNull();
+    expect(row![1].split(" ")).toEqual(expect.arrayContaining(["flex", "flex-wrap", "gap-3"]));
+  });
+
+  it("the star rating is an image with its rating as the name", () => {
+    expect(card("Maria Lopez")).toMatch(/<div[^>]*role="img"[^>]*aria-label="5 out of 5 stars"|<div[^>]*aria-label="5 out of 5 stars"[^>]*role="img"/);
+  });
+});

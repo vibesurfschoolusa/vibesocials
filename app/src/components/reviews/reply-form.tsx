@@ -5,6 +5,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { REPLY_TOO_LONG_MESSAGE, replyCounter, replyTooLong } from "@/lib/reviewReplyLength";
 
+const DRAFTING_STATUS = "Writing a draft. You can edit it here as soon as it is ready.";
+
 interface ReplyFormProps {
   value: string;
   onChange: (value: string) => void;
@@ -31,6 +33,9 @@ export function ReplyForm({
   // R17 L1: Google takes at most 4096 bytes; an AI draft can be longer.
   const counter = replyCounter(value);
   const tooLong = replyTooLong(value);
+  const describedBy = [generatingAI ? "review-reply-drafting" : "", counter ? "review-reply-length" : ""]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -54,8 +59,17 @@ export function ReplyForm({
         rows={4}
         className="resize-none"
         aria-invalid={tooLong || undefined}
-        aria-describedby={counter ? "review-reply-length" : undefined}
+        aria-describedby={describedBy || undefined}
+        // R23 client-journey L3: the draft fills the box when it arrives, so the
+        // box takes no typing meanwhile (read-only keeps focus) and says why.
+        readOnly={generatingAI}
+        aria-busy={generatingAI || undefined}
       />
+      {generatingAI ? (
+        <p id="review-reply-drafting" role="status" className="text-xs text-muted-foreground">
+          {DRAFTING_STATUS}
+        </p>
+      ) : null}
       {counter ? (
         <div id="review-reply-length" className={tooLong ? "space-y-1 text-xs text-destructive" : "text-xs text-muted-foreground"}>
           <p>{counter}</p>
@@ -63,7 +77,7 @@ export function ReplyForm({
         </div>
       ) : null}
       <div className="flex gap-3">
-        <Button type="button" onClick={onSubmit} loading={submitting} disabled={tooLong}>
+        <Button type="button" onClick={onSubmit} loading={submitting} disabled={tooLong || generatingAI}>
           {submitting ? "Posting…" : "Post reply"}
         </Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
