@@ -11,6 +11,11 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { MAX_POSTING_SLOTS, normalizePostingSlots, type PostingSlot } from "@/lib/postingSlots";
 import { localTimeZoneLabel } from "@/lib/scheduling";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+
+/** R28 NN2: the times may have been saved before the answer was lost. */
+export const POSTING_TIMES_MAYBE_SAVED_MESSAGE = answerLostText("the posting times may have been saved", "Reload this page to see them.");
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -81,7 +86,7 @@ export function PostingSlotsForm({
     }
     setSaving(true);
     try {
-      const response = await fetch("/api/settings", {
+      const response = await fetchOrNoAnswer("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ postingSlots: checked.slots, workspaceId }),
@@ -100,8 +105,8 @@ export function PostingSlotsForm({
       setNextKey(stored.length);
       toast.success("Posting times saved.");
       router.refresh();
-    } catch {
-      toast.error("Couldn't save the posting times. Check your connection and try again.");
+    } catch (caught) {
+      toast.error(isNoAnswer(caught) ? POSTING_TIMES_MAYBE_SAVED_MESSAGE : "Couldn't save the posting times. Try again.");
     } finally {
       setSaving(false);
     }

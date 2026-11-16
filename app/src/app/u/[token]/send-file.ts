@@ -1,6 +1,8 @@
 import { put } from "@vercel/blob/client";
 
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * One file through a client upload link, in the browser (2026-11-10): prepared
@@ -31,10 +33,12 @@ export interface SendFileDeps {
 const browserDeps: SendFileDeps = {
   prepare: (file) => prepareUploadFile(file),
   put: (pathname, body, options) => put(pathname, body, options),
-  fetch: (url, init) => fetch(url, init),
+  fetch: (url, init) => fetchOrNoAnswer(url, init),
 };
 
 const UPLOAD_FAILED_MESSAGE = "The upload didn't finish. Check your connection and try again.";
+/** R28 NN2: the file is in storage; only the answer to registering it was lost, so it may have arrived. */
+export const CLIENT_FILE_MAYBE_ARRIVED_MESSAGE = answerLostText("the file may have arrived", "If you send it again, it may arrive twice.");
 
 /**
  * Why a file did not arrive. "network": the request or the upload never got a
@@ -68,7 +72,7 @@ async function failureOf(response: Response, fallback: string): Promise<ClientFi
     : new ClientFileError("network", fallback);
 }
 
-async function postJson(deps: SendFileDeps, url: string, body: unknown): Promise<Response> {
+async function postJson(deps: SendFileDeps, url: string, body: unknown, lost = UPLOAD_FAILED_MESSAGE): Promise<Response> {
   try {
     return await deps.fetch(url, {
       method: "POST",
@@ -77,7 +81,7 @@ async function postJson(deps: SendFileDeps, url: string, body: unknown): Promise
     });
   } catch {
     // fetch throws only when no answer came back (offline, dropped connection).
-    throw new ClientFileError("network", UPLOAD_FAILED_MESSAGE);
+    throw new ClientFileError("network", lost);
   }
 }
 
@@ -139,7 +143,7 @@ export async function sendClientFile(
     filename: prepared.name,
     senderName: input.senderName,
     note: input.note,
-  });
+  }, CLIENT_FILE_MAYBE_ARRIVED_MESSAGE);
   if (!mediaResponse.ok) {
     throw await failureOf(mediaResponse, "Couldn't save the file. Check your connection and try again.");
   }

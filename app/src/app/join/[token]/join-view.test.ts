@@ -20,7 +20,7 @@ import {
   INVALID_INVITE_DESCRIPTION,
   invalidInviteDescription,
   JOIN_FAILED_MESSAGE,
-  JOIN_OFFLINE_MESSAGE,
+  JOIN_MAYBE_JOINED_MESSAGE,
   JOIN_SIGNED_OUT_MESSAGE,
   JoinAlreadyMember,
   JoinDeadLink,
@@ -100,7 +100,7 @@ describe("acceptInvite", () => {
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
-    await expect(acceptInvite(offline, "tok")).resolves.toEqual({ kind: "failed", message: JOIN_OFFLINE_MESSAGE });
+    await expect(acceptInvite(offline, "tok")).resolves.toEqual({ kind: "failed", message: JOIN_MAYBE_JOINED_MESSAGE });
   });
 
   // R11-client-journey L3: a server's own failure text ("Failed to join
@@ -184,8 +184,9 @@ describe("settleJoin", () => {
 describe("join failure sentences", () => {
   it("say what happened and what to do", () => {
     expect(JOIN_FAILED_MESSAGE).toBe("You weren't added to the workspace. Please press Join workspace again in a minute.");
-    expect(JOIN_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so you weren't added. Check your internet connection and press Join workspace again.",
+    // R28 NN2: the join may have gone through before the answer was lost.
+    expect(JOIN_MAYBE_JOINED_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so you may have joined. If your connection dropped, reconnect first. Reload this page to see whether you're a member before you press Join workspace again.",
     );
   });
 });

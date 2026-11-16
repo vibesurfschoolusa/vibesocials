@@ -9,6 +9,7 @@
 import { answerLostText } from "./answerLost";
 import { postDestination, type ComposerPublishMode } from "./composerSubmitOutcome";
 import { UploadRefusedError } from "./uploadFailure";
+import { fetchOrNoAnswer } from "./requestNoAnswer";
 
 /** What the form knows before an answer: the mode, and whether its posts are held. */
 export type SubmitWhere = { mode: ComposerPublishMode; holdsForApproval: boolean };
@@ -55,11 +56,7 @@ export function isRouteBody(parsed: unknown): boolean {
 export async function sendPostRequest(body: string, fetchImpl: typeof fetch = fetch): Promise<Response> {
   let response: Response;
   try {
-    response = await fetchImpl("/api/posts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
+    response = await fetchOrNoAnswer("/api/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body }, fetchImpl);
   } catch {
     throw new PostConnectionLostError();
   }

@@ -7,6 +7,8 @@ import { useSession } from "next-auth/react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
+import { VERIFY_RESEND_MAYBE_SENT_MESSAGE } from "@/app/verify-email/verifyOutcome";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * Soft, dismissable-by-verifying nudge shown at the top of the authenticated
@@ -109,15 +111,15 @@ export function VerifyEmailBanner({ suppressed = false }: { suppressed?: boolean
   async function handleResend() {
     setSending(true);
     try {
-      const response = await fetch("/api/auth/resend-verification", { method: "POST" });
+      const response = await fetchOrNoAnswer("/api/auth/resend-verification", { method: "POST" });
       if (response.ok) {
         success("Verification email sent.");
       } else {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         error(data?.error ?? "Couldn't send the verification email. Please try again.");
       }
-    } catch {
-      error("Couldn't send the verification email. Please try again.");
+    } catch (caught) {
+      error(isNoAnswer(caught) ? VERIFY_RESEND_MAYBE_SENT_MESSAGE : "Couldn't send the verification email. Please try again.");
     } finally {
       setSending(false);
     }

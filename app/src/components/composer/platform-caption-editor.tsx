@@ -18,6 +18,7 @@ import {
   type PlatformOverrides,
 } from "@/lib/platformOverrides";
 import { platformLabel } from "@/lib/platforms";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 export interface PlatformCaptionEditorProps {
   /** Prefix for element ids, unique on the page. */
@@ -74,7 +75,7 @@ export function PlatformCaptionEditor({
     const maxLength = adaptMaxLength(platform, footer);
     setAdapting(platform);
     try {
-      const response = await fetch("/api/posts/enhance-caption", {
+      const response = await fetchOrNoAnswer("/api/posts/enhance-caption", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

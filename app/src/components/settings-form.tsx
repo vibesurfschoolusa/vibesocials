@@ -27,6 +27,14 @@ import {
 } from "@/lib/googlePostOptions";
 import { trackedWebsiteLink } from "@/lib/trackingTags";
 import type { UserSettings } from "@/lib/userSettings";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+
+/** R28 NN2: the settings may have been saved before the answer was lost. */
+export const SETTINGS_MAYBE_SAVED_MESSAGE = answerLostText(
+  "your settings may have been saved",
+  "Reload this page to see them before you save again.",
+);
 
 // Mirrors tiktok-post-settings.tsx's checkbox styling for a consistent look
 // across the app's few native checkbox controls.
@@ -213,7 +221,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
           }
         : { notifyOnPostComplete, notifyDailyDigest, notifyNewReviews, notifyMonthlyReport };
 
-      const response = await fetch("/api/settings", {
+      const response = await fetchOrNoAnswer("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...body, workspaceId }),
@@ -240,8 +248,8 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
 
       toast.success("Settings saved successfully!");
       router.refresh();
-    } catch {
-      toast.error("Failed to save settings. Please try again.");
+    } catch (caught) {
+      toast.error(isNoAnswer(caught) ? SETTINGS_MAYBE_SAVED_MESSAGE : "Failed to save settings. Please try again.");
     } finally {
       setIsLoading(false);
     }

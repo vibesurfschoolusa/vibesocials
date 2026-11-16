@@ -13,6 +13,8 @@ import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { workspaceLink } from "@/server/notifications/links";
 
 import { JOIN_FAILED_MESSAGE } from "./joinMessages";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /** GET /api/invites/[token] preview shape. 404 (invalid/expired/revoked) is handled separately. */
 interface InvitePreview {
@@ -68,8 +70,11 @@ export async function loadInvite(fetchImpl: typeof fetch, token: string): Promis
 export { JOIN_FAILED_MESSAGE };
 /** R11-client-journey L3: Join answered 401 (signed out in another tab, or the session ran out). */
 export const JOIN_SIGNED_OUT_MESSAGE = "You were signed out. Sign in again, then open this invite link again.";
-export const JOIN_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so you weren't added. Check your internet connection and press Join workspace again.";
+/** R28 NN2: the join may have gone through before the answer was lost. */
+export const JOIN_MAYBE_JOINED_MESSAGE = answerLostText(
+  "you may have joined",
+  "Reload this page to see whether you're a member before you press Join workspace again.",
+);
 
 export type AcceptOutcome =
   | { kind: "joined" }
@@ -86,7 +91,7 @@ export type AcceptOutcome =
  */
 export async function acceptInvite(fetchImpl: typeof fetch, token: string): Promise<AcceptOutcome> {
   try {
-    const response = await fetchImpl(`/api/invites/${token}/accept`, { method: "POST" });
+    const response = await fetchOrNoAnswer(`/api/invites/${token}/accept`, { method: "POST" }, fetchImpl);
     if (response.ok) return { kind: "joined" };
     if (response.status === 404) return await invalidFrom(response);
     if (response.status === 401) return { kind: "signedOut" };
@@ -94,7 +99,7 @@ export async function acceptInvite(fetchImpl: typeof fetch, token: string): Prom
     const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
     return { kind: "failed", message: typeof data?.error === "string" && data.error ? data.error : JOIN_FAILED_MESSAGE };
   } catch {
-    return { kind: "failed", message: JOIN_OFFLINE_MESSAGE };
+    return { kind: "failed", message: JOIN_MAYBE_JOINED_MESSAGE };
   }
 }
 

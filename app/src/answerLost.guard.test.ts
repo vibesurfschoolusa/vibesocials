@@ -52,28 +52,25 @@ const TEMPORARY_ALLOWLIST: Record<"fetch" | "wording", Record<string, number>> =
  */
 const OUTSIDE_NN2_FILES: Record<"fetch" | "wording", Record<string, number>> = {
   fetch: {
-    "app/admin/workspaces/[id]/admin-controls.tsx": 1,
-    "app/c/[token]/connect-link-choice.tsx": 2,
-    "app/join/[token]/join-view.tsx": 1,
-    "app/posts/bulk/bulk-posts-form.tsx": 2,
-    "app/posts/bulk/bulkExtras.ts": 1,
-    "app/u/[token]/send-file.ts": 1,
-    "components/activity/post-job-card.tsx": 1,
-    "components/composer/platform-caption-editor.tsx": 1,
-    "components/plan-actions.tsx": 1,
-    "components/posting-slots-form.tsx": 1,
-    "components/settings-form.tsx": 1,
-    "components/shell/time-zone-sync.tsx": 1,
-    "components/shell/verify-email-banner.tsx": 1,
-    "components/shell/workspace-paused-banner.tsx": 1,
-    "components/workspace-logo-control.tsx": 1,
-    "lib/postSubmitFailure.ts": 1,
+    "components/activity/post-job-card.tsx": 1, // NN4's file: converted after the rebase
   },
-  wording: {
-    "lib/captionRequest.ts": 2,
-    "lib/workspaceLogo.ts": 2,
-  },
+  wording: {},
 };
+
+/**
+ * Sentences that are true whatever reached the server, named one by one.
+ * CAPTION_OFFLINE_MESSAGE, CAPTION_FAILED_MESSAGE: asking for an AI caption
+ * saves nothing on the server, and the caption box changes only from an
+ * answer, so "your caption is unchanged" holds after a lost answer too.
+ */
+const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant: string }> = [
+  { file: "lib/captionRequest.ts", constant: "CAPTION_OFFLINE_MESSAGE" },
+  { file: "lib/captionRequest.ts", constant: "CAPTION_FAILED_MESSAGE" },
+];
+
+function isTrueWhateverArrived(file: string, name: string): boolean {
+  return TRUE_WHATEVER_ARRIVED.some((entry) => entry.file === rel(file) && entry.constant === name);
+}
 
 /** Wordings that say a request which may have arrived did nothing. */
 const SAYS_NOTHING_HAPPENED =
@@ -243,6 +240,7 @@ function sayings(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): void {
     // a value in all but name, so it is read.
     if (!isPropertyName) {
       for (let value of resolveName(node)) {
+        if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text)) continue;
         if (ts.isBlock(value) || ((ts.isArrowFunction(value) || ts.isFunctionExpression(value)) && ts.isBlock(value.body))) continue;
         // `MESSAGES.saveLost`: only that field of an object constant.
         while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isParenthesizedExpression(value)) value = value.expression;
@@ -315,7 +313,7 @@ function noAnswerBranches(sf: ts.SourceFile): ts.Node[] {
     if (ts.isJsxAttribute(node) && nameText(node.name) === "unreachableText" && node.initializer) out.push(node.initializer);
     if ((ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) && node.initializer) {
       const name = nameText(node.name);
-      if (name && (name === "unreachableText" || NO_ANSWER_NAME.test(name))) out.push(node.initializer);
+      if (name && (name === "unreachableText" || NO_ANSWER_NAME.test(name)) && !isTrueWhateverArrived(sf.fileName, name)) out.push(node.initializer);
     }
     if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.body && NO_ANSWER_NAME.test(nameText(node.name) ?? "")) out.push(node.body);
     if (ts.isCaseClause(node) && (ts.isStringLiteral(node.expression) || ts.isNoSubstitutionTemplateLiteral(node.expression)) && NO_ANSWER_NAME.test(node.expression.text)) out.push(...node.statements);
@@ -608,6 +606,13 @@ describe("requests that change data, and their no-answer wording", () => {
 
   it("a no-answer branch never says nothing changed", () => {
     expect(beyond(wordingFindings(clientFiles), { ...TEMPORARY_ALLOWLIST.wording, ...OUTSIDE_NN2_FILES.wording })).toEqual([]);
+  });
+
+  it("each documented exception names a constant that exists, by name, not by count", () => {
+    for (const entry of TRUE_WHATEVER_ARRIVED) {
+      const source = readFileSync(path.join(SRC, entry.file), "utf8");
+      expect(source, entry.constant).toMatch(new RegExp(`export const ${entry.constant}\\b`));
+    }
   });
 
   it("each allowance is still needed, so a fixed file comes off the list", () => {

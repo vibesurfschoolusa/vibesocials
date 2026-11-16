@@ -9,13 +9,18 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import { limitInputValues, limitsChangeBody, storedLimitsKey, type LimitInput } from "./limitsChange";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /** Field name, label, and the default shown as the placeholder. */
 export type LimitFieldView = { field: string; label: string; value: number | null; defaultLabel: string; max: number };
 
+/** R28 NN2: the change may have been saved before the answer was lost. */
+export const CHANGE_MAYBE_SAVED_MESSAGE = answerLostText("the change may have been saved", "Reload the page to see.");
+
 async function post(url: string, body: unknown): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
   try {
-    const response = await fetch(url, {
+    const response = await fetchOrNoAnswer(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -23,8 +28,8 @@ async function post(url: string, body: unknown): Promise<{ ok: boolean; error?: 
     const data = (await response.json().catch(() => null)) as { error?: string; changed?: boolean } | null;
     if (!response.ok) return { ok: false, error: data?.error ?? "That did not work. Reload the page and try again." };
     return { ok: true, changed: data?.changed };
-  } catch {
-    return { ok: false, error: "Couldn't reach the server. Check the connection and try again." };
+  } catch (caught) {
+    return { ok: false, error: isNoAnswer(caught) ? CHANGE_MAYBE_SAVED_MESSAGE : "That did not work. Reload the page and try again." };
   }
 }
 

@@ -15,6 +15,7 @@ import { storyVideoLengthRefusal, type PlacementChoiceValue } from "@/lib/storyP
 import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import type { coverRequestFields } from "@/lib/videoCover";
 import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * Add many's share of what makes Create pleasant (P1 parity): Improve, the
@@ -72,11 +73,11 @@ export async function requestImprovedCaption(
   fetchImpl: typeof fetch = fetch,
 ): Promise<BulkImproveResult> {
   try {
-    const response = await fetchImpl("/api/posts/enhance-caption", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ caption }),
-    });
+    const response = await fetchOrNoAnswer(
+      "/api/posts/enhance-caption",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ caption }) },
+      fetchImpl,
+    );
     const data = (await response.json().catch(() => null)) as
       | { enhancedCaption?: unknown; error?: unknown; code?: unknown }
       | null;

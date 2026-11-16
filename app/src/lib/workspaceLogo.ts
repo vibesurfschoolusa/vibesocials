@@ -4,6 +4,8 @@
  * (reading the body, decoding and re-encoding) is src/server/workspaceLogo.ts.
  */
 
+import { answerLostText } from "./answerLost";
+
 /** Largest upload accepted, in bytes (1 MB). */
 export const LOGO_MAX_BYTES = 1024 * 1024;
 /** The stored PNG fits inside this box; a smaller picture is never enlarged. */
@@ -23,6 +25,16 @@ export const LOGO_SVG_MESSAGE = "SVG files can't be used as a logo. Choose a PNG
 export const LOGO_LIMIT_MESSAGE = "You've changed the logo 10 times in the last hour. Try again later.";
 export const LOGO_SAVE_FAILED_MESSAGE = "Couldn't save the logo. Nothing was changed. Try again.";
 export const LOGO_REMOVE_FAILED_MESSAGE = "Couldn't remove the logo. Nothing was changed. Try again.";
+/** R28 NN2: the change may have been made before the answer was lost, or before a gateway's 5xx. */
+export const LOGO_SAVE_MAYBE_MESSAGE = answerLostText("the logo may have been saved", "Reload this page to see it.");
+export const LOGO_REMOVE_MAYBE_MESSAGE = answerLostText("the logo may have been removed", "Reload this page to see.");
+
+/** A refused or unreadable answer: the route's sentence; an unreadable 5xx may come after the change. */
+export function logoFailureText(method: "POST" | "DELETE", status: number, data: { error?: unknown } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  if (status >= 500) return method === "POST" ? LOGO_SAVE_MAYBE_MESSAGE : LOGO_REMOVE_MAYBE_MESSAGE;
+  return method === "POST" ? LOGO_SAVE_FAILED_MESSAGE : LOGO_REMOVE_FAILED_MESSAGE;
+}
 
 export const LOGO_ADDRESS_RESERVED_MESSAGE =
   "That file address belongs to a workspace logo and can't be used here. Upload the file instead.";

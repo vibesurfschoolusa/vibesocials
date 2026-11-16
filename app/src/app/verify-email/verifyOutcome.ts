@@ -11,6 +11,12 @@
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
+/** R28 NN2: the email may have gone before the answer was lost (this page and the banners). */
+export const VERIFY_RESEND_MAYBE_SENT_MESSAGE = answerLostText(
+  "a new link may have been sent",
+  "Look in your inbox before you ask for another.",
+);
+
 export type VerifyAttempt = "ok" | "invalid" | "rate_limited" | "server" | "network";
 export type AccountState = "verified" | "unverified" | "signed_out" | "unknown";
 
@@ -130,7 +136,7 @@ export async function resendVerificationEmail(
     // R28 NN2: the email may have gone before the answer was lost.
     return {
       ok: false,
-      message: answerLostText("a new link may have been sent", "Look in your inbox before you ask for another."),
+      message: VERIFY_RESEND_MAYBE_SENT_MESSAGE,
     };
   }
 }

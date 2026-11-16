@@ -5,6 +5,8 @@ import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * The visitor chooses which of several accounts to connect (2026-11-11), from
@@ -19,6 +21,9 @@ export type ConnectLinkChoiceState =
   | { status: "loading" }
   | { status: "ready"; platform: string; candidates: Candidate[] }
   | { status: "gone"; message: string };
+
+/** R28 NN2: the account may have been connected before the answer was lost. */
+export const CHOICE_MAYBE_CONNECTED_MESSAGE = answerLostText("the account may have been connected", "Reload this page to see.");
 
 export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {
   const router = useRouter();
@@ -56,7 +61,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     setBusy(candidateId);
     setError(null);
     try {
-      const response = await fetch(base, {
+      const response = await fetchOrNoAnswer(base, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId }),
@@ -68,8 +73,8 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
         return;
       }
       setError(data?.error ?? "Couldn't connect that account. Try again.");
-    } catch {
-      setError("Couldn't reach Vibe Socials. Check your connection and try again.");
+    } catch (caught) {
+      setError(isNoAnswer(caught) ? CHOICE_MAYBE_CONNECTED_MESSAGE : "Couldn't connect that account. Try again.");
     }
     setBusy(null);
   }
@@ -77,7 +82,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
   async function cancel(platform: string) {
     setBusy("cancel");
     try {
-      await fetch(base, { method: "DELETE" });
+      await fetchOrNoAnswer(base, { method: "DELETE" });
     } catch {
       // The choice expires by itself in 15 minutes.
     }

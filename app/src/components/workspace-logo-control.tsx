@@ -9,10 +9,14 @@ import {
   LOGO_SIZE_LINE,
   LOGO_MAX_BYTES,
   LOGO_REMOVE_FAILED_MESSAGE,
+  LOGO_REMOVE_MAYBE_MESSAGE,
   LOGO_SAVE_FAILED_MESSAGE,
+  LOGO_SAVE_MAYBE_MESSAGE,
   LOGO_TOO_LARGE_MESSAGE,
   logoEndpoint,
+  logoFailureText,
 } from "@/lib/workspaceLogo";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * The workspace's report logo in Settings (18b). An owner uploads, replaces
@@ -46,19 +50,19 @@ export function WorkspaceLogoControl({
     setError(null);
     const fallback = method === "POST" ? LOGO_SAVE_FAILED_MESSAGE : LOGO_REMOVE_FAILED_MESSAGE;
     try {
-      const response = await fetch(logoEndpoint(workspaceId), {
+      const response = await fetchOrNoAnswer(logoEndpoint(workspaceId), {
         method,
         ...(file ? { body: file, headers: { "Content-Type": file.type || "application/octet-stream" } } : {}),
       });
       const data = (await response.json().catch(() => null)) as { logoUrl?: string | null; error?: string } | null;
       if (!response.ok || !data || data.logoUrl === undefined) {
-        setError(data?.error ?? fallback);
+        setError(logoFailureText(method, response.ok ? 500 : response.status, data));
         return;
       }
       setCurrent(data.logoUrl);
       router.refresh();
-    } catch {
-      setError(fallback);
+    } catch (caught) {
+      setError(isNoAnswer(caught) ? (method === "POST" ? LOGO_SAVE_MAYBE_MESSAGE : LOGO_REMOVE_MAYBE_MESSAGE) : fallback);
     } finally {
       setBusy(null);
     }

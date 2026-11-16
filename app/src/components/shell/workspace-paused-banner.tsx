@@ -9,6 +9,8 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
+import { VERIFY_RESEND_MAYBE_SENT_MESSAGE } from "@/app/verify-email/verifyOutcome";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * The one banner a paused workspace's members see on every signed-in page
@@ -55,15 +57,15 @@ export function WorkspacePausedBanner({
     setSending(true);
     try {
       // The existing route, with its own per-person limit of 3 in 15 minutes.
-      const response = await fetch("/api/auth/resend-verification", { method: "POST" });
+      const response = await fetchOrNoAnswer("/api/auth/resend-verification", { method: "POST" });
       if (response.ok) {
         success("We sent a new link. Open it from your inbox to start posting.");
       } else {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         error(data?.error ?? "Could not send the link. Try again in a minute.");
       }
-    } catch {
-      error("Could not send the link. Try again in a minute.");
+    } catch (caught) {
+      error(isNoAnswer(caught) ? VERIFY_RESEND_MAYBE_SENT_MESSAGE : "Could not send the link. Try again in a minute.");
     } finally {
       setSending(false);
     }

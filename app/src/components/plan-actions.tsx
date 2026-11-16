@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { planChoiceView, type BillingChoice } from "@/components/planChoiceButtons";
 import type { PlanKey } from "@/lib/plans";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * Settings → Plan buttons (21b): one per offered plan, which opens Stripe
@@ -18,7 +19,7 @@ export type PlanOfferView = { plan: PlanKey; name: string; price: string | null;
 
 async function openStripe(url: string, body?: unknown): Promise<string | null> {
   try {
-    const response = await fetch(url, {
+    const response = await fetchOrNoAnswer(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),

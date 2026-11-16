@@ -91,6 +91,7 @@ import {
   rowStoryRefusal,
   saveAiCaptionsChoice,
 } from "./bulkExtras";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 export interface BulkRow {
   id: string;
@@ -476,7 +477,7 @@ export function BulkPostsForm({
       const frames = await readRowMedia(id, row, blob);
       // Built from the rows as they are now, after the frames were read, so the
       // other rows' latest captions go with it and this one does not repeat them.
-      const response = await fetch("/api/posts/auto-caption", {
+      const response = await fetchOrNoAnswer("/api/posts/auto-caption", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(autoCaptionRequestBody(rowsRef.current, id, blob, frames)),
@@ -757,7 +758,7 @@ export function BulkPostsForm({
         });
         let response: BulkSendResponse;
         try {
-          const answer = await fetch("/api/posts", {
+          const answer = await fetchOrNoAnswer("/api/posts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),

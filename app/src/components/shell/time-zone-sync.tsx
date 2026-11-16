@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useSession } from "next-auth/react";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * Fix round 1, F4: emails show times in the recipient's own zone, which only
@@ -65,7 +66,7 @@ export function TimeZoneSync() {
     const storage = localStorageOrNull();
     const zone = timeZoneToSend(browserTimeZone(), storage ? readSentTimeZone(storage, userId) : null);
     if (!zone) return;
-    fetch("/api/me/time-zone", {
+    fetchOrNoAnswer("/api/me/time-zone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ timeZone: zone }),
