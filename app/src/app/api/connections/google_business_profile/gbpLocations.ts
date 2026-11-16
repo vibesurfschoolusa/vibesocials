@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
-import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
+import { reviewsErrorBody } from "@/server/googleReviews";
+import {
+  CONNECTION_RECONNECT_REQUIRED_CODE,
+  refreshConnectionToken,
+} from "@/server/platforms/connectionRefresh";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import type { SocialConnection } from "@prisma/client";
 
@@ -22,6 +26,14 @@ export const GBP_MAX_PAGES = 50;
 /** Google failed (429, 5xx or no answer at all); trying again later may work. */
 export const GOOGLE_NO_ANSWER_MESSAGE = "Google didn't answer. Try again in a minute.";
 
+/**
+ * R24 platform-clients L1: the grant is dead (the row is flagged, or Google
+ * refused the refresh), so only a reconnect helps. `code` lets the form tell
+ * it apart and show the card's Reconnect state.
+ */
+export const GBP_RECONNECT_MESSAGE = "Reconnect Google Business Profile in Settings, then try again.";
+export const GBP_RECONNECT_CODE = CONNECTION_RECONNECT_REQUIRED_CODE;
+
 export interface ListedGbpLocation {
   /** "accounts/{accountId}/locations/{locationId}". */
   resourceName: string;
@@ -40,9 +52,12 @@ export type GbpLocationList =
   | { ok: true; locations: ListedGbpLocation[]; complete: boolean }
   | { ok: false; response: NextResponse };
 
-function refused(body: { error: string }, init: { status: number }): GbpLocationList {
+function refused(body: { error: string; code?: string }, init: { status: number }): GbpLocationList {
   return { ok: false, response: NextResponse.json(body, init) };
 }
+
+const reconnectRefusal = (): GbpLocationList =>
+  refused({ error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE }, { status: 409 });
 
 interface GbpAccount {
   name?: string | null; // "accounts/{accountId}"
@@ -79,14 +94,17 @@ interface GbpLocation {
 // 2026-11-01 scale audit (jobs, token refresh): the refresh runs under the
 // per-connection lock (connectionRefresh.ts); a lock timeout, a gone or flagged
 // connection also lands in the catch -> null, like any other failure.
+//
+// R24 platform-clients L1: a failure also says whether the grant is dead, by
+// the rule the Reviews routes use (reviewsErrorBody asks for a reconnect).
 async function refreshAccessToken(
   connection: SocialConnection,
-): Promise<SocialConnection | null> {
+): Promise<{ renewed: SocialConnection | null; grantDead: boolean }> {
   try {
-    return await refreshConnectionToken(connection, (current) => refreshGoogleToken(current));
+    return { renewed: await refreshConnectionToken(connection, (current) => refreshGoogleToken(current)), grantDead: false };
   } catch (error) {
     console.error("[GBP] Failed to refresh access token", { error });
-    return null;
+    return { renewed: null, grantDead: reviewsErrorBody(error, "", "owner").reconnect === true };
   }
 }
 
@@ -146,13 +164,19 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
     );
   }
 
+  // A row already flagged asks for a reconnect without asking Google, as the
+  // Reviews routes do.
+  if (connection.needsReconnect) return reconnectRefusal();
+
   // One token refresh at most, on the first 401 (an expired access token).
   let refreshed = false;
+  let grantDead = false;
   const get = async (url: URL): Promise<Response> => {
     const response = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
     if (response.status !== 401 || refreshed) return response;
     refreshed = true;
-    const renewed = await refreshAccessToken(connection);
+    const { renewed, grantDead: dead } = await refreshAccessToken(connection);
+    grantDead = dead;
     if (!renewed?.accessToken) return response;
     accessToken = renewed.accessToken;
     return fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -166,6 +190,7 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
     const accounts = await readAllPages<GbpAccount>(new URL(`${accountManagementBase}/accounts`), "accounts", get);
     if (!accounts.ok) {
       console.error("[GBP] accounts.list failed while listing locations", { status: accounts.status });
+      if (grantDead) return reconnectRefusal();
       return googleDidNotAnswer(accounts.status)
         ? refused({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 })
         : refused({ error: "Failed to list Google Business Profile accounts" }, { status: 502 });
@@ -188,6 +213,7 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
       const locations = await readAllPages<GbpLocation>(url, "locations", get);
       if (!locations.ok) {
         console.error("[GBP] accounts.locations.list failed", { accountName, status: locations.status });
+        if (grantDead) return reconnectRefusal();
         complete = false;
         continue;
       }

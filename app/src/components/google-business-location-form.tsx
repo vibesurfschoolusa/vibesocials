@@ -37,6 +37,25 @@ export const LOCATION_MESSAGES = {
     "We couldn't reach Vibe Socials, so the locations weren't loaded. Check your internet connection and try again.",
 } as const;
 
+/**
+ * The code both location routes send when the Google grant is dead (gbpLocations.ts,
+ * GBP_RECONNECT_CODE). This file is client code, so it is repeated here; a test
+ * keeps the two equal.
+ */
+export const LOCATION_RECONNECT_CODE = "RECONNECT_REQUIRED";
+
+/**
+ * What a failed answer shows: the route's own text, else `fallback`. `reconnect`
+ * (R24 platform-clients L1) means the card should refresh so its server-rendered
+ * Reconnect state shows without a manual reload.
+ */
+export function locationFailure(
+  data: { error?: string; code?: string } | null,
+  fallback: string,
+): { message: string; reconnect: boolean } {
+  return { message: data?.error ?? fallback, reconnect: data?.code === LOCATION_RECONNECT_CODE };
+}
+
 export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, initialLocationTitle }: Props) {
   const toast = useToast();
   const router = useRouter();
@@ -62,11 +81,13 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         body: JSON.stringify({ locationName: name, locationTitle: title, workspaceId }),
       });
 
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      const data = (await response.json().catch(() => null)) as { error?: string; code?: string } | null;
 
       if (!response.ok) {
-        toast.error(data?.error ?? LOCATION_MESSAGES.saveFailed);
+        const failure = locationFailure(data, LOCATION_MESSAGES.saveFailed);
+        toast.error(failure.message);
         setSaving(false);
+        if (failure.reconnect) router.refresh();
         return;
       }
 
@@ -100,13 +121,15 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
       const data = (await response.json().catch(() => null)) as
-        | { locations?: RemoteLocation[]; error?: string }
+        | { locations?: RemoteLocation[]; error?: string; code?: string }
         | null;
 
       if (!response.ok) {
         setLocations(null);
-        toast.error(data?.error ?? LOCATION_MESSAGES.loadFailed);
+        const failure = locationFailure(data, LOCATION_MESSAGES.loadFailed);
+        toast.error(failure.message);
         setLoadingLocations(false);
+        if (failure.reconnect) router.refresh();
         return;
       }
 

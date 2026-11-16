@@ -13,14 +13,25 @@ const h = vi.hoisted(() => ({
   findFirst: vi.fn(),
   update: vi.fn(),
   refresh: vi.fn(),
+  refreshGoogle: vi.fn(),
 }));
 vi.mock("@/lib/workspace", () => ({ requireOwnerContext: h.requireOwnerContext }));
 vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: h.findFirst, update: h.update } } }));
-vi.mock("@/server/platforms/connectionRefresh", () => ({ refreshConnectionToken: h.refresh }));
-vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: vi.fn() }));
+vi.mock("@/server/platforms/connectionRefresh", () => ({
+  refreshConnectionToken: h.refresh,
+  CONNECTION_RECONNECT_REQUIRED_CODE: "RECONNECT_REQUIRED",
+}));
+vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: h.refreshGoogle }));
 
-import { GOOGLE_NO_ANSWER_MESSAGE, GBP_MAX_PAGES, listGbpLocations } from "./gbpLocations";
+import {
+  GBP_RECONNECT_CODE,
+  GBP_RECONNECT_MESSAGE,
+  GOOGLE_NO_ANSWER_MESSAGE,
+  GBP_MAX_PAGES,
+  listGbpLocations,
+} from "./gbpLocations";
 import { POST } from "./location/route";
+import { GET } from "./locations/route";
 
 const ACCOUNTS = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts";
 const INFO = "https://mybusinessbusinessinformation.googleapis.com/v1";
@@ -205,5 +216,132 @@ describe("Google failing is not 'not one this account manages'", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/^That location isn't one this Google account manages\./);
     expect(h.update).not.toHaveBeenCalled();
+  });
+});
+
+// R24 platform-clients L1: a grant Google has revoked gave the picker "Failed to
+// list Google Business Profile accounts" and no next step. Both routes now say
+// to reconnect, with a code the form tells apart, as the Reviews routes do.
+describe("a revoked grant: reconnect, from the picker and the save", () => {
+  const RECONNECT_BODY = { error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE };
+  const invalidGrant = () =>
+    Object.assign(new Error("Google token refresh failed"), {
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      status: 400,
+      oauthError: "invalid_grant",
+    });
+
+  /** Google answering one request after another, in order. */
+  function googleInTurn(...answers: Page[]) {
+    const fetchMock = vi.fn(async () => {
+      const page = answers.shift();
+      if (!page) throw new Error("unexpected request");
+      if (page.throws) throw new TypeError("fetch failed");
+      return Response.json(page.body ?? {}, { status: page.status ?? 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const routes: Array<[string, () => Promise<Response>]> = [
+    ["GET .../locations", () => GET()],
+    ["POST .../location", () => save("accounts/1/locations/1")],
+  ];
+
+  it("says it plainly", () => {
+    expect(GBP_RECONNECT_MESSAGE).toBe("Reconnect Google Business Profile in Settings, then try again.");
+    expect(GBP_RECONNECT_CODE).toBe("RECONNECT_REQUIRED");
+  });
+
+  it.each(routes)("%s: a flagged row says reconnect without asking Google", async (_label, call) => {
+    h.findFirst.mockResolvedValue({ ...CONNECTION, needsReconnect: true });
+    const fetchMock = googleInTurn();
+
+    const res = await call();
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each(routes)("%s: a 401 whose refresh Google refuses (invalid_grant) says reconnect", async (_label, call) => {
+    googleInTurn({ status: 401 });
+    h.refresh.mockImplementation(async (connection: unknown, refresher: (c: unknown) => Promise<unknown>) =>
+      refresher(connection),
+    );
+    // The shared refresh flags the row on a terminal refusal (googleTokens.test.ts).
+    h.refreshGoogle.mockRejectedValue(invalidGrant());
+
+    const res = await call();
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+    expect(h.refreshGoogle).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }));
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each(routes)("%s: a 401 on a row flagged meanwhile says reconnect", async (_label, call) => {
+    googleInTurn({ status: 401 });
+    h.refresh.mockRejectedValue(Object.assign(new Error("Reconnect"), { code: "RECONNECT_REQUIRED" }));
+
+    const res = await call();
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+  });
+
+  it.each(routes)("%s: a 401 with a refresh that works is retried and listed", async (_label, call) => {
+    const fetchMock = googleInTurn(
+      { status: 401 },
+      { body: { accounts: [{ name: "accounts/1" }] } },
+      { body: { locations: [location(1, 1)] } },
+    );
+    h.refresh.mockResolvedValue({ ...CONNECTION, accessToken: "fresh" });
+
+    const res = await call();
+
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const lastHeaders = (fetchMock.mock.calls[2] as unknown as [string, { headers: Record<string, string> }])[1].headers;
+    expect(lastHeaders.Authorization).toBe("Bearer fresh");
+  });
+
+  it.each(routes)("%s: a 401 whose refresh fails on Google's side keeps today's answer", async (_label, call) => {
+    googleInTurn({ status: 401 });
+    h.refresh.mockRejectedValue(
+      Object.assign(new Error("Google token refresh failed"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }),
+    );
+
+    const res = await call();
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({ error: "Failed to list Google Business Profile accounts" });
+  });
+
+  it.each([
+    ["a 503", { status: 503 }],
+    ["no answer", { throws: true }],
+  ] as Array<[string, Page]>)("%s keeps today's text on both routes", async (_label, failure) => {
+    for (const [, call] of routes) {
+      googleInTurn(failure);
+      const res = await call();
+      expect(res.status).toBe(503);
+      await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
+    }
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it("the picker lists as before for a healthy row", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
+    });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).locations).toHaveLength(1);
   });
 });
