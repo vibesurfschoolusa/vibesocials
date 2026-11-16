@@ -198,7 +198,8 @@ describe("ConfirmDialog callers", () => {
  */
 describe("requests outside the dialogs", () => {
   const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
-  const failureSaid = /catch \(error\) \{\s+const text = confirmFailureText\(error\);\s+if \(text\) toast\.error\(text\);/;
+  // R27 MM3: a create that may have gone through words the no-answer case itself.
+  const failureSaid = /catch \(error\) \{\s+const text = confirmFailureText\(error(, [A-Z_]+)?\);\s+if \(text\) toast\.error\(text\);/;
 
   for (const [path, start, end] of [
     ["../team-section.tsx", "const handleSaveName = useCallback", "}, ["],

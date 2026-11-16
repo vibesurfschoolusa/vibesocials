@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { memberIsGone, memberRoleChanged, teamMemberLines } from "./team-section";
+import { INVITE_MAYBE_MADE_MESSAGE, inviteFailureText, memberIsGone, memberRoleChanged, teamMemberLines } from "./team-section";
 
 // R5 pages L10: the field that shows a new invite link has a name for screen
 // readers. It only renders right after a link is made (client state), so the
@@ -105,5 +105,56 @@ describe("a member whose role changed in the meantime", () => {
       const end = body.indexOf("}, [");
       expect(body.slice(0, end), handler).toMatch(/if \(memberRoleChanged\(response\.status, data\)\) return;/);
     }
+  });
+});
+
+// R27 MM3 (new-customer L2, pages L1): "Create invite link" is replaced by the
+// invite block, and the rename Save disables itself after a save. Both hand
+// focus on through lib/focusAfter: Copy link, and the name field.
+describe("Team card focus after a press", () => {
+  const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+  const body = (start: string) => source.slice(source.indexOf(start), source.indexOf("}, [", source.indexOf(start)));
+
+  it("Create invite link: focus goes to the new Copy link button", () => {
+    const create = body("const createInvite = useCallback");
+    expect(create).toMatch(/const pressed = event\?\.currentTarget \?\? null;/);
+    expect(create).toMatch(/focusAfterPress\(pressed, \(\) => copyInviteRef\.current\);\s+setFreshUrl\(data\.url\);/);
+    expect(source).toMatch(/ref=\{copyInviteRef\}\s+size="sm"\s+variant="outline"\s+className="shrink-0"\s+onClick=\{copyInviteUrl\}/);
+  });
+
+  it("the rename Save: once saved it is disabled, and focus moves on, not to the page", () => {
+    const save = body("const handleSaveName = useCallback");
+    expect(save).toMatch(/const pressed = event\?\.currentTarget \?\? null;/);
+    expect(save).toMatch(/focusAfterPress\(pressed\);\s+setSavedName\(stored\);/);
+  });
+});
+
+// R27 MM3 (new-customer L1): the invite route turns the old link off before it
+// answers, so a lost answer may mean a new link exists. Never "nothing changed".
+describe("Create invite link when the answer is lost", () => {
+  const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+
+  it("says it may have gone through and where to check", () => {
+    expect(INVITE_MAYBE_MADE_MESSAGE).toBe(
+      "The answer was lost, so a new invite link may have been made, which turns the old one off. Reload this page and check Invite link before you send a link.",
+    );
+    expect(INVITE_MAYBE_MADE_MESSAGE).not.toMatch(/nothing changed/i);
+  });
+
+  it("no answer, an unreadable 5xx or a 2xx without the link: that sentence; a refusal: the route's own", () => {
+    expect(inviteFailureText(502, null)).toBe(INVITE_MAYBE_MADE_MESSAGE);
+    expect(inviteFailureText(500, {})).toBe(INVITE_MAYBE_MADE_MESSAGE);
+    expect(inviteFailureText(200, null)).toBe(INVITE_MAYBE_MADE_MESSAGE);
+    expect(inviteFailureText(409, { error: "This page was opened for another workspace." })).toBe(
+      "This page was opened for another workspace.",
+    );
+    expect(inviteFailureText(503, { error: "Try again in a minute." })).toBe("Try again in a minute.");
+    expect(inviteFailureText(403, null)).toBe("Couldn't create an invite link. Reload the page and try again.");
+  });
+
+  it("the request with no answer at all uses the same sentence", () => {
+    const create = source.slice(source.indexOf("const createInvite = useCallback"), source.indexOf("}, [", source.indexOf("const createInvite = useCallback")));
+    expect(create).toMatch(/toast\.error\(inviteFailureText\(response\.status, data\)\);/);
+    expect(create).toMatch(/confirmFailureText\(error, INVITE_MAYBE_MADE_MESSAGE\)/);
   });
 });

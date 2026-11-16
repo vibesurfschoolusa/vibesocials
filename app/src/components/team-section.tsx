@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Copy } from "lucide-react";
@@ -28,6 +28,7 @@ import { useToast } from "@/components/ui/toast";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { formatDisplayDate } from "@/lib/displayDate";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
@@ -53,6 +54,21 @@ interface Member {
  */
 export function teamMemberLines(member: Pick<Member, "name" | "email">): { label: string; email: string | null } {
   return { label: personLabel(member, true), email: member.name?.trim() ? member.email : null };
+}
+
+/**
+ * R27 MM3 (new-customer L1): the invite route turns the old link off before it
+ * answers, so when the answer is lost a new link may exist and the old one be
+ * dead. Never "nothing changed".
+ */
+export const INVITE_MAYBE_MADE_MESSAGE =
+  "The answer was lost, so a new invite link may have been made, which turns the old one off. Reload this page and check Invite link before you send a link.";
+
+/** What a failed Create invite link says, from the answer it got. */
+export function inviteFailureText(status: number, data: { error?: unknown } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  if (status >= 500 || (status >= 200 && status < 300)) return INVITE_MAYBE_MADE_MESSAGE;
+  return "Couldn't create an invite link. Reload the page and try again.";
 }
 
 /**
@@ -609,7 +625,8 @@ function OwnerView({
   const [savedName, setSavedName] = useState(workspaceName);
   const [savingName, setSavingName] = useState(false);
 
-  const handleSaveName = useCallback(async () => {
+  const handleSaveName = useCallback(async (event?: MouseEvent<HTMLElement>) => {
+    const pressed = event?.currentTarget ?? null;
     if (!workspaceNameSavable(name, savedName)) return;
     const trimmed = workspaceNameToSave(name);
     setSavingName(true);
@@ -626,6 +643,8 @@ function OwnerView({
       }
       // The field shows the name as stored, so Save goes quiet until it changes.
       const stored = typeof data?.name === "string" ? data.name : trimmed;
+      // R27 MM3: Save is disabled once the name is stored; focus moves on (the name field).
+      focusAfterPress(pressed);
       setSavedName(stored);
       setName(stored);
       toast.success("Workspace renamed.");
@@ -673,7 +692,10 @@ function OwnerView({
     };
   }, []);
 
-  const createInvite = useCallback(async () => {
+  const copyInviteRef = useRef<HTMLButtonElement>(null);
+
+  const createInvite = useCallback(async (event?: MouseEvent<HTMLElement>) => {
+    const pressed = event?.currentTarget ?? null;
     setInviteBusy(true);
     try {
       const response = await fetchOrNoAnswer("/api/workspaces/invites", {
@@ -685,14 +707,16 @@ function OwnerView({
         | { url?: string; expiresAt?: string; error?: string }
         | null;
       if (!response.ok || !data?.url || !data.expiresAt) {
-        toast.error(data?.error ?? "Couldn't create an invite link.");
+        toast.error(inviteFailureText(response.status, data));
         return;
       }
+      // R27 MM3: "Create invite link" is replaced by the new link; focus goes to its Copy button.
+      focusAfterPress(pressed, () => copyInviteRef.current);
       setFreshUrl(data.url);
       setInvite({ expiresAt: data.expiresAt, createdAt: new Date().toISOString() });
       toast.success("Invite link created.");
     } catch (error) {
-      const text = confirmFailureText(error);
+      const text = confirmFailureText(error, INVITE_MAYBE_MADE_MESSAGE);
       if (text) toast.error(text);
     } finally {
       setInviteBusy(false);
@@ -1001,7 +1025,7 @@ function OwnerView({
             {freshUrl ? (
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input readOnly value={freshUrl} aria-label="New invite link" className="font-mono text-xs sm:max-w-md" />
-                <Button size="sm" variant="outline" className="shrink-0" onClick={copyInviteUrl}>
+                <Button ref={copyInviteRef} size="sm" variant="outline" className="shrink-0" onClick={copyInviteUrl}>
                   <Copy aria-hidden className="h-4 w-4" />
                   Copy link
                 </Button>
