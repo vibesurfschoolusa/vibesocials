@@ -328,6 +328,19 @@ describe("submitControl: the form's refusal line", () => {
     expect(render(control({ pageError: refusal }))).toContain(refusal);
   });
 
+  // R31 lead review: an old line must not hide what disables the button now.
+  it("while the button is disabled, its disabling reason wins over an old line", () => {
+    const old = "Please enter a caption for this post.";
+    const tiktok = control({ pageError: old, tiktokBlock: "Choose who can see this video." });
+    expect(tiktok.disabled).toBe(true);
+    expect(tiktok.reason).toBe("TikTok: Choose who can see this video.");
+    expect(control({ pageError: old, caption: "a".repeat(10_050) }).reason).toBe(
+      "Caption is too long: 10,050 / 10,000 characters.",
+    );
+    const wait = "Wait until the file from your library has loaded, then press the button again.";
+    expect(control({ pageError: old, fileBlock: wait }).reason).toBe(wait);
+  });
+
   it("the untouched sentence still comes first; the refusal comes before standing reasons", () => {
     expect(control({ pageError: refusal, untouchedMessage: UNTOUCHED_SUBMIT_MESSAGE }).reason).toBe(UNTOUCHED_SUBMIT_MESSAGE);
     expect(control({ pageError: refusal, platformAlert: "Select at least one platform." }).reason).toBe(refusal);

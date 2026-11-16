@@ -440,13 +440,18 @@ export function submitControl(input: {
   pageError: string | null;
 }): SubmitControlView {
   const counter = captionCounter(input.caption);
-  const reason =
-    input.untouchedMessage ??
-    input.pageError ??
-    input.platformAlert ??
+  // What disables the button, in the order the bar has always named them.
+  const disablingReason =
     (counter.over ? `Caption is too long: ${counter.label} characters.` : null) ??
     (input.tiktokBlock ? `TikTok: ${input.tiktokBlock}` : null) ??
     input.fileBlock;
+  // R31 lead review: the form's line shows only while the button is enabled,
+  // so an old line never hides what disables it now.
+  const reason =
+    input.untouchedMessage ??
+    (disablingReason === null ? input.pageError : null) ??
+    input.platformAlert ??
+    disablingReason;
   return {
     label: input.buttonLabel,
     loading: input.loading,
@@ -2443,7 +2448,7 @@ function CreatePostFormInner({
     <Card className="p-6">
       <form id="create-post-form" onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && dispatchFailed && (
-          <div ref={successRef}>
+          <div ref={successRef} className="scroll-mt-24">
             <Alert variant="warning" title="Publishing didn't start">
               <div className="flex flex-col items-start gap-2">
                 <p>{dispatchFailed}</p>
@@ -2459,7 +2464,7 @@ function CreatePostFormInner({
         )}
 
         {showSuccess && !dispatchFailed && banner?.kind === "warning" && (
-          <div ref={successRef}>
+          <div ref={successRef} className="scroll-mt-24">
             <Alert variant="warning" title={banner.title}>
               <div className="flex flex-col items-start gap-2">
                 <p>{banner.text}</p>
@@ -2472,7 +2477,7 @@ function CreatePostFormInner({
         )}
 
         {showSuccess && !dispatchFailed && banner?.kind !== "warning" && (
-          <div ref={successRef}>
+          <div ref={successRef} className="scroll-mt-24">
             <Alert
               variant="success"
               title={
@@ -2515,7 +2520,7 @@ function CreatePostFormInner({
           </div>
         )}
 
-        {uploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger">{uploadError}</Alert>}
+        {uploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger" className="scroll-mt-24">{uploadError}</Alert>}
 
         <div className="space-y-1.5">
           {reuseItem ? (

@@ -20,7 +20,7 @@ import {
 import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 
 /** Shown over a list on screen when reloading it failed. */
-const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
+export const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
 /** R29 client-journey L2: Send again found the same change request already standing. */
 export const REVIEW_CHANGE_ALREADY_SAVED_MESSAGE = "Your change request was already saved. The list was loaded again.";
 
@@ -35,28 +35,48 @@ const NOT_RELOADED: Record<string, string> = {
   [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page.",
 };
 
-/**
- * R31 client-journey L1: the card's sentence when the reload failed. The old
- * version is still on the card, so the step is a reload; the notice above the
- * list leaves that step to the refresh alert, so it is said once.
- */
-const CARD_CHANGED_NOT_RELOADED = "This post may have changed. Reload the page to see it.";
-
 export function staleNotice(message: string, reloaded: boolean): string {
   return reloaded ? message : (NOT_RELOADED[message] ?? message);
 }
 
 /**
- * The card's sentence for a refused decision. A post changed since the page
- * loaded reloads the list first, and the sentence follows that reload's
- * result (R31 client-journey L1).
+ * A card's line under its buttons. `clearAfter`: the count of list reloads
+ * that worked when it was set; a later one that works takes it away (the
+ * card then shows the post as it now is). Null: it stays.
  */
-export async function cardRefusal(
+export interface CardLine {
+  text: string;
+  clearAfter: number | null;
+}
+
+/**
+ * R31 client-journey L1 (lead review): the card's line for a refused decision,
+ * shown at once, and whether to reload the list. A post changed since the page
+ * loaded gets the sentence that is true before the reload answers; the reload
+ * runs in the background, so a stalled one never keeps the buttons spinning.
+ */
+export function cardRefusalStart(
   outcome: { kind: string; message: string },
-  onStale: (message: string) => Promise<boolean>,
-): Promise<string> {
-  if (outcome.kind !== "changed") return outcome.message;
-  return (await onStale(outcome.message)) ? outcome.message : CARD_CHANGED_NOT_RELOADED;
+  reloads: number,
+): { line: CardLine; reload: boolean } {
+  if (outcome.kind !== "changed") return { line: { text: outcome.message, clearAfter: null }, reload: false };
+  return { line: { text: staleNotice(outcome.message, false), clearAfter: reloads }, reload: true };
+}
+
+/**
+ * Once the reload answered: it worked, so the new version is on the card; it
+ * failed, so the line stays as it is and the refresh alert above the list
+ * gives the reload step, once.
+ */
+export function cardLineAfterReload(line: CardLine, message: string, reloaded: boolean): CardLine {
+  return reloaded ? { text: message, clearAfter: null } : line;
+}
+
+/** The line as shown, given the count of list reloads that worked. */
+export function shownCardLine(line: CardLine | null, reloads: number): string | null {
+  if (!line) return null;
+  if (line.clearAfter !== null && reloads > line.clearAfter) return null;
+  return line.text;
 }
 
 /** The route's `already`: this request wrote nothing, as an earlier one had. */
@@ -139,6 +159,7 @@ export function ReviewPostCard({
   token,
   onDecided,
   onStale,
+  reloads,
 }: {
   post: ReviewPostDTO;
   token: string;
@@ -146,11 +167,14 @@ export function ReviewPostCard({
   onDecided: (patch: Partial<ReviewPostDTO>) => void;
   /** The post changed since the page loaded: show why above the list and reload it; true when it reloaded. */
   onStale: (message: string) => Promise<boolean>;
+  /** How many list reloads have worked (shownCardLine). */
+  reloads: number;
 }) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CardLine | null>(null);
+  const shownError = shownCardLine(error, reloads);
   const stateRef = useRef<HTMLParagraphElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
@@ -195,10 +219,19 @@ export function ReviewPostCard({
         onStale(outcome.message);
         return;
       }
-      // A refused decision always says why on its own card.
-      setError(await cardRefusal(outcome, onStale));
+      // A refused decision always says why on its own card, at once.
+      const start = cardRefusalStart(outcome, reloads);
+      setError(start.line);
+      if (start.reload) {
+        void onStale(outcome.message).then((reloaded) =>
+          setError((current) => (current === start.line ? cardLineAfterReload(start.line, outcome.message, reloaded) : current)),
+        );
+      }
     } catch (error) {
-      setError(isNoAnswer(error) ? REVIEW_DECISION_MAYBE_SAVED_MESSAGE : "Couldn't save that. Reload the page and try again.");
+      setError({
+        text: isNoAnswer(error) ? REVIEW_DECISION_MAYBE_SAVED_MESSAGE : "Couldn't save that. Reload the page and try again.",
+        clearAfter: null,
+      });
     } finally {
       setBusy(false);
     }
@@ -333,9 +366,9 @@ export function ReviewPostCard({
           )
         ) : null}
 
-        {error ? (
+        {shownError ? (
           <p role="alert" className="text-sm text-destructive">
-            {error}
+            {shownError}
           </p>
         ) : null}
       </div>
@@ -350,6 +383,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
+  // List reloads that worked; a card's line set before one can go (shownCardLine).
+  const [reloads, setReloads] = useState(0);
 
   /** True when the list was read again. */
   const load = useCallback(async (): Promise<boolean> => {
@@ -368,6 +403,7 @@ export function ReviewLinkView({ token }: { token: string }) {
       }
       setPosts(data.posts);
       setMore(data.more === true);
+      setReloads((count) => count + 1);
       return true;
     } catch {
       setError("");
@@ -438,6 +474,7 @@ export function ReviewLinkView({ token }: { token: string }) {
                 token={token}
                 onDecided={(change) => patch(post.id, change)}
                 onStale={stale}
+                reloads={reloads}
               />
             ))}
           </ul>

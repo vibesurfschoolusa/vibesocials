@@ -11,9 +11,12 @@ import {
   REVIEW_MORE_SENTENCE,
   ReviewListMore,
   ReviewPostCard,
+  REFRESH_FAILED_MESSAGE,
   alreadyStood,
-  cardRefusal,
+  cardLineAfterReload,
+  cardRefusalStart,
   changeNoteHint,
+  shownCardLine,
   staleNotice,
 } from "./review-link-view";
 
@@ -37,7 +40,7 @@ function post(over: Partial<ReviewPostDTO> = {}): ReviewPostDTO {
 
 function render(p: ReviewPostDTO): string {
   return renderToStaticMarkup(
-    createElement("ul", null, createElement(ReviewPostCard, { post: p, token: "t", onDecided: () => {}, onStale: async () => true })),
+    createElement("ul", null, createElement(ReviewPostCard, { post: p, token: "t", onDecided: () => {}, onStale: async () => true, reloads: 0 })),
   );
 }
 
@@ -234,53 +237,63 @@ describe("ReviewLinkView: the notice after a reload", () => {
   });
 });
 
-// R31 client-journey L1: on a "changed" 409 the card said "Have a look at the
-// new version" even when the reload failed and the old caption stayed. The
-// card's sentence waits for the reload and follows its result (staleNotice).
+// R31 client-journey L1 (lead review): on a "changed" 409 the card says at once
+// what is true, its spinner stops, and the list reloads in the background (a
+// stalled reload must not keep Looks good spinning). A reload that worked adds
+// "Have a look at the new version"; one that failed leaves the reload step to
+// the refresh alert alone, and the card's line goes when a later reload works.
 describe("ReviewPostCard: a post changed since the page loaded", () => {
-  it("reloaded: the card says to look at the new version", async () => {
-    const asked: string[] = [];
-    const text = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async (message) => {
-      asked.push(message);
-      return true;
-    });
-    expect(asked).toEqual([REVIEW_POST_CHANGED_MESSAGE]);
-    expect(text).toBe(REVIEW_POST_CHANGED_MESSAGE);
+  const changed = { kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE } as const;
+
+  it("at once: the true sentence, and a reload to start", () => {
+    const start = cardRefusalStart(changed, 2);
+    expect(start.reload).toBe(true);
+    expect(start.line).toEqual({ text: "This post was changed after you opened this page.", clearAfter: 2 });
+    expect(shownCardLine(start.line, 2)).toBe("This post was changed after you opened this page.");
   });
 
-  it("the reload failed: the card says to reload the page, not to look at a new version", async () => {
-    const text = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async () => false);
-    expect(text).toBe("This post may have changed. Reload the page to see it.");
-    expect(text).not.toContain("Have a look");
+  it("the reload worked: the card says to look at the new version, and keeps it", () => {
+    const line = cardLineAfterReload(cardRefusalStart(changed, 0).line, REVIEW_POST_CHANGED_MESSAGE, true);
+    expect(shownCardLine(line, 1)).toBe(REVIEW_POST_CHANGED_MESSAGE);
+    expect(shownCardLine(line, 5)).toBe(REVIEW_POST_CHANGED_MESSAGE);
   });
 
-  // Coordinator (R31 review): the refresh alert above the list already says to
-  // reload; the notice does not say it again, and the card says it once.
-  it("the reload failed: the reload step is on the card once and not in the notice above the list", async () => {
-    const card = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async () => false);
+  it("the reload failed: the reload step is on screen once (the refresh alert's)", () => {
+    const line = cardLineAfterReload(cardRefusalStart(changed, 0).line, REVIEW_POST_CHANGED_MESSAGE, false);
+    const card = shownCardLine(line, 0) ?? "";
+    expect(card).toBe("This post was changed after you opened this page.");
     const notice = staleNotice(REVIEW_POST_CHANGED_MESSAGE, false);
-    expect(notice).not.toMatch(/reload/i);
-    expect(notice).not.toContain("Have a look");
-    expect(`${notice} ${card}`.match(/Reload the page to see it/g)).toHaveLength(1);
-    expect(card).not.toBe(notice);
+    expect(`${REFRESH_FAILED_MESSAGE} ${notice} ${card}`.match(/reload/gi)).toHaveLength(1);
+    expect(`${notice} ${card}`).not.toContain("Have a look");
   });
 
-  it("any other refusal is the route's sentence, with no reload", async () => {
-    let reloads = 0;
-    const text = await cardRefusal({ kind: "refused", message: "This link has been turned off." }, async () => {
-      reloads += 1;
-      return true;
-    });
-    expect(text).toBe("This link has been turned off.");
-    expect(reloads).toBe(0);
+  it("a later Reload the list that works clears the card's line", () => {
+    const line = cardLineAfterReload(cardRefusalStart(changed, 3).line, REVIEW_POST_CHANGED_MESSAGE, false);
+    expect(shownCardLine(line, 3)).not.toBeNull();
+    expect(shownCardLine(line, 4)).toBeNull();
   });
 
-  it("decide shows the card's sentence from cardRefusal", async () => {
+  it("any other refusal is the route's sentence, with no reload, and stays", () => {
+    const start = cardRefusalStart({ kind: "refused", message: "This link has been turned off." }, 0);
+    expect(start.reload).toBe(false);
+    expect(shownCardLine(start.line, 9)).toBe("This link has been turned off.");
+  });
+
+  it("decide shows the line at once and runs the reload in the background", async () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     const decide = source.slice(source.indexOf("async function decide("), source.indexOf("return (", source.indexOf("async function decide(")));
-    expect(decide).toContain("setError(await cardRefusal(outcome, onStale));");
-    expect(decide).not.toContain("setError(outcome.message);");
+    expect(decide).toMatch(/const start = cardRefusalStart\(outcome, reloads\);\s*setError\(start\.line\);\s*if \(start\.reload\) \{\s*void onStale\(outcome\.message\)\.then\(/);
+    expect(decide).not.toMatch(/await onStale|await cardRefusal/);
+    expect(source).toContain("shownCardLine(error, reloads)");
+  });
+
+  it("the view counts reloads that worked and hands the count to each card", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/setPosts\(data\.posts\);\s*setMore\(data\.more === true\);\s*setReloads\(\(count\) => count \+ 1\);\s*return true;/);
+    expect(source).toContain("reloads={reloads}");
   });
 });

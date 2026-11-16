@@ -1427,7 +1427,19 @@ describe("a refused press shows its reason where the person is", () => {
     // Counted with the clear, before any refusal, so the same sentence twice is shown twice.
     expect(submit).toMatch(/setUploadError\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*if \(first\.stop === "wait"\)/);
     expect(raw).toMatch(/if \(pressCount === 0\) return;[\s\S]{0,200}revealRefusal\(uploadErrorRef\.current, reduce\);\s*\}, \[pressCount\]\);/);
-    expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger">\{uploadError\}<\/Alert>/);
+    expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger" className="scroll-mt-24">\{uploadError\}<\/Alert>/);
+  });
+
+  // R31 lead review: the top bar is sticky, see-through and 64px tall (h-16);
+  // a line scrolled to the top must stop below it (scroll-mt-24 is 96px).
+  it("the error line and the success banners scroll to below the sticky top bar", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const bar = readFileSync(new URL("./shell/top-bar.tsx", import.meta.url), "utf8");
+    expect(bar).toContain("sticky top-0 z-20 flex h-16");
+    expect(raw).toContain('<Alert ref={uploadErrorRef} tabIndex={-1} variant="danger" className="scroll-mt-24">');
+    const banners = raw.match(/<div ref=\{successRef\}[^>]*>/g) ?? [];
+    expect(banners).toHaveLength(3);
+    for (const banner of banners) expect(banner).toBe('<div ref={successRef} className="scroll-mt-24">');
   });
 
   it("the phone bar's reason is the form's line", () => {
