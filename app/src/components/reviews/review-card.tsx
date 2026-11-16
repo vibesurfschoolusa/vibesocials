@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { MessageSquare, Sparkles } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { nameInitial } from "@/lib/accountInitials";
 import { cn } from "@/lib/cn";
 import type { GoogleReview } from "./types";
 import { StarRating } from "./star-rating";
-import { ReplyForm } from "./reply-form";
+import { DraftAIButton, ReplyForm } from "./reply-form";
 import { replyButtonId } from "./reviews-page";
 
 function formatDate(dateString: string) {
@@ -77,8 +77,9 @@ export function ReviewCard({
           {/* R24 pages L1: the row wraps on a 375 px phone, so the pill and the
               date move whole instead of breaking over two lines. */}
           <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <div className="font-semibold text-foreground">
+            {/* JJ3 second review: a one-word long name wraps at 375 px. */}
+            <div className="min-w-0">
+              <div className="break-words font-semibold text-foreground">
                 {review.reviewer.displayName}
               </div>
               <div className="mt-1 flex items-center gap-2">
@@ -139,15 +140,7 @@ export function ReviewCard({
                     <MessageSquare aria-hidden className="h-4 w-4" />
                     Reply to review
                   </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={onDraftAI}
-                    loading={isGeneratingAI}
-                  >
-                    {!isGeneratingAI && <Sparkles aria-hidden className="h-4 w-4" />}
-                    {isGeneratingAI ? "Generating…" : "Draft AI response"}
-                  </Button>
+                  <DraftAIButton drafting={isGeneratingAI} onDraft={onDraftAI} />
                 </div>
               )}
             </div>

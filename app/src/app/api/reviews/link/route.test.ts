@@ -200,6 +200,36 @@ describe("GET /api/reviews/link", () => {
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });
 
+  // JJ3 lead review: the panel follows the rule the Reviews routes use
+  // (reviewsErrorBody), so a refresh that flags the row reads "Reconnect".
+  it("an expired token whose refresh Google refuses (invalid_grant) says reconnect", async () => {
+    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+    mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() - 60 * 1000) }));
+    mocks.refreshAccessToken.mockRejectedValue(
+      Object.assign(new Error("refused"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 400, oauthError: "invalid_grant" }),
+    );
+
+    const body = await (await GET()).json();
+
+    expect(body).toEqual({
+      url: null,
+      reason: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+    });
+    expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
+  });
+
+  it("an expired token whose refresh gets a 5xx keeps today's text", async () => {
+    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+    mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() - 60 * 1000) }));
+    mocks.refreshAccessToken.mockRejectedValue(
+      Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 502 }),
+    );
+
+    expect((await (await GET()).json()).reason).toBe(
+      "Couldn't get your review link from Google. Reload this page to try again.",
+    );
+  });
+
   it("says why there is no link: not connected", async () => {
     mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(null);

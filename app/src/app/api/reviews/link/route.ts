@@ -6,7 +6,13 @@ import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { fetchNewReviewUri, refreshAccessToken, reviewLinkReason, savedNewReviewUri } from "@/server/googleReviews";
+import {
+  fetchNewReviewUri,
+  refreshAccessToken,
+  reviewLinkReason,
+  reviewsErrorBody,
+  savedNewReviewUri,
+} from "@/server/googleReviews";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -99,9 +105,11 @@ export async function GET() {
       error: error instanceof Error ? error.name : "unknown",
       code: (error as { code?: unknown } | null)?.code,
     });
-    return NextResponse.json({
-      url: null,
-      reason: (error as { code?: unknown } | null)?.code === "RECONNECT_REQUIRED" ? reason("needs_reconnect") : GOOGLE_FAILED,
-    });
+    // JJ3 lead review: the Reviews routes' rule (reviewsErrorBody), so a
+    // refresh that flags the row reads "Reconnect", not "Reload this page".
+    // Asked as "owner" only because a member's body carries no reconnect
+    // flag; the reason itself is worded for the caller's role below.
+    const asksReconnect = reviewsErrorBody(error, GOOGLE_FAILED, "owner").reconnect === true;
+    return NextResponse.json({ url: null, reason: asksReconnect ? reason("needs_reconnect") : GOOGLE_FAILED });
   }
 }

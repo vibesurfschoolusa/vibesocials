@@ -92,7 +92,7 @@ describe("ReviewCard: small screens and screen readers", () => {
   // never break over two lines at 375 px.
   it("the header row wraps and the Needs reply pill stays on one line", () => {
     const html = card("Maria Lopez");
-    const header = html.match(/<div class="([^"]*)"><div><div class="font-semibold/);
+    const header = html.match(/<div class="([^"]*)"><div class="min-w-0"><div class="[^"]*font-semibold/);
     expect(header, "header row").not.toBeNull();
     expect(header![1].split(" ")).toEqual(
       expect.arrayContaining(["flex", "flex-wrap", "items-start", "justify-between", "gap-2"]),
@@ -100,6 +100,44 @@ describe("ReviewCard: small screens and screen readers", () => {
     const pill = html.match(/<span class="([^"]*)"[^>]*>Needs reply<\/span>/);
     expect(pill, "Needs reply pill").not.toBeNull();
     expect(pill![1].split(" ")).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
+  });
+
+  // JJ3 second review: a one-word long name wraps inside the card at 375 px.
+  it("the name column can shrink and a long one-word name wraps", () => {
+    const html = card("Bartholomewsurfschoolfanatic");
+    const column = html.match(/<div class="([^"]*)"><div class="([^"]*)">Bartholomewsurfschoolfanatic</);
+    expect(column, "name column").not.toBeNull();
+    expect(column![1].split(" ")).toContain("min-w-0");
+    expect(column![2].split(" ")).toContain("break-words");
+  });
+
+  it("the card's Draft button stays focusable while it writes", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReviewCard, {
+        review: {
+          name: "accounts/1/locations/2/reviews/r1",
+          reviewId: "r1",
+          reviewer: { displayName: "Maria", isAnonymous: false },
+          starRating: "FIVE",
+          createTime: "2026-11-01T00:00:00Z",
+          updateTime: "2026-11-01T00:00:00Z",
+        },
+        needsReply: true,
+        isReplyOpen: false,
+        isSubmitting: false,
+        isGeneratingAI: true,
+        replyValue: "",
+        onOpenReply: () => {},
+        onCloseReply: () => {},
+        onChangeReply: () => {},
+        onSubmitReply: () => {},
+        onDraftAI: () => {},
+      }),
+    );
+    const tag = html.match(/<button[^>]*aria-busy="true"[^>]*>/);
+    expect(tag, "busy Draft button").not.toBeNull();
+    expect(tag![0]).toContain('aria-disabled="true"');
+    expect(tag![0]).not.toMatch(/\sdisabled=""/);
   });
 
   it("the date stays on one line", () => {

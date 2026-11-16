@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { REPLY_TOO_LONG_MESSAGE, replyCounter, replyTooLong } from "@/lib/reviewReplyLength";
 
@@ -20,25 +21,66 @@ export function replyUndoStatus(canUndo: boolean, restored: boolean): string {
 }
 
 /** Where keyboard focus is, seen from one reply form. */
-export type FocusPlace = "this form" | "body" | "elsewhere";
+export type FocusPlace = "this form" | "elsewhere";
 
 /**
  * Whether the box takes focus now (R24 pages L2): only once a draft asked for
  * with this form's own Draft button is no longer being written, and only while
- * focus is still in this form or was dropped to the page body (the Draft
- * button is disabled while it writes). Focus the person moved elsewhere, say to
- * another card's Draft button, stays there. A draft started from the card, or
- * another review's, leaves focus where it is.
+ * focus is still in this form (on that button, which stays focusable while it
+ * writes: DraftAIButton). Focus anywhere else, say on another card's Draft
+ * button, stays there. A draft started from the card, or another review's,
+ * leaves focus where it is.
  */
 export function focusBoxAfterDraft(drafting: boolean, draftedHere: boolean, focusAt: FocusPlace): boolean {
-  return draftedHere && !drafting && focusAt !== "elsewhere";
+  return draftedHere && !drafting && focusAt === "this form";
 }
 
-/** `active` is document.activeElement; null or the body itself means focus was dropped. */
-export function focusPlace<N>(active: N | null, form: { contains(node: N): boolean } | null, body: N | null): FocusPlace {
-  if (!active || active === body) return "body";
-  if (form?.contains(active)) return "this form";
-  return "elsewhere";
+/**
+ * `active` is document.activeElement. JJ3 second review: nothing focused, or
+ * the body, is not this form's: no Draft button drops focus any more, so a
+ * body focus says nothing about whose button it was.
+ */
+export function focusPlace<N>(active: N | null, form: { contains(node: N): boolean } | null): FocusPlace {
+  return active && form?.contains(active) ? "this form" : "elsewhere";
+}
+
+/** A Draft press while its draft is being written is ignored (the button stays focusable). */
+export function draftClick(drafting: boolean, onDraft: () => void): () => void {
+  return () => {
+    if (!drafting) onDraft();
+  };
+}
+
+/**
+ * "Draft AI response", on the card and in the form. JJ3 second review: while
+ * it writes it is aria-disabled and aria-busy, never `disabled`, so keyboard
+ * focus stays on it instead of dropping to the page body (Button's `loading`
+ * disables, so it is not used here).
+ */
+export function DraftAIButton({
+  drafting,
+  onDraft,
+  size = "md",
+}: {
+  drafting: boolean;
+  onDraft: () => void;
+  size?: "sm" | "md";
+}) {
+  const icon = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      size={size}
+      onClick={draftClick(drafting, onDraft)}
+      aria-disabled={drafting || undefined}
+      aria-busy={drafting || undefined}
+      className={drafting ? "cursor-progress opacity-50" : undefined}
+    >
+      {drafting ? <Spinner size="sm" /> : <Sparkles aria-hidden className={icon} />}
+      {drafting ? "Generating…" : "Draft AI response"}
+    </Button>
+  );
 }
 
 /** The effect run when `drafting` changes: the mark is used once the draft ends. */
@@ -185,7 +227,7 @@ export function ReplyForm({
     settleDraftFocus({
       drafting: generatingAI,
       draftedHere,
-      where: () => focusPlace(document.activeElement, formRef.current, document.body),
+      where: () => focusPlace(document.activeElement, formRef.current),
       focusBox: () => boxRef.current?.focus(),
     });
   }, [generatingAI]);
@@ -196,16 +238,7 @@ export function ReplyForm({
     <div ref={formRef} className="space-y-3">
       <div className="flex items-center justify-between">
         <Label htmlFor="review-reply">Your reply</Label>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={draftHere}
-          loading={generatingAI}
-        >
-          {!generatingAI && <Sparkles aria-hidden className="h-3.5 w-3.5" />}
-          {generatingAI ? "Generating…" : "Draft AI response"}
-        </Button>
+        <DraftAIButton drafting={generatingAI} onDraft={draftHere} size="sm" />
       </div>
       <Textarea
         ref={boxRef}
