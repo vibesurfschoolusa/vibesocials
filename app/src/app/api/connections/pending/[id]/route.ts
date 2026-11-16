@@ -44,9 +44,20 @@ const CHOOSABLE = ["facebook_page", "instagram", "linkedin", "pinterest"] as con
  * either way. The dialog passes `?platform=` once known; the sentence
  * follows the row Settings shows for it (shownControl): connected, or the
  * button that row offers. Without a platform it names no button. Only the
- * caller's own workspace is read, and only an owner gets here.
+ * caller's own workspace's connection is read, and only an owner gets here.
  */
-async function notFound(request: Request, workspaceId: string): Promise<NextResponse> {
+async function notFound(request: Request, id: string, owner: { workspaceId: string; userId: string }): Promise<NextResponse> {
+  // R30 (security-billing L1): the hint outlives a reload, and the choice
+  // belongs to the workspace it was started in, so a choice of this user's in
+  // another workspace says so before this workspace's row is read.
+  const choice = await prisma.pendingConnection.findUnique({ where: { id }, select: { workspaceId: true, userId: true } });
+  if (choice && choice.userId === owner.userId && choice.workspaceId !== owner.workspaceId) {
+    return NextResponse.json(
+      { error: "This choice was started in another workspace. Switch back to it to choose." },
+      { status: 404 },
+    );
+  }
+  const { workspaceId } = owner;
   const hint = new URL(request.url).searchParams.get("platform");
   const platform = CHOOSABLE.find((choosable) => choosable === hint);
   if (!platform) {
@@ -102,7 +113,7 @@ export async function GET(request: Request, { params }: PendingRouteContext) {
   try {
     const pending = await loadPendingConnection(id, ownerOf(contextOrError));
     if (!pending) {
-      return await notFound(request, contextOrError.workspace.id);
+      return await notFound(request, id, ownerOf(contextOrError));
     }
 
     return NextResponse.json({
@@ -162,7 +173,7 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
   try {
     const pending = await loadPendingConnection(id, owner);
     if (!pending) {
-      return await notFound(request, contextOrError.workspace.id);
+      return await notFound(request, id, ownerOf(contextOrError));
     }
 
     const result = await connectPendingCandidate(pending, candidateId, owner);
@@ -223,7 +234,7 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
   try {
     const pending = await loadPendingConnection(id, ownerOf(contextOrError));
     if (!pending) {
-      return await notFound(request, contextOrError.workspace.id);
+      return await notFound(request, id, ownerOf(contextOrError));
     }
 
     await deletePendingConnection(pending.id);

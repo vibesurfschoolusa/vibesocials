@@ -788,6 +788,33 @@ describe("pending/[id]: a choice that is gone", () => {
     expect((await soon.json()).error).toContain("press Reconnect on LinkedIn");
   });
 
+  // R30 (security-billing L1): the hint outlives a reload in another workspace,
+  // and this workspace's row says nothing about the choice's own workspace.
+  it("a choice started in another workspace: says so, never this workspace's row", async () => {
+    findUniqueMock.mockResolvedValue(row(INSTAGRAM, { workspaceId: "ws-other" }));
+    connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram" });
+    for (const response of [
+      await GET(hinted("GET", "instagram"), ctx()),
+      await POST(hinted("POST", "instagram"), ctx()),
+      await GET(getReq(), ctx()),
+    ]) {
+      expect(response.status).toBe(404);
+      const body = await response.json();
+      expect(body).toEqual({ error: "This choice was started in another workspace. Switch back to it to choose." });
+      expect(body.error).not.toMatch(/connected/);
+    }
+    expectNothingSaved();
+  });
+
+  it("another user's choice in another workspace is not named: the row's sentence as before", async () => {
+    findUniqueMock.mockResolvedValue(row(INSTAGRAM, { workspaceId: "ws-other", userId: "user-2" }));
+    connectionFindUniqueMock.mockResolvedValue(null);
+    const response = await GET(hinted("GET", "instagram"), ctx());
+    await expect(response.json()).resolves.toEqual({
+      error: "This choice expired. To start again, press Connect on Instagram.",
+    });
+  });
+
   it("no row: names Connect", async () => {
     connectionFindUniqueMock.mockResolvedValue(null);
     const response = await GET(hinted("GET", "instagram"), ctx());
