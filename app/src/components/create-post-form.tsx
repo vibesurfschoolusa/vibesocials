@@ -52,7 +52,6 @@ import { cn } from "@/lib/cn";
 import { composerPublishConfirmCopy, type ComposerConfirmCopy } from "@/lib/composerConfirm";
 import { deriveComposerGate } from "@/lib/composerGate";
 import {
-  COMPOSER_DISPATCH_FAILED_MESSAGE,
   composerSubmitOutcome,
   postDestination,
 } from "@/lib/composerSubmitOutcome";
@@ -827,8 +826,9 @@ function CreatePostFormInner({
   // the truth for a held post (nothing is queued or scheduled yet).
   const [awaitingApproval, setAwaitingApproval] = useState(false);
   // Final review M3 — the post was saved but its publishing never started
-  // (503 DISPATCH_FAILED): the banner points at Activity to retry it.
-  const [dispatchFailed, setDispatchFailed] = useState(false);
+  // (503 DISPATCH_FAILED): the banner points at Activity to retry it, in the
+  // outcome's own sentence, so it matches the toast (KK4). Null otherwise.
+  const [dispatchFailed, setDispatchFailed] = useState<string | null>(null);
   // G1 review: chosen platforms the post could not be sent to (notSentBanner).
   const [notSent, setNotSent] = useState<{ allFailed: boolean; text: string } | null>(null);
   // Task 7 — publish-now confirmation dialog. Immediate publishes can't be
@@ -1941,7 +1941,7 @@ function CreatePostFormInner({
         toast.success(typeof seriesMessage === "string" && seriesMessage ? seriesMessage : outcome.toast);
       }
       setNotSent(postNotSent);
-      setDispatchFailed(outcome.kind === "dispatch_failed");
+      setDispatchFailed(outcome.kind === "dispatch_failed" ? outcome.toast : null);
       setAwaitingApproval(outcome.kind === "success" && outcome.heldForApproval);
       setSubmittedMode(publishMode);
       setSubmittedToTikTok(tiktokSelected);
@@ -2271,7 +2271,7 @@ function CreatePostFormInner({
           <div ref={successRef}>
             <Alert variant="warning" title="Publishing didn't start">
               <div className="flex flex-col items-start gap-2">
-                <p>{COMPOSER_DISPATCH_FAILED_MESSAGE}</p>
+                <p>{dispatchFailed}</p>
                 <Link
                   href="/activity"
                   className={buttonVariants({ variant: "outline", size: "sm" })}

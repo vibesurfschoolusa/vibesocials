@@ -1130,3 +1130,18 @@ describe("the success banner's link", () => {
     expect(raw).not.toContain('!awaitingApproval && submittedMode === "now"');
   });
 });
+
+// KK4: the "Publishing didn't start" banner says what the toast says, from the
+// one rule in composerSubmitOutcome (the usual sentence, or the longer one when
+// the route couldn't mark the results failed).
+describe("the Publishing didn't start banner", () => {
+  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("keeps the dispatch-failed outcome's own sentence and shows it, not a fixed one", () => {
+    expect(source).toContain(
+      'setDispatchFailed(outcome.kind === "dispatch_failed" ? outcome.toast : null);',
+    );
+    expect(source).toContain("<p>{dispatchFailed}</p>");
+    expect(source).not.toContain("COMPOSER_DISPATCH_FAILED_MESSAGE");
+  });
+});
