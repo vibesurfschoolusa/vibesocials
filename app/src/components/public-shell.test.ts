@@ -50,3 +50,28 @@ describe("PublicHeader", () => {
     expect(html).not.toContain("Log in");
   });
 });
+
+// R26 pages L8: with billing on, the brand, Pricing, About and Dashboard were
+// wider than a 375 px phone (Dashboard is about 30 px wider than Log in).
+// Below sm the nav's buttons are narrower, and the header may wrap; billing
+// off (no Pricing) the header is unchanged (publicPagesBillingOff.test.ts).
+describe("PublicHeader on a phone", () => {
+  const navLinks = (html: string) => html.slice(html.indexOf('<nav aria-label="Main"')).match(/<a [^>]*>/g) ?? [];
+
+  it("with Pricing: narrower buttons below sm, and the header can wrap", () => {
+    const html = render(createElement(PublicHeader, { showPricing: true, signedIn: true }));
+    expect(html).toMatch(/<header class="[^"]*\bflex-wrap\b/);
+    const links = navLinks(html);
+    expect(links).toHaveLength(3);
+    for (const link of links) {
+      expect(link).toMatch(/\bpx-2 sm:px-3\b/);
+      expect(link).not.toMatch(/ px-3\b/);
+    }
+  });
+
+  it("without Pricing: the buttons and the header as before", () => {
+    const html = render(createElement(PublicHeader, { showPricing: false }));
+    expect(html).not.toContain("flex-wrap");
+    for (const link of navLinks(html)) expect(link).toMatch(/ px-3\b/);
+  });
+});
