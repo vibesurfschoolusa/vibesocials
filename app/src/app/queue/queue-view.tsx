@@ -486,6 +486,17 @@ export const EDIT_COPY_YOUR_TEXT = "Copy your text if you want to keep it, then 
 const EDIT_MOVED_ON_FALLBACK = "This post can no longer be edited.";
 
 /**
+ * Lead review: the refusal as a sentence, then the copy step. A 404's "Not
+ * found" is not a sentence for a person; any text without a closing full
+ * stop gets one, so the two never run together.
+ */
+export function editMovedOnText(status: number, error: string | undefined): string {
+  const said = status === 404 ? "This post no longer exists." : error?.trim() || EDIT_MOVED_ON_FALLBACK;
+  const sentence = /[.!?]$/.test(said) ? said : `${said}.`;
+  return `${sentence} ${EDIT_COPY_YOUR_TEXT}`;
+}
+
+/**
  * Edit dialog for a scheduled/draft post. Remounted per target (keyed by job
  * id) so its local caption/time state always initializes from the current job.
  * A scheduled job edits its caption + `scheduledFor` in one PATCH. A draft edits
@@ -656,7 +667,7 @@ function QueueEditDialog({
             // stays open with the route's sentence and Save off, so what was typed can be
             // copied; the list reloads behind it.
             focusAfterPress(saveRef.current, () => movedOnRef.current);
-            setMovedOn(errorData?.error ?? EDIT_MOVED_ON_FALLBACK);
+            setMovedOn(editMovedOnText(response.status, errorData?.error));
             onStale();
             return;
           }
@@ -771,7 +782,7 @@ function QueueEditDialog({
         {model.notice ? <p className="text-sm text-muted-foreground">{model.notice}</p> : null}
         {movedOn ? (
           <Alert ref={movedOnRef} tabIndex={-1} variant="danger" className="outline-none">
-            {movedOn} {EDIT_COPY_YOUR_TEXT}
+            {movedOn}
           </Alert>
         ) : null}
       </DialogBody>

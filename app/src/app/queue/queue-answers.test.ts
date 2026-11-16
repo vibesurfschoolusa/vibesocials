@@ -11,6 +11,7 @@ import {
   REVIEW_LINK_MAYBE_MADE_MESSAGE,
   REVIEW_LINK_MAYBE_OFF_MESSAGE,
   EDIT_COPY_YOUR_TEXT,
+  editMovedOnText,
 } from "./queue-view";
 
 /**
@@ -108,12 +109,34 @@ describe("Queue: a stale card's 409 reloads the list", () => {
     expect(start).toBeGreaterThan(-1);
     const failed = view.slice(start, view.indexOf("const outcome = editOutcome(data);", start));
     expect(failed).toMatch(
-      /if \(shouldRefetchAfterError\(response\.status\)\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(errorData\?\.error \?\? EDIT_MOVED_ON_FALLBACK\);\s+onStale\(\);\s+return;\s+\}/,
+      /if \(shouldRefetchAfterError\(response\.status\)\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(editMovedOnText\(response\.status, errorData\?\.error\)\);\s+onStale\(\);\s+return;\s+\}/,
     );
     expect(failed).not.toContain("onClose()");
     expect(view).toMatch(/<Button ref=\{saveRef\} onClick=\{handleSave\} loading=\{saving\} disabled=\{captionOver \|\| movedOn !== null\}>/);
-    expect(view).toMatch(/\{movedOn \? \(\s+<Alert ref=\{movedOnRef\} tabIndex=\{-1\} variant="danger" className="outline-none">\s+\{movedOn\} \{EDIT_COPY_YOUR_TEXT\}/);
+    expect(view).toMatch(/\{movedOn \? \(\s+<Alert ref=\{movedOnRef\} tabIndex=\{-1\} variant="danger" className="outline-none">\s+\{movedOn\}\s+<\/Alert>/);
     expect(EDIT_COPY_YOUR_TEXT).toBe("Copy your text if you want to keep it, then press Cancel.");
+  });
+
+  // Lead review: a 404 read "Not found Copy your text...". Each refusal is a
+  // sentence, and the copy step always follows a full stop.
+  it("Edit: each refusal is worded as a sentence before the copy step", () => {
+    expect(editMovedOnText(404, "Not found")).toBe(
+      "This post no longer exists. Copy your text if you want to keep it, then press Cancel.",
+    );
+    expect(
+      editMovedOnText(409, "This post has started publishing, so it can't be edited. Check Activity to see how it goes."),
+    ).toBe(
+      "This post has started publishing, so it can't be edited. Check Activity to see how it goes. Copy your text if you want to keep it, then press Cancel.",
+    );
+    expect(editMovedOnText(409, "This post can no longer be edited")).toBe(
+      "This post can no longer be edited. Copy your text if you want to keep it, then press Cancel.",
+    );
+    expect(editMovedOnText(409, undefined)).toBe(
+      "This post can no longer be edited. Copy your text if you want to keep it, then press Cancel.",
+    );
+    expect(editMovedOnText(503, "  ")).toBe(
+      "This post can no longer be edited. Copy your text if you want to keep it, then press Cancel.",
+    );
   });
 
   it("the calendar drag: the route's sentence and a silent reload", () => {
