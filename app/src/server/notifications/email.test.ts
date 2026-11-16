@@ -60,7 +60,7 @@ describe("sendEmail", () => {
 
     await expect(
       sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(ResendMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe("sendEmail", () => {
 
     await expect(
       sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(consoleSpy).toHaveBeenCalled();
   });
@@ -144,7 +144,7 @@ describe("sendEmail", () => {
 
     await expect(
       sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(consoleSpy).toHaveBeenCalledWith(
       "[Notifications] Failed to send email",
@@ -164,7 +164,7 @@ describe("sendEmail", () => {
 
     await expect(
       sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(loggerErrorMock).toHaveBeenCalledTimes(1);
     expect(loggerErrorMock).toHaveBeenCalledWith("[Notifications] Resend rejected email", {
@@ -221,7 +221,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
     async (name) => {
       sendMock.mockResolvedValueOnce(rejection(429, name));
 
-      await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+      await expect(sendEmail(params, opts)).resolves.toBe(false);
 
       expect(sendMock).toHaveBeenCalledTimes(1);
       expect(loggerErrorMock).toHaveBeenCalledTimes(1);
@@ -242,7 +242,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
 
     await expect(
       sendEmail(params, { ...opts, idempotencyKey: "reconnect/conn-1/2026-11-02/user-a" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 
   it("only a 429 can be a quota error: a 503 named daily_quota_exceeded still retries", async () => {
@@ -276,7 +276,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
   it("422 resolves (logged, dropped)", async () => {
     sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
 
-    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+    await expect(sendEmail(params, opts)).resolves.toBe(false);
 
     expect(loggerErrorMock).toHaveBeenCalledTimes(1);
   });
@@ -284,7 +284,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
   it("409 invalid_idempotent_request resolves: a send with that key already went out", async () => {
     sendMock.mockResolvedValueOnce(rejection(409, "invalid_idempotent_request"));
 
-    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+    await expect(sendEmail(params, opts)).resolves.toBe(true);
 
     expect(loggerErrorMock).not.toHaveBeenCalled();
   });
@@ -300,7 +300,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
       throw new Error("bad key");
     });
 
-    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+    await expect(sendEmail(params, opts)).resolves.toBe(false);
   });
 
   it("never puts the recipient address in a thrown error", async () => {
@@ -317,7 +317,7 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
   });
 
   it("a successful send resolves", async () => {
-    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+    await expect(sendEmail(params, opts)).resolves.toBe(true);
   });
 });
 
@@ -343,14 +343,14 @@ describe("sendEmail - without throwOnRetryable it never throws", () => {
       headers: null,
     });
 
-    await expect(sendEmail(params)).resolves.toBeUndefined();
-    await expect(sendEmail(params, { idempotencyKey: "k" })).resolves.toBeUndefined();
+    await expect(sendEmail(params)).resolves.toBeTypeOf("boolean");
+    await expect(sendEmail(params, { idempotencyKey: "k" })).resolves.toBeTypeOf("boolean");
   });
 
   it("a thrown network error resolves", async () => {
     sendMock.mockRejectedValueOnce(new Error("network down"));
 
-    await expect(sendEmail(params)).resolves.toBeUndefined();
+    await expect(sendEmail(params)).resolves.toBe(false);
   });
 });
 
@@ -548,7 +548,7 @@ describe("sendEmail - no recipient address in any log line", () => {
       headers: null,
     });
 
-    await expect(sendEmail(params)).resolves.toBeUndefined();
+    await expect(sendEmail(params)).resolves.toBe(false);
 
     expect(loggerErrorMock).toHaveBeenCalledTimes(1);
     const [, context] = loggerErrorMock.mock.calls[0] as [string, { error: { message: string } }];
@@ -646,5 +646,67 @@ describe("sendEmail - no subject in any log line", () => {
     await sendEmail(params, { idempotencyKey: "Maria Lopez/1" });
     expect(logged()).not.toContain("Maria");
     expect(logged()).toContain('"kind":"unlabelled"');
+  });
+});
+
+/**
+ * R23-client-journey L4: a caller that tells someone "they were emailed" needs
+ * to know the email went out. true only when Resend accepted it.
+ */
+describe("sendEmail - whether the email went out", () => {
+  const params = { to: "user@example.com", subject: "Hi", html: "<p>hi</p>" };
+
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("an accepted send resolves true", async () => {
+    await expect(sendEmail(params)).resolves.toBe(true);
+  });
+
+  it("a repeat of an idempotency key Resend already sent resolves true", async () => {
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { name: "invalid_idempotent_request", message: "x", statusCode: 409 },
+      headers: null,
+    });
+    await expect(sendEmail(params, { idempotencyKey: "k" })).resolves.toBe(true);
+  });
+
+  it("no RESEND_API_KEY resolves false", async () => {
+    vi.stubEnv("RESEND_API_KEY", "");
+    await expect(sendEmail(params)).resolves.toBe(false);
+  });
+
+  it("a Resend constructor error resolves false", async () => {
+    ResendMock.mockImplementationOnce(function BadCtor() {
+      throw new Error("bad key");
+    });
+    await expect(sendEmail(params)).resolves.toBe(false);
+  });
+
+  it("a Resend rejection resolves false", async () => {
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { name: "validation_error", message: "x", statusCode: 422 },
+      headers: null,
+    });
+    await expect(sendEmail(params)).resolves.toBe(false);
+  });
+
+  it("a quota error resolves false, even under throwOnRetryable", async () => {
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { name: "daily_quota_exceeded", message: "x", statusCode: 429 },
+      headers: null,
+    });
+    await expect(sendEmail(params, { throwOnRetryable: true })).resolves.toBe(false);
+  });
+
+  it("a network error resolves false", async () => {
+    sendMock.mockRejectedValueOnce(new Error("network down"));
+    await expect(sendEmail(params)).resolves.toBe(false);
   });
 });

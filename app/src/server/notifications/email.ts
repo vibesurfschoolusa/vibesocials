@@ -167,10 +167,15 @@ function emailKind(label: string | undefined, idempotencyKey: string | undefined
   return plain(label) ?? plain(idempotencyKey?.split("/")[0]) ?? "unlabelled";
 }
 
+/**
+ * Resolves true when Resend accepted the email (or already had it under this
+ * idempotency key), false when it did not go out. R23-client-journey L4: a
+ * caller that tells someone "they were emailed" reads it; others ignore it.
+ */
 export async function sendEmail(
   { to, subject, html, text }: SendEmailParams,
   { label, idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
   const kind = emailKind(label, idempotencyKey);
 
@@ -178,7 +183,7 @@ export async function sendEmail(
     console.log(
       "[Notifications] RESEND_API_KEY not set — email notifications are disabled; skipping send.",
     );
-    return;
+    return false;
   }
 
   const from = process.env.NOTIFICATIONS_FROM || DEFAULT_FROM;
@@ -190,7 +195,7 @@ export async function sendEmail(
     // A bad key is configuration, not a transient failure: never retried.
     // No log line here carries the recipient address (final review F9).
     console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
-    return;
+    return false;
   }
 
   const payload = { from, to, subject, html, text: text ?? htmlToPlainText(html) };
@@ -208,13 +213,13 @@ export async function sendEmail(
     // notification) must complete regardless of whether the email actually
     // went out. The recipient address is never logged (final review F9).
     console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
-    return;
+    return false;
   }
 
   // Resend 6.x reports an API rejection (bad key, unverified sender,
   // quota...) by RESOLVING { data: null, error } — it does not throw.
   const { error } = response;
-  if (!error) return;
+  if (!error) return true;
 
   const failure = classifyResendFailure(error);
 
@@ -224,7 +229,7 @@ export async function sendEmail(
     logger.warn("[Notifications] Resend already accepted this idempotency key; treating as sent", {
       kind,
     });
-    return;
+    return true;
   }
 
   // A quota 429 is dropped like any other rejection: it falls through to the
@@ -254,4 +259,5 @@ export async function sendEmail(
       statusCode: error.statusCode,
     },
   });
+  return false;
 }
