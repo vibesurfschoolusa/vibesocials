@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
-import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
+import { sendPostRequest, submitErrorText } from "@/lib/postSubmitFailure";
+import { explainUploadFailure } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
 import {
@@ -1886,13 +1887,10 @@ function CreatePostFormInner({
         coverFields = coverRequestFields(coverChoice, image);
       }
 
-      const response = await fetch("/api/posts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ...postData, ...storyRequestFields, ...repeatFields, ...coverFields }),
-      });
+      // A rejected fetch throws PostConnectionLostError (lib/postSubmitFailure.ts).
+      const response = await sendPostRequest(
+        JSON.stringify({ ...postData, ...storyRequestFields, ...repeatFields, ...coverFields }),
+      );
 
       const data: unknown = await response.json().catch(() => null);
 
@@ -1994,10 +1992,8 @@ function CreatePostFormInner({
       setFacebookPlacement(startPlacements.facebook);
       setUploadLoading(false);
     } catch (err: unknown) {
-      // An upload refused for full storage says so; anything else stays generic.
-      toast.error(
-        err instanceof UploadRefusedError ? err.message : "Unexpected error while creating post.",
-      );
+      // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts).
+      toast.error(submitErrorText(err));
       setUploadLoading(false);
     }
   }

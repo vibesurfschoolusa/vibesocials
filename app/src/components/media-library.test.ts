@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@vercel/blob/client", () => ({ upload: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {} }) }));
 
+import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE } from "@/lib/uploadFailure";
+
 import { MEDIA_MESSAGES, MediaCard, retentionText, uploadErrorMessage } from "./media-library";
 
 // F1 round 2: Media read "auto-removes in 1 days".
@@ -107,5 +109,16 @@ describe("the media library's error sentences", () => {
       "This workspace's storage is full.",
     );
     expect(uploadErrorMessage("??")).toBe(MEDIA_MESSAGES.uploadNetwork);
+  });
+
+  // R24 JJ2 follow-up: offline, the upload's own failure (explained in
+  // lib/uploadFailure.ts) and the save's failed fetch read as one sentence.
+  it("offline: the upload and the save say the same sentence", async () => {
+    const offline = (() => Promise.reject(new TypeError("Failed to fetch"))) as unknown as typeof fetch;
+    const explained = await explainUploadFailure(new TypeError("Failed to fetch"), offline);
+    expect(explained.message).toBe(UPLOAD_OFFLINE_MESSAGE);
+    expect(uploadErrorMessage(explained)).toBe(MEDIA_MESSAGES.uploadNetwork);
+    expect(uploadErrorMessage(new TypeError("Failed to fetch"))).toBe(MEDIA_MESSAGES.uploadNetwork);
+    expect(MEDIA_MESSAGES.uploadNetwork).toBe("Couldn't upload the file. Check your connection and try again.");
   });
 });

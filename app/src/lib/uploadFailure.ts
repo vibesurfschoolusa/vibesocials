@@ -9,7 +9,11 @@
 
 import { SIGNED_OUT_ERROR } from "./signedOutMessage";
 
-/** An upload refused for a reason the user can act on; `message` is the sentence to show. */
+/**
+ * An upload failure explained in a sentence the user can act on (refused,
+ * storage full, signed out, never reached us); `message` is the sentence to
+ * show. Every sentence explainUploadFailure writes comes as this type.
+ */
 export class UploadRefusedError extends Error {
   constructor(message: string) {
     super(message);
@@ -53,13 +57,13 @@ export async function explainUploadFailure(
   const otherwise = TOKEN_REFUSED.test(original.message)
     ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE)
     : original instanceof TypeError
-      ? new Error(UPLOAD_OFFLINE_MESSAGE)
+      ? new UploadRefusedError(UPLOAD_OFFLINE_MESSAGE)
       : original;
   let response: Response;
   try {
     response = await fetchImpl("/api/upload", { method: "GET" });
   } catch {
-    return BLOB_SERVICE_UNAVAILABLE.test(original.message) ? new Error(UPLOAD_OFFLINE_MESSAGE) : otherwise;
+    return BLOB_SERVICE_UNAVAILABLE.test(original.message) ? new UploadRefusedError(UPLOAD_OFFLINE_MESSAGE) : otherwise;
   }
   try {
     // R20 new-customer L2: the session ended (another tab, a new password).

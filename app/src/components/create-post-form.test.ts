@@ -1100,3 +1100,23 @@ describe("the AI caption buttons' requests", () => {
     expect(handler).not.toMatch(/\.message\b/);
   });
 });
+
+// R24 JJ2 follow-up: a failed press keeps the form. The post goes through
+// sendPostRequest, and the catch only says why and ends the busy state.
+describe("the Post button's failure", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  const start = raw.indexOf("async function performSubmit(");
+  const submit = raw.slice(start, raw.indexOf("\n  }\n", start));
+
+  it("sends the post through sendPostRequest", () => {
+    expect(submit).toContain("await sendPostRequest(");
+    expect(submit).not.toMatch(/\bfetch\("\/api\/posts"/);
+  });
+
+  it("the catch shows submitErrorText and clears nothing", () => {
+    const catchBlock = submit.slice(submit.lastIndexOf("} catch (err: unknown) {"));
+    expect(catchBlock.replace(/\s+/g, " ")).toBe(
+      "} catch (err: unknown) { // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err)); setUploadLoading(false); }",
+    );
+  });
+});

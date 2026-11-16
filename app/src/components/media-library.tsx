@@ -39,7 +39,7 @@ import { bulkHandoffHref, toggleMediaSelection } from "@/lib/bulkMedia";
 import { BULK_MAX_FILES } from "@/lib/bulkPosts";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
-import { explainUploadFailure } from "@/lib/uploadFailure";
+import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
 import {
   appendMediaPage,
@@ -98,6 +98,8 @@ export const MEDIA_MESSAGES = {
  */
 export function uploadErrorMessage(error: unknown): string {
   if (error instanceof TypeError || !(error instanceof Error) || !error.message) return MEDIA_MESSAGES.uploadNetwork;
+  // R24: offline, the upload and the save read as this page's one sentence.
+  if (error.message === UPLOAD_OFFLINE_MESSAGE) return MEDIA_MESSAGES.uploadNetwork;
   return error.message;
 }
 
