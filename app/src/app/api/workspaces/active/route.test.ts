@@ -195,6 +195,23 @@ describe("PATCH /api/workspaces/active", () => {
   });
 });
 
+// R23 new-customer L2: a name with a double space showed collapsed in the
+// delete dialog (HTML), so typing what it showed was refused.
+describe("PATCH /api/workspaces/active: spaces", () => {
+  it("collapses runs of spaces, as creating a workspace does", async () => {
+    updateMock.mockResolvedValue({ id: "ws-1", name: "Surf Co" });
+
+    const response = await PATCH(jsonRequest({ name: " Surf  \t Co " }));
+
+    expect(response.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { name: "Surf Co" },
+      select: { id: true, name: true },
+    });
+  });
+});
+
 // F3 (R1 security H1): a rename typed in a tab left on workspace A must not
 // rename workspace B.
 describe("PATCH /api/workspaces/active and the rendered workspace", () => {
@@ -371,6 +388,26 @@ describe("DELETE /api/workspaces/active", () => {
 
   it("returns 400 when confirmName does not match exactly", async () => {
     for (const confirmName of ["old name", "Old name ", "", undefined]) {
+      const response = await DELETE(deleteRequest({ confirmName }));
+      expect(response.status).toBe(400);
+    }
+    nothingWritten();
+  });
+
+  // R23 new-customer L2: a name stored with a double space before renames
+  // collapsed them shows collapsed in the dialog, so that is what gets typed.
+  it("deletes a name stored with a double space when the name is typed as the dialog shows it", async () => {
+    requireOwnerContextMock.mockResolvedValue({ ...OWNER_CONTEXT, workspace: { ...OWNER_CONTEXT.workspace, name: "Surf  Co" } });
+
+    const response = await DELETE(deleteRequest({ confirmName: "Surf Co" }));
+
+    expect(response.status).toBe(200);
+    expect(m.workspaceDeleteMany).toHaveBeenCalled();
+  });
+
+  it("still refuses a wrong name for a name stored with a double space", async () => {
+    requireOwnerContextMock.mockResolvedValue({ ...OWNER_CONTEXT, workspace: { ...OWNER_CONTEXT.workspace, name: "Surf  Co" } });
+    for (const confirmName of ["Surf", "surf co", "Surf Cot", "SurfCo"]) {
       const response = await DELETE(deleteRequest({ confirmName }));
       expect(response.status).toBe(400);
     }

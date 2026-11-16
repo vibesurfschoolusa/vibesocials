@@ -574,7 +574,7 @@ function OwnerView({
   const [savingName, setSavingName] = useState(false);
 
   const handleSaveName = useCallback(async () => {
-    const trimmed = name.trim();
+    const trimmed = workspaceNameToSave(name);
     if (!trimmed || trimmed === savedName) return;
     setSavingName(true);
     try {
@@ -1128,6 +1128,23 @@ function OwnerView({
   );
 }
 
+/**
+ * R23 new-customer L2: runs of spaces collapse, as creating a workspace does,
+ * so the name the delete dialog shows (HTML collapses them) is the one stored.
+ */
+export function workspaceNameToSave(name: string): string {
+  return name.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The typed name against the stored one, spaces collapsed on both sides as
+ * DELETE /api/workspaces/active compares them: a name stored with a double
+ * space before renames collapsed them is typed as the dialog shows it.
+ */
+export function deleteConfirmMatches(typed: string, workspaceName: string): boolean {
+  return typed.replace(/\s+/g, " ") === workspaceName.replace(/\s+/g, " ");
+}
+
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -1230,7 +1247,7 @@ export function DeleteWorkspace({
             <Button
               variant="destructive"
               loading={busy}
-              disabled={confirmName !== workspaceName}
+              disabled={!deleteConfirmMatches(confirmName, workspaceName)}
               onClick={handleDelete}
             >
               Delete workspace

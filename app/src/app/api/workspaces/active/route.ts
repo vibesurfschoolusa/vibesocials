@@ -63,7 +63,9 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Name is required." }, { status: 400 });
   }
 
-  const trimmed = body.name.trim();
+  // R23 new-customer L2: runs of spaces collapse, as on create (../route.ts),
+  // so the name the delete dialog shows is the name stored.
+  const trimmed = collapseSpaces(body.name).trim();
   if (trimmed.length < NAME_MIN_LENGTH || trimmed.length > NAME_MAX_LENGTH) {
     return NextResponse.json(
       { error: `Name must be ${NAME_MIN_LENGTH}-${NAME_MAX_LENGTH} characters.` },
@@ -78,6 +80,10 @@ export async function PATCH(request: Request) {
   });
 
   return NextResponse.json({ id: updated.id, name: updated.name }, { status: 200 });
+}
+
+function collapseSpaces(value: string): string {
+  return value.replace(/\s+/g, " ");
 }
 
 /**
@@ -127,7 +133,9 @@ export async function DELETE(request: Request) {
   if (refusal) {
     return refusal;
   }
-  if (body.confirmName !== context.workspace.name) {
+  // Spaces compared collapsed: HTML shows a name stored with a double space
+  // (before renames collapsed them) with one, and that is what gets typed.
+  if (typeof body.confirmName !== "string" || collapseSpaces(body.confirmName) !== collapseSpaces(context.workspace.name)) {
     return NextResponse.json(
       { error: "Type the workspace name exactly as it is shown to confirm." },
       { status: 400 },

@@ -31,7 +31,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: 
 vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null }), signOut: vi.fn() }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { DeleteWorkspace } from "./team-section";
+import { DeleteWorkspace, deleteConfirmMatches, workspaceNameToSave } from "./team-section";
 
 const DELETION = { memberCount: 2, scheduledCount: 0, refusal: null };
 
@@ -69,5 +69,25 @@ describe("Delete workspace dialog", () => {
 
   it("with two members, says 'for all 2 members'", () => {
     expect(dialog(2)).toContain("This removes the workspace for all 2 members, with its connections, media, posts and stats.");
+  });
+});
+
+// R23 new-customer L2: HTML shows "Surf  Co" as "Surf Co", so that is what is typed.
+describe("workspace names with runs of spaces", () => {
+  it("a rename saves the name with spaces collapsed", () => {
+    expect(workspaceNameToSave(" Surf  Co ")).toBe("Surf Co");
+    expect(workspaceNameToSave("Surf \t\n Co")).toBe("Surf Co");
+    expect(workspaceNameToSave("   ")).toBe("");
+  });
+
+  it("a name stored with a double space is confirmed by typing it as shown", () => {
+    expect(deleteConfirmMatches("Surf Co", "Surf  Co")).toBe(true);
+    expect(deleteConfirmMatches("Surf Co", "Surf Co")).toBe(true);
+  });
+
+  it("a wrong name is still refused", () => {
+    for (const typed of ["Surf", "surf co", "Surf Cot", "SurfCo", ""]) {
+      expect(deleteConfirmMatches(typed, "Surf  Co")).toBe(false);
+    }
   });
 });
