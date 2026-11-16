@@ -1,4 +1,5 @@
 import { Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -7,6 +8,25 @@ import { REPLY_TOO_LONG_MESSAGE, replyCounter, replyTooLong } from "@/lib/review
 
 const DRAFTING_STATUS = "Writing a draft. You can edit it here as soon as it is ready.";
 const UNDO_STATUS = "Draft written. Undo to get your text back.";
+export const RESTORED_STATUS = "Your text is back.";
+
+/**
+ * The second status line (R24 pages L2): Undo while it is offered; after an
+ * Undo (its button gone), that the text is back, so the change is announced.
+ */
+export function replyUndoStatus(canUndo: boolean, restored: boolean): string {
+  if (canUndo) return UNDO_STATUS;
+  return restored ? RESTORED_STATUS : "";
+}
+
+/**
+ * Whether the box takes focus now (R24 pages L2): only once a draft asked for
+ * with this form's own Draft button is no longer being written. A draft started
+ * from the card, or another review's, leaves focus where it is.
+ */
+export function focusBoxAfterDraft(drafting: boolean, draftedHere: boolean): boolean {
+  return draftedHere && !drafting;
+}
 
 /**
  * The reply boxes of the Reviews page, by review id: the text, and the person's
@@ -107,6 +127,28 @@ export function ReplyForm({
     .filter(Boolean)
     .join(" ");
   const canUndo = onUndoDraft !== undefined && !generatingAI;
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  // Set when this form's Draft button is pressed; read when that draft ends.
+  const draftedHere = useRef(false);
+  const [restored, setRestored] = useState(false);
+
+  useEffect(() => {
+    if (!focusBoxAfterDraft(generatingAI, draftedHere.current)) return;
+    draftedHere.current = false;
+    boxRef.current?.focus();
+  }, [generatingAI]);
+
+  const draftHere = () => {
+    draftedHere.current = true;
+    setRestored(false);
+    onDraftAI();
+  };
+  const undo = () => {
+    onUndoDraft?.();
+    setRestored(true);
+    // The Undo button leaves with this click; focus goes to the restored text.
+    boxRef.current?.focus();
+  };
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -115,7 +157,7 @@ export function ReplyForm({
           type="button"
           variant="secondary"
           size="sm"
-          onClick={onDraftAI}
+          onClick={draftHere}
           loading={generatingAI}
         >
           {!generatingAI && <Sparkles aria-hidden className="h-3.5 w-3.5" />}
@@ -123,9 +165,13 @@ export function ReplyForm({
         </Button>
       </div>
       <Textarea
+        ref={boxRef}
         id="review-reply"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          setRestored(false);
+          onChange(e.target.value);
+        }}
         placeholder="Write your reply or use AI to draft one..."
         rows={4}
         className="resize-none"
@@ -144,10 +190,10 @@ export function ReplyForm({
       </p>
       <div className={canUndo ? "flex flex-wrap items-center gap-3" : "contents"}>
         <p role="status" className="text-xs text-muted-foreground empty:sr-only">
-          {canUndo ? UNDO_STATUS : ""}
+          {replyUndoStatus(canUndo, restored)}
         </p>
         {canUndo ? (
-          <Button type="button" variant="outline" size="sm" onClick={onUndoDraft} disabled={submitting}>
+          <Button type="button" variant="outline" size="sm" onClick={undo} disabled={submitting}>
             Undo
           </Button>
         ) : null}

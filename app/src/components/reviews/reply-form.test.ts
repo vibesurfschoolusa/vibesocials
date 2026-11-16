@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMPTY_REPLY_BOXES,
+  RESTORED_STATUS,
   ReplyForm,
+  focusBoxAfterDraft,
+  replyUndoStatus,
   draftingAfterEnd,
   draftingAfterStart,
   openAfterDraft,
@@ -251,5 +254,40 @@ describe("which box is open after a draft lands", () => {
     boxes = replyBoxAfterDraft(boxes, "A", "Draft for A");
     expect(boxes.text).toEqual({ A: "Draft for A", B: "Typing for B" });
     expect(boxes.undo).toEqual({ A: "My words for A" });
+  });
+});
+
+// R24 pages L2: Undo removes its own button, so focus went to the page body and
+// nothing was said. Undo now puts focus in the box and says the text is back;
+// a draft asked for with this form's own Draft button gives focus back to the
+// box when it lands. A draft from the card, or for another review, never
+// moves focus.
+describe("ReplyForm: focus and status after Undo and a draft", () => {
+  it("after Undo the status says the text is back", () => {
+    expect(RESTORED_STATUS).toBe("Your text is back.");
+    expect(replyUndoStatus(false, true)).toBe(RESTORED_STATUS);
+  });
+
+  it("while Undo is offered it says so, even after an earlier Undo", () => {
+    expect(replyUndoStatus(true, false)).toBe("Draft written. Undo to get your text back.");
+    expect(replyUndoStatus(true, true)).toBe("Draft written. Undo to get your text back.");
+  });
+
+  it("with nothing to undo and no Undo done it says nothing", () => {
+    expect(replyUndoStatus(false, false)).toBe("");
+  });
+
+  it("a draft from this form's Draft button: focus returns to the box when it lands", () => {
+    expect(focusBoxAfterDraft(true, true)).toBe(false); // still drafting
+    expect(focusBoxAfterDraft(false, true)).toBe(true);
+  });
+
+  it("a draft from the card's Draft button, or for another review, never moves focus", () => {
+    expect(focusBoxAfterDraft(false, false)).toBe(false);
+    expect(focusBoxAfterDraft(true, false)).toBe(false);
+  });
+
+  it("the box keeps its id, for the label", () => {
+    expect(textarea(render("Hi"))).toContain('id="review-reply"');
   });
 });
