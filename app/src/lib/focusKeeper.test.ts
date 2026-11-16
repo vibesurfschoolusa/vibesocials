@@ -19,10 +19,11 @@ type Fake = {
   hasAttribute(name: string): boolean;
   getAttribute(name: string): string | null;
   contains(other: Fake | null): boolean;
+  getClientRects(): unknown[];
   readonly isConnected: boolean;
 };
 
-type Listener = (event: { type: string; target: Fake }) => void;
+type Listener = (event: { type: string; target: Fake; key?: string }) => void;
 
 function makeWorld() {
   const listeners = new Map<string, Set<Listener>>();
@@ -30,6 +31,7 @@ function makeWorld() {
   const observed: unknown[] = [];
 
   const doc = {
+    location: { pathname: "/queue" },
     activeElement: null as Fake | null,
     body: null as unknown as Fake,
     documentElement: null as unknown as Fake,
@@ -54,8 +56,8 @@ function makeWorld() {
     },
   };
 
-  const fire = (type: string, target: Fake) => {
-    for (const listener of listeners.get(type) ?? []) listener({ type, target });
+  const fire = (type: string, target: Fake, key?: string) => {
+    for (const listener of listeners.get(type) ?? []) listener({ type, target, key });
   };
 
   function el(tagName: string, children: Fake[] = [], attrs: Record<string, string> = {}): Fake {
@@ -71,6 +73,8 @@ function makeWorld() {
       }),
       hasAttribute: (name) => name in node.attrs,
       getAttribute: (name) => node.attrs[name] ?? null,
+      // A control hidden by CSS (hidden md:inline) has no boxes.
+      getClientRects: () => ("data-css-hidden" in node.attrs ? [] : [{}]),
       contains(other) {
         for (let at = other; at; at = at.parentElement) if (at === node) return true;
         return false;
@@ -129,14 +133,22 @@ function makeWorld() {
   return { doc, el, env, focusOn, remove, setAttr, move, pointerDown, fire, observed };
 }
 
-/** A page: a heading, then rows of a label and a button, inside main; a toast region beside it. */
+/**
+ * A page: a heading, then rows of a label and a button. In main, the shell's
+ * banners (a "Resend email" button) come first, then the page's own root
+ * holding the page; a toast region is beside main.
+ */
 function page(world: ReturnType<typeof makeWorld>) {
   const { el, doc } = world;
   const buttons = [el("BUTTON"), el("BUTTON"), el("BUTTON")];
   const rows = buttons.map((button) => el("LI", [el("P"), button]));
   const heading = el("H2");
   const list = el("UL", rows);
-  const main = el("MAIN", [heading, list]);
+  const pageContent = el("DIV", [heading, list]);
+  const pageRoot = el("DIV", [pageContent], { "data-focus-root": "" });
+  const bannerButton = el("BUTTON");
+  const banner = el("DIV", [el("P"), bannerButton]);
+  const main = el("MAIN", [banner, pageRoot]);
   const toastButton = el("BUTTON");
   const toasts = el("DIV", [toastButton]);
   const body = el("BODY", [main, toasts]);
@@ -144,7 +156,13 @@ function page(world: ReturnType<typeof makeWorld>) {
   doc.body = body;
   doc.documentElement = html;
   doc.activeElement = body;
-  return { buttons, rows, heading, list, main, toastButton, toasts, body };
+  return { buttons, rows, heading, list, main, toastButton, toasts, body, pageContent, pageRoot, bannerButton };
+}
+
+function detachFake(node: Fake) {
+  const parent = node.parentElement!;
+  parent.children = parent.children.filter((child) => child !== node);
+  node.parentElement = null;
 }
 
 let uninstall: (() => void) | null = null;
@@ -339,9 +357,88 @@ describe("the focus keeper", () => {
     const list = rows[0].parentElement!;
     addedRow.parentElement = list;
     list.children.splice(1, 0, addedRow);
-    fire("keydown", buttons[0]);
+    fire("keydown", buttons[0], "Enter");
     remove(rows[0]);
     expect(doc.activeElement).toBe(added);
+  });
+
+  it("other keys (typing, arrows) do not read the fallbacks again", () => {
+    const { buttons, rows, focusOn, remove, fire, doc, el } = setup();
+    focusOn(buttons[0]);
+    const added = el("BUTTON");
+    const addedRow = el("LI", [added]);
+    const list = rows[0].parentElement!;
+    addedRow.parentElement = list;
+    list.children.splice(1, 0, addedRow);
+    fire("keydown", buttons[0], "a");
+    fire("keydown", buttons[0], "ArrowDown");
+    remove(rows[0]);
+    expect(added.focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(buttons[1]);
+  });
+
+  it("Space reads them again too", () => {
+    const { buttons, rows, focusOn, remove, fire, doc, el } = setup();
+    focusOn(buttons[0]);
+    const added = el("BUTTON");
+    const addedRow = el("LI", [added]);
+    const list = rows[0].parentElement!;
+    addedRow.parentElement = list;
+    list.children.splice(1, 0, addedRow);
+    fire("keydown", buttons[0], " ");
+    remove(rows[0]);
+    expect(doc.activeElement).toBe(added);
+  });
+
+  it("a press that navigates (the address changed): focus is left on the body", () => {
+    const { buttons, rows, focusOn, remove, doc, bannerButton } = setup();
+    focusOn(buttons[1]);
+    doc.location.pathname = "/activity";
+    remove(rows[1]);
+    expect(buttons[2].focus).not.toHaveBeenCalled();
+    expect(bannerButton.focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(doc.body);
+  });
+
+  it("the whole page content removed (a navigation): focus is left on the body", () => {
+    const { buttons, focusOn, remove, doc, pageContent, bannerButton } = setup();
+    focusOn(buttons[1]);
+    remove(pageContent);
+    expect(bannerButton.focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(doc.body);
+  });
+
+  it("the fallbacks stop at the page's own root: a shell banner's button is never chosen", () => {
+    const { buttons, rows, heading, list, focusOn, remove, doc, bannerButton, pageContent } = setup();
+    // Only one row and no heading left in the page.
+    detachFake(heading);
+    detachFake(rows[0]);
+    detachFake(rows[2]);
+    expect(list.children).toHaveLength(1);
+    expect(pageContent.children).toEqual([list]);
+    focusOn(buttons[1]);
+    remove(rows[1]);
+    expect(bannerButton.focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(doc.body);
+  });
+
+  it("a control hidden by CSS is skipped for the next fallback", () => {
+    const { buttons, rows, heading, focusOn, remove, doc } = setup();
+    buttons[1].attrs["data-css-hidden"] = "";
+    focusOn(buttons[0]);
+    remove(rows[0]);
+    expect(buttons[1].focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(heading);
+  });
+
+  it("a fallback that did not take focus: the next one is tried", () => {
+    const { buttons, rows, heading, focusOn, remove, doc } = setup();
+    buttons[2].focus = vi.fn();
+    focusOn(buttons[1]);
+    remove(rows[1]);
+    expect(buttons[2].focus).toHaveBeenCalled();
+    expect(doc.activeElement).toBe(buttons[0]);
+    expect(heading.focus).not.toHaveBeenCalled();
   });
 
   it("installs once however many times it is mounted, and stops when the last goes", () => {

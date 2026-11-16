@@ -31,7 +31,7 @@ vi.mock("./workspace-paused-banner", () => ({ WorkspacePausedBanner: () => null 
 import { SessionContext } from "next-auth/react";
 
 import { AppShell } from "./app-shell";
-import { makeDocument } from "./fakeDom.testkit";
+import { html, makeDocument, type FakeNode } from "./fakeDom.testkit";
 
 const SIGNED_IN = {
   status: "authenticated",
@@ -40,12 +40,14 @@ const SIGNED_IN = {
 const NOBODY = { status: "unauthenticated", data: null };
 
 let root: Root;
+let container: FakeNode;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("window", made.doc.defaultView);
+  container = made.container;
   root = createRoot(made.container as unknown as HTMLElement);
   install.mockClear();
   stop.mockClear();
@@ -76,4 +78,17 @@ describe("AppShell installs the focus keeper", () => {
       expect(stop).toHaveBeenCalledTimes(1);
     });
   }
+});
+
+describe("the page's own root in the frame", () => {
+  it("holds the page after the shell's banners, so focus fallbacks never reach them", async () => {
+    path.value = "/queue";
+    await act(async () => {
+      root.render(
+        createElement(SessionContext.Provider as never, { value: SIGNED_IN } as never, createElement(AppShell, null, "PAGE")),
+      );
+    });
+    expect(html(container)).toMatch(/<main id="main-content"[^>]*>(?:(?!<\/main>).)*<div data-focus-root="" class="contents">PAGE<\/div><\/main>/);
+    await act(async () => root.unmount());
+  });
 });

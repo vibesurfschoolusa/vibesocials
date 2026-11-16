@@ -54,6 +54,11 @@ export function isMainLandmark(element: Element): boolean {
   return element.tagName === "MAIN" || element.getAttribute("role") === "main";
 }
 
+/** R28 NN1 review: the frame's wrapper round the page, below its banners (app-shell.tsx). */
+export function isPageRoot(element: Element): boolean {
+  return element.hasAttribute("data-focus-root");
+}
+
 function nearestAncestor(start: Element | null, matches: (element: Element) => boolean): Element | null {
   for (let at = start?.parentElement ?? null; at; at = at.parentElement) {
     if (matches(at)) return at;
@@ -81,8 +86,12 @@ export function focusFallbacks(trigger: HTMLElement | null): HTMLElement[] {
   };
   // Lead review: past the page content a "next row" was a toast's button or
   // the mobile drawer. The walk ends at the trigger's main landmark, or its
-  // nearest section where there is none.
-  const limit = nearestAncestor(trigger, isMainLandmark) ?? nearestAncestor(trigger, (el) => el.tagName === "SECTION");
+  // nearest section where there is none. R28 NN1 review: in the signed-in
+  // frame it ends at the page's own root, before the shell's banners.
+  const limit =
+    nearestAncestor(trigger, isPageRoot) ??
+    nearestAncestor(trigger, isMainLandmark) ??
+    nearestAncestor(trigger, (el) => el.tagName === "SECTION");
   let child: Element | null = trigger;
   while (child?.parentElement && child !== limit) {
     const siblings = Array.from(child.parentElement.children);
@@ -103,12 +112,17 @@ export function focusFallbacks(trigger: HTMLElement | null): HTMLElement[] {
 export function focusFirstOf(
   candidates: HTMLElement[],
   usable: (element: HTMLElement) => boolean = canTakeFocus,
+  doc?: Pick<Document, "activeElement">,
 ): boolean {
-  const target = candidates.find(usable);
-  if (!target) return false;
-  if (!isFocusable(target) && !target.hasAttribute("tabindex")) target.tabIndex = -1;
-  target.focus({ preventScroll: true });
-  return true;
+  for (const target of candidates) {
+    if (!usable(target)) continue;
+    if (!isFocusable(target) && !target.hasAttribute("tabindex")) target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+    // R28 NN1 review: given a document, a control that did not take focus
+    // (hidden by a rule focus can't see) gives way to the next one.
+    if (!doc || doc.activeElement === target) return true;
+  }
+  return false;
 }
 
 /**

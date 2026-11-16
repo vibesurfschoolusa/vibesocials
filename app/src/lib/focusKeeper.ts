@@ -3,6 +3,7 @@ import {
   focusFirstOf,
   isHiddenElement,
   isMainLandmark,
+  isPageRoot,
   isWatchedForFocus,
 } from "./focusAfter";
 
@@ -28,11 +29,17 @@ import {
  *   own restore), and for a control outside main (a toast, the sidebar).
  * - A pointerdown outside the control (a click into the page on purpose) ends
  *   the watch until another control takes focus.
+ * - Lead review: never on a navigation (the address changed since the
+ *   control took focus or was pressed, or the whole page content went), and
+ *   the fallbacks stop at the page's own root, so a banner's "Resend email"
+ *   is never chosen.
  */
 
 /** What the keeper needs from the browser; tests pass a fake one. */
 export interface KeeperEnv {
-  doc: Pick<Document, "activeElement" | "body" | "addEventListener" | "removeEventListener" | "querySelector">;
+  doc: Pick<Document, "activeElement" | "body" | "addEventListener" | "removeEventListener" | "querySelector"> & {
+    location?: { pathname: string } | null;
+  };
   MutationObserver: typeof MutationObserver;
 }
 
@@ -51,10 +58,34 @@ function selfOrAncestor(element: Element, matches: (element: Element) => boolean
   return false;
 }
 
-/** On the page, not disabled, and not in a hidden, aria-hidden or inert part. */
+/**
+ * On the page, not disabled, not in a hidden, aria-hidden or inert part, and
+ * drawn: a control hidden by CSS (hidden md:inline) has no boxes.
+ */
 function isUsable(element: HTMLElement): boolean {
-  return element.isConnected && !element.hasAttribute("disabled") && !selfOrAncestor(element, isHiddenElement);
+  return (
+    element.isConnected &&
+    !element.hasAttribute("disabled") &&
+    !selfOrAncestor(element, isHiddenElement) &&
+    (typeof element.getClientRects !== "function" || element.getClientRects().length > 0)
+  );
 }
+
+/** The node that holds the page: the frame's page root, else the main landmark. */
+function pageRootOf(element: HTMLElement): Element | null {
+  for (let at: Element | null = element.parentElement; at; at = at.parentElement) if (isPageRoot(at)) return at;
+  for (let at: Element | null = element.parentElement; at; at = at.parentElement) if (isMainLandmark(at)) return at;
+  return null;
+}
+
+/** The whole page went: its root, or a direct child of the root holding the page. */
+function removesPage(record: MutationRecord, root: Element | null): boolean {
+  if (!root || record.type !== "childList" || record.removedNodes.length === 0) return false;
+  return record.target === root || Array.from(record.removedNodes).some((node) => node.contains(root));
+}
+
+/** The keys that press a control; the fallbacks are read again only then. */
+const PRESS_KEYS = new Set(["Enter", " "]);
 
 function isElement(target: unknown): target is HTMLElement {
   return typeof target === "object" && target !== null && typeof (target as Element).getAttribute === "function";
@@ -68,13 +99,21 @@ function touches(record: MutationRecord, element: HTMLElement): boolean {
 }
 
 function start({ doc, MutationObserver: Observer }: KeeperEnv): () => void {
-  let tracked: { element: HTMLElement; fallbacks: HTMLElement[] } | null = null;
+  type Tracked = { element: HTMLElement; fallbacks: HTMLElement[]; root: Element | null; pathname?: string };
+  let tracked: Tracked | null = null;
+  const pathname = () => doc.location?.pathname;
+  const record = (element: HTMLElement): Tracked => ({
+    element,
+    fallbacks: focusFallbacks(element),
+    root: pageRootOf(element),
+    pathname: pathname(),
+  });
 
   const onFocusIn = (event: Event) => {
     const target = event.target;
     tracked =
       isElement(target) && selfOrAncestor(target, isMainLandmark) && !selfOrAncestor(target, isDialog)
-        ? { element: target, fallbacks: focusFallbacks(target) }
+        ? record(target)
         : null;
   };
 
@@ -85,13 +124,20 @@ function start({ doc, MutationObserver: Observer }: KeeperEnv): () => void {
       tracked = null;
       return;
     }
-    if (isUsable(tracked.element)) tracked.fallbacks = focusFallbacks(tracked.element);
+    // Lead review: only a press reads them again, not every key typed.
+    if (event.type === "keydown" && !PRESS_KEYS.has((event as KeyboardEvent).key)) return;
+    if (isUsable(tracked.element)) tracked = record(tracked.element);
   };
 
   const observer = new Observer((records) => {
     if (!tracked) return;
-    const { element, fallbacks } = tracked;
-    if (!records.some((record) => touches(record, element))) return;
+    const { element, fallbacks, root } = tracked;
+    if (!records.some((change) => touches(change, element))) return;
+    // A navigation took the page away: the new page sets its own focus.
+    if (pathname() !== tracked.pathname || records.some((change) => removesPage(change, root))) {
+      tracked = null;
+      return;
+    }
     const active = doc.activeElement;
     if (active && active !== doc.body) return;
     if (doc.querySelector(OPEN_DIALOG)) return;
@@ -100,7 +146,7 @@ function start({ doc, MutationObserver: Observer }: KeeperEnv): () => void {
       return;
     }
     if (isWatchedForFocus(element)) return;
-    focusFirstOf(fallbacks, isUsable);
+    focusFirstOf(fallbacks, isUsable, doc);
   });
 
   doc.addEventListener("focusin", onFocusIn, true);

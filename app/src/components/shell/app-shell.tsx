@@ -108,7 +108,12 @@ function AuthenticatedShell({ children, signedOut = false }: { children: ReactNo
           <WorkspacePausedBanner onConfirmEmailShownChange={setConfirmEmailShown} />
           {/* Its own slot before the page, so the page keeps its place in the tree. */}
           {signedOut ? <SignedOutAlert /> : null}
-          {children}
+          {/* R28 NN1 review: the page's own root. Focus fallbacks stop here,
+              never reaching the banners above (a second Enter on "Resend
+              email"); display: contents keeps the layout as it was. */}
+          <div data-focus-root="" className="contents">
+            {children}
+          </div>
         </main>
       </div>
     </div>
