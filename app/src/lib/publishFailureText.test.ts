@@ -78,6 +78,15 @@ describe("publishErrorMessage (F1 L7)", () => {
     expect(publishErrorMessage("x", error)).toBe(notReachedMessage("x"));
   });
 
+  // R26 (found with platform-clients L4): "Reconnect" holds the letters of
+  // ECONN, so a client's own sentence naming Reconnect read as a network error.
+  it("keeps a client's own sentence that says Reconnect, and still hides ECONN codes", () => {
+    const board = "The Pinterest board this connection posts to no longer exists. Reconnect Pinterest in Settings and choose a board.";
+    expect(publishErrorMessage("pinterest", coded(board, "PINTEREST_BOARD_NOT_FOUND"))).toBe(board);
+    expect(publishErrorMessage("x", coded("connect ECONNREFUSED", "X_UPLOAD_FAILED"))).toBe(notReachedMessage("x"));
+    expect(publishErrorMessage("x", coded("read -ECONNRESET", "X_UPLOAD_FAILED"))).toBe(notReachedMessage("x"));
+  });
+
   it("never lets a network error reach the user", () => {
     expect(publishErrorMessage("youtube", new TypeError("fetch failed"))).toBe(notReachedMessage("youtube"));
     expect(publishErrorMessage("youtube", coded("socket hang up", "ECONNRESET"))).toBe(notReachedMessage("youtube"));

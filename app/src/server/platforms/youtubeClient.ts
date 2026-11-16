@@ -2,9 +2,10 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { STORAGE_READ_CODES, asStorageReadFailure } from "@/lib/publishFailureText";
+import { STORAGE_READ_CODES, YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT, asStorageReadFailure } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { fitTitle, truncateUnits } from "@/lib/truncate";
+import { isGoogleScopeRefusal } from "@/server/googleFailure";
 import {
   YOUTUBE_UPLOAD_STATE_KIND,
   type UploadSnapshot,
@@ -32,7 +33,7 @@ import {
 } from "./largeUpload";
 import { COVER_REQUEST_TIMEOUT_MS, fetchCoverImage } from "./coverImage";
 import { budgetedTimeout, PUBLISH_BUDGET_EXCEEDED_CODE, remainingMs } from "./publishBudget";
-import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
+import { classifyRateLimit, isRateLimitedError, readGoogleErrorReasons } from "./rateLimited";
 import { isNeverConnectedFetchError } from "./transientRetry";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -945,6 +946,15 @@ async function setYouTubeCover(
   }
 }
 
+/**
+ * A 403 for a token without the upload scope: Google's shared scope reason, or
+ * YouTube's own `insufficientPermissions` ("The OAuth 2.0 token provided for
+ * the request specifies scopes that are insufficient", YouTube Data API errors).
+ */
+function isMissingUploadScope(reasons: readonly string[]): boolean {
+  return isGoogleScopeRefusal(reasons) || reasons.includes("insufficientpermissions");
+}
+
 /** The code a row is flagged with when YouTube refuses its token (an API 401). */
 const YOUTUBE_RECONNECT_CODE = "YOUTUBE_RECONNECT_REQUIRED";
 
@@ -1130,9 +1140,21 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
   const limited = await classifyRateLimit("youtube", uploadResponse);
   if (limited) throw limited;
 
+  // R26 platform-clients L4: a 403 left after the quota reasons above is the
+  // upload permission, not the video breaking YouTube's rules. A missing scope
+  // also flags the row (as googleFailure's rule does for every Google read), so
+  // Settings shows the Reconnect the sentence names. Code and status are kept.
+  const uploadNotAllowed = uploadResponse.status === 403 ? await readGoogleErrorReasons(uploadResponse) : null;
+  if (uploadNotAllowed && isMissingUploadScope(uploadNotAllowed) && used.row) {
+    if ((await flagRejectedToken(used.row, YOUTUBE_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
+  }
+
   await assertOk(uploadResponse, {
     code: "YOUTUBE_UPLOAD_FAILED",
     prefix: "YouTube upload failed",
+  }).catch((error: Error) => {
+    if (uploadNotAllowed) error.message = YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT;
+    throw error;
   });
 
   // The insert answered 2xx, so the video may exist (see completedUpload).

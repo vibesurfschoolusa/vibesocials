@@ -1,7 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { publishErrorMessage } from "@/lib/publishFailureText";
+import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   buildLocalPostBody,
@@ -250,12 +250,12 @@ describe("googleBusinessProfileClient.publishVideo — what is posted", () => {
     expect(publishErrorMessage("google_business_profile", error!)).toBe(VIDEO_REFUSED);
   });
 
-  it("a 403 keeps today's sanitized message (not about the media)", async () => {
+  it("a 403 is not about the media: the access sentence", async () => {
     stubAny(() => new Response("denied", { status: 403 }));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
 
-    expect(error?.message).toBe("Failed to create the Google Business Profile post (status 403)");
+    expect(error?.message).toBe(GBP_ACCESS_REFUSED);
   });
 
   it("keeps GBP_CREATE_MEDIA_FAILED for a refused video", async () => {
@@ -1153,12 +1153,13 @@ describe("googleBusinessProfileClient.publishText - a post without a photo", () 
     expect(error?.message).not.toMatch(/photo/i);
   });
 
-  it("a 403 on a text-only post keeps the plain failure", async () => {
+  it("a 403 on a text-only post: the access sentence, not the caption", async () => {
     stubMediaCreate(() => new Response("denied", { status: 403 }));
 
     const error = await failure(googleBusinessProfileClient.publishText!(textCtx()));
 
     expect(error?.code).toBe("GBP_CREATE_POST_FAILED");
+    expect(error?.message).toBe(GBP_ACCESS_REFUSED);
     expect(error?.message).not.toContain("Check the caption");
   });
 
@@ -1238,5 +1239,36 @@ describe("googleBusinessProfileClient: a token Google refuses flags the row", ()
 
     expect(await failure(googleBusinessProfileClient.publishVideo(makeContext()))).not.toBeNull();
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+});
+
+const GBP_ACCESS_REFUSED =
+  "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again with the account that manages it, then retry.";
+
+// R26 platform-clients L4: a 403 is access (the account no longer manages the
+// listing), not the post breaking Google's rules. Quota and our own API setup stay as they were.
+describe("googleBusinessProfileClient: a 403 on a post", () => {
+  const googleError = (reason: string) =>
+    new Response(JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason }] } }), { status: 403 });
+
+  it("without a quota reason: the access sentence, code and status kept, and the member's wording", async () => {
+    stubMediaCreate(() => googleError("PERMISSION_DENIED"));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error).toMatchObject({ code: "GBP_CREATE_POST_FAILED", status: 403 });
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(GBP_ACCESS_REFUSED);
+    expect(publishErrorMessage("google_business_profile", error!)).not.toMatch(/rules/);
+    expect(sentenceForRecipient(GBP_ACCESS_REFUSED, "google_business_profile", "member")).toBe(
+      "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. The workspace owner can sign in to Google again with the account that manages it; then retry.",
+    );
+  });
+
+  it.each(["QUOTA_EXCEEDED", "SERVICE_DISABLED", "rateLimitExceeded"])("a %s 403 is unchanged", async (reason) => {
+    stubMediaCreate(() => googleError(reason));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.message).toBe("Failed to create the Google Business Profile post (status 403)");
   });
 });

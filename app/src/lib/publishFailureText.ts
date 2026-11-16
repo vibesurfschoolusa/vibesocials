@@ -48,6 +48,14 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
       "This store code matches more than one Google Business Profile location. The workspace owner can choose the location; then retry.",
     ],
     [LINKEDIN_NOT_SUPER_ADMIN, linkedinNotSuperAdminMember],
+    [
+      GBP_ACCESS_REFUSED_TEXT,
+      "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. The workspace owner can sign in to Google again with the account that manages it; then retry.",
+    ],
+    [
+      YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
+      "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. The workspace owner can reconnect YouTube and allow uploads; then retry.",
+    ],
     // R19 publishing L6: the Business Profile location is chosen on an owner-only page.
     [GBP_NO_LOCATION, "Google Business Profile location is not configured. The workspace owner can choose the Business Profile location; then retry."],
     [
@@ -64,6 +72,16 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
 /** linkedinClient's sentence for an account that is not a Super admin of the page. */
 const LINKEDIN_NOT_SUPER_ADMIN =
   "LinkedIn refused the post because the LinkedIn account you connected is not a Super admin of this company page. Ask a Super admin of the page to add that account as a Super admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+
+/**
+ * R26 platform-clients L4: a Google 403 on a post that is not quota or our own
+ * API setup is access, not the post breaking the platform's rules. Written by
+ * googleBusinessProfileClient and youtubeClient; the member wording is above.
+ */
+export const GBP_ACCESS_REFUSED_TEXT =
+  "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again with the account that manages it, then retry.";
+export const YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT =
+  "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.";
 
 /** googleBusinessProfileClient's sentence for a connection with no location chosen. */
 const GBP_NO_LOCATION = "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.";
@@ -89,10 +107,11 @@ const CONNECTION_STATE = /^Your (.+?) connection (has expired|is no longer valid
 
 /**
  * A step only an owner can take: connect or reconnect (with or without
- * "Settings"), or anything in Settings. Choices on the post itself ("Choose
- * Feed", TikTok privacy) are the member's own and don't match.
+ * "Settings"), signing in to Google again (the owner's in-place sign-in), or
+ * anything in Settings. Choices on the post itself ("Choose Feed", TikTok
+ * privacy) are the member's own and don't match.
  */
-const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b/i;
+const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b|\bsign in to Google again\b/i;
 
 /**
  * A stored result sentence as its reader should see it (R9-client-journey L4).
@@ -275,9 +294,10 @@ const HTTP_STATUS_LINE = /\(status (\d{3})\)\s*$/;
 const RENEW_CODE = /(?:_NO_REFRESH_TOKEN|_NO_ACCESS_TOKEN|RECONNECT_REQUIRED)$/;
 // A token refresh failed: renewal only if it was refused for good (below).
 const REFRESH_FAILED_CODE = /_TOKEN_REFRESH_FAILED$/;
-// Database, network and host details that must never reach the user.
+// Database, network and host details that must never reach the user. ECONN is
+// matched at a word start only: "Reconnect" holds the same letters (R26).
 const INTERNALS =
-  /prisma|database|can't reach|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
+  /prisma|database|can't reach|\bECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
 
 /** Would publishErrorMessage hide this text as an internal detail? A client checks before adding a platform's word. */
 export function hasInternalDetail(text: string): boolean {

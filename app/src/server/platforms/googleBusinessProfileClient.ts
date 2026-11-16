@@ -1,6 +1,8 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
+import { GBP_ACCESS_REFUSED_TEXT } from "@/lib/publishFailureText";
+import { isGoogleServiceRefusal } from "@/server/googleFailure";
 import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
@@ -14,7 +16,7 @@ import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken, refreshGoogleTokenEarly } from "./googleTokens";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
-import { classifyRateLimit } from "./rateLimited";
+import { classifyRateLimit, readGoogleErrorReasons } from "./rateLimited";
 import type {
   GoogleBusinessPostMetadata,
   PlatformClient,
@@ -72,6 +74,17 @@ async function throwGbpReconnect(connection: SocialConnection): Promise<never> {
     new Error("Google no longer accepts this connection. Reconnect Google Business Profile in Settings."),
     { code: GBP_RECONNECT_CODE },
   );
+}
+
+/**
+ * R26 platform-clients L4: a 403 that is not quota or our own API setup
+ * (isGoogleServiceRefusal) is access: the connected Google account may no
+ * longer manage the listing. It is not the post breaking Google's rules, so it
+ * gets its own sentence (GBP_ACCESS_REFUSED_TEXT); code and status are kept.
+ */
+async function isAccessRefusal(response: Response): Promise<boolean> {
+  if (response.status !== 403) return false;
+  return !isGoogleServiceRefusal(await readGoogleErrorReasons(response));
 }
 
 export const googleBusinessProfileClient: PlatformClient = {
@@ -162,11 +175,13 @@ export const googleBusinessProfileClient: PlatformClient = {
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
     if (createRes.status === 401) await throwGbpReconnect(socialConnection);
+    const accessRefused = await isAccessRefusal(createRes);
 
     // A 400 (INVALID_ARGUMENT) is Google refusing what was sent: say what it
     // accepts. Code and status are kept, so retrying stays exactly as before.
     await assertOk(createRes, request.failure).catch((error: Error & { status?: number }) => {
       if (error.status === 400) error.message = request.refused;
+      if (accessRefused) error.message = GBP_ACCESS_REFUSED_TEXT;
       throw error;
     });
 
@@ -247,6 +262,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
     if (createRes.status === 401) await throwGbpReconnect(socialConnection);
+    const accessRefused = await isAccessRefusal(createRes);
 
     // As the photo post: a 400 names what to check; code and status are kept.
     await assertOk(createRes, {
@@ -254,6 +270,7 @@ export const googleBusinessProfileClient: PlatformClient = {
       prefix: "Failed to create the Google Business Profile post",
     }).catch((error: Error & { status?: number }) => {
       if (error.status === 400) error.message = GBP_TEXT_REFUSED_TEXT;
+      if (accessRefused) error.message = GBP_ACCESS_REFUSED_TEXT;
       throw error;
     });
 

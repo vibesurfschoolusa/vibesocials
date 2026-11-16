@@ -80,6 +80,20 @@ const SERVICE_REASONS: ReadonlySet<string> = new Set([
   "userratelimitexceeded",
 ]);
 
+/**
+ * Google's 403 reasons that are our side's API setup or quota, not the
+ * person's access (R26 platform-clients L4: the publishing clients' 403s).
+ * `reasons` are googleErrorReasons' normalized form.
+ */
+export function isGoogleServiceRefusal(reasons: readonly string[]): boolean {
+  return reasons.some((reason) => SERVICE_REASONS.has(reason));
+}
+
+/** Google's 403 reasons for a token without the scope the call needs. */
+export function isGoogleScopeRefusal(reasons: readonly string[]): boolean {
+  return reasons.some((reason) => SCOPE_REASONS.has(reason));
+}
+
 interface FailureFields {
   status?: unknown;
   code?: unknown;

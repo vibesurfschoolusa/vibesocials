@@ -235,6 +235,37 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     stubYouTube(() => googleError(403, "forbidden"));
     expect((await failure())?.code).toBe("YOUTUBE_UPLOAD_FAILED");
   });
+
+  // R26 platform-clients L4: a 403 that is not quota is the upload permission,
+  // never "check the post meets YouTube's rules"; a member reads the owner can.
+  it("insert 403 without a quota reason: the upload-permission sentence, code and status kept", async () => {
+    stubYouTube(() => googleError(403, "forbidden"));
+
+    const error = (await failure()) as Error & { code?: string; status?: number };
+
+    expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 403 });
+    const owner = publishErrorMessage("youtube", error);
+    expect(owner).toBe(
+      "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.",
+    );
+    expect(sentenceForRecipient(owner, "youtube", "member")).toBe(
+      "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. The workspace owner can reconnect YouTube and allow uploads; then retry.",
+    );
+  });
+
+  it("insert 403 for a missing scope also flags the row, so Settings shows Reconnect", async () => {
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+    stubYouTube(() => googleError(403, "insufficientPermissions"));
+
+    const error = (await failure()) as Error & { code?: string; status?: number };
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "conn-yt", accessToken: "access-token", refreshToken: "refresh-token" },
+      "YOUTUBE_RECONNECT_REQUIRED",
+    );
+    expect(publishErrorMessage("youtube", error)).toMatch(/^YouTube refused the upload, so nothing was posted: the upload permission/);
+  });
 });
 
 // 2026-11-01 scale audit (jobs H6, Review Focus 5): `videos.insert` is the commit
