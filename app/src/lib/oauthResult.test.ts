@@ -565,6 +565,21 @@ describe("describeOAuthResult — every sentence names only the button the row s
     );
   });
 
+  // Lead review: the Pinterest callback sends pinterest_auth_failed for a
+  // provider code it won't pass on; only LinkedIn's auth_failed is a "no".
+  it("R30: pinterest_auth_failed is a failed sign-in, not a cancel; pinterest_access_denied is a cancel", () => {
+    expect(describe_("pinterest_auth_failed", "reconnect")).toBe(
+      "We couldn't reconnect Pinterest, so your Pinterest connection is unchanged. Click Reconnect to try again.",
+    );
+    expect(describe_("pinterest_auth_failed", "connect")).toBe("Pinterest couldn't be connected. Please try again.");
+    expect(describe_("pinterest_access_denied", "connect")).toBe(
+      "You cancelled the Pinterest authorization — nothing was connected. Click Connect to try again.",
+    );
+    expect(describe_("linkedin_auth_failed", "connect")).toBe(
+      "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
+    );
+  });
+
   it("a cancelled Reconnect: the existing connection is unchanged, and Reconnect tries again", () => {
     expect(describe_("youtube_oauth_denied", "reconnect")).toBe(
       "You cancelled the YouTube authorization — your YouTube connection is unchanged. Click Reconnect to try again.",

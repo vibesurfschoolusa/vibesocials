@@ -13,9 +13,12 @@ export const LOGIN_NOT_SENT_MESSAGE =
   "Vibe Socials couldn't be reached, so your email and password weren't sent. If your connection dropped, reconnect first, then press Sign in again.";
 export const GOOGLE_NOT_SENT_MESSAGE =
   "Vibe Socials couldn't be reached, so nothing was sent. If your connection dropped, reconnect first, then press Continue with Google again.";
-/** Register's automatic sign-in after its 201, when the providers list didn't come back. */
-export const REGISTER_SIGN_IN_UNFINISHED_MESSAGE =
-  "Your account was created, but signing you in didn't finish. Log in with your email and password.";
+/**
+ * Register's automatic sign-in after its 201, when the providers list didn't
+ * come back. The 201 also comes for an email that already had an account, so
+ * it claims no new one.
+ */
+export const REGISTER_SIGN_IN_UNFINISHED_MESSAGE = "Signing you in didn't finish. Log in with your email and password.";
 
 /**
  * R30 new-customer L2: next-auth's signIn reads /api/auth/providers first and,

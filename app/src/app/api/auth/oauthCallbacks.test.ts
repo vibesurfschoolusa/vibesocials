@@ -350,6 +350,21 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
     expectNoConnectionWrites();
   });
 
+  it("an odd ?error= value is not passed on: it reads as a provider error of the platform", async () => {
+    const url = new URL(`/api/auth/${platform}/callback`, ORIGIN);
+    url.searchParams.set("error", "<b>Access Denied</b>");
+    url.searchParams.set("state", signedState());
+
+    const res = await GET(new NextRequest(url));
+
+    const fixed: Record<string, string> = {
+      linkedin: "linkedin_auth_failed",
+      youtube: "youtube_oauth_denied",
+      pinterest: "pinterest_auth_failed",
+    };
+    expect(location(res).searchParams.get("error")).toBe(fixed[platform] ?? `${platform}_provider_error`);
+  });
+
   describe("unexpected errors redirect to <platform>_connect_failed instead of a 500", () => {
     it("session lookup (DB) failure", async () => {
       getCurrentUserMock.mockRejectedValue(new Error("db down"));

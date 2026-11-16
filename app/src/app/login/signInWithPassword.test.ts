@@ -127,7 +127,8 @@ describe("signInWithPassword when sign-in can't be reached", () => {
       "Vibe Socials couldn't be reached, so nothing was sent. If your connection dropped, reconnect first, then press Continue with Google again.",
     );
     expect(REGISTER_SIGN_IN_UNFINISHED_MESSAGE).toBe(
-      "Your account was created, but signing you in didn't finish. Log in with your email and password.",
+      // Lead review: a 201 also comes for an email that already had an account.
+      "Signing you in didn't finish. Log in with your email and password.",
     );
   });
 });
