@@ -296,7 +296,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       const body = { ...dispatchBody(false), withoutResults: true };
       const fetcher = vi
         .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+        .mockResolvedValueOnce(Response.json(body, { status: 503 }))
         .mockResolvedValueOnce(unsentPost());
       const press = createSendAgain("job-9", fetcher, () => true);
       await expect(press()).resolves.toEqual({
@@ -310,7 +310,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       const body = { ...dispatchBody(false), withoutResults: true };
       const fetcher = vi
         .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+        .mockResolvedValueOnce(Response.json(body, { status: 503 }))
         .mockResolvedValueOnce(response(200, { postJob: { id: "job-9", status: "in_progress" }, results: [] }));
       const press = createSendAgain("job-9", fetcher, () => true);
       await expect(press()).resolves.toEqual({
