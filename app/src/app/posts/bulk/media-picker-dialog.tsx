@@ -32,6 +32,11 @@ interface Page {
   nextCursor: string | null;
 }
 
+/** The first page failed: nothing is listed or ticked yet. */
+export const FIRST_LOAD_FAILED_MESSAGE = "Your media could not be loaded. Close this and try again.";
+/** R30 pages L5: a later page failed; the list, its ticks and Load more are still there. */
+export const LOAD_MORE_FAILED_MESSAGE = "Couldn't load more. Press Load more to try again.";
+
 /** "Choose from Media": the workspace's photos and videos, newest first, paged like the Media page. */
 export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }: MediaPickerDialogProps) {
   const [items, setItems] = useState<MediaItemDto[]>([]);
@@ -41,19 +46,19 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const fetchPage = useCallback(async (cursor: string | null): Promise<Page | string> => {
+  const fetchPage = useCallback(async (cursor: string | null, failed: string): Promise<Page | string> => {
     try {
       const response = await fetch(cursor ? `/api/media?cursor=${encodeURIComponent(cursor)}` : "/api/media");
       const data = (await response.json().catch(() => null)) as
         | (Partial<Page> & { error?: string })
         | null;
-      if (!response.ok) return data?.error ?? "Your media could not be loaded. Close this and try again.";
+      if (!response.ok) return data?.error ?? failed;
       return {
         items: Array.isArray(data?.items) ? data.items : [],
         nextCursor: typeof data?.nextCursor === "string" ? data.nextCursor : null,
       };
     } catch {
-      return "Your media could not be loaded. Close this and try again.";
+      return failed;
     }
   }, []);
 
@@ -61,7 +66,7 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void fetchPage(null).then((result) => {
+    void fetchPage(null, FIRST_LOAD_FAILED_MESSAGE).then((result) => {
       if (cancelled) return;
       if (typeof result === "string") {
         setError(result);
@@ -83,7 +88,7 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
     if (!nextCursor || loadingMore) return;
     setError(null);
     setLoadingMore(true);
-    const result = await fetchPage(nextCursor);
+    const result = await fetchPage(nextCursor, LOAD_MORE_FAILED_MESSAGE);
     if (typeof result === "string") setError(result);
     else {
       setItems((current) => appendMediaPage(current, result.items));
