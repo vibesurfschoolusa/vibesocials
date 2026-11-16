@@ -380,6 +380,14 @@ describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
     expect(email.text).not.toContain("send the new");
   });
 
+  // HH1 review: blocked AND on a plan without client links, the copies won't
+  // work again when the block ends, so the plan's wording (the lasting reason) wins.
+  it("blocked on a plan without client links: the plan's wording, not 'work again'", () => {
+    const email = buildFormerOwnerEmail({ ...base, uploadLink: true, reviewLink: true, clientLinksIncluded: false, workspaceBlocked: BLOCKED });
+    expect(email.text).toContain("paused, because this workspace's plan doesn't include client links");
+    expect(email.text).not.toContain("work again once the workspace is active again");
+  });
+
   it("one link: singular wording", () => {
     const email = buildFormerOwnerEmail({ ...base, uploadLink: false, reviewLink: true, workspaceBlocked: BLOCKED });
     expect(email.text).toContain(`Sam had access to its client review link. ${BLOCKED}`);

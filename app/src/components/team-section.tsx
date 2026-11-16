@@ -182,7 +182,8 @@ export function demotionOutcome(body: unknown): MemberRemovalOutcome {
 
 export function demotedMessage(links: ClientLinksState | null, self = false): string {
   if (self || !links) return "Role updated.";
-  if (links.workspaceBlocked) return blockedDemotedMessage(links, links.workspaceBlocked);
+  // HH1 review: on a plan without client links the plan is the lasting reason, so its wording wins.
+  if (links.workspaceBlocked && links.included) return blockedDemotedMessage(links, links.workspaceBlocked);
   if (!links.included) return "Role updated.";
   const working = [
     links.on.upload ? "upload" : null,
@@ -357,7 +358,8 @@ export function ClientLinksPanel({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   if (clientLinksTurnOffShown(state)) {
-    const blocked = state?.workspaceBlocked;
+    // The plan's wording wins on a plan without client links (HH1 review).
+    const blocked = state?.included ? state.workspaceBlocked : undefined;
     return (
       <div className="flex flex-col gap-2 border-t border-border pt-6">
         <h3 className="text-sm font-medium text-foreground">Client links</h3>

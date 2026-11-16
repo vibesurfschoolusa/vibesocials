@@ -310,6 +310,17 @@ describe("while the workspace is blocked", () => {
     });
   });
 
+  // HH1 review: blocked AND on a plan without client links, the plan's wording
+  // (the lasting reason) wins: the copies won't work again when the block ends.
+  it("blocked on a plan without client links: the panel and the toast use the plan's wording", () => {
+    const both = { ...BLOCKED, included: false };
+    expect(panel(both)).toContain("because this workspace&apos;s plan doesn&apos;t include them".replace(/&apos;/g, "&#x27;"));
+    expect(panel(both)).not.toContain("work again once the workspace is active again");
+    expect(demotedMessage({ ...both, on: { upload: true, review: true, connect: false } })).not.toContain(
+      "work again once the workspace is active again",
+    );
+  });
+
   it("the demotion toast says the links work again once the block ends, and points to Turn off", () => {
     expect(demotedMessage({ ...BLOCKED, on: { upload: true, review: true, connect: false } })).toBe(
       `Role updated. They could copy the client upload and review links. ${BLOCKED_SENTENCE} The copies they kept will work again once the workspace is active again. Press Turn off client links below to stop that.`,

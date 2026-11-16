@@ -83,7 +83,8 @@ export function buildFormerOwnerEmail(input: {
   const { workspaceName, formerOwnerName } = input;
   const href = workspaceLink(input.workspaceId, CLIENT_LINKS_SETTINGS_PATH, input.appBaseUrl);
   const invites = inviteLinksLine(formerOwnerName, workspaceName, input.joinLinksRevoked ?? 0, stepDown(input));
-  if (input.workspaceBlocked) {
+  // HH1 review: on a plan without client links the plan is the lasting reason, so its wording wins.
+  if (input.workspaceBlocked && input.clientLinksIncluded !== false) {
     return pausedLinksEmail({ ...input, href, invites, blocked: input.workspaceBlocked });
   }
   if (input.clientLinksIncluded === false) {
