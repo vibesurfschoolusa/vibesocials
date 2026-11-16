@@ -71,10 +71,38 @@ function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
  * A cause fixed on the platform's side, then the button to try again. A
  * sign-in that fails saves nothing, so a row that had a connection keeps it.
  */
-function fixThenTryAgain(fix: string, shown: ShownControl): string {
+function fixThenTryAgain(fix: string, shown: ShownControl, press: "click" | "press"): string {
   const button = signInButton(shown);
-  const step = button ? `${fix}, then ${pressAgain("click", button)}.` : `${fix}.`;
+  const step = button ? `${fix}, then ${pressAgain(press, button)}.` : `${fix}.`;
   return shown === "connect" ? step : `${step} Your existing connection is unchanged.`;
+}
+
+/**
+ * R5 new-customer M1: the account reached the platform but has nothing to
+ * post to. Retrying repeats the failure, so the sentence says what to fix
+ * first. One table for Settings ("click") and the connect link page ("press").
+ */
+const CAUSE_FIXES: Record<string, string> = {
+  // LinkedIn's organizationAcls answered: the account administers no page
+  // (app/api/auth/linkedin/callback/route.ts).
+  linkedin_no_admin_pages:
+    "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page",
+  facebook_page_no_pages:
+    "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page",
+  instagram_no_instagram_account:
+    "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page",
+  youtube_no_channel:
+    "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel",
+  // Pinterest: a Pin always goes on a board, and GET /boards listed none
+  // (app/api/auth/pinterest/callback/route.ts). Secret boards are not listed:
+  // the app does not ask for boards:read_secret.
+  pinterest_no_boards:
+    "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one)",
+};
+
+/** The fix-first sentence for `code`, naming the button `shown` gives; null for any other code. */
+export function causeMessage(code: string, shown: ShownControl, press: "click" | "press"): string | null {
+  return Object.hasOwn(CAUSE_FIXES, code) ? fixThenTryAgain(CAUSE_FIXES[code], shown, press) : null;
 }
 
 /** What the callback refused, and the permission to allow on Google's screen. */
@@ -166,46 +194,12 @@ function describeCode(
           "That connection was started from a different account. Sign in to the account you want to connect and try again.",
       };
     }
-    // LinkedIn's organizationAcls answered: the account administers no page
-    // (app/api/auth/linkedin/callback/route.ts).
-    if (error === "linkedin_no_admin_pages") {
-      return {
-        variant: "danger",
-        message: fixThenTryAgain(
-          "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page",
-          shown,
-        ),
-      };
-    }
-    // R5 new-customer M1: the account reached the platform but has nothing
-    // to post to. Retrying repeats the failure, so say what to fix first. The
-    // Meta sentences match the connect link page's (lib/connectLink.ts).
-    const NOTHING_TO_POST_TO: Record<string, string> = {
-      facebook_page_no_pages:
-        "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page",
-      instagram_no_instagram_account:
-        "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page",
-      youtube_no_channel:
-        "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel",
-    };
-    if (Object.hasOwn(NOTHING_TO_POST_TO, error)) {
-      return { variant: "danger", message: fixThenTryAgain(NOTHING_TO_POST_TO[error], shown) };
-    }
+    // Nothing to post to (no page, Page, Instagram account, channel or board).
+    const cause = causeMessage(error, shown, "click");
+    if (cause) return { variant: "danger", message: cause };
     // R27 platform-clients L3, R27 lead review and R28: a missing Google
     // permission is worded by googlePermissionMessage (describeOAuthResult).
 
-    // Pinterest: a Pin always goes on a board, and GET /boards listed none
-    // (app/api/auth/pinterest/callback/route.ts). Secret boards are not listed:
-    // the app does not ask for boards:read_secret.
-    if (error === "pinterest_no_boards") {
-      return {
-        variant: "danger",
-        message: fixThenTryAgain(
-          "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one)",
-          shown,
-        ),
-      };
-    }
     // F3 (2026-11-14 review): the Connect was clicked in a tab rendered for
     // another workspace, so the start refused it before going to the platform
     // (lib/workspace.ts requireOwnerContextForOAuthStart). This page was

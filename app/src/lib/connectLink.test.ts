@@ -184,6 +184,26 @@ describe("the sentence the visitor reads after a flow", () => {
     expect(describe_({ linkedin_setup: "true" })?.message).toMatch(/Super admin/);
   });
 
+  // R29 OO1 lead follow-up: /c shows Reconnect on a flagged or ending-soon row
+  // (app/c/[token]/page.tsx: form(connection ? "Reconnect" : "Connect")), so
+  // a cause names the button the row shows, with the page's "press".
+  it("a cause names the row's own button: Connect, Reconnect, or none on a working row", () => {
+    const withShown = (query: Record<string, string>, shown: ShownControl) =>
+      describeConnectLinkResult(new URLSearchParams(query), { shown: () => shown })?.message ?? "";
+    for (const error of ["linkedin_no_admin_pages", "pinterest_no_boards", "facebook_page_no_pages", "instagram_no_instagram_account"]) {
+      expect(withShown({ error }, "connect"), error).toMatch(/, then press Connect again\.$/);
+      const reconnect = withShown({ error }, "reconnect");
+      expect(reconnect, error).toMatch(/, then press Reconnect\. Your existing connection is unchanged\.$/);
+      expect(reconnect, error).not.toMatch(/\bConnect\b/);
+      const connected = withShown({ error }, "connected");
+      expect(connected, error).not.toMatch(/\b(Re)?[Cc]onnect again\b|press (Re)?Connect/);
+    }
+    expect(withShown({ linkedin_setup: "true" }, "reconnect")).toMatch(/press Reconnect\./);
+    expect(describe_({ error: "pinterest_no_boards" })?.message).toBe(
+      "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then press Connect again.",
+    );
+  });
+
   it("anything else names the platform and the workspace, never the code", () => {
     for (const error of ["tiktok_token_exchange_failed", "x_session_expired", "tiktok_connect_failed"]) {
       const message = describe_({ error })?.message ?? "";

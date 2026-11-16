@@ -105,3 +105,33 @@ describe("PlanActions busy buttons", () => {
     expect(source).toMatch(/async function run\([^)]*\) \{\s*if \(busy !== null\) return;/);
   });
 });
+
+// R29 OO1 lead follow-up: a request with no answer (offline, or a gateway's
+// page) may have reached Stripe, but starting Checkout or the portal charges
+// nothing, so that is what the line says, true either way.
+describe("openStripe when Vibe Socials doesn't answer", () => {
+  it("says nothing was charged, to reconnect, then try again", async () => {
+    const { openStripe, PLAN_NO_ANSWER_MESSAGE } = await import("./plan-actions");
+    expect(PLAN_NO_ANSWER_MESSAGE).toBe(
+      "Vibe Socials didn't answer, so nothing was charged. If your connection dropped, reconnect first; then try again.",
+    );
+    const answers = [
+      async () => {
+        throw new TypeError("Failed to fetch");
+      },
+      async () => new Response("<html>504</html>", { status: 504, headers: { "content-type": "text/html" } }),
+    ];
+    for (const answer of answers) {
+      vi.stubGlobal("fetch", vi.fn(answer));
+      await expect(openStripe("/api/billing/checkout", { plan: "pro" })).resolves.toBe(PLAN_NO_ANSWER_MESSAGE);
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it("a refusal still shows the route's sentence", async () => {
+    const { openStripe } = await import("./plan-actions");
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Only an owner can change the plan." }, { status: 403 })));
+    await expect(openStripe("/api/billing/portal")).resolves.toBe("Only an owner can change the plan.");
+    vi.unstubAllGlobals();
+  });
+});

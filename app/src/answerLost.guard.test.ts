@@ -85,7 +85,7 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
   },
   {
     file: "components/plan-actions.tsx",
-    text: "Couldn't reach the server. Check the connection and try again.",
+    text: "Vibe Socials didn't answer, so nothing was charged.",
     why: "Starting Stripe Checkout or the portal makes a session and charges nothing; the plan changes only from Stripe's webhook.",
   },
   { file: "lib/signedOutMessage.ts", constant: "SIGNED_OUT_ERROR", why: "An answer arrived (401): the session had ended, so nothing was done." },
@@ -1133,10 +1133,10 @@ async function press() { try { await save(); } catch { setError("Couldn't reach 
   });
 
   it("passes a named exception, and only in its own file", () => {
-    const named = fake("components/plan-actions.tsx", `try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { show("Couldn't reach the server. Check the connection and try again."); }`);
+    const named = fake("components/plan-actions.tsx", `try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { show("Vibe Socials didn't answer, so nothing was charged."); }`);
     expect(positiveFindings([named]).length).toBeGreaterThan(0); // a fixture path is not the real file
-    expect(isExceptedText(path.join(SRC, "components/plan-actions.tsx"), "Couldn't reach the server. Check the connection and try again.")).toBe(true);
-    expect(isExceptedText(path.join(SRC, "components/settings-form.tsx"), "Couldn't reach the server. Check the connection and try again.")).toBe(false);
+    expect(isExceptedText(path.join(SRC, "components/plan-actions.tsx"), "Vibe Socials didn't answer, so nothing was charged.")).toBe(true);
+    expect(isExceptedText(path.join(SRC, "components/settings-form.tsx"), "Vibe Socials didn't answer, so nothing was charged.")).toBe(false);
   });
 });
 

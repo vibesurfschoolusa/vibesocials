@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { describeOAuthResult, googlePermissionMessage, isGooglePermissionCode, type ShownControl } from "@/lib/oauthResult";
+import { causeMessage, googlePermissionMessage, isGooglePermissionCode, type ShownControl } from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 
 /**
@@ -147,19 +147,16 @@ function platformOfCode(code: string): Platform | null {
 const LINKEDIN_NO_PAGE_CODE = "linkedin_no_admin_pages";
 
 /**
- * Causes the visitor can fix on the platform's side. LinkedIn's and
- * Pinterest's sentences are the ones Settings shows (lib/oauthResult.ts); they
- * already speak to whoever pressed Connect and never mention Settings. The
- * Meta ones have no sentence of their own there, so they are written here.
+ * Causes the visitor can fix on the platform's side, worded by the table
+ * Settings uses (lib/oauthResult.ts causeMessage) with this page's "press";
+ * they never mention Settings.
  */
-const VISITOR_CAUSES: Record<string, string | (() => string)> = {
-  facebook_page_no_pages:
-    "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page, then press Connect again.",
-  instagram_no_instagram_account:
-    "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page, then press Connect again.",
-  [LINKEDIN_NO_PAGE_CODE]: () => describeOAuthResult({ error: LINKEDIN_NO_PAGE_CODE, success: null })!.message,
-  pinterest_no_boards: () => describeOAuthResult({ error: "pinterest_no_boards", success: null })!.message,
-};
+const VISITOR_CAUSES: ReadonlySet<string> = new Set([
+  "facebook_page_no_pages",
+  "instagram_no_instagram_account",
+  LINKEDIN_NO_PAGE_CODE,
+  "pinterest_no_boards",
+]);
 
 export type ConnectLinkResult = { variant: "success" | "danger"; message: string };
 
@@ -180,7 +177,7 @@ export function describeConnectLinkResult(
   const success = query.get("success");
 
   if (!error && query.get("linkedin_setup")) {
-    return { variant: "danger", message: (VISITOR_CAUSES[LINKEDIN_NO_PAGE_CODE] as () => string)() };
+    return { variant: "danger", message: causeMessage(LINKEDIN_NO_PAGE_CODE, shown ? shown("linkedin") : "connect", "press")! };
   }
 
   if (error) {
@@ -199,10 +196,10 @@ export function describeConnectLinkResult(
       const fallback: ShownControl = platform === "youtube" ? "connect" : "reconnect";
       return { variant: "danger", message: googlePermissionMessage(error, shown ? shown(platform) : fallback, "link") };
     }
-    const cause = VISITOR_CAUSES[error];
-    if (cause) {
-      return { variant: "danger", message: typeof cause === "function" ? cause() : cause };
-    }
+    // R29 OO1 lead follow-up: the page shows Reconnect on a flagged or
+    // ending-soon row, so the cause names the row's own button.
+    const cause = platform && VISITOR_CAUSES.has(error) ? causeMessage(error, shown ? shown(platform) : "connect", "press") : null;
+    if (cause) return { variant: "danger", message: cause };
     return {
       variant: "danger",
       message: label

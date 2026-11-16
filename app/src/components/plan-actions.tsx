@@ -17,7 +17,15 @@ import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 /** twoMonthsFree: a yearly offer's saving, from getYearlyPlanOffers (the pricing page's rule). */
 export type PlanOfferView = { plan: PlanKey; name: string; price: string | null; twoMonthsFree?: boolean };
 
-async function openStripe(url: string, body?: unknown): Promise<string | null> {
+/**
+ * R29 OO1 lead follow-up: no answer (offline, or a gateway's page). The
+ * request may have reached Stripe, but starting Checkout or the portal only
+ * makes a session and charges nothing, so this is true either way.
+ */
+export const PLAN_NO_ANSWER_MESSAGE =
+  "Vibe Socials didn't answer, so nothing was charged. If your connection dropped, reconnect first; then try again.";
+
+export async function openStripe(url: string, body?: unknown): Promise<string | null> {
   try {
     const response = await fetchOrNoAnswer(url, {
       method: "POST",
@@ -31,7 +39,7 @@ async function openStripe(url: string, body?: unknown): Promise<string | null> {
     }
     return data?.error ?? "That did not work. Reload the page and try again.";
   } catch {
-    return "Couldn't reach the server. Check the connection and try again.";
+    return PLAN_NO_ANSWER_MESSAGE;
   }
 }
 
