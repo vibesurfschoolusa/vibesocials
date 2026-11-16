@@ -24,24 +24,44 @@ export class UploadRefusedError extends Error {
 export const UPLOAD_REFUSED_MESSAGE =
   "The upload was refused. If you are adding many files, wait a few minutes and try again.";
 
+/**
+ * R24 new-customer L3: the upload never reached us. Create and Add many show
+ * the message, which would otherwise be the browser's "Failed to fetch".
+ */
+export const UPLOAD_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so the file wasn't uploaded. Check your connection and try again.";
+
 // What the blob client throws when the token route answers non-2xx (its own
 // text has a double space in one spelling).
 const TOKEN_REFUSED = /failed to\s+retrieve the client token/i;
 
+// What it throws when a part's request drops; also its answer to a real
+// outage, so it means "offline" only when our own question fails too.
+const BLOB_SERVICE_UNAVAILABLE = /blob service is currently not available/i;
+
 /**
  * The storage sentence when that is why the upload failed; for any other
- * refused token, UPLOAD_REFUSED_MESSAGE; else the original error.
+ * refused token, UPLOAD_REFUSED_MESSAGE; for a request that never left,
+ * UPLOAD_OFFLINE_MESSAGE; else the original error.
  */
 export async function explainUploadFailure(
   error: unknown,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Error> {
   const original = error instanceof Error ? error : new Error(String(error));
+  // fetch throws a TypeError only when no answer came (the browser's own text).
   const otherwise = TOKEN_REFUSED.test(original.message)
     ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE)
-    : original;
+    : original instanceof TypeError
+      ? new Error(UPLOAD_OFFLINE_MESSAGE)
+      : original;
+  let response: Response;
   try {
-    const response = await fetchImpl("/api/upload", { method: "GET" });
+    response = await fetchImpl("/api/upload", { method: "GET" });
+  } catch {
+    return BLOB_SERVICE_UNAVAILABLE.test(original.message) ? new Error(UPLOAD_OFFLINE_MESSAGE) : otherwise;
+  }
+  try {
     // R20 new-customer L2: the session ended (another tab, a new password).
     // That is why the upload failed, whatever the blob client threw; the
     // route's own sentence says so.

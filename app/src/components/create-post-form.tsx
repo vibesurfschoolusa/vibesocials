@@ -4,6 +4,7 @@ import { useState, useEffect, useEffectEvent, useMemo, useRef, useCallback, Susp
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
+import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
 import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
@@ -1304,34 +1305,27 @@ function CreatePostFormInner({
         ? await extractVideoFrames(options.fileOverride ?? uploadFile ?? blob.url)
         : [];
 
-      const response = await fetch("/api/posts/auto-caption", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      // No answer, or one that is not JSON, reads as a sentence that the
+      // caption is unchanged (lib/captionRequest.ts), never "Failed to fetch".
+      const result = await requestCaption(
+        "/api/posts/auto-caption",
+        {
           blobUrl: blob.url,
           mimeType: blob.mimeType,
           ...(frames.length > 0 ? { frames } : {}),
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        const message =
-          (errorData as { error?: string } | null)?.error ||
-          "Failed to generate caption from media";
-        throw new Error(message);
-      }
-
-      const data = await response.json();
-      const caption = (data as { caption?: string })?.caption;
-
-      if (typeof caption !== "string" || !caption.trim()) {
-        throw new Error("AI returned an empty caption from media");
-      }
+        },
+        "caption",
+      );
+      const caption = result.ok ? result.caption : null;
 
       if (options.isStale?.()) {
+        return;
+      }
+
+      if (!result.ok || typeof caption !== "string" || !caption.trim()) {
+        const problem = result.ok ? "AI returned an empty caption from media" : result.error;
+        console.error("Error generating caption from media:", problem);
+        toast.error(problem);
         return;
       }
 
@@ -1347,7 +1341,7 @@ function CreatePostFormInner({
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
       if (!options.isStale?.()) {
-        toast.error((err as Error).message || "Failed to generate caption from media");
+        toast.error(CAPTION_FAILED_MESSAGE);
       }
     } finally {
       // A replaced pick leaves the busy state to the newer one.
@@ -2155,29 +2149,24 @@ function CreatePostFormInner({
       setEnhancingCaption(true);
       setUploadError(null);
 
-      const response = await fetch("/api/posts/enhance-caption", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          caption: uploadCaption,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to enhance caption");
+      // One request for both AI buttons (lib/captionRequest.ts): a failure is
+      // a sentence that the caption is unchanged, or the route's own text.
+      const result = await requestCaption(
+        "/api/posts/enhance-caption",
+        { caption: uploadCaption },
+        "enhancedCaption",
+      );
+      if (!result.ok) {
+        console.error("Error enhancing caption:", result.error);
+        toast.error(result.error);
+        return;
       }
 
-      const data = await response.json();
-      const enhancedCaption = data.enhancedCaption;
-
       // Set the enhanced caption in the textarea
-      setUploadCaption(enhancedCaption);
+      setUploadCaption(result.caption as string);
     } catch (err: unknown) {
       console.error("Error enhancing caption:", err);
-      toast.error((err as Error).message || "Failed to enhance caption");
+      toast.error(CAPTION_FAILED_MESSAGE);
     } finally {
       setEnhancingCaption(false);
     }

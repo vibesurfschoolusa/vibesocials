@@ -1081,3 +1081,22 @@ describe("composerPageView: several photos", () => {
     expect(view(["image/jpeg", "image/jpeg"]).selected).toEqual(connected);
   });
 });
+
+// R24 new-customer L3: both AI caption buttons go through one request helper
+// (lib/captionRequest.ts), so neither shows the browser's "Failed to fetch".
+describe("the AI caption buttons' requests", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  function body(name: string): string {
+    const start = raw.indexOf(`async function ${name}(`);
+    expect(start).toBeGreaterThan(-1);
+    const end = raw.indexOf("\n  }\n", start);
+    return raw.slice(start, end);
+  }
+
+  it.each(["handleEnhanceCaption", "runAutoCaptionFromMedia"])("%s uses requestCaption and never shows a raw error", (name) => {
+    const handler = body(name);
+    expect(handler).toContain("requestCaption(");
+    expect(handler).not.toMatch(/\bfetch\(/);
+    expect(handler).not.toMatch(/\.message\b/);
+  });
+});

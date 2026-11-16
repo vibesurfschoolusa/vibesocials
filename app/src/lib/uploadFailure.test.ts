@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { explainUploadFailure, UPLOAD_REFUSED_MESSAGE, UploadRefusedError } from "./uploadFailure";
+import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, UPLOAD_REFUSED_MESSAGE, UploadRefusedError } from "./uploadFailure";
 
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
@@ -122,6 +122,46 @@ describe("explainUploadFailure", () => {
         const original = new Error("network down");
         await expect(explainUploadFailure(original, fetchMock)).resolves.toBe(original);
       }
+    });
+  });
+
+  // R24 new-customer L3: offline, the blob client throws the browser's own
+  // TypeError ("Failed to fetch", "Load failed") from its token request, or its
+  // "blob service is currently not available" after a dropped part. Create and
+  // Add many show the message, so it is a sentence instead.
+  describe("offline", () => {
+    const offline = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+    it.each(["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."])(
+      "the browser's %s with the question failing too: our sentence",
+      async (browserText) => {
+        const explained = await explainUploadFailure(new TypeError(browserText), offline);
+        expect(explained.message).toBe(UPLOAD_OFFLINE_MESSAGE);
+        expect(explained.message).toBe(
+          "We couldn't reach Vibe Socials, so the file wasn't uploaded. Check your connection and try again.",
+        );
+      },
+    );
+
+    it("the browser's text with the question answered and nothing to say: still our sentence", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
+      expect((await explainUploadFailure(new TypeError("Load failed"), fetchMock)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
+    });
+
+    it("the blob service unavailable while we cannot be reached: our sentence", async () => {
+      const unavailable = new Error("Vercel Blob: The blob service is currently not available. Please try again.");
+      expect((await explainUploadFailure(unavailable, offline)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
+    });
+
+    it("the blob service unavailable while we answer: kept (the connection is not the cause)", async () => {
+      const unavailable = new Error("Vercel Blob: The blob service is currently not available. Please try again.");
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
+      await expect(explainUploadFailure(unavailable, fetchMock)).resolves.toBe(unavailable);
+    });
+
+    it("a reason the route gives still wins", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: true, error: FULL }));
+      expect((await explainUploadFailure(new TypeError("Failed to fetch"), fetchMock)).message).toBe(FULL);
     });
   });
 });
