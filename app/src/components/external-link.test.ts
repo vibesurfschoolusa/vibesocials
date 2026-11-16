@@ -29,6 +29,13 @@ describe("ExternalLink", () => {
     expect(html).toMatch(/^<a [^>]*>How to connect <span class="[^"]*print:hidden[^"]*">\(opens in a new tab\)<\/span><\/a>$/);
     expect(html).not.toContain("sr-only");
   });
+
+  it("a caller can place the hint (a thumbnail lays it over the image)", () => {
+    const placed = renderToStaticMarkup(
+      createElement(ExternalLink, { href: "/f.png", hintClassName: "absolute bottom-1 left-1" }, "Open f.png"),
+    );
+    expect(placed).toMatch(/<span class="[^"]*print:hidden[^"]*absolute bottom-1 left-1[^"]*">\(opens in a new tab\)<\/span>/);
+  });
 });
 
 const CALLERS = [
@@ -38,6 +45,10 @@ const CALLERS = [
   "./activity/post-job-card.tsx",
   "../app/help/page.tsx",
   "../app/terms/page.tsx",
+  // Lead follow-up: the rest.
+  "../app/c/[token]/page.tsx",
+  "./media-library.tsx",
+  "./shell/signed-out-alert.tsx",
 ];
 
 describe("new-tab links use ExternalLink", () => {

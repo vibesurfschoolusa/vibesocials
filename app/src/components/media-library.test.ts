@@ -58,6 +58,16 @@ describe("MediaCard at phone width", () => {
     expect(html).toMatch(/<button[^>]*class="[^"]*\bmin-w-0\b[^"]*"[^>]*>.*<span class="truncate">Use in new post<\/span><\/button>/);
   });
 
+  // Lead follow-up (R26 pages L6): the thumbnail opens the file in a new tab;
+  // it says so over the image, and its name is "Open <file> (opens in a new tab)".
+  it("the thumbnail says it opens a new tab, in sight and in its name", () => {
+    const thumb = html.slice(html.indexOf('<a href="'), html.indexOf("</a>") + 4);
+    expect(thumb).toContain('target="_blank"');
+    expect(thumb).not.toContain("aria-label=");
+    expect(thumb).toContain('<span class="sr-only">Open a-very-long-file-name-from-the-camera-roll.jpg</span>');
+    expect(thumb).toMatch(/<span class="[^"]*absolute[^"]*">\(opens in a new tab\)<\/span><\/a>$/);
+  });
+
   it("keeps Delete in the card, with its word on a phone and its file in its name", () => {
     expect(html).toMatch(/<button[^>]*aria-label="Delete a-very-long-file-name-from-the-camera-roll.jpg"[^>]*>/);
     expect(html).toMatch(/<span class="sm:sr-only">Delete<\/span>/);

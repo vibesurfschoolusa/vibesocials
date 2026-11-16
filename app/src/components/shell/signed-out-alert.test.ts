@@ -60,8 +60,9 @@ describe("SignedOutAlert", () => {
   it("in a browser tab: the new-tab link and its sentence", () => {
     vi.stubGlobal("window", fakeWindow({}));
     const html = renderToStaticMarkup(createElement(SignedOutAlert));
-    expect(html).toContain('<a href="/login?callbackUrl=%2Fsigned-in-again" target="_blank" rel="noopener"');
-    expect(html).toContain("Sign in again in a new tab</a>, then come back: this page keeps what you wrote.");
+    expect(html).toMatch(/<a href="\/login\?callbackUrl=%2Fsigned-in-again" [^>]*target="_blank" rel="noopener noreferrer"/);
+    // Lead follow-up: the shared ExternalLink and its visible hint.
+    expect(html).toMatch(/>Sign in again <span class="[^"]*">\(opens in a new tab\)<\/span><\/a>, then come back: this page keeps what you wrote\./);
   });
 
   it("installed: the same-view link, and it says to copy unsent work first", () => {

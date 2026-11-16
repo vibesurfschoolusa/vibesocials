@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { ClientPageShell } from "@/components/client-page-header";
+import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -196,9 +197,9 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                   <div className="mt-3 rounded-[var(--radius)] border p-3 text-left text-sm text-muted-foreground">
                     <ol className="list-decimal space-y-1.5 pl-5">
                       <li>
-                        <a href={LINKEDIN_SIGN_OUT_URL} target="_blank" rel="noopener noreferrer" className="underline">
+                        <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="underline">
                           Open LinkedIn sign-out
-                        </a>{" "}
+                        </ExternalLink>{" "}
                         and sign out in the new tab. If that tab shows a sign-in page instead, you&apos;re already
                         signed out: close it.
                       </li>

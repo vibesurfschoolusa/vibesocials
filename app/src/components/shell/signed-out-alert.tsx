@@ -4,6 +4,7 @@ import { useContext, useEffect, useState } from "react";
 import { SessionContext } from "next-auth/react";
 
 import { readServerSession, type ServerSession } from "@/components/signed-in-swap";
+import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
 import { isInstalledApp } from "@/lib/installedApp";
 import { rereadSessionHere } from "@/lib/staleSignOut";
@@ -93,9 +94,9 @@ export function SignedOutAlert() {
           You were signed out.{" "}
           {link.newTab ? (
             <>
-              <a href={link.href} target="_blank" rel="noopener" className={LINK_CLASS}>
-                Sign in again in a new tab
-              </a>
+              <ExternalLink href={link.href} className={LINK_CLASS}>
+                Sign in again
+              </ExternalLink>
               , then come back: this page keeps what you wrote.
             </>
           ) : (

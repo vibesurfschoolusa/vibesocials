@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { CaptionCounter } from "@/components/caption-counter";
+import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -213,11 +214,9 @@ function MediaThumbnail({ item }: { item: MediaItemDto }) {
   const isVideo = item.mimeType.startsWith("video/");
 
   return (
-    <a
+    <ExternalLink
       href={item.storageLocation}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={`Open ${item.originalFilename}`}
+      hintClassName="pointer-events-none absolute bottom-1 left-1 rounded bg-background/85 px-1.5 py-0.5 text-foreground"
       className="relative block aspect-square w-full overflow-hidden bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
     >
       {isImage && !imageFailed ? (
@@ -257,7 +256,8 @@ function MediaThumbnail({ item }: { item: MediaItemDto }) {
           )}
         </div>
       )}
-    </a>
+      <span className="sr-only">{`Open ${item.originalFilename}`}</span>
+    </ExternalLink>
   );
 }
 

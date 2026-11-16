@@ -183,11 +183,11 @@ describe("AppShell: the session turns to nobody on an open app page", () => {
         expect(markup).toContain('<main id="main-content"');
         expect(markup.match(/role="alert"/g)).toHaveLength(1);
         expect(markup.replace(/<[^>]+>/g, "")).toContain(
-          "You were signed out. Sign in again in a new tab, then come back: this page keeps what you wrote.",
+          "You were signed out. Sign in again (opens in a new tab), then come back: this page keeps what you wrote.",
         );
         // R21 new-customer L1 (= pages L1): the link opens a new tab, so this page and its work stay;
         // that tab lands on /signed-in-again, not a second, empty copy of this page.
-        expect(markup).toContain('<a href="/login?callbackUrl=%2Fsigned-in-again" target="_blank" rel="noopener"');
+        expect(markup).toMatch(/<a href="\/login\?callbackUrl=%2Fsigned-in-again" [^>]*target="_blank" rel="noopener noreferrer"/);
         expect(refresh).not.toHaveBeenCalled();
       });
     }
