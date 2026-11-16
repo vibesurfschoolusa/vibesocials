@@ -55,6 +55,11 @@ vi.mock("./connectionHealth", async (importOriginal) => ({
   flagRejectedToken: flagRejectedTokenMock,
 }));
 
+const YOUTUBE_REFUSED =
+  "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then send it again.";
+const YOUTUBE_NOT_ALLOWED =
+  "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.";
+
 // 2026-11-01 audit (Task 4 item 1): the YouTube title is the POST's own base
 // caption (no footer) — the job's snapshot first, the shared MediaItem's only
 // as a legacy fallback — so a reused video gets the title typed for THIS post.
@@ -238,17 +243,26 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
 
   // R26 platform-clients L4: a 403 that is not quota is the upload permission,
   // never "check the post meets YouTube's rules"; a member reads the owner can.
-  it("insert 403 without a quota reason: the upload-permission sentence, code and status kept", async () => {
+  // R26 lead follow-up: a plain forbidden 403 names no control (an unflagged
+  // row has no Reconnect button); only the missing upload scope says Reconnect.
+  it("insert 403 forbidden: the YouTube Studio sentence, code and status kept, nothing flagged", async () => {
+    flagRejectedTokenMock.mockReset();
     stubYouTube(() => googleError(403, "forbidden"));
 
     const error = (await failure()) as Error & { code?: string; status?: number };
 
     expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 403 });
     const owner = publishErrorMessage("youtube", error);
-    expect(owner).toBe(
-      "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.",
-    );
+    expect(owner).toBe(YOUTUBE_REFUSED);
+    expect(owner).not.toMatch(/connect/i);
     expect(sentenceForRecipient(owner, "youtube", "member")).toBe(
+      "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then send it again.",
+    );
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the missing-scope sentence, for a member", () => {
+    expect(sentenceForRecipient(YOUTUBE_NOT_ALLOWED, "youtube", "member")).toBe(
       "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. The workspace owner can reconnect YouTube and allow uploads; then retry.",
     );
   });
@@ -264,7 +278,7 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       { id: "conn-yt", accessToken: "access-token", refreshToken: "refresh-token" },
       "YOUTUBE_RECONNECT_REQUIRED",
     );
-    expect(publishErrorMessage("youtube", error)).toMatch(/^YouTube refused the upload, so nothing was posted: the upload permission/);
+    expect(publishErrorMessage("youtube", error)).toBe(YOUTUBE_NOT_ALLOWED);
   });
 });
 
@@ -1081,6 +1095,34 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
         nextPacificMidnight(new Date(NOW)).getTime() + PACIFIC_RESET_GRACE_MS,
       );
       expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    // R26 lead follow-up: the resumable path follows the simple path's 403 rule.
+    it("a 403 forbidden on the session start: the YouTube Studio sentence, no Reconnect, nothing flagged", async () => {
+      flagRejectedTokenMock.mockReset();
+      const { store } = fakeStore();
+      stubUpload({ start: [googleError(403, "forbidden")] });
+
+      const error = (await failure(bigCtx(store)))!;
+
+      expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 403 });
+      expect(publishErrorMessage("youtube", error)).toBe(YOUTUBE_REFUSED);
+      expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    });
+
+    it("a 403 for a missing scope on a chunk: the Reconnect sentence, and the row is flagged", async () => {
+      flagRejectedTokenMock.mockReset();
+      flagRejectedTokenMock.mockResolvedValue("flagged");
+      const { store } = fakeStore();
+      stubUpload({ session: [googleError(403, "insufficientPermissions")] });
+
+      const error = (await failure(bigCtx(store)))!;
+
+      expect(publishErrorMessage("youtube", error)).toBe(YOUTUBE_NOT_ALLOWED);
+      expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "conn-yt" }),
+        "YOUTUBE_RECONNECT_REQUIRED",
+      );
     });
 
     it("a 5xx on the start is an ordinary failure (retryable), never PUBLISH_UNCONFIRMED: no video exists yet", async () => {

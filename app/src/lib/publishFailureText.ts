@@ -50,7 +50,11 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
     [LINKEDIN_NOT_SUPER_ADMIN, linkedinNotSuperAdminMember],
     [
       GBP_ACCESS_REFUSED_TEXT,
-      "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. The workspace owner can sign in to Google again with the account that manages it; then retry.",
+      "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. The workspace owner can sign in to Google again with the account that manages this listing; then retry.",
+    ],
+    [
+      YOUTUBE_UPLOAD_REFUSED_TEXT,
+      "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then send it again.",
     ],
     [
       YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
@@ -79,9 +83,13 @@ const LINKEDIN_NOT_SUPER_ADMIN =
  * googleBusinessProfileClient and youtubeClient; the member wording is above.
  */
 export const GBP_ACCESS_REFUSED_TEXT =
-  "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again with the account that manages it, then retry.";
+  "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again on the Google Business Profile card in Settings, with the account that manages this listing, then retry.";
+/** YouTube, a 403 for the missing upload scope: the row is flagged too, so the card shows Reconnect. */
 export const YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT =
   "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.";
+/** YouTube, any other 403 that is not quota: nothing is flagged, so no control is named. */
+export const YOUTUBE_UPLOAD_REFUSED_TEXT =
+  "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then send it again.";
 
 /** googleBusinessProfileClient's sentence for a connection with no location chosen. */
 const GBP_NO_LOCATION = "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.";
@@ -107,11 +115,11 @@ const CONNECTION_STATE = /^Your (.+?) connection (has expired|is no longer valid
 
 /**
  * A step only an owner can take: connect or reconnect (with or without
- * "Settings"), signing in to Google again (the owner's in-place sign-in), or
- * anything in Settings. Choices on the post itself ("Choose Feed", TikTok
+ * "Settings"), signing in to Google again (the owner's in-place sign-in),
+ * checking the channel in YouTube Studio, or anything in Settings. Choices on the post itself ("Choose Feed", TikTok
  * privacy) are the member's own and don't match.
  */
-const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b|\bsign in to Google again\b/i;
+const OWNER_STEP = /\b(?:re)?connect\b|\bSettings\b|\bsign in to Google again\b|\bin YouTube Studio\b/i;
 
 /**
  * A stored result sentence as its reader should see it (R9-client-journey L4).

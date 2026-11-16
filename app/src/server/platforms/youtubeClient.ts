@@ -2,7 +2,12 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { STORAGE_READ_CODES, YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT, asStorageReadFailure } from "@/lib/publishFailureText";
+import {
+  STORAGE_READ_CODES,
+  YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
+  YOUTUBE_UPLOAD_REFUSED_TEXT,
+  asStorageReadFailure,
+} from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { fitTitle, truncateUnits } from "@/lib/truncate";
 import {
@@ -342,14 +347,27 @@ function youtubeUploadError(message: string, status?: number): Error & { code: s
 }
 
 /**
- * Throws for a response that is neither progress nor success: a quota or rate
- * limit becomes RATE_LIMITED (as for the multipart insert, 2026-11-01 scale audit,
+ * Throws for a response that is neither progress nor success, on every upload
+ * request (the multipart insert, and the resumable start, chunks and status
+ * checks): a quota or rate limit becomes RATE_LIMITED (2026-11-01 scale audit,
  * platform limits), anything else YOUTUBE_UPLOAD_FAILED with its status.
+ *
+ * R26 platform-clients L4: a 403 left after that is about the channel, not the
+ * video breaking YouTube's rules. A missing upload scope reads Reconnect and is
+ * marked `uploadScopeMissing`, so flagRejectedYouTubeToken flags the row and
+ * the card shows that Reconnect. Any other 403 names no control (nothing is
+ * flagged, so the card has no Reconnect): check the channel in YouTube Studio.
  */
 async function rejectedByYouTube(response: Response, prefix: string): Promise<never> {
   const limited = await classifyRateLimit("youtube", response);
   if (limited) throw limited;
-  await assertOk(response, { code: "YOUTUBE_UPLOAD_FAILED", prefix });
+  const reasons = response.status === 403 ? await readGoogleErrorReasons(response) : null;
+  await assertOk(response, { code: "YOUTUBE_UPLOAD_FAILED", prefix }).catch((error: Error) => {
+    if (!reasons) throw error;
+    const scopeMissing = isMissingUploadScope(reasons);
+    error.message = scopeMissing ? YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT : YOUTUBE_UPLOAD_REFUSED_TEXT;
+    throw scopeMissing ? Object.assign(error, { uploadScopeMissing: true }) : error;
+  });
   // assertOk throws for every response that is not ok; this is for the types.
   throw youtubeUploadError(`${prefix} (status ${response.status})`, response.status);
 }
@@ -440,9 +458,7 @@ async function startUploadSession(args: {
     budgetedTimeout(YOUTUBE_SESSION_START_TIMEOUT_MS, ctx.deadline),
   );
 
-  const limited = await classifyRateLimit("youtube", response);
-  if (limited) throw limited;
-  await assertOk(response, { code: "YOUTUBE_UPLOAD_FAILED", prefix: "YouTube upload failed" });
+  if (!response.ok) await rejectedByYouTube(response, "YouTube upload failed");
   void response.body?.cancel().catch(() => {});
 
   const location = response.headers.get("Location");
@@ -975,6 +991,13 @@ async function flagRejectedYouTubeToken(error: unknown, used: UsedToken): Promis
   const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
   const fromStorage = typeof code === "string" && STORAGE_READ_CODES.has(code);
   const row = used.row;
+  // R26: a 403 for the missing upload scope (rejectedByYouTube) flags the row,
+  // as googleFailure's rule does for every Google read, so the card shows the
+  // Reconnect its sentence names. Its own sentence is kept.
+  if (status === 403 && (error as { uploadScopeMissing?: unknown }).uploadScopeMissing === true && row) {
+    if ((await flagRejectedToken(row, YOUTUBE_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
+    throw error;
+  }
   if (status !== 401 || fromStorage || !row) throw error;
   // R26 platform-clients L1: the token was past its stored expiry when the 401
   // came (a failed early refresh, then a slow download): no refusal, nothing
@@ -1166,26 +1189,9 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
 
   // 2026-11-01 scale audit (platform limits): quotaExceeded / uploadLimitExceeded
   // / rate limits become RATE_LIMITED (with the Pacific-midnight reset), not
-  // YOUTUBE_UPLOAD_FAILED.
-  const limited = await classifyRateLimit("youtube", uploadResponse);
-  if (limited) throw limited;
-
-  // R26 platform-clients L4: a 403 left after the quota reasons above is the
-  // upload permission, not the video breaking YouTube's rules. A missing scope
-  // also flags the row (as googleFailure's rule does for every Google read), so
-  // Settings shows the Reconnect the sentence names. Code and status are kept.
-  const uploadNotAllowed = uploadResponse.status === 403 ? await readGoogleErrorReasons(uploadResponse) : null;
-  if (uploadNotAllowed && isMissingUploadScope(uploadNotAllowed) && used.row) {
-    if ((await flagRejectedToken(used.row, YOUTUBE_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
-  }
-
-  await assertOk(uploadResponse, {
-    code: "YOUTUBE_UPLOAD_FAILED",
-    prefix: "YouTube upload failed",
-  }).catch((error: Error) => {
-    if (uploadNotAllowed) error.message = YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT;
-    throw error;
-  });
+  // YOUTUBE_UPLOAD_FAILED. R26: a 403 follows the same rule as the resumable
+  // path (rejectedByYouTube). Code and status are kept.
+  if (!uploadResponse.ok) await rejectedByYouTube(uploadResponse, "YouTube upload failed");
 
   // The insert answered 2xx, so the video may exist (see completedUpload).
   const published = await completedUpload(uploadResponse);

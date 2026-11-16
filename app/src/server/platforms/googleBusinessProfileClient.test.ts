@@ -1283,8 +1283,9 @@ describe("googleBusinessProfileClient: a token Google refuses flags the row", ()
   });
 });
 
+// R26 lead follow-up: the sign-in is on the Google Business Profile card in Settings.
 const GBP_ACCESS_REFUSED =
-  "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again with the account that manages it, then retry.";
+  "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again on the Google Business Profile card in Settings, with the account that manages this listing, then retry.";
 
 // R26 platform-clients L4: a 403 is access (the account no longer manages the
 // listing), not the post breaking Google's rules. Quota and our own API setup stay as they were.
@@ -1301,7 +1302,7 @@ describe("googleBusinessProfileClient: a 403 on a post", () => {
     expect(publishErrorMessage("google_business_profile", error!)).toBe(GBP_ACCESS_REFUSED);
     expect(publishErrorMessage("google_business_profile", error!)).not.toMatch(/rules/);
     expect(sentenceForRecipient(GBP_ACCESS_REFUSED, "google_business_profile", "member")).toBe(
-      "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. The workspace owner can sign in to Google again with the account that manages it; then retry.",
+      "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. The workspace owner can sign in to Google again with the account that manages this listing; then retry.",
     );
   });
 
