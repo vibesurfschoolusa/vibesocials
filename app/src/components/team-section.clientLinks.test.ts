@@ -365,15 +365,15 @@ describe("an ended trial or plan, as the GET answers it", () => {
       const state = states[name];
       const html = panel(state);
       expect(html).toContain(
-        `${state.workspaceBlocked.replace(/'/g, "&#x27;")} Copies kept by someone who stopped being an owner will work again once the workspace is on Growth or Pro again. Turning them off stops that.`,
+        `${state.workspaceBlocked.replace(/'/g, "&#x27;")} Copies kept by someone who stopped being an owner will work again once the workspace is on Growth or Pro. Turning them off stops that.`,
       );
       expect(html).not.toContain("active again");
       expect(html).not.toContain("plan doesn&#x27;t include them");
       expect(demotedMessage({ ...state, on: both })).toBe(
-        `Role updated. They could copy the client upload and review links. ${state.workspaceBlocked} The copies they kept will work again once the workspace is on Growth or Pro again. Press Turn off client links below to stop that.`,
+        `Role updated. They could copy the client upload and review links. ${state.workspaceBlocked} The copies they kept will work again once the workspace is on Growth or Pro. Press Turn off client links below to stop that.`,
       );
       expect(demotedMessage({ ...state, on: { upload: false, review: true, connect: false } })).toContain(
-        "The copy they kept will work again once the workspace is on Growth or Pro again.",
+        "The copy they kept will work again once the workspace is on Growth or Pro.",
       );
     });
   }

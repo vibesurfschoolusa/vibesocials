@@ -41,6 +41,7 @@ vi.mock("@/server/notifications/email", async (importOriginal) => ({
 }));
 
 import { EmailRetryableError } from "@/server/notifications/email";
+import { htmlToPlainText } from "@/server/notifications/plainText";
 import { expiryNoticeWhere } from "./connectionHealthSweep";
 import {
   CONNECTION_EXPIRED_CODE,
@@ -395,4 +396,36 @@ describe("sendConnectionNotices", () => {
 
     expect(Object.keys(out).sort()).toEqual(["lapsed", "reconnectEmails", "warned"]);
   });
+});
+
+// R24 pages L4: the client line follows what Settings' connect-link group shows
+// for the workspace (clientLinkPanelStatus), from the workspace row already read.
+describe("the client line follows the workspace's client links", () => {
+  const PAST = new Date(NOW.getTime() - 10 * DAY_MS);
+  const FUTURE = new Date(NOW.getTime() + 20 * DAY_MS);
+  const cases = [
+    { name: "billing off", billing: "", ws: { name: "Acme", plan: "starter", planStatus: "active", currentPeriodEnd: FUTURE }, line: "send them a connect link from" },
+    { name: "Growth", billing: "true", ws: { name: "Acme", plan: "growth", planStatus: "active", currentPeriodEnd: FUTURE }, line: "send them a connect link from" },
+    { name: "Starter", billing: "true", ws: { name: "Acme", plan: "starter", planStatus: "active", currentPeriodEnd: FUTURE }, line: "connect links are part of the Growth and Pro plans" },
+    { name: "an ended trial", billing: "true", ws: { name: "Acme", plan: null, trialEndsAt: PAST }, line: "Your free trial has ended. Choose Growth or Pro in Settings and your client links work again" },
+    { name: "paused", billing: "", ws: { name: "Acme", pausedAt: PAST, pausedReason: null }, line: "Client links don't work right now. This workspace is paused." },
+  ];
+
+  for (const { name, billing, ws, line } of cases) {
+    it(`${name}: both emails say what Settings says`, async () => {
+      vi.stubEnv("BILLING_ENABLED", billing);
+      workspaceFindUniqueMock.mockResolvedValue(ws);
+
+      row("flagged", { needsReconnect: true, refreshFailedAt: new Date(NOW.getTime() - DAY_MS) });
+      await notifyOwnersToReconnect("flagged", DAY);
+      row("soon", { expiresAt: new Date("2026-11-20T15:30:00.000Z") });
+      table.delete("flagged");
+      await sendConnectionNotices(NOW.toISOString(), DAY);
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(4);
+      for (const [email] of sendEmailMock.mock.calls) expect(htmlToPlainText(email.html)).toContain(line);
+      // One workspace read per connection, the one that was already made.
+      for (const [args] of workspaceFindUniqueMock.mock.calls) expect(args.select).toMatchObject({ name: true, pausedAt: true, pausedReason: true });
+    });
+  }
 });

@@ -1,14 +1,10 @@
 import { billingFieldsSelect } from "@/lib/billing";
+import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planOffers } from "@/lib/planFeatures";
 import { personLabel } from "@/lib/usageLimits";
-import {
-  clientLinkBlockKind,
-  clientLinkCreateRefusal,
-  copiesWorkAgainWhen,
-  type ClientLinkBlockKind,
-} from "@/server/clientLinkPanelStatus";
+import { clientLinkBlockKind, clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -184,7 +180,7 @@ function pausedLinksEmail(input: {
       ]
     : [
         `${had} ${one ? "It is" : "They are"} paused, because this workspace's plan doesn't include client links.`,
-        `If the plan changes to one with client links (Growth or Pro), the copies ${formerOwnerName} kept would work again. ${turnOff}`,
+        `If the plan changes to one with client links (Growth or Pro), ${one ? "the copy" : "the copies"} ${formerOwnerName} kept would work again. ${turnOff}`,
       ];
   if (input.invites) lines.push(input.invites);
   return {

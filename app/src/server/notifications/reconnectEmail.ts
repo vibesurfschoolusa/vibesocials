@@ -1,4 +1,5 @@
 import { emailDate, emailDateTime } from "@/server/notifications/emailTime";
+import type { ClientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
 import { workspaceLink } from "@/server/notifications/links";
 
 /**
@@ -35,9 +36,19 @@ function reconnectLine(platform: string, workspaceId: string, base: string | nul
 
 /**
  * R5-client-journey L4: an agency's client often connected the account through a
- * connect link, and only the client can connect it again.
+ * connect link, and only the client can connect it again. R24 pages L4: the line
+ * follows what Settings' connect-link group shows for this workspace (its
+ * clientLinkPanelStatus), so an owner who can't make one is not told to send it.
  */
-function clientLine(workspaceId: string, base: string | null): string {
+function clientLine(workspaceId: string, base: string | null, clientLinks: ClientLinkPanelStatus): string {
+  const need = "If your client connected it, they need a connect link to connect it again";
+  if (clientLinks.workspaceBlocked) return `<p>${need}. ${escapeHtml(clientLinks.workspaceBlocked)}</p>`;
+  if (clientLinks.pausedByPlan) {
+    const plan = base
+      ? `<a href="${escapeHtml(workspaceLink(workspaceId, "/settings#plan", base))}">Settings, Plan</a>`
+      : "Settings, Plan";
+    return `<p>${need}, and connect links are part of the Growth and Pro plans. See ${plan}.</p>`;
+  }
   const place = base
     ? `<a href="${escapeHtml(workspaceLink(workspaceId, "/settings#connect-link", base))}">Settings, Connections</a>`
     : "Settings, Connections";
@@ -56,6 +67,8 @@ export function buildReconnectEmail(params: {
    * that cannot be renewed reached its end date.
    */
   reason?: "rejected" | "expired";
+  /** What Settings' connect-link group shows for the workspace (clientLinkPanelStatus). */
+  clientLinks: ClientLinkPanelStatus;
 }): { subject: string; html: string } {
   const platform = escapeHtml(params.platformLabel);
   const workspace = escapeHtml(params.workspaceName);
@@ -72,7 +85,7 @@ export function buildReconnectEmail(params: {
       `<p>The ${platform} connection in <strong>${workspace}</strong> has stopped working: ${why}</p>`,
       `<p>Until it is reconnected, new and scheduled posts to ${platform} will fail.</p>`,
       reconnectLine(platform, params.workspaceId, base),
-      clientLine(params.workspaceId, base),
+      clientLine(params.workspaceId, base, params.clientLinks),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };
@@ -91,6 +104,8 @@ export function buildExpiryWarningEmail(params: {
   /** The owner's `User.timeZone`. */
   timeZone: string | null;
   appBaseUrl: string | null;
+  /** What Settings' connect-link group shows for the workspace (clientLinkPanelStatus). */
+  clientLinks: ClientLinkPanelStatus;
 }): { subject: string; html: string } {
   const platform = escapeHtml(params.platformLabel);
   const workspace = escapeHtml(params.workspaceName);
@@ -104,7 +119,7 @@ export function buildExpiryWarningEmail(params: {
       `<p>The ${platform} connection in <strong>${workspace}</strong> stops working on ${escapeHtml(moment)}. ${platform} does not let us renew this sign-in automatically, so it has to be connected again.</p>`,
       `<p>If it is not reconnected by then, new and scheduled posts to ${platform} will fail.</p>`,
       reconnectLine(platform, params.workspaceId, base),
-      clientLine(params.workspaceId, base),
+      clientLine(params.workspaceId, base, params.clientLinks),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };

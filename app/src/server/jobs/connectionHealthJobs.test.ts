@@ -1065,7 +1065,7 @@ describe("refreshConnection — one connection", () => {
     // The email names the platform and the workspace.
     expect(sendEmailMock.mock.calls[0][0].subject).toContain("TikTok");
     expect(JSON.stringify(sendEmailMock.mock.calls[0][0])).toContain("Acme");
-    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: { name: true } });
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: { name: true, pausedAt: true, pausedReason: true } });
     expect(membersFindManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", role: "owner" },
       select: { user: { select: { id: true, email: true } } },

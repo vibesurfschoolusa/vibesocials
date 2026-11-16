@@ -3,7 +3,8 @@
  * 1, F4): some mail apps show only text, and spam filters score HTML-only mail
  * lower. The builders write a small, known set of tags, so a few rules cover
  * them: block ends become blank lines, list items get "- ", a link becomes
- * "text: address", everything else is dropped and entities are decoded.
+ * "text: address", table cells are joined by " | " with one row per line
+ * (R24 pages L5), everything else is dropped and entities are decoded.
  */
 
 const ENTITIES: Record<string, string> = {
@@ -29,7 +30,9 @@ export function htmlToPlainText(html: string): string {
     })
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<li\b[^>]*>/gi, "\n- ")
-    .replace(/<\/(p|h[1-6]|div|blockquote|ul|ol)>/gi, "\n\n")
+    .replace(/<\/t[dh]>\s*(?=<t[dh]\b)/gi, " | ")
+    .replace(/<\/tr>\s*/gi, "\n")
+    .replace(/<\/(p|h[1-6]|div|blockquote|ul|ol|table)>/gi, "\n\n")
     .replace(/<\/li>/gi, "")
     .replace(/<[^>]*>/g, "");
 

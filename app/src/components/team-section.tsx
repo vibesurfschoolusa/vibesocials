@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
+import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
@@ -161,12 +162,7 @@ export interface ClientLinksState {
    */
   workspaceBlocked?: string;
   /** II1 review: what blocks it; an ended trial or plan comes back only on Growth or Pro. */
-  workspaceBlockedBy?: "pause" | "plan";
-}
-
-/** When a blocked workspace's kept copies work again, in the block's words (a pause when not said). */
-function copiesWorkAgainWhen(state: ClientLinksState): string {
-  return state.workspaceBlockedBy === "plan" ? "once the workspace is on Growth or Pro again" : "once the workspace is active again";
+  workspaceBlockedBy?: ClientLinkBlockKind;
 }
 
 /**
@@ -241,7 +237,7 @@ function blockedDemotedMessage(links: ClientLinksState, blocked: string): string
     "Role updated.",
     one ? `They could copy the client ${held[0]} link.` : `They could copy the client ${listOf(held)} links.`,
     blocked,
-    `${one ? "The copy they kept" : "The copies they kept"} will work again ${copiesWorkAgainWhen(links)}.`,
+    `${one ? "The copy they kept" : "The copies they kept"} will work again ${copiesWorkAgainWhen(links.workspaceBlockedBy)}.`,
     "Press Turn off client links below to stop that.",
   ].join(" ");
 }
@@ -384,7 +380,7 @@ export function ClientLinksPanel({
         {blocked ? (
           <p className="text-sm text-muted-foreground">
             {blocked} Copies kept by someone who stopped being an owner will work again{" "}
-            {state ? copiesWorkAgainWhen(state) : "once the workspace is active again"}. Turning them off stops that.
+            {copiesWorkAgainWhen(state?.workspaceBlockedBy)}. Turning them off stops that.
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -592,8 +588,8 @@ function OwnerView({
   const [savingName, setSavingName] = useState(false);
 
   const handleSaveName = useCallback(async () => {
+    if (!workspaceNameSavable(name, savedName)) return;
     const trimmed = workspaceNameToSave(name);
-    if (!trimmed || trimmed === savedName) return;
     setSavingName(true);
     try {
       const response = await fetch("/api/workspaces/active", {
@@ -601,13 +597,15 @@ function OwnerView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: trimmed, workspaceId }),
       });
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      const data = (await response.json().catch(() => null)) as { error?: string; name?: unknown } | null;
       if (!response.ok) {
         toast.error(data?.error ?? "Couldn't rename workspace.");
         return;
       }
-      setSavedName(trimmed);
-      setName(trimmed);
+      // The field shows the name as stored, so Save goes quiet until it changes.
+      const stored = typeof data?.name === "string" ? data.name : trimmed;
+      setSavedName(stored);
+      setName(stored);
       toast.success("Workspace renamed.");
       // R16 L1: the active workspace stays, so no full load, which threw away
       // unsaved typing on Settings and a freshly shown invite or connect link.
@@ -931,7 +929,7 @@ function OwnerView({
             variant="outline"
             className="shrink-0 sm:w-auto"
             loading={savingName}
-            disabled={!name.trim() || name.trim() === savedName}
+            disabled={!workspaceNameSavable(name, savedName)}
             onClick={handleSaveName}
           >
             {savingName ? "Saving…" : "Save"}
@@ -1152,6 +1150,16 @@ function OwnerView({
  */
 export function workspaceNameToSave(name: string): string {
   return name.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * R24 new-customer L1: Save is enabled on exactly the rule its handler saves
+ * by, so it is never enabled for a press that does nothing ("Surf  Co" when
+ * "Surf Co" is stored).
+ */
+export function workspaceNameSavable(typed: string, saved: string): boolean {
+  const next = workspaceNameToSave(typed);
+  return next !== "" && next !== saved;
 }
 
 /**

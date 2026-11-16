@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { htmlToPlainText } from "./plainText";
 import { buildExpiryWarningEmail, buildReconnectEmail } from "./reconnectEmail";
 
 describe("buildReconnectEmail", () => {
@@ -8,6 +9,7 @@ describe("buildReconnectEmail", () => {
     workspaceId: "ws_1",
     workspaceName: "Klaus Schroder's workspace",
     appBaseUrl: "https://vibesocials.wtf",
+    clientLinks: {},
   });
 
   // R2-pages L5: an owner of several workspaces sees which one from the subject.
@@ -23,6 +25,7 @@ describe("buildReconnectEmail", () => {
       workspaceId: "ws_1",
       workspaceName: "Surf\r\nCo",
       appBaseUrl: null,
+      clientLinks: {},
     });
     expect(broken.subject).toBe("Action needed: reconnect X in Surf Co");
   });
@@ -42,6 +45,7 @@ describe("buildReconnectEmail", () => {
       workspaceId: "ws_1",
       workspaceName: "W",
       appBaseUrl: "https://vibesocials.wtf/",
+      clientLinks: {},
     });
     expect(trimmed.html).toContain("https://vibesocials.wtf/go?w=ws_1");
     expect(trimmed.html).not.toContain("wtf//go");
@@ -53,6 +57,7 @@ describe("buildReconnectEmail", () => {
       workspaceId: "ws_1",
       workspaceName: "W",
       appBaseUrl: null,
+      clientLinks: {},
     });
     expect(noLink.html).not.toContain("<a ");
     expect(noLink.html).toMatch(/reconnect x in settings/i);
@@ -64,6 +69,7 @@ describe("buildReconnectEmail", () => {
       workspaceId: "ws_1",
       workspaceName: '<img src=x onerror=alert(1)>',
       appBaseUrl: null,
+      clientLinks: {},
     });
     expect(evil.html).not.toContain("<img");
   });
@@ -78,7 +84,7 @@ describe("buildReconnectEmail", () => {
   });
 
   it("names Settings, Connections without a link when appBaseUrl is null", () => {
-    const noLink = buildReconnectEmail({ platformLabel: "X", workspaceId: "ws_1", workspaceName: "W", appBaseUrl: null });
+    const noLink = buildReconnectEmail({ platformLabel: "X", workspaceId: "ws_1", workspaceName: "W", appBaseUrl: null, clientLinks: {} });
     expect(noLink.html).toContain("If your client connected it, send them a connect link from Settings, Connections.");
   });
 
@@ -97,6 +103,7 @@ describe("buildReconnectEmail", () => {
       workspaceId: "ws_1",
       workspaceName: "Acme",
       appBaseUrl: null,
+      clientLinks: {},
       reason: "expired",
     });
     expect(expired.html).toContain(
@@ -116,6 +123,7 @@ describe("buildExpiryWarningEmail", () => {
     expiresAt: new Date("2026-11-20T15:30:00.000Z"),
     timeZone: "America/New_York",
     appBaseUrl: "https://vibesocials.wtf",
+    clientLinks: {},
   };
   const email = buildExpiryWarningEmail(params);
 
@@ -153,4 +161,57 @@ describe("buildExpiryWarningEmail", () => {
       "LinkedIn needs reconnecting by Friday, November 20, 2026 (Surf Co)",
     );
   });
+});
+
+// R24 pages L4: the client line follows what the Settings connect-link group
+// shows (clientLinkPanelStatus), so an owner without client links is not told
+// to send one. The plain-text part is made from this HTML (sendEmail).
+describe("the client line, by what Settings offers", () => {
+  const PLAN_LINE =
+    "If your client connected it, they need a connect link to connect it again, and connect links are part of the Growth and Pro plans. See Settings, Plan.";
+  const BLOCKED =
+    "Client links don't work right now. Your free trial has ended. Choose Growth or Pro in Settings and your client links work again, or contact help@example.com.";
+  const PAUSED = "Client links don't work right now. This workspace is paused. Contact help@example.com.";
+  const reconnect = (clientLinks: { pausedByPlan?: true; workspaceBlocked?: string }, appBaseUrl: string | null = "https://vibesocials.wtf") =>
+    buildReconnectEmail({ platformLabel: "LinkedIn", workspaceId: "ws_1", workspaceName: "Acme", appBaseUrl, clientLinks });
+  const expiry = (clientLinks: { pausedByPlan?: true; workspaceBlocked?: string }, appBaseUrl: string | null = "https://vibesocials.wtf") =>
+    buildExpiryWarningEmail({
+      platformLabel: "LinkedIn",
+      workspaceId: "ws_1",
+      workspaceName: "Acme",
+      expiresAt: new Date("2026-11-20T15:30:00.000Z"),
+      timeZone: null,
+      appBaseUrl,
+      clientLinks,
+    });
+
+  for (const [name, build] of [["reconnect", reconnect], ["expiry warning", expiry]] as const) {
+    it(`${name}: links on (billing off, or Growth): today's line`, () => {
+      const text = htmlToPlainText(build({}).html);
+      expect(text).toContain(
+        "If your client connected it, send them a connect link from Settings, Connections: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23connect-link.",
+      );
+      expect(text).not.toContain("Growth and Pro");
+    });
+
+    it(`${name}: a plan without client links (Starter): the plan line, linked to Settings, Plan`, () => {
+      const email = build({ pausedByPlan: true });
+      expect(email.html).toContain('href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23plan">Settings, Plan</a>');
+      expect(email.html).not.toContain("send them a connect link");
+      expect(htmlToPlainText(email.html)).toContain(
+        "If your client connected it, they need a connect link to connect it again, and connect links are part of the Growth and Pro plans. See Settings, Plan: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23plan.",
+      );
+      expect(htmlToPlainText(build({ pausedByPlan: true }, null).html)).toContain(PLAN_LINE);
+    });
+
+    it(`${name}: an ended trial or a pause: the Settings panel's sentence`, () => {
+      for (const blocked of [BLOCKED, PAUSED]) {
+        const email = build({ workspaceBlocked: blocked, pausedByPlan: true });
+        const text = htmlToPlainText(email.html);
+        expect(text).toContain(`If your client connected it, they need a connect link to connect it again. ${blocked}`);
+        expect(text).not.toContain("send them a connect link");
+        expect(text).not.toContain("Growth and Pro plans");
+      }
+    });
+  }
 });

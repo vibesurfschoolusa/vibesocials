@@ -1,7 +1,13 @@
 import { pausedByPlan, planOffers } from "@/lib/planFeatures";
+import type { ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { isPlanKey, PLANS } from "@/lib/plans";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { PLAN_ENDED_CODE, workspaceBlock, type WorkspaceStatusFields } from "@/lib/workspaceStatus";
+
+export type { ClientLinkBlockKind };
+
+/** What a link panel is told; also decides the client line in the reconnect emails (R24). */
+export type ClientLinkPanelStatus = { pausedByPlan?: true; workspaceBlocked?: string };
 
 /**
  * R21 client-journey L1: what the three owner link GETs add to their answer.
@@ -14,7 +20,7 @@ import { PLAN_ENDED_CODE, workspaceBlock, type WorkspaceStatusFields } from "@/l
 export function clientLinkPanelStatus(
   workspace: WorkspaceStatusFields,
   now: Date = new Date(),
-): { pausedByPlan?: true; workspaceBlocked?: string } {
+): ClientLinkPanelStatus {
   const block = workspaceBlock(workspace, now, "owner");
   if (block) return { workspaceBlocked: `Client links don't work right now. ${blockSentence(workspace, block)}` };
   return pausedByPlan(workspace, "clientLinks", process.env, now);
@@ -38,23 +44,11 @@ function blockSentence(workspace: WorkspaceStatusFields, block: { code: string; 
   return `${ended} ${again}`;
 }
 
-/**
- * What blocks the client links: a pause ends when the workspace is active
- * again, an ended trial or plan only on Growth or Pro (II1 review: picking
- * Starter makes the workspace active but leaves the links off). Null when
- * nothing blocks them.
- */
-export type ClientLinkBlockKind = "pause" | "plan";
-
+/** What blocks the client links (pause or plan); null when nothing does. */
 export function clientLinkBlockKind(workspace: WorkspaceStatusFields, now: Date = new Date()): ClientLinkBlockKind | null {
   const block = workspaceBlock(workspace, now, "owner");
   if (!block) return null;
   return block.code === PLAN_ENDED_CODE ? "plan" : "pause";
-}
-
-/** When a blocked workspace's kept copies work again, in the kind's words. */
-export function copiesWorkAgainWhen(kind: ClientLinkBlockKind | null | undefined): string {
-  return kind === "plan" ? "once the workspace is on Growth or Pro again" : "once the workspace is active again";
 }
 
 /**

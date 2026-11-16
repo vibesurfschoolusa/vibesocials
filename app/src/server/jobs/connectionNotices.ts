@@ -1,5 +1,7 @@
+import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
+import { clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
 import { sendEmail } from "@/server/notifications/email";
 import { buildExpiryWarningEmail, buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { expiryNoticeDue, expiryNoticeWhere } from "./connectionHealthSweep";
@@ -38,6 +40,13 @@ export const CONNECTION_NOTICES_BATCH = 100;
 export const CONNECTION_FLAG_SCAN_LIMIT = 500;
 
 type Stamp = Date | string | null;
+
+/**
+ * The workspace row both notices read: its name, and what decides the client
+ * line (R24 pages L4: the pause and billing columns clientLinkPanelStatus uses,
+ * as Settings' connect-link group reads them).
+ */
+const WORKSPACE_SELECT = () => ({ name: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() }) as const;
 
 /** Was the reconnect email already sent for the connection's current flag? */
 function reconnectAlreadyEmailed(connection: { refreshFailedAt: Stamp; reconnectEmailedAt: Stamp }): boolean {
@@ -80,7 +89,7 @@ export async function notifyOwnersToReconnect(
   const [workspace, owners] = await Promise.all([
     prisma.workspace.findUnique({
       where: { id: connection.workspaceId },
-      select: { name: true },
+      select: WORKSPACE_SELECT(),
     }),
     prisma.workspaceMember.findMany({
       where: { workspaceId: connection.workspaceId, role: "owner" },
@@ -93,6 +102,7 @@ export async function notifyOwnersToReconnect(
     workspaceName: workspace?.name ?? "your workspace",
     appBaseUrl: process.env.NEXTAUTH_URL || null,
     reason: connection.lastRefreshErrorCode === CONNECTION_EXPIRED_CODE ? "expired" : "rejected",
+    clientLinks: workspace ? clientLinkPanelStatus(workspace) : {},
   });
   // One reconnect email per owner per connection per UTC day: a retry of the step
   // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
@@ -123,13 +133,14 @@ async function warnOwnersOfExpiry(connection: {
   expiresAt: Date;
 }): Promise<void> {
   const [workspace, owners] = await Promise.all([
-    prisma.workspace.findUnique({ where: { id: connection.workspaceId }, select: { name: true } }),
+    prisma.workspace.findUnique({ where: { id: connection.workspaceId }, select: WORKSPACE_SELECT() }),
     prisma.workspaceMember.findMany({
       where: { workspaceId: connection.workspaceId, role: "owner" },
       select: { user: { select: { id: true, email: true, timeZone: true } } },
     }),
   ]);
   const expiry = connection.expiresAt.toISOString();
+  const clientLinks = workspace ? clientLinkPanelStatus(workspace) : {};
   for (const owner of owners) {
     const email = buildExpiryWarningEmail({
       platformLabel: platformLabel(connection.platform),
@@ -138,6 +149,7 @@ async function warnOwnersOfExpiry(connection: {
       expiresAt: connection.expiresAt,
       timeZone: owner.user.timeZone,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
+      clientLinks,
     });
     await sendEmail(
       { to: owner.user.email, ...email },

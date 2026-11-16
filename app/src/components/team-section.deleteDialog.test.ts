@@ -31,7 +31,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: 
 vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null }), signOut: vi.fn() }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { DeleteWorkspace, deleteConfirmMatches, workspaceNameToSave } from "./team-section";
+import { DeleteWorkspace, deleteConfirmMatches, workspaceNameSavable, workspaceNameToSave } from "./team-section";
 
 const DELETION = { memberCount: 2, scheduledCount: 0, refusal: null };
 
@@ -89,5 +89,20 @@ describe("workspace names with runs of spaces", () => {
     for (const typed of ["Surf", "surf co", "Surf Cot", "SurfCo", ""]) {
       expect(deleteConfirmMatches(typed, "Surf  Co")).toBe(false);
     }
+  });
+});
+
+// R24 new-customer L1: Save is enabled exactly when pressing it saves something.
+describe("workspaceNameSavable", () => {
+  it("nothing to save: the same name once spaces collapse, or no name", () => {
+    expect(workspaceNameSavable("Surf  Co", "Surf Co")).toBe(false);
+    expect(workspaceNameSavable(" Surf Co ", "Surf Co")).toBe(false);
+    expect(workspaceNameSavable("Surf Co", "Surf Co")).toBe(false);
+    expect(workspaceNameSavable("", "Surf Co")).toBe(false);
+    expect(workspaceNameSavable("   ", "Surf Co")).toBe(false);
+  });
+
+  it("a different name is saved", () => {
+    expect(workspaceNameSavable("Surf Co 2", "Surf Co")).toBe(true);
   });
 });

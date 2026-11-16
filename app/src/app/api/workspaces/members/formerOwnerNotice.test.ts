@@ -339,6 +339,11 @@ describe("buildFormerOwnerEmail: on a plan without client links", () => {
   it("one link: singular wording", () => {
     const email = buildFormerOwnerEmail({ ...base, uploadLink: false, reviewLink: true, clientLinksIncluded: false });
     expect(email.text).toContain("Sam had access to its client review link. It is paused, because");
+    // R24 security-billing L2: one link on, one copy kept.
+    expect(email.text).toContain(
+      "If the plan changes to one with client links (Growth or Pro), the copy Sam kept would work again.",
+    );
+    expect(email.text).not.toContain("the copies");
   });
 
   it("the notice reads the plan, and with only a stopped connect link there is nothing to turn off: no email", async () => {
@@ -393,10 +398,10 @@ describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
       "Client links don't work right now. Your plan has ended. Choose Growth or Pro in Settings and your client links work again, or contact help@example.com.";
     const many = buildFormerOwnerEmail({ ...base, uploadLink: true, reviewLink: true, workspaceBlocked: ended, workspaceBlockedBy: "plan" });
     expect(many.text).toContain(
-      'The copies Sam kept will work again once the workspace is on Growth or Pro again. To stop that, open Settings, Team and press "Turn off client links".',
+      'The copies Sam kept will work again once the workspace is on Growth or Pro. To stop that, open Settings, Team and press "Turn off client links".',
     );
     const one = buildFormerOwnerEmail({ ...base, uploadLink: false, reviewLink: true, workspaceBlocked: ended, workspaceBlockedBy: "plan" });
-    expect(one.text).toContain("The copy Sam kept will work again once the workspace is on Growth or Pro again.");
+    expect(one.text).toContain("The copy Sam kept will work again once the workspace is on Growth or Pro.");
     const paused = buildFormerOwnerEmail({ ...base, uploadLink: true, reviewLink: true, workspaceBlocked: BLOCKED, workspaceBlockedBy: "pause" });
     expect(paused.text).toContain("The copies Sam kept will work again once the workspace is active again.");
   });
@@ -451,7 +456,7 @@ describe("noticeOwnersOfFormerOwner: an ended trial or plan", () => {
     const sent = m.sendEmail.mock.calls[0][0];
     expect(sent.text).toContain("Your free trial has ended. Choose Growth or Pro in Settings and your client links work again");
     // II1 review: "once the workspace is active again" was untrue after picking Starter.
-    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is on Growth or Pro again.");
+    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is on Growth or Pro.");
     expect(sent.text).not.toContain("active again");
     expect(sent.text).not.toContain("plan doesn't include client links");
   });
@@ -468,7 +473,7 @@ describe("noticeOwnersOfFormerOwner: an ended trial or plan", () => {
     const sent = m.sendEmail.mock.calls[0][0];
     expect(sent.subject).toBe("Turn off client links for Surf Co");
     expect(sent.text).toContain("Your plan has ended. Choose Growth or Pro in Settings and your client links work again");
-    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is on Growth or Pro again.");
+    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is on Growth or Pro.");
     expect(sent.text).not.toContain("active again");
     expect(sent.text).not.toContain("plan doesn't include client links");
   });
