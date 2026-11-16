@@ -10,7 +10,7 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), e
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { SIGN_OUT_FAILED_MESSAGE } from "@/lib/signOutChecked";
+import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 import {
@@ -266,7 +266,7 @@ describe("AccountMenu: Sign out", () => {
     const close = vi.fn();
     const error = vi.fn();
     const leave = vi.fn();
-    await signOutFromMenu(async () => true, close, error, leave);
+    await signOutFromMenu(async () => ({ ok: true as const }), close, error, leave);
     expect(close).toHaveBeenCalledTimes(1);
     expect(leave).toHaveBeenCalledWith("/");
     expect(error).not.toHaveBeenCalled();
@@ -276,8 +276,11 @@ describe("AccountMenu: Sign out", () => {
     const close = vi.fn();
     const error = vi.fn();
     const leave = vi.fn();
-    await signOutFromMenu(async () => false, close, error, leave);
+    await signOutFromMenu(async () => ({ ok: false as const, message: SIGN_OUT_FAILED_MESSAGE }), close, error, leave);
     expect(error).toHaveBeenCalledWith(SIGN_OUT_FAILED_MESSAGE);
+    // R32 lead review: an answer that left the person signed in says so.
+    await signOutFromMenu(async () => ({ ok: false as const, message: SIGN_OUT_STILL_SIGNED_IN_MESSAGE }), close, error, leave);
+    expect(error).toHaveBeenLastCalledWith(SIGN_OUT_STILL_SIGNED_IN_MESSAGE);
     expect(close).not.toHaveBeenCalled();
     expect(leave).not.toHaveBeenCalled();
   });

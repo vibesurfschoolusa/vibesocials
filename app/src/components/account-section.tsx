@@ -23,7 +23,7 @@ import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDa
 import { focusAfterPress } from "@/lib/focusAfter";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
-import { SIGN_OUT_FAILED_MESSAGE, signOutChecked } from "@/lib/signOutChecked";
+import { signOutChecked } from "@/lib/signOutChecked";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
 
@@ -360,8 +360,8 @@ function ChangePasswordForm() {
       window.setTimeout(() => {
         void signOutChecked().then((signedOut) => {
           // A full load, so nothing of the signed-in page stays in memory.
-          if (signedOut) afterWorkspaceChange("/login");
-          else setSignOutError(SIGN_OUT_FAILED_MESSAGE);
+          if (signedOut.ok) afterWorkspaceChange("/login");
+          else setSignOutError(signedOut.message);
         });
       }, 2000);
     } catch (error) {

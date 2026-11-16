@@ -301,8 +301,9 @@ describe("Settings, Account: sign-out after a password change", () => {
   it("goes to Log in only when signOutChecked says signed out; otherwise the sign-out sentence shows", () => {
     expect(form).not.toMatch(/\bsignOut\(/);
     expect(form).toMatch(/signOutChecked\(\)/);
-    expect(form).toMatch(/if \(signedOut\) afterWorkspaceChange\("\/login"\);/);
-    expect(form).toContain("SIGN_OUT_FAILED_MESSAGE");
+    // R32 lead review: the helper's own sentence (lost answer, or still signed in).
+    expect(form).toMatch(/else setSignOutError\(signedOut\.message\);/);
+    expect(form).toMatch(/if \(signedOut\.ok\) afterWorkspaceChange\("\/login"\);/);
     // The sentence shows with the success line (the form is gone by then).
     const alert = form.indexOf('<Alert variant="success">');
     expect(form.indexOf("signOutError", alert)).toBeGreaterThan(alert);

@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { normalizeEmail } from "./email";
+import { rateLimitWindow } from "./rateLimit";
 
 /**
  * Log in's per-(address, network) limit. auth.ts counts in it; a password
@@ -23,11 +24,10 @@ export function loginEmailIpUserId(email: string, ip: string): string {
  * emptied: a reset needs the emailed link, so whoever completes one already
  * controls the account, and the per-network and per-address buckets (which
  * limit guessing at other addresses and from many networks) stay as they are.
- * The key is checkRateLimit's `${userId}:${route}:${bucket}` for the current
- * window (loginLimit.test.ts ties the two together). Throws on a store error.
+ * The key is checkRateLimit's own for the current window (rateLimitWindow).
+ * Throws on a store error.
  */
 export async function clearLoginLimitForNetwork(email: string, ip: string): Promise<void> {
-  const bucket = Math.floor(Date.now() / LOGIN_EMAIL_IP_LIMIT.windowMs);
-  const key = `${loginEmailIpUserId(email, ip)}:${LOGIN_EMAIL_IP_LIMIT.route}:${bucket}`;
+  const { key } = rateLimitWindow(loginEmailIpUserId(email, ip), LOGIN_EMAIL_IP_LIMIT.route, LOGIN_EMAIL_IP_LIMIT.windowMs);
   await prisma.rateLimitEntry.deleteMany({ where: { key } });
 }

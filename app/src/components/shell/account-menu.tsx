@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useSignedInAccount } from "@/components/signed-in-swap";
-import { SIGN_OUT_FAILED_MESSAGE, signOutChecked } from "@/lib/signOutChecked";
+import { signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
 import { InstallInstructionsDialog, useInstallApp } from "./install-app";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -128,13 +128,14 @@ export function createWorkspaceFailureText(status: number, data: { error?: unkno
  * too), and the page loads home only after it, never next-auth's own page.
  */
 export async function signOutFromMenu(
-  signOutFn: () => Promise<boolean>,
+  signOutFn: () => Promise<SignOutCheck>,
   close: () => void,
   showError: (message: string) => void,
   leave: (url: string) => void = (url) => window.location.assign(url),
 ): Promise<void> {
-  if (!(await signOutFn())) {
-    showError(SIGN_OUT_FAILED_MESSAGE);
+  const check = await signOutFn();
+  if (!check.ok) {
+    showError(check.message);
     return;
   }
   close();

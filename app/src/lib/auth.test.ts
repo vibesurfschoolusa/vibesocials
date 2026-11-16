@@ -5,12 +5,14 @@ import type { CheckRateLimitOptions, RateLimitResult } from "./rateLimit";
 const {
   findUniqueMock,
   checkRateLimitMock,
+  peekRateLimitMock,
   compareMock,
   findOrCreateGoogleSsoUserMock,
   getServerSessionMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  peekRateLimitMock: vi.fn(),
   compareMock: vi.fn(),
   findOrCreateGoogleSsoUserMock: vi.fn(),
   getServerSessionMock: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("./db", () => ({
 
 vi.mock("./rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
+  peekRateLimit: peekRateLimitMock,
 }));
 
 // The Google provider stays unregistered (no env); the signIn callback is
@@ -89,6 +92,8 @@ beforeEach(() => {
   getServerSessionMock.mockReset();
   checkRateLimitMock.mockReset();
   checkRateLimitMock.mockResolvedValue({ allowed: true });
+  peekRateLimitMock.mockReset();
+  peekRateLimitMock.mockResolvedValue({ blocked: false });
   compareMock.mockReset();
   compareMock.mockResolvedValue(false);
 });
@@ -230,6 +235,47 @@ describe("authorizeCredentials — rate limits", () => {
       new Error("SignInLimited-46"),
     );
     checkRateLimitMock.mockResolvedValue({ allowed: false });
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error(SIGN_IN_LIMITED),
+    );
+  });
+
+  // R32 lead review: the person is told the longest wait among the limits
+  // they are over, not only the one that tripped first.
+  it("both exceeded: the 15-minute bucket trips first, the hourly one still blocks: the hourly wait", async () => {
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 5 * 60 });
+    peekRateLimitMock.mockImplementation(async (opts: { route: string }) =>
+      opts.route === "auth/login-email" ? { blocked: true, retryAfterSeconds: 45 * 60 } : { blocked: false },
+    );
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error("SignInLimited-45"),
+    );
+    // The other limits are only read, never counted (an attacker's tries stay out of the backstop).
+    expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+    expect(peekRateLimitMock.mock.calls.map(([opts]) => (opts as { userId: string }).userId)).toEqual([
+      "ip:1.1.1.1",
+      "email:victim@example.com",
+    ]);
+  });
+
+  it("a longer wait on the bucket that tripped wins over a shorter blocked one", async () => {
+    checkRateLimitMock
+      .mockResolvedValueOnce({ allowed: true })
+      .mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 14 * 60 });
+    peekRateLimitMock.mockResolvedValue({ blocked: true, retryAfterSeconds: 3 * 60 });
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error("SignInLimited-14"),
+    );
+  });
+
+  it("the limiter can't tell (a read of another limit fails, or no wait): no number", async () => {
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 5 * 60 });
+    peekRateLimitMock.mockRejectedValueOnce(new Error("db down"));
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error(SIGN_IN_LIMITED),
+    );
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 5 * 60 });
+    peekRateLimitMock.mockResolvedValue({ blocked: true });
     await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
       new Error(SIGN_IN_LIMITED),
     );

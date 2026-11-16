@@ -16,7 +16,7 @@ import {
   showSignedInNotice,
   signOutHere,
 } from "./signed-in-notice";
-import { SIGN_OUT_FAILED_MESSAGE } from "@/lib/signOutChecked";
+import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
 
 const source = readFileSync(join(__dirname, "signed-in-notice.tsx"), "utf8");
 
@@ -33,13 +33,17 @@ describe("signed-in notice on Log in and Register", () => {
 
   // R32 new-customer L2: through the one checked sign-out (lib/signOutChecked.ts).
   it("signs out on this page, so the form shows here with the same callbackUrl", async () => {
-    const signOut = vi.fn(async () => true);
+    const signOut = vi.fn(async () => ({ ok: true as const }));
     await expect(signOutHere(signOut)).resolves.toBeNull();
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
   it("says plainly when signing out did not work (a csrf=true answer, a lost one, a session still there)", async () => {
-    await expect(signOutHere(async () => false)).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
+    await expect(signOutHere(async () => ({ ok: false as const, message: SIGN_OUT_FAILED_MESSAGE }))).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
+    // R32 lead review: an answer that left the person signed in says so.
+    await expect(
+      signOutHere(async () => ({ ok: false as const, message: SIGN_OUT_STILL_SIGNED_IN_MESSAGE })),
+    ).resolves.toBe(SIGN_OUT_STILL_SIGNED_IN_MESSAGE);
     // Lead review 3 (R28 NN2): the sign-out may have ended the session before the answer was lost.
     expect(SIGN_OUT_FAILED_MESSAGE).toBe(
       "Vibe Socials' answer didn't reach you, so you may be signed out. If your connection dropped, reconnect first. Then reload the page to see.",
@@ -48,7 +52,7 @@ describe("signed-in notice on Log in and Register", () => {
 
   it("the card's Sign out goes through it", () => {
     expect(source).toMatch(/pressSignOut\(signOutChecked, onSignedOut\)/);
-    expect(source).toMatch(/signOutFn: \(\) => Promise<boolean> = signOutChecked/);
+    expect(source).toMatch(/signOutFn: \(\) => Promise<SignOutCheck> = signOutChecked/);
   });
 });
 
@@ -57,14 +61,14 @@ describe("signed-in notice on Log in and Register", () => {
 describe("after Sign out on the notice", () => {
   it("tells the page once when signing out worked, so the form's heading takes the focus", async () => {
     const onSignedOut = vi.fn();
-    await expect(pressSignOut(async () => true, onSignedOut)).resolves.toBeNull();
+    await expect(pressSignOut(async () => ({ ok: true as const }), onSignedOut)).resolves.toBeNull();
     expect(onSignedOut).toHaveBeenCalledTimes(1);
   });
 
   it("does not move the focus when signing out failed; the notice says why", async () => {
     const onSignedOut = vi.fn();
     await expect(
-      pressSignOut(async () => false, onSignedOut),
+      pressSignOut(async () => ({ ok: false as const, message: SIGN_OUT_FAILED_MESSAGE }), onSignedOut),
     ).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
     expect(onSignedOut).not.toHaveBeenCalled();
   });

@@ -7,7 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import type { SignedInAccount } from "@/components/signed-in-swap";
-import { SIGN_OUT_FAILED_MESSAGE, signOutChecked } from "@/lib/signOutChecked";
+import { signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
 
 /**
  * R17-pages L1: Log in and Register show who is signed in instead of their
@@ -24,8 +24,9 @@ export function showSignedInNotice(account: SignedInAccount | null, submitting: 
  * callbackUrl. R32 new-customer L2: through signOutChecked, so a csrf=true
  * answer or a session still there is a failure, not a silent "done".
  */
-export async function signOutHere(signOutFn: () => Promise<boolean> = signOutChecked): Promise<string | null> {
-  return (await signOutFn()) ? null : SIGN_OUT_FAILED_MESSAGE;
+export async function signOutHere(signOutFn: () => Promise<SignOutCheck> = signOutChecked): Promise<string | null> {
+  const check = await signOutFn();
+  return check.ok ? null : check.message;
 }
 
 /**
@@ -33,7 +34,7 @@ export async function signOutHere(signOutFn: () => Promise<boolean> = signOutChe
  * form, so the page is told and moves the focus to the form's heading.
  */
 export async function pressSignOut(
-  signOutFn: () => Promise<boolean>,
+  signOutFn: () => Promise<SignOutCheck>,
   onSignedOut: () => void,
 ): Promise<string | null> {
   const failed = await signOutHere(signOutFn);

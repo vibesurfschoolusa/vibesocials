@@ -146,10 +146,28 @@ export async function checkRateLimit(
 ): Promise<RateLimitResult> {
   const { userId, route, limit, windowMs, failClosed = false, markUnavailable = false } = opts;
 
-  const now = Date.now();
-  const bucket = Math.floor(now / windowMs);
-  const key = `${userId}:${route}:${bucket}`;
-  const resetAt = new Date((bucket + 1) * windowMs);
+  const { key, resetAt } = rateLimitWindow(userId, route, windowMs);
 
   return consumeFixedWindow({ key, limit, resetAt, failClosed, markUnavailable });
+}
+
+/** checkRateLimit's counter key and window end for `userId` + `route` right now. */
+export function rateLimitWindow(userId: string, route: string, windowMs: number): { key: string; resetAt: Date } {
+  const bucket = Math.floor(Date.now() / windowMs);
+  return { key: `${userId}:${route}:${bucket}`, resetAt: new Date((bucket + 1) * windowMs) };
+}
+
+/**
+ * R32 lead review: reads a checkRateLimit window without counting a use, and
+ * says whether the next use would be refused. Log in reads its other limits
+ * this way after one refuses, to state the longest wait. Throws on a store
+ * error, so the caller can say it couldn't tell.
+ */
+export async function peekRateLimit(
+  opts: Pick<CheckRateLimitOptions, "userId" | "route" | "limit" | "windowMs">,
+): Promise<{ blocked: boolean; retryAfterSeconds?: number }> {
+  const { key, resetAt } = rateLimitWindow(opts.userId, opts.route, opts.windowMs);
+  const entry = await prisma.rateLimitEntry.findUnique({ where: { key } });
+  if (!entry || entry.count < opts.limit) return { blocked: false };
+  return { blocked: true, retryAfterSeconds: Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 1000)) };
 }

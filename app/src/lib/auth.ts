@@ -11,7 +11,7 @@ import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
 import { logger } from "./logger";
 import { LOGIN_EMAIL_IP_LIMIT, loginEmailIpUserId } from "./loginLimit";
 import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
-import { checkRateLimit } from "./rateLimit";
+import { checkRateLimit, peekRateLimit } from "./rateLimit";
 import { SIGN_IN_UNCHECKED, signInLimitedCode } from "./signInErrorCodes";
 
 // Login throttles (all fail-closed). Keyed per (email, IP) rather than per
@@ -60,6 +60,33 @@ function clientIpFromAuthReq(req: AuthorizeRequest): string {
 export const LOGIN_DUMMY_PASSWORD_HASH =
   "$2b$10$q6MrNNSuZd96xoBcyDM4fOwEYlaaK9ofCxe.2kWdoXNQQJ1jGtipW";
 
+/**
+ * R32 lead review: the wait Log in states is the longest among the limits the
+ * person is over, so a 15-minute bucket that tripped first can't hide the
+ * hourly one. The others are only read (peekRateLimit), never counted, so an
+ * attacker's tries past their own bucket still stay out of the backstop.
+ * undefined (no number) when any wait is unknown or a read fails.
+ */
+async function longestLoginWait(
+  trippedWait: number | undefined,
+  others: { userId: string; route: string; limit: number; windowMs: number }[],
+): Promise<number | undefined> {
+  if (trippedWait === undefined) return undefined;
+  let longest = trippedWait;
+  try {
+    for (const other of others) {
+      const peek = await peekRateLimit(other);
+      if (!peek.blocked) continue;
+      if (peek.retryAfterSeconds === undefined) return undefined;
+      longest = Math.max(longest, peek.retryAfterSeconds);
+    }
+  } catch (error) {
+    logger.warn("[auth] couldn't read the other sign-in limits for the wait", { error });
+    return undefined;
+  }
+  return longest;
+}
+
 /** The Credentials provider's `authorize` (exported for tests). */
 export async function authorizeCredentials(
   credentials: Record<"email" | "password", string> | undefined,
@@ -88,7 +115,8 @@ export async function authorizeCredentials(
   for (const limit of limits) {
     const result = await checkRateLimit({ ...limit, failClosed: true, markUnavailable: true });
     if (!result.allowed) {
-      throw new Error(result.unavailable ? SIGN_IN_UNCHECKED : signInLimitedCode(result.retryAfterSeconds));
+      if (result.unavailable) throw new Error(SIGN_IN_UNCHECKED);
+      throw new Error(signInLimitedCode(await longestLoginWait(result.retryAfterSeconds, limits.filter((other) => other !== limit))));
     }
   }
 

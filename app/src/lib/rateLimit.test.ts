@@ -4,12 +4,14 @@ import {
   checkRateLimit,
   consumeFixedWindow,
   exhaustFixedWindow,
+  peekRateLimit,
 } from "./rateLimit";
 
 // No real database: the limiter talks to prisma.rateLimitEntry only.
-const { upsertMock, deleteManyMock } = vi.hoisted(() => ({
+const { upsertMock, deleteManyMock, findUniqueMock } = vi.hoisted(() => ({
   upsertMock: vi.fn(),
   deleteManyMock: vi.fn(),
+  findUniqueMock: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
@@ -17,6 +19,7 @@ vi.mock("./db", () => ({
     rateLimitEntry: {
       upsert: upsertMock,
       deleteMany: deleteManyMock,
+      findUnique: findUniqueMock,
     },
   },
 }));
@@ -26,6 +29,7 @@ const NOW = Date.UTC(2026, 10, 1, 12, 0, 0);
 beforeEach(() => {
   upsertMock.mockReset();
   deleteManyMock.mockReset();
+  findUniqueMock.mockReset();
   deleteManyMock.mockResolvedValue({ count: 0 });
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -189,5 +193,36 @@ describe("exhaustFixedWindow", () => {
 
     await expect(exhaustFixedWindow({ key: "k", limit: 1, resetAt })).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalled();
+  });
+});
+
+// R32 lead review: Log in states the longest wait among the limits it is over,
+// so it reads the others without counting a try in them.
+describe("peekRateLimit", () => {
+  const opts = { userId: "email:a@example.test", route: "auth/login-email", limit: 100, windowMs: 60 * 60 * 1000 };
+
+  it("reads the same key checkRateLimit counts in, and never counts", async () => {
+    upsertMock.mockResolvedValue({ count: 1 });
+    await checkRateLimit(opts);
+    const counted = (upsertMock.mock.calls[0][0] as { where: { key: string } }).where.key;
+    findUniqueMock.mockResolvedValue(null);
+    await peekRateLimit(opts);
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { key: counted } });
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocked once the window's count has reached the limit, with the seconds until it ends", async () => {
+    findUniqueMock.mockResolvedValue({ count: 100 });
+    // NOW is 12:00 UTC, the start of an hour bucket.
+    expect(await peekRateLimit(opts)).toEqual({ blocked: true, retryAfterSeconds: 3600 });
+    findUniqueMock.mockResolvedValue({ count: 99 });
+    expect(await peekRateLimit(opts)).toEqual({ blocked: false });
+    findUniqueMock.mockResolvedValue(null);
+    expect(await peekRateLimit(opts)).toEqual({ blocked: false });
+  });
+
+  it("throws on a store error, so the caller can say it couldn't tell", async () => {
+    findUniqueMock.mockRejectedValue(new Error("db down"));
+    await expect(peekRateLimit(opts)).rejects.toThrow("db down");
   });
 });
