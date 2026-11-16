@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, MessageSquare } from "lucide-react";
 
+import { SignInAgainLink } from "@/components/gbp-sign-in-link";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { canRetry, readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
@@ -66,6 +68,22 @@ export function replyFailureShown(error: unknown): ShownError {
   return isNoAnswer(error) ? { message: REPLY_OFFLINE_MESSAGE, settingsLink: false } : shownError(error, REPLY_FAILED);
 }
 const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
+export const DRAFT_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so no draft was written. Check your connection and try again.";
+
+/** R26 client-journey L5: what a failed AI draft says; a request that got no answer says so. */
+export function draftFailureMessage(error: unknown): string {
+  return isNoAnswer(error) ? DRAFT_OFFLINE_MESSAGE : shownError(error, DRAFT_FAILED).message;
+}
+
+/**
+ * R26 client-journey L3: whether the locations answer asks an owner for the
+ * in-place sign-in with its notice (an empty listing: GBP_NO_LISTING_NOTICE).
+ * Only the flag is read; the link is built from the page's workspace.
+ */
+export function locationsSignIn(data: { notice?: unknown; signIn?: unknown } | null, isMember: boolean): boolean {
+  return !isMember && data?.signIn === true && typeof data.notice === "string" && data.notice !== "";
+}
 
 const HEADING_CLASS = "text-2xl font-bold tracking-tight text-foreground outline-none";
 
@@ -87,12 +105,14 @@ export function ReviewsLoadingList() {
  * R25 pages L4: the locations route's notice. Lead review: a live region that
  * first appears already filled may not be announced, so it is drawn from the
  * loading view on (same key under the same page element) and only its text changes.
+ * R26 client-journey L3: with the owner's sign-in when the answer asks for it.
  */
-function LocationsNotice({ notice }: { notice: string | null }) {
+export function LocationsNotice({ notice, signInUrl }: { notice: string | null; signInUrl: string | null }) {
   return (
-    <p role="status" className="mb-6 text-sm text-muted-foreground empty:mb-0 empty:sr-only">
-      {notice}
-    </p>
+    <div role="status" className="mb-6 flex flex-col items-start gap-3 empty:mb-0 empty:sr-only">
+      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+      {notice && signInUrl ? <SignInAgainLink href={signInUrl} /> : null}
+    </div>
   );
 }
 
@@ -156,6 +176,9 @@ export function ReviewsView({
   const [locationsError, setLocationsError] = useState<ShownError | null>(null);
   // R25 pages L4: the route's sentence about accounts whose locations Google would not send.
   const [locationsNotice, setLocationsNotice] = useState<string | null>(null);
+  // R26 client-journey L3: the answer asked an owner to sign in again with its notice.
+  const [locationsSignInAsked, setLocationsSignInAsked] = useState(false);
+  const locationsSignInUrl = locationsSignInAsked ? gbpSignInUrl(workspaceId) : null;
   const [reviewsError, setReviewsError] = useState<ShownError | null>(null);
   // Google had more than the page loads: only the latest are shown.
   const [truncated, setTruncated] = useState(false);
@@ -194,6 +217,7 @@ export function ReviewsView({
       setLoadingLocations(true);
       setLocationsError(null);
       setLocationsNotice(null);
+      setLocationsSignInAsked(false);
       const response = await fetch("/api/reviews/locations");
 
       if (!response.ok) {
@@ -205,6 +229,7 @@ export function ReviewsView({
       setLocations(locs);
       setGbpConnected(data.connected === true);
       setLocationsNotice(typeof data.notice === "string" && data.notice ? data.notice : null);
+      setLocationsSignInAsked(locationsSignIn(data, isMember));
 
       // The saved location when listed, else the only one; else the person picks.
       const initial = initialLocation(locs, savedLocation);
@@ -217,7 +242,7 @@ export function ReviewsView({
     } finally {
       setLoadingLocations(false);
     }
-  }, [savedLocation]);
+  }, [savedLocation, isMember]);
 
   const loadReviews = useCallback(async () => {
     if (!selectedLocation) return;
@@ -374,7 +399,7 @@ export function ReviewsView({
     try {
       setGeneratingAI((prev) => draftingAfterStart(prev, review.reviewId));
 
-      const response = await fetch("/api/reviews/draft-response", {
+      const response = await fetchOrNoAnswer("/api/reviews/draft-response", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -404,7 +429,7 @@ export function ReviewsView({
       setBoxFocusAfterDraft({ reviewId: review.reviewId, activeId: document.activeElement?.id ?? "" });
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
-      toast.error(shownError(err, DRAFT_FAILED).message);
+      toast.error(draftFailureMessage(err));
     } finally {
       setGeneratingAI((prev) => draftingAfterEnd(prev, review.reviewId));
     }
@@ -450,7 +475,7 @@ export function ReviewsView({
     return (
       <div className={APP_PAGE_CLASS}>
         <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
-        <LocationsNotice key="locations-notice" notice={locationsNotice} />
+        <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
         <ReviewsLoadingList />
       </div>
     );
@@ -501,7 +526,7 @@ export function ReviewsView({
         />
       )}
 
-      <LocationsNotice key="locations-notice" notice={locationsNotice} />
+      <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
 
       {/* Tabs */}
       {selectedLocation && !reviewsError && (
@@ -593,8 +618,9 @@ export function ReviewsView({
         <ReviewLinkPanel
           workspaceId={workspaceId}
           isMember={isMember}
-          // One sign-in button per page: the reviews error card's, when it shows one.
-          signInShownAbove={Boolean(reviewsError && signInHref(reviewsError, workspaceId))}
+          // One sign-in button per page: the locations notice's or the reviews
+          // error card's, when one shows it.
+          signInShownAbove={Boolean(locationsSignInUrl || (reviewsError && signInHref(reviewsError, workspaceId)))}
         />
       )}
 

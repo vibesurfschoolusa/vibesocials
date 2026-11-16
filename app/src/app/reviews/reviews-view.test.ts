@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { canRetry, ReviewsApiError } from "@/components/reviews/api-error";
@@ -8,7 +10,14 @@ import { NoAnswerError } from "@/lib/requestNoAnswer";
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 vi.mock("./review-link-panel", () => ({ ReviewLinkPanel: () => null }));
 
-import { REPLY_OFFLINE_MESSAGE, replyFailureShown } from "./reviews-view";
+import {
+  DRAFT_OFFLINE_MESSAGE,
+  draftFailureMessage,
+  LocationsNotice,
+  locationsSignIn,
+  REPLY_OFFLINE_MESSAGE,
+  replyFailureShown,
+} from "./reviews-view";
 
 const source = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
 const at = (needle: string) => {
@@ -152,7 +161,7 @@ describe("ReviewsView and an answer a retry can't change", () => {
 // R25 lead review: one sign-in button per page; the reviews error card's wins.
 describe("ReviewsView and one sign-in per page", () => {
   it("tells the panel when the reviews error card shows the sign-in", () => {
-    expect(source).toContain("signInShownAbove={Boolean(reviewsError && signInHref(reviewsError, workspaceId))}");
+    expect(source).toContain("signInShownAbove={Boolean(locationsSignInUrl || (reviewsError && signInHref(reviewsError, workspaceId)))}");
   });
 });
 
@@ -186,7 +195,7 @@ describe("ReviewsView and accounts Google would not list", () => {
     const region = main.indexOf('<LocationsNotice key="locations-notice"');
     expect(region).toBeGreaterThan(main.indexOf("<LocationPicker"));
     expect(region).toBeLessThan(main.indexOf('aria-label="Review filter"'));
-    expect(source).toMatch(/<p role="status"[^>]*empty:sr-only[^>]*>\s*\{notice\}/);
+    expect(source).toMatch(/<div role="status"[^>]*empty:sr-only[^>]*>\s*\{notice \? <p/);
   });
 
   // Lead review: a live region that first appears already filled may not be
@@ -194,8 +203,8 @@ describe("ReviewsView and accounts Google would not list", () => {
   // key under the same page element, and only its text changes.
   it("keeps the region from the first render, the loading view included", () => {
     const loading = source.slice(at("if (loadingLocations) {"), at("if (locationsError) {"));
-    expect(loading).toContain('<LocationsNotice key="locations-notice" notice={locationsNotice} />');
-    expect(source.split('<LocationsNotice key="locations-notice" notice={locationsNotice} />').length - 1).toBe(2);
+    expect(loading).toContain('<LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />');
+    expect(source.split('<LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />').length - 1).toBe(2);
   });
 
   it("does not also say there are no locations when the notice says some were not read", () => {
@@ -247,5 +256,78 @@ describe("ReviewsView when a reply fails", () => {
     expect(perform).toMatch(/await fetchOrNoAnswer\(`\/api\/reviews\/\$\{review\.reviewId\}\/reply`/);
     expect(perform).toContain("const shown = replyFailureShown(err);");
     expect(perform).not.toMatch(/throw err;/);
+  });
+});
+
+// R26 client-journey L3: with zero locations the route sends the picker's
+// notice (GBP_NO_LISTING_NOTICE) and, for an owner, signIn: true. The page shows
+// that sentence with the sign-in, not "Add one in Google Business Profile".
+describe("ReviewsView and an empty listing's notice", () => {
+  const notice = "Google found no locations for this Google account.";
+
+  it("offers the sign-in only for an owner, only with a notice, only on the flag", () => {
+    // The whole answer, as the route sends it for an owner.
+    const answer = { locations: [], connected: true, notice, signIn: true };
+    expect(locationsSignIn(answer, false)).toBe(true);
+    expect(locationsSignIn(answer, true)).toBe(false);
+    expect(locationsSignIn({ notice, signIn: "yes" }, false)).toBe(false);
+    expect(locationsSignIn({ notice }, false)).toBe(false);
+    expect(locationsSignIn({ signIn: true }, false)).toBe(false);
+    expect(locationsSignIn(null, false)).toBe(false);
+  });
+
+  it("shows the sentence and the sign-in for the page's own workspace in one status region", () => {
+    const html = renderToStaticMarkup(
+      createElement(LocationsNotice, { notice, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-A" }),
+    );
+    expect(html).toMatch(
+      /^<div role="status"[^>]*><p[^>]*>Google found no locations for this Google account\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again /,
+    );
+    const plain = renderToStaticMarkup(createElement(LocationsNotice, { notice, signInUrl: null }));
+    expect(plain).not.toContain("<a ");
+    expect(renderToStaticMarkup(createElement(LocationsNotice, { notice: null, signInUrl: null }))).toMatch(
+      /^<div role="status"[^>]*><\/div>$/,
+    );
+  });
+
+  it("reads the flag from the answer and builds the link from the page's workspace", () => {
+    expect(source).toContain("setLocationsSignInAsked(locationsSignIn(data, isMember));");
+    expect(source).toContain("const locationsSignInUrl = locationsSignInAsked ? gbpSignInUrl(workspaceId) : null;");
+    expect(source.split("<LocationsNotice key=\"locations-notice\" notice={locationsNotice} signInUrl={locationsSignInUrl} />").length - 1).toBe(2);
+  });
+
+  it("keeps Add one in Google Business Profile only for an answer with no notice", () => {
+    expect(source).toContain("!selectedLocation && locations.length === 0 && locationsNotice ? null");
+  });
+
+  it("one sign-in per page: the panel adds none when the notice shows it", () => {
+    expect(source).toContain(
+      "signInShownAbove={Boolean(locationsSignInUrl || (reviewsError && signInHref(reviewsError, workspaceId)))}",
+    );
+  });
+});
+
+// R26 client-journey L5: "Draft AI response" with no connection said the AI failed.
+describe("ReviewsView when a draft fails", () => {
+  it("no answer: says no draft was written and to check the connection", () => {
+    expect(DRAFT_OFFLINE_MESSAGE).toBe(
+      "We couldn't reach Vibe Socials, so no draft was written. Check your connection and try again.",
+    );
+    expect(draftFailureMessage(new NoAnswerError(new TypeError("Failed to fetch")))).toBe(DRAFT_OFFLINE_MESSAGE);
+  });
+
+  it("the route's sentence, else the AI sentence; never the offline one for other errors", () => {
+    expect(draftFailureMessage(new ReviewsApiError("Too many drafts. Try again in a minute.", false))).toBe(
+      "Too many drafts. Try again in a minute.",
+    );
+    expect(draftFailureMessage(new TypeError("Failed to fetch"))).toBe(
+      "The AI could not write a reply. Try again, or write one yourself.",
+    );
+  });
+
+  it("sends through fetchOrNoAnswer and shows draftFailureMessage", () => {
+    const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
+    expect(draft).toContain('await fetchOrNoAnswer("/api/reviews/draft-response", {');
+    expect(draft).toContain("toast.error(draftFailureMessage(err));");
   });
 });

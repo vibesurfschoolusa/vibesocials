@@ -20,9 +20,10 @@ export interface Location {
   name: string;
   locationName: string;
   title: string;
-  storeCode?: string;
+  /** R26 client-journey L4: the locations route sends both; null when Google has none. */
+  storeCode?: string | null;
   /** One-line address, when the API returns one; used only to tell same-named locations apart. */
-  address?: string;
+  address?: string | null;
 }
 
 export const STAR_RATINGS = {

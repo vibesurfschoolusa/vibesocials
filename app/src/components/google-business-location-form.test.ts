@@ -15,7 +15,9 @@ import {
   PickerStatusLine,
   locationFailure,
   locationsLoadedStatus,
+  pickAfterSave,
   saveFailureAt,
+  savedLocationLine,
 } from "./google-business-location-form";
 import { SignInAgainLink } from "./gbp-sign-in-link";
 
@@ -198,5 +200,47 @@ describe("Google location form: where its sentences show", () => {
     expect(html).toMatch(/<p[^>]*>Sign in to Google again with the account that manages this location\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"/);
     const plain = renderToStaticMarkup(createElement(PickerStatusLine, { status: { message: "Try again.", signInUrl: null } }));
     expect(plain).not.toContain("<a ");
+  });
+});
+
+// R26 new-customer L1: after a failed save the same location could not be
+// picked again (an uncontrolled select fires only on a change), and an
+// Advanced save read as if nothing were saved. Pages L1: the dropdown keeps
+// focus while saving.
+describe("Google location form: the dropdown after a save", () => {
+  it("is controlled, and empties after a failed save so the same location can be picked again", () => {
+    expect(pickAfterSave("accounts/1/locations/2", "pick", false)).toBe("");
+    expect(pickAfterSave("accounts/1/locations/2", "pick", true)).toBe("accounts/1/locations/2");
+    // A save from the Advanced field leaves the dropdown on its placeholder.
+    expect(pickAfterSave("STORE-1", "field", true)).toBe("");
+    expect(pickAfterSave("STORE-1", "field", false)).toBe("");
+    expect(formSource).toMatch(/<Select[^>]*id="gbp-location-select"[^>]*value=\{picked\}/);
+    expect(formSource).not.toContain('defaultValue=""');
+    const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
+    expect(save.match(/setPicked\(pickAfterSave\(name, from, (true|false)\)\)/g)).toHaveLength(3);
+  });
+
+  it("stays focusable while a save runs, and ignores a change until it ends", () => {
+    const select = formSource.slice(formSource.indexOf('<Select\n'), formSource.indexOf("</Select>"));
+    expect(select).not.toMatch(/\sdisabled=/);
+    expect(select).toContain("aria-disabled={saving}");
+    const onPickAt = formSource.indexOf("function handleSelectLocation");
+    const onPick = formSource.slice(onPickAt, formSource.indexOf("return (\n", onPickAt));
+    expect(onPick).toMatch(/if \(!value \|\| saving\) \{\s*return;/);
+    expect(onPick).toContain("setPicked(value);");
+  });
+
+  it("says what is saved, a pasted store code or resource name included", () => {
+    expect(savedLocationLine("Joe's Pizza", "accounts/1/locations/2")).toBe(
+      "Posting to Joe's Pizza. Load your locations again to choose another.",
+    );
+    expect(savedLocationLine(null, "STORE-1")).toBe(
+      "Posting to the location you saved (STORE-1). Load your locations from Google to choose by name.",
+    );
+    expect(savedLocationLine(null, null)).toBe("Load your locations from Google and choose the one to post to.");
+    expect(savedLocationLine(null, "  ")).toBe("Load your locations from Google and choose the one to post to.");
+    expect(formSource).toContain("{savedLocationLine(savedTitle, savedName)}");
+    const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
+    expect(save).toContain("setSavedName(name);");
   });
 });

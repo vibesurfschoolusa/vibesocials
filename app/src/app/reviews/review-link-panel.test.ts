@@ -73,6 +73,17 @@ describe("ReviewLinkPanelView", () => {
     expect(html).toContain("Google didn&#x27;t accept the connection.");
   });
 
+  // R26 pages L6: both new-tab links say so, with the shared visible hint, in their own text.
+  it("the review link and Print card show that they open in a new tab", () => {
+    const html = render({ status: "ready", url: LINK });
+    const hint = '<span class="text-xs font-normal opacity-90">(opens in a new tab)</span>';
+    expect(html).toContain(
+      `<a href="${LINK}" target="_blank" rel="noopener noreferrer" class="break-all text-sm text-primary underline-offset-4 hover:underline">${LINK} ${hint}</a>`,
+    );
+    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
+    expect(html).toMatch(/<a [^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Print card/);
+  });
+
   it("shows a placeholder while loading", () => {
     const html = render({ status: "loading" });
 

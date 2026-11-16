@@ -107,6 +107,27 @@ export function saveFailureAt(failure: SaveFailure | null, place: SavePlace): Pi
   return failure?.from === place ? failure.status : null;
 }
 
+/**
+ * R26 new-customer L1: what the dropdown shows once a save ends. After a failed
+ * pick it goes back to its placeholder, so picking the same location fires a
+ * change and saves again; a save from the Advanced field leaves it there too.
+ */
+export function pickAfterSave(name: string, from: SavePlace, ok: boolean): string {
+  return ok && from === "pick" ? name : "";
+}
+
+/**
+ * The line under "Maps business location": the saved location by its Google
+ * name, else (R26 new-customer L1: an Advanced save has no name) by what was
+ * saved, else the first step.
+ */
+export function savedLocationLine(title: string | null, name: string | null): string {
+  if (title) return `Posting to ${title}. Load your locations again to choose another.`;
+  const saved = name?.trim();
+  if (saved) return `Posting to the location you saved (${saved}). Load your locations from Google to choose by name.`;
+  return "Load your locations from Google and choose the one to post to.";
+}
+
 /** R25 pages L4: one sentence of the status region, which stays until the next fetch or save. */
 export function PickerStatusLine({ status }: { status: PickerStatus }) {
   return (
@@ -122,6 +143,9 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const router = useRouter();
   const [locationName, setLocationName] = useState(initialLocationName ?? "");
   const [savedTitle, setSavedTitle] = useState(initialLocationTitle ?? null);
+  const [savedName, setSavedName] = useState(initialLocationName ?? null);
+  // R26 new-customer L1: the dropdown's value, controlled so a failed save can empty it.
+  const [picked, setPicked] = useState("");
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
@@ -159,12 +183,15 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       if (!response.ok) {
         const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
         setSaveFailure({ from, status: { message: failed.message, signInUrl: failed.signInUrl } });
+        setPicked(pickAfterSave(name, from, false));
         setSaving(false);
         if (failed.reconnect) router.refresh();
         return;
       }
 
       setSavedTitle(title);
+      setSavedName(name);
+      setPicked(pickAfterSave(name, from, true));
       toast.success(
         title ? `Saved. Posts will go to ${title} on Google Maps.` : "Saved. Future posts will use this Maps location.",
       );
@@ -173,6 +200,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       router.refresh();
     } catch {
       setSaveFailure({ from, status: { message: LOCATION_MESSAGES.saveOffline, signInUrl: null } });
+      setPicked(pickAfterSave(name, from, false));
       setSaving(false);
     }
   }
@@ -223,9 +251,12 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
   function handleSelectLocation(event: React.ChangeEvent<HTMLSelectElement>) {
     const value = event.target.value;
-    if (!value) {
+    // The dropdown stays focusable while a save runs (R26 pages L1); a change
+    // then is ignored, and the controlled value stays on the one being saved.
+    if (!value || saving) {
       return;
     }
+    setPicked(value);
     setLocationName(value);
     const picked = locations?.find((loc) => loc.resourceName === value);
     void saveLocation(value, picked?.title ?? null, "pick");
@@ -239,9 +270,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">Maps business location</p>
             <p className="text-sm text-muted-foreground">
-              {savedTitle
-                ? `Posting to ${savedTitle}. Load your locations again to choose another.`
-                : "Load your locations from Google and choose the one to post to."}
+              {savedLocationLine(savedTitle, savedName)}
             </p>
           </div>
           <Button
@@ -268,9 +297,9 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
             <Select
               id="gbp-location-select"
               aria-describedby="gbp-pick-status"
-              defaultValue=""
+              value={picked}
               onChange={handleSelectLocation}
-              disabled={saving}
+              aria-disabled={saving}
             >
               <option value="">Select a location</option>
               {locations.map((loc) => {

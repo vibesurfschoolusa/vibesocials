@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import { SignInAgainLink } from "@/components/gbp-sign-in-link";
+import { NewTabHint, SignInAgainLink } from "@/components/gbp-sign-in-link";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -123,13 +123,14 @@ export function ReviewLinkPanelView({
           <div className="flex min-w-0 flex-1 flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-foreground">Your Google review link</span>
+              {/* R26 pages L6: both new-tab links show the shared visible hint in their text. */}
               <a
                 href={state.url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="break-all text-sm text-primary underline-offset-4 hover:underline"
               >
-                {state.url}
+                {state.url} <NewTabHint />
               </a>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => copy(state.url, "Link")}>
@@ -138,9 +139,10 @@ export function ReviewLinkPanelView({
                 <Link
                   href="/reviews/print-card"
                   target="_blank"
+                  rel="noopener noreferrer"
                   className={buttonVariants({ variant: "outline", size: "sm" })}
                 >
-                  Print card
+                  Print card <NewTabHint />
                 </Link>
               </div>
             </div>
