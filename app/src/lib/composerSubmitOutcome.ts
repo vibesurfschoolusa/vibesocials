@@ -49,10 +49,11 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
 /**
  * KK4: the 503 says `resultsMarked: false` when the route couldn't mark the
  * results failed. Activity then shows the post as publishing until the
- * stuck-job reconciler fails it (2 hours); Retry is offered from then on.
+ * stuck-job reconciler fails it: it takes jobs untouched for 2 hours, on a scan
+ * every 10 minutes, later when a batch is waiting. Retry is offered from then on.
  */
 export const COMPOSER_DISPATCH_UNMARKED_MESSAGE =
-  "The post was saved but didn't start. In Activity it can show as publishing for up to 2 hours before it shows as failed; then retry it there. Don't press Post again.";
+  "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Post again.";
 
 const FALLBACK_ERROR = "Failed to create post.";
 

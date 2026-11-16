@@ -63,7 +63,7 @@ describe("composerSubmitOutcome", () => {
       composerSubmitOutcome({ ok: false, mode: "now", body: { ...DISPATCH_FAILED_BODY, resultsMarked: false } }),
     ).toEqual({ kind: "dispatch_failed", resetForm: true, toast: COMPOSER_DISPATCH_UNMARKED_MESSAGE });
     expect(COMPOSER_DISPATCH_UNMARKED_MESSAGE).toBe(
-      "The post was saved but didn't start. In Activity it can show as publishing for up to 2 hours before it shows as failed; then retry it there. Don't press Post again.",
+      "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Post again.",
     );
   });
 

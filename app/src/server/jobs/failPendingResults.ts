@@ -81,32 +81,38 @@ export const RECOMPUTE_TX_TIMEOUT_MS = 10_000;
 export async function recomputeAndStorePostJobStatus(
   postJobId: string,
 ): Promise<{ status: PostJobStatus; successCount: number }> {
-  return prisma.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
+  return prisma.$transaction((tx) => recomputeInTransaction(tx, postJobId), {
+    maxWait: RECOMPUTE_TX_MAX_WAIT_MS,
+    timeout: RECOMPUTE_TX_TIMEOUT_MS,
+  });
+}
 
-      const results = await tx.postJobResult.findMany({
-        where: { postJobId },
-        select: { status: true },
-      });
-      const status = recomputePostJobStatus(results);
+/** The locked recompute, inside the caller's transaction. */
+async function recomputeInTransaction(
+  tx: Prisma.TransactionClient,
+  postJobId: string,
+): Promise<{ status: PostJobStatus; successCount: number }> {
+  await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
 
-      await tx.postJob.update({
-        where: { id: postJobId },
-        data: { status },
-      });
+  const results = await tx.postJobResult.findMany({
+    where: { postJobId },
+    select: { status: true },
+  });
+  const status = recomputePostJobStatus(results);
 
-      if (status === "completed" || status === "failed") {
-        await stampPostMediaLastUsed(tx, postJobId, new Date());
-      }
+  await tx.postJob.update({
+    where: { id: postJobId },
+    data: { status },
+  });
 
-      return {
-        status,
-        successCount: results.filter((result) => result.status === "success").length,
-      };
-    },
-    { maxWait: RECOMPUTE_TX_MAX_WAIT_MS, timeout: RECOMPUTE_TX_TIMEOUT_MS },
-  );
+  if (status === "completed" || status === "failed") {
+    await stampPostMediaLastUsed(tx, postJobId, new Date());
+  }
+
+  return {
+    status,
+    successCount: results.filter((result) => result.status === "success").length,
+  };
 }
 
 /**
@@ -173,7 +179,8 @@ export async function finishPostJob(
  * already live — so it is failed with {@link PUBLISH_UNCONFIRMED}, never with
  * `failure`. One nobody claimed provably never reached the platform and gets
  * `failure`'s code and message. The claimed rows are written first, so a row
- * claimed between the two writes is simply left to its run.
+ * claimed between the two writes is simply left to its run. All of it is one
+ * transaction with the recompute (KK4): it commits whole or not at all.
  *
  * Shared by every route that dispatches `post/publish.requested` (on an
  * `inngest.send` failure) and the publish functions' Inngest `onFailure`
@@ -198,26 +205,34 @@ export async function failPendingPostJobResults(
     ...(platforms ? { platform: { in: platforms } } : {}),
   };
 
-  const { count: unconfirmedCount } = await prisma.postJobResult.updateMany({
-    where: { ...scope, claimRunId: { not: null } },
-    data: {
-      status: "failed",
-      errorCode: PUBLISH_UNCONFIRMED.errorCode,
-      errorMessage: PUBLISH_UNCONFIRMED.errorMessage,
+  // KK4: the row writes and the status recompute are one transaction, so
+  // marking either fully happens or not at all; a half-marked job (rows failed,
+  // status write lost) can't publish, yet a caller told "it threw" would treat
+  // it as still pending. The rows are written before the job's row lock is
+  // taken: the same order as a platform step's result write (result row, then
+  // its job's heartbeat), so the two can't deadlock, and the recompute (which
+  // only reads results under the job lock) never waits on a result row.
+  return prisma.$transaction(
+    async (tx) => {
+      const { count: unconfirmedCount } = await tx.postJobResult.updateMany({
+        where: { ...scope, claimRunId: { not: null } },
+        data: {
+          status: "failed",
+          errorCode: PUBLISH_UNCONFIRMED.errorCode,
+          errorMessage: PUBLISH_UNCONFIRMED.errorMessage,
+        },
+      });
+      const { count: failedCount } = await tx.postJobResult.updateMany({
+        where: { ...scope, claimRunId: null },
+        data: {
+          status: "failed",
+          errorCode: failure.errorCode,
+          errorMessage: failure.errorMessage,
+        },
+      });
+      const { status } = await recomputeInTransaction(tx, postJobId);
+      return { failedCount, unconfirmedCount, status };
     },
-  });
-  const { count: failedCount } = await prisma.postJobResult.updateMany({
-    where: { ...scope, claimRunId: null },
-    data: {
-      status: "failed",
-      errorCode: failure.errorCode,
-      errorMessage: failure.errorMessage,
-    },
-  });
-
-  // The row writes above are NOT in the recompute's transaction, so the job lock
-  // is never held while result rows are locked.
-  const { status } = await recomputeAndStorePostJobStatus(postJobId);
-
-  return { failedCount, unconfirmedCount, status };
+    { maxWait: RECOMPUTE_TX_MAX_WAIT_MS, timeout: RECOMPUTE_TX_TIMEOUT_MS },
+  );
 }

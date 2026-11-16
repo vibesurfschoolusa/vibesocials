@@ -5,10 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // asserted below is the one the publish pipeline itself would compute.
 //
 // The status recompute runs inside `prisma.$transaction` (2026-11-01 scale
-// audit, jobs H6): the bare client has ONLY the claimed/unclaimed `updateMany`
-// writes, while the result read, the status write and the row lock live on the
-// `tx` the transaction hands out - so a read or write that bypassed the
-// transaction would throw here instead of passing.
+// audit, jobs H6), and since KK4 so do failPendingPostJobResults' row writes:
+// the bare client has no result writes at all, while the writes, the result
+// read, the status write and the row lock live on the `tx` the transaction
+// hands out - so a read or write that bypassed the transaction would throw
+// here instead of passing.
 const {
   resultUpdateManyMock,
   resultFindManyMock,
@@ -29,7 +30,6 @@ const {
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    postJobResult: { updateMany: resultUpdateManyMock },
     $transaction: transactionMock,
   },
 }));
@@ -56,7 +56,7 @@ import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/pub
 /** The transaction client `$transaction` hands to its callback. */
 const tx = {
   $executeRaw: executeRawMock,
-  postJobResult: { findMany: resultFindManyMock },
+  postJobResult: { findMany: resultFindManyMock, updateMany: resultUpdateManyMock },
   postJob: { update: postJobUpdateMock, findUnique: postJobFindUniqueMock },
   mediaItem: { updateMany: mediaUpdateManyMock },
 };
@@ -673,18 +673,44 @@ describe("finishPostJob (review item 6)", () => {
 });
 
 describe("failPendingPostJobResults - status recompute", () => {
-  it("writes the result rows first, then recomputes the job's status under the row lock", async () => {
+  // KK4: the rows and the job status are one transaction, so marking either
+  // fully happens or not at all (a half-marked job can't publish, yet the
+  // route would keep its count).
+  it("writes the result rows, then takes the job's row lock and recomputes, all in one transaction", async () => {
     await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
 
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(executeRawMock).toHaveBeenCalledTimes(1);
-    // The row writes are not part of the transaction: the lock is held only for
-    // the short read + write, never while result rows are locked.
-    expect(resultUpdateManyMock.mock.invocationCallOrder[1]).toBeLessThan(
-      transactionMock.mock.invocationCallOrder[0],
-    );
     expect(transactionMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resultUpdateManyMock.mock.invocationCallOrder[0],
+    );
+    // Rows before the job lock: the same order a platform step's result write
+    // takes (result row, then its job's heartbeat), so the two can't deadlock.
+    expect(resultUpdateManyMock.mock.invocationCallOrder[1]).toBeLessThan(
       executeRawMock.mock.invocationCallOrder[0],
     );
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(
+      postJobUpdateMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("the status update failing fails the whole transaction, so the row writes roll back with it", async () => {
+    const committed: string[] = [];
+    transactionMock.mockImplementation(async (callback: (client: typeof tx) => Promise<unknown>) => {
+      // A stand-in for the database: writes count only if the callback returns.
+      const pending: string[] = [];
+      resultUpdateManyMock.mockImplementation(async () => {
+        pending.push("rows");
+        return { count: 1 };
+      });
+      const value = await callback(tx);
+      committed.push(...pending);
+      return value;
+    });
+    postJobUpdateMock.mockRejectedValue(new Error("database blip"));
+
+    await expect(failPendingPostJobResults("job-1", DISPATCH_FAILURE)).rejects.toThrow("database blip");
+    expect(resultUpdateManyMock).toHaveBeenCalledTimes(2);
+    expect(committed).toEqual([]);
   });
 });
