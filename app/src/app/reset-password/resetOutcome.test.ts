@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { RESET_FAILED_MESSAGE, RESET_MAYBE_CHANGED_MESSAGE, signOutAfterReset, submitReset } from "./resetOutcome";
 
 function respond(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
-  return vi.fn(async () => new Response(JSON.stringify(body), { status, headers })) as unknown as typeof fetch;
+  return vi.fn(
+    async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } }),
+  ) as unknown as typeof fetch;
 }
 const offline = vi.fn(async () => {
   throw new TypeError("Failed to fetch");
@@ -54,15 +56,23 @@ describe("submitReset", () => {
     });
   });
 
-  it("a server failure (5xx) is RESET_FAILED_MESSAGE, not the route's text", async () => {
+  it("the route's own readable 5xx (the transaction rolled back) is RESET_FAILED_MESSAGE, not the route's text", async () => {
     await expect(submitReset(respond(500, { error: "Failed to reset password." }), "tok", "new-password")).resolves.toEqual({
       kind: "error",
       message: RESET_FAILED_MESSAGE,
     });
-    await expect(submitReset(respond(503), "tok", "new-password")).resolves.toEqual({
-      kind: "error",
-      message: RESET_FAILED_MESSAGE,
-    });
+  });
+
+  // R29 OO1 (new-customer L1): a gateway's 502/504 can come after the
+  // transaction committed, so it never says the password wasn't changed.
+  it("an unreadable 5xx (a gateway's page, an empty 500) says the password may have changed", async () => {
+    const gateway = vi.fn(
+      async () => new Response("<html>504 Gateway Timeout</html>", { status: 504, headers: { "content-type": "text/html" } }),
+    ) as unknown as typeof fetch;
+    const empty = vi.fn(async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
+    for (const fetchImpl of [gateway, empty]) {
+      await expect(submitReset(fetchImpl, "tok", "new-password")).resolves.toEqual({ kind: "error", message: RESET_MAYBE_CHANGED_MESSAGE });
+    }
   });
 
   // R28 NN2 (new-customer L2): the reset may have gone through, and a retry

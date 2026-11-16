@@ -65,8 +65,19 @@ export async function readAccountState(fetchImpl: typeof fetch): Promise<Account
 const CONTINUE = { href: "/", label: "Continue to Vibe Socials" };
 const LOG_IN = { href: "/login", label: "Log in" };
 
-export function verifyView(attempt: VerifyAttempt, account: AccountState): VerifyView {
-  const next = account === "signed_out" ? LOG_IN : CONTINUE;
+/**
+ * R29 OO1 (pages L3): Try again shows a signed-out reader nothing about the
+ * address (a used link gets the uniform 400), so they are told to log in.
+ */
+const SEE_WHETHER_VERIFIED = "log in to see whether your address is verified";
+
+export function verifyView(
+  attempt: VerifyAttempt,
+  account: AccountState,
+  { retried = false }: { retried?: boolean } = {},
+): VerifyView {
+  const signedOut = account === "signed_out";
+  const next = signedOut ? LOG_IN : CONTINUE;
   const base = { verified: false, next, offerResend: false, offerRetry: false };
 
   if (attempt === "ok") {
@@ -79,7 +90,10 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
       ...base,
       offerRetry: true,
       title: "Vibe Socials didn't answer",
-      message: answerLostText("your email may already be verified", "Then press Try again to see."),
+      message: answerLostText(
+        "your email may already be verified",
+        signedOut ? `Then press Try again, or ${SEE_WHETHER_VERIFIED}.` : "Then press Try again to see.",
+      ),
     };
   }
   if (attempt === "rate_limited") {
@@ -95,7 +109,9 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
       ...base,
       offerRetry: true,
       title: "Something went wrong on our side",
-      message: "Your email may not be verified yet. Press Try again in a minute to see.",
+      message: signedOut
+        ? `Your email may not be verified yet. Press Try again in a minute, or ${SEE_WHETHER_VERIFIED}.`
+        : "Your email may not be verified yet. Press Try again in a minute to see.",
     };
   }
   // A dead link. It may belong to another account than the one signed in, so
@@ -108,6 +124,14 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
       title: "Your email is already verified",
       message:
         "This link has expired or was already used, but the account you're signed in to is already verified, so there's nothing more to do. If the link is for another account, sign in to that account first.",
+    };
+  }
+  // A signed-out retry: the first press may have used the link to verify.
+  if (retried && signedOut) {
+    return {
+      ...base,
+      title: "This link can't be used again",
+      message: `This link has expired or was already used. It may have verified your email when you first pressed it: ${SEE_WHETHER_VERIFIED}.`,
     };
   }
   return {

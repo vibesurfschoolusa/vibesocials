@@ -52,12 +52,12 @@ export function VerifyEmailClient() {
 
   // State updates happen inside the async callback, never synchronously in
   // the effect body, so each try resolves to exactly one answer.
-  const verify = useCallback(async () => {
+  const verify = useCallback(async (retried = false) => {
     setView(null);
     const attempt = await attemptVerify(fetch, window.location.hash.slice(1));
     // Only a failure needs to know who is reading (lib comment in verifyOutcome.ts).
     const account = attempt === "ok" ? "unknown" : await readAccountState(fetch);
-    setView(verifyView(attempt, account));
+    setView(verifyView(attempt, account, { retried }));
   }, []);
 
   useEffect(() => {
@@ -82,7 +82,7 @@ export function VerifyEmailClient() {
     );
   }
 
-  return <VerifyResult view={view} resend={resend} onResend={handleResend} onRetry={() => void verify()} />;
+  return <VerifyResult view={view} resend={resend} onResend={handleResend} onRetry={() => void verify(true)} />;
 }
 
 /** The answer card; exported so its markup can be checked without a browser. */

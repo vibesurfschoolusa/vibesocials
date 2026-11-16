@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { confirmNewAddress } from "./confirmNewAddress";
 
 function respond(status: number, body: unknown) {
-  return vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  return vi.fn(
+    async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+  ) as unknown as typeof fetch;
 }
 
 // R5 new-customer L4: the page the link sent to the new address opens.
@@ -104,6 +106,25 @@ describe("confirmNewAddress", () => {
     const view = await confirmNewAddress(respond(502, null), "tok");
     expect(view.message).toBe("Your sign-in email may not have changed. Press Try again in a minute to see.");
     expect(view.offerRetry).toBe(true);
+  });
+
+  // R29 OO1: a gateway's page can come after the change was made.
+  it("an unreadable 5xx (a gateway's page) is a lost answer: the email may have changed", async () => {
+    const gateway = vi.fn(async () => new Response("<html>504</html>", { status: 504, headers: { "content-type": "text/html" } }));
+    const view = await confirmNewAddress(gateway as unknown as typeof fetch, "tok");
+    expect(view.title).toBe("Vibe Socials didn't answer");
+    expect(view.message).toContain("your sign-in email may have changed");
+    expect(view.offerRetry).toBe(true);
+  });
+
+  // R29 OO1 (security L2): once a change's row is cleared, the route can't
+  // tell an expired link from one already used, so the page claims neither.
+  it("a dead link (no row, or expired) gets a neutral title and the route's sentence", async () => {
+    const sentence =
+      "This link has expired or was already used. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.";
+    const view = await confirmNewAddress(respond(400, { error: sentence, reason: "not_valid" }), "tok");
+    expect(view).toMatchObject({ changed: false, offerRetry: false, title: "This link can't be used", message: sentence });
+    expect(view.title).not.toMatch(/wasn't changed|unchanged/);
   });
 
   it("calls a link without a token not valid, without asking the server", async () => {

@@ -12,11 +12,15 @@ import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
 const RATE_LIMIT = { route: "auth/change-email-undo", limit: 10, windowMs: 15 * 60 * 1000 } as const;
 
 const refuse = (status: number, error: string) => NextResponse.json({ error }, { status });
+/** `reason`: the page titles it "This link can't be used", not "wasn't undone". */
+const refuseNotValid = () => NextResponse.json({ error: NOT_VALID, reason: "not_valid" }, { status: 400 });
 
 // R6-pages L6: a link's record is cleared once its 72 hours have passed
 // (server/auth/undoWindow.ts), so a link not found may be an expired one.
-const NOT_VALID = `This link isn't valid, or it has expired: undo links work for 72 hours. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
-const USED = `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`;
+// R29 OO1 (security L2): or one already used, so it claims neither.
+const NOT_VALID = `This link has expired or was already used: undo links work for 72 hours. If you already undid the change, sign in with your old address (reset your password if it doesn't work). If not, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
+// R29 OO1 (security L1): the undo cleared the password, so say how to get back in.
+const USED = `This link was already used, so the change was already undone. Your password stopped working then, and we emailed a link to set a new one to the restored address. If you can't find it, press Reset your password below.`;
 const EXPIRED = `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 // R7-new-customer H1: no link is sent for such a change; this is the backstop.
 const UNCONFIRMED = `This change can't be undone with a link, because the address it replaced was never confirmed. If this is your account, write to ${SUPPORT_EMAIL}.`;
@@ -69,7 +73,7 @@ export async function POST(request: Request) {
   }
   const { token } = body;
   if (typeof token !== "string" || token.length === 0) {
-    return refuse(400, NOT_VALID);
+    return refuseNotValid();
   }
 
   const undoTokenHash = hashAccountToken(token);
@@ -80,7 +84,7 @@ export async function POST(request: Request) {
       include: { user: { select: { email: true } } },
     });
     if (record?.previousEmailUnverified) return refuse(400, UNCONFIRMED);
-    if (!record || !record.previousEmail || !record.undoExpiresAt) return refuse(400, NOT_VALID);
+    if (!record || !record.previousEmail || !record.undoExpiresAt) return refuseNotValid();
     if (record.undoneAt) return refuseUsed();
     if (record.undoExpiresAt <= now) return refuse(400, EXPIRED);
     if (record.user.email !== record.newEmail) return refuse(409, CHANGED_AGAIN);

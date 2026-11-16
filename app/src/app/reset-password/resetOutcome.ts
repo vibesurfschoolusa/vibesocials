@@ -3,8 +3,10 @@
  * (R15-new-customer L2). Like verifyOutcome.ts, the form chooses by the
  * answer's status rather than showing the route's own text: the route answers
  * one uniform 400 for every dead link (no oracle), so a 400 is the invalid-link
- * state with "Request a new link"; a 429 says how long to wait; anything from
- * 500 up says the password wasn't changed.
+ * state with "Request a new link"; a 429 says how long to wait; the route's own
+ * readable 500 (the transaction rolled back) says the password wasn't changed.
+ * R29 OO1 (new-customer L1): an unreadable 5xx (a gateway's page) can come
+ * after the commit; fetchOrNoAnswer throws it as no answer, so it says "may".
  */
 
 import { answerLostText } from "@/lib/answerLost";

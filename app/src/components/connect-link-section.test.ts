@@ -213,6 +213,23 @@ describe("changeConnectLink when the answer is lost", () => {
     }
   });
 
+  // R29 OO1 (client-journey L4): the route turned the old link off and made a
+  // new one; only its answer can't be read. As Queue and Media do: lost.
+  it("an OK answer to Make whose link can't be read, or a 5xx with no sentence: lost, and the Team card is told to read again", async () => {
+    for (const fetchImpl of [
+      vi.fn(async () => new Response("<!doctype html><html></html>", { status: 200, headers: { "content-type": "text/html" } })),
+      vi.fn(async () => Response.json({ ok: true }, { status: 200 })),
+      // A 5xx with no sentence of the route's: it may have gone through too.
+      vi.fn(async () => Response.json({}, { status: 500 })),
+    ]) {
+      const announce = vi.fn();
+      await expect(
+        changeConnectLink(fetchImpl as unknown as typeof fetch, "POST", { workspaceId: "ws-1", platforms: ["tiktok"] }, announce, () => true),
+      ).resolves.toEqual({ ok: false, error: null, lost: true });
+      expect(announce).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("offline at the press: nothing is sent", async () => {
     const announce = vi.fn();
     const fetchImpl = vi.fn();

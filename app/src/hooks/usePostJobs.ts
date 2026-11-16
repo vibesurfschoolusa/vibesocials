@@ -14,7 +14,7 @@ import {
   shouldPollPostJobs,
 } from "@/lib/postJobPolling";
 import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
-import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 
 /** R26 LL3: a Load more that got no answer. */
@@ -266,7 +266,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       setNextCursor(data.nextCursor);
     } catch (error) {
       // Same as a non-ok response — keep the loaded list + cursor for a retry.
-      if (show === showRef.current) setLoadMoreError(loadMoreFailureText(isNoAnswer(error) ? "offline" : 0));
+      if (show === showRef.current) setLoadMoreError(loadMoreFailureText(isNoConnection(error) ? "offline" : 0));
     } finally {
       setLoadingMore(false);
     }

@@ -38,10 +38,11 @@ describe("requestCaption", () => {
     );
   });
 
-  it("an error answer that is not JSON: a plain sentence that the caption is unchanged", async () => {
+  // R29 OO1: a gateway's page is no answer: the AI may have run, its answer isn't shown.
+  it("an error answer that is not JSON (a gateway's page): the lost-answer sentence", async () => {
     const fetchImpl = vi.fn(async () => new Response("<html>Bad gateway</html>", { status: 502 }));
     const result = await requestCaption("/api/posts/enhance-caption", body, "enhancedCaption", fetchImpl as unknown as typeof fetch);
-    expect(result).toEqual({ ok: false, error: CAPTION_FAILED_MESSAGE });
+    expect(result).toEqual({ ok: false, error: CAPTION_OFFLINE_MESSAGE });
     expect(CAPTION_FAILED_MESSAGE).toMatch(/your caption is unchanged/);
   });
 

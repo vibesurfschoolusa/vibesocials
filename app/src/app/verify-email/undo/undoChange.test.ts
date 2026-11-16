@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { undoEmailChange } from "./undoChange";
 
 function respond(status: number, body: unknown) {
-  return vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  return vi.fn(
+    async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+  ) as unknown as typeof fetch;
 }
 
 // Review item 1: the page the "This wasn't me: undo" link opens.
@@ -53,6 +55,21 @@ describe("undoEmailChange", () => {
     expect(failed.message).toBe("The change may not have been undone. Press Try again in a minute to see.");
   });
 
+  // R29 OO1: a gateway's page can come after the undo was made.
+  it("an unreadable 5xx (a gateway's page) is a lost answer: the change may have been undone", async () => {
+    const gateway = vi.fn(async () => new Response("<html>504</html>", { status: 504, headers: { "content-type": "text/html" } }));
+    const view = await undoEmailChange(gateway as unknown as typeof fetch, "tok");
+    expect(view.title).toBe("Vibe Socials didn't answer");
+    expect(view.message).toContain("the change may have been undone");
+  });
+
+  // R29 OO1 (security L2): once the window has passed the row is cleared,
+  // so the page can't tell whether the change was undone and claims neither.
+  it("a link the route can't find gets a neutral title and the route's sentence", async () => {
+    const view = await undoEmailChange(respond(400, { error: "Route sentence.", reason: "not_valid" }), "tok");
+    expect(view).toMatchObject({ undone: false, offerRetry: false, title: "This link can't be used", message: "Route sentence." });
+  });
+
   it("calls a link without a token not valid, without asking the server", async () => {
     const spy = respond(200, {});
     const view = await undoEmailChange(spy, "");
@@ -71,5 +88,12 @@ describe("undoEmailChange on a used link", () => {
     );
     expect(view).toMatchObject({ undone: false, title: "This link was already used", offerRetry: false });
     expect(view.message).toBe("This link was already used, so the change was already undone.");
+  });
+
+  // R29 OO1 (security L1): the undo cleared the password, so the next step
+  // is a reset link, not the home page.
+  it("points to Reset your password", async () => {
+    const view = await undoEmailChange(respond(400, { error: "Used.", used: true }), "tok");
+    expect(view.next).toEqual({ href: "/forgot-password", label: "Reset your password" });
   });
 });

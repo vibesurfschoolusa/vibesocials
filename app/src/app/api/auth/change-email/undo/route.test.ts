@@ -190,7 +190,8 @@ describe("POST /api/auth/change-email/undo", () => {
     const response = await POST(request({ token: "undo-token" }));
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`,
+      // R29 OO1 (security L1): the undo cleared the password and sent a reset link.
+      error: `This link was already used, so the change was already undone. Your password stopped working then, and we emailed a link to set a new one to the restored address. If you can't find it, press Reset your password below.`,
       // Lead review (R28 NN2): the page titles it "already used", not "wasn't undone".
       used: true,
     });
@@ -234,7 +235,9 @@ describe("POST /api/auth/change-email/undo", () => {
     response = await POST(request({ token: "undo-token" }));
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: `This link isn't valid, or it has expired: undo links work for 72 hours. Open the link from the email again, or write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
+      // R29 OO1 (security L2): the row may be gone after a successful undo, so no "wasn't undone".
+      error: `This link has expired or was already used: undo links work for 72 hours. If you already undid the change, sign in with your old address (reset your password if it doesn't work). If not, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`,
+      reason: "not_valid",
     });
     response = await POST(request({}));
     expect(response.status).toBe(400);

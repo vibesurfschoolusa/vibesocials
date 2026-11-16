@@ -524,17 +524,18 @@ describe("requestPhotoDescription", () => {
     );
   });
 
-  it("an error answer that is not JSON, or JSON with no text: a plain sentence", async () => {
-    for (const response of [
-      new Response("<html>Bad gateway</html>", { status: 502 }),
-      new Response("{}", { status: 500 }),
-    ]) {
-      const fetchImpl = vi.fn(async () => response);
-      await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
-    }
+  it("a JSON error with no text: a plain sentence", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({}, { status: 500 }));
+    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
     expect(PHOTO_DESCRIPTION_FAILED_MESSAGE).toBe(
       "Something went wrong on our side, so no description was written. Please try again in a minute.",
     );
+  });
+
+  // R29 OO1: a gateway's page is no answer: the AI may have run, its answer isn't shown.
+  it("an error answer that is not JSON (a gateway's page): the lost-answer sentence", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>Bad gateway</html>", { status: 502 }));
+    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_OFFLINE_MESSAGE);
   });
 
   it("a success answer that is not JSON: the plain sentence", async () => {

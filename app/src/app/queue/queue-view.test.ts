@@ -331,7 +331,8 @@ describe("Load more in the Queue", () => {
   const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
 
   it("words its failure with the shared sentence and shows it under the button", () => {
-    expect(queueSource).toMatch(/loadMoreFailureText\(\s*isNoAnswer\(error\) \? "offline"/);
+    // R29 OO1: an unreadable 5xx came over a working connection, so only a dropped request is "offline".
+    expect(queueSource).toMatch(/loadMoreFailureText\(\s*isNoConnection\(error\) \? "offline"/);
     expect(queueSource).toMatch(/loadMoreFailureText\(response\.status\)/);
     expect(queueSource).toMatch(/role="status"[^>]*>\s*\{loadMoreError\}/);
   });

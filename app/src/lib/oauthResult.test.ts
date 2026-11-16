@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 import { describeOAuthResult, shownControl, type ShownControl } from "./oauthResult";
 
@@ -505,5 +508,87 @@ describe("shownControl", () => {
     expect(shownControl({ needsReconnect: false, reconnectSoon: true })).toBe("reconnect");
     expect(shownControl({ needsReconnect: false })).toBe("connected");
     expect(shownControl({ needsReconnect: false, reconnectSoon: false })).toBe("connected");
+  });
+});
+
+// R29 OO1 (pages L5): a cancelled Reconnect on a flagged card said "Click
+// Connect to try again", and that card shows Reconnect. Every sentence that
+// names the sign-in button takes it from the row the page shows.
+describe("describeOAuthResult — every sentence names only the button the row shows", () => {
+  const CODES = [
+    "linkedin_no_admin_pages",
+    "facebook_page_no_pages",
+    "instagram_no_instagram_account",
+    "youtube_no_channel",
+    "pinterest_no_boards",
+    "x_workspace_changed",
+    "youtube_workspace_changed",
+    "x_auth_denied",
+    "youtube_oauth_denied",
+    "linkedin_auth_failed",
+    "pinterest_access_denied",
+    "google_business_profile_oauth_denied",
+    "tiktok_oauth_denied",
+    "x_invalid_state",
+    "instagram_missing_params",
+    "tiktok_not_workspace_owner",
+    "x_not_configured",
+    "youtube_connect_failed",
+    "youtube_upload_not_allowed",
+    "youtube_readonly_not_allowed",
+    "google_business_profile_permission_missing",
+    "oauth_session_mismatch",
+  ];
+  const STATES: ShownControl[] = ["connect", "reconnect", "connected"];
+  const describe_ = (code: string, shown: ShownControl) =>
+    describeOAuthResult({ error: code, success: null }, { shown: () => shown })!.message;
+
+  it.each(CODES.flatMap((code) => STATES.map((shown) => [code, shown] as const)))("%s with a row showing %s", (code, shown) => {
+    const message = describe_(code, shown);
+    if (shown !== "connect") expect(message).not.toMatch(/\bConnect\b/);
+    if (shown !== "reconnect") expect(message).not.toMatch(/\bReconnect\b/);
+    // A sign-in that fails or is cancelled saves nothing, so a row that had a
+    // connection keeps it: never "nothing was connected" there.
+    if (shown !== "connect") expect(message).not.toMatch(/nothing was connected|wasn't connected/);
+  });
+
+  it("a cancelled Reconnect: the existing connection is unchanged, and Reconnect tries again", () => {
+    expect(describe_("youtube_oauth_denied", "reconnect")).toBe(
+      "You cancelled the YouTube authorization — your existing connection is unchanged. Click Reconnect to try again.",
+    );
+    expect(describe_("youtube_oauth_denied", "connected")).toBe(
+      "You cancelled the YouTube authorization — your existing connection is unchanged.",
+    );
+    expect(describe_("youtube_oauth_denied", "connect")).toBe(
+      "You cancelled the YouTube authorization — nothing was connected. Click Connect to try again.",
+    );
+  });
+
+  it("a failed Reconnect: the fix, then Reconnect, and the existing connection is unchanged", () => {
+    expect(describe_("pinterest_no_boards", "reconnect")).toBe(
+      "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Reconnect. Your existing connection is unchanged.",
+    );
+    expect(describe_("youtube_no_channel", "connected")).toBe(
+      "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel. Your existing connection is unchanged.",
+    );
+  });
+
+  it("another workspace's tab: the button this page shows for it", () => {
+    expect(describe_("x_workspace_changed", "reconnect")).toBe(
+      "That tab was for another workspace, so nothing changed. This page shows the workspace you are in now: click Reconnect to reconnect it here.",
+    );
+    expect(describe_("x_workspace_changed", "connected")).toBe(
+      "That tab was for another workspace, so nothing changed. This page shows the workspace you are in now, where it is already connected.",
+    );
+  });
+
+  it("the button's name is written in one place in the file", () => {
+    const source = readFileSync(fileURLToPath(new URL("./oauthResult.ts", import.meta.url)), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const helper = source.slice(source.indexOf("export function signInButton("), source.indexOf("export type GooglePermissionCode"));
+    const elsewhere = source.replace(helper, "");
+    expect(helper).toMatch(/"Connect"/);
+    expect(elsewhere).not.toMatch(/\b(Re)?[Cc]onnect again\b|[Cc]lick (Re)?Connect|[Pp]ress (Re)?Connect|"(Re)?Connect"/);
   });
 });

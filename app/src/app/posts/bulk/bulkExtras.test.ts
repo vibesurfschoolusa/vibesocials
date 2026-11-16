@@ -138,7 +138,7 @@ describe("Add many: Improve", () => {
   });
 
   it("a refusal, an empty answer or no answer: not ok, with the plain line", async () => {
-    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Server text" }), { status: 500 }));
+    const refused = vi.fn(async () => Response.json({ error: "Server text" }, { status: 500 }));
     expect(await requestImprovedCaption("x", refused as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
     const empty = vi.fn(async () => new Response(JSON.stringify({ enhancedCaption: "  " }), { status: 200 }));
     expect(await requestImprovedCaption("x", empty as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
@@ -147,6 +147,9 @@ describe("Add many: Improve", () => {
     });
     // Lead review 3 (R28 NN2): no answer: the AI may have run; the improved caption isn't shown.
     expect(await requestImprovedCaption("x", thrown as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
+    // R29 OO1: a gateway's page is no answer too: the AI may have run.
+    const gateway = vi.fn(async () => new Response("<html>504</html>", { status: 504, headers: { "content-type": "text/html" } }));
+    expect(await requestImprovedCaption("x", gateway as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
     expect(BULK_IMPROVE_LOST_TEXT).toBe(
       "Vibe Socials' answer didn't reach you, so the improved caption isn't shown. If your connection dropped, reconnect first. The caption is as it was; try again, or edit it yourself.",
     );
@@ -292,7 +295,7 @@ describe("Add many: avoidCaptions in the caption request", () => {
 // P1 fix 1: the line tells the truth about why Improve failed.
 describe("Add many: why Improve failed", () => {
   const answer = (status: number, body: unknown) =>
-    vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+    vi.fn(async () => Response.json(body, { status })) as unknown as typeof fetch;
 
   it("maps each status to its own sentence", () => {
     expect(improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).toBe(

@@ -209,8 +209,11 @@ describe("Settings, Account: change email when the answer is lost", () => {
 
   it("no answer or an unreadable 5xx: it may have gone through, and where to check", () => {
     expect(EMAIL_CHANGE_MAYBE_SENT_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so the change may have gone through. If your connection dropped, reconnect first. Look in the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.",
+      "Vibe Socials' answer didn't reach you, so a confirmation link may have been sent to the new address. If your connection dropped, reconnect first. Look in that inbox for it before you ask again.",
     );
+    // R29 OO1 (pages L4): the sign-in email changes only when that link is
+    // opened, so a reload always shows the old one and proves nothing.
+    expect(EMAIL_CHANGE_MAYBE_SENT_MESSAGE).not.toMatch(/reload/i);
     expect(emailChangeFailureText(502, null)).toBe(EMAIL_CHANGE_MAYBE_SENT_MESSAGE);
     expect(emailChangeFailureText(400, { error: "That is your current email." })).toBe("That is your current email.");
     expect(emailChangeFailureText(400, null)).toBe(

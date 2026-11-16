@@ -549,6 +549,12 @@ describe("usePostJobs Load more failure", () => {
       LOAD_MORE_OFFLINE_TEXT,
     ],
     ["a server error", async () => ({ ok: false, status: 500, json: async () => ({}) }), LOAD_MORE_FAILED_TEXT],
+    // R29 OO1: a gateway's page came over a working connection: not "there's no connection".
+    [
+      "a gateway's page",
+      async () => new Response("<html>504</html>", { status: 504, headers: { "content-type": "text/html" } }),
+      LOAD_MORE_FAILED_TEXT,
+    ],
     [
       "a 200 that isn't JSON",
       async () => ({

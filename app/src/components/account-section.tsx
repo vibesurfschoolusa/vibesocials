@@ -284,8 +284,10 @@ const EMAIL_CHANGE_NOT_STARTED = "We couldn't start the change. Your email is un
  * on its way, so "unchanged" could be wrong. Say where to check instead.
  */
 export const EMAIL_CHANGE_MAYBE_SENT_MESSAGE = answerLostText(
-  "the change may have gone through",
-  "Look in the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.",
+  // R29 OO1 (pages L4): the request only sends a link; the sign-in email changes
+  // when it is opened, so a reload would always show the old one.
+  "a confirmation link may have been sent to the new address",
+  "Look in that inbox for it before you ask again.",
 );
 
 /** What a refused or unreadable change-email answer says. */

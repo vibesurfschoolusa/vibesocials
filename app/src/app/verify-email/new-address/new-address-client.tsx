@@ -50,11 +50,22 @@ export function NewAddressClient() {
     );
   }
 
-  return <NewAddressResult view={view} onRetry={() => void confirm()} />;
+  return <NewAddressResult view={view} busy={busy} onRetry={() => void confirm()} />;
 }
 
-/** The answer card; exported so its markup can be checked without a browser. */
-export function NewAddressResult({ view, onRetry }: { view: NewAddressView; onRetry: () => void }) {
+/**
+ * The answer card; exported so its markup can be checked without a browser.
+ * R29 OO1 (new-customer L3): Try again shows it is working, as the undo page's does.
+ */
+export function NewAddressResult({
+  view,
+  busy = false,
+  onRetry,
+}: {
+  view: NewAddressView;
+  busy?: boolean;
+  onRetry: () => void;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -64,7 +75,7 @@ export function NewAddressResult({ view, onRetry }: { view: NewAddressView; onRe
         <Alert variant={view.changed ? "success" : "danger"}>{view.message}</Alert>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {view.offerRetry ? (
-            <Button size="sm" onClick={onRetry}>
+            <Button size="sm" loading={busy} onClick={onRetry}>
               Try again
             </Button>
           ) : null}

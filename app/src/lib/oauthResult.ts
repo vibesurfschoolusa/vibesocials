@@ -53,6 +53,30 @@ export function shownControl(
   return connection.needsReconnect || connection.reconnectSoon ? "reconnect" : "connected";
 }
 
+/**
+ * R29 OO1 (pages L5): the one place a sentence gets the sign-in button's
+ * name: the one the row shows, or null when it shows neither (it works).
+ */
+export function signInButton(shown: ShownControl): "Connect" | "Reconnect" | null {
+  if (shown === "connect") return "Connect";
+  return shown === "reconnect" ? "Reconnect" : null;
+}
+
+/** The step that tries the sign-in once more: "Click Connect again", "Click Reconnect". */
+function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
+  return button === "Connect" ? `${press} Connect again` : `${press} ${button}`;
+}
+
+/**
+ * A cause fixed on the platform's side, then the button to try again. A
+ * sign-in that fails saves nothing, so a row that had a connection keeps it.
+ */
+function fixThenTryAgain(fix: string, shown: ShownControl): string {
+  const button = signInButton(shown);
+  const step = button ? `${fix}, then ${pressAgain("click", button)}.` : `${fix}.`;
+  return shown === "connect" ? step : `${step} Your existing connection is unchanged.`;
+}
+
 /** What the callback refused, and the permission to allow on Google's screen. */
 const GOOGLE_PERMISSIONS = {
   youtube_upload_not_allowed: { reason: "the permission to upload videos wasn't allowed", allow: "Manage your YouTube videos" },
@@ -82,17 +106,17 @@ export function googlePermissionMessage(code: GooglePermissionCode, shown: Shown
     const lead = `Google didn't give Vibe Socials access to ${whose} Business Profile, so nothing changed.`;
     const allow = `on Google's screen, allow access to ${whose} Business Profile.`;
     const card = page === "settings" ? " on the Google Business Profile card" : "";
-    if (shown === "reconnect") return `${lead} ${press} Reconnect${card} and, ${allow}`;
-    if (shown === "connect") return `${lead} ${press} Connect${card} and, ${allow}`;
+    const button = signInButton(shown);
+    if (button) return `${lead} ${press} ${button}${card} and, ${allow}`;
     return page === "settings"
       ? `${lead} Sign in to Google again from the Google Business Profile card and, ${allow}`
       : `${lead} The Business Profile stays connected as before.`;
   }
   const { reason, allow } = GOOGLE_PERMISSIONS[code];
-  if (shown === "connected") return `Nothing changed: ${reason}, and YouTube stays connected as before.`;
-  return shown === "reconnect"
-    ? `YouTube wasn't reconnected: ${reason}. ${press} Reconnect and, on Google's screen, allow "${allow}".`
-    : `YouTube wasn't connected: ${reason}. ${press} Connect again and, on Google's screen, allow "${allow}".`;
+  const button = signInButton(shown);
+  if (!button) return `Nothing changed: ${reason}, and YouTube stays connected as before.`;
+  const what = button === "Reconnect" ? "reconnected" : "connected";
+  return `YouTube wasn't ${what}: ${reason}. ${pressAgain(press, button)} and, on Google's screen, allow "${allow}".`;
 }
 
 /**
@@ -115,15 +139,21 @@ export function describeOAuthResult(
     const shown = options.shown ? options.shown(platform) : fallback;
     return { variant: "danger", message: googlePermissionMessage(params.error, shown, "settings"), platform };
   }
-  const described = describeCode(params);
+  // R29 OO1: a code naming no platform reads as a first Connect, as before.
+  const shown = platform && options.shown ? options.shown(platform) : "connect";
+  const described = describeCode(params, shown);
   return described && code ? { ...described, platform } : null;
 }
 
-function describeCode(params: {
-  error: string | null;
-  success: string | null;
-}): { variant: "success" | "danger"; message: string } | null {
+function describeCode(
+  params: {
+    error: string | null;
+    success: string | null;
+  },
+  shown: ShownControl,
+): { variant: "success" | "danger"; message: string } | null {
   const { error, success } = params;
+  const button = signInButton(shown);
 
   if (error) {
     // The callback finished in a browser signed in as someone other than the
@@ -141,8 +171,10 @@ function describeCode(params: {
     if (error === "linkedin_no_admin_pages") {
       return {
         variant: "danger",
-        message:
-          "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect again.",
+        message: fixThenTryAgain(
+          "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page",
+          shown,
+        ),
       };
     }
     // R5 new-customer M1: the account reached the platform but has nothing
@@ -150,14 +182,14 @@ function describeCode(params: {
     // Meta sentences match the connect link page's (lib/connectLink.ts).
     const NOTHING_TO_POST_TO: Record<string, string> = {
       facebook_page_no_pages:
-        "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page, then click Connect again.",
+        "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page",
       instagram_no_instagram_account:
-        "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page, then click Connect again.",
+        "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page",
       youtube_no_channel:
-        "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel, then click Connect again.",
+        "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel",
     };
     if (Object.hasOwn(NOTHING_TO_POST_TO, error)) {
-      return { variant: "danger", message: NOTHING_TO_POST_TO[error] };
+      return { variant: "danger", message: fixThenTryAgain(NOTHING_TO_POST_TO[error], shown) };
     }
     // R27 platform-clients L3, R27 lead review and R28: a missing Google
     // permission is worded by googlePermissionMessage (describeOAuthResult).
@@ -168,8 +200,10 @@ function describeCode(params: {
     if (error === "pinterest_no_boards") {
       return {
         variant: "danger",
-        message:
-          "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Connect again.",
+        message: fixThenTryAgain(
+          "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one)",
+          shown,
+        ),
       };
     }
     // F3 (2026-11-14 review): the Connect was clicked in a tab rendered for
@@ -179,8 +213,9 @@ function describeCode(params: {
     if (error.endsWith("_workspace_changed")) {
       return {
         variant: "danger",
-        message:
-          "That tab was for another workspace, so nothing was connected. This page shows the workspace you are in now: click Connect again to connect it here.",
+        message: `That tab was for another workspace, so nothing ${shown === "connect" ? "was connected" : "changed"}. This page shows the workspace you are in now${
+          button ? `: ${pressAgain("click", button)} to ${button.toLowerCase()} it here.` : ", where it is already connected."
+        }`,
       };
     }
     const label = labelFromCode(error);
@@ -190,9 +225,9 @@ function describeCode(params: {
     if (error.includes("denied") || error.endsWith("auth_failed")) {
       return {
         variant: "danger",
-        message: label
-          ? `You cancelled the ${label} authorization — nothing was connected. Click Connect to try again.`
-          : "You cancelled the authorization — nothing was connected. Click Connect to try again.",
+        message: `You cancelled the ${label ? `${label} ` : ""}authorization — ${
+          shown === "connect" ? "nothing was connected" : "your existing connection is unchanged"
+        }.${button ? ` Click ${button} to try again.` : ""}`,
       };
     }
     if (error.includes("missing_params") || error.includes("invalid_state")) {

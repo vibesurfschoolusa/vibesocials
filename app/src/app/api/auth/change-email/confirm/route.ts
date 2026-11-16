@@ -22,11 +22,15 @@ const UNDO_TTL_MS = 72 * 60 * 60 * 1000;
 
 const RATE_LIMIT = { route: "auth/change-email-confirm", limit: 10, windowMs: 15 * 60 * 1000 } as const;
 
+// R29 OO1 (security L2): the change's row is cleared soon after a confirmed
+// change (server/auth/undoWindow.ts), so a link not found may be one already
+// used: the answer claims neither, and `reason` gives the page a neutral title.
 const deadLinkResponse = () =>
   NextResponse.json(
     {
       error:
-        "This link has expired or was already used. Your email is unchanged. To change it, ask again in Settings, Account.",
+        "This link has expired or was already used. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.",
+      reason: "not_valid",
     },
     { status: 400 },
   );

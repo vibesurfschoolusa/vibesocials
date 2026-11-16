@@ -33,7 +33,9 @@ import {
 } from "./join-view";
 
 function respond(status: number, body: unknown = {}) {
-  return vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  return vi.fn(
+    async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+  ) as unknown as typeof fetch;
 }
 
 describe("join page", () => {
@@ -112,6 +114,15 @@ describe("acceptInvite", () => {
         message: JOIN_FAILED_MESSAGE,
       });
     }
+  });
+
+  // R29 OO1: a gateway's page (not the route's JSON) may come after the join was made.
+  it("an unreadable 5xx: you may have joined", async () => {
+    const gateway = vi.fn(async () => new Response("<html>502</html>", { status: 502, headers: { "content-type": "text/html" } }));
+    await expect(acceptInvite(gateway as unknown as typeof fetch, "tok")).resolves.toEqual({
+      kind: "failed",
+      message: JOIN_MAYBE_JOINED_MESSAGE,
+    });
   });
 
   // R11-client-journey L3: signed out in another tab between opening the link and Join.

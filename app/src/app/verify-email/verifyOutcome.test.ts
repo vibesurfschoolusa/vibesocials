@@ -10,7 +10,9 @@ import {
 } from "./verifyOutcome";
 
 function respond(status: number, body: unknown = {}) {
-  return vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  return vi.fn(
+    async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+  ) as unknown as typeof fetch;
 }
 const offline = vi.fn(async () => {
   throw new TypeError("Failed to fetch");
@@ -29,6 +31,9 @@ describe("attemptVerify", () => {
     await expect(attemptVerify(respond(429), "tok")).resolves.toBe("rate_limited");
     await expect(attemptVerify(respond(500), "tok")).resolves.toBe("server");
     await expect(attemptVerify(offline, "tok")).resolves.toBe("network");
+    // R29 OO1: a gateway's page may come after the link was used: no answer, not the route's failure.
+    const gateway = vi.fn(async () => new Response("<html>502</html>", { status: 502, headers: { "content-type": "text/html" } }));
+    await expect(attemptVerify(gateway as unknown as typeof fetch, "tok")).resolves.toBe("network");
   });
 
   it("calls a missing token invalid without asking the server", async () => {
@@ -103,8 +108,8 @@ describe("verifyView", () => {
 
   // R28 NN2: the link may have verified the email before the answer was lost;
   // Try again then shows "already verified", so it is the safe next step.
-  it("no answer: the email may already be verified, and Try again shows which", () => {
-    for (const account of all) {
+  it("no answer: the email may already be verified, and Try again shows which when signed in", () => {
+    for (const account of all.filter((a) => a !== "signed_out")) {
       const view = verifyView("network", account);
       expect(view.title).toBe("Vibe Socials didn't answer");
       expect(view.message).toBe(
@@ -112,6 +117,29 @@ describe("verifyView", () => {
       );
       expect(view.offerRetry).toBe(true);
     }
+  });
+
+  // R29 OO1 (pages L3): Try again can't show a signed-out reader anything:
+  // the used link gets the uniform 400, so logging in is the way to see.
+  it("no answer, signed out: Try again, or log in to see whether the address is verified", () => {
+    const view = verifyView("network", "signed_out");
+    expect(view.message).toBe(
+      "Vibe Socials' answer didn't reach you, so your email may already be verified. If your connection dropped, reconnect first. Then press Try again, or log in to see whether your address is verified.",
+    );
+    expect(view.offerRetry).toBe(true);
+    expect(view.next).toEqual({ href: "/login", label: "Log in" });
+  });
+
+  it("a signed-out Try again that finds the link dead says it may already have verified the email", () => {
+    const view = verifyView("invalid", "signed_out", { retried: true });
+    expect(view.title).toBe("This link can't be used again");
+    expect(view.message).toBe(
+      "This link has expired or was already used. It may have verified your email when you first pressed it: log in to see whether your address is verified.",
+    );
+    expect(view.next).toEqual({ href: "/login", label: "Log in" });
+    // The first open of a dead link, and a signed-in retry, read as before.
+    expect(verifyView("invalid", "signed_out").title).toBe("This link isn't valid");
+    expect(verifyView("invalid", "unverified", { retried: true }).title).toBe("This link isn't valid");
   });
 
   it("too many tries: says to wait", () => {
@@ -124,6 +152,9 @@ describe("verifyView", () => {
     const view = verifyView("server", "unknown");
     expect(view.message).toBe("Your email may not be verified yet. Press Try again in a minute to see.");
     expect(view.offerRetry).toBe(true);
+    expect(verifyView("server", "signed_out").message).toBe(
+      "Your email may not be verified yet. Press Try again in a minute, or log in to see whether your address is verified.",
+    );
   });
 
   it("success says the email is verified", () => {

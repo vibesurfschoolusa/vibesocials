@@ -28,7 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { answerLostText } from "@/lib/answerLost";
 import { focusAfterPress } from "@/lib/focusAfter";
-import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { CaptionCounter } from "@/components/caption-counter";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { PlatformCaptionEditor } from "@/components/composer/platform-caption-editor";
@@ -1217,7 +1217,7 @@ export function QueueView({
       setNextCursor(data.nextCursor);
     } catch (error) {
       // Keep the loaded list + cursor for a retry.
-      setLoadMoreError(loadMoreFailureText(isNoAnswer(error) ? "offline" : 0));
+      setLoadMoreError(loadMoreFailureText(isNoConnection(error) ? "offline" : 0));
     } finally {
       setLoadingMore(false);
     }

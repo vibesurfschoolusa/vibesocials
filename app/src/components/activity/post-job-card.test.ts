@@ -279,7 +279,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       const body = dispatchBody(true);
       const fetcher = vi
         .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+        .mockResolvedValueOnce(Response.json(body, { status: 503 }))
         .mockResolvedValueOnce(unsentPost())
         .mockResolvedValueOnce(response(202, { ok: true }));
       const press = createSendAgain("job-9", fetcher, () => true);
@@ -311,7 +311,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         const body = dispatchBody(resultsMarked);
         const fetcher = vi
           .fn()
-          .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+          .mockResolvedValueOnce(Response.json(body, { status: 503 }))
           .mockResolvedValueOnce(fresh());
         const press = createSendAgain("job-9", fetcher, () => true);
         await expect(press()).resolves.toEqual({ ok: false, error: dispatchFailedText(body, "Send again"), refetch: true });
@@ -327,7 +327,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       );
       for (const failedRead of [new Response("<html>502</html>", { status: 502 }), new TypeError("Failed to fetch")]) {
         const body = dispatchBody(true);
-        const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }));
+        const fetcher = vi.fn().mockResolvedValueOnce(Response.json(body, { status: 503 }));
         if (failedRead instanceof Error) fetcher.mockRejectedValueOnce(failedRead);
         else fetcher.mockResolvedValueOnce(failedRead);
         fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 202 }));
@@ -379,7 +379,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         "job-9",
         vi
           .fn()
-          .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+          .mockResolvedValueOnce(Response.json(body, { status: 503 }))
           .mockResolvedValueOnce(response(200, { postJob: { id: "job-9", status: "in_progress" }, results: [] })),
         () => true,
       );

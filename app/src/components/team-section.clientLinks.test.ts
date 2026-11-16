@@ -278,7 +278,7 @@ describe("Turn off client links", () => {
     expect(announce).toHaveBeenCalledTimes(1);
 
     announce.mockClear();
-    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Nope." }), { status: 500 }));
+    const refused = vi.fn(async () => Response.json({ error: "Nope." }, { status: 500 }));
     await expect(requestClientLinksTurnOff(refused as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow("Nope.");
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");

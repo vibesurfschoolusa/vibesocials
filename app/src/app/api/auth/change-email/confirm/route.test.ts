@@ -86,7 +86,9 @@ function record(overrides: Record<string, unknown> = {}) {
 }
 
 const USED = "This link was already used. If you just confirmed it, your email has changed.";
-const DEAD = "This link has expired or was already used. Your email is unchanged. To change it, ask again in Settings, Account.";
+// R29 OO1 (security L2): the row may be gone after a confirmed change, so no "unchanged".
+const DEAD =
+  "This link has expired or was already used. If you already confirmed the change, sign in with the new address. If not, ask for the change again in Settings, Account.";
 
 beforeEach(() => {
   for (const mock of [
@@ -139,7 +141,7 @@ describe("POST /api/auth/change-email/confirm", () => {
       findUniqueMock.mockResolvedValue(found);
       const response = await POST(request(body));
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: DEAD });
+      await expect(response.json()).resolves.toEqual({ error: DEAD, reason: "not_valid" });
     }
     expect(userUpdateMock).not.toHaveBeenCalled();
   });

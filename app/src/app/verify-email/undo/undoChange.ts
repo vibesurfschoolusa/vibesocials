@@ -45,7 +45,7 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
     };
   }
   const data = (await response.json().catch(() => null)) as
-    | { email?: string; resetSent?: boolean; error?: string; used?: boolean }
+    | { email?: string; resetSent?: boolean; error?: string; used?: boolean; reason?: string }
     | null;
   if (response.ok) {
     // The undo cleared the password (the person who made the change knew
@@ -66,8 +66,19 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
   }
   // Lead review (R28 NN2): a used link means it was already undone, so the
   // title must not say it wasn't.
+  // R29 OO1 (security L1): the undo cleared the password, so the way back in is a reset.
   if (data?.used === true && data.error) {
-    return { ...notUndone, title: "This link was already used", message: data.error };
+    return {
+      ...notUndone,
+      next: { href: "/forgot-password", label: "Reset your password" },
+      title: "This link was already used",
+      message: data.error,
+    };
+  }
+  // R29 OO1 (security L2): a link the route can't find may have been used, so
+  // the title claims nothing either way; the route's sentence says what to do.
+  if (data?.reason === "not_valid" && data.error) {
+    return { ...notUndone, title: "This link can't be used", message: data.error };
   }
   const serverFailed = response.status >= 500;
   return {

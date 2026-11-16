@@ -75,7 +75,13 @@ export async function changeConnectLink(
   }
   const { response } = answer;
   const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto; error?: string } | null;
-  if (!response.ok || (method === "POST" && !data?.link)) {
+  // R29 OO1 (client-journey L4): an OK answer to Make whose link can't be read:
+  // the link was made and the old one turned off, so it is lost, as on Queue and Media.
+  if (response.ok && method === "POST" && !data?.link) {
+    announce();
+    return { ok: false, error: null, lost: true };
+  }
+  if (!response.ok) {
     return { ok: false, error: typeof data?.error === "string" ? data.error : null };
   }
   announce();

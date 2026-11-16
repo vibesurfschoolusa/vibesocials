@@ -6,7 +6,7 @@ import type {
   ConnectionStatus,
   ConnectionsResponse,
 } from "@/lib/connectionsDto";
-import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 
 /**
@@ -50,7 +50,7 @@ export function useConnections(): UseConnectionsResult {
       }
       setConnections(data.connections);
     } catch (err: unknown) {
-      setError(isNoAnswer(err) ? CONNECTIONS_OFFLINE_TEXT : CONNECTIONS_FAILED_TEXT);
+      setError(isNoConnection(err) ? CONNECTIONS_OFFLINE_TEXT : CONNECTIONS_FAILED_TEXT);
     } finally {
       setLoading(false);
     }

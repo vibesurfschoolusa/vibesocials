@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useSignedInAccount } from "@/components/signed-in-swap";
+import { SIGN_OUT_FAILED_MESSAGE } from "@/app/login/signed-in-notice";
 import { InstallInstructionsDialog, useInstallApp } from "./install-app";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -117,6 +118,24 @@ export function createWorkspaceFailureText(status: number, data: { error?: unkno
   if (typeof data?.error === "string" && data.error) return data.error;
   if (status >= 500) return WORKSPACE_MAYBE_MADE_MESSAGE;
   return "Couldn't create the workspace. Try again.";
+}
+
+/**
+ * R29 OO1 (new-customer L2): a sign-out that fails (offline, a lost answer)
+ * says so with the Log in notice's sentence, and the menu stays open, so
+ * nobody leaves a shared computer thinking they are signed out.
+ */
+export async function signOutFromMenu(
+  signOutFn: (options: { callbackUrl: string }) => Promise<unknown>,
+  close: () => void,
+  showError: (message: string) => void,
+): Promise<void> {
+  try {
+    await signOutFn({ callbackUrl: "/" });
+    close();
+  } catch {
+    showError(SIGN_OUT_FAILED_MESSAGE);
+  }
 }
 
 /**
@@ -501,10 +520,7 @@ export function AccountMenu() {
           ) : null}
           <button
             type="button"
-            onClick={async () => {
-              setOpen(false);
-              await signOut({ callbackUrl: "/" });
-            }}
+            onClick={() => void signOutFromMenu(signOut, () => setOpen(false), toast.error)}
             className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <LogOut aria-hidden className="h-4 w-4 text-muted-foreground" />

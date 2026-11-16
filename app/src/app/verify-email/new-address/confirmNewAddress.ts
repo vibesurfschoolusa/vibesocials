@@ -91,6 +91,11 @@ export async function confirmNewAddress(fetchImpl: typeof fetch, token: string):
   if (data?.used === true && data.error) {
     return { ...notChanged, title: "This link was already used", message: data.error };
   }
+  // R29 OO1 (security L2): a link the route can't find may have been used, so
+  // the title claims nothing either way; the route's sentence says what to do.
+  if (data?.reason === "not_valid" && data.error) {
+    return { ...notChanged, title: "This link can't be used", message: data.error };
+  }
   // R6-security M1: the undo-window refusals, written again from `until` so
   // the date is in the viewer's time zone rather than the server's.
   if (typeof data?.until === "string" && (data.reason === "locked" || data.reason === "held")) {
