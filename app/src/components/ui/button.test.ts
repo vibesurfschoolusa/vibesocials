@@ -61,3 +61,23 @@ describe("Button while loading", () => {
     expect(preventDefault).not.toHaveBeenCalled();
   });
 });
+
+// R26 follow-up: a button blocked while a sibling works is aria-disabled (it
+// keeps focus), and must look unavailable as a disabled one does.
+describe("buttonVariants and aria-disabled", () => {
+  it("an aria-disabled button gets the disabled look: opacity and cursor", async () => {
+    const { buttonVariants } = await import("./button");
+    const classes = buttonVariants().split(/\s+/);
+    expect(classes).toContain("disabled:opacity-50");
+    expect(classes).toContain("aria-disabled:opacity-50");
+    expect(classes).toContain("aria-disabled:cursor-not-allowed");
+  });
+
+  it("aria-disabled from a caller is passed through and the press still reaches onClick", () => {
+    expect(render({ "aria-disabled": true })).toContain('aria-disabled="true"');
+    const onClick = vi.fn();
+    const element = buttonElement({ "aria-disabled": true, onClick });
+    (element.props.onClick as (event: unknown) => void)({ preventDefault: vi.fn() });
+    expect(onClick).toHaveBeenCalled();
+  });
+});
