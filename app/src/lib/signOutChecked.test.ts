@@ -82,8 +82,19 @@ describe("signOutChecked", () => {
     }
   });
 
-  it("no answer (offline, a gateway's non-JSON 5xx) at any step: the may-have sentence", async () => {
-    for (const step of ["csrf", "signout", "session"] as const) {
+  // R32 lead second look: no token read means the sign-out was never sent.
+  it("no answer to the token read (offline, a gateway's non-JSON 5xx): nothing sent, still signed in", async () => {
+    for (const answer of [offline, gateway]) {
+      const fetchImpl = server({ csrf: answer });
+      const tellTabs = vi.fn();
+      await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(still);
+      expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(["/api/auth/csrf"]);
+      expect(tellTabs).not.toHaveBeenCalled();
+    }
+  });
+
+  it("no answer after the sign-out was sent (offline, a gateway's non-JSON 5xx): the may-have sentence", async () => {
+    for (const step of ["signout", "session"] as const) {
       for (const answer of [offline, gateway]) {
         const tellTabs = vi.fn();
         await expect(signOutChecked(server({ [step]: answer }), tellTabs)).resolves.toEqual(lost);

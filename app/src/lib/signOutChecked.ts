@@ -59,22 +59,29 @@ function tellTabsSignedOut(): void {
  * names nobody. Never throws and never leaves the page: the caller shows the
  * failure's message and leaves only after { ok: true }.
  *
- * R32 lead review: two failure sentences. No answer at some step (offline, a
- * non-JSON 5xx, fetchOrNoAnswer's NoAnswerError), or an answer after the
- * request that can't be read, may have ended the session: SIGN_OUT_FAILED_MESSAGE.
- * An answer that leaves the person signed in (no token, a refusal, csrf=true,
- * a session that names someone): SIGN_OUT_STILL_SIGNED_IN_MESSAGE.
+ * R32 lead review: two failure sentences. No answer after the sign-out was
+ * sent (offline, a non-JSON 5xx, fetchOrNoAnswer's NoAnswerError), or an
+ * answer to it that can't be read, may have ended the session:
+ * SIGN_OUT_FAILED_MESSAGE. Everything that leaves the person signed in says
+ * SIGN_OUT_STILL_SIGNED_IN_MESSAGE: no token (the token read got no answer or
+ * none in it, so nothing was sent), a refusal, csrf=true, a session that
+ * names someone.
  */
 export async function signOutChecked(
   fetchImpl: typeof fetch = fetch,
   afterSignedOut: () => void = tellTabsSignedOut,
 ): Promise<SignOutCheck> {
+  let csrfToken = "";
   try {
     const csrfAnswer = await fetchOrNoAnswer("/api/auth/csrf", { cache: "no-store" }, fetchImpl);
     const csrf = csrfAnswer.ok ? await jsonObject(csrfAnswer) : null;
-    const csrfToken = typeof csrf?.csrfToken === "string" ? csrf.csrfToken : "";
-    // Nothing was sent, so the session is as it was.
-    if (!csrfToken) return STILL_SIGNED_IN;
+    if (typeof csrf?.csrfToken === "string") csrfToken = csrf.csrfToken;
+  } catch {
+    // No answer to the token read: the sign-out below is never sent.
+  }
+  // Nothing was sent, so the session is as it was.
+  if (!csrfToken) return STILL_SIGNED_IN;
+  try {
     const response = await fetchOrNoAnswer(
       "/api/auth/signout",
       {
