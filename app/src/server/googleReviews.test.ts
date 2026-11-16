@@ -26,6 +26,9 @@ import {
   reviewsErrorBody,
   reviewsListedLocation,
   savedLocationIn,
+  reviewsKindBody,
+  REPLY_FINAL_CODES,
+  replyErrorBody,
 } from "./googleReviews";
 import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
 
@@ -309,7 +312,7 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
       expect(JSON.stringify(owner)).not.toContain("/api/auth");
       expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
     }
-    expect(GOOGLE_REFUSED_MESSAGE).toBe("Google refused the request. Reconnect Google Business Profile in Settings.");
+    expect(GOOGLE_REFUSED_MESSAGE).toBe("Google refused the request. Sign in to Google again with the account that manages this listing.");
     expect(GOOGLE_REFUSED_MEMBER_MESSAGE).toBe(
       "Google refused the request. The workspace owner can reconnect Google Business Profile.",
     );
@@ -437,6 +440,33 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
   });
 });
 
+// R25 lead review: a reply that can't work however often it is sent says so
+// with a code, so the page closes the confirm dialog and keeps the sentence in
+// the form. Only try-later (and the route's own fallback) stay retryable.
+describe("replyErrorBody", () => {
+  it("adds the kind's code to the Reviews answer for the kinds a retry can't change, for owners and members", () => {
+    const codes = {
+      reconnect: "RECONNECT_REQUIRED",
+      access: "GBP_ACCESS_REFUSED",
+      notFound: "GBP_LOCATION_GONE",
+      chooseAgain: "GBP_CHOOSE_LOCATION_AGAIN",
+      reviewGone: "GBP_REVIEW_GONE",
+    } as const;
+    expect(REPLY_FINAL_CODES).toEqual(codes);
+    for (const [kind, code] of Object.entries(codes)) {
+      for (const role of ["owner", "member"] as const) {
+        const k = kind as keyof typeof codes;
+        expect(replyErrorBody(k, "Fallback.", role)).toEqual({ ...reviewsKindBody(k, "Fallback.", role), code });
+      }
+    }
+  });
+
+  it("try-later and anything else: the Reviews answer with no code", () => {
+    expect(replyErrorBody("tryLater", "Fallback.", "owner")).toEqual(reviewsKindBody("tryLater", "Fallback.", "owner"));
+    expect(replyErrorBody("other", "Fallback.", "owner")).toEqual({ error: "Fallback." });
+  });
+});
+
 // R12 L1: the "Get more reviews" panel's reasons, for whoever reads them.
 describe("reviewLinkReason", () => {
   it("an owner: the step in Settings, Connections, as before", () => {
@@ -447,7 +477,7 @@ describe("reviewLinkReason", () => {
       "Choose your Maps location for Google Business Profile in Settings, Connections to get your review link.",
     );
     expect(reviewLinkReason("needs_reconnect", "owner")).toBe(
-      "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+      "Google no longer accepts this connection. Sign in to Google again with the account that manages this listing to get your review link.",
     );
     expect(reviewLinkReason("google_has_none", "owner")).toBe(
       "Google has no review link for this location yet. Check that the listing is verified in Google Business Profile, then reload this page.",

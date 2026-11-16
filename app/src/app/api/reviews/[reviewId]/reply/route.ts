@@ -6,13 +6,11 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
-import { flagIfTokenRejected } from "@/server/googleFailure";
+import { classifyGoogleFailure, flagIfTokenRejected } from "@/server/googleFailure";
 import {
   MEMBER_OTHER_LOCATION_MESSAGE,
-  googleRefusedBody,
+  replyErrorBody,
   reviewLocationName,
-  reviewsErrorBody,
-  reviewsKindBody,
   savedLocationIn,
   savedLocationName,
   type ReviewsReader,
@@ -106,9 +104,11 @@ export async function POST(request: Request) {
     }
 
     // A connection Google has revoked reads "Reconnect" at once, as the link
-    // route does, instead of after the stored token runs out.
+    // route does, instead of after the stored token runs out. R25 lead review:
+    // every Google failure answers through replyErrorBody, whose code tells the
+    // page a retry can't change it.
     if (connection.needsReconnect) {
-      return NextResponse.json(googleRefusedBody(role), { status: 500 });
+      return NextResponse.json(replyErrorBody("reconnect", REPLY_FAILED_MESSAGE, role), { status: 500 });
     }
 
     // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
@@ -119,7 +119,7 @@ export async function POST(request: Request) {
     const accessToken = used.accessToken;
 
     if (!accessToken) {
-      return NextResponse.json(googleRefusedBody(role), { status: 500 });
+      return NextResponse.json(replyErrorBody("reconnect", REPLY_FAILED_MESSAGE, role), { status: 500 });
     }
 
     // The same paged listing the Reviews page shows, so any location the
@@ -130,7 +130,7 @@ export async function POST(request: Request) {
       WHERE,
     );
     if (!listing.ok) {
-      return NextResponse.json(reviewsKindBody(listing.kind, REPLY_FAILED_MESSAGE, role), { status: 500 });
+      return NextResponse.json(replyErrorBody(listing.kind, REPLY_FAILED_MESSAGE, role), { status: 500 });
     }
     if (!listing.locations.some((location) => location.resourceName === reviewLocation)) {
       return listing.complete
@@ -159,8 +159,8 @@ export async function POST(request: Request) {
   } catch (error: unknown) {
     // R25 platform-clients L2: a token Google refused flags the row first.
     const settled = await flagIfTokenRejected(error, used);
-    // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
-    const body = reviewsErrorBody(settled, REPLY_FAILED_MESSAGE, role, { where: WHERE });
+    // Classified once, by kind (classifyGoogleFailure), then worded with its code.
+    const body = replyErrorBody(classifyGoogleFailure(settled, WHERE), REPLY_FAILED_MESSAGE, role);
     return NextResponse.json(body, { status: 500 });
   }
 }

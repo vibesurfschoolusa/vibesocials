@@ -200,7 +200,7 @@ describe("GET /api/reviews/link", () => {
     mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() - 60 * 1000) }));
     mocks.refreshAccessToken.mockRejectedValueOnce(Object.assign(new Error("dead"), { code: "RECONNECT_REQUIRED" }));
-    expect((await (await GET()).json()).reason).toMatch(/Reconnect/);
+    expect((await (await GET()).json()).reason).toMatch(/Sign in to Google again/);
 
     mocks.refreshAccessToken.mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }));
     expect((await (await GET()).json()).reason).toMatch(/Try again later/);
@@ -220,7 +220,7 @@ describe("GET /api/reviews/link", () => {
 
     expect(body).toEqual({
       url: null,
-      reason: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+      reason: "Google no longer accepts this connection. Sign in to Google again with the account that manages this listing to get your review link.",
       signIn: true,
     });
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
@@ -255,7 +255,7 @@ describe("GET /api/reviews/link", () => {
 
       expect(await (await GET()).json()).toEqual({
         url: null,
-        reason: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+        reason: "Google no longer accepts this connection. Sign in to Google again with the account that manages this listing to get your review link.",
         signIn: true,
       });
       expect(mocks.flagRejectedToken).toHaveBeenCalledWith(
@@ -287,7 +287,7 @@ describe("GET /api/reviews/link", () => {
       mocks.refreshAccessToken.mockRejectedValue(failing({ code: "RECONNECT_REQUIRED" }));
 
       expect((await (await GET()).json()).reason).toBe(
-        "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+        "Google no longer accepts this connection. Sign in to Google again with the account that manages this listing to get your review link.",
       );
     });
 
@@ -398,7 +398,7 @@ describe("GET /api/reviews/link", () => {
     const body = await (await GET()).json();
 
     expect(body.url).toBeNull();
-    expect(body.reason).toMatch(/Reconnect/);
+    expect(body.reason).toMatch(/Sign in to Google again/);
     expect(body.signIn).toBe(true);
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });

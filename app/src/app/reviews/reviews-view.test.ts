@@ -141,6 +141,13 @@ describe("ReviewsView and an answer a retry can't change", () => {
   });
 });
 
+// R25 lead review: one sign-in button per page; the reviews error card's wins.
+describe("ReviewsView and one sign-in per page", () => {
+  it("tells the panel when the reviews error card shows the sign-in", () => {
+    expect(source).toContain("signInShownAbove={Boolean(reviewsError && signInHref(reviewsError, workspaceId))}");
+  });
+});
+
 // R25 pages L1: Reply hands focus to the box; Cancel to that review's Reply button.
 describe("ReviewsView and focus when a reply form opens or closes", () => {
   it("asks for the box on Reply, and decides with focusBoxOnOpen once it is open", () => {

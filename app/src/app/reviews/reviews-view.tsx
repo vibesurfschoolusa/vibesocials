@@ -576,7 +576,14 @@ export function ReviewsView({
       {/* 2026-11-10: the review link, QR code, print card and message. Only once
           Google is connected: before that the page offers the connect step.
           N2: below the list, since people come here to answer reviews. */}
-      {gbpConnected && <ReviewLinkPanel workspaceId={workspaceId} isMember={isMember} />}
+      {gbpConnected && (
+        <ReviewLinkPanel
+          workspaceId={workspaceId}
+          isMember={isMember}
+          // One sign-in button per page: the reviews error card's, when it shows one.
+          signInShownAbove={Boolean(reviewsError && signInHref(reviewsError, workspaceId))}
+        />
+      )}
 
       <ConfirmDialog
         open={confirmTarget !== null}

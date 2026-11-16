@@ -159,7 +159,7 @@ describe("GET /api/reviews/locations", () => {
     const body = await (await GET()).json();
 
     expect(body).toEqual({
-      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      error: "Google refused the request. Sign in to Google again with the account that manages this listing.",
       reconnect: true,
       signIn: true,
     });
@@ -285,7 +285,7 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
-      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      error: "Google refused the request. Sign in to Google again with the account that manages this listing.",
       reconnect: true,
       signIn: true,
     });
@@ -304,7 +304,7 @@ describe("GET /api/reviews/locations for a connection flagged for reconnect", ()
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
-      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      error: "Google refused the request. Sign in to Google again with the account that manages this listing.",
       reconnect: true,
       signIn: true,
     });

@@ -198,9 +198,14 @@ export async function fetchAllReviews(
   }
 }
 
-/** What the Reviews page says when Google refused: its token is no longer accepted. */
+/**
+ * What the Reviews page says when Google refused: its token is no longer
+ * accepted. R25 lead review: an owner's answer always carries `signIn: true`,
+ * and the page then shows Sign in to Google again (not Go to Settings), so the
+ * sentence names that control.
+ */
 export const GOOGLE_REFUSED_MESSAGE =
-  "Google refused the request. Reconnect Google Business Profile in Settings.";
+  "Google refused the request. Sign in to Google again with the account that manages this listing.";
 /** R12 L1: the same for a member, who can read and reply but not reconnect. */
 export const GOOGLE_REFUSED_MEMBER_MESSAGE =
   "Google refused the request. The workspace owner can reconnect Google Business Profile.";
@@ -252,7 +257,9 @@ const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, strin
       "The workspace owner can choose the Maps location for Google Business Profile; then the review link shows here.",
   },
   needs_reconnect: {
-    owner: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+    // An owner's needs_reconnect answer always carries `signIn: true` (link route): the sentence names that button.
+    owner:
+      "Google no longer accepts this connection. Sign in to Google again with the account that manages this listing to get your review link.",
     member: "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
   },
 
@@ -336,6 +343,34 @@ export interface ReviewsErrorBody {
 /** The chooseAgain sentence, for whoever reads it (the Reviews routes and the link panel). */
 export function storeCodeStaleMessage(role: ReviewsReader): string {
   return role === "member" ? STORE_CODE_STALE_MEMBER_MESSAGE : STORE_CODE_STALE_MESSAGE;
+}
+
+/**
+ * R25 lead review: the codes of the reply failures a retry can't change. The
+ * reply route adds the kind's code (status and text unchanged), so the page
+ * closes the confirm dialog and keeps the sentence and any link in the form.
+ * Try-later and the route's fallback carry none: sending again may work.
+ * components/reviews/api-error.ts repeats the values (client code); a test
+ * keeps the two equal.
+ */
+export const REPLY_FINAL_CODES = {
+  // connectionRefresh.ts CONNECTION_RECONNECT_REQUIRED_CODE, the code the picker routes send too.
+  reconnect: "RECONNECT_REQUIRED",
+  access: "GBP_ACCESS_REFUSED",
+  notFound: "GBP_LOCATION_GONE",
+  chooseAgain: "GBP_CHOOSE_LOCATION_AGAIN",
+  reviewGone: "GBP_REVIEW_GONE",
+} as const satisfies Partial<Record<GoogleFailureKind, string>>;
+
+/** The reply route's answer for a kind: the Reviews answer, plus the kind's code when a retry can't change it. */
+export function replyErrorBody(
+  kind: GoogleFailureKind,
+  fallback: string,
+  role: ReviewsReader,
+): ReviewsErrorBody & { code?: string } {
+  const body = reviewsKindBody(kind, fallback, role);
+  const code = (REPLY_FINAL_CODES as Partial<Record<GoogleFailureKind, string>>)[kind];
+  return code ? { ...body, code } : body;
 }
 
 /** An owner's answer carries `reconnect: true`: the page links to Settings, where the step is. */

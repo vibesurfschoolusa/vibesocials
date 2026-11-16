@@ -29,7 +29,16 @@ const LOAD_FAILED = "Couldn't load your review link. Reload this page to try aga
  * its QR code, a printable card and a message to send a customer. The link
  * comes from GET /api/reviews/link, which asks Google only while none is saved.
  */
-export function ReviewLinkPanel({ workspaceId, isMember }: { workspaceId: string; isMember: boolean }) {
+export function ReviewLinkPanel({
+  workspaceId,
+  isMember,
+  signInShownAbove = false,
+}: {
+  workspaceId: string;
+  isMember: boolean;
+  /** R25 lead review: the page's error card already offers the sign-in, so this panel adds no second button. */
+  signInShownAbove?: boolean;
+}) {
   const [state, setState] = useState<ReviewLinkState>({ status: "loading" });
 
   useEffect(() => {
@@ -58,7 +67,9 @@ export function ReviewLinkPanel({ workspaceId, isMember }: { workspaceId: string
     };
   }, []);
 
-  return <ReviewLinkPanelView state={state} workspaceId={workspaceId} isMember={isMember} />;
+  return (
+    <ReviewLinkPanelView state={state} workspaceId={workspaceId} isMember={isMember} signInShownAbove={signInShownAbove} />
+  );
 }
 
 /** The panel for a given state; separate so it renders in tests without a fetch. */
@@ -66,11 +77,14 @@ export function ReviewLinkPanelView({
   state,
   workspaceId,
   isMember,
+  signInShownAbove = false,
 }: {
   state: ReviewLinkState;
   workspaceId: string;
   /** The page's own role: a member never gets the sign-in link (as error-state.tsx). */
   isMember: boolean;
+  /** The page's error card already shows the sign-in: one button per page. */
+  signInShownAbove?: boolean;
 }) {
   const toast = useToast();
 
@@ -93,7 +107,7 @@ export function ReviewLinkPanelView({
       ) : state.status === "none" ? (
         <>
           <p className="mt-2 text-sm text-muted-foreground">{state.reason}</p>
-          {state.signIn && !isMember ? (
+          {state.signIn && !isMember && !signInShownAbove ? (
             <div className="mt-3">
               <SignInAgainLink href={gbpSignInUrl(workspaceId)} />
             </div>

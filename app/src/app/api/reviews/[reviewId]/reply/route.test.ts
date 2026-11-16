@@ -109,7 +109,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true, code: "RECONNECT_REQUIRED" });
     expect(flagRejectedTokenMock).toHaveBeenCalledWith(
       { id: "c1", accessToken: "tok", refreshToken: "ref" },
       "GOOGLE_API_TOKEN_REJECTED",
@@ -125,7 +125,23 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "This review is no longer on Google. Reload the page." });
+    await expect(response.json()).resolves.toEqual({ error: "This review is no longer on Google. Reload the page.", code: "GBP_REVIEW_GONE" });
+  });
+
+  // R25 lead review: an access refusal and a stale store code can't work on a
+  // retry either; their status and text stay, with the kind's code.
+  it("an access refusal and a stale store code carry their codes, with status and text as before", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 403)"), { status: 403, googleReasons: [] }));
+    let response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+    expect(response.status).toBe(500);
+    expect((await response.json()).code).toBe("GBP_ACCESS_REFUSED");
+
+    listGbpLocationsMock.mockResolvedValue({ ok: false, kind: "chooseAgain" });
+    response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+    expect(response.status).toBe(500);
+    expect((await response.json()).code).toBe("GBP_CHOOSE_LOCATION_AGAIN");
   });
 
   // R25 security-billing L1: replies are limited per person, 20 every 5 minutes.
@@ -245,7 +261,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true, code: "RECONNECT_REQUIRED" });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 });
@@ -257,7 +273,7 @@ describe("POST /api/reviews/[reviewId]/reply for a member", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE, code: "RECONNECT_REQUIRED" });
   });
 });
 
@@ -379,7 +395,7 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true, code: "RECONNECT_REQUIRED" });
     expect(listGbpLocationsMock).not.toHaveBeenCalled();
   });
 });
@@ -400,7 +416,7 @@ describe("POST /api/reviews/[reviewId]/reply for a connection flagged for reconn
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true, code: "RECONNECT_REQUIRED" });
     expect(refreshAccessToken).not.toHaveBeenCalled();
     expect(listGbpLocationsMock).not.toHaveBeenCalled();
   });

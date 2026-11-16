@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { canRetry, readApiError, shownError, signInHref } from "./api-error";
+import { REPLY_FINAL_CODES } from "@/server/googleReviews";
+import { CONNECTION_RECONNECT_REQUIRED_CODE } from "@/server/platforms/connectionRefresh";
+
+import { FINAL_FAILURE_CODES, canRetry, readApiError, shownError, signInHref } from "./api-error";
 
 // F7 (R1 M5): the Reviews page read every error body with response.json(), so
 // a non-JSON answer (a proxy's HTML page, an empty 502) showed a parse error.
@@ -65,10 +68,28 @@ describe("an answer a retry can't change", () => {
     expect(canRetry(shown)).toBe(false);
   });
 
-  it("anything else keeps Retry", async () => {
+  it("anything else keeps Retry: a plain 5xx, a 429 and no answer at all", async () => {
     const shown = shownError(await readApiError(new Response("", { status: 500 }), "F."), "Other.");
     expect(canRetry(shown)).toBe(true);
+    expect(canRetry(shownError(await readApiError(new Response("{}", { status: 429 }), "F."), "O."))).toBe(true);
     expect(canRetry(shownError(new TypeError("Failed to fetch"), "F."))).toBe(true);
+  });
+
+  // R25 lead review: a reply refused for a reason a retry can't change: the
+  // route's code (kept equal to the server's list), a 404 or a 400.
+  it.each(Object.values(REPLY_FINAL_CODES))("a 500 with code %s is final", async (code) => {
+    const error = await readApiError(new Response(JSON.stringify({ error: "No.", code }), { status: 500 }), "F.");
+    expect(canRetry(shownError(error, "O."))).toBe(false);
+  });
+
+  it("the page's list of final codes is the server's", () => {
+    expect([...FINAL_FAILURE_CODES].sort()).toEqual(Object.values(REPLY_FINAL_CODES).sort());
+    expect(REPLY_FINAL_CODES.reconnect).toBe(CONNECTION_RECONNECT_REQUIRED_CODE);
+  });
+
+  it.each([400, 404])("a %i is final", async (status) => {
+    const error = await readApiError(new Response(JSON.stringify({ error: "No." }), { status }), "F.");
+    expect(canRetry(shownError(error, "O."))).toBe(false);
   });
 });
 
