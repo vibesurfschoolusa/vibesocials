@@ -276,3 +276,18 @@ describe("Settings, Account: success lines are on the page from the first render
     }
   });
 });
+
+// Lead review (R28 NN2): once the DELETE answered ok the account is gone; a
+// failing sign-out must not show an error, and the page leaves as deleted.
+describe("Settings, Account: sign-out after a delete", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+  const remove = source.slice(source.indexOf("function DeleteAccount"), source.indexOf("return (", source.indexOf("function DeleteAccount")));
+
+  it("signs out in its own try, and leaves for the home page whatever it does", () => {
+    expect(remove).toMatch(/try \{\s+await signOut\(\{ callbackUrl: "\/" \}\);\s+\} catch \{[\s\S]*?afterWorkspaceChange\("\/"\);\s+\}/);
+    const failure = remove.slice(remove.indexOf("} catch (error) {"), remove.indexOf("return;", remove.indexOf("} catch (error) {")));
+    expect(failure).toContain("ACCOUNT_MAYBE_DELETED_MESSAGE");
+    expect(failure).not.toContain("signOut");
+    expect(remove.indexOf("await signOut")).toBeGreaterThan(remove.indexOf("} catch (error) {"));
+  });
+});

@@ -45,7 +45,7 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
     };
   }
   const data = (await response.json().catch(() => null)) as
-    | { email?: string; resetSent?: boolean; error?: string }
+    | { email?: string; resetSent?: boolean; error?: string; used?: boolean }
     | null;
   if (response.ok) {
     // The undo cleared the password (the person who made the change knew
@@ -63,6 +63,11 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
         ? `Your email is back to ${address}. We sent a password reset link there; set a new password to sign in.`
         : `Your email is back to ${address}. We couldn't send a password reset link just now: press Reset your password below to get one, then set a new password to sign in.`,
     };
+  }
+  // Lead review (R28 NN2): a used link means it was already undone, so the
+  // title must not say it wasn't.
+  if (data?.used === true && data.error) {
+    return { ...notUndone, title: "This link was already used", message: data.error };
   }
   const serverFailed = response.status >= 500;
   return {

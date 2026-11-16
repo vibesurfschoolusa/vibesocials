@@ -95,4 +95,29 @@ describe("lost answers outside the first list", () => {
     expect(read("app/admin/workspaces/[id]/admin-controls.tsx")).toMatch(/isNoAnswer\(caught\) \? CHANGE_MAYBE_SAVED_MESSAGE : /);
     expect(read("app/c/[token]/connect-link-choice.tsx")).toMatch(/isNoAnswer\(caught\) \? CHOICE_MAYBE_CONNECTED_MESSAGE : /);
   });
+
+  // Lead review: an unreadable 5xx may come after the save, as a lost answer may.
+  it("an unreadable 5xx after the file reached storage may have saved it", async () => {
+    const media = read("components/media-library.tsx");
+    expect(media).toMatch(/toast\.error\(mediaSaveFailureText\(response\.status, data as \{ error\?: string \} \| null\)\);/);
+    const { mediaSaveFailureText, MEDIA_MESSAGES } = await import("@/components/media-library");
+    expect(mediaSaveFailureText(502, null)).toBe(MEDIA_MESSAGES.saveLost);
+    expect(mediaSaveFailureText(400, null)).toBe(MEDIA_MESSAGES.uploadFailed);
+    expect(mediaSaveFailureText(409, { error: "Switched workspace." })).toBe("Switched workspace.");
+
+    const file = new File(["x"], "a.jpg", { type: "image/jpeg" });
+    const input = { token: "t", file, senderName: "", note: "", onProgress: () => {} };
+    let calls = 0;
+    const deps = {
+      prepare: async (f: File) => f,
+      put: async () => ({ url: "https://blob.example/a.jpg" }),
+      fetch: async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response(JSON.stringify({ clientToken: "c", pathname: "p" }), { status: 200 })
+          : new Response("<html>Bad gateway</html>", { status: 502 });
+      },
+    };
+    await expect(sendClientFile(input, deps)).rejects.toMatchObject({ kind: "network", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
+  });
 });

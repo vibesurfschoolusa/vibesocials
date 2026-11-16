@@ -99,10 +99,14 @@ function resolveImport(fromFile: string, specifier: string): string | null {
   else if (specifier.startsWith(".")) base = path.resolve(path.dirname(fromFile), specifier);
   else return null;
   for (const candidate of [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), path.join(base, "index.tsx")]) {
+    if (fixtureFiles.includes(candidate)) return candidate;
     if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
   }
   return null;
 }
+
+/** The guard's own test sources, parsed from strings (fake()). */
+const fixtureFiles: string[] = [];
 
 type Value = { node: ts.Node } | { from: string; name: string };
 
@@ -168,8 +172,52 @@ function testOf(node: ts.IfStatement | ts.ConditionalExpression): ts.Expression 
   return ts.isIfStatement(node) ? node.expression : node.condition;
 }
 
-function conditionReadsOnLine(condition: ts.Expression): boolean {
-  return /[oO]nLine/.test(condition.getText());
+/** `navigator.onLine`, or a value named for it (`onLineAtPress`). */
+function isOnLineRead(node: ts.Expression): boolean {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text === "onLine";
+  return ts.isIdentifier(node) && /^onLine/.test(node.text);
+}
+
+/**
+ * Which side of a test is taken when the browser is offline: "true" (the
+ * then side), "false" (the else side), or null when the test isn't a plain
+ * read of onLine (`a && navigator.onLine`): then both sides are read.
+ */
+function offlineSide(condition: ts.Expression): "true" | "false" | null {
+  let node = condition;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (isOnLineRead(node)) return "false";
+  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+    const inner = offlineSide(node.operand);
+    return inner === null ? null : inner === "true" ? "false" : "true";
+  }
+  if (ts.isBinaryExpression(node)) {
+    const kind = node.operatorToken.kind;
+    const equal = kind === ts.SyntaxKind.EqualsEqualsEqualsToken || kind === ts.SyntaxKind.EqualsEqualsToken;
+    const notEqual = kind === ts.SyntaxKind.ExclamationEqualsEqualsToken || kind === ts.SyntaxKind.ExclamationEqualsToken;
+    if (!equal && !notEqual) return null;
+    const literal = [node.left, node.right].find((side) => side.kind === ts.SyntaxKind.TrueKeyword || side.kind === ts.SyntaxKind.FalseKeyword);
+    const read = [node.left, node.right].find((side) => side !== literal && offlineSide(side) !== null);
+    if (!literal || !read) return null;
+    // `onLine === false` and `onLine !== true` are offline when true.
+    const offlineWhenTrue = (literal.kind === ts.SyntaxKind.FalseKeyword) === equal;
+    const inner = offlineSide(read);
+    // `read` itself is offline on its "false" side for a plain read; a negated read flips it.
+    return (inner === "false") === offlineWhenTrue ? "true" : "false";
+  }
+  return null;
+}
+
+/** The expressions a function body returns, not those of functions inside it. */
+function returnsOf(body: ts.Block): ts.Expression[] {
+  const out: ts.Expression[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionLike(node)) return;
+    if (ts.isReturnStatement(node) && node.expression) out.push(node.expression);
+    ts.forEachChild(node, visit);
+  };
+  body.statements.forEach(visit);
+  return out;
 }
 
 interface Finding {
@@ -188,14 +236,15 @@ function sayings(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): void {
       out.push({ file: rel(sf.fileName), line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1, text });
     }
   };
-  // Offline at the press: nothing was sent, so that branch may say so.
-  if ((ts.isIfStatement(node) || ts.isConditionalExpression(node)) && conditionReadsOnLine(testOf(node))) {
-    if (ts.isIfStatement(node)) {
-      if (node.elseStatement) sayings(node.elseStatement, seen, out);
-    } else {
-      sayings(node.whenFalse, seen, out);
+  // Offline at the press: nothing was sent, so only that side may say so.
+  if (ts.isIfStatement(node) || ts.isConditionalExpression(node)) {
+    const offline = offlineSide(testOf(node));
+    if (offline !== null) {
+      const [whenTrue, whenFalse] = ts.isIfStatement(node) ? [node.thenStatement, node.elseStatement] : [node.whenTrue, node.whenFalse];
+      const online = offline === "true" ? whenFalse : whenTrue;
+      if (online) sayings(online, seen, out);
+      return;
     }
-    return;
   }
   // Inside a catch, `isNoAnswer(error) ? lost : other`: only the lost branch is a no-answer branch.
   if (ts.isIfStatement(node) || ts.isConditionalExpression(node)) {
@@ -212,13 +261,17 @@ function sayings(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): void {
   if (ts.isIdentifier(node)) {
     const parent = node.parent;
     const isPropertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node) || (ts.isPropertyAssignment(parent) && parent.name === node);
-    // A name is read through to its value. A function's body is not: its own
-    // no-answer branches are checked where it is written. A one-line arrow is
-    // a value in all but name, so it is read.
+    // A name is read through to its value. A function with a body is read
+    // through what it returns (lead review): a helper that returns "nothing
+    // changed" is caught where it is called. A one-line arrow is a value.
     if (!isPropertyName) {
       for (let value of resolveName(node)) {
         if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text)) continue;
-        if (ts.isBlock(value) || ((ts.isArrowFunction(value) || ts.isFunctionExpression(value)) && ts.isBlock(value.body))) continue;
+        const body = ts.isBlock(value) ? value : (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) && ts.isBlock(value.body) ? value.body : null;
+        if (body) {
+          for (const returned of returnsOf(body)) sayings(returned, seen, out);
+          continue;
+        }
         // `MESSAGES.saveLost`: only that field of an object constant.
         while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isParenthesizedExpression(value)) value = value.expression;
         if (ts.isPropertyAccessExpression(parent) && parent.expression === node && ts.isObjectLiteralExpression(value)) {
@@ -300,6 +353,31 @@ function noAnswerBranches(sf: ts.SourceFile): ts.Node[] {
   return out;
 }
 
+/**
+ * Every use, in the scanned files, of `name` imported from `file` (under any
+ * local name). Re-exports and `export default` are not followed.
+ */
+function importedUses(file: string, name: string): ts.Identifier[] {
+  const out: ts.Identifier[] = [];
+  // A parsed file's name uses forward slashes; the file list uses the system's.
+  const target = path.resolve(file);
+  for (const other of [...browserFileList(), ...fixtureFiles]) {
+    if (path.resolve(other) === target) continue;
+    const sf = parse(other);
+    for (const statement of sf.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+      const from = resolveImport(other, statement.moduleSpecifier.text);
+      if (!from || path.resolve(from) !== target) continue;
+      const bindings = statement.importClause?.namedBindings;
+      if (!bindings || !ts.isNamedImports(bindings)) continue;
+      for (const element of bindings.elements) {
+        if ((element.propertyName ?? element.name).text === name) out.push(...usesIn(sf, element.name.text));
+      }
+    }
+  }
+  return out;
+}
+
 /** The function a callee names, in its own file or across an import. */
 function functionsNamed(sf: ts.SourceFile, callee: ts.Expression): ts.SignatureDeclaration[] {
   if (!ts.isIdentifier(callee)) return [];
@@ -337,7 +415,8 @@ function usesIn(scope: ts.Node, name: string): ts.Identifier[] {
         ((ts.isParameter(parent) || ts.isVariableDeclaration(parent) || ts.isBindingElement(parent)) && parent.name === node) ||
         (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
         ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isMethodDeclaration(parent)) && parent.name === node) ||
-        ts.isTypeQueryNode(parent);
+        ts.isTypeQueryNode(parent) ||
+        ts.isImportSpecifier(parent);
       if (!isDeclaration) uses.push(node);
     }
     ts.forEachChild(node, visit);
@@ -410,6 +489,8 @@ function plainFetchesThatMayChange(sf: ts.SourceFile): Finding[] {
       let scope: ts.Node = parent;
       while (scope.parent && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
       for (const use of usesIn(scope, parent.name.text)) holder(use);
+      // Lead review: an exported alias is followed into every file that imports it.
+      if (ts.isSourceFile(scope)) for (const use of importedUses(scope.fileName, parent.name.text)) holder(use);
       return;
     }
     if (ts.isPropertyAssignment(parent) && parent.initializer === here && ts.isObjectLiteralExpression(parent.parent)) {
@@ -470,7 +551,13 @@ function browserFiles(): string[] {
   return [...reached].sort();
 }
 
-const clientFiles = browserFiles();
+let browserFilesCache: string[] | null = null;
+function browserFileList(): string[] {
+  browserFilesCache ??= browserFiles();
+  return browserFilesCache;
+}
+
+const clientFiles = browserFileList();
 
 /** Findings in one scan, deduplicated (a followed helper can be reached from two callers). */
 function fetchFindings(files: string[]): Finding[] {
@@ -492,6 +579,7 @@ function wordingFindings(files: string[]): Finding[] {
 function fake(name: string, code: string): string {
   const file = path.join(SRC, "__guard_fixture__", name);
   parsed.set(file, ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+  if (!fixtureFiles.includes(file)) fixtureFiles.push(file);
   return file;
 }
 
@@ -552,6 +640,61 @@ describe("the guard itself: a variable can't hide a change or a sentence", () =>
     fine.forEach((code, index) => {
       expect(wordingFindings([fake(`quiet${index}.tsx`, code)]), code).toEqual([]);
     });
+  });
+});
+
+// Lead review (R28 NN2): only the side where the browser is offline may say nothing was sent.
+describe("the guard itself: the offline side of an onLine test", () => {
+  const flagged = [
+    `try { await go(); } catch { if (navigator.onLine) show("Nothing was sent."); }`,
+    `try { await go(); } catch { if (navigator.onLine === true) show("Nothing was sent."); }`,
+    `try { await go(); } catch { if (navigator.onLine !== false) show("Nothing was sent."); }`,
+    `try { await go(); } catch { if (!navigator.onLine) {} else { show("Nothing was sent."); } }`,
+    `try { await go(); } catch { show(navigator.onLine ? "Nothing was sent." : LOST); }`,
+    `try { await go(); } catch { show(navigator.onLine === false ? LOST : "Nothing was sent."); }`,
+    `try { await go(); } catch { show(onLineAtPress !== true ? LOST : "Nothing was sent."); }`,
+    // Can't tell which side is offline: both are read.
+    `try { await go(); } catch { show(navigator.onLine && ready ? LOST : "Nothing was sent."); }`,
+  ];
+  const fine = [
+    `try { await go(); } catch { if (!navigator.onLine) show("Nothing was sent."); }`,
+    `try { await go(); } catch { if (navigator.onLine === false) show("Nothing was sent."); }`,
+    `try { await go(); } catch { if (navigator.onLine !== true) show("Nothing was sent."); }`,
+    `try { await go(); } catch { if (navigator.onLine) {} else { show("Nothing was sent."); } }`,
+    `try { await go(); } catch { show(navigator.onLine ? LOST : "Nothing was sent."); }`,
+    `try { await go(); } catch { show(navigator.onLine == false ? "Nothing was sent." : LOST); }`,
+    `try { await go(); } catch { show(false === navigator.onLine ? "Nothing was sent." : LOST); }`,
+    `try { await go(); } catch { show(onLineAtPress === false ? "Nothing was sent." : LOST); }`,
+    `try { await go(); } catch { show(!(navigator.onLine) ? "Nothing was sent." : LOST); }`,
+  ];
+
+  it("flags the online side, and a test it can't read", () => {
+    flagged.forEach((code, index) => {
+      expect(wordingFindings([fake(`online${index}.tsx`, code)]).length, code).toBeGreaterThan(0);
+    });
+  });
+
+  it("lets the offline side through, however it is written", () => {
+    fine.forEach((code, index) => {
+      expect(wordingFindings([fake(`offline${index}.tsx`, code)]), code).toEqual([]);
+    });
+  });
+});
+
+// Lead review (R28 NN2): a helper with a body is read through its returns;
+// an exported fetch alias is followed into the files that import it.
+describe("the guard itself: helpers and aliases across files", () => {
+  it("reads what a block-bodied helper returns", () => {
+    const code = `function lostText(kind: string) { if (kind === "a") return "Nothing changed."; return "Try again."; }
+try { await go(); } catch { show(lostText("a")); }`;
+    expect(wordingFindings([fake("helper.tsx", code)]).length).toBeGreaterThan(0);
+  });
+
+  it("follows an exported fetch alias into the file that imports it", () => {
+    const alias = fake("alias.ts", `export const send = fetch;`);
+    const user = fake("alias-user.ts", `import { send } from "./alias";\nsend("/x", { method: "POST" });`);
+    expect(fetchFindings([alias]).map((finding) => finding.file)).toContain("__guard_fixture__/alias-user.ts");
+    expect(fetchFindings([user])).toEqual([]);
   });
 });
 

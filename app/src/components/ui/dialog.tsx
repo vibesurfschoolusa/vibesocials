@@ -326,7 +326,8 @@ export class ConfirmFailureShown extends Error {
  */
 export const CONFIRM_UNREACHABLE_MESSAGE = answerLostText("this may have gone through", "Then reload the page to see.");
 export const CONFIRM_NOTHING_SENT_MESSAGE = "You're offline, so nothing was sent. Reconnect, then try again.";
-export const CONFIRM_FAILED_MESSAGE = "Something went wrong, nothing changed. Try again.";
+/** Lead review (R28 NN2): an unexpected failure may follow the request, so it never claims nothing changed. */
+export const CONFIRM_FAILED_MESSAGE = "Something went wrong. Reload the page to see whether it went through.";
 
 /**
  * What ConfirmDialog (and a page's own Create link) says when a request

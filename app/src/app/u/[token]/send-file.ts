@@ -145,6 +145,10 @@ export async function sendClientFile(
     note: input.note,
   }, CLIENT_FILE_MAYBE_ARRIVED_MESSAGE);
   if (!mediaResponse.ok) {
-    throw await failureOf(mediaResponse, "Couldn't save the file. Check your connection and try again.");
+    // Lead review: an unreadable 5xx may come after the file was registered.
+    throw await failureOf(
+      mediaResponse,
+      mediaResponse.status >= 500 ? CLIENT_FILE_MAYBE_ARRIVED_MESSAGE : "Couldn't save the file. Check your connection and try again.",
+    );
   }
 }

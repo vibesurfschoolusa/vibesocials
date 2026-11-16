@@ -60,3 +60,16 @@ describe("undoEmailChange", () => {
     expect(view).toMatchObject({ undone: false, title: "This link isn't valid", offerRetry: false });
   });
 });
+
+// Lead review (R28 NN2): a used link means the change was already undone, so
+// the title follows the route's answer instead of saying it wasn't.
+describe("undoEmailChange on a used link", () => {
+  it("titles it already used", async () => {
+    const view = await undoEmailChange(
+      respond(400, { error: "This link was already used, so the change was already undone.", used: true }),
+      "tok",
+    );
+    expect(view).toMatchObject({ undone: false, title: "This link was already used", offerRetry: false });
+    expect(view.message).toBe("This link was already used, so the change was already undone.");
+  });
+});

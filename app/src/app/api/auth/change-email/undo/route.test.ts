@@ -191,6 +191,8 @@ describe("POST /api/auth/change-email/undo", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: `This link was already used, so the change was already undone. If you still can't sign in, write to ${SUPPORT_EMAIL}.`,
+      // Lead review (R28 NN2): the page titles it "already used", not "wasn't undone".
+      used: true,
     });
     expect(userUpdateManyMock).not.toHaveBeenCalled();
   });

@@ -22,6 +22,9 @@ const EXPIRED = `This link has expired: it worked for 72 hours. Write to ${SUPPO
 const UNCONFIRMED = `This change can't be undone with a link, because the address it replaced was never confirmed. If this is your account, write to ${SUPPORT_EMAIL}.`;
 const CHANGED_AGAIN = `The sign-in email has changed again since this email was sent, so this link can't undo it. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 
+/** `used`: the page titles a used link "already used", not "wasn't undone" (R28 NN2). */
+const refuseUsed = () => NextResponse.json({ error: USED, used: true }, { status: 400 });
+
 /** Thrown inside the transaction so the claim rolls back with it. */
 class ChangedAgain extends Error {}
 
@@ -78,7 +81,7 @@ export async function POST(request: Request) {
     });
     if (record?.previousEmailUnverified) return refuse(400, UNCONFIRMED);
     if (!record || !record.previousEmail || !record.undoExpiresAt) return refuse(400, NOT_VALID);
-    if (record.undoneAt) return refuse(400, USED);
+    if (record.undoneAt) return refuseUsed();
     if (record.undoExpiresAt <= now) return refuse(400, EXPIRED);
     if (record.user.email !== record.newEmail) return refuse(409, CHANGED_AGAIN);
     const previousEmail = record.previousEmail;
@@ -106,7 +109,7 @@ export async function POST(request: Request) {
       await tx.emailChangeRequest.deleteMany({ where: { userId: record.userId, usedAt: null } });
       return issueAccountToken(tx, record.userId, "password_reset", now);
     });
-    if (!resetToken) return refuse(400, USED);
+    if (!resetToken) return refuseUsed();
 
     // deliverAccountEmail logs and returns false on any failure; the page
     // then points to Forgot password instead.

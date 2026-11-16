@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { answerLostText } from "@/lib/answerLost";
 import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
 import { focusAfterPress } from "@/lib/focusAfter";
@@ -456,10 +457,19 @@ function DeleteAccount({
         setBusy(false);
         return;
       }
-      await signOut({ callbackUrl: "/" });
     } catch (error) {
       setError(confirmFailureText(error, ACCOUNT_MAYBE_DELETED_MESSAGE, onLineAtPress));
       setBusy(false);
+      return;
+    }
+    // Lead review (R28 NN2): the account is gone; a failing sign-out must not
+    // show an error, so the page leaves as deleted whatever it does. `busy`
+    // stays set while the page unloads.
+    try {
+      await signOut({ callbackUrl: "/" });
+    } catch {
+      // A full load, as after deleting a workspace: the account and its workspaces are gone.
+      afterWorkspaceChange("/");
     }
   }
 

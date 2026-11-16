@@ -131,7 +131,8 @@ describe("ConfirmDialog failures", () => {
       expect(confirmFailureText(error)).toBe(CONFIRM_FAILED_MESSAGE);
     }
     expect(log).toHaveBeenCalledTimes(5);
-    expect(CONFIRM_FAILED_MESSAGE).toBe("Something went wrong, nothing changed. Try again.");
+    // Lead review (R28 NN2): it can't know nothing changed.
+    expect(CONFIRM_FAILED_MESSAGE).toBe("Something went wrong. Reload the page to see whether it went through.");
     log.mockRestore();
   });
 

@@ -97,6 +97,12 @@ export const MEDIA_MESSAGES = {
   deleteFailed: "Couldn't delete the file. Try again in a moment.",
 } as const;
 
+/** A refused save: the route's sentence, else an unreadable 5xx may come after the save (lead review). */
+export function mediaSaveFailureText(status: number, data: { error?: string } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  return status >= 500 ? MEDIA_MESSAGES.saveLost : MEDIA_MESSAGES.uploadFailed;
+}
+
 /** A refused delete: the route's sentence, else an unreadable 5xx may come after the delete. */
 export function mediaDeleteFailureText(status: number, data: { error?: string } | null): string {
   if (typeof data?.error === "string" && data.error) return data.error;
@@ -847,7 +853,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         | null;
 
       if (!response.ok) {
-        toast.error((data as { error?: string } | null)?.error ?? MEDIA_MESSAGES.uploadFailed);
+        toast.error(mediaSaveFailureText(response.status, data as { error?: string } | null));
         return;
       }
 
