@@ -52,6 +52,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
   }, [base]);
 
   async function choose(candidateId: string) {
+    if (busy !== null) return;
     setBusy(candidateId);
     setError(null);
     try {
@@ -133,7 +134,7 @@ export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel }
               type="button"
               size="sm"
               loading={busy === candidate.id}
-              disabled={busy !== null}
+              aria-disabled={busy !== null || undefined}
               onClick={() => onChoose(candidate.id)}
             >
               Connect

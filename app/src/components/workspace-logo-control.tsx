@@ -41,6 +41,7 @@ export function WorkspaceLogoControl({
   const uploadRefused = Boolean(planNote);
 
   async function send(method: "POST" | "DELETE", file?: File) {
+    if (busy !== null) return;
     setBusy(method === "POST" ? "upload" : "remove");
     setError(null);
     const fallback = method === "POST" ? LOGO_SAVE_FAILED_MESSAGE : LOGO_REMOVE_FAILED_MESSAGE;
@@ -100,9 +101,11 @@ export function WorkspaceLogoControl({
               variant="outline"
               size="sm"
               loading={busy === "upload"}
-              disabled={busy !== null || uploadRefused}
-              aria-disabled={uploadRefused || undefined}
-              onClick={() => input.current?.click()}
+              disabled={uploadRefused}
+              aria-disabled={uploadRefused || busy !== null || undefined}
+              onClick={() => {
+                if (busy === null) input.current?.click();
+              }}
             >
               Upload
             </Button>
@@ -112,7 +115,7 @@ export function WorkspaceLogoControl({
                 variant="ghost"
                 size="sm"
                 loading={busy === "remove"}
-                disabled={busy !== null}
+                aria-disabled={busy !== null || undefined}
                 onClick={() => void send("DELETE")}
               >
                 Remove

@@ -76,6 +76,7 @@ export function PlanActions({
   useEffect(() => onReturnFromCache(window, () => setBusy(null)), []);
 
   async function run(key: string, url: string, body?: unknown) {
+    if (busy !== null) return;
     setBusy(key);
     setError(null);
     const message = await openStripe(url, { ...(body as Record<string, unknown> | undefined), workspaceId });
@@ -101,8 +102,10 @@ export function PlanActions({
               aria-pressed={choice.interval === option.value}
               variant={choice.interval === option.value ? "primary" : "outline"}
               size="sm"
-              disabled={busy !== null}
-              onClick={() => setBillingInterval(option.value)}
+              aria-disabled={busy !== null || undefined}
+              onClick={() => {
+                if (busy === null) setBillingInterval(option.value);
+              }}
             >
               {option.label}
             </Button>
@@ -116,7 +119,8 @@ export function PlanActions({
               <Button
                 key={button.key}
                 variant="primary"
-                disabled={busy !== null}
+                loading={busy === button.key}
+                aria-disabled={busy !== null || undefined}
                 onClick={() => run(button.key, "/api/billing/checkout", button.body)}
               >
                 {button.label}
@@ -135,7 +139,12 @@ export function PlanActions({
       ) : null}
       {manage ? (
         <div>
-          <Button variant="outline" disabled={busy !== null} onClick={() => run("portal", "/api/billing/portal")}>
+          <Button
+            variant="outline"
+            loading={busy === "portal"}
+            aria-disabled={busy !== null || undefined}
+            onClick={() => run("portal", "/api/billing/portal")}
+          >
             {manageLabel}
           </Button>
         </div>

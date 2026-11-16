@@ -90,3 +90,18 @@ describe("onReturnFromCache", () => {
     expect(target.listeners.has("pageshow")).toBe(false);
   });
 });
+
+// R26 pages L1: the pressed plan button shows Button's loading and keeps focus;
+// the others are aria-disabled and run() ignores a second press.
+describe("PlanActions busy buttons", () => {
+  it("loading on the pressed one, aria-disabled on the rest, never disabled", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./plan-actions.tsx", import.meta.url)), "utf8");
+    expect(source).not.toMatch(/\sdisabled=\{busy/);
+    expect(source).toContain("loading={busy === button.key}");
+    expect(source).toContain('loading={busy === "portal"}');
+    expect((source.match(/aria-disabled=\{busy !== null \|\| undefined\}/g) ?? []).length).toBe(3);
+    expect(source).toMatch(/async function run\([^)]*\) \{\s*if \(busy !== null\) return;/);
+  });
+});

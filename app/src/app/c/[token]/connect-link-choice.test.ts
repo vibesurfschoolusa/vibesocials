@@ -50,3 +50,15 @@ describe("the connect link's account choice", () => {
     expect(view({ state: { status: "loading" } })).toContain('role="status"');
   });
 });
+
+// R26 pages L1: the pressed Connect keeps keyboard focus (Button's loading,
+// never disabled); the other accounts' Connect are aria-disabled.
+describe("the connect link's account choice while one connects", () => {
+  it("no Connect is disabled; the pressed one is busy, the others aria-disabled", () => {
+    const buttons = view({ busy: "a" }).match(/<button[^>]*>/g) ?? [];
+    const connects = buttons.slice(0, 2);
+    expect(connects.join("")).not.toContain('disabled=""');
+    expect(connects[0]).toContain('aria-busy="true"');
+    expect(connects[1]).toContain('aria-disabled="true"');
+  });
+});

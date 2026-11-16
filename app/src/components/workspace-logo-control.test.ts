@@ -110,3 +110,18 @@ describe("WorkspaceLogoControl: Upload by plan", () => {
     }
   });
 });
+
+// R26 pages L1: Upload and Remove keep keyboard focus while busy (Button's
+// loading, guarded by button.busyGuard.test.ts); while one works the other is
+// aria-disabled and a press on it does nothing.
+describe("WorkspaceLogoControl while busy", () => {
+  it("the other button is aria-disabled and send ignores a second press", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./workspace-logo-control.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/async function send\([^)]*\) \{\s*if \(busy !== null\) return;/);
+    expect(source).toContain("aria-disabled={uploadRefused || busy !== null || undefined}");
+    expect(source).toContain("aria-disabled={busy !== null || undefined}");
+    expect(source).toMatch(/if \(busy === null\) input\.current\?\.click\(\);/);
+  });
+});

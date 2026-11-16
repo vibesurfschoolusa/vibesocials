@@ -360,10 +360,10 @@ export function AccountMenu() {
                     key={workspace.id}
                     type="button"
                     aria-pressed={workspace.isActive}
-                    disabled={switchingId !== null}
+                    aria-disabled={switchingId !== null || undefined}
                     onClick={() => handleSwitch(workspace)}
                     className={cn(
-                      "flex items-center justify-between gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
+                      "flex items-center justify-between gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-disabled:opacity-60",
                       workspace.isActive ? "text-foreground" : "text-muted-foreground",
                     )}
                   >
@@ -391,7 +391,7 @@ export function AccountMenu() {
                     maxLength={60}
                     value={newWorkspaceName}
                     onChange={(event) => setNewWorkspaceName(event.target.value)}
-                    disabled={createBusy}
+                    readOnly={createBusy}
                   />
                   {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}
                   <div className="flex justify-end gap-2">
@@ -399,8 +399,9 @@ export function AccountMenu() {
                       type="button"
                       size="sm"
                       variant="ghost"
-                      disabled={createBusy}
+                      aria-disabled={createBusy || undefined}
                       onClick={() => {
+                        if (createBusy) return;
                         focusNewWorkspaceButton.current = true;
                         setCreatingWorkspace(false);
                         setNewWorkspaceName("");
@@ -408,7 +409,7 @@ export function AccountMenu() {
                     >
                       Cancel
                     </Button>
-                    <Button type="submit" size="sm" disabled={createBusy || !newWorkspaceName.trim()}>
+                    <Button type="submit" size="sm" loading={createBusy} disabled={!newWorkspaceName.trim()}>
                       {createBusy ? "Creating…" : "Create"}
                     </Button>
                   </div>

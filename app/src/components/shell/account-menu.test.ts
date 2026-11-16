@@ -182,3 +182,26 @@ describe("AccountMenu: focus and the button's attributes", () => {
     expect(source).toMatch(/role="group"\s+aria-label="Account"/);
   });
 });
+
+// R26 pages L1 (= new-customer L5): nothing in the menu disables itself while
+// it works, so keyboard focus stays where it was. Create shows Button's
+// loading; the field is read-only; Cancel and the switch buttons are
+// aria-disabled and their handlers ignore a press while busy.
+describe("AccountMenu: busy controls keep focus", () => {
+  const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
+  const form = source.slice(source.indexOf("<form onSubmit={handleCreateWorkspace}"), source.indexOf("</form>"));
+  const switches = source.slice(source.indexOf('aria-label="Switch workspace"'), source.indexOf("{!workspacesLoading ? ("));
+
+  it("no busy flag reaches disabled", () => {
+    expect(form).not.toMatch(/\sdisabled=\{createBusy/);
+    expect(switches).not.toMatch(/\sdisabled=\{switchingId/);
+  });
+
+  it("the name field is read-only, Cancel aria-disabled, Create loading", () => {
+    expect(form).toContain("readOnly={createBusy}");
+    expect(form).toMatch(/aria-disabled=\{createBusy \|\| undefined\}[\s\S]*if \(createBusy\) return;/);
+    expect(form).toMatch(/type="submit"[^>]*loading=\{createBusy\}/);
+    expect(switches).toContain("aria-disabled={switchingId !== null || undefined}");
+    expect(source).toMatch(/if \(workspace\.isActive \|\| switchingId\) return;/);
+  });
+});

@@ -264,14 +264,15 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
               variant="outline"
               onClick={handleCancel}
               loading={busy === "cancel"}
-              disabled={busy !== null}
+              aria-disabled={busy !== null || undefined}
             >
               Cancel
             </Button>
             <Button
               onClick={handleConnect}
               loading={busy === "connect"}
-              disabled={busy !== null || !selectedId}
+              disabled={!selectedId}
+              aria-disabled={busy !== null || undefined}
             >
               {busy === "connect" ? "Connecting…" : "Connect"}
             </Button>
