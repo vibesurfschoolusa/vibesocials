@@ -12,7 +12,14 @@ import { fileURLToPath } from "node:url";
 
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
-import { closeOnEscape, focusWhenPending, readWorkspaceListOnce, watchWorkspaceList } from "./account-menu";
+import {
+  closeOnEscape,
+  createWorkspaceFailureText,
+  focusWhenPending,
+  readWorkspaceListOnce,
+  watchWorkspaceList,
+  WORKSPACE_MAYBE_MADE_MESSAGE,
+} from "./account-menu";
 
 // R16 L1 (all four reviewers): a rename no longer loads the page again, so the
 // menu reads its list again when the Team card announces it, and its button
@@ -203,5 +210,41 @@ describe("AccountMenu: busy controls keep focus", () => {
     expect(form).toMatch(/type="submit"[^>]*loading=\{createBusy\}/);
     expect(switches).toContain("aria-disabled={switchingId !== null || undefined}");
     expect(source).toMatch(/if \(workspace\.isActive \|\| switchingId\) return;/);
+  });
+});
+
+// R27 MM3 (new-customer L3 = pages L4): Install app closes the menu and opens
+// the instructions in one press, so the dialog saw the page body as its
+// trigger. Focus goes to the menu button first, so closing the instructions
+// returns it there.
+describe("AccountMenu: Install app instructions", () => {
+  const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
+
+  it("focuses the menu button before the menu closes and the instructions open", () => {
+    expect(source).toMatch(
+      /onClick=\{\(\) => \{\s+\/\/[^\n]*\n\s+buttonRef\.current\?\.focus\(\);\s+setOpen\(false\);\s+installApp\.install\(\);/,
+    );
+  });
+});
+
+// R27 MM3 (new-customer L1): the workspace may exist when the answer is lost,
+// and a second Create would make another. Never "nothing changed".
+describe("AccountMenu: Create workspace when the answer is lost", () => {
+  const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
+  const create = source.slice(source.indexOf("async function handleCreateWorkspace("), source.indexOf("const initials ="));
+
+  it("says it may have been made and to check the workspace list", () => {
+    expect(WORKSPACE_MAYBE_MADE_MESSAGE).toBe(
+      "The answer was lost, so the workspace may have been made. Open this menu again and check the workspace list before you create it again.",
+    );
+  });
+
+  it("no answer or an unreadable 5xx: that sentence; a refusal: the route's own", () => {
+    expect(createWorkspaceFailureText(502, null)).toBe(WORKSPACE_MAYBE_MADE_MESSAGE);
+    expect(createWorkspaceFailureText(500, {})).toBe(WORKSPACE_MAYBE_MADE_MESSAGE);
+    expect(createWorkspaceFailureText(429, { error: "Too many new workspaces today." })).toBe("Too many new workspaces today.");
+    expect(createWorkspaceFailureText(400, null)).toBe("Couldn't create the workspace. Try again.");
+    expect(create).toMatch(/toast\.error\(createWorkspaceFailureText\(response\.status, data\)\);/);
+    expect(create).toMatch(/confirmFailureText\(error, WORKSPACE_MAYBE_MADE_MESSAGE\)/);
   });
 });

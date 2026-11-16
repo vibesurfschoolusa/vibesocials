@@ -102,6 +102,21 @@ export function focusWhenPending(node: { focus(): void } | null, pending: { curr
 }
 
 /**
+ * R27 MM3 (new-customer L1): when the answer to Create is lost the workspace
+ * may exist, and pressing Create again would make a second one. Never
+ * "nothing changed".
+ */
+export const WORKSPACE_MAYBE_MADE_MESSAGE =
+  "The answer was lost, so the workspace may have been made. Open this menu again and check the workspace list before you create it again.";
+
+/** What a refused or unreadable Create workspace answer says. */
+export function createWorkspaceFailureText(status: number, data: { error?: unknown } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  if (status >= 500) return WORKSPACE_MAYBE_MADE_MESSAGE;
+  return "Couldn't create the workspace. Try again.";
+}
+
+/**
  * Account dropdown: signed-in email, workspace switcher, theme toggle, Help, Contact us,
  * "Install app" (hidden when already installed) and sign-out. Implemented as a labelled popover (not an ARIA menu, since it
  * hosts a control group) with Esc-to-close, outside-click-to-close, and focus
@@ -252,7 +267,7 @@ export function AccountMenu() {
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        toast.error(data?.error ?? "Couldn't create the workspace.");
+        toast.error(createWorkspaceFailureText(response.status, data));
         setCreateBusy(false);
         return;
       }
@@ -261,7 +276,7 @@ export function AccountMenu() {
       // Settings first, since a new workspace's first job is connecting accounts.
       afterWorkspaceChange("/settings");
     } catch (error) {
-      const text = confirmFailureText(error);
+      const text = confirmFailureText(error, WORKSPACE_MAYBE_MADE_MESSAGE);
       if (text) toast.error(text);
       setCreateBusy(false);
     }
@@ -470,6 +485,8 @@ export function AccountMenu() {
             <button
               type="button"
               onClick={() => {
+                // R27 MM3: the instructions dialog returns focus to what had it when it opened.
+                buttonRef.current?.focus();
                 setOpen(false);
                 installApp.install();
               }}
