@@ -1159,7 +1159,9 @@ export function workspaceNameToSave(name: string): string {
  */
 export function workspaceNameSavable(typed: string, saved: string): boolean {
   const next = workspaceNameToSave(typed);
-  return next !== "" && next !== saved;
+  // The stored side collapses too: a name saved before renames collapsed spaces
+  // ("Surf  Co") would otherwise open with Save lit for no change.
+  return next !== "" && next !== workspaceNameToSave(saved);
 }
 
 /**

@@ -4,7 +4,7 @@ import Link from "next/link";
  * P1 fix round 1: what a client link panel says where the plan does not
  * include client links (the owner GET answers pausedByPlan). A link that
  * exists is paused, not revoked: its public page answers as an inactive link
- * until the workspace is on Growth or Pro again.
+ * until the workspace is on Growth or Pro.
  */
 
 export const CLIENT_LINK_PAUSED_SENTENCE =

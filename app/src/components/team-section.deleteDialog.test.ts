@@ -105,4 +105,13 @@ describe("workspaceNameSavable", () => {
   it("a different name is saved", () => {
     expect(workspaceNameSavable("Surf Co 2", "Surf Co")).toBe(true);
   });
+
+  // A name stored before renames collapsed spaces: Save lights only on a real change.
+  it("a stored double-spaced name: only a real change is saved", () => {
+    expect(workspaceNameSavable("Surf  Co", "Surf  Co")).toBe(false);
+    expect(workspaceNameSavable("Surf Co", "Surf  Co")).toBe(false);
+    expect(workspaceNameSavable("Surf Co 2", "Surf  Co")).toBe(true);
+    expect(workspaceNameSavable("surf co", "Surf  Co")).toBe(true);
+    expect(workspaceNameSavable("surf co", "Surf Co")).toBe(true);
+  });
 });
