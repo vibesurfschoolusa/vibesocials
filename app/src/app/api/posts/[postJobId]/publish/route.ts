@@ -176,7 +176,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
   // R31 publishing L2: a post that moved on says what happened (postMovedOnText);
   // `fallback` stays for a post still in a state the action fits.
-  const movedOn = (status: PostJobStatus | null | undefined, verb: "published" | "scheduled", fallback: string, code: string) =>
+  const movedOn = (
+    status: PostJobStatus | null | undefined,
+    verb: "published" | "scheduled" | "sent for approval",
+    fallback: string,
+    code: string,
+  ) =>
     NextResponse.json({ error: postMovedOnText(status, verb) ?? fallback, code }, { status: 409 });
   // After a lost claim: the post read again, for the sentence only.
   const statusNow = async () =>
@@ -257,10 +262,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     });
 
     if (!result.ok) {
-      return NextResponse.json(
-        { error: "This post changed in the meantime. Refresh and try again.", code: "NOT_PUBLISHABLE" },
-        { status: 409 },
-      );
+      // R32 publishing L2: lost to the scanner, an edit or another submit: the
+      // post read again says what happened; the old sentence only for a post
+      // still a draft or scheduled.
+      return movedOn(await statusNow(), "sent for approval", "This post changed in the meantime. Refresh and try again.", "NOT_PUBLISHABLE");
     }
 
     // R4 lows, item 3: submitted from a Story, the email describes its feed post.

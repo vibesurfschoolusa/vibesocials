@@ -853,6 +853,26 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
     });
   });
 
+  // R32 publishing L2: a lost "Submit for approval" claim reads the post again
+  // and says what happened; the old sentence stays only for a post still a draft or scheduled.
+  it.each([
+    ["in_progress", "This post has started publishing, so it can't be sent for approval. Check Activity to see how it goes."],
+    ["completed", "This post has already gone out, so it can't be sent for approval. Check Activity to see it."],
+    ["cancelled", "This post was cancelled, so it can't be sent for approval."],
+    [null, "This post no longer exists."],
+    ["draft", "This post changed in the meantime. Refresh and try again."],
+    ["scheduled", "This post changed in the meantime. Refresh and try again."],
+  ])("a member's submit that lost its claim, now %s: the post's own sentence", async (status, error) => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValueOnce(status === null ? null : { status });
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error, code: "NOT_PUBLISHABLE" });
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
   it("a concurrent edit re-hold in the read→claim window makes the claim match nothing: 409 NOT_PUBLISHABLE, nothing published", async () => {
     // Read: approved + scheduled. Meanwhile a PATCH re-held it (draft,
     // approvedAt null, new text, new updatedAt) — the pinned claim misses.

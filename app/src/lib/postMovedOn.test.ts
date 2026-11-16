@@ -18,6 +18,18 @@ describe("postMovedOnText", () => {
     );
   });
 
+  // R32 publishing L2: a lost "Submit for approval" claim words the post's state too.
+  it("sent for approval", () => {
+    expect(postMovedOnText("in_progress", "sent for approval")).toBe(
+      "This post has started publishing, so it can't be sent for approval. Check Activity to see how it goes.",
+    );
+    expect(postMovedOnText("completed", "sent for approval")).toBe(
+      "This post has already gone out, so it can't be sent for approval. Check Activity to see it.",
+    );
+    expect(postMovedOnText("scheduled", "sent for approval")).toBeNull();
+    expect(postMovedOnText("draft", "sent for approval")).toBeNull();
+  });
+
   it("already published", () => {
     expect(postMovedOnText("completed", "cancelled")).toBe(
       "This post has already gone out, so it can't be cancelled. Check Activity to see it.",
