@@ -15,6 +15,9 @@ import {
   GOOGLE_REFUSED_MESSAGE,
   REVIEWS_SHOWN_MAX,
   REVIEWS_UNAVAILABLE_MESSAGE,
+  GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE,
+  GOOGLE_ACCESS_REFUSED_MESSAGE,
+  GOOGLE_NOT_ANSWERING_MESSAGE,
   fetchAllReviews,
   fetchNewReviewUri,
   fetchReviews,
@@ -150,6 +153,44 @@ describe("fetchNewReviewUri", () => {
       code: "GBP_REVIEW_LINK_FETCH_FAILED",
     });
   });
+
+  // JJ3 lead review: a 403's reasons ride on the error, so the routes can tell
+  // "this account doesn't manage the location" from "the API is off on our side".
+  it("a 403 carries Google's reasons (errors[] and ErrorInfo details[])", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(
+      json(
+        {
+          error: {
+            code: 403,
+            status: "PERMISSION_DENIED",
+            errors: [{ reason: "accessNotConfigured" }],
+            details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "SERVICE_DISABLED" }],
+          },
+        },
+        403,
+      ),
+    );
+
+    const error = (await fetchNewReviewUri("tok", "accounts/1/locations/22").catch((e: unknown) => e)) as {
+      status?: number;
+      googleReasons?: string[];
+    };
+
+    expect(error.status).toBe(403);
+    expect([...(error.googleReasons ?? [])].sort()).toEqual(["accessnotconfigured", "servicedisabled"]);
+  });
+
+  it("a 403 with a body that is not JSON carries no reasons", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(new Response("<html>nope</html>", { status: 403 }));
+
+    const error = (await fetchNewReviewUri("tok", "accounts/1/locations/22").catch((e: unknown) => e)) as {
+      googleReasons?: string[];
+    };
+
+    expect(error.googleReasons).toEqual([]);
+  });
 });
 
 // F7 (R1 M4): the Reviews page read only Google's first page, so older reviews
@@ -251,7 +292,6 @@ describe("reviewsErrorBody", () => {
 
   it.each([
     ["a 401 from Google", coded({ status: 401, code: "GBP_REVIEWS_FETCH_FAILED" })],
-    ["a 403 from Google", coded({ status: 403, code: "GBP_REVIEWS_REPLY_FAILED" })],
     ["a connection already flagged for reconnecting", coded({ code: "RECONNECT_REQUIRED" })],
     ["a connection removed meanwhile", coded({ code: "CONNECTION_GONE" })],
     ["a refused token refresh", coded({ status: 400, code: "GOOGLE_TOKEN_REFRESH_FAILED" })],
@@ -279,7 +319,7 @@ describe("reviewsErrorBody", () => {
   // R12 L1: a member may read and reply, but only an owner can reconnect, so a
   // member reads who can, without the flag that makes the page link to Settings.
   it("words a refusal for a member: who can reconnect, no reconnect flag", () => {
-    expect(reviewsErrorBody(coded({ status: 403 }), "Fallback.", "member")).toEqual({
+    expect(reviewsErrorBody(coded({ status: 401 }), "Fallback.", "member")).toEqual({
       error: GOOGLE_REFUSED_MEMBER_MESSAGE,
     });
     expect(GOOGLE_REFUSED_MEMBER_MESSAGE).toBe(
@@ -291,6 +331,59 @@ describe("reviewsErrorBody", () => {
     expect(reviewsErrorBody(coded({ status: 500 }), "Fallback.", "member")).toEqual({ error: "Fallback." });
     expect(reviewsErrorBody(coded({ code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" }), "Fallback.", "member")).toEqual({
       error: REVIEWS_UNAVAILABLE_MESSAGE,
+    });
+  });
+});
+
+// JJ3 lead review: Google also answers 403 when the connected account no
+// longer manages the location, or when the API is off on our side, and
+// reconnecting fixes neither. A 403 never asks for a reconnect.
+describe("reviewsErrorBody: a 403 from Google", () => {
+  const forbidden = (googleReasons?: string[]) =>
+    Object.assign(new Error("Failed (status 403)"), { status: 403, code: "GBP_REVIEWS_FETCH_FAILED", googleReasons });
+
+  it("says the sentences plainly", () => {
+    expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe(
+      "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.",
+    );
+    expect(GOOGLE_NOT_ANSWERING_MESSAGE).toBe(
+      "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
+    );
+  });
+
+  it.each([
+    ["no reason", undefined],
+    ["an empty reason list", []],
+    ["forbidden", ["forbidden"]],
+    ["PERMISSION_DENIED", ["permissiondenied"]],
+  ])("%s: the access sentence, no reconnect flag", (_label, reasons) => {
+    expect(reviewsErrorBody(forbidden(reasons), "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE });
+  });
+
+  it("a member reads who can check it", () => {
+    expect(reviewsErrorBody(forbidden(), "Fallback.", "member")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE });
+    expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe(
+      "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
+    );
+  });
+
+  it.each([
+    ["SERVICE_DISABLED", ["servicedisabled"]],
+    ["accessNotConfigured", ["accessnotconfigured"]],
+    ["quotaExceeded", ["quotaexceeded"]],
+    ["rateLimitExceeded", ["ratelimitexceeded"]],
+    ["RATE_LIMIT_EXCEEDED among others", ["forbidden", "ratelimitexceeded"]],
+  ])("%s: the try-later sentence for owner and member, and it is logged", (_label, reasons) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(reviewsErrorBody(forbidden(reasons), "Fallback.", "owner")).toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
+    expect(reviewsErrorBody(forbidden(reasons), "Fallback.", "member")).toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("403"), { status: 403, reasons });
+  });
+
+  it("a 401 still asks for a reconnect", () => {
+    expect(reviewsErrorBody(Object.assign(new Error("x"), { status: 401 }), "Fallback.", "owner")).toEqual({
+      error: GOOGLE_REFUSED_MESSAGE,
+      reconnect: true,
     });
   });
 });

@@ -5,6 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
+import { readGoogleErrorReasons } from "./platforms/rateLimited";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
 import { refreshGoogleToken } from "./platforms/googleTokens";
 
@@ -52,6 +53,20 @@ export async function refreshAccessToken(
   return refreshConnectionToken(connection, (current) => refreshGoogleToken(current));
 }
 
+/**
+ * assertOk, with Google's error reasons on the thrown error (`googleReasons`),
+ * so reviewsErrorBody can tell one 403 from another (JJ3 lead review).
+ */
+async function assertGoogleOk(response: Response, options: Parameters<typeof assertOk>[1]): Promise<void> {
+  if (response.ok) return;
+  const googleReasons = await readGoogleErrorReasons(response);
+  try {
+    await assertOk(response, options);
+  } catch (error) {
+    throw Object.assign(error as Error, { googleReasons });
+  }
+}
+
 type GoogleReviewPayload = Omit<GoogleReview, "reviewId" | "reviewer"> & {
   reviewer?: Partial<GoogleReview["reviewer"]>;
 };
@@ -88,7 +103,7 @@ async function fetchReviewsPage(
     timeoutMs
   );
 
-  await assertOk(response, {
+  await assertGoogleOk(response, {
     code: "GBP_REVIEWS_FETCH_FAILED",
     prefix: "Failed to fetch Google Business Profile reviews",
   });
@@ -231,6 +246,42 @@ export function reviewLinkReason(problem: ReviewLinkProblem, role: ReviewsReader
   return REVIEW_LINK_REASONS[problem][role];
 }
 
+/**
+ * JJ3 lead review: Google's 403 is not a dead grant. With a permission reason
+ * (or none) the connected account no longer manages the location; with one of
+ * {@link GOOGLE_SERVICE_REASONS} the API is off or out of quota on our side.
+ * Reconnecting fixes neither, and nothing is flagged.
+ */
+export const GOOGLE_ACCESS_REFUSED_MESSAGE =
+  "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.";
+export const GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE =
+  "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.";
+export const GOOGLE_NOT_ANSWERING_MESSAGE =
+  "Google Business Profile isn't answering for Vibe Socials right now. Try again later.";
+
+/** 403 reasons (googleErrorReasons' normalized form) that are our side's API setup or quota. */
+const GOOGLE_SERVICE_REASONS: ReadonlySet<string> = new Set([
+  "servicedisabled",
+  "accessnotconfigured",
+  "quotaexceeded",
+  "dailylimitexceeded",
+  "ratelimitexceeded",
+  "userratelimitexceeded",
+]);
+
+/** The sentence for a Google 403, or null when `error` is not one. Shared by every Reviews route. */
+export function googleForbiddenMessage(error: unknown, role: ReviewsReader): string | null {
+  const { status, googleReasons } = (error ?? {}) as { status?: unknown; googleReasons?: unknown };
+  if (status !== 403) return null;
+  const reasons = Array.isArray(googleReasons) ? googleReasons.filter((r): r is string => typeof r === "string") : [];
+  if (reasons.some((reason) => GOOGLE_SERVICE_REASONS.has(reason))) {
+    // Our own setup or quota: worth a look in the logs. Status and reasons only.
+    console.warn("[GBP Reviews] Google answered 403 for our API setup or quota", { status, reasons });
+    return GOOGLE_NOT_ANSWERING_MESSAGE;
+  }
+  return role === "member" ? GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE : GOOGLE_ACCESS_REFUSED_MESSAGE;
+}
+
 /** What the Reviews page says when our own Google setup, not the person's grant, failed. */
 export const REVIEWS_UNAVAILABLE_MESSAGE = "Google Reviews are not available right now. Try again later.";
 
@@ -276,7 +327,9 @@ export function reviewsErrorBody(
     if (isTerminalRefreshFailure(typeof status === "number" ? status : 0, oauth)) return refused;
     return { error: fallback };
   }
-  if (status === 401 || status === 403) return refused;
+  const forbidden = googleForbiddenMessage(error, role);
+  if (forbidden) return { error: forbidden };
+  if (status === 401) return refused;
   if (typeof code === "string" && RECONNECT_CODES.has(code)) return refused;
   return { error: fallback };
 }
@@ -323,6 +376,7 @@ export async function listGbpLocations(
   });
 
   if (!accountsResponse.ok) {
+    const googleReasons = await readGoogleErrorReasons(accountsResponse);
     const errorText = await accountsResponse.text();
     console.error("[GBP Locations] Failed to fetch accounts:", {
       status: accountsResponse.status,
@@ -332,6 +386,7 @@ export async function listGbpLocations(
     // The status decides what the page says (reviewsErrorBody).
     throw Object.assign(new Error("Failed to fetch Google Business Profile accounts"), {
       status: accountsResponse.status,
+      googleReasons,
     });
   }
 
@@ -425,7 +480,7 @@ export async function fetchNewReviewUri(
     { headers: { Authorization: `Bearer ${accessToken}` } },
     15_000
   );
-  await assertOk(response, {
+  await assertGoogleOk(response, {
     code: "GBP_REVIEW_LINK_FETCH_FAILED",
     prefix: "Failed to read the Google review link",
   });
@@ -469,7 +524,7 @@ export async function replyToReview(
     }
   );
 
-  await assertOk(response, {
+  await assertGoogleOk(response, {
     code: "GBP_REVIEWS_REPLY_FAILED",
     prefix: "Failed to post Google Business Profile review reply",
   });

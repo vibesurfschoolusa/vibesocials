@@ -93,6 +93,16 @@ describe("ReviewsView and several drafts at once", () => {
   });
 });
 
+// JJ3 lead review: a card draft that lands while focus is on that card's own
+// Draft button gives focus to the new box; the decision is focusBoxAfterCardDraft.
+describe("ReviewsView when a card draft lands", () => {
+  it("notes where focus was as the draft lands, then decides with the shared rule once the box is open", () => {
+    expect(source).toContain("activeId: document.activeElement?.id");
+    expect(source).toMatch(/focusBoxAfterCardDraft\(\s*boxFocusAfterDraft\.activeId,\s*boxFocusAfterDraft\.reviewId,\s*replyingTo/);
+    expect(source).toContain('document.getElementById("review-reply")?.focus()');
+  });
+});
+
 // Lead review (R23): the open box is judged when the draft lands, not when it was asked for.
 describe("ReviewsView when a draft lands while another review is open", () => {
   it("picks the open box from the current state through openAfterDraft", () => {

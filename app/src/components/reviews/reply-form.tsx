@@ -44,6 +44,25 @@ export function focusPlace<N>(active: N | null, form: { contains(node: N): boole
   return active && form?.contains(active) ? "this form" : "elsewhere";
 }
 
+/** The card's Draft button, by review id: the page checks focus against it as a draft lands. */
+export function draftButtonId(reviewId: string): string {
+  return `review-draft-${reviewId}`;
+}
+
+/**
+ * JJ3 lead review: a draft from the card's Draft button opens the form, and the
+ * button leaves with it. The new box takes focus only when, as the draft
+ * landed, focus was on that very button (the person's own action) and the box
+ * that opened is that review's; anywhere else, focus is left alone.
+ */
+export function focusBoxAfterCardDraft(
+  activeIdAtLanding: string | null | undefined,
+  reviewId: string,
+  openReview: string | null,
+): boolean {
+  return activeIdAtLanding === draftButtonId(reviewId) && openReview === reviewId;
+}
+
 /** A Draft press while its draft is being written is ignored (the button stays focusable). */
 export function draftClick(drafting: boolean, onDraft: () => void): () => void {
   return () => {
@@ -61,14 +80,17 @@ export function DraftAIButton({
   drafting,
   onDraft,
   size = "md",
+  id,
 }: {
   drafting: boolean;
   onDraft: () => void;
   size?: "sm" | "md";
+  id?: string;
 }) {
   const icon = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
   return (
     <Button
+      id={id}
       type="button"
       variant="secondary"
       size={size}

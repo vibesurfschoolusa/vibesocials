@@ -88,6 +88,7 @@ const OWNER_STEPS: RegExp[] = [
   /\bGo to (connections|Settings)\b/,
   /\bAdd one in Google Business Profile\b/,
   /\bCheck that the listing is verified\b/,
+  /\bCheck that the connected Google account still manages it\b/,
   /href="\/settings#(connections|plan|posting-times|connect-link|team)"/,
   /href="\/api\/auth\//,
   // Review of X1: owner-only steps other pages say, so a leak of any of them to a member fails here.
@@ -168,8 +169,10 @@ async function tiktokReconnectAnswer(role: Role): Promise<string> {
   return JSON.stringify(await response.json());
 }
 
-function reviewsRefused(role: Role): string {
-  const body = reviewsErrorBody({ status: 403 }, "Couldn't load your Google reviews.", role);
+// JJ3 lead review: a 401 is the refusal that asks for a reconnect; a 403 says
+// to check the account (googleForbiddenMessage), guarded below too.
+function reviewsRefused(role: Role, status = 401): string {
+  const body = reviewsErrorBody({ status }, "Couldn't load your Google reviews.", role);
   return render(
     createElement(ErrorState, {
       title: "Couldn't load reviews",
@@ -189,7 +192,8 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
     render(createElement(ReviewsEmptyState, { locationsCount: 0, gbpConnected: false, isMember: role === "member" })),
   "Reviews, connected with no locations": (role) =>
     render(createElement(ReviewsEmptyState, { locationsCount: 0, gbpConnected: true, isMember: role === "member" })),
-  "Reviews, Google refused (error card)": reviewsRefused,
+  "Reviews, Google refused (error card)": (role) => reviewsRefused(role),
+  "Reviews, Google refused access to the location (error card)": (role) => reviewsRefused(role, 403),
   ...Object.fromEntries(
     LINK_PROBLEMS.map((problem) => [`Reviews, Get more reviews (${problem})`, (role: Role) => reviewLinkReason(problem, role)]),
   ),

@@ -137,6 +137,8 @@ describe("ReviewCard: small screens and screen readers", () => {
     const tag = html.match(/<button[^>]*aria-busy="true"[^>]*>/);
     expect(tag, "busy Draft button").not.toBeNull();
     expect(tag![0]).toContain('aria-disabled="true"');
+    // JJ3 lead review: its id lets the page see focus was on it as the draft lands.
+    expect(tag![0]).toContain('id="review-draft-r1"');
     expect(tag![0]).not.toMatch(/\sdisabled=""/);
   });
 

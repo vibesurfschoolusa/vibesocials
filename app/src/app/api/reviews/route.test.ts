@@ -16,7 +16,13 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   refreshAccessToken: vi.fn(),
 }));
 
-import { GOOGLE_REFUSED_MEMBER_MESSAGE, GOOGLE_REFUSED_MESSAGE, refreshAccessToken } from "@/server/googleReviews";
+import {
+  GOOGLE_ACCESS_REFUSED_MESSAGE,
+  GOOGLE_NOT_ANSWERING_MESSAGE,
+  GOOGLE_REFUSED_MEMBER_MESSAGE,
+  GOOGLE_REFUSED_MESSAGE,
+  refreshAccessToken,
+} from "@/server/googleReviews";
 
 import { GET } from "./route";
 
@@ -49,16 +55,36 @@ describe("GET /api/reviews", () => {
     expect(fetchAllReviewsMock).toHaveBeenCalledWith("tok", "accounts/1/locations/2");
   });
 
-  it("asks for a reconnect when Google refuses", async () => {
+  it("asks for a reconnect when Google refuses the token (401)", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     fetchAllReviewsMock.mockRejectedValue(
-      Object.assign(new Error("Failed to fetch Google Business Profile reviews (status 403)"), { status: 403 }),
+      Object.assign(new Error("Failed to fetch Google Business Profile reviews (status 401)"), { status: 401 }),
     );
 
     const response = await get();
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+  });
+
+  // JJ3 lead review: a 403 is not a dead grant; reconnecting fixes neither case.
+  it("a 403 permission refusal says to check the account, with no reconnect flag", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    fetchAllReviewsMock.mockRejectedValue(
+      Object.assign(new Error("Failed (status 403)"), { status: 403, googleReasons: ["forbidden"] }),
+    );
+
+    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE });
+  });
+
+  it("a 403 for a disabled service says to try later", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    fetchAllReviewsMock.mockRejectedValue(
+      Object.assign(new Error("Failed (status 403)"), { status: 403, googleReasons: ["servicedisabled"] }),
+    );
+
+    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
   });
 
   it("gives a plain sentence for anything else, not the error's text", async () => {
@@ -85,7 +111,7 @@ describe("GET /api/reviews", () => {
 // reconnect flag that makes the page link to Settings.
 describe("GET /api/reviews for a member", () => {
   it("Google refuses: who can reconnect, no Settings link", async () => {
-    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("403"), { status: 403 }));
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("401"), { status: 401 }));
 
     const response = await get();
 

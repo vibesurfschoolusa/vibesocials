@@ -8,6 +8,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import {
   fetchNewReviewUri,
+  googleForbiddenMessage,
   refreshAccessToken,
   reviewLinkReason,
   reviewsErrorBody,
@@ -110,6 +111,11 @@ export async function GET() {
     // Asked as "owner" only because a member's body carries no reconnect
     // flag; the reason itself is worded for the caller's role below.
     const asksReconnect = reviewsErrorBody(error, GOOGLE_FAILED, "owner").reconnect === true;
-    return NextResponse.json({ url: null, reason: asksReconnect ? reason("needs_reconnect") : GOOGLE_FAILED });
+    // A Google 403 says what it means (googleForbiddenMessage); nothing is flagged.
+    const forbidden = googleForbiddenMessage(error, context.role);
+    return NextResponse.json({
+      url: null,
+      reason: asksReconnect ? reason("needs_reconnect") : (forbidden ?? GOOGLE_FAILED),
+    });
   }
 }

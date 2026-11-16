@@ -230,6 +230,47 @@ describe("GET /api/reviews/link", () => {
     );
   });
 
+  // JJ3 lead review: Google's link answer goes through the shared rule.
+  describe("Google refusing the link request", () => {
+    const failing = (fields: Record<string, unknown>) => Object.assign(new Error("refused"), fields);
+
+    beforeEach(() => {
+      mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+      mocks.findFirst.mockResolvedValue(connection());
+    });
+
+    it("a 401 says reconnect", async () => {
+      mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 401, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
+
+      expect((await (await GET()).json()).reason).toBe(
+        "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+      );
+    });
+
+    it("a 403 permission refusal says to check the account, and flags nothing", async () => {
+      mocks.fetchNewReviewUri.mockRejectedValue(
+        failing({ status: 403, code: "GBP_REVIEW_LINK_FETCH_FAILED", googleReasons: [] }),
+      );
+
+      expect((await (await GET()).json()).reason).toBe(
+        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.",
+      );
+      expect(mocks.update).not.toHaveBeenCalled();
+    });
+
+    it("a 403 for a disabled service says to try later", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      mocks.fetchNewReviewUri.mockRejectedValue(
+        failing({ status: 403, code: "GBP_REVIEW_LINK_FETCH_FAILED", googleReasons: ["servicedisabled"] }),
+      );
+
+      expect((await (await GET()).json()).reason).toBe(
+        "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
+      );
+      expect(mocks.update).not.toHaveBeenCalled();
+    });
+  });
+
   it("says why there is no link: not connected", async () => {
     mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(null);

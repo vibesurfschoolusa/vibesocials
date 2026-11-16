@@ -20,6 +20,7 @@ import {
   draftingAfterEnd,
   draftingAfterStart,
   EMPTY_REPLY_BOXES,
+  focusBoxAfterCardDraft,
   openAfterDraft,
   replyBoxAfterDraft,
   replyBoxAfterPost,
@@ -124,6 +125,9 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   // the heading). The success toast already announces the reply.
   const [pendingFocus, setPendingFocus] = useState<{ reviewId: string | null } | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  // JJ3 lead review: where focus was as a draft landed, decided once its box is
+  // open (focusBoxAfterCardDraft): the card's Draft button leaves with it.
+  const [boxFocusAfterDraft, setBoxFocusAfterDraft] = useState<{ reviewId: string; activeId: string } | null>(null);
 
   const loadLocations = useCallback(async () => {
     try {
@@ -200,6 +204,15 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot focus request, cleared once used
     setPendingFocus(null);
   }, [pendingFocus, confirmTarget]);
+
+  useEffect(() => {
+    if (!boxFocusAfterDraft) return;
+    if (focusBoxAfterCardDraft(boxFocusAfterDraft.activeId, boxFocusAfterDraft.reviewId, replyingTo)) {
+      document.getElementById("review-reply")?.focus();
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot focus request, cleared once used
+    setBoxFocusAfterDraft(null);
+  }, [boxFocusAfterDraft, replyingTo]);
 
   // Validate, then ask for confirmation before posting a public reply.
   const requestReply = (review: GoogleReview) => {
@@ -312,6 +325,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       // Opens this review's box only when none is open, judged now, not when
       // Draft was pressed: a box the person opened meanwhile stays theirs.
       setReplyingTo((open) => openAfterDraft(open, review.reviewId));
+      setBoxFocusAfterDraft({ reviewId: review.reviewId, activeId: document.activeElement?.id ?? "" });
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
       toast.error(shownError(err, DRAFT_FAILED).message);

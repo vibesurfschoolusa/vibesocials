@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DraftAIButton,
   EMPTY_REPLY_BOXES,
+  draftButtonId,
   draftClick,
+  focusBoxAfterCardDraft,
   RESTORED_STATUS,
   ReplyForm,
   focusBoxAfterDraft,
@@ -317,6 +319,36 @@ describe("ReplyForm: where focus is", () => {
     expect(focusPlace(body, form)).toBe("elsewhere");
     expect(focusPlace(other, form)).toBe("elsewhere");
     expect(focusPlace(inside, null)).toBe("elsewhere");
+  });
+});
+
+// JJ3 lead review: a draft from the card's Draft button opens the form, and
+// that button leaves, so focus would drop to the body. When focus was on that
+// very button as the draft landed, the new box takes it (the person's own
+// action); anywhere else, focus is left alone.
+describe("a draft from the card's Draft button lands", () => {
+  it("focus on that card's Draft button, and its box opened: the new box takes focus", () => {
+    expect(focusBoxAfterCardDraft(draftButtonId("r1"), "r1", "r1")).toBe(true);
+  });
+
+  it("focus anywhere else, or nowhere: left alone", () => {
+    expect(focusBoxAfterCardDraft(undefined, "r1", "r1")).toBe(false);
+    expect(focusBoxAfterCardDraft("", "r1", "r1")).toBe(false);
+    expect(focusBoxAfterCardDraft("something-else", "r1", "r1")).toBe(false);
+    expect(focusBoxAfterCardDraft(draftButtonId("r2"), "r1", "r1")).toBe(false);
+  });
+
+  it("another review's box stayed open: left alone, even from its own button", () => {
+    expect(focusBoxAfterCardDraft(draftButtonId("r1"), "r1", "r2")).toBe(false);
+    expect(focusBoxAfterCardDraft(draftButtonId("r1"), "r1", null)).toBe(false);
+  });
+
+  it("the Draft button carries the id the rule looks for", () => {
+    const html = renderToStaticMarkup(
+      createElement(DraftAIButton, { drafting: true, onDraft: () => {}, id: draftButtonId("r1") }),
+    );
+    expect(html).toContain(`id="${draftButtonId("r1")}"`);
+    expect(draftButtonId("r1")).not.toBe(draftButtonId("r2"));
   });
 });
 

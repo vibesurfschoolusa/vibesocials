@@ -8,7 +8,7 @@ import { nameInitial } from "@/lib/accountInitials";
 import { cn } from "@/lib/cn";
 import type { GoogleReview } from "./types";
 import { StarRating } from "./star-rating";
-import { DraftAIButton, ReplyForm } from "./reply-form";
+import { DraftAIButton, ReplyForm, draftButtonId } from "./reply-form";
 import { replyButtonId } from "./reviews-page";
 
 function formatDate(dateString: string) {
@@ -140,7 +140,7 @@ export function ReviewCard({
                     <MessageSquare aria-hidden className="h-4 w-4" />
                     Reply to review
                   </Button>
-                  <DraftAIButton drafting={isGeneratingAI} onDraft={onDraftAI} />
+                  <DraftAIButton id={draftButtonId(review.reviewId)} drafting={isGeneratingAI} onDraft={onDraftAI} />
                 </div>
               )}
             </div>

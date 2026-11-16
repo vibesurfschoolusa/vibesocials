@@ -267,8 +267,12 @@ export function currentPacificMidnight(now: Date): Date {
   return pacificMidnightOn(today.year, today.month, today.day);
 }
 
-/** Reasons under `error.errors[].reason` and `error.details[].reason`, normalized. */
-function youtubeReasons(body: unknown): Set<string> {
+/**
+ * Reasons under `error.errors[].reason` and `error.details[].reason`, normalized.
+ * Google's shared error shape, so the Reviews routes read GBP 403s with it too
+ * (googleReviews.ts readGoogleErrorReasons).
+ */
+export function googleErrorReasons(body: unknown): Set<string> {
   const reasons = new Set<string>();
   const error = (body as { error?: { errors?: unknown; details?: unknown } } | null)?.error;
   for (const list of [error?.errors, error?.details]) {
@@ -281,6 +285,11 @@ function youtubeReasons(body: unknown): Set<string> {
     }
   }
   return reasons;
+}
+
+/** A failed Google response's reasons (googleErrorReasons), read from a clone of its body. */
+export async function readGoogleErrorReasons(res: Response): Promise<string[]> {
+  return [...googleErrorReasons(await readJsonClone(res))];
 }
 
 /** Parse a response body as JSON from a clone, so the caller can still read the original. */
@@ -345,7 +354,7 @@ export async function classifyRateLimit(
         return rateLimitedError(platform, "rate_limited", retryAfterAt(res.headers, now));
       }
       if (res.status !== 403 && res.status !== 400) return null;
-      const reasons = youtubeReasons(await readJsonClone(res));
+      const reasons = googleErrorReasons(await readJsonClone(res));
       const resetAt = () => nextPacificMidnight(new Date(now)).getTime() + PACIFIC_RESET_GRACE_MS;
       if (res.status === 403) {
         if ([...reasons].some((r) => YOUTUBE_QUOTA_REASONS.has(r))) {
