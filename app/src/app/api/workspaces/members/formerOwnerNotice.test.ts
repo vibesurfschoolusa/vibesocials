@@ -373,7 +373,7 @@ describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
       `Sam is no longer an owner of Surf Co. As an owner, Sam had access to its client upload link and client review link. ${BLOCKED}`,
     );
     expect(email.text).toContain(
-      'When they work again, so would the copies Sam kept. To stop that, open Settings, Team and press "Turn off client links".',
+      'The copies Sam kept will work again once the workspace is active again. To stop that, open Settings, Team and press "Turn off client links".',
     );
     expect(email.text).not.toContain("Make new client links");
     expect(email.text).not.toContain("still work");
@@ -383,7 +383,7 @@ describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
   it("one link: singular wording", () => {
     const email = buildFormerOwnerEmail({ ...base, uploadLink: false, reviewLink: true, workspaceBlocked: BLOCKED });
     expect(email.text).toContain(`Sam had access to its client review link. ${BLOCKED}`);
-    expect(email.text).toContain("When it works again, so would the copy Sam kept.");
+    expect(email.text).toContain("The copy Sam kept will work again once the workspace is active again.");
   });
 
   it("the notice reads the pause and sends that email; with only a stopped connect link it sends none", async () => {
@@ -393,7 +393,7 @@ describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
     const sent = m.sendEmail.mock.calls[0][0];
     expect(sent.subject).toBe("Turn off client links for Surf Co");
     expect(sent.text).toContain("This workspace is paused.");
-    expect(sent.text).toContain("When they work again, so would the copies Sam kept.");
+    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is active again.");
 
     m.sendEmail.mockClear();
     m.uploadFindFirst.mockResolvedValue(null);

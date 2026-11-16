@@ -301,7 +301,7 @@ describe("while the workspace is blocked", () => {
     expect(html).toContain("Turn off client links");
     expect(html).not.toContain("Make new client links");
     expect(html).toContain(
-      "Client links don&#x27;t work right now. This workspace is paused. Contact help@example.com. When they work again, so would the copies kept by someone who stopped being an owner. Turning them off stops that.",
+      "Client links don&#x27;t work right now. This workspace is paused. Contact help@example.com. Copies kept by someone who stopped being an owner will work again once the workspace is active again. Turning them off stops that.",
     );
     expect(confirmProps[0]).toMatchObject({
       title: "Turn off client links?",
@@ -312,10 +312,10 @@ describe("while the workspace is blocked", () => {
 
   it("the demotion toast says the links work again once the block ends, and points to Turn off", () => {
     expect(demotedMessage({ ...BLOCKED, on: { upload: true, review: true, connect: false } })).toBe(
-      `Role updated. They could copy the client upload and review links. ${BLOCKED_SENTENCE} When they work again, so would the copies they kept. Press Turn off client links below to stop that.`,
+      `Role updated. They could copy the client upload and review links. ${BLOCKED_SENTENCE} The copies they kept will work again once the workspace is active again. Press Turn off client links below to stop that.`,
     );
     expect(demotedMessage({ ...BLOCKED, on: { upload: false, review: true, connect: false } })).toBe(
-      `Role updated. They could copy the client review link. ${BLOCKED_SENTENCE} When it works again, so would the copy they kept. Press Turn off client links below to stop that.`,
+      `Role updated. They could copy the client review link. ${BLOCKED_SENTENCE} The copy they kept will work again once the workspace is active again. Press Turn off client links below to stop that.`,
     );
     // A stopped connect link alone: nothing to turn off, nothing to make while blocked.
     expect(demotedMessage({ ...BLOCKED, on: { upload: false, review: false, connect: true }, connectStopped: true })).toBe(

@@ -171,7 +171,7 @@ function pausedLinksEmail(input: {
   const lines = input.blocked
     ? [
         `${had} ${input.blocked}`,
-        `${one ? "When it works again, so would the copy" : "When they work again, so would the copies"} ${formerOwnerName} kept. ${turnOff}`,
+        `${one ? "The copy" : "The copies"} ${formerOwnerName} kept will work again once the workspace is active again. ${turnOff}`,
       ]
     : [
         `${had} ${one ? "It is" : "They are"} paused, because this workspace's plan doesn't include client links.`,

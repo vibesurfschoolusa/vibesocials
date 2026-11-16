@@ -232,7 +232,7 @@ function blockedDemotedMessage(links: ClientLinksState, blocked: string): string
     "Role updated.",
     one ? `They could copy the client ${held[0]} link.` : `They could copy the client ${listOf(held)} links.`,
     blocked,
-    one ? "When it works again, so would the copy they kept." : "When they work again, so would the copies they kept.",
+    one ? "The copy they kept will work again once the workspace is active again." : "The copies they kept will work again once the workspace is active again.",
     "Press Turn off client links below to stop that.",
   ].join(" ");
 }
@@ -363,7 +363,7 @@ export function ClientLinksPanel({
         <h3 className="text-sm font-medium text-foreground">Client links</h3>
         {blocked ? (
           <p className="text-sm text-muted-foreground">
-            {blocked} When they work again, so would the copies kept by someone who stopped being an owner. Turning
+            {blocked} Copies kept by someone who stopped being an owner will work again once the workspace is active again. Turning
             them off stops that.
           </p>
         ) : (
