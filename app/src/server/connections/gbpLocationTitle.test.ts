@@ -44,6 +44,12 @@ vi.mock("@/server/platforms/gbpLocation", () => ({
   resolveGbpLocationName: resolveGbpLocationNameMock,
 }));
 
+const { flagRejectedTokenMock } = vi.hoisted(() => ({ flagRejectedTokenMock: vi.fn() }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -307,5 +313,54 @@ describe("backfillGbpLocationTitles", () => {
 
     expect(result.named).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// R25 (lead follow-up): one rule on every Google call. A 401 here flags the row
+// with the tokens this run sent, so the sweep emails the owners (once: the
+// sweep's own notices step sees the email already sent for that flag).
+describe("backfillGbpLocationTitles and a token Google refuses", () => {
+  const SNAPSHOT = { id: "conn-1", accessToken: "gbp-access", refreshToken: "gbp-refresh" };
+
+  function flagsTheRow(row: SocialConnection) {
+    flagRejectedTokenMock.mockImplementation(async () => {
+      (row as { needsReconnect: boolean }).needsReconnect = true;
+      return "flagged";
+    });
+  }
+
+  it("a 401 on the title flags the row and hands it to the sweep to email", async () => {
+    const row = connection();
+    useRows([row]);
+    flagsTheRow(row);
+    fetchMock.mockResolvedValue(json({}, 401));
+
+    const result = await backfillGbpLocationTitles();
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GOOGLE_API_TOKEN_REJECTED");
+    expect(result).toEqual({ named: 0, failed: 1, flagged: ["conn-1"] });
+  });
+
+  it("a 401 while a store code is looked up flags the row too", async () => {
+    const row = connection({ metadata: { locationName: "STORE-1" } });
+    useRows([row]);
+    flagsTheRow(row);
+    resolveGbpLocationNameMock.mockRejectedValue(Object.assign(new Error("Google list failed"), { status: 401 }));
+
+    const result = await backfillGbpLocationTitles();
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledTimes(1);
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GOOGLE_API_TOKEN_REJECTED");
+    expect(result.flagged).toEqual(["conn-1"]);
+  });
+
+  it("a 5xx flags nothing", async () => {
+    useRows([connection()]);
+    fetchMock.mockResolvedValue(json({}, 503));
+
+    const result = await backfillGbpLocationTitles();
+
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ named: 0, failed: 1, flagged: [] });
   });
 });

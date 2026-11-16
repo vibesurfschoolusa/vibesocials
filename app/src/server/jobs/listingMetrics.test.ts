@@ -40,6 +40,11 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   refreshAccessToken: refreshMock,
 }));
 vi.mock("@/server/platforms/gbpLocation", () => ({ resolveGbpLocationName: resolveMock }));
+const { flagRejectedTokenMock } = vi.hoisted(() => ({ flagRejectedTokenMock: vi.fn() }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
 
 import {
   LISTING_METRICS_BUDGET_MS,
@@ -535,5 +540,51 @@ describe("syncListingMetrics", () => {
     useRows([conn()]);
     const result = await syncListingMetrics(NOW, () => 0);
     expect(Object.values(result).every((value) => typeof value === "number")).toBe(true);
+  });
+});
+
+// R25 (lead follow-up): one rule on every Google call. A 401 here flags the
+// row, with the tokens this run sent, from the row already loaded; the health
+// sweep's notices step emails the owners once for that flag.
+describe("syncListingMetrics and a token Google refuses", () => {
+  const SNAPSHOT = { id: "conn-1", accessToken: "gbp-access", refreshToken: "gbp-refresh" };
+  const refused = (status: number) => ({ ok: false, status, statusText: "x", json: async () => ({}), text: async () => "{}" });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("a 401 on the numbers flags the row, reading it no more than once", async () => {
+    useRows([conn()]);
+    fetchMock.mockResolvedValue(refused(401));
+
+    const result = await syncListingMetrics(NOW, () => 0);
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledTimes(1);
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GOOGLE_API_TOKEN_REJECTED");
+    expect(result.failed).toBe(1);
+    expect(db.connectionFindUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 401 while a store code is looked up flags the row too", async () => {
+    useRows([conn({ metadata: { locationName: "STORE-1" } })]);
+    resolveMock.mockRejectedValue(Object.assign(new Error("Google list failed"), { status: 401 }));
+
+    await syncListingMetrics(NOW, () => 0);
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GOOGLE_API_TOKEN_REJECTED");
+  });
+
+  it("a 5xx flags nothing", async () => {
+    useRows([conn()]);
+    fetchMock.mockResolvedValue(refused(503));
+
+    const result = await syncListingMetrics(NOW, () => 0);
+
+    expect(result.failed).toBe(1);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 });

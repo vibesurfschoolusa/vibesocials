@@ -3,6 +3,7 @@ import type { Prisma, SocialConnection } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
+import { flagIfTokenRejected } from "@/server/googleFailure";
 import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
 import { refreshGoogleToken, refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
@@ -28,7 +29,9 @@ import { refreshGoogleToken, refreshGoogleTokenEarly } from "@/server/platforms/
  * - a refresh here can find the Google grant dead and flag the connection
  *   (googleTokens.ts). The owners are emailed by whoever observes that flip, so
  *   the flagged ids are returned and the sweep emails them
- *   (inngest-functions.ts), as `refresh-connection` does for its own;
+ *   (inngest-functions.ts), as `refresh-connection` does for its own. R25: an
+ *   API 401 (or a missing scope) here flags the row the same way
+ *   (flagIfTokenRejected), and is emailed the same way, once per flag;
  * - the work is bounded by a count and by a time budget, well inside one step.
  */
 
@@ -67,6 +70,17 @@ async function readLocationTitle(
     refreshConnectionToken(row, (stored) => refreshGoogleToken(stored)),
   );
 
+  try {
+    return await readTitleWith(current, locationName);
+  } catch (error) {
+    // R25: one rule on every Google call. A token Google refused flags the row,
+    // guarded by the tokens this read sent; the caller then sees the flag and
+    // the sweep emails the owners.
+    throw await flagIfTokenRejected(error, current);
+  }
+}
+
+async function readTitleWith(current: SocialConnection, locationName: string): Promise<string | null> {
   // A store code is resolved to its resource name first (one or more requests).
   const resourceName = await resolveGbpLocationName(current.accessToken, locationName);
   const locationId = locationIdOf(resourceName);
@@ -77,9 +91,12 @@ async function readLocationTitle(
     { headers: { Authorization: `Bearer ${current.accessToken}` } },
     GBP_TITLE_TIMEOUT_MS,
   );
+  if (response.status === 401) {
+    throw Object.assign(new Error("Google refused the token while reading a location title"), { status: 401 });
+  }
   if (!response.ok) {
     logger.warn("[GBP] Could not read a location's title", {
-      connectionId: connection.id,
+      connectionId: current.id,
       status: response.status,
     });
     return null;

@@ -3,6 +3,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { locationIdOf } from "@/server/googleReviews";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
+import { flagIfTokenRejected } from "@/server/googleFailure";
 import { accessTokenOf } from "@/server/jobs/reviewAlerts";
 
 /**
@@ -346,8 +347,11 @@ export async function syncListingMetrics(
     }
 
     result.checked++;
+    // The tokens this run sends, from the row already loaded (the refresh keeps the refresh token).
+    let used: { id: string; accessToken: string; refreshToken: string | null } | null = null;
     try {
       const accessToken = await accessTokenOf(connection);
+      used = { id: connection.id, accessToken, refreshToken: connection.refreshToken };
       const newest = await prisma.locationMetricDaily.findFirst({
         where: { workspaceId: connection.workspaceId, locationName },
         orderBy: { day: "desc" },
@@ -372,6 +376,10 @@ export async function syncListingMetrics(
       await saveListingMetricsCheckedAt(id, locationName, now);
     } catch (error) {
       result.failed++;
+      // R25: one rule on every Google call. A token Google refused flags the row
+      // (guarded by the tokens sent); the health sweep's notices step emails the
+      // owners once for that flag, and tomorrow's run skips the row.
+      await flagIfTokenRejected(error, used);
       // The error kind only: a message could quote a URL with the location in it.
       logger.warn("[listing-metrics] Couldn't read a Google listing's numbers; carrying on", {
         connectionId: id,
