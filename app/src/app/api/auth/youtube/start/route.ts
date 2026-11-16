@@ -3,6 +3,7 @@ import { YOUTUBE_SCOPES } from "@/lib/oauthScopes";
 
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export async function GET(request: NextRequest) {
   const contextOrRedirect = await requireOwnerContextForOAuthStart(
@@ -21,9 +22,7 @@ export async function GET(request: NextRequest) {
   const redirectUriEnv = process.env.YOUTUBE_REDIRECT_URI;
 
   if (!clientId || !redirectUriEnv) {
-    const url = new URL("/settings", request.url);
-    url.searchParams.set("error", "youtube_not_configured");
-    return NextResponse.redirect(url);
+    return oauthErrorRedirect("youtube", "not_configured", request.url);
   }
 
   // Sign the state with the canonical HMAC helper so the callback can trust

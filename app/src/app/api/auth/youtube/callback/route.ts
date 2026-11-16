@@ -8,6 +8,7 @@ import { verifyOAuthState } from "@/lib/oauthState";
 import { YOUTUBE_SCOPES, YOUTUBE_UPLOAD_SCOPE } from "@/lib/oauthScopes";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -26,23 +27,17 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
   if (error) {
     console.error("[YouTube OAuth] User denied access or error:", error);
-    return NextResponse.redirect(
-      new URL(`/settings?error=youtube_oauth_denied`, request.url),
-    );
+    return oauthErrorRedirect("youtube", "oauth_denied", request.url);
   }
 
   if (!code || !encodedState) {
-    return NextResponse.redirect(
-      new URL(`/settings?error=youtube_oauth_missing_params`, request.url),
-    );
+    return oauthErrorRedirect("youtube", "oauth_missing_params", request.url);
   }
 
   const stateCheck = verifyOAuthState(encodedState, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     console.error("[YouTube OAuth] Invalid state parameter");
-    return NextResponse.redirect(
-      new URL(`/settings?error=youtube_oauth_invalid_state`, request.url),
-    );
+    return oauthErrorRedirect("youtube", "oauth_invalid_state", request.url);
   }
 
   const userId = stateCheck.userId;
@@ -65,9 +60,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // owner of this workspace before writing a connection — ownership could
     // have changed between the redirect to Google and this return trip.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
-      return NextResponse.redirect(
-        new URL(`/settings?error=youtube_not_workspace_owner`, request.url),
-      );
+      return oauthErrorRedirect("youtube", "not_workspace_owner", request.url);
     }
 
     const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
@@ -76,9 +69,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("[YouTube OAuth] Missing OAuth configuration");
-      return NextResponse.redirect(
-        new URL(`/settings?error=youtube_oauth_config`, request.url),
-      );
+      return oauthErrorRedirect("youtube", "oauth_config", request.url);
     }
 
     // Exchange code for tokens
@@ -102,9 +93,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         tokenResponse.status,
         await tokenResponse.text(),
       );
-      return NextResponse.redirect(
-        new URL(`/settings?error=youtube_oauth_token_failed`, request.url),
-      );
+      return oauthErrorRedirect("youtube", "oauth_token_failed", request.url);
     }
 
     const tokenJson = (await tokenResponse.json()) as GoogleTokenResponse;
@@ -116,14 +105,14 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     const granted = tokenJson.scope?.split(" ");
     if (granted && !granted.includes(YOUTUBE_UPLOAD_SCOPE)) {
       console.warn("[YouTube OAuth] Connected without the upload permission; nothing saved");
-      return NextResponse.redirect(new URL(`/settings?error=youtube_upload_not_allowed`, request.url));
+      return oauthErrorRedirect("youtube", "upload_not_allowed", request.url);
     }
     // R28 platform-clients L3: "View your YouTube account" (youtube.readonly)
     // unticked: the channel call below would answer 403 and read as a
     // generic failure, and the same choice would fail the same way again.
     if (granted && !YOUTUBE_SCOPES.every((scope) => granted.includes(scope))) {
       console.warn("[YouTube OAuth] Connected without the view permission; nothing saved");
-      return NextResponse.redirect(new URL(`/settings?error=youtube_readonly_not_allowed`, request.url));
+      return oauthErrorRedirect("youtube", "readonly_not_allowed", request.url);
     }
 
     // Get channel info to use as accountIdentifier
@@ -141,9 +130,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         "[YouTube OAuth] Failed to fetch channel info",
         channelResponse.status,
       );
-      return NextResponse.redirect(
-        new URL(`/settings?error=youtube_channel_fetch_failed`, request.url),
-      );
+      return oauthErrorRedirect("youtube", "channel_fetch_failed", request.url);
     }
 
     const channelData = (await channelResponse.json()) as {
@@ -158,9 +145,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     const channel = channelData.items?.[0];
     if (!channel?.id) {
       console.error("[YouTube OAuth] No channel found for user");
-      return NextResponse.redirect(
-        new URL(`/settings?error=youtube_no_channel`, request.url),
-      );
+      return oauthErrorRedirect("youtube", "no_channel", request.url);
     }
 
     const accountIdentifier = channel.snippet?.title || channel.id;

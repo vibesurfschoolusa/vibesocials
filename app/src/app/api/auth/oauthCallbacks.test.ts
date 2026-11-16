@@ -360,7 +360,6 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
     const fixed: Record<string, string> = {
       linkedin: "linkedin_auth_failed",
       youtube: "youtube_oauth_denied",
-      pinterest: "pinterest_auth_failed",
     };
     expect(location(res).searchParams.get("error")).toBe(fixed[platform] ?? `${platform}_provider_error`);
   });

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 /**
  * OAuth 1.0a signature generation
@@ -54,9 +55,7 @@ export async function GET(request: Request) {
 
   if (!consumerKey || !consumerSecret || !callbackUrl) {
     console.error("[X OAuth 1.0a] Missing environment variables");
-    return NextResponse.redirect(
-      new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL),
-    );
+    return oauthErrorRedirect("x", "config_missing", process.env.NEXTAUTH_URL);
   }
 
   try {
@@ -107,9 +106,7 @@ export async function GET(request: Request) {
         status: response.status,
         error: errorText,
       });
-      return NextResponse.redirect(
-        new URL("/settings?error=x_request_token_failed", process.env.NEXTAUTH_URL),
-      );
+      return oauthErrorRedirect("x", "request_token_failed", process.env.NEXTAUTH_URL);
     }
 
     const responseText = await response.text();
@@ -119,9 +116,7 @@ export async function GET(request: Request) {
 
     if (!oauthToken || !oauthTokenSecret) {
       console.error("[X OAuth 1.0a] Invalid request token response");
-      return NextResponse.redirect(
-        new URL("/settings?error=x_invalid_token_response", process.env.NEXTAUTH_URL),
-      );
+      return oauthErrorRedirect("x", "invalid_token_response", process.env.NEXTAUTH_URL);
     }
 
     const now = new Date();
@@ -160,8 +155,6 @@ export async function GET(request: Request) {
     return NextResponse.redirect(authorizeUrl.toString());
   } catch (error) {
     console.error("[X OAuth 1.0a] Unexpected error:", error);
-    return NextResponse.redirect(
-      new URL("/settings?error=x_unexpected_error", process.env.NEXTAUTH_URL),
-    );
+    return oauthErrorRedirect("x", "unexpected_error", process.env.NEXTAUTH_URL);
   }
 }

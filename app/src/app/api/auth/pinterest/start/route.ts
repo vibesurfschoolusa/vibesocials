@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createOAuthState } from "@/lib/oauthState";
 import { buildPinterestAuthorizeUrl, pinterestConfig } from "@/lib/pinterestApi";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export const runtime = "nodejs";
 
@@ -28,10 +29,7 @@ export async function GET(request: Request) {
 
   const config = pinterestConfig();
   if (!config) {
-    const url = new URL(request.url);
-    url.pathname = "/settings";
-    url.searchParams.set("error", "pinterest_not_configured");
-    return NextResponse.redirect(url);
+    return oauthErrorRedirect("pinterest", "not_configured", request.url);
   }
 
   const state = createOAuthState({ userId: user.id, workspaceId: workspace.id });

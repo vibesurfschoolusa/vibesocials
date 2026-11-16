@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
-import { providerErrorSuffix } from "@/lib/oauthResult";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
@@ -10,6 +9,7 @@ import { createPendingConnection } from "@/server/connections/pendingConnection"
 import { saveFacebookPageConnection } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
@@ -19,22 +19,16 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
   if (error) {
     console.error("[FacebookPage OAuth] Error from provider:", error);
-    return NextResponse.redirect(
-      new URL(`/settings?error=facebook_page_${providerErrorSuffix(error)}`, request.url),
-    );
+    return oauthErrorRedirect("facebook_page", error, request.url);
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(
-      new URL("/settings?error=facebook_page_missing_code_or_state", request.url),
-    );
+    return oauthErrorRedirect("facebook_page", "missing_code_or_state", request.url);
   }
 
   const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
-    return NextResponse.redirect(
-      new URL("/settings?error=facebook_page_invalid_state", request.url),
-    );
+    return oauthErrorRedirect("facebook_page", "invalid_state", request.url);
   }
 
   const userId = stateCheck.userId;
@@ -57,9 +51,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // owner of this workspace before writing a connection — ownership could
     // have changed between the redirect to Facebook and this return trip.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
-      return NextResponse.redirect(
-        new URL("/settings?error=facebook_page_not_workspace_owner", request.url),
-      );
+      return oauthErrorRedirect("facebook_page", "not_workspace_owner", request.url);
     }
 
     const clientId = process.env.FACEBOOK_APP_ID;
@@ -68,9 +60,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("[FacebookPage OAuth] Missing environment variables");
-      return NextResponse.redirect(
-        new URL("/settings?error=facebook_page_config_error", request.url),
-      );
+      return oauthErrorRedirect("facebook_page", "config_error", request.url);
     }
 
     // 1. Exchange code for short-lived user access token
@@ -84,9 +74,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error("[FacebookPage OAuth] Token exchange failed:", errorText);
-      return NextResponse.redirect(
-        new URL("/settings?error=facebook_page_token_exchange_failed", request.url),
-      );
+      return oauthErrorRedirect("facebook_page", "token_exchange_failed", request.url);
     }
 
     const tokenData = (await tokenResponse.json()) as {
@@ -110,9 +98,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         "[FacebookPage OAuth] Long-lived token exchange failed:",
         errorText,
       );
-      return NextResponse.redirect(
-        new URL("/settings?error=facebook_page_long_lived_token_failed", request.url),
-      );
+      return oauthErrorRedirect("facebook_page", "long_lived_token_failed", request.url);
     }
 
     const longLivedData = (await longLivedResponse.json()) as {
@@ -132,9 +118,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     if (!pagesResponse.ok) {
       const errorText = await pagesResponse.text();
       console.error("[FacebookPage OAuth] Failed to fetch pages:", errorText);
-      return NextResponse.redirect(
-        new URL("/settings?error=facebook_page_failed_to_fetch_pages", request.url),
-      );
+      return oauthErrorRedirect("facebook_page", "failed_to_fetch_pages", request.url);
     }
 
     const pagesData = (await pagesResponse.json()) as {
@@ -152,9 +136,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
     if (!pagesData.data || pagesData.data.length === 0) {
       console.error("[FacebookPage OAuth] No Facebook Pages found");
-      return NextResponse.redirect(
-        new URL("/settings?error=facebook_page_no_pages", request.url),
-      );
+      return oauthErrorRedirect("facebook_page", "no_pages", request.url);
     }
 
     const expiresAt = new Date(Date.now() + expiresIn * 1000);

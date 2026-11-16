@@ -18,6 +18,7 @@ import { createPendingConnection } from "@/server/connections/pendingConnection"
 import { fetchPinterestAccount, listPinterestBoards } from "@/server/connections/pinterestAccount";
 import { savePinterestConnection, type PinterestToken } from "@/server/connections/saveConnection";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export const runtime = "nodejs";
 
@@ -50,22 +51,18 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
   const settingsUrl = new URL("/settings", url.origin);
 
   if (errorParam) {
-    // Pinterest's own code (e.g. access_denied), prefixed so lib/oauthResult.ts
-    // names the platform; only a short, plain code is passed on.
-    const safe = /^[a-z_]{1,40}$/.test(errorParam) ? errorParam : "auth_failed";
-    settingsUrl.searchParams.set("error", `pinterest_${safe}`);
-    return NextResponse.redirect(settingsUrl);
+    // Pinterest's own code (e.g. access_denied); the helper names the platform
+    // and passes on only a short, plain code.
+    return oauthErrorRedirect("pinterest", errorParam, url.origin);
   }
 
   if (!code || !state) {
-    settingsUrl.searchParams.set("error", "pinterest_missing_params");
-    return NextResponse.redirect(settingsUrl);
+    return oauthErrorRedirect("pinterest", "missing_params", url.origin);
   }
 
   const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
-    settingsUrl.searchParams.set("error", "pinterest_invalid_state");
-    return NextResponse.redirect(settingsUrl);
+    return oauthErrorRedirect("pinterest", "invalid_state", url.origin);
   }
 
   const userId = stateCheck.userId;
@@ -87,14 +84,12 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // Ownership could have changed between the redirect to Pinterest and this
     // return trip: re-verify before writing a connection.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
-      settingsUrl.searchParams.set("error", "pinterest_not_workspace_owner");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("pinterest", "not_workspace_owner", url.origin);
     }
 
     const config = pinterestConfig();
     if (!config) {
-      settingsUrl.searchParams.set("error", "pinterest_not_configured");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("pinterest", "not_configured", url.origin);
     }
 
     const tokenResponse = await fetchWithTimeout(PINTEREST_TOKEN_URL, {
@@ -116,15 +111,13 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         status: tokenResponse.status,
         errorCode: readPinterestErrorCode(errorBody),
       });
-      settingsUrl.searchParams.set("error", "pinterest_token_exchange_failed");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("pinterest", "token_exchange_failed", url.origin);
     }
 
     const tokenJson = (await tokenResponse.json()) as PinterestTokenResponse;
     if (typeof tokenJson.access_token !== "string" || tokenJson.access_token === "") {
       console.error("[Pinterest OAuth] Token answer has no access_token");
-      settingsUrl.searchParams.set("error", "pinterest_token_exchange_failed");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("pinterest", "token_exchange_failed", url.origin);
     }
 
     const expiresInSeconds =
@@ -157,13 +150,11 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     ]);
 
     if (!account || !boards) {
-      settingsUrl.searchParams.set("error", "pinterest_account_unavailable");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("pinterest", "account_unavailable", url.origin);
     }
 
     if (boards.length === 0) {
-      settingsUrl.searchParams.set("error", "pinterest_no_boards");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("pinterest", "no_boards", url.origin);
     }
 
     if (boards.length > 1) {

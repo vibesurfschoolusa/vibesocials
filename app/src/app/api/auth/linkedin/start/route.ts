@@ -2,6 +2,7 @@ import { NextResponse, NextRequest } from "next/server";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export async function GET(request: NextRequest) {
   const contextOrRedirect = await requireOwnerContextForOAuthStart(
@@ -21,9 +22,7 @@ export async function GET(request: NextRequest) {
 
   if (!clientId || !redirectUri) {
     console.error("[LinkedIn OAuth] Missing environment variables");
-    const url = new URL("/settings", request.url);
-    url.searchParams.set("error", "linkedin_not_configured");
-    return NextResponse.redirect(url);
+    return oauthErrorRedirect("linkedin", "not_configured", request.url);
   }
 
   // Check if user provided a vanity name for organization lookup

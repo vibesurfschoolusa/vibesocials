@@ -4,11 +4,11 @@ import { saveSocialConnection } from "@/server/connections/saveConnection";
 import { LOCATION_CLEARED_PARAM, refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
-import { providerErrorSuffix } from "@/lib/oauthResult";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export const runtime = "nodejs";
 
@@ -30,19 +30,16 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
   const settingsUrl = new URL("/settings", url.origin);
 
   if (errorParam) {
-    settingsUrl.searchParams.set("error", `google_business_profile_${providerErrorSuffix(errorParam)}`);
-    return NextResponse.redirect(settingsUrl);
+    return oauthErrorRedirect("google_business_profile", errorParam, url.origin);
   }
 
   if (!code || !state) {
-    settingsUrl.searchParams.set("error", "google_business_profile_missing_code_or_state");
-    return NextResponse.redirect(settingsUrl);
+    return oauthErrorRedirect("google_business_profile", "missing_code_or_state", url.origin);
   }
 
   const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
-    settingsUrl.searchParams.set("error", "google_business_profile_invalid_state");
-    return NextResponse.redirect(settingsUrl);
+    return oauthErrorRedirect("google_business_profile", "invalid_state", url.origin);
   }
 
   const userId = stateCheck.userId;
@@ -65,8 +62,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // owner of this workspace before writing a connection — ownership could
     // have changed between the redirect to Google and this return trip.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
-      settingsUrl.searchParams.set("error", "google_business_profile_not_workspace_owner");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("google_business_profile", "not_workspace_owner", url.origin);
     }
 
     const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
@@ -74,8 +70,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     const redirectUri = process.env.GOOGLE_GBP_REDIRECT_URI;
 
     if (!clientId || !clientSecret || !redirectUri) {
-      settingsUrl.searchParams.set("error", "google_business_profile_not_configured");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("google_business_profile", "not_configured", url.origin);
     }
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -97,8 +92,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         status: tokenResponse.status,
         statusText: tokenResponse.statusText,
       });
-      settingsUrl.searchParams.set("error", "google_business_profile_token_exchange_failed");
-      return NextResponse.redirect(settingsUrl);
+      return oauthErrorRedirect("google_business_profile", "token_exchange_failed", url.origin);
     }
 
     const tokenJson = (await tokenResponse.json()) as TokenResponse;

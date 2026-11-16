@@ -3,6 +3,7 @@ import { GOOGLE_BUSINESS_PROFILE_SCOPES } from "@/lib/oauthScopes";
 
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export const runtime = "nodejs";
 
@@ -26,10 +27,7 @@ export async function GET(request: Request) {
   const redirectUriEnv = process.env.GOOGLE_GBP_REDIRECT_URI;
 
   if (!clientId || !redirectUriEnv) {
-    const url = new URL(request.url);
-    url.pathname = "/settings";
-    url.searchParams.set("error", "google_business_profile_not_configured");
-    return NextResponse.redirect(url);
+    return oauthErrorRedirect("google_business_profile", "not_configured", request.url);
   }
 
   const state = createOAuthState({ userId: user.id, workspaceId: workspace.id });

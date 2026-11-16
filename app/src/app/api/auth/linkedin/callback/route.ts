@@ -19,6 +19,7 @@ import {
 } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
@@ -28,16 +29,12 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
   if (error) {
     console.error("[LinkedIn OAuth] Authorization error:", error);
-    return NextResponse.redirect(
-      new URL(`/settings?error=linkedin_auth_failed`, process.env.NEXTAUTH_URL!)
-    );
+    return oauthErrorRedirect("linkedin", "auth_failed", process.env.NEXTAUTH_URL!);
   }
 
   if (!code || !state) {
     console.error("[LinkedIn OAuth] Missing code or state");
-    return NextResponse.redirect(
-      new URL("/settings?error=linkedin_missing_params", process.env.NEXTAUTH_URL!)
-    );
+    return oauthErrorRedirect("linkedin", "missing_params", process.env.NEXTAUTH_URL!);
   }
 
   // Verify the signed state. userId must come only from the verified HMAC state.
@@ -47,9 +44,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
   const stateCheck = verifyOAuthState(signedState, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     console.error("[LinkedIn OAuth] Invalid state");
-    return NextResponse.redirect(
-      new URL("/settings?error=linkedin_invalid_state", process.env.NEXTAUTH_URL!)
-    );
+    return oauthErrorRedirect("linkedin", "invalid_state", process.env.NEXTAUTH_URL!);
   }
 
   const userId = stateCheck.userId;
@@ -84,9 +79,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     // unauthorized request fails fast instead of spending a token exchange and
     // several organization-lookup calls first.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
-      return NextResponse.redirect(
-        new URL("/settings?error=linkedin_not_workspace_owner", process.env.NEXTAUTH_URL!)
-      );
+      return oauthErrorRedirect("linkedin", "not_workspace_owner", process.env.NEXTAUTH_URL!);
     }
 
     const clientId = process.env.LINKEDIN_CLIENT_ID;
@@ -95,9 +88,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("[LinkedIn OAuth] Missing environment variables");
-      return NextResponse.redirect(
-        new URL("/settings?error=linkedin_not_configured", process.env.NEXTAUTH_URL!)
-      );
+      return oauthErrorRedirect("linkedin", "not_configured", process.env.NEXTAUTH_URL!);
     }
 
     // Exchange authorization code for access token
@@ -123,9 +114,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         status: tokenResponse.status,
         error: errorText,
       });
-      return NextResponse.redirect(
-        new URL("/settings?error=linkedin_token_exchange_failed", process.env.NEXTAUTH_URL!)
-      );
+      return oauthErrorRedirect("linkedin", "token_exchange_failed", process.env.NEXTAUTH_URL!);
     }
 
     const tokenData = await tokenResponse.json();
@@ -178,9 +167,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     // live: a page found that way refused every post). The fallbacks below are
     // only for when organizationAcls could not be read at all.
     if (administered !== null && administered.length === 0) {
-      return NextResponse.redirect(
-        new URL("/settings?error=linkedin_no_admin_pages", process.env.NEXTAUTH_URL!)
-      );
+      return oauthErrorRedirect("linkedin", "no_admin_pages", process.env.NEXTAUTH_URL!);
     }
 
     // Strategy 2: Check if user has a previous LinkedIn connection with organization data

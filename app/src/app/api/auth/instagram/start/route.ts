@@ -4,6 +4,7 @@ import { INSTAGRAM_SCOPES } from "@/lib/oauthScopes";
 import { META_OAUTH_DIALOG_URL } from "@/lib/metaGraph";
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 export async function GET(request: NextRequest) {
   const contextOrRedirect = await requireOwnerContextForOAuthStart(
@@ -22,9 +23,7 @@ export async function GET(request: NextRequest) {
   const redirectUri = process.env.INSTAGRAM_REDIRECT_URI;
 
   if (!clientId || !redirectUri) {
-    const url = new URL("/settings", request.url);
-    url.searchParams.set("error", "instagram_not_configured");
-    return NextResponse.redirect(url);
+    return oauthErrorRedirect("instagram", "not_configured", request.url);
   }
 
   const encodedState = createOAuthState({ userId: user.id, workspaceId: workspace.id });

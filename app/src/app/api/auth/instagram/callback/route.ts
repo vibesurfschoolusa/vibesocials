@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
-import { providerErrorSuffix } from "@/lib/oauthResult";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
@@ -13,6 +12,7 @@ import {
 } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
@@ -22,22 +22,16 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
   if (error) {
     console.error("[Instagram OAuth] Error from provider:", error);
-    return NextResponse.redirect(
-      new URL(`/settings?error=instagram_${providerErrorSuffix(error)}`, request.url),
-    );
+    return oauthErrorRedirect("instagram", error, request.url);
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(
-      new URL("/settings?error=instagram_missing_code_or_state", request.url),
-    );
+    return oauthErrorRedirect("instagram", "missing_code_or_state", request.url);
   }
 
   const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
-    return NextResponse.redirect(
-      new URL("/settings?error=instagram_invalid_state", request.url),
-    );
+    return oauthErrorRedirect("instagram", "invalid_state", request.url);
   }
 
   const userId = stateCheck.userId;
@@ -60,9 +54,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // owner of this workspace before writing a connection — ownership could
     // have changed between the redirect to Facebook and this return trip.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_not_workspace_owner", request.url),
-      );
+      return oauthErrorRedirect("instagram", "not_workspace_owner", request.url);
     }
 
     const clientId = process.env.FACEBOOK_APP_ID;
@@ -71,9 +63,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("[Instagram OAuth] Missing environment variables");
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_config_error", request.url),
-      );
+      return oauthErrorRedirect("instagram", "config_error", request.url);
     }
 
     // 1. Exchange code for short-lived access token
@@ -87,9 +77,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error("[Instagram OAuth] Token exchange failed:", errorText);
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_token_exchange_failed", request.url),
-      );
+      return oauthErrorRedirect("instagram", "token_exchange_failed", request.url);
     }
 
     const tokenData = (await tokenResponse.json()) as {
@@ -110,9 +98,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     if (!longLivedResponse.ok) {
       const errorText = await longLivedResponse.text();
       console.error("[Instagram OAuth] Long-lived token exchange failed:", errorText);
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_long_lived_token_failed", request.url),
-      );
+      return oauthErrorRedirect("instagram", "long_lived_token_failed", request.url);
     }
 
     const longLivedData = (await longLivedResponse.json()) as {
@@ -134,9 +120,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     if (!pagesResponse.ok) {
       const errorText = await pagesResponse.text();
       console.error("[Instagram OAuth] Failed to fetch pages:", errorText);
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_failed_to_fetch_pages", request.url),
-      );
+      return oauthErrorRedirect("instagram", "failed_to_fetch_pages", request.url);
     }
 
     const pagesData = (await pagesResponse.json()) as {
@@ -164,9 +148,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
     if (pagesWithInstagram.length === 0) {
       console.error("[Instagram OAuth] No Instagram Business Account found");
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_no_instagram_account", request.url),
-      );
+      return oauthErrorRedirect("instagram", "no_instagram_account", request.url);
     }
 
     const expiresAt = new Date(Date.now() + expiresIn * 1000);
@@ -211,9 +193,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // 4. Get Instagram account details
     const details = await fetchInstagramAccountDetails(igAccountId, pageAccessToken);
     if (!details) {
-      return NextResponse.redirect(
-        new URL("/settings?error=instagram_failed_to_fetch_ig_account", request.url),
-      );
+      return oauthErrorRedirect("instagram", "failed_to_fetch_ig_account", request.url);
     }
 
     // 5. Store or update the connection

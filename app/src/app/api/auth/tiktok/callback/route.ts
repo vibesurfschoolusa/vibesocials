@@ -5,7 +5,7 @@ import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
-import { providerErrorSuffix } from "@/lib/oauthResult";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform, type Prisma } from "@prisma/client";
@@ -32,8 +32,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
   const settingsUrl = new URL("/settings", url.origin);
 
   if (errorParam) {
-    settingsUrl.searchParams.set("error", `tiktok_${providerErrorSuffix(errorParam)}`);
-    return NextResponse.redirect(settingsUrl);
+    return oauthErrorRedirect("tiktok", errorParam, url.origin);
   }
 
   if (!code || !state) {

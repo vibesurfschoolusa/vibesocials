@@ -8,6 +8,7 @@ import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallb
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
+import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
 /**
  * OAuth 1.0a signature generation
@@ -43,16 +44,12 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
   if (denied) {
     console.error("[X OAuth 1.0a] Authorization denied");
-    return NextResponse.redirect(
-      new URL(`/settings?error=x_auth_denied`, process.env.NEXTAUTH_URL!),
-    );
+    return oauthErrorRedirect("x", "auth_denied", process.env.NEXTAUTH_URL!);
   }
 
   if (!oauthToken || !oauthVerifier) {
     console.error("[X OAuth 1.0a] Missing oauth_token or oauth_verifier");
-    return NextResponse.redirect(
-      new URL("/settings?error=x_missing_params", process.env.NEXTAUTH_URL!),
-    );
+    return oauthErrorRedirect("x", "missing_params", process.env.NEXTAUTH_URL!);
   }
 
   try {
@@ -66,9 +63,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
       }
       console.error("[X OAuth 1.0a] Missing or expired handshake");
-      return NextResponse.redirect(
-        new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!),
-      );
+      return oauthErrorRedirect("x", "session_expired", process.env.NEXTAUTH_URL!);
     }
 
     // Client connect link: a handshake row belongs to a link flow exactly when
@@ -78,9 +73,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
       (handshake.connectLinkId ?? null) !== (link?.id ?? null) ||
       (handshake.connectLinkNonce ?? null) !== (link?.nonce ?? null)
     ) {
-      return NextResponse.redirect(
-        new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!),
-      );
+      return oauthErrorRedirect("x", "session_expired", process.env.NEXTAUTH_URL!);
     }
 
     const { tokenSecret: oauthTokenSecret, userId, workspaceId } = handshake;
@@ -103,9 +96,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     // and this return trip.
     if (!(await isWorkspaceOwner(userId, workspaceId))) {
       await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
-      return NextResponse.redirect(
-        new URL("/settings?error=x_not_workspace_owner", process.env.NEXTAUTH_URL!),
-      );
+      return oauthErrorRedirect("x", "not_workspace_owner", process.env.NEXTAUTH_URL!);
     }
 
     const consumerKey = process.env.X_CONSUMER_KEY;
@@ -113,9 +104,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
     if (!consumerKey || !consumerSecret) {
       console.error("[X OAuth 1.0a] Missing environment variables");
-      return NextResponse.redirect(
-        new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL!),
-      );
+      return oauthErrorRedirect("x", "config_missing", process.env.NEXTAUTH_URL!);
     }
 
     console.log("[X OAuth 1.0a] Exchanging for access token", { userId });
@@ -164,9 +153,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         status: response.status,
         error: errorText,
       });
-      return NextResponse.redirect(
-        new URL("/settings?error=x_token_exchange_failed", process.env.NEXTAUTH_URL!),
-      );
+      return oauthErrorRedirect("x", "token_exchange_failed", process.env.NEXTAUTH_URL!);
     }
 
     const responseText = await response.text();
@@ -178,9 +165,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
     if (!accessToken || !accessTokenSecret) {
       console.error("[X OAuth 1.0a] Invalid access token response");
-      return NextResponse.redirect(
-        new URL("/settings?error=x_invalid_token_response", process.env.NEXTAUTH_URL!),
-      );
+      return oauthErrorRedirect("x", "invalid_token_response", process.env.NEXTAUTH_URL!);
     }
 
     console.log("[X OAuth 1.0a] Access token received", {
