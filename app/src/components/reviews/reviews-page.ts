@@ -52,3 +52,8 @@ export function singleLocationName(locations: Location[]): string | null {
 export function replyButtonId(reviewId: string): string {
   return `reply-to-${reviewId}`;
 }
+
+/** R27 lead review: a tab's name, with its count only once the list is loaded (null while it loads). */
+export function tabLabel(name: string, count: number | null): string {
+  return count === null ? name : `${name} (${count})`;
+}

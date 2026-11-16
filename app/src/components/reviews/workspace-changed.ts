@@ -13,3 +13,12 @@ export const WORKSPACE_CHANGED_RELOAD_MESSAGE =
 export function isWorkspaceChanged(body: { code?: unknown } | null | undefined): boolean {
   return body?.code === WORKSPACE_CHANGED_CODE;
 }
+
+/**
+ * R27 lead review: which refusal the page shows after `next`. "press" (a reply
+ * or draft, with typed text and the copy hint on the page) is never downgraded
+ * to "load" (which hides the list), so the typed text can still be copied.
+ */
+export function workspaceChangedAfter(prev: "load" | "press" | null, next: "load" | "press"): "load" | "press" {
+  return prev === "press" ? "press" : next;
+}

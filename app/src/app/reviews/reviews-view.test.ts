@@ -423,17 +423,21 @@ describe("ReviewsView when the page was drawn for another workspace", () => {
 
   it("shows the notice with Reload instead of the form's line, and keeps the typed reply", () => {
     const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
-    expect(perform).toMatch(/if \(shown\.reload\) \{\s*setWorkspaceChanged\("press"\);\s*\} else \{\s*toast\.error\(shown\.message\);\s*setReplyRefusal\(replyRefusalAfterFailure/);
+    expect(perform).toMatch(/if \(shown\.reload\) \{\s*refuseForWorkspace\("press"\);\s*\} else \{\s*toast\.error\(shown\.message\);\s*setReplyRefusal\(replyRefusalAfterFailure/);
     const failed = perform.slice(perform.indexOf("} catch"));
     expect(failed).not.toContain("setReplyBoxes");
     const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
-    expect(draft).toMatch(/if \(asksReload\(err\)\) setWorkspaceChanged\("press"\);\s*else toast\.error\(draftFailureMessage\(err\)\);/);
+    expect(draft).toMatch(/if \(asksReload\(err\)\) refuseForWorkspace\("press"\);\s*else toast\.error\(draftFailureMessage\(err\)\);/);
     expect(draft.slice(draft.indexOf("} catch"))).not.toContain("setReplyBoxes");
   });
 
   it("draws the notice from the first render in both views, and focuses Reload once the dialog closes", () => {
     expect(source.split('<WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />').length - 1).toBe(2);
-    expect(source).toMatch(/if \(!workspaceChanged \|\| confirmTarget\) return;\s*reloadRef\.current\?\.focus\(\);/);
+    // R27 lead review: only right after a refusal, so a later Cancel restores focus as usual.
+    expect(source).toMatch(/if \(!reloadFocusPending \|\| confirmTarget\) return;\s*reloadRef\.current\?\.focus\(\);\s*(\/\/[^\n]*\n\s*)*setReloadFocusPending\(false\);/);
+    expect(source).toMatch(/const refuseForWorkspace = \(kind: "load" \| "press"\) => \{\s*setWorkspaceChanged\(\(prev\) => workspaceChangedAfter\(prev, kind\)\);\s*setReloadFocusPending\(true\);\s*\};/);
+    expect(source.split("setReloadFocusPending(true)").length - 1).toBe(1);
+    expect(source).not.toContain('setWorkspaceChanged("');
   });
 
   it("renders the empty region on the first render", () => {
@@ -451,12 +455,12 @@ describe("ReviewsView loads for the page's workspace", () => {
 
   it("a refused locations load: the notice, not the error card", () => {
     const locs = source.slice(at("const loadLocations = useCallback"), at("const loadReviews = useCallback"));
-    expect(locs).toMatch(/if \(shown\.reload\) setWorkspaceChanged\("load"\);\s*else setLocationsError\(shown\);/);
+    expect(locs).toMatch(/if \(shown\.reload\) refuseForWorkspace\("load"\);\s*else setLocationsError\(shown\);/);
   });
 
   it("a refused list load: the notice, not the error card", () => {
     const load = source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
-    expect(load).toMatch(/if \(outcome\.error\.reload\) setWorkspaceChanged\("load"\);\s*else setReviewsError\(outcome\.error\);/);
+    expect(load).toMatch(/if \(outcome\.error\.reload\) refuseForWorkspace\("load"\);\s*else setReviewsError\(outcome\.error\);/);
   });
 
   it("hides the tabs and the list after a refused load, but keeps them after a refused press", () => {
@@ -465,5 +469,13 @@ describe("ReviewsView loads for the page's workspace", () => {
     expect(source).toContain("{listRefused ? null : !selectedLocation && locations.length === 0 && locationsNotice ? null");
     // The subtitle's count and the cap note would describe a list that never loaded.
     expect(source.split("selectedLocation && !loading && !reviewsError && !listRefused").length - 1).toBe(2);
+  });
+});
+
+// R27 lead review: the tab counts follow the subtitle: none while a list loads.
+describe("ReviewsView tab counts", () => {
+  it("names the tabs through tabLabel with no count while loading", () => {
+    expect(source).toContain('["needs_reply", tabLabel("Needs reply", loading ? null : needsReplyReviews.length)]');
+    expect(source).toContain('["replied", tabLabel("Replied", loading ? null : repliedReviews.length)]');
   });
 });

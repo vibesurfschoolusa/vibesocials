@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { WORKSPACE_CHANGED_CODE } from "@/lib/workspaceChanged";
 
-import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "./workspace-changed";
+import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE, workspaceChangedAfter } from "./workspace-changed";
 import { COPY_BEFORE_RELOAD, WorkspaceChangedNotice } from "./workspace-changed-notice";
 
 const source = readFileSync(path.join(__dirname, "workspace-changed-notice.tsx"), "utf8");
@@ -54,5 +54,20 @@ describe("workspace changed: the copy hint", () => {
   it("not when only the page's loads were refused", () => {
     const html = renderToStaticMarkup(createElement(WorkspaceChangedNotice, { shown: true }));
     expect(html).not.toContain(COPY_BEFORE_RELOAD);
+  });
+});
+
+// R27 lead review: after a refused press, a refused load (another location
+// picked) must not hide the open reply box and the copy hint.
+describe("workspaceChangedAfter", () => {
+  it("a press is never downgraded to a load", () => {
+    expect(workspaceChangedAfter("press", "load")).toBe("press");
+    expect(workspaceChangedAfter("press", "press")).toBe("press");
+  });
+
+  it("otherwise the newest refusal", () => {
+    expect(workspaceChangedAfter(null, "load")).toBe("load");
+    expect(workspaceChangedAfter(null, "press")).toBe("press");
+    expect(workspaceChangedAfter("load", "press")).toBe("press");
   });
 });

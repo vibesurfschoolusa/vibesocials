@@ -49,8 +49,10 @@ import {
   reviewsSubtitle,
   showLocationPicker,
   singleLocationName,
+  tabLabel,
 } from "@/components/reviews/reviews-page";
 import type { GoogleReview, Location } from "@/components/reviews/types";
+import { workspaceChangedAfter } from "@/components/reviews/workspace-changed";
 import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
 
 import { ReviewLinkPanel } from "./review-link-panel";
@@ -215,6 +217,12 @@ export function ReviewsView({
   const [workspaceChanged, setWorkspaceChanged] = useState<"load" | "press" | null>(null);
   const listRefused = workspaceChanged === "load";
   const reloadRef = useRef<HTMLButtonElement>(null);
+  // Set only by a refusal, so Reload takes focus right after it and never on a later dialog Cancel.
+  const [reloadFocusPending, setReloadFocusPending] = useState(false);
+  const refuseForWorkspace = (kind: "load" | "press") => {
+    setWorkspaceChanged((prev) => workspaceChangedAfter(prev, kind));
+    setReloadFocusPending(true);
+  };
 
   // Every change of the open form but a draft landing (which opens one only
   // when none is open) comes here, so a closed form's refusal never comes back.
@@ -250,7 +258,7 @@ export function ReviewsView({
     } catch (err: unknown) {
       console.error("Error fetching locations:", err);
       const shown = shownError(err, LOCATIONS_FAILED);
-      if (shown.reload) setWorkspaceChanged("load");
+      if (shown.reload) refuseForWorkspace("load");
       else setLocationsError(shown);
     } finally {
       setLoadingLocations(false);
@@ -263,7 +271,7 @@ export function ReviewsView({
     setReviewsError(null);
     await loadReviewsFor(selectedLocation, workspaceId, nextReviewsRequest(), (outcome) => {
       if ("error" in outcome) {
-        if (outcome.error.reload) setWorkspaceChanged("load");
+        if (outcome.error.reload) refuseForWorkspace("load");
         else setReviewsError(outcome.error);
       } else {
         setReviews(outcome.reviews);
@@ -297,9 +305,11 @@ export function ReviewsView({
 
   // As pendingFocus: once the confirm dialog has closed, so its own restore doesn't win.
   useEffect(() => {
-    if (!workspaceChanged || confirmTarget) return;
+    if (!reloadFocusPending || confirmTarget) return;
     reloadRef.current?.focus();
-  }, [workspaceChanged, confirmTarget]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot focus request, cleared once used
+    setReloadFocusPending(false);
+  }, [reloadFocusPending, confirmTarget]);
 
   useEffect(() => {
     if (!boxFocusAfterDraft) return;
@@ -399,7 +409,7 @@ export function ReviewsView({
       // The typed reply stays in its box either way. A page drawn for another
       // workspace says so once, in the notice.
       if (shown.reload) {
-        setWorkspaceChanged("press");
+        refuseForWorkspace("press");
       } else {
         toast.error(shown.message);
         setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
@@ -446,7 +456,7 @@ export function ReviewsView({
       setBoxFocusAfterDraft({ reviewId: review.reviewId, activeId: document.activeElement?.id ?? "" });
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
-      if (asksReload(err)) setWorkspaceChanged("press");
+      if (asksReload(err)) refuseForWorkspace("press");
       else toast.error(draftFailureMessage(err));
     } finally {
       setGeneratingAI((prev) => draftingAfterEnd(prev, review.reviewId));
@@ -558,8 +568,8 @@ export function ReviewsView({
           >
             {(
               [
-                ["needs_reply", `Needs reply (${needsReplyReviews.length})`],
-                ["replied", `Replied (${repliedReviews.length})`],
+                ["needs_reply", tabLabel("Needs reply", loading ? null : needsReplyReviews.length)],
+                ["replied", tabLabel("Replied", loading ? null : repliedReviews.length)],
               ] as const
             ).map(([value, label]) => (
               <button

@@ -8,6 +8,7 @@ import {
   reviewsSubtitle,
   showLocationPicker,
   singleLocationName,
+  tabLabel,
 } from "./reviews-page";
 import type { Location } from "./types";
 
@@ -98,5 +99,17 @@ describe("reviewsCapNote", () => {
 
   it("says nothing otherwise", () => {
     expect(reviewsCapNote(false)).toBeNull();
+  });
+});
+
+// R27 lead review: while B's list loads, the tabs showed A's counts.
+describe("tabLabel", () => {
+  it("names the tab with its count once the list is loaded", () => {
+    expect(tabLabel("Needs reply", 3)).toBe("Needs reply (3)");
+    expect(tabLabel("Replied", 0)).toBe("Replied (0)");
+  });
+
+  it("no count while the list loads", () => {
+    expect(tabLabel("Needs reply", null)).toBe("Needs reply");
   });
 });
