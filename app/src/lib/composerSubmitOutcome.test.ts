@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  postDestination,
   COMPOSER_DISPATCH_FAILED_MESSAGE,
   composerSubmitOutcome,
   type ComposerSubmitOutcome,
@@ -169,5 +170,19 @@ describe("composerSubmitOutcome - platforms not sent", () => {
       heldForApproval: false,
       toast: "Post queued — track it in Activity",
     });
+  });
+});
+
+// R24 JJ2 review: one rule says where a post lands, for the success text, the
+// success banner's link and the lost-connection sentence.
+describe("postDestination", () => {
+  it.each([
+    ["Post now by an owner", "now", false, "activity"],
+    ["Schedule", "schedule", false, "queue"],
+    ["Draft", "draft", false, "queue"],
+    ["a member's Post now held for approval", "now", true, "queue"],
+    ["a member's Schedule held for approval", "schedule", true, "queue"],
+  ] as const)("%s (%s, held %s) -> %s", (_name, mode, held, page) => {
+    expect(postDestination(mode, held)).toBe(page);
   });
 });

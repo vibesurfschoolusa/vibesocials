@@ -63,11 +63,23 @@ function readNotSent(value: unknown): NotSentPlatform[] {
   });
 }
 
+/** The page a created post is listed on. */
+export type PostDestination = "activity" | "queue";
+
+/**
+ * Where a post lands: a Post now goes to Activity; a schedule, a draft and a
+ * post held for approval wait in the Queue. The success text, the success
+ * banner's link and the lost-connection sentence (postSubmitFailure.ts) all
+ * read this one rule.
+ */
+export function postDestination(mode: ComposerPublishMode, heldForApproval: boolean): PostDestination {
+  return heldForApproval || mode !== "now" ? "queue" : "activity";
+}
+
 function successToast(mode: ComposerPublishMode, heldForApproval: boolean): string {
   if (heldForApproval) return "Sent for approval — an owner will review it before it publishes";
-  if (mode === "draft") return "Draft saved — find it in your Queue";
-  if (mode === "schedule") return "Post scheduled — see it in your Queue";
-  return "Post queued — track it in Activity";
+  if (postDestination(mode, heldForApproval) === "activity") return "Post queued — track it in Activity";
+  return mode === "draft" ? "Draft saved — find it in your Queue" : "Post scheduled — see it in your Queue";
 }
 
 export function composerSubmitOutcome(input: {

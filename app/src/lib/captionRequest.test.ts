@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CAPTION_FAILED_MESSAGE, CAPTION_OFFLINE_MESSAGE, requestCaption } from "./captionRequest";
+import { CAPTION_EMPTY_MESSAGE, CAPTION_FAILED_MESSAGE, CAPTION_OFFLINE_MESSAGE, requestCaption } from "./captionRequest";
 
 // R24 new-customer L3: "Improve caption" and "Caption from media" showed the
 // browser's raw "Failed to fetch" / "Load failed" when the request never left.
@@ -75,5 +75,20 @@ describe("requestCaption", () => {
     await expect(
       requestCaption("/api/posts/auto-caption", body, "caption", fetchImpl as unknown as typeof fetch),
     ).resolves.toEqual({ ok: false, error: CAPTION_FAILED_MESSAGE });
+  });
+
+  // R24 JJ2 review: a 200 without a caption used to empty the box (Improve).
+  it.each([
+    ["enhance-caption", "enhancedCaption", {}],
+    ["enhance-caption", "enhancedCaption", { enhancedCaption: "   " }],
+    ["enhance-caption", "enhancedCaption", { enhancedCaption: 42 }],
+    ["auto-caption", "caption", {}],
+    ["auto-caption", "caption", { caption: "" }],
+  ])("a 200 from %s with no usable %s: caption unchanged, a plain sentence", async (route, field, answer) => {
+    const fetchImpl = vi.fn(async () => Response.json(answer));
+    await expect(
+      requestCaption(`/api/posts/${route}`, body, field, fetchImpl as unknown as typeof fetch),
+    ).resolves.toEqual({ ok: false, error: CAPTION_EMPTY_MESSAGE });
+    expect(CAPTION_EMPTY_MESSAGE).toBe("The AI sent back no caption, so your caption is unchanged. Try again, or write it yourself.");
   });
 });

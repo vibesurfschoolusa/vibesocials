@@ -10,10 +10,15 @@ export const CAPTION_OFFLINE_MESSAGE =
 export const CAPTION_FAILED_MESSAGE =
   "Something went wrong on our side, so your caption is unchanged. Please try again in a minute.";
 
-export type CaptionRequestResult = { ok: true; caption: unknown } | { ok: false; error: string };
+/** A 200 with no caption in it: the box keeps what it had. */
+export const CAPTION_EMPTY_MESSAGE =
+  "The AI sent back no caption, so your caption is unchanged. Try again, or write it yourself.";
+
+export type CaptionRequestResult = { ok: true; caption: string } | { ok: false; error: string };
 
 /**
- * POSTs `body` as JSON to a caption route. Success gives the answer's `field`;
+ * POSTs `body` as JSON to a caption route. Success gives the answer's `field`
+ * when it is text that is not blank;
  * a refusal gives the route's own `error` text; no answer, or one that is not
  * JSON, gives ours.
  */
@@ -39,5 +44,7 @@ export async function requestCaption(
     return { ok: false, error: typeof error === "string" && error ? error : CAPTION_FAILED_MESSAGE };
   }
   if (data === null || typeof data !== "object") return { ok: false, error: CAPTION_FAILED_MESSAGE };
-  return { ok: true, caption: data[field] };
+  const caption = data[field];
+  if (typeof caption !== "string" || !caption.trim()) return { ok: false, error: CAPTION_EMPTY_MESSAGE };
+  return { ok: true, caption };
 }

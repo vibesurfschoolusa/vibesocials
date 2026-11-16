@@ -54,6 +54,7 @@ import { deriveComposerGate } from "@/lib/composerGate";
 import {
   COMPOSER_DISPATCH_FAILED_MESSAGE,
   composerSubmitOutcome,
+  postDestination,
 } from "@/lib/composerSubmitOutcome";
 import {
   buildPhotosPostBody,
@@ -1317,18 +1318,17 @@ function CreatePostFormInner({
         },
         "caption",
       );
-      const caption = result.ok ? result.caption : null;
 
       if (options.isStale?.()) {
         return;
       }
 
-      if (!result.ok || typeof caption !== "string" || !caption.trim()) {
-        const problem = result.ok ? "AI returned an empty caption from media" : result.error;
-        console.error("Error generating caption from media:", problem);
-        toast.error(problem);
+      if (!result.ok) {
+        console.error("Error generating caption from media:", result.error);
+        toast.error(result.error);
         return;
       }
+      const caption = result.caption;
 
       setUploadCaption((prev) => {
         if (!options.overwrite && prev.trim()) {
@@ -1993,7 +1993,7 @@ function CreatePostFormInner({
       setUploadLoading(false);
     } catch (err: unknown) {
       // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts).
-      toast.error(submitErrorText(err));
+      toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval }));
       setUploadLoading(false);
     }
   }
@@ -2159,7 +2159,7 @@ function CreatePostFormInner({
       }
 
       // Set the enhanced caption in the textarea
-      setUploadCaption(result.caption as string);
+      setUploadCaption(result.caption);
     } catch (err: unknown) {
       console.error("Error enhancing caption:", err);
       toast.error(CAPTION_FAILED_MESSAGE);
@@ -2326,10 +2326,10 @@ function CreatePostFormInner({
                   </p>
                 ) : null}
                 <Link
-                  href={!awaitingApproval && submittedMode === "now" ? "/activity" : "/queue"}
+                  href={postDestination(submittedMode, awaitingApproval) === "activity" ? "/activity" : "/queue"}
                   className={buttonVariants({ variant: "outline", size: "sm" })}
                 >
-                  {!awaitingApproval && submittedMode === "now"
+                  {postDestination(submittedMode, awaitingApproval) === "activity"
                     ? "View activity"
                     : "View queue"}
                 </Link>

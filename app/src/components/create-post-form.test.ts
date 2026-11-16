@@ -1116,7 +1116,17 @@ describe("the Post button's failure", () => {
   it("the catch shows submitErrorText and clears nothing", () => {
     const catchBlock = submit.slice(submit.lastIndexOf("} catch (err: unknown) {"));
     expect(catchBlock.replace(/\s+/g, " ")).toBe(
-      "} catch (err: unknown) { // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err)); setUploadLoading(false); }",
+      "} catch (err: unknown) { // Nothing is cleared: the person's post stays as it was (lib/postSubmitFailure.ts). toast.error(submitErrorText(err, { mode: publishMode, holdsForApproval })); setUploadLoading(false); }",
     );
+  });
+});
+
+// R24 JJ2 review: the success banner's link follows postDestination, the rule
+// the success text and the lost-connection sentence use.
+describe("the success banner's link", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  it("reads postDestination", () => {
+    expect(raw).toContain('href={postDestination(submittedMode, awaitingApproval) === "activity" ? "/activity" : "/queue"}');
+    expect(raw).not.toContain('!awaitingApproval && submittedMode === "now"');
   });
 });
