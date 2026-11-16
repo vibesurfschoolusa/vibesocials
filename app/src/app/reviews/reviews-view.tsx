@@ -12,12 +12,13 @@ import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
-import { canRetry, readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
+import { asksReload, canRetry, readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import { initialLocation } from "@/components/reviews/initial-location";
+import { latestRequests, loadReviewsFor } from "@/components/reviews/load-reviews";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import {
   draftingAfterEnd,
@@ -49,12 +50,12 @@ import {
   singleLocationName,
 } from "@/components/reviews/reviews-page";
 import type { GoogleReview, Location } from "@/components/reviews/types";
+import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
 
 import { ReviewLinkPanel } from "./review-link-panel";
 
 // F7 (R1 M5): plain sentences for a failure the route did not explain.
 const LOCATIONS_FAILED = "Couldn't load your Google locations. Try again in a minute.";
-const REVIEWS_FAILED = "Couldn't load your Google reviews. Try again in a minute.";
 const REPLY_FAILED = "Couldn't post your reply. Try again in a minute.";
 export const REPLY_OFFLINE_MESSAGE =
   "We couldn't reach Vibe Socials, so your reply wasn't posted. Check your connection and try again.";
@@ -204,6 +205,12 @@ export function ReviewsView({
   // JJ3 lead review: where focus was as a draft landed, decided once its box is
   // open (focusBoxAfterCardDraft): the card's Draft button leaves with it.
   const [boxFocusAfterDraft, setBoxFocusAfterDraft] = useState<{ reviewId: string; activeId: string } | null>(null);
+  // R27 client-journey L1: only the latest reviews request may fill the list.
+  const [nextReviewsRequest] = useState(latestRequests);
+  // R27 security-billing L1: a reply or draft was refused because this page was
+  // drawn for another workspace; the notice offers Reload, which takes focus.
+  const [workspaceChanged, setWorkspaceChanged] = useState(false);
+  const reloadRef = useRef<HTMLButtonElement>(null);
 
   // Every change of the open form but a draft landing (which opens one only
   // when none is open) comes here, so a closed form's refusal never comes back.
@@ -246,29 +253,18 @@ export function ReviewsView({
 
   const loadReviews = useCallback(async () => {
     if (!selectedLocation) return;
-
-    try {
-      setLoading(true);
-      setReviewsError(null);
-
-      const response = await fetch(
-        `/api/reviews?location=${encodeURIComponent(selectedLocation)}`
-      );
-
-      if (!response.ok) {
-        throw await readApiError(response, REVIEWS_FAILED);
+    setLoading(true);
+    setReviewsError(null);
+    await loadReviewsFor(selectedLocation, nextReviewsRequest(), (outcome) => {
+      if ("error" in outcome) {
+        setReviewsError(outcome.error);
+      } else {
+        setReviews(outcome.reviews);
+        setTruncated(outcome.truncated);
       }
-
-      const data = await response.json();
-      setReviews(data.reviews || []);
-      setTruncated(data.truncated === true);
-    } catch (err: unknown) {
-      console.error("Error fetching reviews:", err);
-      setReviewsError(shownError(err, REVIEWS_FAILED));
-    } finally {
       setLoading(false);
-    }
-  }, [selectedLocation]);
+    });
+  }, [selectedLocation, nextReviewsRequest]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
@@ -291,6 +287,12 @@ export function ReviewsView({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot focus request, cleared once used
     setPendingFocus(null);
   }, [pendingFocus, confirmTarget]);
+
+  // As pendingFocus: once the confirm dialog has closed, so its own restore doesn't win.
+  useEffect(() => {
+    if (!workspaceChanged || confirmTarget) return;
+    reloadRef.current?.focus();
+  }, [workspaceChanged, confirmTarget]);
 
   useEffect(() => {
     if (!boxFocusAfterDraft) return;
@@ -350,6 +352,7 @@ export function ReviewsView({
         body: JSON.stringify({
           comment,
           reviewName: review.name, // Pass full review name for API
+          workspaceId,
         }),
       });
 
@@ -387,7 +390,9 @@ export function ReviewsView({
       console.error("Error posting reply:", err);
       const shown = replyFailureShown(err);
       toast.error(shown.message);
-      setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
+      // The typed reply stays in its box either way.
+      if (shown.reload) setWorkspaceChanged(true);
+      else setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
       // A reply a retry can't change (a 403) lets the dialog close; its form keeps the sentence.
       if (canRetry(shown)) throw new ConfirmFailureShown("REPLY_FAILED");
     } finally {
@@ -409,6 +414,7 @@ export function ReviewsView({
           starRating: review.starRating,
           comment: review.comment || "",
           businessName: "", // Can be configured later
+          workspaceId,
         }),
       });
 
@@ -430,6 +436,7 @@ export function ReviewsView({
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
       toast.error(draftFailureMessage(err));
+      if (asksReload(err)) setWorkspaceChanged(true);
     } finally {
       setGeneratingAI((prev) => draftingAfterEnd(prev, review.reviewId));
     }
@@ -476,6 +483,7 @@ export function ReviewsView({
       <div className={APP_PAGE_CLASS}>
         <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
         <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
+        <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged} reloadRef={reloadRef} />
         <ReviewsLoadingList />
       </div>
     );
@@ -527,6 +535,7 @@ export function ReviewsView({
       )}
 
       <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
+      <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged} reloadRef={reloadRef} />
 
       {/* Tabs */}
       {selectedLocation && !reviewsError && (

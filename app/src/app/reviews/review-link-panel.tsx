@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { qrSvg } from "@/lib/qrSvg";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 /** The message an owner sends a customer to ask for a review; fits any kind of business. */
 export function reviewRequestMessage(link: string): string {
@@ -78,25 +79,28 @@ export function ReviewLinkPanel({
  * installed app a new tab opens the browser, where iOS has no session and the
  * card sends to Log in, so there it opens in the same view (the card page has
  * the app's own navigation back); in a browser tab it opens a new one and says so.
+ * R27 security-billing L2: it names the page's workspace, which the card page
+ * checks against the active one, so it never prints another workspace's card.
  */
-export function PrintCardLinkView({ installed }: { installed: boolean }) {
+export function PrintCardLinkView({ installed, workspaceId }: { installed: boolean; workspaceId: string }) {
   const className = buttonVariants({ variant: "outline", size: "sm" });
+  const href = withWorkspaceId("/reviews/print-card", workspaceId);
   if (installed) {
     return (
-      <Link href="/reviews/print-card" className={className}>
+      <Link href={href} className={className}>
         Print card
       </Link>
     );
   }
   return (
-    <ExternalLink href="/reviews/print-card" className={className}>
+    <ExternalLink href={href} className={className}>
       Print card
     </ExternalLink>
   );
 }
 
-function PrintCardLink() {
-  return <PrintCardLinkView installed={useInstalledApp()} />;
+function PrintCardLink({ workspaceId }: { workspaceId: string }) {
+  return <PrintCardLinkView installed={useInstalledApp()} workspaceId={workspaceId} />;
 }
 
 /** The panel for a given state; separate so it renders in tests without a fetch. */
@@ -163,7 +167,7 @@ export function ReviewLinkPanelView({
                 <Button type="button" variant="outline" size="sm" onClick={() => copy(state.url, "Link")}>
                   Copy link
                 </Button>
-                <PrintCardLink />
+                <PrintCardLink workspaceId={workspaceId} />
               </div>
             </div>
             <div className="flex flex-col gap-1.5">

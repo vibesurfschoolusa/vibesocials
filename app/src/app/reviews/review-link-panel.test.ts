@@ -30,7 +30,7 @@ describe("ReviewLinkPanelView", () => {
     expect(html).toContain("Get more reviews");
     expect(html).toContain(`href="${LINK}"`);
     expect(html).toContain(qrSvg(LINK));
-    expect(html).toContain('href="/reviews/print-card"');
+    expect(html).toContain('href="/reviews/print-card?workspaceId=ws-A"');
     expect(html).toContain("Print card");
     expect(html).toContain(reviewRequestMessage(LINK));
     expect(html.match(/>Copy link</g)).toHaveLength(1);
@@ -83,7 +83,7 @@ describe("ReviewLinkPanelView", () => {
       // LL2 lead review: the hint doesn't inherit the URL's break-all, so it breaks only between words.
       `<a href="${LINK}" class="break-all text-sm text-primary underline-offset-4 hover:underline" target="_blank" rel="noopener noreferrer">${LINK} <span class="text-xs font-normal print:hidden break-normal">(opens in a new tab)</span></a>`,
     );
-    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card"[^>]*>Print card <span class="text-xs font-normal print:hidden">\(opens in a new tab\)<\/span><\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card\?workspaceId=ws-A"[^>]*>Print card <span class="text-xs font-normal print:hidden">\(opens in a new tab\)<\/span><\/a>/);
     expect(html).toMatch(/<a [^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Print card/);
   });
 
@@ -100,20 +100,35 @@ describe("ReviewLinkPanelView", () => {
 // sign-in link's rule: the same view in the installed app, a new tab otherwise.
 describe("Print card and the installed app", () => {
   it("in a browser tab: a new tab, with the visible hint", () => {
-    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: false }));
-    expect(html).toMatch(/<a href="\/reviews\/print-card" [^>]*target="_blank" rel="noopener noreferrer">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
+    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: false, workspaceId: "ws-A" }));
+    expect(html).toMatch(/<a href="\/reviews\/print-card\?workspaceId=ws-A" [^>]*target="_blank" rel="noopener noreferrer">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
   });
 
   it("in the installed app: the same view, and no new-tab hint", () => {
-    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: true }));
-    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card">Print card<\/a>/);
+    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: true, workspaceId: "ws-A" }));
+    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card\?workspaceId=ws-A">Print card<\/a>/);
     expect(html).not.toContain("target=");
     expect(html).not.toContain("new tab");
   });
 
   it("the panel decides with the shared installed-app hook", () => {
     const source = readFileSync(path.join(__dirname, "review-link-panel.tsx"), "utf8");
-    expect(source).toContain("<PrintCardLinkView installed={useInstalledApp()} />");
-    expect(source).toContain("<PrintCardLink />");
+    expect(source).toContain("<PrintCardLinkView installed={useInstalledApp()} workspaceId={workspaceId} />");
+    expect(source).toContain("<PrintCardLink workspaceId={workspaceId} />");
+  });
+});
+
+// R27 security-billing L2: the card prints the workspace this page was drawn
+// for (print-card/page.tsx takes ?workspaceId= and refuses another).
+describe("Print card names the page's workspace", () => {
+  it("encodes the id into the link", () => {
+    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: true, workspaceId: "ws 1&x" }));
+    expect(html).toContain('href="/reviews/print-card?workspaceId=ws%201%26x"');
+  });
+
+  it("names it in both views and never the bare path", () => {
+    expect(render({ status: "ready", url: LINK }, "ws-B")).toContain('href="/reviews/print-card?workspaceId=ws-B"');
+    const source = readFileSync(path.join(__dirname, "review-link-panel.tsx"), "utf8");
+    expect(source).not.toContain('href="/reviews/print-card"');
   });
 });

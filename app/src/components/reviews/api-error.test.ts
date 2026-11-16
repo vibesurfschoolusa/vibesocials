@@ -102,3 +102,30 @@ describe("shownError", () => {
     expect(shownError(error, "Fallback.")).toEqual({ message: "Fallback.", settingsLink: false });
   });
 });
+
+// R27 security-billing L1: the reply and draft routes refuse a page drawn for
+// another workspace (409 WORKSPACE_CHANGED); the page says so with Reload.
+describe("a page drawn for another workspace", () => {
+  it("is final, with the page's own sentence and the reload flag", async () => {
+    const error = await readApiError(
+      new Response(JSON.stringify({ code: "WORKSPACE_CHANGED", error: "Server words." }), { status: 409 }),
+      "F.",
+    );
+    const shown = shownError(error, "Other.");
+    expect(shown).toEqual({
+      message: "This page was opened for another workspace. Reload to see the one you're working in.",
+      settingsLink: false,
+      retry: false,
+      reload: true,
+    });
+    expect(canRetry(shown)).toBe(false);
+  });
+
+  it("any other 409 is as today", async () => {
+    const shown = shownError(
+      await readApiError(new Response(JSON.stringify({ error: "Busy." }), { status: 409 }), "F."),
+      "Other.",
+    );
+    expect(shown).toEqual({ message: "Busy.", settingsLink: false });
+  });
+});

@@ -1,5 +1,7 @@
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
+import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "./workspace-changed";
+
 /**
  * F7 (R1 M5): what the Reviews page shows when a call fails. The routes answer
  * `{ error, reconnect? }` (server/googleReviews.ts reviewsErrorBody), but a
@@ -14,6 +16,8 @@ export class ReviewsApiError extends Error {
     readonly signIn = false,
     /** R25: false when asking again can't change the answer (a final status or code, readApiError). */
     readonly retry = true,
+    /** R27: the page was drawn for another workspace (409 WORKSPACE_CHANGED); the step is Reload. */
+    readonly reload = false,
   ) {
     super(message);
     this.name = "ReviewsApiError";
@@ -41,6 +45,8 @@ export async function readApiError(response: Response, fallback: string): Promis
   const body = (await response.json().catch(() => null)) as
     | { error?: unknown; reconnect?: unknown; signIn?: unknown; code?: unknown }
     | null;
+  // R27: the page's own sentence, which names its Reload control.
+  if (isWorkspaceChanged(body)) return new ReviewsApiError(WORKSPACE_CHANGED_RELOAD_MESSAGE, false, false, false, true);
   const message = typeof body?.error === "string" && body.error.trim() !== "" ? body.error : fallback;
   // Only the flag is read: a URL in an answer is never followed.
   // Only try-later (a 5xx with no final code, a 429) and no answer at all stay retryable.
@@ -55,6 +61,8 @@ export interface ShownError {
   signIn?: true;
   /** Set (false) only when asking again can't change the answer. */
   retry?: false;
+  /** Set when the page was drawn for another workspace: the step is Reload. */
+  reload?: true;
 }
 
 export function shownError(error: unknown, fallback: string): ShownError {
@@ -62,7 +70,13 @@ export function shownError(error: unknown, fallback: string): ShownError {
   const shown: ShownError = { message: error.message, settingsLink: error.settingsLink };
   if (error.signIn) shown.signIn = true;
   if (!error.retry) shown.retry = false;
+  if (error.reload) shown.reload = true;
   return shown;
+}
+
+/** Whether a caught error asks for Reload (a page drawn for another workspace). */
+export function asksReload(error: unknown): boolean {
+  return error instanceof ReviewsApiError && error.reload;
 }
 
 /** Whether the page offers Retry (or keeps a dialog open to send again) for this error. */

@@ -28,6 +28,7 @@ import {
   locationsSignIn,
   REPLY_OFFLINE_MESSAGE,
   replyFailureShown,
+  ReviewsView,
 } from "./reviews-view";
 
 const source = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
@@ -389,3 +390,55 @@ describe("ReviewsView and the locations route's real empty answers", () => {
     }
   });
 });
+
+// R27 client-journey L1: pick A then B, A answers last; A's reviews never show under B.
+describe("ReviewsView loads only the selected location's reviews", () => {
+  it("goes through loadReviewsFor with the latest-request guard", () => {
+    const load = source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
+    expect(source).toContain('from "@/components/reviews/load-reviews"');
+    expect(source).toContain("useState(latestRequests)");
+    expect(load).toContain("loadReviewsFor(selectedLocation, nextReviewsRequest(),");
+    expect(load).not.toContain("fetch(");
+    expect(load).not.toContain("finally");
+  });
+});
+
+// R27 security-billing L1: reply and draft name the page's workspace; a refusal
+// says so with Reload, and keeps what was typed.
+describe("ReviewsView when the page was drawn for another workspace", () => {
+  it("sends the page's workspaceId on reply and draft", () => {
+    const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
+    expect(perform).toMatch(/body: JSON\.stringify\(\{\s*comment,\s*reviewName: review\.name,[^}]*workspaceId,\s*\}\)/);
+    const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
+    expect(draft).toMatch(/body: JSON\.stringify\(\{[^}]*workspaceId,\s*\}\)/);
+  });
+
+  it("a 409 WORKSPACE_CHANGED reply: the Reload sentence, final, so the dialog closes", () => {
+    const shown = replyFailureShown(
+      new ReviewsApiError("This page was opened for another workspace. Reload to see the one you're working in.", false, false, false, true),
+    );
+    expect(shown.reload).toBe(true);
+    expect(canRetry(shown)).toBe(false);
+  });
+
+  it("shows the notice with Reload instead of the form's line, and keeps the typed reply", () => {
+    const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
+    expect(perform).toMatch(/if \(shown\.reload\) setWorkspaceChanged\(true\);\s*else setReplyRefusal\(replyRefusalAfterFailure/);
+    const failed = perform.slice(perform.indexOf("} catch"));
+    expect(failed).not.toContain("setReplyBoxes");
+    const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
+    expect(draft).toContain("if (asksReload(err)) setWorkspaceChanged(true);");
+    expect(draft.slice(draft.indexOf("} catch"))).not.toContain("setReplyBoxes");
+  });
+
+  it("draws the notice from the first render in both views, and focuses Reload once the dialog closes", () => {
+    expect(source.split('<WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged} reloadRef={reloadRef} />').length - 1).toBe(2);
+    expect(source).toMatch(/if \(!workspaceChanged \|\| confirmTarget\) return;\s*reloadRef\.current\?\.focus\(\);/);
+  });
+
+  it("renders the empty region on the first render", () => {
+    const html = renderToStaticMarkup(createElement(ReviewsView, { savedLocation: null, isMember: false, workspaceId: "ws-1" }));
+    expect(html).toContain('<div role="status" class="mb-6 flex flex-col items-start gap-3 empty:mb-0 empty:sr-only"></div><div role="status"');
+  });
+});
+

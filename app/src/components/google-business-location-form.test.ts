@@ -20,6 +20,7 @@ import {
   pickAfterSave,
   saveFailureAt,
   savedLocationLine,
+  fieldSaveButton,
 } from "./google-business-location-form";
 import { SignInAgainLink } from "./gbp-sign-in-link";
 
@@ -307,3 +308,60 @@ describe("Google location form: the saved line names the real button", () => {
     expect(formSource).not.toContain("Load your locations");
   });
 });
+
+// R27 new-customer L5: a pick's save said "Saving…" on the Advanced button too.
+describe("Google location form: the Advanced button while a save runs", () => {
+  it("spins and says Saving… only for its own save; aria-disabled while a pick saves", () => {
+    expect(fieldSaveButton("field")).toEqual({ loading: true, label: "Saving…", ariaDisabled: true });
+    expect(fieldSaveButton("pick")).toEqual({ loading: false, label: "Save location", ariaDisabled: true });
+    expect(fieldSaveButton(null)).toEqual({ loading: false, label: "Save location", ariaDisabled: false });
+  });
+
+  it("the button reads the helper, and a submit while a pick saves does nothing", () => {
+    expect(formSource).toContain("const fieldButton = fieldSaveButton(savingFrom);");
+    expect(formSource).toMatch(/<Button\s+type="submit"\s+size="sm"\s+loading=\{fieldButton\.loading\}\s+aria-disabled=\{fieldButton\.ariaDisabled \|\| undefined\}/);
+    expect(formSource).toContain("{fieldButton.label}");
+    expect(formSource).not.toContain('{saving ? "Saving…" : "Save location"}');
+    const submit = formSource.slice(formSource.indexOf("async function handleSubmit"), formSource.indexOf("async function handleFetchLocations"));
+    expect(submit).toMatch(/event\.preventDefault\(\);\s*if \(saving\) return;/);
+  });
+});
+
+// R27 new-customer L6: the list request names the page's workspace; a page drawn
+// for another one says so with Reload; the route's sentences show as sent.
+describe("Google location form: the page's workspace", () => {
+  it("asks for the list with the page's workspaceId", () => {
+    expect(formSource).toContain(
+      'fetch(withWorkspaceId("/api/connections/google_business_profile/locations", workspaceId))',
+    );
+  });
+
+  it("a 409 WORKSPACE_CHANGED: the Reload sentence and control, nothing else", () => {
+    const failed = locationFailure({ code: "WORKSPACE_CHANGED", error: "Server words." }, LOCATION_MESSAGES.loadFailed, "ws-1");
+    expect(failed).toEqual({
+      message: "This page was opened for another workspace. Reload to see the one you're working in.",
+      reconnect: false,
+      signInUrl: null,
+      reload: true,
+    });
+    const html = renderToStaticMarkup(createElement(PickerStatusLine, { status: failed }));
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*>Reload<\/button>/);
+    expect(renderToStaticMarkup(createElement(PickerStatusLine, { status: { message: "x", signInUrl: null } }))).not.toContain("Reload");
+  });
+
+  it("carries reload into every status the form keeps", () => {
+    expect(formSource.match(/reload: failed\.reload/g)).toHaveLength(2);
+
+    // The dropdown's own region shows a pick's Reload too.
+    const regionAt = formSource.indexOf('<div id="gbp-pick-status"');
+    const region = formSource.slice(regionAt, formSource.indexOf("</div>", regionAt));
+    expect(region).toContain("{!saving && pickFailure?.reload ? <ReloadPageButton /> : null}");
+  });
+
+  it("shows the route's own sentence as it comes, for a 400 after a disconnect too", () => {
+    const sentence = "Your Google Business Profile was disconnected. Connect it again, or reload this page.";
+    expect(locationFailure({ error: sentence, code: "GBP_NOT_CONNECTED" }, LOCATION_MESSAGES.loadFailed, "ws-1").message).toBe(sentence);
+    expect(formSource).not.toContain("disconnected");
+  });
+});
+

@@ -9,8 +9,11 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { SignInAgainLink } from "./gbp-sign-in-link";
+import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "./reviews/workspace-changed";
+import { ReloadPageButton } from "./reviews/workspace-changed-notice";
 
 interface Props {
   /** The workspace this page was rendered for; the route refuses any other (F3). */
@@ -52,13 +55,18 @@ export const LOCATION_RECONNECT_CODE = "RECONNECT_REQUIRED";
 /**
  * What a failed answer shows: the route's own text, else `fallback`. `reconnect`
  * (R24 platform-clients L1) means the card should refresh so its server-rendered
- * Reconnect state shows without a manual reload.
+ * Reconnect state shows without a manual reload. `reload` (R27): the route
+ * refused a page drawn for another workspace (409 WORKSPACE_CHANGED); the
+ * sentence names the Reload control the status line then shows.
  */
 export function locationFailure(
   data: { error?: string; code?: string; signIn?: unknown } | null,
   fallback: string,
   workspaceId: string,
-): { message: string; reconnect: boolean; signInUrl: string | null } {
+): { message: string; reconnect: boolean; signInUrl: string | null; reload?: true } {
+  if (isWorkspaceChanged(data)) {
+    return { message: WORKSPACE_CHANGED_RELOAD_MESSAGE, reconnect: false, signInUrl: null, reload: true };
+  }
   const reconnect = data?.code === LOCATION_RECONNECT_CODE;
   return {
     message: data?.error ?? fallback,
@@ -75,6 +83,8 @@ export function locationFailure(
 export interface PickerStatus {
   message: string;
   signInUrl: string | null;
+  /** R27: the page was drawn for another workspace; the line offers Reload. */
+  reload?: true;
 }
 
 /**
@@ -107,6 +117,15 @@ export function pickStatusText(savingFrom: SavePlace | null, failure: PickerStat
   if (savingFrom === "pick") return PICK_SAVING_STATUS;
   if (savingFrom === "field") return "";
   return failure?.message ?? "";
+}
+
+/**
+ * R27 new-customer L5: the Advanced button spins and says Saving… only for its
+ * own save; while a pick saves it is aria-disabled (it keeps focus).
+ */
+export function fieldSaveButton(savingFrom: SavePlace | null): { loading: boolean; label: string; ariaDisabled: boolean } {
+  const own = savingFrom === "field";
+  return { loading: own, label: own ? "Saving…" : "Save location", ariaDisabled: savingFrom !== null };
 }
 
 /** Lead review: which control a save came from, so its failure shows by that control. */
@@ -148,6 +167,7 @@ export function PickerStatusLine({ status }: { status: PickerStatus }) {
     <div className="flex flex-col items-start gap-2">
       <p className="text-sm text-muted-foreground">{status.message}</p>
       {status.signInUrl ? <SignInAgainLink href={status.signInUrl} /> : null}
+      {status.reload ? <ReloadPageButton /> : null}
     </div>
   );
 }
@@ -175,6 +195,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const pickFailure = saveFailureAt(saveFailure, "pick");
   const pickStatus = pickStatusText(savingFrom, pickFailure);
   const fieldFailure = saveFailureAt(saveFailure, "field");
+  const fieldButton = fieldSaveButton(savingFrom);
 
   // Saves a location: picked from Google's list (with its name, saved at once)
   // or typed in the Advanced field (no name). 2026-11-09 first-run check:
@@ -199,7 +220,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
       if (!response.ok) {
         const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
-        setSaveFailure({ from, status: { message: failed.message, signInUrl: failed.signInUrl } });
+        setSaveFailure({ from, status: { message: failed.message, signInUrl: failed.signInUrl, reload: failed.reload } });
         setPicked(pickAfterSave(name, from, false));
         setSavingFrom(null);
         if (failed.reconnect) router.refresh();
@@ -224,6 +245,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
 
     const trimmed = locationName.trim();
     if (!trimmed) {
@@ -240,7 +262,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     setSaveFailure(null);
 
     try {
-      const response = await fetch("/api/connections/google_business_profile/locations");
+      const response = await fetch(withWorkspaceId("/api/connections/google_business_profile/locations", workspaceId));
       const data = (await response.json().catch(() => null)) as
         | { locations?: RemoteLocation[]; error?: string; code?: string; notice?: string; signIn?: unknown }
         | null;
@@ -248,7 +270,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       if (!response.ok) {
         setLocations(null);
         const failed = locationFailure(data, LOCATION_MESSAGES.loadFailed, workspaceId);
-        setFetchFailure({ message: failed.message, signInUrl: failed.signInUrl });
+        setFetchFailure({ message: failed.message, signInUrl: failed.signInUrl, reload: failed.reload });
         setLoadingLocations(false);
         if (failed.reconnect) router.refresh();
         return;
@@ -343,6 +365,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         <div id="gbp-pick-status" role="status" className={pickStatus ? "flex flex-col items-start gap-2" : "sr-only"}>
           <p className="text-sm text-muted-foreground">{pickStatus}</p>
           {!saving && pickFailure?.signInUrl ? <SignInAgainLink href={pickFailure.signInUrl} /> : null}
+          {!saving && pickFailure?.reload ? <ReloadPageButton /> : null}
         </div>
       </div>
 
@@ -359,8 +382,14 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
             value={locationName}
             onChange={(event) => setLocationName(event.target.value)}
           />
-          <Button type="submit" size="sm" loading={saving} className="shrink-0 sm:w-auto">
-            {saving ? "Saving…" : "Save location"}
+          <Button
+            type="submit"
+            size="sm"
+            loading={fieldButton.loading}
+            aria-disabled={fieldButton.ariaDisabled || undefined}
+            className="shrink-0 sm:w-auto"
+          >
+            {fieldButton.label}
           </Button>
         </div>
         <div id="gbp-save-status" role="status" className="empty:sr-only">

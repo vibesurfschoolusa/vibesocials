@@ -27,4 +27,15 @@ describe("initialLocation", () => {
   it("chooses nothing when the list did not load", () => {
     expect(initialLocation([], SAVED)).toBeNull();
   });
+
+  // R27 client-journey L2: Settings can hold a store code (Advanced).
+  it("opens with the one listed location whose store code is the saved value", () => {
+    const withCode = (name: string, storeCode: string | null): Location => ({ ...loc(name), storeCode });
+    expect(initialLocation([withCode("a", "STORE-11"), withCode("b", "STORE-12")], "STORE-12")).toBe("b");
+  });
+
+  it("asks when two listed locations share the saved store code", () => {
+    const withCode = (name: string, storeCode: string | null): Location => ({ ...loc(name), storeCode });
+    expect(initialLocation([withCode("a", "STORE-12"), withCode("b", "STORE-12")], "STORE-12")).toBeNull();
+  });
 });
