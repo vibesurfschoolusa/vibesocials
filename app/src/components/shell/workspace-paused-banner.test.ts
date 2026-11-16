@@ -230,7 +230,7 @@ describe("the banner keeps the newest answer", () => {
 
   it("every status read in the banner takes its place in the order", () => {
     const source = readFileSync(fileURLToPath(new URL("./workspace-paused-banner.tsx", import.meta.url)), "utf8");
-    const reads = source.match(/fetchWorkspaceStatus\(fetchImpl, workspaceOf\)/g) ?? [];
+    const reads = source.match(/fetchWorkspaceStatus\(fetchImpl, \(\) => workspaceOf\((true|false)\)\)/g) ?? [];
     expect(reads.length).toBeGreaterThan(0);
     expect((source.match(/\breads\.next\(\)/g) ?? []).length).toBe(reads.length);
     expect(source).not.toMatch(/fetchWorkspaceStatus\(fetch\)/);
@@ -266,16 +266,59 @@ describe("the banner and the tab's workspace", () => {
     expect(onStatus).not.toHaveBeenCalled();
   });
 
-  it("tabWorkspace reads the list once and keeps the active id; a failed read is asked again", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValue(Response.json({ workspaces: [{ id: "ws-9", isActive: false }, { id: "ws-1", isActive: true }] }));
+  const list = (active: string) =>
+    Response.json({ workspaces: [{ id: "ws-9", isActive: active === "ws-9" }, { id: "ws-1", isActive: active === "ws-1" }] });
+
+  it("tabWorkspace keeps the active id between announces; a failed read is asked again", async () => {
+    const fetchImpl = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValue(list("ws-1"));
     const workspaceOf = tabWorkspace(fetchImpl as unknown as typeof fetch);
-    await expect(workspaceOf()).resolves.toBeNull();
-    await expect(workspaceOf()).resolves.toBe("ws-1");
-    await expect(workspaceOf()).resolves.toBe("ws-1");
+    await expect(workspaceOf(false)).resolves.toBeNull();
+    await expect(workspaceOf(false)).resolves.toBe("ws-1");
+    await expect(workspaceOf(false)).resolves.toBe("ws-1");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces", { cache: "no-store" });
+  });
+
+  // R32 lead review: a page drawn after a navigation belongs to the cookie's
+  // workspace, so a navigation read adopts the one now active; a failed list
+  // read keeps the last one.
+  it("a navigation read adopts the workspace now active; an announce read keeps it", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(list("ws-1"))
+      .mockResolvedValueOnce(list("ws-9"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const workspaceOf = tabWorkspace(fetchImpl as unknown as typeof fetch);
+    await expect(workspaceOf(true)).resolves.toBe("ws-1");
+    await expect(workspaceOf(true)).resolves.toBe("ws-9");
+    await expect(workspaceOf(false)).resolves.toBe("ws-9");
+    await expect(workspaceOf(true)).resolves.toBe("ws-9");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("after another tab switched, the next page shows that workspace's own line, not the switch sentence", async () => {
+    let active = "ws-1";
+    const fetchImpl = vi.fn(async (url: string) =>
+      url === "/api/workspaces"
+        ? list(active)
+        : url === `/api/workspaces/status?workspaceId=${active}`
+          ? Response.json({ blockedMessage: "Paused: unpaid invoice." })
+          : (renderedWorkspaceRefusal("ws-1", active) as Response),
+    );
+    const workspaceOf = tabWorkspace(fetchImpl as unknown as typeof fetch);
+    await workspaceOf(true);
+    active = "ws-9";
+    const onStatus = vi.fn();
+    readWorkspaceStatusOnce(onStatus, workspaceOf, fetchImpl as unknown as typeof fetch);
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalled());
+    expect(onStatus.mock.calls[0][0].message).toBe("Paused: unpaid invoice.");
+  });
+
+  it("the banner asks afresh on navigation and keeps the id on an announce", () => {
+    const source = readFileSync(fileURLToPath(new URL("./workspace-paused-banner.tsx", import.meta.url)), "utf8");
+    const once = source.slice(source.indexOf("export function readWorkspaceStatusOnce"), source.indexOf("export function watchWorkspaceStatus"));
+    const watch = source.slice(source.indexOf("export function watchWorkspaceStatus"), source.indexOf("export type WorkspaceStatus"));
+    expect(once).toContain("fetchWorkspaceStatus(fetchImpl, () => workspaceOf(true))");
+    expect(watch).toContain("fetchWorkspaceStatus(fetchImpl, () => workspaceOf(false))");
   });
 });

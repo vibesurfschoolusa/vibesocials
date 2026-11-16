@@ -38,7 +38,7 @@ export function WorkspacePausedBanner({
   const [sending, setSending] = useState(false);
   // The navigation read and the announce read share one order: the later one shows.
   const [reads] = useState(newestAnswer);
-  // R32: the workspace this tab was drawn for, read once and kept across page changes.
+  // R32: the workspace the page on screen was drawn for (read again on each page change).
   const [workspaceOf] = useState(() => tabWorkspace(fetch));
 
   useEffect(() => {
@@ -78,15 +78,18 @@ export function WorkspacePausedBanner({
 }
 
 /**
- * R32: the workspace this tab was drawn for: the active one in the tab's first
- * workspace list (the one the account menu names), kept for the life of the
- * tab, since a switch in this tab is a full load (afterWorkspaceChange). A
- * failed read is asked again next time; null until one is answered.
+ * R32: the workspace the page on screen was drawn for. A navigation draws a
+ * new page for the cookie's workspace, so a navigation read (`fresh`) reads
+ * the workspace list again and adopts the active one; an announce read keeps
+ * the last one, so a tab another tab switched says the shared sentence instead
+ * of showing the other workspace's line. A failed list read keeps the last id
+ * (null until one is answered). The gap between a page's render and its list
+ * read is accepted.
  */
-export function tabWorkspace(fetchImpl: typeof fetch = fetch): () => Promise<string | null> {
+export function tabWorkspace(fetchImpl: typeof fetch = fetch): (fresh: boolean) => Promise<string | null> {
   let known: string | null = null;
-  return async () => {
-    if (known) return known;
+  return async (fresh) => {
+    if (known && !fresh) return known;
     try {
       const response = await fetchImpl("/api/workspaces", { cache: "no-store" });
       const data = (await response.json().catch(() => null)) as { workspaces?: { id?: unknown; isActive?: unknown }[] } | null;
@@ -128,13 +131,13 @@ async function fetchWorkspaceStatus(
  */
 export function readWorkspaceStatusOnce(
   onStatus: (status: WorkspaceStatus) => void,
-  workspaceOf: () => Promise<string | null>,
+  workspaceOf: (fresh: boolean) => Promise<string | null>,
   fetchImpl: typeof fetch = fetch,
   reads = newestAnswer(),
 ): () => void {
   let cancelled = false;
   const show = reads.next();
-  void fetchWorkspaceStatus(fetchImpl, workspaceOf).then((next) => {
+  void fetchWorkspaceStatus(fetchImpl, () => workspaceOf(true)).then((next) => {
     if (!cancelled && next && show()) onStatus(next);
   });
   return () => {
@@ -149,14 +152,14 @@ export function readWorkspaceStatusOnce(
  */
 export function watchWorkspaceStatus(
   onStatus: (status: WorkspaceStatus) => void,
-  workspaceOf: () => Promise<string | null>,
+  workspaceOf: (fresh: boolean) => Promise<string | null>,
   fetchImpl: typeof fetch = fetch,
   reads = newestAnswer(),
 ): () => void {
   let stopped = false;
   const unsubscribe = subscribeWorkspaceChange(() => {
     const show = reads.next();
-    void fetchWorkspaceStatus(fetchImpl, workspaceOf).then((next) => {
+    void fetchWorkspaceStatus(fetchImpl, () => workspaceOf(false)).then((next) => {
       if (!stopped && next && show()) onStatus(next);
     });
   });
