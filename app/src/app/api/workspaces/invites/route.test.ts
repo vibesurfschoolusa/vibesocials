@@ -55,7 +55,19 @@ vi.mock("@/lib/inviteToken", async () => {
 import { NextResponse } from "next/server";
 
 import { INVITE_TTL_MS } from "@/lib/inviteToken";
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { DELETE, GET, POST } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/workspaces/invites${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 
 const OWNER_CONTEXT = {
   user: { id: "user-1", email: "owner@example.com", name: "Owner" },
@@ -123,6 +135,24 @@ beforeEach(() => {
   delete process.env.NEXTAUTH_URL;
 });
 
+// R32 lead follow-up: a page drawn for another workspace (another tab
+// switched) gets the switch sentence; a page that sent no id, the reload one.
+describe("GET /api/workspaces/invites - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/workspaces/invites", () => {
   // The invite rows below are made on 2026-07-12 and expire on 2026-07-19.
   beforeEach(() => {
@@ -136,7 +166,7 @@ describe("GET /api/workspaces/invites", () => {
   it("returns 401 when unauthenticated", async () => {
     requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
-    const response = await GET();
+    const response = await GET(req());
 
     expect(response.status).toBe(401);
     expect(findFirstMock).not.toHaveBeenCalled();
@@ -145,7 +175,7 @@ describe("GET /api/workspaces/invites", () => {
   it("returns 403 for a member", async () => {
     requireOwnerContextMock.mockResolvedValue(forbiddenResponse());
 
-    const response = await GET();
+    const response = await GET(req());
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
@@ -156,7 +186,7 @@ describe("GET /api/workspaces/invites", () => {
   it("returns { invite: null } when there is no active invite", async () => {
     findFirstMock.mockResolvedValue(null);
 
-    const response = await GET();
+    const response = await GET(req());
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -170,7 +200,7 @@ describe("GET /api/workspaces/invites", () => {
   it("returns active invite metadata WITHOUT the raw token or tokenHash (url is always null)", async () => {
     findFirstMock.mockResolvedValue(makeInviteRow());
 
-    const response = await GET();
+    const response = await GET(req());
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -193,14 +223,14 @@ describe("GET /api/workspaces/invites", () => {
     findFirstMock.mockResolvedValue(makeInviteRow());
     vi.setSystemTime(new Date("2026-07-19T00:00:00Z"));
 
-    await expect((await GET()).json()).resolves.toEqual({ invite: null });
+    await expect((await GET(req())).json()).resolves.toEqual({ invite: null });
   });
 
   it("a link whose maker is no longer an owner (demoted before #151, or deleted): { invite: null }", async () => {
     findFirstMock.mockResolvedValue(makeInviteRow({ createdById: "user-old" }));
     memberCountMock.mockResolvedValue(0);
 
-    await expect((await GET()).json()).resolves.toEqual({ invite: null });
+    await expect((await GET(req())).json()).resolves.toEqual({ invite: null });
     expect(memberCountMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-old", role: "owner" },
     });

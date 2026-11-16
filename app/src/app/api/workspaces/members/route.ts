@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { requireOwnerContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
  * GET /api/workspaces/members
@@ -10,11 +11,15 @@ import { requireOwnerContext } from "@/lib/workspace";
  * workspace-internal data, so this route is never exposed to non-owners —
  * there is no member-visible variant).
  */
-export async function GET() {
+export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
+
+  // R32: the page's workspace, so Team never lists another one's people.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), contextOrError.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const context = contextOrError;
 
   const memberships = await prisma.workspaceMember.findMany({

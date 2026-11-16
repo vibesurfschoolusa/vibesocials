@@ -6,7 +6,7 @@ import { readJsonObject } from "@/lib/http";
 import { generateInviteToken, INVITE_TTL_MS } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { requireOwnerContext } from "@/lib/workspace";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
  * GET /api/workspaces/invites
@@ -21,11 +21,15 @@ import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
  * R10-client-journey L3: only a link that still works (inviteLinkWorks: not
  * expired, its maker still an owner); otherwise null, so the card offers Create.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
+
+  // R32: the page's workspace, so Team never shows another one's invite link.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), contextOrError.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const context = contextOrError;
 
   const invite = await prisma.workspaceInvite.findFirst({

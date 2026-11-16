@@ -33,6 +33,7 @@ import { formatDisplayDate } from "@/lib/displayDate";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 import { personLabel } from "@/lib/usageLimits";
 import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
@@ -137,6 +138,30 @@ interface RosterEntry {
 interface InviteMeta {
   expiresAt: string;
   createdAt: string;
+}
+
+/** The Team card's own sentence when its list can't be read. */
+export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try reloading the page.";
+
+/**
+ * R32: the people of the workspace this page was drawn for (the roster or the
+ * owners' list). A refusal (another tab switched) is the shared sentence,
+ * never the other workspace's people.
+ */
+export async function readTeamList<T>(
+  path: string,
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ members: T[] } | { error: string }> {
+  try {
+    const response = await fetchImpl(withWorkspaceId(path, workspaceId));
+    const refusal = await readWorkspaceRefusalText(response);
+    if (refusal) return { error: refusal };
+    const data = (await response.json().catch(() => null)) as { members?: T[] } | null;
+    return response.ok && Array.isArray(data?.members) ? { members: data.members } : { error: MEMBERS_LOAD_FAILED_TEXT };
+  } catch {
+    return { error: MEMBERS_LOAD_FAILED_TEXT };
+  }
 }
 
 function formatDate(iso: string): string {
@@ -557,30 +582,20 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
   // --- Roster (GET /api/workspaces/members/roster) ---
   const [roster, setRoster] = useState<RosterEntry[] | null>(null);
   const [rosterLoading, setRosterLoading] = useState(true);
-  const [rosterError, setRosterError] = useState(false);
+  const [rosterError, setRosterError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch("/api/workspaces/members/roster");
-        const data = (await response.json().catch(() => null)) as
-          | { members: RosterEntry[] }
-          | null;
-        if (!cancelled) {
-          if (response.ok && data) setRoster(data.members);
-          else setRosterError(true);
-        }
-      } catch {
-        if (!cancelled) setRosterError(true);
-      } finally {
-        if (!cancelled) setRosterLoading(false);
-      }
-    })();
+    void readTeamList<RosterEntry>("/api/workspaces/members/roster", workspaceId).then((read) => {
+      if (cancelled) return;
+      if ("members" in read) setRoster(read.members);
+      else setRosterError(read.error);
+      setRosterLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here, mirrors revokeInvite/
@@ -621,9 +636,7 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
             </div>
           </>
         ) : rosterError ? (
-          <p className="text-sm text-muted-foreground">
-            Couldn&apos;t load members. Try reloading the page.
-          </p>
+          <p className="text-sm text-muted-foreground">{rosterError}</p>
         ) : roster && roster.length > 0 ? (
           <ul className="divide-y divide-border">
             {roster.map((entry, index) => (
@@ -738,7 +751,8 @@ function OwnerView({
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/workspaces/invites");
+        // R32: the page's workspace; a refusal leaves the link unknown, as any failure does.
+        const response = await fetch(withWorkspaceId("/api/workspaces/invites", workspaceId));
         const data = (await response.json().catch(() => null)) as
           | { invite: InviteMeta | null }
           | null;
@@ -755,7 +769,7 @@ function OwnerView({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   const copyInviteRef = useRef<HTMLButtonElement>(null);
 
@@ -820,7 +834,7 @@ function OwnerView({
   // --- Members (GET /api/workspaces/members, DELETE .../[userId]) ---
   const [members, setMembers] = useState<Member[] | null>(null);
   const [membersLoading, setMembersLoading] = useState(true);
-  const [membersError, setMembersError] = useState(false);
+  const [membersError, setMembersError] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
   const [promoteTarget, setPromoteTarget] = useState<Member | null>(null);
   const [demoteTarget, setDemoteTarget] = useState<Member | null>(null);
@@ -844,27 +858,16 @@ function OwnerView({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch("/api/workspaces/members");
-        const data = (await response.json().catch(() => null)) as { members: Member[] } | null;
-        if (!cancelled) {
-          if (response.ok && data) {
-            setMembers(data.members);
-          } else {
-            setMembersError(true);
-          }
-        }
-      } catch {
-        if (!cancelled) setMembersError(true);
-      } finally {
-        if (!cancelled) setMembersLoading(false);
-      }
-    })();
+    void readTeamList<Member>("/api/workspaces/members", workspaceId).then((read) => {
+      if (cancelled) return;
+      if ("members" in read) setMembers(read.members);
+      else setMembersError(read.error);
+      setMembersLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   // R25 new-customer L2: someone who already left (another owner removed them,
   // or they left) goes from the list; the route's answer says so.
@@ -1144,9 +1147,7 @@ function OwnerView({
             </div>
           </>
         ) : membersError ? (
-          <p className="text-sm text-muted-foreground">
-            Couldn&apos;t load members. Try reloading the page.
-          </p>
+          <p className="text-sm text-muted-foreground">{membersError}</p>
         ) : members && members.length > 0 ? (
           <ul className="divide-y divide-border">
             {members.map((member) => (

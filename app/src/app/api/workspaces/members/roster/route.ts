@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { personLabel } from "@/lib/usageLimits";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
  * GET /api/workspaces/members/roster
@@ -16,12 +17,16 @@ import { signedOutResponse } from "@/lib/signedOutResponse";
  * local-part, as posts' "by" shows it to members; the full email never
  * leaves the server on this route, whoever reads it.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32: the page's workspace, so Team never lists another one's people.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const memberships = await prisma.workspaceMember.findMany({
     where: { workspaceId: context.workspace.id },

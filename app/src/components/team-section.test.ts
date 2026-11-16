@@ -1,9 +1,56 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { INVITE_MAYBE_MADE_MESSAGE, inviteFailureText, memberIsGone, memberRoleChanged, teamMemberLines } from "./team-section";
+import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
+
+import {
+  INVITE_MAYBE_MADE_MESSAGE,
+  inviteFailureText,
+  MEMBERS_LOAD_FAILED_TEXT,
+  memberIsGone,
+  memberRoleChanged,
+  readTeamList,
+  teamMemberLines,
+} from "./team-section";
+
+// R32 lead follow-up: Team's reads name the workspace the page was drawn for;
+// a refusal (another tab switched) says the shared sentence, not the other's people.
+describe("readTeamList", () => {
+  const asFetch = (fn: () => Promise<Response>) => vi.fn(fn) as unknown as typeof fetch;
+
+  it("asks with the page's id and gives the list", async () => {
+    const fetchImpl = asFetch(async () => Response.json({ members: [{ name: "Ana", role: "owner" }] }));
+    await expect(readTeamList("/api/workspaces/members/roster", "ws-1", fetchImpl)).resolves.toEqual({
+      members: [{ name: "Ana", role: "owner" }],
+    });
+    expect(String((fetchImpl as unknown as { mock: { calls: [string][] } }).mock.calls[0][0])).toBe(
+      "/api/workspaces/members/roster?workspaceId=ws-1",
+    );
+  });
+
+  it("a refusal: the switch sentence", async () => {
+    const fetchImpl = asFetch(async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response);
+    await expect(readTeamList("/api/workspaces/members", "ws-1", fetchImpl)).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE });
+  });
+
+  it("any other failure: the card's own sentence", async () => {
+    await expect(readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => new Response("x", { status: 500 })))).resolves.toEqual({
+      error: MEMBERS_LOAD_FAILED_TEXT,
+    });
+    await expect(
+      readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => Promise.reject(new TypeError("Failed to fetch")))),
+    ).resolves.toEqual({ error: MEMBERS_LOAD_FAILED_TEXT });
+  });
+
+  it("the roster, members and invite reads all send the page's id", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    expect(source).toContain('readTeamList<RosterEntry>("/api/workspaces/members/roster", workspaceId)');
+    expect(source).toContain('readTeamList<Member>("/api/workspaces/members", workspaceId)');
+    expect(source).toContain('fetch(withWorkspaceId("/api/workspaces/invites", workspaceId))');
+  });
+});
 
 // R5 pages L10: the field that shows a new invite link has a name for screen
 // readers. It only renders right after a link is made (client state), so the

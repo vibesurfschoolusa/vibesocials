@@ -22,7 +22,19 @@ vi.mock("@/lib/workspace", () => ({
   requireOwnerContext: requireOwnerContextMock,
 }));
 
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { GET } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/workspaces/members${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 
 const OWNER_CONTEXT = {
   user: { id: "user-1", email: "owner@example.com", name: "Owner" },
@@ -46,13 +58,31 @@ beforeEach(() => {
   requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
 });
 
+// R32 lead follow-up: a page drawn for another workspace (another tab
+// switched) gets the switch sentence; a page that sent no id, the reload one.
+describe("GET /api/workspaces/members - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/workspaces/members", () => {
   it("returns the gate's 401 response as-is when unauthenticated", async () => {
     requireOwnerContextMock.mockResolvedValue(
       NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
     );
 
-    const response = await GET();
+    const response = await GET(req());
 
     expect(response.status).toBe(401);
     expect(findManyMock).not.toHaveBeenCalled();
@@ -63,7 +93,7 @@ describe("GET /api/workspaces/members", () => {
       NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
     );
 
-    const response = await GET();
+    const response = await GET(req());
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
@@ -86,7 +116,7 @@ describe("GET /api/workspaces/members", () => {
       }),
     ]);
 
-    const response = await GET();
+    const response = await GET(req());
     const body = await response.json();
 
     expect(response.status).toBe(200);
