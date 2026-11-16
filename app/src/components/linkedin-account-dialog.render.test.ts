@@ -53,6 +53,18 @@ describe("LinkedIn Reconnect dialog", () => {
     expect(html).not.toContain("post numbers");
   });
 
+  // Lead review (R26 pages L6): it opens a new tab, so it says so with the shared hint.
+  it("Open LinkedIn sign-out shows the visible new-tab hint in its text", async () => {
+    const { NEW_TAB_HINT } = await import("./external-link");
+    const html = render();
+    // The steps name the button in quotes; this is the button's own text.
+    const at = html.indexOf(">Open LinkedIn sign-out ") + 1;
+    expect(at).toBeGreaterThan(0);
+    const button = html.slice(at, html.indexOf("</button>", at));
+    expect(button).toMatch(/^Open LinkedIn sign-out <span class="[^"]*">/);
+    expect(button.endsWith(`${NEW_TAB_HINT}</span>`)).toBe(true);
+  });
+
   it("without a name: the connected LinkedIn page", () => {
     expect(render()).toContain("sign in with a LinkedIn account that manages the connected LinkedIn page.");
   });

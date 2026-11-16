@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { NewTabHint } from "@/components/external-link";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -127,7 +128,8 @@ export function LinkedInAccountDialog({
           onClick={() => window.open(LINKEDIN_SIGN_OUT_URL, "_blank", "noopener,noreferrer")}
           disabled={busy}
         >
-          Open LinkedIn sign-out
+          {/* It opens a new tab (window.open), so it says so, as every new-tab link does. */}
+          Open LinkedIn sign-out <NewTabHint />
         </Button>
         <Button onClick={handleContinue} loading={busy}>
           {copy.continueLabel}
