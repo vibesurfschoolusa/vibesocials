@@ -94,7 +94,8 @@ describe("WorkspaceLogoControl: Upload by plan", () => {
     const remove = html(STARTER, ON).match(/<button[^>]*>Remove<\/button>/)?.[0] ?? "";
     expect(remove).not.toBe("");
     expect(remove).not.toContain('disabled=""');
-    expect(remove).not.toContain("aria-disabled");
+    // The attribute, not the class: buttonVariants styles aria-disabled buttons.
+    expect(remove).not.toMatch(/\saria-disabled=/);
   });
 
   it("enabled exactly as today with billing off, exempt, in a trial, on Growth and on Pro", () => {
