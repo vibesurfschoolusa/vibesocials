@@ -41,13 +41,18 @@ export function loadOutcome(ok: boolean, data: ChoiceAnswer): ConnectLinkChoiceS
   return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
 }
 
+const CHOICE_GONE_MESSAGE =
+  "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected.";
+
 /**
- * A choice that didn't come back connected. `gone`: the choice ended and its
- * platform is connected, so the buttons give way to that sentence. With no
- * sentence of ours, a 2xx or 5xx may have come after the save; a 4xx did not.
+ * A choice that didn't come back connected. `gone`: any 404 (R31
+ * client-journey L2, as Settings): the choice ended (used, expired, or the
+ * link turned off), so the buttons give way to the sentence. With no sentence
+ * of ours, a 2xx or 5xx may have come after the save; a 4xx did not.
  */
 export function chooseFailure(status: number, data: ChoiceAnswer): { gone: boolean; message: string } {
-  if (data?.error) return { gone: data.connected === true, message: data.error };
+  if (status === 404) return { gone: true, message: data?.error || CHOICE_GONE_MESSAGE };
+  if (data?.error) return { gone: false, message: data.error };
   const maySaved = status < 300 || status >= 500;
   return { gone: false, message: maySaved ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE };
 }

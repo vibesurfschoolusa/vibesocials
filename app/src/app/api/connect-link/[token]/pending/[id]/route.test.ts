@@ -235,7 +235,20 @@ describe("POST: the visitor's choice", () => {
     h.saveFacebookPage.mockRejectedValue(new Error("db down"));
     const res = await POST(request("POST", { candidateId: "page-2" }), context());
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: "Failed to connect the account." });
+    // R31 new-customer L3: true, with a next step (the save may have gone through).
+    expect(await res.json()).toEqual({
+      error: "Something went wrong on our side, so the account may have been connected. Reload this page to see.",
+    });
+  });
+
+  // R31 new-customer L3: the account is connected; a failed clean-up must not say it failed.
+  it("a failure deleting the choice after the save still answers connected", async () => {
+    h.pendingDeleteMany.mockRejectedValue(new Error("db blip"));
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, platform: "facebook_page" });
+    expect(h.notifyConnect).toHaveBeenCalledTimes(1);
+    expect(res.headers.get("set-cookie")).toMatch(/^vs_connect=;/);
   });
 });
 
@@ -284,6 +297,16 @@ describe("DELETE: Cancel", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(h.pendingDeleteMany).toHaveBeenCalledWith({ where: { id: "pending-1" } });
     expect(res.headers.get("set-cookie")).toMatch(/^vs_connect=;/);
+  });
+
+  // R31 new-customer L3: no bare "Failed to cancel."
+  it("a failure is a 500 with a true sentence and a next step", async () => {
+    h.pendingDeleteMany.mockRejectedValue(new Error("db down"));
+    const res = await DELETE(request("DELETE"), context());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
+    });
   });
 
   it("another link's choice is a 404 and is left alone", async () => {

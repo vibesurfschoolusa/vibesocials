@@ -11,6 +11,7 @@ const {
   checkRateLimitMock,
   findUniqueMock,
   connectionFindUniqueMock,
+  memberFindUniqueMock,
   deleteManyMock,
   saveFacebookPageConnectionMock,
   saveInstagramConnectionMock,
@@ -22,6 +23,7 @@ const {
   checkRateLimitMock: vi.fn(),
   findUniqueMock: vi.fn(),
   connectionFindUniqueMock: vi.fn(),
+  memberFindUniqueMock: vi.fn(),
   deleteManyMock: vi.fn(),
   saveFacebookPageConnectionMock: vi.fn(),
   saveInstagramConnectionMock: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("@/lib/db", () => ({
       deleteMany: deleteManyMock,
     },
     socialConnection: { findUnique: connectionFindUniqueMock },
+    workspaceMember: { findUnique: memberFindUniqueMock },
   },
 }));
 
@@ -187,6 +190,7 @@ beforeEach(() => {
     requireOwnerContextMock,
     checkRateLimitMock,
     findUniqueMock,
+    memberFindUniqueMock,
     deleteManyMock,
     saveFacebookPageConnectionMock,
     saveInstagramConnectionMock,
@@ -568,9 +572,25 @@ describe("POST /api/connections/pending/[id]", () => {
     const response = await POST(postReq({ candidateId: "page-2" }), ctx());
 
     expect(response.status).toBe(500);
+    // R31 new-customer L3: true, with a next step (the save may have gone through).
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "Something went wrong on our side, so the account may have been connected. Press Cancel, then look for it in your connections before you connect again.",
+    });
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalled();
     expect(JSON.stringify(vi.mocked(logger.error).mock.calls)).not.toContain("page-token-2");
+  });
+
+  // R31 new-customer L3: the account is connected; a failed clean-up must not say it failed.
+  it("a failure deleting the choice after the save still answers connected", async () => {
+    findUniqueMock.mockResolvedValue(row(FACEBOOK));
+    deleteManyMock.mockRejectedValue(new Error("db blip"));
+
+    const response = await POST(postReq({ candidateId: "page-2" }), ctx());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, platform: "facebook_page" });
   });
 });
 
@@ -584,6 +604,19 @@ describe("DELETE /api/connections/pending/[id]", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
     expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: PENDING_ID } });
     expectNothingSaved();
+  });
+
+  // R31 new-customer L3: no bare "Failed to cancel."
+  it("a failure is a 500 with a true sentence and a next step", async () => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN));
+    deleteManyMock.mockRejectedValue(new Error("db down"));
+
+    const response = await DELETE(deleteReq(), ctx());
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes.",
+    });
   });
 });
 
@@ -790,32 +823,93 @@ describe("pending/[id]: a choice that is gone", () => {
 
   // R30 (security-billing L1): the hint outlives a reload in another workspace,
   // and this workspace's row says nothing about the choice's own workspace.
-  it("a choice started in another workspace: says so, never this workspace's row", async () => {
-    findUniqueMock.mockResolvedValue(row(INSTAGRAM, { workspaceId: "ws-other" }));
-    connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram" });
+  // R31 (platform-clients L1): the step names the button the choice's own
+  // workspace's card shows, read there (same user, still an owner there).
+  const otherWorkspace = (overrides: Partial<{ expiresAt: Date }> = {}) =>
+    row(INSTAGRAM, { workspaceId: "ws-other", ...overrides });
+
+  it("a choice started in another workspace: says so, and names the button that workspace's card shows", async () => {
+    findUniqueMock.mockResolvedValue(otherWorkspace());
+    memberFindUniqueMock.mockResolvedValue({ role: "owner" });
+    connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram", needsReconnect: true });
     for (const response of [
       await GET(hinted("GET", "instagram"), ctx()),
       await POST(hinted("POST", "instagram"), ctx()),
       await GET(getReq(), ctx()),
     ]) {
       expect(response.status).toBe(404);
-      const body = await response.json();
-      // Lead review: switching back drops ?choose=, so the step is Connect there.
-      expect(body).toEqual({
-        error: "This choice was started in another workspace. Switch back to it and press Connect again there.",
+      await expect(response.json()).resolves.toEqual({
+        error: "This choice was started in another workspace. Switch back to it and press Reconnect on Instagram there.",
       });
-      expect(body.error).not.toMatch(/connected/);
+    }
+    expect(memberFindUniqueMock.mock.calls[0][0].where).toEqual({
+      workspaceId_userId: { workspaceId: "ws-other", userId: "user-1" },
+    });
+    // Only the choice's own workspace is read, never this one's row.
+    for (const [args] of connectionFindUniqueMock.mock.calls) {
+      expect(args.where).toEqual({ workspaceId_platform: { workspaceId: "ws-other", platform: "instagram" } });
     }
     expectNothingSaved();
   });
 
-  it("a choice started in another workspace that has expired: says it expired", async () => {
-    findUniqueMock.mockResolvedValue(row(INSTAGRAM, { workspaceId: "ws-other", expiresAt: new Date(Date.now() - 1000) }));
-    connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram" });
+  it("no row there: names Connect", async () => {
+    findUniqueMock.mockResolvedValue(otherWorkspace());
+    memberFindUniqueMock.mockResolvedValue({ role: "owner" });
+    connectionFindUniqueMock.mockResolvedValue(null);
+    const response = await GET(hinted("GET", "instagram"), ctx());
+    await expect(response.json()).resolves.toEqual({
+      error: "This choice was started in another workspace. Switch back to it and press Connect on Instagram there.",
+    });
+  });
+
+  it("a working card there, no longer an owner there, or a read that fails: names no button", async () => {
+    const cases: Array<() => void> = [
+      () => {
+        memberFindUniqueMock.mockResolvedValue({ role: "owner" });
+        connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram" });
+      },
+      () => {
+        memberFindUniqueMock.mockResolvedValue({ role: "member" });
+        connectionFindUniqueMock.mockResolvedValue(null);
+      },
+      () => {
+        memberFindUniqueMock.mockResolvedValue(null);
+        connectionFindUniqueMock.mockResolvedValue(null);
+      },
+      () => {
+        memberFindUniqueMock.mockRejectedValue(new Error("db blip"));
+      },
+      () => {
+        memberFindUniqueMock.mockResolvedValue({ role: "owner" });
+        connectionFindUniqueMock.mockRejectedValue(new Error("db blip"));
+      },
+    ];
+    for (const arrange of cases) {
+      memberFindUniqueMock.mockReset();
+      connectionFindUniqueMock.mockReset();
+      findUniqueMock.mockResolvedValue(otherWorkspace());
+      arrange();
+      const response = await GET(hinted("GET", "instagram"), ctx());
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({
+        error: "This choice was started in another workspace. Switch back to it and try again from the Instagram card there.",
+      });
+    }
+  });
+
+  it("a choice started in another workspace that has expired: says it expired, by the same rule", async () => {
+    findUniqueMock.mockResolvedValue(otherWorkspace({ expiresAt: new Date(Date.now() - 1000) }));
+    memberFindUniqueMock.mockResolvedValue({ role: "owner" });
+    connectionFindUniqueMock.mockResolvedValue(null);
     const response = await GET(hinted("GET", "instagram"), ctx());
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({
-      error: "This choice, started in another workspace, expired. Switch back to it and press Connect again there.",
+      error: "This choice, started in another workspace, expired. Switch back to it and press Connect on Instagram there.",
+    });
+    connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram" });
+    const healthy = await GET(hinted("GET", "instagram"), ctx());
+    await expect(healthy.json()).resolves.toEqual({
+      error: "This choice, started in another workspace, expired. Switch back to it and try again from the Instagram card there.",
     });
   });
 

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import type { Platform } from "@prisma/client";
 
 import { accountCheckFailedMessage, choiceDifferentAccountMessage } from "@/lib/differentAccount";
 import { CONNECTION_EXPIRY_SELECT, inExpiryWarningWindow } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { shownControl } from "@/lib/oauthResult";
+import { shownControl, signInButton } from "@/lib/oauthResult";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
@@ -50,16 +51,18 @@ async function notFound(request: Request, id: string, owner: { workspaceId: stri
   // R30 (security-billing L1): the hint outlives a reload, and the choice
   // belongs to the workspace it was started in, so a choice of this user's in
   // another workspace says so before this workspace's row is read. Switching
-  // back drops ?choose= (afterWorkspaceChange), so the step is Connect there.
+  // back drops ?choose= (afterWorkspaceChange), so the step is that card's
+  // sign-in button (R31 platform-clients L1).
   const choice = await prisma.pendingConnection.findUnique({
     where: { id },
-    select: { workspaceId: true, userId: true, expiresAt: true },
+    select: { workspaceId: true, userId: true, expiresAt: true, platform: true },
   });
   if (choice && choice.userId === owner.userId && choice.workspaceId !== owner.workspaceId) {
+    const step = await otherWorkspaceStep(choice.workspaceId, owner.userId, choice.platform);
     const error =
       choice.expiresAt.getTime() <= Date.now()
-        ? "This choice, started in another workspace, expired. Switch back to it and press Connect again there."
-        : "This choice was started in another workspace. Switch back to it and press Connect again there.";
+        ? `This choice, started in another workspace, expired. Switch back to it and ${step}.`
+        : `This choice was started in another workspace. Switch back to it and ${step}.`;
     return NextResponse.json({ error }, { status: 404 });
   }
   const { workspaceId } = owner;
@@ -89,6 +92,36 @@ async function notFound(request: Request, id: string, owner: { workspaceId: stri
     },
     { status: 404 },
   );
+}
+
+/**
+ * R31 (platform-clients L1): what to press on the choice's platform card in
+ * its own workspace, read there only while this user is still an owner
+ * there: the button that card shows (shownControl). A working card shows
+ * neither, and a read that fails says nothing, so then no button is named.
+ * Lower case, no full stop.
+ */
+async function otherWorkspaceStep(workspaceId: string, userId: string, platform: Platform): Promise<string> {
+  const label = PLATFORM_LABELS[platform];
+  const noButton = `try again from the ${label} card there`;
+  try {
+    const member = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+      select: { role: true },
+    });
+    if (member?.role !== "owner") return noButton;
+    const row = await prisma.socialConnection.findUnique({
+      where: { workspaceId_platform: { workspaceId, platform } },
+      select: CONNECTION_EXPIRY_SELECT,
+    });
+    const button = signInButton(
+      shownControl(row ? { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row) } : null),
+    );
+    return button ? `press ${button} on ${label} there` : noButton;
+  } catch (error) {
+    logger.warn("[pending/[id]] Couldn't read the other workspace's card (ignored)", { error: errorKind(error) });
+    return noButton;
+  }
 }
 
 function ownerOf(context: WorkspaceContext) {
@@ -206,7 +239,15 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
           );
     }
 
-    await deletePendingConnection(pending.id);
+    // R31 new-customer L3: the account is saved; a failed clean-up must not
+    // turn that into "failed". The row ends by itself (and the daily sweep
+    // deletes it).
+    await deletePendingConnection(pending.id).catch((error: unknown) => {
+      logger.error("[POST /api/connections/pending/[id]] Couldn't delete the used choice (ignored)", {
+        error: errorKind(error),
+        pendingConnectionId: id,
+      });
+    });
 
     // R7 review 4: the dialog adds same_end to the success address, as the callback does.
     return NextResponse.json(
@@ -219,7 +260,14 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return NextResponse.json({ error: "Failed to connect the account." }, { status: 500 });
+    // R31 new-customer L3: the save itself may have gone through.
+    return NextResponse.json(
+      {
+        error:
+          "Something went wrong on our side, so the account may have been connected. Press Cancel, then look for it in your connections before you connect again.",
+      },
+      { status: 500 },
+    );
   }
 }
 
@@ -250,6 +298,9 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return NextResponse.json({ error: "Failed to cancel." }, { status: 500 });
+    return NextResponse.json(
+      { error: "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes." },
+      { status: 500 },
+    );
   }
 }

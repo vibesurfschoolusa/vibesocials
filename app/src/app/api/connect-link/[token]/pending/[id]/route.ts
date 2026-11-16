@@ -174,7 +174,12 @@ export async function POST(request: Request, context: RouteContext) {
           );
     }
 
-    await deletePendingConnection(pending.id);
+    // R31 new-customer L3: the account is saved; a failed clean-up must not
+    // turn that into "failed". The row ends by itself (and the daily sweep
+    // deletes it).
+    await deletePendingConnection(pending.id).catch((error: unknown) => {
+      logger.error("[connect-link] Couldn't delete the used choice (ignored)", { error: errorKind(error) });
+    });
     await prisma.workspaceConnectLink
       .update({ where: { id: link.id }, data: { lastUsedAt: new Date() } })
       .catch((error: unknown) => {
@@ -199,7 +204,11 @@ export async function POST(request: Request, context: RouteContext) {
     return response;
   } catch (error) {
     logger.error("[POST /api/connect-link/pending] Unexpected error", { error: errorKind(error) });
-    return NextResponse.json({ error: "Failed to connect the account." }, { status: 500 });
+    // R31 new-customer L3: the save itself may have gone through.
+    return NextResponse.json(
+      { error: "Something went wrong on our side, so the account may have been connected. Reload this page to see." },
+      { status: 500 },
+    );
   }
 }
 
@@ -214,6 +223,12 @@ export async function DELETE(request: Request, context: RouteContext) {
     return response;
   } catch (error) {
     logger.error("[DELETE /api/connect-link/pending] Unexpected error", { error: errorKind(error) });
-    return NextResponse.json({ error: "Failed to cancel." }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
+      },
+      { status: 500 },
+    );
   }
 }

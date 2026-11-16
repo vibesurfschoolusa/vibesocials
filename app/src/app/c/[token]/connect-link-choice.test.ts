@@ -111,6 +111,19 @@ describe("the account choice's answers (R29)", () => {
     });
   });
 
+  // R31 client-journey L2: an expired choice, or a link turned off, kept its Connect buttons.
+  it("choose: any 404 means the choice is gone: its sentence replaces the buttons", () => {
+    expect(chooseFailure(404, { error: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected." })).toEqual({
+      gone: true,
+      message: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected.",
+    });
+    expect(chooseFailure(404, { error: "This link is no longer active." })).toEqual({ gone: true, message: "This link is no longer active." });
+    expect(chooseFailure(404, null)).toEqual({
+      gone: true,
+      message: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected.",
+    });
+  });
+
   it("choose: the route's own sentence stays under the buttons", () => {
     expect(chooseFailure(409, { error: "Pick the connected one." })).toEqual({ gone: false, message: "Pick the connected one." });
     expect(chooseFailure(500, { error: "Failed to connect the account." })).toEqual({
