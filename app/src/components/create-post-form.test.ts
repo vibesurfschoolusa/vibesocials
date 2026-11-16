@@ -32,6 +32,7 @@ import {
   needsSubmitConfirm,
   nextFileLostNotice,
   nextPreparingPick,
+  nextPickJudgment,
   notSentBanner,
   noFileSubmitError,
   photosFailureLosesFile,
@@ -107,6 +108,54 @@ describe("photoSetTypeKeyOf and judgedMimeType", () => {
     expect(judgedMimeType([photo("IMG_1.HEIC", "", "preparing")], null)).toBe("image/jpeg");
     expect(judgedMimeType([], "video/mp4")).toBe("video/mp4");
     expect(judgedMimeType([], null)).toBeNull();
+  });
+});
+
+// R22 second review: a single pick is judged by the type it will have while
+// it prepares, and judged on nothing again once the pick ends.
+describe("nextPickJudgment", () => {
+  const all: Platform[] = ["instagram", "facebook_page", "linkedin", "x", "tiktok", "youtube"];
+  const view = (mimeType: string | null) =>
+    Object.fromEntries(
+      composerPageView({
+        pageState: "file",
+        connected: all,
+        deselected: new Set(),
+        mimeType: judgedMimeType([], mimeType),
+        mimeTypes: [],
+        mode: "now",
+        loading: false,
+        triedSend: false,
+      }).choices.map((c) => [c.platform, c.disabledReason]),
+    );
+  const pick = (name: string, type: string, size = 10) => new File([new Uint8Array(size)], name, { type });
+
+  it("one Windows HEIC preparing: TikTok and YouTube greyed from the first frame", () => {
+    const judged = nextPickJudgment(null, { type: "pick", selection: 1, file: pick("IMG_1.HEIC", "") });
+    expect(judged).toEqual({ selection: 1, mimeType: "image/jpeg" });
+    const by = view(judged?.mimeType ?? null);
+    expect(by.tiktok).not.toBeNull();
+    expect(by.youtube).not.toBeNull();
+    expect([by.instagram, by.facebook_page, by.linkedin, by.x]).toEqual([null, null, null, null]);
+  });
+
+  it("an 8 MB JPEG preparing is judged as a JPEG", () => {
+    expect(nextPickJudgment(null, { type: "pick", selection: 2, file: pick("a.jpg", "image/jpeg", 8_000_000) })?.mimeType).toBe(
+      "image/jpeg",
+    );
+  });
+
+  it("a video pick is judged as the video it stays", () => {
+    const judged = nextPickJudgment(null, { type: "pick", selection: 3, file: pick("a.mp4", "video/mp4") });
+    expect(view(judged?.mimeType ?? null)).toEqual(view("video/mp4"));
+  });
+
+  it("the pick ending (ready or failed) or a clear goes back to no judgment; an older pick settling changes nothing", () => {
+    const judged = nextPickJudgment(null, { type: "pick", selection: 4, file: pick("IMG_1.HEIC", "") });
+    expect(nextPickJudgment(judged, { type: "settled", selection: 4 })).toBeNull();
+    expect(nextPickJudgment(judged, { type: "clear" })).toBeNull();
+    expect(nextPickJudgment(judged, { type: "settled", selection: 3 })).toBe(judged);
+    expect(view(null)).toEqual(Object.fromEntries(all.map((p) => [p, null])));
   });
 });
 
@@ -300,7 +349,7 @@ describe("no Location field on Create", () => {
 
   it("builds the photo types from photoSetTypeKeyOf", () => {
     expect(source).toContain("const photoSetTypeKey = photoSetTypeKeyOf(photoSet);");
-    expect(source).toContain("const judgedType = judgedMimeType(photoSet, activeMimeType);");
+    expect(source).toContain("const judgedType = judgedMimeType(photoSet, activeMimeType ?? pickJudgment?.mimeType ?? null);");
     expect(source).toContain("mimeType: judgedType,");
   });
 

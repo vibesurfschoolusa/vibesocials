@@ -598,6 +598,24 @@ export function nextPreparingPick(current: number | null, event: PickEvent): num
   return current === event.selection ? null : current;
 }
 
+/** A single pick still being prepared and the type it will have (preparedTypeOf). */
+export type PickJudgment = { selection: number; mimeType: string } | null;
+
+/**
+ * The type the platform list judges a single pick on while it prepares (R22
+ * second review): uploadFile is set only once it is ready. Ends with the pick,
+ * ready or failed, or a clear; an older pick settling changes nothing. Feeds
+ * composerPageView only, never activeMimeType.
+ */
+export function nextPickJudgment(
+  current: PickJudgment,
+  event: { type: "pick"; selection: number; file: File } | { type: "clear" } | { type: "settled"; selection: number },
+): PickJudgment {
+  if (event.type === "pick") return { selection: event.selection, mimeType: preparedTypeOf(event.file) };
+  if (event.type === "clear") return null;
+  return current?.selection === event.selection ? null : current;
+}
+
 /** Why the file side of the form cannot be sent yet, or null. The submit buttons are disabled while it is set. */
 export function fileSubmitBlock(state: {
   preparingFile: boolean;
@@ -873,6 +891,7 @@ function CreatePostFormInner({
   // The single pick still being prepared (nextPreparingPick), or null. While it
   // is set the page counts a file, so it never sends a text post by mistake.
   const [preparingPick, setPreparingPick] = useState<number | null>(null);
+  const [pickJudgment, setPickJudgment] = useState<PickJudgment>(null);
   // Switched off, the page keeps its earlier behaviour while a pick is prepared.
   const preparingFile = TEXT_POSTS_ON && preparingPick !== null;
   const [sharedSettled, setSharedSettled] = useState(false);
@@ -982,7 +1001,7 @@ function CreatePostFormInner({
   const photoSetTypeKey = photoSetTypeKeyOf(photoSet);
   const photoSetTypes = useMemo(() => (photoSetTypeKey ? photoSetTypeKey.split(" ") : []), [photoSetTypeKey]);
   // A text value, so upload progress on the photos does not redo the view.
-  const judgedType = judgedMimeType(photoSet, activeMimeType);
+  const judgedType = judgedMimeType(photoSet, activeMimeType ?? pickJudgment?.mimeType ?? null);
   const pageView = useMemo(
     () =>
       composerPageView({
@@ -1345,6 +1364,9 @@ function CreatePostFormInner({
     setPreparingPick((current) =>
       nextPreparingPick(current, pickedFile ? { type: "pick", selection } : { type: "clear" }),
     );
+    setPickJudgment((current) =>
+      nextPickJudgment(current, pickedFile ? { type: "pick", selection, file: pickedFile } : { type: "clear" }),
+    );
     // Clearing the pick is the person's own doing (or the form's reset): no
     // "file went away" notice is left over from before. A pick that then fails
     // sets it again below.
@@ -1380,6 +1402,7 @@ function CreatePostFormInner({
         nextFile = await prepareUploadFile(pickedFile);
       } catch (prepareError) {
         setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
+        setPickJudgment((current) => nextPickJudgment(current, { type: "settled", selection }));
         if (selection === fileSelectionRef.current) {
           // Clear the input so the same file can be picked again.
           setFileInputKey((key) => key + 1);
@@ -1388,6 +1411,7 @@ function CreatePostFormInner({
         throw prepareError;
       }
       setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
+      setPickJudgment((current) => nextPickJudgment(current, { type: "settled", selection }));
       if (selection !== fileSelectionRef.current) {
         return;
       }
