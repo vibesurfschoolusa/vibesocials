@@ -1227,6 +1227,47 @@ describe("googleBusinessProfileClient: a token Google refuses flags the row", ()
     expect(publishErrorMessage("google_business_profile", error!)).toMatch(/^Reconnect Google Business Profile in Settings/);
   });
 
+  // R26 platform-clients L1: the early refresh failed and the stored token ran
+  // out before the store-code lookup reached Google: one refresh, one retry,
+  // and the post goes out with the new token.
+  it("a 401 in the store-code lookup on a token that ran out on the way: refreshed once, retried, posted", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ctx = makeContext();
+    ctx.socialConnection = {
+      ...ctx.socialConnection,
+      expiresAt: new Date(Date.now() + 60 * 1000),
+      metadata: { locationName: "STORE-1" },
+    } as SocialConnection;
+    refreshConnectionTokenMock
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" }))
+      .mockResolvedValueOnce({ ...ctx.socialConnection, accessToken: "fresh", expiresAt: new Date(Date.now() + 3_600_000) });
+    const auth: (string | null)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        const bearer = new Headers(init?.headers).get("Authorization");
+        auth.push(bearer);
+        if (bearer === "Bearer access-token") {
+          vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+          return new Response("{}", { status: 401 });
+        }
+        if (url.endsWith("/v1/accounts") || url.includes("/v1/accounts?")) return Response.json({ accounts: [{ name: "accounts/111" }] });
+        if (url.includes("/accounts/111/locations?")) return Response.json({ locations: [{ name: "locations/999", storeCode: "STORE-1" }] });
+        if (url.includes("/localPosts")) return Response.json({ name: "accounts/111/locations/999/localPosts/p1" });
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+
+    await expect(googleBusinessProfileClient.publishVideo(ctx)).resolves.toEqual({
+      externalPostId: "accounts/111/locations/999/localPosts/p1",
+    });
+    expect(auth[0]).toBe("Bearer access-token");
+    expect(auth.slice(1).every((value) => value === "Bearer fresh")).toBe(true);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
   it("tokens that changed meanwhile: nothing flagged, a retryable failure", async () => {
     flagRejectedTokenMock.mockResolvedValue("superseded");
     stubMediaCreate(() => new Response("{}", { status: 401 }));

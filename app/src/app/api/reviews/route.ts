@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
-import { flagIfTokenRejected, googleFailureKind } from "@/server/googleFailure";
+import { flagIfTokenRejected, googleFailureKind, withGoogleTokenRetry } from "@/server/googleFailure";
 import {
   MEMBER_OTHER_LOCATION_MESSAGE,
   googleRefusedBody,
@@ -81,9 +81,8 @@ export async function GET(request: Request) {
     // A failed early refresh of a still-valid token goes on with the stored one.
     const { refreshAccessToken } = await import("@/server/googleReviews");
     used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
-    const accessToken = used.accessToken;
 
-    if (!accessToken) {
+    if (!used.accessToken) {
       return NextResponse.json(googleRefusedBody(role), { status: 500 });
     }
 
@@ -100,29 +99,35 @@ export async function GET(request: Request) {
         { status: 400 }
       );
     }
-
-    if (role === "member" && locationName !== saved) {
-      // A store code saved under Advanced is matched through the listing.
-      let allowed = false;
-      if (saved && !saved.startsWith("accounts/")) {
-        const listing = await listGbpLocationsWithToken(
-          { id: used.id, accessToken, refreshToken: used.refreshToken ?? null },
-          WHERE,
-        );
-        if (!listing.ok) {
-          return NextResponse.json(reviewsKindBody(listing.kind, REVIEWS_FAILED_MESSAGE, role), { status: 500 });
-        }
-        allowed = savedLocationIn(listing.locations, saved)?.resourceName === locationName;
-      }
-      if (!allowed) return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
-    }
-
     asked = { locationName, saved };
-    // Fetch reviews from Google Business Profile API
-    const { fetchAllReviews } = await import("@/server/googleReviews");
-    const { reviews, truncated } = await fetchAllReviews(accessToken, locationName);
 
-    return NextResponse.json({ reviews, truncated });
+    // R26 platform-clients L1: a 401 on a token that ran out on the way is
+    // refreshed once and the work retried once (withGoogleTokenRetry).
+    return await withGoogleTokenRetry(used, refreshAccessToken, async (row) => {
+      used = row;
+      const accessToken = row.accessToken ?? "";
+      if (role === "member" && locationName !== saved) {
+        // A store code saved under Advanced is matched through the listing.
+        let allowed = false;
+        if (saved && !saved.startsWith("accounts/")) {
+          const listing = await listGbpLocationsWithToken(
+            { id: row.id, accessToken, refreshToken: row.refreshToken ?? null, expiresAt: row.expiresAt },
+            WHERE,
+          );
+          if (!listing.ok) {
+            return NextResponse.json(reviewsKindBody(listing.kind, REVIEWS_FAILED_MESSAGE, role), { status: 500 });
+          }
+          allowed = savedLocationIn(listing.locations, saved)?.resourceName === locationName;
+        }
+        if (!allowed) return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
+      }
+
+      // Fetch reviews from Google Business Profile API
+      const { fetchAllReviews } = await import("@/server/googleReviews");
+      const { reviews, truncated } = await fetchAllReviews(accessToken, locationName);
+
+      return NextResponse.json({ reviews, truncated });
+    });
   } catch (error: unknown) {
     // R25 platform-clients L2: a token Google refused flags the row first.
     const settled = await flagIfTokenRejected(error, used);

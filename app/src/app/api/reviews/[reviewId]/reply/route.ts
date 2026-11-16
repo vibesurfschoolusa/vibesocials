@@ -6,7 +6,7 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
-import { classifyGoogleFailure, flagIfTokenRejected } from "@/server/googleFailure";
+import { classifyGoogleFailure, flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
 import {
   MEMBER_OTHER_LOCATION_MESSAGE,
   replyErrorBody,
@@ -116,45 +116,51 @@ export async function POST(request: Request) {
     // A failed early refresh of a still-valid token goes on with the stored one.
     const { refreshAccessToken } = await import("@/server/googleReviews");
     used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
-    const accessToken = used.accessToken;
 
-    if (!accessToken) {
+    if (!used.accessToken) {
       return NextResponse.json(replyErrorBody("reconnect", REPLY_FAILED_MESSAGE, role), { status: 500 });
     }
 
-    // The same paged listing the Reviews page shows, so any location the
-    // person can open there can be answered. An account that could not be
-    // read is a failure to retry, not a review that does not exist.
-    const listing = await listGbpLocationsWithToken(
-      { id: used.id, accessToken, refreshToken: used.refreshToken ?? null },
-      WHERE,
-    );
-    if (!listing.ok) {
-      return NextResponse.json(replyErrorBody(listing.kind, REPLY_FAILED_MESSAGE, role), { status: 500 });
-    }
-    if (!listing.locations.some((location) => location.resourceName === reviewLocation)) {
-      return listing.complete
-        ? NextResponse.json(REVIEW_NOT_FOUND, { status: 404 })
-        : NextResponse.json({ error: REPLY_FAILED_MESSAGE }, { status: 500 });
-    }
-    if (
-      role === "member" &&
-      savedLocationIn(listing.locations, savedLocationName(connection.metadata))?.resourceName !== reviewLocation
-    ) {
-      return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
-    }
+    // R26 platform-clients L1: a 401 on a token that ran out on the way is
+    // refreshed once and the work retried once (withGoogleTokenRetry). A 401
+    // means Google took nothing, so the reply is never posted twice.
+    return await withGoogleTokenRetry(used, refreshAccessToken, async (row) => {
+      used = row;
+      const accessToken = row.accessToken ?? "";
+      // The same paged listing the Reviews page shows, so any location the
+      // person can open there can be answered. An account that could not be
+      // read is a failure to retry, not a review that does not exist.
+      const listing = await listGbpLocationsWithToken(
+        { id: row.id, accessToken, refreshToken: row.refreshToken ?? null, expiresAt: row.expiresAt },
+        WHERE,
+      );
+      if (!listing.ok) {
+        return NextResponse.json(replyErrorBody(listing.kind, REPLY_FAILED_MESSAGE, role), { status: 500 });
+      }
+      if (!listing.locations.some((location) => location.resourceName === reviewLocation)) {
+        return listing.complete
+          ? NextResponse.json(REVIEW_NOT_FOUND, { status: 404 })
+          : NextResponse.json({ error: REPLY_FAILED_MESSAGE }, { status: 500 });
+      }
+      if (
+        role === "member" &&
+        savedLocationIn(listing.locations, savedLocationName(connection.metadata))?.resourceName !== reviewLocation
+      ) {
+        return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
+      }
 
-    // Post reply to Google Business Profile API using full review name
-    const { replyToReview } = await import("@/server/googleReviews");
-    const result = await replyToReview(
-      accessToken,
-      reviewName,
-      comment.trim()
-    );
+      // Post reply to Google Business Profile API using full review name
+      const { replyToReview } = await import("@/server/googleReviews");
+      const result = await replyToReview(
+        accessToken,
+        reviewName,
+        comment.trim()
+      );
 
-    return NextResponse.json({
-      success: true,
-      reply: result,
+      return NextResponse.json({
+        success: true,
+        reply: result,
+      });
     });
   } catch (error: unknown) {
     // R25 platform-clients L2: a token Google refused flags the row first.

@@ -486,3 +486,32 @@ describe("GET /api/reviews/link for a member", () => {
     });
   });
 });
+
+// R26 platform-clients L1: a 401 on a token that ran out on the way (the early
+// refresh had failed) is refreshed once and the link read once more.
+describe("GET /api/reviews/link and a 401 on a token that ran out on the way", () => {
+  it("refreshes once and reads the link with the new token: nothing flagged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+      mocks.checkRateLimit.mockResolvedValue({ allowed: true });
+      mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() + 60 * 1000) }));
+      mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
+      mocks.refreshAccessToken
+        .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" }))
+        .mockResolvedValueOnce(connection({ accessToken: "gbp-access-2", expiresAt: new Date(Date.now() + 3_600_000) }));
+      mocks.fetchNewReviewUri
+        .mockImplementationOnce(async () => {
+          vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+          throw Object.assign(new Error("401"), { status: 401, code: "GBP_REVIEW_LINK_FETCH_FAILED" });
+        })
+        .mockResolvedValueOnce(LINK);
+
+      await expect((await GET()).json()).resolves.toEqual({ url: LINK });
+      expect(mocks.fetchNewReviewUri.mock.calls.map(([token]) => token)).toEqual(["gbp-access", "gbp-access-2"]);
+      expect(mocks.flagRejectedToken).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

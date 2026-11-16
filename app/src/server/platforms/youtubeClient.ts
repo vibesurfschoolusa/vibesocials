@@ -5,7 +5,12 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { STORAGE_READ_CODES, YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT, asStorageReadFailure } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { fitTitle, truncateUnits } from "@/lib/truncate";
-import { isGoogleScopeRefusal } from "@/server/googleFailure";
+import {
+  expiredTokenFailure,
+  isExpiredTokenFailure,
+  isExpiredTokenRejection,
+  isGoogleScopeRefusal,
+} from "@/server/googleFailure";
 import {
   YOUTUBE_UPLOAD_STATE_KIND,
   type UploadSnapshot,
@@ -966,10 +971,15 @@ const YOUTUBE_RECONNECT_CODE = "YOUTUBE_RECONNECT_REQUIRED";
  * CONNECTION_TOKEN_CHANGED is thrown. A 401 from our own storage
  * (STORAGE_READ_CODES) says nothing about YouTube and flags nothing.
  */
-async function flagRejectedYouTubeToken(error: unknown, row: TokenSnapshot | undefined): Promise<never> {
+async function flagRejectedYouTubeToken(error: unknown, used: UsedToken): Promise<never> {
   const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
   const fromStorage = typeof code === "string" && STORAGE_READ_CODES.has(code);
+  const row = used.row;
   if (status !== 401 || fromStorage || !row) throw error;
+  // R26 platform-clients L1: the token was past its stored expiry when the 401
+  // came (a failed early refresh, then a slow download): no refusal, nothing
+  // flagged; publishVideo refreshes once and uploads once more.
+  if (isExpiredTokenRejection(error, { expiresAt: used.expiresAt })) throw expiredTokenFailure(error);
   if ((await flagRejectedToken(row, YOUTUBE_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
   throw Object.assign(new Error("YouTube no longer accepts this connection. Reconnect YouTube in Settings."), {
     code: YOUTUBE_RECONNECT_CODE,
@@ -980,7 +990,21 @@ async function flagRejectedYouTubeToken(error: unknown, row: TokenSnapshot | und
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     const used: UsedToken = {};
-    const result = await uploadYouTubeVideo(ctx, used).catch((error: unknown) => flagRejectedYouTubeToken(error, used.row));
+    const upload = (attempt: PublishContext) =>
+      uploadYouTubeVideo(attempt, used).catch((error: unknown) => flagRejectedYouTubeToken(error, used));
+    // R26 platform-clients L1: a 401 on a token that ran out on the way is
+    // refreshed once and the upload sent once more (a 401 means YouTube took
+    // nothing). A terminal refresh flags the row itself and its failure is thrown.
+    const result = await upload(ctx).catch(async (error: unknown) => {
+      if (!isExpiredTokenFailure(error) || !used.connection) throw error;
+      const { deadline } = ctx;
+      const renewed = await refreshConnectionToken(
+        used.connection,
+        (current) => refreshGoogleToken(current, { deadline }),
+        { deadline },
+      );
+      return upload({ ...ctx, socialConnection: renewed });
+    });
     // Only once the video exists: a continuation or a failure has no video yet.
     if (!ctx.cover || typeof result.externalPostId !== "string" || !used.accessToken) return result;
     const note = await setYouTubeCover(ctx, result.externalPostId, used.accessToken);
@@ -995,8 +1019,12 @@ export const youtubeClient: PlatformClient = {
   },
 };
 
-/** The token an upload sent: for the cover call after it, and the row to flag if YouTube refuses it. */
-type UsedToken = { accessToken?: string; row?: TokenSnapshot };
+/**
+ * The token an upload sent: for the cover call after it, the row to flag if
+ * YouTube refuses it, and (R26) its stored expiry and the connection it came
+ * from, to refresh once when it ran out on the way.
+ */
+type UsedToken = { accessToken?: string; row?: TokenSnapshot; expiresAt?: Date | null; connection?: SocialConnection };
 
 /** The upload itself; `used` is the token it sent. */
 async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise<PublishResult> {
@@ -1047,6 +1075,8 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
   }
   used.accessToken = accessToken;
   used.row = { id: socialConnection.id, accessToken, refreshToken: socialConnection.refreshToken };
+  used.expiresAt = socialConnection.expiresAt;
+  used.connection = socialConnection;
 
   // YouTube only supports videos
   if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("video/")) {

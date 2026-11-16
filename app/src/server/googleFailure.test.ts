@@ -8,7 +8,13 @@ vi.mock("./platforms/connectionHealth", async (importOriginal) => ({
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
-import { classifyGoogleFailure, flagIfTokenRejected, googleFailureKind } from "./googleFailure";
+import {
+  classifyGoogleFailure,
+  flagIfTokenRejected,
+  googleFailureKind,
+  isExpiredTokenFailure,
+  withGoogleTokenRetry,
+} from "./googleFailure";
 
 /**
  * JJ3 lead review: Google failures were turned into text in three places
@@ -187,5 +193,91 @@ describe("flagIfTokenRejected", () => {
 
     expect(settled).toMatchObject({ code: "CONNECTION_TOKEN_CHANGED" });
     expect(googleFailureKind(settled)).toBe("other");
+  });
+});
+
+// R26 platform-clients L1: a failed early refresh leaves the stored token in
+// use until it expires, and a long call can send it after that. Google's 401
+// then says the token ran out, not that the grant is dead.
+describe("a 401 on a token already past its stored expiry", () => {
+  const tokens = { id: "conn-1", accessToken: "tok", refreshToken: "ref" };
+  const expired = { ...tokens, expiresAt: new Date(Date.now() - 1000) };
+  const fresh = { ...tokens, accessToken: "fresh", expiresAt: new Date(Date.now() + 60 * 60 * 1000) };
+  const unauthorized = () => failure({ status: 401, code: "GBP_REVIEWS_FETCH_FAILED" });
+
+  it("flags nothing, and is a failure to try again", async () => {
+    h.flagRejectedToken.mockReset();
+
+    const settled = await flagIfTokenRejected(unauthorized(), expired);
+
+    expect(h.flagRejectedToken).not.toHaveBeenCalled();
+    expect(isExpiredTokenFailure(settled)).toBe(true);
+    expect(googleFailureKind(settled)).toBe("tryLater");
+  });
+
+  it("a 401 on a token still within its expiry flags as before", async () => {
+    h.flagRejectedToken.mockReset();
+    h.flagRejectedToken.mockResolvedValue("flagged");
+
+    await flagIfTokenRejected(unauthorized(), fresh);
+
+    expect(h.flagRejectedToken).toHaveBeenCalledWith({ id: "conn-1", accessToken: "fresh", refreshToken: "ref" }, "GOOGLE_API_TOKEN_REJECTED");
+  });
+
+  it("a missing scope is no expiry: flagged whatever the expiry", async () => {
+    h.flagRejectedToken.mockReset();
+    h.flagRejectedToken.mockResolvedValue("flagged");
+
+    await flagIfTokenRejected(failure({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] }), expired);
+
+    expect(h.flagRejectedToken).toHaveBeenCalledTimes(1);
+  });
+
+  describe("withGoogleTokenRetry", () => {
+    it("refreshes once and retries the call once: the retry's answer, nothing flagged", async () => {
+      h.flagRejectedToken.mockReset();
+      const call = vi.fn().mockRejectedValueOnce(unauthorized()).mockResolvedValueOnce("reviews");
+      const renew = vi.fn().mockResolvedValue(fresh);
+
+      await expect(withGoogleTokenRetry(expired, renew, call)).resolves.toBe("reviews");
+      expect(renew).toHaveBeenCalledWith(expired);
+      expect(call.mock.calls.map(([row]) => row.accessToken)).toEqual(["tok", "fresh"]);
+      expect(h.flagRejectedToken).not.toHaveBeenCalled();
+    });
+
+    it("the same for a failure the flag path already settled (a listing's)", async () => {
+      const settled = await flagIfTokenRejected(unauthorized(), expired);
+      const call = vi.fn().mockRejectedValueOnce(settled).mockResolvedValueOnce("ok");
+
+      await expect(withGoogleTokenRetry(expired, vi.fn().mockResolvedValue(fresh), call)).resolves.toBe("ok");
+    });
+
+    it("a terminal refresh: its own failure, which reads Reconnect (the refresh flags the row), and no retry", async () => {
+      const call = vi.fn().mockRejectedValue(unauthorized());
+      const dead = refresh(400, "invalid_grant");
+
+      const error = await withGoogleTokenRetry(expired, vi.fn().mockRejectedValue(dead), call).catch((e: unknown) => e);
+
+      expect(error).toBe(dead);
+      expect(googleFailureKind(error)).toBe("reconnect");
+      expect(call).toHaveBeenCalledTimes(1);
+    });
+
+    it("a 401 on a token within its expiry: no refresh, the failure as it was", async () => {
+      const first = unauthorized();
+      const renew = vi.fn();
+
+      await expect(withGoogleTokenRetry(fresh, renew, vi.fn().mockRejectedValue(first))).rejects.toBe(first);
+      expect(renew).not.toHaveBeenCalled();
+    });
+
+    it("the retry's own 401 is handed back as it is (the caller flags it), with no second refresh", async () => {
+      const again = unauthorized();
+      const renew = vi.fn().mockResolvedValue(fresh);
+      const call = vi.fn().mockRejectedValueOnce(unauthorized()).mockRejectedValueOnce(again);
+
+      await expect(withGoogleTokenRetry(expired, renew, call)).rejects.toBe(again);
+      expect(renew).toHaveBeenCalledTimes(1);
+    });
   });
 });

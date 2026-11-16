@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
-import { flagIfTokenRejected } from "@/server/googleFailure";
+import { flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
 import {
   MEMBER_NO_LOCATION_NOTICE,
   MEMBER_SAVED_NOT_LISTED_NOTICE,
@@ -96,36 +96,41 @@ export async function GET() {
       return NextResponse.json(googleRefusedBody(role), { status: 500 });
     }
 
-    // The listing the reply route checks a review's location against.
-    const listing = await listGbpLocationsWithToken(
-      { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null },
-      WHERE,
-    );
-    // No location is chosen here yet: an access refusal is about the account.
-    if (!listing.ok) {
-      return NextResponse.json(reviewsKindBody(listing.kind, LOCATIONS_FAILED_MESSAGE, role, { subject: "account" }), {
-        status: 500,
-      });
-    }
+    // R26 platform-clients L1: a 401 on a token that ran out on the way is
+    // refreshed once and the listing read once more (withGoogleTokenRetry).
+    return await withGoogleTokenRetry(used, refreshAccessToken, async (row) => {
+      used = row;
+      // The listing the reply route checks a review's location against.
+      const listing = await listGbpLocationsWithToken(
+        { id: row.id, accessToken: row.accessToken ?? "", refreshToken: row.refreshToken ?? null, expiresAt: row.expiresAt },
+        WHERE,
+      );
+      // No location is chosen here yet: an access refusal is about the account.
+      if (!listing.ok) {
+        return NextResponse.json(reviewsKindBody(listing.kind, LOCATIONS_FAILED_MESSAGE, role, { subject: "account" }), {
+          status: 500,
+        });
+      }
 
-    // R26 client-journey L2: a saved store code two listed locations share names neither.
-    const shared = savedCodeShared(listing.locations, savedName) ? savedCodeSharedNotice(role) : null;
-    if (role === "owner") {
-      const locations = listing.locations.map(reviewsListedLocation);
-      // R26 client-journey L3: the picker's notices, from the same helper (an
-      // empty list says to sign in again, never to create a listing).
-      const listed = listingNotice(listing, "reviews");
-      const notice = [listed.notice, shared].filter(Boolean).join(" ");
-      return NextResponse.json({ locations, connected: true, ...listed, ...(notice ? { notice } : {}) });
-    }
+      // R26 client-journey L2: a saved store code two listed locations share names neither.
+      const shared = savedCodeShared(listing.locations, savedName) ? savedCodeSharedNotice(role) : null;
+      if (role === "owner") {
+        const locations = listing.locations.map(reviewsListedLocation);
+        // R26 client-journey L3: the picker's notices, from the same helper (an
+        // empty list says to sign in again, never to create a listing).
+        const listed = listingNotice(listing, "reviews");
+        const notice = [listed.notice, shared].filter(Boolean).join(" ");
+        return NextResponse.json({ locations, connected: true, ...listed, ...(notice ? { notice } : {}) });
+      }
 
-    if (shared) return NextResponse.json({ locations: [], connected: true, notice: shared });
-    const saved = savedLocationIn(listing.locations, savedName);
-    if (saved) return NextResponse.json({ locations: [reviewsListedLocation(saved)], connected: true });
-    // Not found: maybe on an account that could not be read; else not this login's.
-    const notice = unreadAccountsNotice(listing.unread, "reviews", role);
-    const memberNotice = !listing.complete && notice ? notice : MEMBER_SAVED_NOT_LISTED_NOTICE;
-    return NextResponse.json({ locations: [], connected: true, notice: memberNotice });
+      if (shared) return NextResponse.json({ locations: [], connected: true, notice: shared });
+      const saved = savedLocationIn(listing.locations, savedName);
+      if (saved) return NextResponse.json({ locations: [reviewsListedLocation(saved)], connected: true });
+      // Not found: maybe on an account that could not be read; else not this login's.
+      const notice = unreadAccountsNotice(listing.unread, "reviews", role);
+      const memberNotice = !listing.complete && notice ? notice : MEMBER_SAVED_NOT_LISTED_NOTICE;
+      return NextResponse.json({ locations: [], connected: true, notice: memberNotice });
+    });
   } catch (error: unknown) {
     // R25 platform-clients L2: a token Google refused flags the row first.
     const settled = await flagIfTokenRejected(error, used);

@@ -421,3 +421,35 @@ describe("POST /api/reviews/[reviewId]/reply for a connection flagged for reconn
     expect(listGbpLocationsMock).not.toHaveBeenCalled();
   });
 });
+
+// R26 platform-clients L1: a 401 on a token that ran out on the way (the early
+// refresh had failed) is refreshed once and the reply sent once more.
+describe("POST /api/reviews/[reviewId]/reply and a 401 on a token that ran out on the way", () => {
+  it("refreshes once and replies with the new token: nothing flagged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      findFirstMock.mockResolvedValue({
+        id: "c1",
+        accessToken: "tok",
+        refreshToken: "ref",
+        expiresAt: new Date(Date.now() + 60 * 1000),
+        metadata: { locationName: "accounts/1/locations/2" },
+      });
+      vi.mocked(refreshAccessToken)
+        .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" }))
+        .mockResolvedValueOnce({ id: "c1", accessToken: "fresh", refreshToken: "ref", expiresAt: new Date(Date.now() + 3_600_000) } as never);
+      replyToReviewMock.mockImplementationOnce(async () => {
+        vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+        throw Object.assign(new Error("401"), { status: 401, code: "GBP_REVIEWS_REPLY_FAILED" });
+      });
+
+      const response = await post({ comment: "Thanks!", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+      expect(response.status).toBe(200);
+      expect(replyToReviewMock.mock.calls.map(([token]) => token)).toEqual(["tok", "fresh"]);
+      expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

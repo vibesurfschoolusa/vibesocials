@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { checkRateLimit } from "@/lib/rateLimit";
-import type { GoogleFailureKind } from "@/server/googleFailure";
+import { isExpiredTokenFailure, type GoogleFailureKind } from "@/server/googleFailure";
 import type { TokenSnapshot } from "@/server/platforms/connectionHealth";
 import { readGbpLocations, type GbpListing, type UnreadAccounts } from "@/server/platforms/gbpLocation";
 import {
@@ -181,10 +181,18 @@ function googleGet(url: URL, accessToken: string): Promise<Response> {
 
 /**
  * The listing for a token the caller already holds (the Reviews routes, which
- * refresh it early first): `used` is the row it came from.
+ * refresh it early first): `used` is the row it came from, with its stored
+ * expiry. R26 platform-clients L1: a 401 on that token after it expired flags
+ * nothing (googleFailure.ts flagIfTokenRejected) and is thrown, so the route's
+ * withGoogleTokenRetry refreshes once and lists again.
  */
-export function listGbpLocationsWithToken(used: TokenSnapshot, where: string): Promise<GbpListing> {
-  return readGbpLocations({ where, get: (url) => googleGet(url, used.accessToken), used: () => used });
+export async function listGbpLocationsWithToken(
+  used: TokenSnapshot & { expiresAt?: Date | null },
+  where: string,
+): Promise<GbpListing> {
+  const listing = await readGbpLocations({ where, get: (url) => googleGet(url, used.accessToken), used: () => used });
+  if (!listing.ok && isExpiredTokenFailure(listing.failure)) throw listing.failure;
+  return listing;
 }
 
 /**

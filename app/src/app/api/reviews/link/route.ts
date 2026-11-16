@@ -15,7 +15,7 @@ import {
   storeCodeStaleMessage,
   type ReviewsReader,
 } from "@/server/googleReviews";
-import { classifyGoogleFailure, flagIfTokenRejected, type GoogleFailureKind } from "@/server/googleFailure";
+import { classifyGoogleFailure, flagIfTokenRejected, withGoogleTokenRetry, type GoogleFailureKind } from "@/server/googleFailure";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -100,9 +100,13 @@ export async function GET() {
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.
     used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
-    const accessToken = used.accessToken;
 
-    const url = await fetchNewReviewUri(accessToken, locationName);
+    // R26 platform-clients L1: a 401 on a token that ran out on the way is
+    // refreshed once and the link read once more (withGoogleTokenRetry).
+    const url = await withGoogleTokenRetry(used, refreshAccessToken, (row) => {
+      used = row;
+      return fetchNewReviewUri(row.accessToken, locationName);
+    });
     if (!url) return NextResponse.json({ url: null, reason: reason("google_has_none") });
 
     await saveLinkIfUnchanged(connection.id, locationName, url);

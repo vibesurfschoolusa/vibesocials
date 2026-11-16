@@ -334,6 +334,17 @@ describe("resolveGbpLocationName reads every page", () => {
     expect(error?.status).toBe(401);
   });
 
+  // R26 platform-clients L1: the token ran out before the lookup reached Google.
+  it("a 401 on a token past its stored expiry flags nothing, and fails as one to retry after a refresh", async () => {
+    google({ [`${ACCOUNTS}|`]: { status: 401 } });
+    const used = { id: "conn-1", accessToken: "token-abc", refreshToken: "refresh", expiresAt: new Date(Date.now() - 1000) };
+
+    const error = await resolveGbpLocationName("token-abc", "STORE-1", undefined, used).catch((e: unknown) => e);
+
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(error).toMatchObject({ code: "GOOGLE_TOKEN_EXPIRED" });
+  });
+
   it("a 503 flags nothing", async () => {
     google({ [`${ACCOUNTS}|`]: { status: 503 } });
 

@@ -3,6 +3,7 @@ import {
   classifyGoogleFailure,
   flagIfTokenRejected,
   googleFailureKind,
+  isExpiredTokenFailure,
   type GoogleFailureKind,
 } from "@/server/googleFailure";
 
@@ -168,9 +169,10 @@ interface ReadOptions {
   get: (url: URL) => Promise<Response>;
   /**
    * The tokens the latest request sent: a token Google refused is flagged with
-   * them. Null when the caller flags it itself (the Reviews routes).
+   * them. Null when the caller flags it itself. `expiresAt` (their stored
+   * expiry, when known): a 401 after it is no refusal (R26 platform-clients L1).
    */
-  used: () => TokenSnapshot | null;
+  used: () => (TokenSnapshot & { expiresAt?: Date | null }) | null;
   /** Errors `get` throws that end the reading as they are (a rate limit, the step's time budget). */
   rethrow?: (error: unknown) => boolean;
   /**
@@ -309,8 +311,9 @@ function accountsListFailed(failure: unknown): Error {
  *   listing: the location whose `storeCode` matches, on any page of any account.
  *
  * Throws (with `error.code` tags):
- * - Google's own failure (a 401, a missing scope) when it refused the token, or
- *   CONNECTION_TOKEN_CHANGED.
+ * - Google's own failure (a 401, a missing scope) when it refused the token,
+ *   CONNECTION_TOKEN_CHANGED, or GOOGLE_TOKEN_EXPIRED when `used.expiresAt`
+ *   had passed (R26 platform-clients L1: nothing flagged; refresh and retry).
  *   With `used` (the row the token came from) the row is flagged first, as on
  *   every Google call (R25); callers without it flag in their own catch.
  * - `GBP_ACCOUNTS_LIST_FAILED`, with Google's status, if the accounts list
@@ -331,7 +334,7 @@ export async function resolveGbpLocationName(
   accessToken: string,
   locationNameOrStoreCode: string,
   deadline?: number,
-  used?: TokenSnapshot,
+  used?: TokenSnapshot & { expiresAt?: Date | null },
 ): Promise<string> {
   const trimmed = locationNameOrStoreCode.trim();
 
@@ -363,9 +366,12 @@ export async function resolveGbpLocationName(
     locationsFilter: storeCodeFilter(trimmed),
   });
   if (!listing.ok) {
-    // The token itself was refused (a 401, a missing scope), or the tokens changed meanwhile.
+    // The token itself was refused (a 401, a missing scope), the tokens changed
+    // meanwhile, or (R26) the token ran out on the way: the caller's to handle.
     const code = (listing.failure as { code?: unknown } | null)?.code;
-    if (listing.kind === "reconnect" || code === "CONNECTION_TOKEN_CHANGED") throw listing.failure;
+    if (listing.kind === "reconnect" || code === "CONNECTION_TOKEN_CHANGED" || isExpiredTokenFailure(listing.failure)) {
+      throw listing.failure;
+    }
     throw accountsListFailed(listing.failure);
   }
 

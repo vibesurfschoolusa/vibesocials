@@ -60,10 +60,14 @@ const RECONNECT_CODES: ReadonlySet<string> = new Set(["RECONNECT_REQUIRED", "CON
  * module does not load fetchWithTimeout (tests that mock it whole import
  * googleReviews); googleFailure.test.ts keeps the two equal.
  */
+/** A 401 on a token that was already past its stored expiry (expiredTokenFailure). */
+export const GOOGLE_TOKEN_EXPIRED_CODE = "GOOGLE_TOKEN_EXPIRED";
+
 const TRY_LATER_CODES: ReadonlySet<string> = new Set([
   "GOOGLE_MISSING_OAUTH_CREDENTIALS",
   "CONNECTION_REFRESH_BUSY",
   "FETCH_TIMEOUT",
+  GOOGLE_TOKEN_EXPIRED_CODE,
 ]);
 const REFRESH_FAILED_CODE = "GOOGLE_TOKEN_REFRESH_FAILED";
 
@@ -129,16 +133,80 @@ export const GOOGLE_REJECTED_TOKEN_CODE = "GOOGLE_API_TOKEN_REJECTED";
  * card shows Reconnect and the reconnect email goes out. Returns the failure
  * to word: the same one, or CONNECTION_TOKEN_CHANGED ("other": try again)
  * when the stored tokens changed meanwhile and nothing was flagged.
+ *
+ * R26 platform-clients L1: a 401 on a token already past its stored expiry
+ * (`used.expiresAt`) is not a refusal. A failed early refresh leaves the
+ * stored token in use until it expires (googleTokens.ts
+ * refreshGoogleTokenEarly), and a long call (a big upload, a long listing)
+ * can send it after that. Nothing is flagged; the failure handed back is
+ * expiredTokenFailure ("tryLater"), which withGoogleTokenRetry retries after
+ * one refresh, and a caller that can't retry tries on its next run.
  */
 export async function flagIfTokenRejected(error: unknown, used: UsedRow | null | undefined): Promise<unknown> {
   if (!used?.accessToken || !isRejectedToken(error)) return error;
+  if (sentAfterExpiry(error, used)) return expiredTokenFailure(error);
   const snapshot: TokenSnapshot = { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null };
   const result = await flagRejectedToken(snapshot, GOOGLE_REJECTED_TOKEN_CODE);
   return result === "superseded" ? connectionTokenChangedError() : error;
 }
 
-/** The row a Google call read its token from (a SocialConnection, or a TokenSnapshot). */
-type UsedRow = { id: string; accessToken: string | null; refreshToken?: string | null };
+/**
+ * The row a Google call read its token from (a SocialConnection, or a
+ * TokenSnapshot). `expiresAt`, when known, is the stored expiry of that token.
+ */
+type UsedRow = { id: string; accessToken: string | null; refreshToken?: string | null; expiresAt?: Date | null };
+
+/**
+ * Was this a 401 on a token past its stored expiry? Judged when the failure
+ * is handled, a moment after Google answered; a token that ran out in that
+ * moment costs one refresh and one retry, and the retry's own 401, on a fresh
+ * token, is flagged as before. A missing scope (403) is never an expiry.
+ */
+function sentAfterExpiry(error: unknown, used: { expiresAt?: Date | null }): boolean {
+  const status = (error as FailureFields | null)?.status;
+  if (status !== 401 || !used.expiresAt) return false;
+  return new Date(used.expiresAt).getTime() <= Date.now();
+}
+
+/** The same rule for a client with its own flag path (youtubeClient): a 401 on a token past its stored expiry. */
+export function isExpiredTokenRejection(error: unknown, used: { expiresAt?: Date | null }): boolean {
+  return isRejectedToken(error) && sentAfterExpiry(error, used);
+}
+
+/** The failure flagIfTokenRejected hands back for a 401 on an expired token: nothing flagged, try again. */
+export function expiredTokenFailure(cause: unknown): Error & { code: string } {
+  return Object.assign(new Error("Google's access token ran out while the request was sent. Try again."), {
+    code: GOOGLE_TOKEN_EXPIRED_CODE,
+    cause,
+  });
+}
+
+/** Is this the failure of a 401 on a token past its stored expiry (expiredTokenFailure)? */
+export function isExpiredTokenFailure(error: unknown): boolean {
+  return (error as FailureFields | null)?.code === GOOGLE_TOKEN_EXPIRED_CODE;
+}
+
+/**
+ * R26 platform-clients L1: runs `call` with the row's token; when it fails
+ * with a 401 on a token past its stored expiry (raw, or already settled by
+ * flagIfTokenRejected), refreshes once (`renew`, the caller's path through
+ * refreshConnectionToken) and runs `call` once more with the new row. A
+ * terminal refresh flags the row itself (googleTokens.ts refreshGoogleToken)
+ * and its failure is thrown, so it reads Reconnect; any other failure, the
+ * retry's included, is thrown as it is, for the caller's flag path.
+ */
+export async function withGoogleTokenRetry<R extends UsedRow, T>(
+  row: R,
+  renew: (row: R) => Promise<R>,
+  call: (row: R) => Promise<T>,
+): Promise<T> {
+  try {
+    return await call(row);
+  } catch (error) {
+    if (!isExpiredTokenFailure(error) && !isExpiredTokenRejection(error, row)) throw error;
+    return call(await renew(row));
+  }
+}
 
 /** The kind, without logging (a test seam and the rule itself). */
 export function googleFailureKind(error: unknown): GoogleFailureKind {

@@ -2500,3 +2500,91 @@ describe("youtubeClient: a token YouTube refuses flags the row", () => {
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 });
+
+// R26 platform-clients L1: the early refresh failed, the stored token was used,
+// and it ran out before the upload reached YouTube (a slow download). The 401
+// says the token expired, not that the grant is dead: one refresh, one retry.
+describe("youtubeClient: a 401 on a token that ran out on the way", () => {
+  const MINUTE = 60 * 1000;
+  const fresh = { id: "conn-yt", platform: "youtube", accessToken: "fresh", refreshToken: "refresh-token" };
+  const busy = () => Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" });
+  const ctxExpiringSoon = () =>
+    ytCtx({
+      socialConnection: {
+        id: "conn-yt",
+        platform: "youtube",
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        expiresAt: new Date(Date.now() + MINUTE),
+      } as unknown as SocialConnection,
+    });
+  let insert: ReturnType<typeof vi.fn<(auth: string | null) => Response>>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+    refreshConnectionTokenMock.mockReset();
+    insert = vi.fn<(auth: string | null) => Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.includes("blob.example.com")) return new Response(new Uint8Array([1, 2, 3, 4]));
+        if (url.includes(INSERT_URL_FRAGMENT)) return insert(new Headers(init?.headers).get("Authorization"));
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    refreshConnectionTokenMock.mockReset();
+    refreshConnectionTokenMock.mockImplementation((snapshot, refresh) => refresh(snapshot));
+  });
+
+  const expiredUpload = () => {
+    vi.setSystemTime(Date.now() + 2 * MINUTE);
+    return new Response("{}", { status: 401 });
+  };
+
+  it("refreshes once and uploads once more with the new token: posted, nothing flagged", async () => {
+    refreshConnectionTokenMock.mockRejectedValueOnce(busy()).mockResolvedValueOnce({ ...fresh, expiresAt: new Date(Date.now() + 60 * MINUTE) });
+    insert
+      .mockImplementationOnce(expiredUpload)
+      .mockImplementationOnce(() => new Response(JSON.stringify({ id: "vid-1", snippet: { title: "t" } }), { status: 200 }));
+
+    await expect(youtubeClient.publishVideo(ctxExpiringSoon())).resolves.toEqual({ externalPostId: "vid-1" });
+    expect(insert.mock.calls.map(([auth]) => auth)).toEqual(["Bearer access-token", "Bearer fresh"]);
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(2);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the refresh is terminal: its failure (the refresh flags the row itself), no second upload", async () => {
+    const dead = Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      status: 400,
+      oauthError: "invalid_grant",
+    });
+    refreshConnectionTokenMock.mockRejectedValueOnce(busy()).mockRejectedValueOnce(dead);
+    insert.mockImplementationOnce(expiredUpload);
+
+    await expect(youtubeClient.publishVideo(ctxExpiringSoon())).rejects.toBe(dead);
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("a 401 on a token with time left flags as today, with no refresh", async () => {
+    insert.mockImplementation(() => new Response("{}", { status: 401 }));
+    const ctx = ytCtx({
+      socialConnection: { ...ctxExpiringSoon().socialConnection, expiresAt: new Date(Date.now() + 30 * MINUTE) } as SocialConnection,
+    });
+
+    await expect(youtubeClient.publishVideo(ctx)).rejects.toMatchObject({ code: "YOUTUBE_RECONNECT_REQUIRED" });
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    expect(flagRejectedTokenMock).toHaveBeenCalledTimes(1);
+  });
+});

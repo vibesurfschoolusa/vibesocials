@@ -2,7 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { GBP_ACCESS_REFUSED_TEXT } from "@/lib/publishFailureText";
-import { isGoogleServiceRefusal } from "@/server/googleFailure";
+import { isGoogleServiceRefusal, withGoogleTokenRetry } from "@/server/googleFailure";
 import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
@@ -102,14 +102,16 @@ export const googleBusinessProfileClient: PlatformClient = {
       refreshConnectionToken(stored, (current) => refreshGoogleToken(current, { deadline }), { deadline }),
     );
 
-    const accessToken = socialConnection.accessToken;
-    if (!accessToken) {
+    if (!socialConnection.accessToken) {
       const error = new Error("Missing access token for Google Business Profile") as Error & { code: string };
       error.code = "GBP_NO_ACCESS_TOKEN";
       throw error;
     }
 
-    const { locationName } = await ensureLocationName(socialConnection, accessToken, deadline);
+    const located = await ensureLocationName(socialConnection, deadline);
+    const { locationName } = located;
+    socialConnection = located.connection;
+    const accessToken = located.accessToken;
 
     // A photo becomes a Business Profile post (an "Update" with the caption, shown
     // on Google Search and Maps). Until 2026-11 it was only added to the photo
@@ -231,14 +233,16 @@ export const googleBusinessProfileClient: PlatformClient = {
       refreshConnectionToken(stored, (current) => refreshGoogleToken(current, { deadline }), { deadline }),
     );
 
-    const accessToken = socialConnection.accessToken;
-    if (!accessToken) {
+    if (!socialConnection.accessToken) {
       const error = new Error("Missing access token for Google Business Profile") as Error & { code: string };
       error.code = "GBP_NO_ACCESS_TOKEN";
       throw error;
     }
 
-    const { locationName } = await ensureLocationName(socialConnection, accessToken, deadline);
+    const located = await ensureLocationName(socialConnection, deadline);
+    const { locationName } = located;
+    socialConnection = located.connection;
+    const accessToken = located.accessToken;
     const body = buildLocalPostBody(ctx.caption, null, await resolvePostOptions(ctx));
 
     console.log("[GBP] Creating text post", { locationName });
@@ -413,11 +417,17 @@ async function resolvePostOptions(
   return { ...options, button: { ...options.button, url: trackedGoogleButtonUrl(url, workspace.companyWebsite) } };
 }
 
+/**
+ * The location to post to, and the connection (and token) to post with: the
+ * same one, or (R26 platform-clients L1) the one refreshed when the store-code
+ * lookup's 401 came on a token past its stored expiry (withGoogleTokenRetry:
+ * one refresh, one more lookup; nothing is flagged unless that refresh is
+ * terminal, which flags the row itself).
+ */
 async function ensureLocationName(
   socialConnection: SocialConnection,
-  accessToken: string,
   deadline?: number,
-): Promise<{ locationName: string }> {
+): Promise<{ locationName: string; connection: SocialConnection; accessToken: string }> {
   const metadata = (socialConnection.metadata as { locationName?: unknown } | null) ?? {};
   const raw = metadata.locationName;
 
@@ -433,7 +443,12 @@ async function ensureLocationName(
   // resolveGbpLocationName handles both a full "accounts/..." resource name
   // (returned as-is) and a Store code from Advanced settings (resolved via the
   // account/location listing). R25: a 401 there flags the row with the tokens sent.
-  const used = { id: socialConnection.id, accessToken, refreshToken: socialConnection.refreshToken };
-  const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline, used);
-  return { locationName };
+  const renew = (row: SocialConnection) =>
+    refreshConnectionToken(row, (current) => refreshGoogleToken(current, { deadline }), { deadline });
+  return withGoogleTokenRetry(socialConnection, renew, async (connection) => {
+    const accessToken = connection.accessToken ?? "";
+    const used = { id: connection.id, accessToken, refreshToken: connection.refreshToken, expiresAt: connection.expiresAt };
+    const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline, used);
+    return { locationName, connection, accessToken };
+  });
 }

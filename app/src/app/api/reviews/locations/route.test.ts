@@ -591,3 +591,34 @@ describe("GET /api/reviews/locations sends each location's address and store cod
     ]);
   });
 });
+
+// R26 platform-clients L1: the listing ran past the stored token's expiry after
+// a failed early refresh; its 401 is refreshed once and listed again.
+describe("GET /api/reviews/locations and a 401 on a token that ran out on the way", () => {
+  const MINUTE = 60 * 1000;
+  afterEach(() => vi.useRealTimers());
+
+  it("refreshes once and lists again with the new token: nothing flagged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue({ ...CONNECTION, expiresAt: new Date(Date.now() + MINUTE) });
+    refreshAccessTokenMock
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" }))
+      .mockResolvedValueOnce({ ...CONNECTION, accessToken: "fresh", expiresAt: new Date(Date.now() + 60 * MINUTE) });
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (new Headers(init?.headers).get("Authorization") === "Bearer token-abc") {
+        vi.setSystemTime(Date.now() + 2 * MINUTE);
+        return new Response("{}", { status: 401 });
+      }
+      return Response.json({ accounts: [] });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).connected).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+});

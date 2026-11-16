@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // F7 (R1 M4, M5): GET /api/reviews loads every page and never shows Google's
 // own error text. Google itself is stubbed out (server/googleReviews.ts).
@@ -441,5 +441,85 @@ describe("GET /api/reviews for a connection flagged for reconnect", () => {
     await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
     expect(refreshAccessToken).not.toHaveBeenCalled();
     expect(fetchAllReviewsMock).not.toHaveBeenCalled();
+  });
+});
+
+// R26 platform-clients L1: the early refresh failed, so the stored token was
+// used, and it ran out while the call was on its way. Google's 401 then says
+// the token expired, not that the grant is dead: one refresh, one retry.
+describe("GET /api/reviews and a 401 on a token that ran out on the way", () => {
+  const MINUTE = 60 * 1000;
+  const refreshBusy = () =>
+    Object.assign(new Error("Failed to refresh Google access token (status 503)"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 });
+  const unauthorized = () => Object.assign(new Error("Failed (status 401)"), { status: 401, code: "GBP_REVIEWS_FETCH_FAILED" });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    findFirstMock.mockResolvedValue({
+      id: "c1",
+      accessToken: "tok",
+      refreshToken: "ref",
+      expiresAt: new Date(Date.now() + MINUTE),
+      metadata: { locationName: "accounts/1/locations/2" },
+    });
+    // The listing takes longer than the minute the token had left.
+    fetchAllReviewsMock.mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 2 * MINUTE);
+      throw unauthorized();
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("refreshes once and retries once: the reviews, and nothing flagged", async () => {
+    vi.mocked(refreshAccessToken)
+      .mockRejectedValueOnce(refreshBusy())
+      .mockResolvedValueOnce({ id: "c1", accessToken: "fresh", refreshToken: "ref", expiresAt: new Date(Date.now() + 60 * MINUTE) } as never);
+    fetchAllReviewsMock.mockResolvedValueOnce({ reviews: [{ reviewId: "a" }], truncated: false });
+
+    const response = await get();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ reviews: [{ reviewId: "a" }], truncated: false });
+    expect(fetchAllReviewsMock.mock.calls.map(([token]) => token)).toEqual(["tok", "fresh"]);
+    expect(refreshAccessToken).toHaveBeenCalledTimes(2);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the refresh is terminal: the reconnect answer (the refresh flags the row itself), and no retry", async () => {
+    vi.mocked(refreshAccessToken)
+      .mockRejectedValueOnce(refreshBusy())
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
+          code: "GOOGLE_TOKEN_REFRESH_FAILED",
+          status: 400,
+          oauthError: "invalid_grant",
+        }),
+      );
+
+    const response = await get();
+
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    expect(fetchAllReviewsMock).toHaveBeenCalledTimes(1);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("a 401 on a token with time left flags as today", async () => {
+    findFirstMock.mockResolvedValue({
+      id: "c1",
+      accessToken: "tok",
+      refreshToken: "ref",
+      expiresAt: new Date(Date.now() + 30 * MINUTE),
+      metadata: { locationName: "accounts/1/locations/2" },
+    });
+    fetchAllReviewsMock.mockReset();
+    fetchAllReviewsMock.mockRejectedValue(unauthorized());
+
+    const response = await get();
+
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith({ id: "c1", accessToken: "tok", refreshToken: "ref" }, "GOOGLE_API_TOKEN_REJECTED");
   });
 });
