@@ -88,6 +88,25 @@ describe("ReviewCard: small screens and screen readers", () => {
     expect(row![1].split(" ")).toEqual(expect.arrayContaining(["flex", "flex-wrap", "gap-3"]));
   });
 
+  // R24 pages L1: the header row wraps, so the "Needs reply" pill and the date
+  // never break over two lines at 375 px.
+  it("the header row wraps and the Needs reply pill stays on one line", () => {
+    const html = card("Maria Lopez");
+    const header = html.match(/<div class="([^"]*)"><div><div class="font-semibold/);
+    expect(header, "header row").not.toBeNull();
+    expect(header![1].split(" ")).toEqual(
+      expect.arrayContaining(["flex", "flex-wrap", "items-start", "justify-between", "gap-2"]),
+    );
+    const pill = html.match(/<span class="([^"]*)"[^>]*>Needs reply<\/span>/);
+    expect(pill, "Needs reply pill").not.toBeNull();
+    expect(pill![1].split(" ")).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
+  });
+
+  it("the date stays on one line", () => {
+    const html = card("Maria Lopez");
+    expect(html).toMatch(/<span class="[^"]*\bwhitespace-nowrap\b[^"]*">[A-Z][a-z]{2} \d{1,2}, 20\d{2}<\/span>/);
+  });
+
   it("the star rating is an image with its rating as the name", () => {
     expect(card("Maria Lopez")).toMatch(/<div[^>]*role="img"[^>]*aria-label="5 out of 5 stars"|<div[^>]*aria-label="5 out of 5 stars"[^>]*role="img"/);
   });

@@ -74,19 +74,25 @@ export function ReviewCard({
         )}
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between">
+          {/* R24 pages L1: the row wraps on a 375 px phone, so the pill and the
+              date move whole instead of breaking over two lines. */}
+          <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <div className="font-semibold text-foreground">
                 {review.reviewer.displayName}
               </div>
               <div className="mt-1 flex items-center gap-2">
                 <StarRating rating={review.starRating} />
-                <span className="text-sm text-muted-foreground">
+                <span className="whitespace-nowrap text-sm text-muted-foreground">
                   {formatDate(review.createTime)}
                 </span>
               </div>
             </div>
-            {needsReply && <Badge variant="warning">Needs reply</Badge>}
+            {needsReply && (
+              <Badge variant="warning" className="shrink-0 whitespace-nowrap">
+                Needs reply
+              </Badge>
+            )}
           </div>
 
           {/* Review Comment */}
