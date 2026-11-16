@@ -2,9 +2,9 @@
 
 import { useSyncExternalStore } from "react";
 
-import { signInAgainLink } from "@/components/shell/signed-out-alert";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { isInstalledApp } from "@/lib/installedApp";
 
 const HINT_CLASS = "text-xs font-normal opacity-90";
 
@@ -15,14 +15,6 @@ export function NewTabHint() {
 
 /** R26 pages L3: in the installed app the sign-in leaves this page, so a typed reply must be copied first. */
 export const INSTALLED_APP_HINT = "(you'll leave this page: copy any reply you typed first)";
-
-/**
- * Whether this page runs as the installed app. The signed-out line's rule
- * (signInAgainLink) is the one rule: it keeps a new tab only outside the app.
- */
-export function isInstalledApp(win: Window | undefined): boolean {
-  return !!win && !signInAgainLink(win).newTab;
-}
 
 const noSubscribe = () => () => {};
 

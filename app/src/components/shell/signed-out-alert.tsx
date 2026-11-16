@@ -5,6 +5,7 @@ import { SessionContext } from "next-auth/react";
 
 import { readServerSession, type ServerSession } from "@/components/signed-in-swap";
 import { Alert } from "@/components/ui/alert";
+import { isInstalledApp } from "@/lib/installedApp";
 import { rereadSessionHere } from "@/lib/staleSignOut";
 
 /**
@@ -46,11 +47,7 @@ const LINK_CLASS = "font-medium text-primary underline-offset-4 hover:underline"
  * coming back to this page.
  */
 export function signInAgainLink(win: Window | undefined): { href: string; newTab: boolean } {
-  const standalone =
-    !!win &&
-    ((typeof win.matchMedia === "function" && win.matchMedia("(display-mode: standalone)").matches) ||
-      (win.navigator as Navigator & { standalone?: boolean } | undefined)?.standalone === true);
-  if (!standalone || !win) {
+  if (!isInstalledApp(win) || !win) {
     return { href: `/login?callbackUrl=${encodeURIComponent("/signed-in-again")}`, newTab: true };
   }
   const here = `${win.location.pathname}${win.location.search}${win.location.hash}`;

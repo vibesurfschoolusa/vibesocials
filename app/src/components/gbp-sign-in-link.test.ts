@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { INSTALLED_APP_HINT, NewTabHint, SignInAgainLink, SignInAgainLinkView, isInstalledApp } from "./gbp-sign-in-link";
+import { INSTALLED_APP_HINT, NewTabHint, SignInAgainLink, SignInAgainLinkView } from "./gbp-sign-in-link";
 
 const HREF = "/api/auth/google_business_profile/start?workspaceId=ws-1";
 
@@ -75,23 +75,6 @@ describe("SignInAgainLinkView in the installed app", () => {
   it("in a normal tab it is the new-tab link", () => {
     const tab = renderToStaticMarkup(createElement(SignInAgainLinkView, { href: HREF, installed: false }));
     expect(tab).toBe(renderToStaticMarkup(createElement(SignInAgainLink, { href: HREF })));
-  });
-});
-
-describe("isInstalledApp", () => {
-  const win = (standaloneMedia: boolean, navigatorStandalone?: boolean) =>
-    ({
-      matchMedia: (query: string) => ({ matches: standaloneMedia && query === "(display-mode: standalone)" }),
-      navigator: navigatorStandalone === undefined ? {} : { standalone: navigatorStandalone },
-      location: { pathname: "/reviews", search: "", hash: "" },
-    }) as unknown as Window;
-
-  it("follows the signed-out line's rule: display-mode standalone, or iOS's navigator.standalone", () => {
-    expect(isInstalledApp(win(true))).toBe(true);
-    expect(isInstalledApp(win(false, true))).toBe(true);
-    expect(isInstalledApp(win(false, false))).toBe(false);
-    expect(isInstalledApp(win(false))).toBe(false);
-    expect(isInstalledApp(undefined)).toBe(false);
   });
 });
 
