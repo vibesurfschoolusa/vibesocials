@@ -185,3 +185,34 @@ describe("ReviewCard: Undo after an AI draft", () => {
     expect(open()).not.toMatch(/>Undo</);
   });
 });
+
+// R25 pages L4: a refused reply's sentence stays in the open form, not only in a toast.
+describe("ReviewCard: a refused reply", () => {
+  it("hands the sentence to the open reply form", () => {
+    const noop = () => {};
+    const html = renderToStaticMarkup(
+      createElement(ReviewCard, {
+        review: {
+          name: "accounts/1/locations/2/reviews/r1",
+          reviewId: "r1",
+          reviewer: { displayName: "Maria", isAnonymous: false },
+          starRating: "FIVE",
+          createTime: "2026-11-01T00:00:00Z",
+          updateTime: "2026-11-01T00:00:00Z",
+        },
+        needsReply: true,
+        isReplyOpen: true,
+        isSubmitting: false,
+        isGeneratingAI: false,
+        replyValue: "Thanks",
+        onOpenReply: noop,
+        onCloseReply: noop,
+        onChangeReply: noop,
+        onSubmitReply: noop,
+        onDraftAI: noop,
+        replyRefusal: "This review is no longer on Google. Reload the page.",
+      }),
+    );
+    expect(html).toMatch(/role="status"[^>]*><p[^>]*>This review is no longer on Google\. Reload the page\.<\/p>/);
+  });
+});

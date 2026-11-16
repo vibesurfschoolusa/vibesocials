@@ -48,29 +48,43 @@ export function focusPlace<N>(active: N | null, form: { contains(node: N): boole
 }
 
 /**
- * JJ3 lead review: the review whose reply failed because Google wants the
- * owner to sign in again (the route's `signIn`), or null. Its form shows the
- * in-place sign-in link; a member's page never gets one, and any other failure
- * of that review clears it.
+ * JJ3 lead review, R25 pages L4: the review whose reply failed, its sentence
+ * (shown in that form's status line, which outlasts the toast) and whether an
+ * owner gets the in-place sign-in link (the route's `signIn`; a member's page
+ * never does). One form is open at a time, so one refusal is kept.
  */
-export function replySignInAfterFailure(
-  current: string | null,
-  reviewId: string,
-  shown: ShownError,
-  isMember: boolean,
-): string | null {
-  if (shown.signIn && !isMember) return reviewId;
-  return current === reviewId ? null : current;
+export interface ReplyRefusal {
+  reviewId: string;
+  message: string;
+  signIn: boolean;
 }
 
-/** Typing, sending again or closing that review's form clears its link. */
-export function replySignInCleared(current: string | null, reviewId: string): string | null {
-  return current === reviewId ? null : current;
+export function replyRefusalAfterFailure(reviewId: string, shown: ShownError, isMember: boolean): ReplyRefusal {
+  return { reviewId, message: shown.message, signIn: shown.signIn === true && !isMember };
+}
+
+/** Typing, sending again or closing that review's form clears it. */
+export function replyRefusalCleared(current: ReplyRefusal | null, reviewId: string): ReplyRefusal | null {
+  return current?.reviewId === reviewId ? null : current;
+}
+
+/** The sentence for a review's form, else undefined. */
+export function replyRefusalMessage(current: ReplyRefusal | null, reviewId: string): string | undefined {
+  return current?.reviewId === reviewId ? current.message : undefined;
 }
 
 /** The link for a review's form, from the page's own workspace (lib/gbpSignIn.ts), else undefined. */
-export function replySignInHref(current: string | null, reviewId: string, workspaceId: string): string | undefined {
-  return current === reviewId ? gbpSignInUrl(workspaceId) : undefined;
+export function replySignInHref(current: ReplyRefusal | null, reviewId: string, workspaceId: string): string | undefined {
+  return current?.reviewId === reviewId && current.signIn ? gbpSignInUrl(workspaceId) : undefined;
+}
+
+/**
+ * R25 pages L1: the box takes focus once the form the person opened with
+ * "Reply to review" is the open one. A form a draft opened asks for nothing,
+ * so the draft rules above decide.
+ */
+export function focusBoxOnOpen(requested: string | null, openReview: string | null): boolean {
+  return requested !== null && requested === openReview;
 }
 
 /** The card's Draft button, by review id: the page checks focus against it as a draft lands. */
@@ -247,6 +261,8 @@ interface ReplyFormProps {
   generatingAI: boolean;
   /** JJ3 lead review: the in-place Google sign-in, after a reply Google refused (replySignInHref). */
   signInUrl?: string;
+  /** R25 pages L4: why the last send of this reply failed (replyRefusalMessage). */
+  refusal?: string;
 }
 
 /**
@@ -263,6 +279,7 @@ export function ReplyForm({
   submitting,
   generatingAI,
   signInUrl,
+  refusal,
 }: ReplyFormProps) {
   // R17 L1: Google takes at most 4096 bytes; an AI draft can be longer.
   const counter = replyCounter(value);
@@ -328,8 +345,9 @@ export function ReplyForm({
           </Button>
         ) : null}
       </div>
-      {/* A live region that stays on the page, so the link is announced when it appears. */}
-      <div role="status" className="empty:sr-only">
+      {/* A live region that stays on the page, so the sentence and link are announced when they appear. */}
+      <div role="status" className="flex flex-col items-start gap-2 empty:sr-only">
+        {refusal ? <p className="text-sm text-destructive">{refusal}</p> : null}
         {signInUrl ? <SignInAgainLink href={signInUrl} /> : null}
       </div>
       {counter ? (

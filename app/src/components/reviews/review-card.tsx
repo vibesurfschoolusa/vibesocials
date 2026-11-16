@@ -36,6 +36,8 @@ interface ReviewCardProps {
   onUndoDraft?: () => void;
   /** JJ3 lead review: the in-place Google sign-in for this review's form, after a refused reply. */
   replySignInUrl?: string;
+  /** R25 pages L4: why this review's last reply failed, for its form's status line. */
+  replyRefusal?: string;
 }
 
 /**
@@ -56,6 +58,7 @@ export function ReviewCard({
   onDraftAI,
   onUndoDraft,
   replySignInUrl,
+  replyRefusal,
 }: ReviewCardProps) {
   return (
     <Card className={cn("p-6", needsReply && "border-warning/30 bg-warning/5")}>
@@ -134,6 +137,7 @@ export function ReviewCard({
                   onDraftAI={onDraftAI}
                   onUndoDraft={onUndoDraft}
                   signInUrl={replySignInUrl}
+                  refusal={replyRefusal}
                   submitting={isSubmitting}
                   generatingAI={isGeneratingAI}
                 />

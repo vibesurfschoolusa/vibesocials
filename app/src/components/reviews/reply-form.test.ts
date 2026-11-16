@@ -12,8 +12,10 @@ import {
   ReplyForm,
   focusBoxAfterDraft,
   focusPlace,
-  replySignInAfterFailure,
-  replySignInCleared,
+  focusBoxOnOpen,
+  replyRefusalAfterFailure,
+  replyRefusalCleared,
+  replyRefusalMessage,
   replySignInHref,
   replyUndoStatus,
   settleDraftFocus,
@@ -465,37 +467,46 @@ describe("ReplyForm: the Undo, Draft and draft-landed wiring", () => {
   });
 });
 
-// JJ3 lead review: a reply that fails because Google wants the owner to sign
-// in again gets the in-place sign-in link in the reply form itself, next to
-// its status line, until the person types, sends again or closes the form.
-describe("a reply that fails with the sign-in-again kind", () => {
-  const signIn = { message: "Google didn't accept the connection.", settingsLink: true, signIn: true as const };
+// JJ3 lead review, R25 pages L4: a refused reply keeps its sentence in that
+// form's status line (a toast vanishes), and, when Google wants the owner to
+// sign in again, the in-place sign-in link, until the person types, sends
+// again or closes the form.
+describe("a reply Google refused", () => {
+  const signIn = { message: "Sign in to Google again with the account that manages this location.", settingsLink: true, signIn: true as const };
   const other = { message: "Couldn't post your reply. Try again in a minute.", settingsLink: false };
 
+  it("keeps the sentence for that review's form only", () => {
+    const refused = replyRefusalAfterFailure("r1", other, false);
+    expect(replyRefusalMessage(refused, "r1")).toBe(other.message);
+    expect(replyRefusalMessage(refused, "r2")).toBeUndefined();
+    expect(replyRefusalMessage(null, "r1")).toBeUndefined();
+  });
+
   it("on an owner's page: the link shows for that review, with the page's workspace id", () => {
-    const open = replySignInAfterFailure(null, "r1", signIn, false);
-    expect(open).toBe("r1");
-    expect(replySignInHref(open, "r1", "ws-A")).toBe("/api/auth/google_business_profile/start?workspaceId=ws-A");
-    expect(replySignInHref(open, "r2", "ws-A")).toBeUndefined();
+    const refused = replyRefusalAfterFailure("r1", signIn, false);
+    expect(replyRefusalMessage(refused, "r1")).toBe(signIn.message);
+    expect(replySignInHref(refused, "r1", "ws-A")).toBe("/api/auth/google_business_profile/start?workspaceId=ws-A");
+    expect(replySignInHref(refused, "r2", "ws-A")).toBeUndefined();
   });
 
-  it("on a member's page: none", () => {
-    expect(replySignInAfterFailure(null, "r1", signIn, true)).toBeNull();
+  it("on a member's page: the sentence, never the link", () => {
+    const refused = replyRefusalAfterFailure("r1", signIn, true);
+    expect(replyRefusalMessage(refused, "r1")).toBe(signIn.message);
+    expect(replySignInHref(refused, "r1", "ws-A")).toBeUndefined();
   });
 
-  it("another kind of failure: none, and an earlier link for that review goes", () => {
-    expect(replySignInAfterFailure(null, "r1", other, false)).toBeNull();
-    expect(replySignInAfterFailure("r1", "r1", other, false)).toBeNull();
-    expect(replySignInAfterFailure("r2", "r1", other, false)).toBe("r2");
+  it("another kind of failure: no link", () => {
+    expect(replySignInHref(replyRefusalAfterFailure("r1", other, false), "r1", "ws-A")).toBeUndefined();
   });
 
   it("clears when the person types, sends again or closes the form (that review only)", () => {
-    expect(replySignInCleared("r1", "r1")).toBeNull();
-    expect(replySignInCleared("r2", "r1")).toBe("r2");
-    expect(replySignInCleared(null, "r1")).toBeNull();
+    const refused = replyRefusalAfterFailure("r1", signIn, false);
+    expect(replyRefusalCleared(refused, "r1")).toBeNull();
+    expect(replyRefusalCleared(refused, "r2")).toBe(refused);
+    expect(replyRefusalCleared(null, "r1")).toBeNull();
   });
 
-  it("the form shows it inside a status region, so it is announced", () => {
+  it("the form shows the sentence inside a status region, so it is announced, and stays on the page", () => {
     const html = renderToStaticMarkup(
       createElement(ReplyForm, {
         value: "Thanks",
@@ -505,12 +516,45 @@ describe("a reply that fails with the sign-in-again kind", () => {
         onDraftAI: () => {},
         submitting: false,
         generatingAI: false,
+        refusal: "Couldn't post your reply. Try again in a minute.",
+      }),
+    );
+    expect(html).toMatch(/<div[^>]*role="status"[^>]*><p[^>]*>Couldn&#x27;t post your reply\. Try again in a minute\.<\/p><\/div>/);
+    expect(render("Thanks")).toMatch(/<div[^>]*role="status"[^>]*class="[^"]*empty:sr-only[^"]*"[^>]*><\/div>/);
+  });
+
+  it("the form shows the link after the sentence, inside the same status region", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReplyForm, {
+        value: "Thanks",
+        onChange: () => {},
+        onSubmit: () => {},
+        onCancel: () => {},
+        onDraftAI: () => {},
+        submitting: false,
+        generatingAI: false,
+        refusal: "Sign in to Google again with the account that manages this location.",
         signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-A",
       }),
     );
     expect(html).toMatch(
-      /<div[^>]*role="status"[^>]*><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a><\/div>/,
+      /<div[^>]*role="status"[^>]*><p[^>]*>Sign in to Google again with the account that manages this location\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a><\/div>/,
     );
     expect(render("Thanks")).not.toContain("/api/auth/");
+  });
+});
+
+// R25 pages L1: "Reply to review" swaps itself for the form, and Cancel swaps
+// the form back, so focus would fall to the page body. Reply hands focus to
+// the box; Cancel to that review's Reply button (the page's pendingFocus).
+describe("focus when the form opens from Reply", () => {
+  it("the box takes focus once the review asked for is the open one", () => {
+    expect(focusBoxOnOpen("r1", "r1")).toBe(true);
+  });
+
+  it("nothing asked for (a form a draft opened), or another review open: focus stays", () => {
+    expect(focusBoxOnOpen(null, "r1")).toBe(false);
+    expect(focusBoxOnOpen("r1", "r2")).toBe(false);
+    expect(focusBoxOnOpen("r1", null)).toBe(false);
   });
 });

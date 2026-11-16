@@ -103,13 +103,52 @@ describe("ReviewsView when a card draft lands", () => {
   });
 });
 
-// JJ3 lead review: a reply failing with the sign-in-again kind shows the link in that form.
-describe("ReviewsView when a reply needs the owner to sign in again", () => {
-  it("notes it on failure, clears it on typing, sending again and closing, and hands the form the link", () => {
-    expect(source).toContain("replySignInAfterFailure(prev, review.reviewId, shown, isMember)");
-    expect(source.split("replySignInCleared(prev, review.reviewId)").length - 1).toBeGreaterThanOrEqual(3);
-    expect(source).toContain("replySignInUrl={replySignInHref(replySignIn, review.reviewId, workspaceId)}");
+// JJ3 lead review, R25 pages L4: a refused reply keeps its sentence, and for an
+// owner asked to sign in again the link, in that form.
+describe("ReviewsView when a reply is refused", () => {
+  it("notes it on failure, clears it on typing, sending again and closing, and hands the form the sentence and link", () => {
+    expect(source).toContain("setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember))");
+    expect(source.split("replyRefusalCleared(prev, review.reviewId)").length - 1).toBeGreaterThanOrEqual(3);
+    expect(source).toContain("replySignInUrl={replySignInHref(replyRefusal, review.reviewId, workspaceId)}");
+    expect(source).toContain("replyRefusal={replyRefusalMessage(replyRefusal, review.reviewId)}");
     expect(source).toContain("toast.error(shown.message)");
+  });
+});
+
+// R25 pages L1: Reply hands focus to the box; Cancel to that review's Reply button.
+describe("ReviewsView and focus when a reply form opens or closes", () => {
+  it("asks for the box on Reply, and decides with focusBoxOnOpen once it is open", () => {
+    expect(source).toMatch(/onOpenReply=\{\(\) => \{\s*setReplyingTo\(review\.reviewId\);\s*setBoxFocusOnOpen\(review\.reviewId\);/);
+    expect(source).toMatch(/focusBoxOnOpen\(\s*boxFocusOnOpen,\s*replyingTo\s*\)/);
+  });
+
+  it("sends focus to that review's Reply button on Cancel", () => {
+    const close = source.slice(at("onCloseReply={"), at("onChangeReply={"));
+    expect(close).toContain("setPendingFocus({ reviewId: review.reviewId })");
+  });
+
+  it("a draft that opens the form asks for nothing on open", () => {
+    const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
+    expect(draft).not.toContain("setBoxFocusOnOpen(");
+  });
+});
+
+// R25 pages L4 / platform-clients L1: accounts whose locations Google would not
+// send are said in a status line above the list (the route's `notice`).
+describe("ReviewsView and accounts Google would not list", () => {
+  it("reads the route's notice only when it is a string", () => {
+    expect(source).toContain('setLocationsNotice(typeof data.notice === "string" && data.notice ? data.notice : null)');
+  });
+
+  it("shows it in a status region above the tabs and the list", () => {
+    const region = at("{locationsNotice}");
+    expect(region).toBeGreaterThan(at("<LocationPicker"));
+    expect(region).toBeLessThan(at('aria-label="Review filter"'));
+    expect(source).toMatch(/<p role="status"[^>]*empty:sr-only[^>]*>\s*\{locationsNotice\}/);
+  });
+
+  it("does not also say there are no locations when the notice says some were not read", () => {
+    expect(source).toContain("!selectedLocation && locations.length === 0 && locationsNotice ? null");
   });
 });
 

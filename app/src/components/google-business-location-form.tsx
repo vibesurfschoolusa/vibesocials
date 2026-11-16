@@ -30,8 +30,10 @@ interface RemoteLocation {
 
 /** What the form says when something didn't work (R5 new-customer L8, pages L8). */
 export const LOCATION_MESSAGES = {
+  // R25 client-journey L1: never the card's account switch, which deletes the listing's
+  // numbers; the in-place sign-in keeps the row (the link shows with this).
   noLocations:
-    "This Google account has no business listing we can post to. Press Switch account above and sign in with the Google account that manages your listing (an owner or manager in Google Business Profile).",
+    "This Google account has no business listing we can post to. Sign in to Google again with the Google account that manages your listing (an owner or manager in Google Business Profile), then fetch the locations again.",
   saveFailed: "The location wasn't saved. Please try again in a minute.",
   saveOffline:
     "We couldn't reach Vibe Socials, so the location wasn't saved. Check your internet connection and try again.",
@@ -66,14 +68,30 @@ export function locationFailure(
   };
 }
 
+/** A sentence in the form's status region, with the in-place sign-in link when it is the step. */
+export interface PickerStatus {
+  message: string;
+  signInUrl: string | null;
+}
+
 /**
  * What a loaded list says (JJ3 lead review): the route's notice about accounts
- * whose locations could not be read, else, for an empty list, how to find the
- * listing; null when there is nothing to say.
+ * whose locations could not be read, else, for an empty list, the sign-in step
+ * with its link for this form's workspace; null when there is nothing to say.
  */
-export function locationsLoadedMessage(count: number, notice: unknown): string | null {
-  if (typeof notice === "string" && notice) return notice;
-  return count === 0 ? LOCATION_MESSAGES.noLocations : null;
+export function locationsLoadedStatus(count: number, notice: unknown, workspaceId: string): PickerStatus | null {
+  if (typeof notice === "string" && notice) return { message: notice, signInUrl: null };
+  return count === 0 ? { message: LOCATION_MESSAGES.noLocations, signInUrl: gbpSignInUrl(workspaceId) } : null;
+}
+
+/** R25 pages L4: one sentence of the status region, which stays until the next fetch or save. */
+export function PickerStatusLine({ status }: { status: PickerStatus }) {
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <p className="text-sm text-muted-foreground">{status.message}</p>
+      {status.signInUrl ? <SignInAgainLink href={status.signInUrl} /> : null}
+    </div>
+  );
 }
 
 export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, initialLocationTitle }: Props) {
@@ -84,8 +102,10 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
-  // Set while a failed answer asks for the in-place Google sign-in.
-  const [signInUrl, setSignInUrl] = useState<string | null>(null);
+  // R25 pages L4: the last fetch or save's failure, and what the loaded list
+  // says; shown in the status region instead of toasts that vanish.
+  const [failure, setFailure] = useState<PickerStatus | null>(null);
+  const [listNote, setListNote] = useState<PickerStatus | null>(null);
 
   // Saves a location: picked from Google's list (with its name, saved at once)
   // or typed in the Advanced field (no name). 2026-11-09 first-run check:
@@ -93,6 +113,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   // choice was silently never saved.
   async function saveLocation(name: string, title: string | null) {
     setSaving(true);
+    setFailure(null);
 
     try {
       const response = await fetch("/api/connections/google_business_profile/location", {
@@ -108,11 +129,11 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         | null;
 
       if (!response.ok) {
-        const failure = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
-        toast.error(failure.message);
-        setSignInUrl(failure.signInUrl);
+        const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
+        toast.error(failed.message);
+        setFailure({ message: failed.message, signInUrl: failed.signInUrl });
         setSaving(false);
-        if (failure.reconnect) router.refresh();
+        if (failed.reconnect) router.refresh();
         return;
       }
 
@@ -125,6 +146,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       router.refresh();
     } catch {
       toast.error(LOCATION_MESSAGES.saveOffline);
+      setFailure({ message: LOCATION_MESSAGES.saveOffline, signInUrl: null });
       setSaving(false);
     }
   }
@@ -142,6 +164,8 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
   async function handleFetchLocations() {
     setLoadingLocations(true);
+    setFailure(null);
+    setListNote(null);
 
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
@@ -151,24 +175,23 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
       if (!response.ok) {
         setLocations(null);
-        const failure = locationFailure(data, LOCATION_MESSAGES.loadFailed, workspaceId);
-        toast.error(failure.message);
-        setSignInUrl(failure.signInUrl);
+        const failed = locationFailure(data, LOCATION_MESSAGES.loadFailed, workspaceId);
+        toast.error(failed.message);
+        setFailure({ message: failed.message, signInUrl: failed.signInUrl });
         setLoadingLocations(false);
-        if (failure.reconnect) router.refresh();
+        if (failed.reconnect) router.refresh();
         return;
       }
 
       const list: RemoteLocation[] =
         data && Array.isArray(data.locations) ? data.locations : [];
       setLocations(list);
-      setSignInUrl(null);
-      const loaded = locationsLoadedMessage(list.length, data?.notice);
-      if (loaded) toast.info(loaded);
+      setListNote(locationsLoadedStatus(list.length, data?.notice, workspaceId));
       setLoadingLocations(false);
     } catch {
       setLocations(null);
       toast.error(LOCATION_MESSAGES.loadOffline);
+      setFailure({ message: LOCATION_MESSAGES.loadOffline, signInUrl: null });
       setLoadingLocations(false);
     }
   }
@@ -185,15 +208,12 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
   return (
     <div className="flex flex-col gap-4">
-      {signInUrl ? (
-        <div className="flex flex-col items-start gap-2">
-          <p className="text-sm text-muted-foreground">
-            Google didn&apos;t accept the connection. Sign in again with the Google account that manages your
-            listing; its listing numbers are kept.
-          </p>
-          <SignInAgainLink href={signInUrl} />
-        </div>
-      ) : null}
+      {/* A live region that stays on the page, so its sentences are announced when they appear.
+          The access wording is the route's own (its `error`), never this form's. */}
+      <div role="status" className="flex flex-col gap-3 empty:sr-only">
+        {failure ? <PickerStatusLine status={failure} /> : null}
+        {listNote ? <PickerStatusLine status={listNote} /> : null}
+      </div>
       {/* Primary flow: pull the account's locations from Google and pick one. */}
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

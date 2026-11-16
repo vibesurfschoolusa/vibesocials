@@ -21,10 +21,13 @@ import {
   draftingAfterStart,
   EMPTY_REPLY_BOXES,
   focusBoxAfterCardDraft,
+  focusBoxOnOpen,
   openAfterDraft,
-  replySignInAfterFailure,
-  replySignInCleared,
+  replyRefusalAfterFailure,
+  replyRefusalCleared,
+  replyRefusalMessage,
   replySignInHref,
+  type ReplyRefusal,
   replyBoxAfterDraft,
   replyBoxAfterPost,
   replyBoxAfterTyping,
@@ -125,6 +128,8 @@ export function ReviewsView({
   const [loadingLocations, setLoadingLocations] = useState(true);
   // F7: a sentence and whether it asks for a reconnect (api-error.ts).
   const [locationsError, setLocationsError] = useState<ShownError | null>(null);
+  // R25 pages L4: the route's sentence about accounts whose locations Google would not send.
+  const [locationsNotice, setLocationsNotice] = useState<string | null>(null);
   const [reviewsError, setReviewsError] = useState<ShownError | null>(null);
   // Google had more than the page loads: only the latest are shown.
   const [truncated, setTruncated] = useState(false);
@@ -137,12 +142,16 @@ export function ReviewsView({
   const [generatingAI, setGeneratingAI] = useState<ReadonlySet<string>>(new Set());
   const [tab, setTab] = useState<"needs_reply" | "replied">("needs_reply");
   const [confirmTarget, setConfirmTarget] = useState<GoogleReview | null>(null);
-  // After a reply posts: where keyboard focus goes (a review id, or null for
-  // the heading). The success toast already announces the reply.
+  // After a reply posts or a form is cancelled: where keyboard focus goes (a
+  // review's Reply button, or null for the heading). The success toast already
+  // announces the reply.
   const [pendingFocus, setPendingFocus] = useState<{ reviewId: string | null } | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  // JJ3 lead review: the review whose reply Google refused until the owner signs in again.
-  const [replySignIn, setReplySignIn] = useState<string | null>(null);
+  // JJ3 lead review, R25 pages L4: the review whose reply failed, why, and
+  // whether its form offers the owner the in-place sign-in.
+  const [replyRefusal, setReplyRefusal] = useState<ReplyRefusal | null>(null);
+  // R25 pages L1: the review the person opened with "Reply to review"; its box takes focus once open.
+  const [boxFocusOnOpen, setBoxFocusOnOpen] = useState<string | null>(null);
   // JJ3 lead review: where focus was as a draft landed, decided once its box is
   // open (focusBoxAfterCardDraft): the card's Draft button leaves with it.
   const [boxFocusAfterDraft, setBoxFocusAfterDraft] = useState<{ reviewId: string; activeId: string } | null>(null);
@@ -151,6 +160,7 @@ export function ReviewsView({
     try {
       setLoadingLocations(true);
       setLocationsError(null);
+      setLocationsNotice(null);
       const response = await fetch("/api/reviews/locations");
 
       if (!response.ok) {
@@ -161,6 +171,7 @@ export function ReviewsView({
       const locs: Location[] = data.locations || [];
       setLocations(locs);
       setGbpConnected(data.connected === true);
+      setLocationsNotice(typeof data.notice === "string" && data.notice ? data.notice : null);
 
       // The saved location when listed, else the only one; else the person picks.
       const initial = initialLocation(locs, savedLocation);
@@ -232,6 +243,15 @@ export function ReviewsView({
     setBoxFocusAfterDraft(null);
   }, [boxFocusAfterDraft, replyingTo]);
 
+  useEffect(() => {
+    if (!boxFocusOnOpen) return;
+    if (focusBoxOnOpen(boxFocusOnOpen, replyingTo)) {
+      document.getElementById("review-reply")?.focus();
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot focus request, cleared once used
+    setBoxFocusOnOpen(null);
+  }, [boxFocusOnOpen, replyingTo]);
+
   // Validate, then ask for confirmation before posting a public reply.
   const requestReply = (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
@@ -261,7 +281,7 @@ export function ReviewsView({
 
     try {
       setSubmitting(review.reviewId);
-      setReplySignIn((prev) => replySignInCleared(prev, review.reviewId));
+      setReplyRefusal((prev) => replyRefusalCleared(prev, review.reviewId));
 
       const response = await fetch(`/api/reviews/${review.reviewId}/reply`, {
         method: "POST",
@@ -308,7 +328,7 @@ export function ReviewsView({
       console.error("Error posting reply:", err);
       const shown = shownError(err, REPLY_FAILED);
       toast.error(shown.message);
-      setReplySignIn((prev) => replySignInAfterFailure(prev, review.reviewId, shown, isMember));
+      setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
       throw err;
     } finally {
       setSubmitting(null);
@@ -367,16 +387,21 @@ export function ReviewsView({
       isSubmitting={submitting === review.reviewId}
       isGeneratingAI={generatingAI.has(review.reviewId)}
       replyValue={replyText[review.reviewId] || ""}
-      onOpenReply={() => setReplyingTo(review.reviewId)}
+      onOpenReply={() => {
+        setReplyingTo(review.reviewId);
+        setBoxFocusOnOpen(review.reviewId);
+      }}
       onCloseReply={() => {
         setReplyingTo(null);
-        setReplySignIn((prev) => replySignInCleared(prev, review.reviewId));
+        setReplyRefusal((prev) => replyRefusalCleared(prev, review.reviewId));
+        setPendingFocus({ reviewId: review.reviewId });
       }}
       onChangeReply={(value) => {
         setReplyBoxes((prev) => replyBoxAfterTyping(prev, review.reviewId, value));
-        setReplySignIn((prev) => replySignInCleared(prev, review.reviewId));
+        setReplyRefusal((prev) => replyRefusalCleared(prev, review.reviewId));
       }}
-      replySignInUrl={replySignInHref(replySignIn, review.reviewId, workspaceId)}
+      replySignInUrl={replySignInHref(replyRefusal, review.reviewId, workspaceId)}
+      replyRefusal={replyRefusalMessage(replyRefusal, review.reviewId)}
       onUndoDraft={
         replyBoxes.undo[review.reviewId] !== undefined
           ? () => setReplyBoxes((prev) => replyBoxAfterUndo(prev, review.reviewId))
@@ -441,6 +466,11 @@ export function ReviewsView({
         />
       )}
 
+      {/* R25 pages L4: stays on the page, so the sentence is announced when it arrives. */}
+      <p role="status" className="mb-6 text-sm text-muted-foreground empty:mb-0 empty:sr-only">
+        {locationsNotice}
+      </p>
+
       {/* Tabs */}
       {selectedLocation && !reviewsError && (
         <div className="mb-6">
@@ -475,7 +505,8 @@ export function ReviewsView({
       )}
 
       {/* Reviews List */}
-      {!selectedLocation ? (
+      {/* With accounts left unread, "no locations yet" would be untrue: the notice says what happened. */}
+      {!selectedLocation && locations.length === 0 && locationsNotice ? null : !selectedLocation ? (
         <ReviewsEmptyState locationsCount={locations.length} gbpConnected={gbpConnected} isMember={isMember} />
       ) : reviewsError ? (
         <ErrorState
