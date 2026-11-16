@@ -800,10 +800,23 @@ describe("pending/[id]: a choice that is gone", () => {
     ]) {
       expect(response.status).toBe(404);
       const body = await response.json();
-      expect(body).toEqual({ error: "This choice was started in another workspace. Switch back to it to choose." });
+      // Lead review: switching back drops ?choose=, so the step is Connect there.
+      expect(body).toEqual({
+        error: "This choice was started in another workspace. Switch back to it and press Connect again there.",
+      });
       expect(body.error).not.toMatch(/connected/);
     }
     expectNothingSaved();
+  });
+
+  it("a choice started in another workspace that has expired: says it expired", async () => {
+    findUniqueMock.mockResolvedValue(row(INSTAGRAM, { workspaceId: "ws-other", expiresAt: new Date(Date.now() - 1000) }));
+    connectionFindUniqueMock.mockResolvedValue({ ...working, platform: "instagram" });
+    const response = await GET(hinted("GET", "instagram"), ctx());
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "This choice, started in another workspace, expired. Switch back to it and press Connect again there.",
+    });
   });
 
   it("another user's choice in another workspace is not named: the row's sentence as before", async () => {

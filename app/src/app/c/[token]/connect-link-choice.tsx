@@ -65,7 +65,8 @@ export const CANCEL_LOST_MESSAGE = answerLostText(
  * cancel that worked says "You cancelled". A 404 means the choice is gone
  * (used, maybe by a press whose answer was lost, or expired): the page with
  * the success code when its platform is now connected, else with none, so the
- * rows say what is connected. Any other answer: the choice may still wait.
+ * rows say what is connected. Any other answer: the choice may still wait,
+ * and the route's own sentence (as Connect shows it) or ours says so.
  */
 export function cancelOutcome(
   status: number,
@@ -75,7 +76,7 @@ export function cancelOutcome(
 ): { go: string } | { error: string } {
   if (status >= 200 && status < 300) return { go: `${page}?error=${encodeURIComponent(`${platform}_cancelled`)}` };
   if (status === 404) return { go: data?.connected === true ? `${page}?${connectedSuccessQuery(platform, false)}` : page };
-  return { error: CANCEL_FAILED_MESSAGE };
+  return { error: data?.error || CANCEL_FAILED_MESSAGE };
 }
 
 export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {

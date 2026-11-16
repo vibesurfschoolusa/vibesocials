@@ -191,6 +191,12 @@ describe("the account choice after a lost Connect answer (R30)", () => {
     expect(CANCEL_FAILED_MESSAGE).not.toMatch(/cancelled/);
   });
 
+  it("Cancel: the route's own sentence when it has one, as Connect shows", () => {
+    expect(cancelOutcome(429, { error: "Too many tries from this link. Wait a few minutes, then try again." }, "instagram", "/c/t")).toEqual({
+      error: "Too many tries from this link. Wait a few minutes, then try again.",
+    });
+  });
+
   it("Cancel: a lost answer may have cancelled it, and says so in the shared words", async () => {
     expect(CANCEL_LOST_MESSAGE).toBe(
       "Vibe Socials' answer didn't reach you, so the choice may already be cancelled. If your connection dropped, reconnect first. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",

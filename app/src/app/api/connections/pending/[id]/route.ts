@@ -49,13 +49,18 @@ const CHOOSABLE = ["facebook_page", "instagram", "linkedin", "pinterest"] as con
 async function notFound(request: Request, id: string, owner: { workspaceId: string; userId: string }): Promise<NextResponse> {
   // R30 (security-billing L1): the hint outlives a reload, and the choice
   // belongs to the workspace it was started in, so a choice of this user's in
-  // another workspace says so before this workspace's row is read.
-  const choice = await prisma.pendingConnection.findUnique({ where: { id }, select: { workspaceId: true, userId: true } });
+  // another workspace says so before this workspace's row is read. Switching
+  // back drops ?choose= (afterWorkspaceChange), so the step is Connect there.
+  const choice = await prisma.pendingConnection.findUnique({
+    where: { id },
+    select: { workspaceId: true, userId: true, expiresAt: true },
+  });
   if (choice && choice.userId === owner.userId && choice.workspaceId !== owner.workspaceId) {
-    return NextResponse.json(
-      { error: "This choice was started in another workspace. Switch back to it to choose." },
-      { status: 404 },
-    );
+    const error =
+      choice.expiresAt.getTime() <= Date.now()
+        ? "This choice, started in another workspace, expired. Switch back to it and press Connect again there."
+        : "This choice was started in another workspace. Switch back to it and press Connect again there.";
+    return NextResponse.json({ error }, { status: 404 });
   }
   const { workspaceId } = owner;
   const hint = new URL(request.url).searchParams.get("platform");
