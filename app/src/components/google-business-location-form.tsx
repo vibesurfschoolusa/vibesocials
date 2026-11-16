@@ -8,6 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { safeGbpSignInUrl } from "@/lib/gbpSignIn";
+
+import { SignInAgainLink } from "./gbp-sign-in-link";
 
 interface Props {
   /** The workspace this page was rendered for; the route refuses any other (F3). */
@@ -50,10 +53,15 @@ export const LOCATION_RECONNECT_CODE = "RECONNECT_REQUIRED";
  * Reconnect state shows without a manual reload.
  */
 export function locationFailure(
-  data: { error?: string; code?: string } | null,
+  data: { error?: string; code?: string; signInUrl?: unknown } | null,
   fallback: string,
-): { message: string; reconnect: boolean } {
-  return { message: data?.error ?? fallback, reconnect: data?.code === LOCATION_RECONNECT_CODE };
+): { message: string; reconnect: boolean; signInUrl: string | null } {
+  return {
+    message: data?.error ?? fallback,
+    reconnect: data?.code === LOCATION_RECONNECT_CODE,
+    // JJ3 lead review: the in-place Google sign-in, only when it is that start URL.
+    signInUrl: safeGbpSignInUrl(data?.signInUrl),
+  };
 }
 
 /**
@@ -74,6 +82,8 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
+  // Set while a failed answer asks for the in-place Google sign-in.
+  const [signInUrl, setSignInUrl] = useState<string | null>(null);
 
   // Saves a location: picked from Google's list (with its name, saved at once)
   // or typed in the Advanced field (no name). 2026-11-09 first-run check:
@@ -91,11 +101,14 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         body: JSON.stringify({ locationName: name, locationTitle: title, workspaceId }),
       });
 
-      const data = (await response.json().catch(() => null)) as { error?: string; code?: string } | null;
+      const data = (await response.json().catch(() => null)) as
+        | { error?: string; code?: string; signInUrl?: unknown }
+        | null;
 
       if (!response.ok) {
         const failure = locationFailure(data, LOCATION_MESSAGES.saveFailed);
         toast.error(failure.message);
+        setSignInUrl(failure.signInUrl);
         setSaving(false);
         if (failure.reconnect) router.refresh();
         return;
@@ -131,13 +144,14 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
       const data = (await response.json().catch(() => null)) as
-        | { locations?: RemoteLocation[]; error?: string; code?: string; notice?: string }
+        | { locations?: RemoteLocation[]; error?: string; code?: string; notice?: string; signInUrl?: unknown }
         | null;
 
       if (!response.ok) {
         setLocations(null);
         const failure = locationFailure(data, LOCATION_MESSAGES.loadFailed);
         toast.error(failure.message);
+        setSignInUrl(failure.signInUrl);
         setLoadingLocations(false);
         if (failure.reconnect) router.refresh();
         return;
@@ -146,6 +160,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       const list: RemoteLocation[] =
         data && Array.isArray(data.locations) ? data.locations : [];
       setLocations(list);
+      setSignInUrl(null);
       const loaded = locationsLoadedMessage(list.length, data?.notice);
       if (loaded) toast.info(loaded);
       setLoadingLocations(false);
@@ -168,6 +183,14 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
   return (
     <div className="flex flex-col gap-4">
+      {signInUrl ? (
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm text-muted-foreground">
+            Google didn&apos;t accept the connection. Your location and listing numbers are kept.
+          </p>
+          <SignInAgainLink href={signInUrl} />
+        </div>
+      ) : null}
       {/* Primary flow: pull the account's locations from Google and pick one. */}
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

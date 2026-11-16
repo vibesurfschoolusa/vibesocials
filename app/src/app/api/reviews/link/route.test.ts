@@ -240,13 +240,17 @@ describe("GET /api/reviews/link", () => {
       mocks.findFirst.mockResolvedValue(connection());
     });
 
-    // JJ3 lead review: an API 401 flags nothing, so the card shows Switch account, not Reconnect.
-    it("a 401 says to press Switch account and sign in again", async () => {
+    // JJ3 lead review: an API 401 flags nothing; the owner signs in again in
+    // place (the Reconnect button's start URL), which keeps location and numbers.
+    it("a 401 offers the in-place sign-in to an owner", async () => {
       mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 401, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
 
-      expect((await (await GET()).json()).reason).toBe(
-        "Press Switch account on the Google Business Profile card in Settings and sign in again to get your review link.",
-      );
+      expect(await (await GET()).json()).toEqual({
+        url: null,
+        reason:
+          "Google didn't accept the connection. Sign in to Google again to get your review link; your location and listing numbers are kept.",
+        signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
+      });
     });
 
     it("a refresh that flags the row says Reconnect, as the card does", async () => {
@@ -273,7 +277,7 @@ describe("GET /api/reviews/link", () => {
       );
 
       expect((await (await GET()).json()).reason).toBe(
-        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
+        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.",
       );
       expect(mocks.update).not.toHaveBeenCalled();
     });
@@ -293,9 +297,11 @@ describe("GET /api/reviews/link", () => {
     it("a member reads who can take each step, never the step itself", async () => {
       mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "member"));
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 401 }));
-      expect((await (await GET()).json()).reason).toBe(
-        "The workspace owner can sign in to Google Business Profile again; then the review link shows here.",
-      );
+      expect(await (await GET()).json()).toEqual({
+        url: null,
+        reason:
+          "Google didn't accept the connection. The workspace owner can sign in to Google again; then the review link shows here.",
+      });
 
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 404, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
       expect((await (await GET()).json()).reason).toBe(
@@ -304,7 +310,7 @@ describe("GET /api/reviews/link", () => {
 
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 403 }));
       expect((await (await GET()).json()).reason).toBe(
-        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
+        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.",
       );
     });
 

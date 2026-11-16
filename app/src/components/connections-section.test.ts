@@ -208,3 +208,13 @@ describe("ConnectionsSection, Google Business Profile with a chosen location but
     });
   }
 });
+
+// JJ3 lead review: owner "Go to Settings" links for Google failures land on this card.
+describe("ConnectionsSection: the Google Business Profile card's anchor", () => {
+  it("is id=google-business-profile, on that card only", () => {
+    const html = render({});
+    expect(html.split('id="google-business-profile"').length - 1).toBe(1);
+    const card = html.slice(html.indexOf('id="google-business-profile"'));
+    expect(card).toContain("Google Business Profile");
+  });
+});

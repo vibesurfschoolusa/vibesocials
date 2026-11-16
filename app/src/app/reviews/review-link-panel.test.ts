@@ -44,6 +44,13 @@ describe("ReviewLinkPanelView", () => {
     expect(html).not.toContain("Print card");
   });
 
+  // JJ3 lead review: an owner's in-place Google sign-in, from the route.
+  it("offers Sign in to Google again when the route gives the start URL", () => {
+    const html = render({ status: "none", reason: "Google didn't accept the connection.", signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
+    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again<\/a>/);
+    expect(render({ status: "none", reason: "Something else." })).not.toContain("/api/auth/");
+  });
+
   it("shows a placeholder while loading", () => {
     const html = render({ status: "loading" });
 

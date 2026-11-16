@@ -73,13 +73,13 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
-  it("says to press Switch account when Google refuses the reply", async () => {
+  it("offers the in-place sign-in when Google refuses the reply", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.", reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.", reconnect: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
   });
 
   it("gives a plain sentence for any other failure", async () => {
@@ -151,13 +151,13 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
-  it("says to press Switch account when Google refuses the listing", async () => {
+  it("offers the in-place sign-in when Google refuses the listing", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     listGbpLocationsMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.", reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.", reconnect: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 });
@@ -169,7 +169,7 @@ describe("POST /api/reviews/[reviewId]/reply for a member", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google refused the request. The workspace owner can sign in to Google Business Profile again." });
+    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept." });
   });
 });
 

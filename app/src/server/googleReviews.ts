@@ -3,6 +3,8 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
+
 import { classifyGoogleFailure } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { readGoogleErrorReasons } from "./platforms/rateLimited";
@@ -239,11 +241,11 @@ const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, strin
     owner: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
     member: "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
   },
-  // JJ3 lead review: Google refused, nothing flagged: the card shows Switch account.
+  // JJ3 lead review: Google refused, nothing flagged: the in-place sign-in (lib/gbpSignIn.ts).
   sign_in_again: {
     owner:
-      "Press Switch account on the Google Business Profile card in Settings and sign in again to get your review link.",
-    member: "The workspace owner can sign in to Google Business Profile again; then the review link shows here.",
+      "Google didn't accept the connection. Sign in to Google again to get your review link; your location and listing numbers are kept.",
+    member: "Google didn't accept the connection. The workspace owner can sign in to Google again; then the review link shows here.",
   },
   location_removed: {
     owner: "This location is no longer in Google Business Profile. Choose another location in Settings.",
@@ -264,24 +266,39 @@ export function reviewLinkReason(problem: ReviewLinkProblem, role: ReviewsReader
 
 /**
  * JJ3 lead review: what the Reviews page says for each kind of Google failure
- * (server/googleFailure.ts decides the kind). An access refusal is about the
- * location being read, or, where none is chosen yet (GET /api/reviews/locations),
- * about the Business Profile account. Reconnecting with the same account fixes
- * neither, so it carries no reconnect flag, and nothing is flagged.
+ * (server/googleFailure.ts decides the kind), for an owner or a member.
+ *
+ * access: the connected Google account no longer manages what was asked for.
+ * The sentence is about the location being read, or about the Business Profile
+ * account where no location is chosen yet (GET /api/reviews/locations). Here a
+ * different Google account is what's needed, so Switch account is named,
+ * together with what switching clears: it disconnects first, which deletes the
+ * listing's saved numbers and the chosen location.
  */
 export const GOOGLE_ACCESS_REFUSED_MESSAGE =
-  "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.";
+  "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.";
 export const GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE =
-  "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.";
+  "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.";
 const GOOGLE_ACCOUNT_REFUSED_MESSAGE =
-  "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.";
-/** signInAgain: refused, nothing flagged, so the card offers Switch account, not Reconnect. */
-export const GOOGLE_SIGN_IN_AGAIN_MESSAGE =
-  "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.";
-export const GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE =
-  "Google refused the request. The workspace owner can sign in to Google Business Profile again.";
+  "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.";
 const GOOGLE_ACCOUNT_REFUSED_MEMBER_MESSAGE =
-  "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile.";
+  "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.";
+/**
+ * signInAgain: Google stopped accepting a connection that is not flagged. The
+ * fix is the in-place sign-in (lib/gbpSignIn.ts), never Switch account.
+ */
+export const GOOGLE_SIGN_IN_AGAIN_MESSAGE =
+  "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.";
+export const GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE =
+  "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept.";
+/** notFound, for a location picked on the Reviews page (not saved): the page's own picker. */
+const LOCATION_GONE_PICKED_MESSAGE =
+  "This location is no longer in Google Business Profile. Pick another location above.";
+/** notFound, for the saved location (Settings, where Google posts go too). */
+const LOCATION_GONE_SAVED_MESSAGE =
+  "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).";
+const LOCATION_GONE_SAVED_MEMBER_MESSAGE =
+  "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one.";
 /** Google or our own setup failed, not the person: the same words for everyone. */
 export const GOOGLE_NOT_ANSWERING_MESSAGE =
   "Google Business Profile isn't answering for Vibe Socials right now. Try again later.";
@@ -297,36 +314,51 @@ export function googleAccessRefusedMessage(subject: AccessSubject, role: Reviews
   return role === "member" ? GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE : GOOGLE_ACCESS_REFUSED_MESSAGE;
 }
 
-/**
- * The error body the Reviews routes answer with (F7, R1 M5): the kind of the
- * failure (classifyGoogleFailure, which logs it once), worded for the page.
- * Only a reconnect carries `reconnect: true` (the page then links to
- * Settings), and only for an owner (googleRefusedBody). `fallback` is the
- * route's own sentence for anything else: an error's own text is never shown.
- */
+/** A Reviews route's error answer. `signInUrl`: an owner's in-place sign-in (lib/gbpSignIn.ts). */
+export interface ReviewsErrorBody {
+  error: string;
+  reconnect?: true;
+  signInUrl?: string;
+}
+
 /** An owner's answer carries `reconnect: true`: the page links to Settings, where the step is. */
-function ownerStep(role: ReviewsReader, owner: string, member: string): { error: string; reconnect?: true } {
+function ownerStep(role: ReviewsReader, owner: string, member: string): ReviewsErrorBody {
   return role === "member" ? { error: member } : { error: owner, reconnect: true };
 }
 
+/**
+ * The error body the Reviews routes answer with (F7, R1 M5): the kind of the
+ * failure (classifyGoogleFailure, which writes its one classification line),
+ * worded for the page. `reconnect: true` (the page then links to the Google
+ * Business Profile card in Settings) goes only to an owner. `fallback` is the
+ * route's own sentence for anything else: an error's own text is never shown.
+ *
+ * `workspaceId` gives an owner's sign-in-again answer its in-place sign-in URL.
+ * `location` says whether a removed location was the saved one ("saved", the
+ * default) or one picked on the Reviews page ("picked", not saved).
+ */
 export function reviewsErrorBody(
   error: unknown,
   fallback: string,
   role: ReviewsReader,
-  options: { where?: string; subject?: AccessSubject } = {},
-): { error: string; reconnect?: true } {
+  options: { where?: string; subject?: AccessSubject; workspaceId?: string; location?: "saved" | "picked" } = {},
+): ReviewsErrorBody {
   const kind = classifyGoogleFailure(error, options.where ?? "Reviews");
   switch (kind) {
     case "reconnect":
       return googleRefusedBody(role);
-    case "signInAgain":
-      return ownerStep(role, GOOGLE_SIGN_IN_AGAIN_MESSAGE, GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE);
+    case "signInAgain": {
+      const body = ownerStep(role, GOOGLE_SIGN_IN_AGAIN_MESSAGE, GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE);
+      return role === "owner" && options.workspaceId ? { ...body, signInUrl: gbpSignInUrl(options.workspaceId) } : body;
+    }
     case "access": {
       const subject = options.subject ?? "location";
       return ownerStep(role, googleAccessRefusedMessage(subject, "owner"), googleAccessRefusedMessage(subject, "member"));
     }
     case "notFound":
-      return ownerStep(role, reviewLinkReason("location_removed", "owner"), reviewLinkReason("location_removed", "member"));
+      return options.location === "picked"
+        ? { error: LOCATION_GONE_PICKED_MESSAGE }
+        : ownerStep(role, LOCATION_GONE_SAVED_MESSAGE, LOCATION_GONE_SAVED_MEMBER_MESSAGE);
     case "tryLater":
       return { error: GOOGLE_NOT_ANSWERING_MESSAGE };
     default:

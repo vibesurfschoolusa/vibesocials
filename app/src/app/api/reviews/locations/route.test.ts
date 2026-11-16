@@ -143,7 +143,7 @@ describe("GET /api/reviews/locations", () => {
   // when Google refused.
   // JJ3 lead review: a 403 is not a dead grant (googleForbiddenMessage).
   // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
-  it.each([401])("says to press Switch account when Google answers %i", async (status) => {
+  it.each([401])("offers the in-place sign-in when Google answers %i", async (status) => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue({
@@ -156,8 +156,9 @@ describe("GET /api/reviews/locations", () => {
     const body = await (await GET()).json();
 
     expect(body).toEqual({
-      error: "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.",
+      error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.",
       reconnect: true,
+      signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
     });
   });
 
@@ -169,7 +170,7 @@ describe("GET /api/reviews/locations", () => {
 
     expect(await (await GET()).json()).toEqual({
       error:
-        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
+        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.",
       reconnect: true,
     });
   });
@@ -187,7 +188,7 @@ describe("GET /api/reviews/locations", () => {
     }) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
-      error: "Google refused the request. The workspace owner can sign in to Google Business Profile again.",
+      error: "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept.",
     });
   });
 

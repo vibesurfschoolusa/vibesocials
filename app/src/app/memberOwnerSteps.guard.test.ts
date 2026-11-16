@@ -88,11 +88,13 @@ const OWNER_STEPS: RegExp[] = [
   /\bGo to (connections|Settings)\b/,
   /\bAdd one in Google Business Profile\b/,
   /\bCheck that the listing is verified\b/,
-  /\bCheck that the connected Google account still manages\b/,
-  // JJ3 lead review: the card's own control, and the location step.
-  /\bSwitch account\b/,
-  /\bChoose another location\b/,
-  /href="\/settings#(connections|plan|posting-times|connect-link|team)"/,
+  // A sentence start: a member's "The workspace owner can check that ..." is the same words mid-sentence.
+  /(?:^|[.>]\s*)Check that the connected Google account still manages\b/,
+  // JJ3 lead review: the card's own control, the in-place sign-in, the location step.
+  /\bpress Switch account\b/i,
+  /(?:^|[.>;]\s*)Sign in to Google again\b/,
+  /\bchoose another location in Settings\b/i,
+  /href="\/settings#(connections|plan|posting-times|connect-link|team|google-business-profile)"/,
   /href="\/api\/auth\//,
   // Review of X1: owner-only steps other pages say, so a leak of any of them to a member fails here.
   /\bSee Settings, Plan\b/,
@@ -180,12 +182,13 @@ function reviewsRefused(role: Role, status = 401, subject: "location" | "account
 }
 
 function reviewsRefusedBy(role: Role, error: object, subject: "location" | "account" = "location"): string {
-  const body = reviewsErrorBody(error, "Couldn't load your Google reviews.", role, { subject });
+  const body = reviewsErrorBody(error, "Couldn't load your Google reviews.", role, { subject, workspaceId: "ws-1" });
   return render(
     createElement(ErrorState, {
       title: "Couldn't load reviews",
       message: body.error,
       settingsLink: body.reconnect === true,
+      signInUrl: body.signInUrl,
       isMember: role === "member",
       onRetry: () => {},
     }),
@@ -215,6 +218,7 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
     reviewsRefusedBy(role, { status: 403, googleReasons: ["accesstokenscopeinsufficient"] }),
   "Reviews, location removed (error card)": (role) =>
     reviewsRefusedBy(role, { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }),
+  "Reviews, Google refused, API 401 (error card)": (role) => reviewsRefusedBy(role, { status: 401 }),
   ...Object.fromEntries(
     LINK_PROBLEMS.map((problem) => [`Reviews, Get more reviews (${problem})`, (role: Role) => reviewLinkReason(problem, role)]),
   ),

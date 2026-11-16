@@ -58,7 +58,7 @@ describe("GET /api/reviews", () => {
   });
 
   // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
-  it("says to press Switch account when Google refuses the token (401)", async () => {
+  it("offers the in-place sign-in when Google refuses the token (401)", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed to fetch Google Business Profile reviews (status 401)"), { status: 401 }),
@@ -67,7 +67,11 @@ describe("GET /api/reviews", () => {
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_SIGN_IN_AGAIN_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({
+      error: GOOGLE_SIGN_IN_AGAIN_MESSAGE,
+      reconnect: true,
+      signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
+    });
   });
 
   // JJ3 lead review: a 403 is not a dead grant; reconnecting fixes neither case.
@@ -130,28 +134,44 @@ describe("GET /api/reviews for a member", () => {
 
     await expect((await get()).json()).resolves.toEqual({
       error:
-        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
+        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.",
     });
     const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
     expect(lines).toHaveLength(1);
     expect(lines[0][1]).toMatchObject({ where: "GET /api/reviews", kind: "access", status: 403 });
   });
 
-  // JJ3 lead review: the chosen location was removed from Google Business Profile.
-  it("a 404 on the location's reviews: it is gone; owner chooses another, a member reads who can", async () => {
+  // JJ3 lead review: the chosen location was removed from Google Business Profile,
+  // worded by whether ?location= is the saved one (the page's picker is not saved).
+  it("a 404 on the saved location's reviews: owner chooses another in Settings, a member picks one above", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const gone = Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
-    fetchAllReviewsMock.mockRejectedValue(gone);
-
-    await expect((await get()).json()).resolves.toEqual({
-      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
+    findFirstMock.mockResolvedValue({
+      id: "c1",
+      accessToken: "tok",
+      expiresAt: null,
+      metadata: { locationName: "accounts/1/locations/2" },
     });
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
+
+    await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one." });
 
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
-    await expect((await get()).json()).resolves.toEqual({
-      error: "This location is no longer in Google Business Profile. Choose another location in Settings.",
-      reconnect: true,
+    await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).", reconnect: true });
+  });
+
+  it("a 404 on a location picked on the page, not the saved one: pick another above", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue({
+      id: "c1",
+      accessToken: "tok",
+      expiresAt: null,
+      metadata: { locationName: "accounts/1/locations/9" },
     });
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
+
+    await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
+    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
   });
 
   it("Google down: the same try-later sentence as an owner's", async () => {

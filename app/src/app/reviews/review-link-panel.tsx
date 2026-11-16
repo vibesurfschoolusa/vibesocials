@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import { SignInAgainLink } from "@/components/gbp-sign-in-link";
+import { safeGbpSignInUrl } from "@/lib/gbpSignIn";
+
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,7 +20,7 @@ export function reviewRequestMessage(link: string): string {
 export type ReviewLinkState =
   | { status: "loading" }
   | { status: "ready"; url: string }
-  | { status: "none"; reason: string };
+  | { status: "none"; reason: string; signInUrl?: string };
 
 const LOAD_FAILED = "Couldn't load your review link. Reload this page to try again.";
 
@@ -34,12 +37,17 @@ export function ReviewLinkPanel() {
     (async () => {
       try {
         const response = await fetch("/api/reviews/link");
-        const body = (await response.json().catch(() => null)) as { url?: unknown; reason?: unknown } | null;
+        const body = (await response.json().catch(() => null)) as
+          | { url?: unknown; reason?: unknown; signInUrl?: unknown }
+          | null;
         if (cancelled) return;
         if (response.ok && typeof body?.url === "string") {
           setState({ status: "ready", url: body.url });
         } else {
-          setState({ status: "none", reason: typeof body?.reason === "string" ? body.reason : LOAD_FAILED });
+          const reason = typeof body?.reason === "string" ? body.reason : LOAD_FAILED;
+          // JJ3 lead review: an owner's in-place Google sign-in, only when it is that start URL.
+          const signInUrl = safeGbpSignInUrl(body?.signInUrl);
+          setState(signInUrl ? { status: "none", reason, signInUrl } : { status: "none", reason });
         }
       } catch {
         if (!cancelled) setState({ status: "none", reason: LOAD_FAILED });
@@ -74,7 +82,14 @@ export function ReviewLinkPanelView({ state }: { state: ReviewLinkState }) {
           <Skeleton className="h-24 w-full" />
         </div>
       ) : state.status === "none" ? (
-        <p className="mt-2 text-sm text-muted-foreground">{state.reason}</p>
+        <>
+          <p className="mt-2 text-sm text-muted-foreground">{state.reason}</p>
+          {state.signInUrl ? (
+            <div className="mt-3">
+              <SignInAgainLink href={state.signInUrl} />
+            </div>
+          ) : null}
+        </>
       ) : (
         <div className="mt-4 flex flex-col gap-6 sm:flex-row">
           <div

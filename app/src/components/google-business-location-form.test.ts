@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +13,9 @@ import {
   locationFailure,
   locationsLoadedMessage,
 } from "./google-business-location-form";
+import { SignInAgainLink } from "./gbp-sign-in-link";
+
+const signInLinkHtml = (href: string) => renderToStaticMarkup(createElement(SignInAgainLink, { href }));
 
 // R5 new-customer L8 and pages L8: each message says what happened and what to do.
 describe("Google location form messages", () => {
@@ -40,13 +45,28 @@ describe("Google location form: a failed answer", () => {
     expect(LOCATION_RECONNECT_CODE).toBe(GBP_RECONNECT_CODE);
     expect(
       locationFailure({ error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE }, LOCATION_MESSAGES.loadFailed),
-    ).toEqual({ message: GBP_RECONNECT_MESSAGE, reconnect: true });
+    ).toEqual({ message: GBP_RECONNECT_MESSAGE, reconnect: true, signInUrl: null });
+  });
+
+  // JJ3 lead review: the picker's in-place sign-in, only when it is that start URL.
+  it("a sign-in answer carries the start URL for the Sign in to Google again link", () => {
+    expect(locationFailure({ error: "Sign in.", signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" }, LOCATION_MESSAGES.loadFailed)).toEqual({
+      message: "Sign in.",
+      reconnect: false,
+      signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
+    });
+    expect(locationFailure({ error: "x", signInUrl: "https://evil.example" }, "F").signInUrl).toBeNull();
+  });
+
+  it("the form shows the link while a sign-in is asked for", () => {
+    expect(signInLinkHtml("/api/auth/google_business_profile/start?workspaceId=ws-1")).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again<\/a>/);
   });
 
   it("any other error keeps its text and does not refresh", () => {
     expect(locationFailure({ error: "Google didn't answer. Try again in a minute." }, LOCATION_MESSAGES.loadFailed)).toEqual({
       message: "Google didn't answer. Try again in a minute.",
       reconnect: false,
+      signInUrl: null,
     });
   });
 
@@ -54,6 +74,7 @@ describe("Google location form: a failed answer", () => {
     expect(locationFailure(null, LOCATION_MESSAGES.saveFailed)).toEqual({
       message: LOCATION_MESSAGES.saveFailed,
       reconnect: false,
+      signInUrl: null,
     });
   });
 });

@@ -3,6 +3,8 @@ import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { SignInAgainLink } from "@/components/gbp-sign-in-link";
+import { GBP_CARD_HREF } from "@/lib/gbpSignIn";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 interface ErrorStateProps {
@@ -16,6 +18,8 @@ interface ErrorStateProps {
    * the routes word a member's message for them (who can reconnect).
    */
   isMember: boolean;
+  /** JJ3 lead review: an owner's in-place Google sign-in (lib/gbpSignIn.ts). */
+  signInUrl?: string;
 }
 
 /**
@@ -24,7 +28,7 @@ interface ErrorStateProps {
  * like a missing connection, it also surfaces a link to /settings (where
  * connection management now lives).
  */
-export function ErrorState({ title, message, onRetry, settingsLink = false, isMember }: ErrorStateProps) {
+export function ErrorState({ title, message, onRetry, settingsLink = false, isMember, signInUrl }: ErrorStateProps) {
   const showConnectionsLink = !isMember && (settingsLink || message.includes("not configured"));
 
   return (
@@ -36,9 +40,12 @@ export function ErrorState({ title, message, onRetry, settingsLink = false, isMe
             <RefreshCw aria-hidden className="h-4 w-4" />
             Retry
           </Button>
+          {signInUrl && !isMember ? <SignInAgainLink href={signInUrl} /> : null}
           {showConnectionsLink && (
             <Link
-              href={SETTINGS_CONNECTIONS_HREF}
+              // JJ3 lead review: a Google failure goes straight to the Google
+              // Business Profile card; the not-configured message to Connections.
+              href={settingsLink ? GBP_CARD_HREF : SETTINGS_CONNECTIONS_HREF}
               className={buttonVariants({
                 variant: "link",
                 size: "sm",

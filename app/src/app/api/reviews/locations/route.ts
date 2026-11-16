@@ -23,6 +23,8 @@ const LOCATIONS_FAILED_MESSAGE = "Couldn't load your Google locations. Try again
 export async function GET() {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
+  // JJ3 lead review: an owner's in-place Google sign-in names the workspace.
+  let workspaceId: string | undefined;
   try {
     const context = await getWorkspaceContext();
 
@@ -30,6 +32,7 @@ export async function GET() {
       return signedOutResponse();
     }
     role = context.role;
+    workspaceId = context.workspace.id;
 
     // Get the workspace's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
@@ -69,11 +72,12 @@ export async function GET() {
       connected: true,
     });
   } catch (error: unknown) {
-    // Logged once, by kind (classifyGoogleFailure, via reviewsErrorBody).
+    // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
     // No location is chosen here yet: an access refusal is about the account.
     const body = reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE, role, {
       where: "GET /api/reviews/locations",
       subject: "account",
+      workspaceId,
     });
     return NextResponse.json(body, { status: 500 });
   }

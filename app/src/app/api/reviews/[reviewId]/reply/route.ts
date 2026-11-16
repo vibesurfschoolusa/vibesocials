@@ -27,6 +27,8 @@ const REVIEW_NOT_FOUND = { error: "Review not found." };
 export async function POST(request: Request) {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
+  // JJ3 lead review: an owner's in-place Google sign-in names the workspace.
+  let workspaceId: string | undefined;
   try {
     const context = await getWorkspaceContext();
 
@@ -34,6 +36,7 @@ export async function POST(request: Request) {
       return signedOutResponse();
     }
     role = context.role;
+    workspaceId = context.workspace.id;
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.
     const blocked = accessBlockResponse(context);
@@ -128,8 +131,11 @@ export async function POST(request: Request) {
       reply: result,
     });
   } catch (error: unknown) {
-    // Logged once, by kind (classifyGoogleFailure, via reviewsErrorBody).
-    const body = reviewsErrorBody(error, REPLY_FAILED_MESSAGE, role, { where: "POST /api/reviews/[reviewId]/reply" });
+    // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
+    const body = reviewsErrorBody(error, REPLY_FAILED_MESSAGE, role, {
+      where: "POST /api/reviews/[reviewId]/reply",
+      workspaceId,
+    });
     return NextResponse.json(body, { status: 500 });
   }
 }

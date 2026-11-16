@@ -19,6 +19,10 @@ const REVIEWS_FAILED_MESSAGE = "Couldn't load your Google reviews. Try again in 
 export async function GET(request: Request) {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
+  // JJ3 lead review: an owner's in-place Google sign-in names the workspace.
+  let workspaceId: string | undefined;
+  // JJ3 lead review: a removed location is worded by whether it is the saved one.
+  let location: "saved" | "picked" = "saved";
   try {
     const context = await getWorkspaceContext();
 
@@ -26,6 +30,7 @@ export async function GET(request: Request) {
       return signedOutResponse();
     }
     role = context.role;
+    workspaceId = context.workspace.id;
 
     // Get location from query params
     const { searchParams } = new URL(request.url);
@@ -65,6 +70,7 @@ export async function GET(request: Request) {
     // Get location name from query param or metadata
     const metadata = (connection.metadata as { locationName?: string } | null) ?? {};
     const locationName = locationParam || metadata.locationName;
+    if (locationName !== metadata.locationName) location = "picked";
 
     if (!locationName) {
       return NextResponse.json(
@@ -82,8 +88,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ reviews, truncated });
   } catch (error: unknown) {
-    // Logged once, by kind (classifyGoogleFailure, via reviewsErrorBody).
-    const body = reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE, role, { where: "GET /api/reviews" });
+    // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
+    const body = reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE, role, { where: "GET /api/reviews", workspaceId, location });
     return NextResponse.json(body, { status: 500 });
   }
 }

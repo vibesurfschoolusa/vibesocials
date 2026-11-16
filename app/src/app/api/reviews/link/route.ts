@@ -15,6 +15,7 @@ import {
   type ReviewsReader,
 } from "@/server/googleReviews";
 import { classifyGoogleFailure, type GoogleFailureKind } from "@/server/googleFailure";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -102,10 +103,17 @@ export async function GET() {
     return NextResponse.json({ url });
   } catch (error) {
     // JJ3 lead review: the kind of Google failure is the one rule every Google
-    // surface uses (classifyGoogleFailure, which logs it once: status, code and
-    // reasons, never a message, which could quote a URL); this panel words it.
+    // surface uses (classifyGoogleFailure, which writes one classification
+    // line: status, code and reasons, never a message, which could quote a
+    // URL); this panel words it. An owner's sign-in-again answer carries the
+    // in-place sign-in (lib/gbpSignIn.ts), never Switch account.
     const kind = classifyGoogleFailure(error, "GET /api/reviews/link");
-    return NextResponse.json({ url: null, reason: linkFailureReason(kind, context.role) });
+    const reason = linkFailureReason(kind, context.role);
+    return NextResponse.json(
+      kind === "signInAgain" && context.role === "owner"
+        ? { url: null, reason, signInUrl: gbpSignInUrl(context.workspace.id) }
+        : { url: null, reason },
+    );
   }
 }
 

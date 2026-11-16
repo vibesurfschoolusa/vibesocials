@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ErrorState } from "./error-state";
 
-const render = (props: { message: string; settingsLink?: boolean; isMember?: boolean }) =>
+const render = (props: { message: string; settingsLink?: boolean; isMember?: boolean; signInUrl?: string }) =>
   renderToStaticMarkup(
     createElement(ErrorState, { title: "Couldn't load reviews", onRetry: () => {}, ...props, isMember: props.isMember ?? false }),
   );
@@ -14,7 +14,8 @@ describe("ErrorState", () => {
   it("links to the connections in Settings when asked to", () => {
     const html = render({ message: "Google refused the request.", settingsLink: true });
 
-    expect(html).toMatch(/<a [^>]*href="\/settings#connections"[^>]*>Go to Settings/);
+    // JJ3 lead review: straight to the Google Business Profile card.
+    expect(html).toMatch(/<a [^>]*href="\/settings#google-business-profile"[^>]*>Go to Settings/);
   });
 
   it("has no Settings link for an error a retry can fix", () => {
@@ -23,6 +24,19 @@ describe("ErrorState", () => {
 
   it("still links for the not-configured message", () => {
     expect(render({ message: "AI is not configured" })).toContain('href="/settings#connections"');
+  });
+});
+
+// JJ3 lead review: the in-place sign-in is a link to the Reconnect button's start URL.
+describe("ErrorState: signing in to Google again", () => {
+  it("an owner gets a Sign in to Google again link to the start URL", () => {
+    const html = render({ message: "Google didn't accept the connection.", settingsLink: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
+    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again<\/a>/);
+  });
+
+  it("a member never does", () => {
+    const html = render({ message: "x", settingsLink: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1", isMember: true });
+    expect(html).not.toContain("/api/auth/");
   });
 });
 

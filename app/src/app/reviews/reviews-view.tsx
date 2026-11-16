@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { readApiError, shownError } from "@/components/reviews/api-error";
+import { readApiError, shownError, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -70,7 +70,7 @@ export function ReviewsLoadFailedPage({
   isMember,
   onRetry,
 }: {
-  error: { message: string; settingsLink: boolean };
+  error: ShownError;
   isMember: boolean;
   onRetry: () => void;
 }) {
@@ -81,6 +81,7 @@ export function ReviewsLoadFailedPage({
         title="Couldn't load reviews"
         message={error.message}
         settingsLink={error.settingsLink}
+        signInUrl={error.signInUrl}
         isMember={isMember}
         onRetry={onRetry}
       />
@@ -108,8 +109,8 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(true);
   // F7: a sentence and whether it asks for a reconnect (api-error.ts).
-  const [locationsError, setLocationsError] = useState<{ message: string; settingsLink: boolean } | null>(null);
-  const [reviewsError, setReviewsError] = useState<{ message: string; settingsLink: boolean } | null>(null);
+  const [locationsError, setLocationsError] = useState<ShownError | null>(null);
+  const [reviewsError, setReviewsError] = useState<ShownError | null>(null);
   // Google had more than the page loads: only the latest are shown.
   const [truncated, setTruncated] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
@@ -447,6 +448,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
           title="Couldn't load reviews"
           message={reviewsError.message}
           settingsLink={reviewsError.settingsLink}
+          signInUrl={reviewsError.signInUrl}
           isMember={isMember}
           onRetry={loadReviews}
         />

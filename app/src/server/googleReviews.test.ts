@@ -308,54 +308,60 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     );
   });
 
-  // JJ3 lead review: an unflagged row's card shows Connected, Switch account and Disconnect.
-  it("signInAgain (the card shows Switch account): the owner is told to press it", () => {
+  // JJ3 lead review: Switch account disconnects first and deletes the listing's
+  // numbers, so a sign-in problem is fixed in place: the Reconnect button's own
+  // start URL, which keeps the row, its location and the numbers.
+  it("signInAgain (nothing flagged): the owner gets the in-place sign-in, a member the same facts", () => {
     for (const error of [failing({ status: 401 }), failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })]) {
-      expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({
-        error:
-          "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.",
+      expect(reviewsErrorBody(error, "Fallback.", "owner", { workspaceId: "ws-1" })).toEqual({
+        error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.",
         reconnect: true,
+        signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
       });
-      expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({
-        error: "Google refused the request. The workspace owner can sign in to Google Business Profile again.",
-      });
+      expect(reviewsErrorBody(error, "Fallback.", "member", { workspaceId: "ws-1" })).toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept." });
     }
   });
 
-  it("notFound: the chosen location was removed; the owner chooses another in Settings", () => {
-    const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({
-      error: "This location is no longer in Google Business Profile. Choose another location in Settings.",
+  it("a flagged row still reads Reconnect, with no sign-in URL of its own", () => {
+    expect(reviewsErrorBody(failing({ code: "RECONNECT_REQUIRED" }), "Fallback.", "owner", { workspaceId: "ws-1" })).toEqual({
+      error: GOOGLE_REFUSED_MESSAGE,
       reconnect: true,
-    });
-    expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({
-      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
     });
   });
 
-  it("access, about a location (list, reply): the Switch account step, linked to Settings for an owner", () => {
+  // JJ3 lead review: the Reviews page can pick a location that is not the saved one.
+  it("notFound, the saved location: the owner chooses another in Settings; a member picks one above", () => {
+    const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
+    expect(reviewsErrorBody(error, "Fallback.", "owner", { location: "saved" })).toEqual({
+      error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).",
+      reconnect: true,
+    });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { location: "saved" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one." });
+  });
+
+  it("notFound, a location picked on the Reviews page: pick another above, for everyone", () => {
+    const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
+    expect(reviewsErrorBody(error, "Fallback.", "owner", { location: "picked" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { location: "picked" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
+  });
+
+  // JJ3 lead review: here a different Google account is what is needed, so
+  // Switch account is named, with what switching clears.
+  it("access, about a location (list, reply): Switch account and what it clears, linked to Settings for an owner", () => {
     const error = failing({ status: 403, googleReasons: ["forbidden"] });
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE, reconnect: true });
     expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE });
-    expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe(
-      "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
-    );
-    expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe(
-      "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
-    );
+    expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe("Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.");
+    expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe("Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.");
   });
 
   it("access, where no location is chosen yet (locations): about the account", () => {
     const error = failing({ status: 403 });
     expect(reviewsErrorBody(error, "Fallback.", "owner", { subject: "account" })).toEqual({
-      error:
-        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
+      error: "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.",
       reconnect: true,
     });
-    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({
-      error:
-        "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile.",
-    });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({ error: "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers." });
     expect(googleAccessRefusedMessage("location", "owner")).toBe(GOOGLE_ACCESS_REFUSED_MESSAGE);
   });
 
