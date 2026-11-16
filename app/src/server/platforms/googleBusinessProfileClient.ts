@@ -1,8 +1,8 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { GBP_ACCESS_REFUSED_TEXT } from "@/lib/publishFailureText";
-import { isGoogleServiceRefusal, withGoogleTokenRetry } from "@/server/googleFailure";
+import { GBP_ACCESS_REFUSED_TEXT, googleSetupRefusedMessage } from "@/lib/publishFailureText";
+import { googlePublish403, isExpiredTokenRejection, withGoogleTokenRetry } from "@/server/googleFailure";
 import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
@@ -77,14 +77,44 @@ async function throwGbpReconnect(connection: SocialConnection): Promise<never> {
 }
 
 /**
- * R26 platform-clients L4: a 403 that is not quota or our own API setup
- * (isGoogleServiceRefusal) is access: the connected Google account may no
- * longer manage the listing. It is not the post breaking Google's rules, so it
- * gets its own sentence (GBP_ACCESS_REFUSED_TEXT); code and status are kept.
+ * R26 platform-clients L4: a 403 on a post follows the one rule for Google
+ * posts (googlePublish403): our own API setup or quota reads try-later (and is
+ * logged there); anything else is access, the connected Google account may no
+ * longer manage the listing (GBP_ACCESS_REFUSED_TEXT). Never the post breaking
+ * Google's rules. Null for any other status. Code and status are kept.
  */
-async function isAccessRefusal(response: Response): Promise<boolean> {
-  if (response.status !== 403) return false;
-  return !isGoogleServiceRefusal(await readGoogleErrorReasons(response));
+async function forbiddenText(response: Response): Promise<string | null> {
+  if (response.status !== 403) return null;
+  return googlePublish403("google_business_profile", await readGoogleErrorReasons(response)) === "setup"
+    ? googleSetupRefusedMessage("google_business_profile")
+    : GBP_ACCESS_REFUSED_TEXT;
+}
+
+/**
+ * R26 lead review: sends the post (the commit call) with the connection's
+ * token. A 401 on a token already past its stored expiry (the early refresh
+ * failed, then a long store-code lookup) is no refusal: Google created
+ * nothing, so the token is refreshed once and the post sent once more. A
+ * terminal refresh flags the row itself and its failure is thrown; a 401 on
+ * a fresh token flags the row (throwGbpReconnect), as before.
+ */
+async function sendWithFreshToken(
+  connection: SocialConnection,
+  deadline: number | undefined,
+  send: (accessToken: string) => Promise<Response>,
+): Promise<Response> {
+  const response = await send(connection.accessToken ?? "");
+  if (response.status !== 401) return response;
+  if (!isExpiredTokenRejection({ status: 401 }, { expiresAt: connection.expiresAt })) await throwGbpReconnect(connection);
+  void response.body?.cancel().catch(() => {});
+  const renewed = await refreshConnectionToken(
+    connection,
+    (current) => refreshGoogleToken(current, { deadline }),
+    { deadline },
+  );
+  const again = await send(renewed.accessToken ?? "");
+  if (again.status === 401) await throwGbpReconnect(renewed);
+  return again;
 }
 
 export const googleBusinessProfileClient: PlatformClient = {
@@ -111,7 +141,6 @@ export const googleBusinessProfileClient: PlatformClient = {
     const located = await ensureLocationName(socialConnection, deadline);
     const { locationName } = located;
     socialConnection = located.connection;
-    const accessToken = located.accessToken;
 
     // A photo becomes a Business Profile post (an "Update" with the caption, shown
     // on Google Search and Maps). Until 2026-11 it was only added to the photo
@@ -157,18 +186,20 @@ export const googleBusinessProfileClient: PlatformClient = {
           refused: GBP_VIDEO_REFUSED_TEXT,
         };
 
-    const createRes = await commitRequest("google_business_profile", () =>
-      fetchWithTimeout(
-        request.url,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
+    const createRes = await sendWithFreshToken(socialConnection, deadline, (token) =>
+      commitRequest("google_business_profile", () =>
+        fetchWithTimeout(
+          request.url,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(request.body),
           },
-          body: JSON.stringify(request.body),
-        },
-        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+          budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+        ),
       ),
     );
 
@@ -176,14 +207,13 @@ export const googleBusinessProfileClient: PlatformClient = {
     // per API, 10 edits/min per profile) with HTTP 429 -> RATE_LIMITED.
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
-    if (createRes.status === 401) await throwGbpReconnect(socialConnection);
-    const accessRefused = await isAccessRefusal(createRes);
+    const forbidden = await forbiddenText(createRes);
 
     // A 400 (INVALID_ARGUMENT) is Google refusing what was sent: say what it
     // accepts. Code and status are kept, so retrying stays exactly as before.
     await assertOk(createRes, request.failure).catch((error: Error & { status?: number }) => {
       if (error.status === 400) error.message = request.refused;
-      if (accessRefused) error.message = GBP_ACCESS_REFUSED_TEXT;
+      if (forbidden) error.message = forbidden;
       throw error;
     });
 
@@ -242,31 +272,31 @@ export const googleBusinessProfileClient: PlatformClient = {
     const located = await ensureLocationName(socialConnection, deadline);
     const { locationName } = located;
     socialConnection = located.connection;
-    const accessToken = located.accessToken;
     const body = buildLocalPostBody(ctx.caption, null, await resolvePostOptions(ctx));
 
     console.log("[GBP] Creating text post", { locationName });
 
     // The commit call, as for a photo post: a lost answer is PUBLISH_UNCONFIRMED.
-    const createRes = await commitRequest("google_business_profile", () =>
-      fetchWithTimeout(
-        `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
+    const createRes = await sendWithFreshToken(socialConnection, deadline, (token) =>
+      commitRequest("google_business_profile", () =>
+        fetchWithTimeout(
+          `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
           },
-          body: JSON.stringify(body),
-        },
-        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+          budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+        ),
       ),
     );
 
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
-    if (createRes.status === 401) await throwGbpReconnect(socialConnection);
-    const accessRefused = await isAccessRefusal(createRes);
+    const forbidden = await forbiddenText(createRes);
 
     // As the photo post: a 400 names what to check; code and status are kept.
     await assertOk(createRes, {
@@ -274,7 +304,7 @@ export const googleBusinessProfileClient: PlatformClient = {
       prefix: "Failed to create the Google Business Profile post",
     }).catch((error: Error & { status?: number }) => {
       if (error.status === 400) error.message = GBP_TEXT_REFUSED_TEXT;
-      if (accessRefused) error.message = GBP_ACCESS_REFUSED_TEXT;
+      if (forbidden) error.message = forbidden;
       throw error;
     });
 

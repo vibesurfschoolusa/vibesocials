@@ -494,7 +494,7 @@ export function savedCodeShared(locations: ListedLocationFields[], saved: string
 const SAVED_CODE_SHARED_NOTICE =
   "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. Choose the location from the list in Settings.";
 const SAVED_CODE_SHARED_MEMBER_NOTICE =
-  "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. The workspace owner can choose the location from the list in Settings.";
+  "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. The workspace owner can choose the location from the list.";
 
 /** The shared-store-code sentence, for whoever reads it. */
 export function savedCodeSharedNotice(role: ReviewsReader): string {

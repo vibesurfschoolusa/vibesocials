@@ -156,7 +156,7 @@ async function removedLocationWas(
   if (role === "member" || !used.accessToken || asked.locationName === asked.saved) return "saved";
   try {
     const listing = await listGbpLocationsWithToken(
-      { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null },
+      { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null, expiresAt: used.expiresAt },
       WHERE,
     );
     if (!listing.ok) return "saved";

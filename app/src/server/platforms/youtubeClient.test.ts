@@ -261,6 +261,29 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 
+  // R26 lead review: our own API setup (accessNotConfigured, servicedisabled)
+  // is no refusal of the channel: try later, and logged. One rule with GBP.
+  it.each(["accessNotConfigured", "SERVICE_DISABLED"])(
+    "insert 403 %s: try later (our setup), logged, nothing flagged",
+    async (reason) => {
+      flagRejectedTokenMock.mockReset();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      stubYouTube(() => googleError(403, reason));
+
+      const error = (await failure()) as Error & { code?: string; status?: number };
+
+      expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 403 });
+      expect(publishErrorMessage("youtube", error)).toBe(
+        "YouTube isn't answering for Vibe Socials right now, so nothing was posted. Try again later.",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "[Google] publish refused by our own API setup or quota",
+        expect.objectContaining({ platform: "youtube", status: 403 }),
+      );
+      expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("the missing-scope sentence, for a member", () => {
     expect(sentenceForRecipient(YOUTUBE_NOT_ALLOWED, "youtube", "member")).toBe(
       "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. The workspace owner can reconnect YouTube and allow uploads; then retry.",

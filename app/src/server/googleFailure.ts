@@ -98,6 +98,24 @@ export function isGoogleScopeRefusal(reasons: readonly string[]): boolean {
   return reasons.some((reason) => SCOPE_REASONS.has(reason));
 }
 
+/**
+ * R26 lead review: the one rule for a 403 on a Google post (Business Profile
+ * and YouTube). "setup": our own API setup or quota (isGoogleServiceRefusal),
+ * logged here and worded try-later; "scope": the token lacks the scope
+ * (YouTube's own `insufficientPermissions` too); "access": anything else, the
+ * connected account's access. Each client words "scope" and "access" itself.
+ */
+export function googlePublish403(
+  platform: "google_business_profile" | "youtube",
+  reasons: readonly string[],
+): "setup" | "scope" | "access" {
+  if (isGoogleServiceRefusal(reasons)) {
+    console.warn("[Google] publish refused by our own API setup or quota", { platform, status: 403, reasons });
+    return "setup";
+  }
+  return isGoogleScopeRefusal(reasons) || reasons.includes("insufficientpermissions") ? "scope" : "access";
+}
+
 interface FailureFields {
   status?: unknown;
   code?: unknown;

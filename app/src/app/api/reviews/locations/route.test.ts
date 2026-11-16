@@ -564,7 +564,7 @@ describe("GET /api/reviews/locations and a saved store code two locations share"
       locations: [],
       connected: true,
       notice:
-        "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. The workspace owner can choose the location from the list in Settings.",
+        "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. The workspace owner can choose the location from the list.",
     });
   });
 });

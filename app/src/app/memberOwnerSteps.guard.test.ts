@@ -68,7 +68,14 @@ import { WorkspaceStatusAlert } from "@/components/shell/workspace-paused-banner
 import type { ConnectionSummary } from "@/lib/connectionSummary";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import { accessBlock } from "@/lib/workspaceStatus";
-import { reviewLinkReason, reviewsErrorBody, type ReviewLinkProblem } from "@/server/googleReviews";
+import { reviewLinkReason, reviewsErrorBody, savedCodeSharedNotice, type ReviewLinkProblem } from "@/server/googleReviews";
+import { unreadAccountsNotice } from "@/app/api/connections/google_business_profile/gbpLocations";
+import {
+  GBP_ACCESS_REFUSED_TEXT,
+  YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
+  YOUTUBE_UPLOAD_REFUSED_TEXT,
+  sentenceForRecipient,
+} from "@/lib/publishFailureText";
 import { NoPlatformConnectedLine } from "@/app/posts/bulk/bulk-posts-form";
 import { GET as tiktokCreatorInfo } from "@/app/api/tiktok/creator-info/route";
 import {
@@ -114,6 +121,10 @@ const OWNER_STEPS: RegExp[] = [
   /\bHow to connect\b/,
   /\bChoose (which|the board|a board)\b/,
   /\bshows what to reconnect\b/,
+  // R26: the Reviews notices and the Google publish 403s.
+  /\bchoose the location from the list in Settings\b/i,
+  /(?:^|[.>]\s*)Check in Google Business Profile that this Google account\b/,
+  /(?:^|[.>]\s*)Check in YouTube Studio\b/,
 ];
 
 function decoded(html: string): string {
@@ -221,6 +232,17 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
   // R25 platform-clients L3: a saved store code that no longer matches.
   "Reviews, store code no longer matches (error card)": (role) =>
     reviewsRefusedBy(role, { code: "GBP_STORE_CODE_NOT_FOUND" }),
+  // R26 client-journey L2: the Reviews locations notices.
+  "Reviews, saved store code shared by two locations (notice)": (role) => savedCodeSharedNotice(role),
+  "Reviews, accounts that refused access (notice)": (role) =>
+    unreadAccountsNotice({ access: true, failed: false }, "reviews", role) ?? "",
+  // R26 platform-clients L4: a Google 403 on a post, as Activity shows it.
+  "Activity, Google Business Profile refused the post (403)": (role) =>
+    sentenceForRecipient(GBP_ACCESS_REFUSED_TEXT, "google_business_profile", role) ?? "",
+  "Activity, YouTube upload scope missing (403)": (role) =>
+    sentenceForRecipient(YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT, "youtube", role) ?? "",
+  "Activity, YouTube refused the upload (403)": (role) =>
+    sentenceForRecipient(YOUTUBE_UPLOAD_REFUSED_TEXT, "youtube", role) ?? "",
   "Reviews, location removed (error card)": (role) =>
     reviewsRefusedBy(role, { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }),
   "Reviews, Google refused, API 401 (error card)": (role) => reviewsRefusedBy(role, { status: 401 }),

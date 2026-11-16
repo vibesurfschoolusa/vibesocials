@@ -318,6 +318,21 @@ describe("GET /api/reviews for a member", () => {
     });
   });
 
+  // R26 lead review: the listing read for the wording carries the token's
+  // expiry too, so a 401 on a just-expired token there flags nothing.
+  it("the listing read for the wording is sent the token's stored expiry", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    findFirstMock.mockResolvedValue({ id: "c1", accessToken: "tok", refreshToken: "ref", expiresAt, metadata: { locationName: "accounts/1/locations/9" } });
+    listMock.mockResolvedValue(listing([listed("accounts/1/locations/9"), listed("accounts/1/locations/3")]));
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
+
+    await get();
+
+    expect(listMock).toHaveBeenCalledWith({ id: "c1", accessToken: "tok", refreshToken: "ref", expiresAt }, "GET /api/reviews");
+  });
+
   it("a 404 on a location the owner picked, with one location listed (no picker shown): the Settings wording", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     getWorkspaceContextMock.mockResolvedValue(OWNER);

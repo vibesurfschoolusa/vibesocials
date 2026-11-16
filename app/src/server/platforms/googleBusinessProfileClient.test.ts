@@ -1306,11 +1306,114 @@ describe("googleBusinessProfileClient: a 403 on a post", () => {
     );
   });
 
-  it.each(["QUOTA_EXCEEDED", "SERVICE_DISABLED", "rateLimitExceeded"])("a %s 403 is unchanged", async (reason) => {
-    stubMediaCreate(() => googleError(reason));
+  // R26 lead review: one 403 rule for both Google clients. Our own API setup or
+  // quota is no refusal of the post: try later, and it is logged.
+  it.each(["QUOTA_EXCEEDED", "SERVICE_DISABLED", "rateLimitExceeded"])(
+    "a %s 403: try later (our setup), logged, code and status kept",
+    async (reason) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      stubMediaCreate(() => googleError(reason));
 
-    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+      const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
 
-    expect(error?.message).toBe("Failed to create the Google Business Profile post (status 403)");
+      expect(error).toMatchObject({ code: "GBP_CREATE_POST_FAILED", status: 403 });
+      expect(publishErrorMessage("google_business_profile", error!)).toBe(
+        "Google Business Profile isn't answering for Vibe Socials right now, so nothing was posted. Try again later.",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "[Google] publish refused by our own API setup or quota",
+        expect.objectContaining({ platform: "google_business_profile", status: 403 }),
+      );
+    },
+  );
+});
+
+// R26 lead review: the post itself sent after the token expired (the early
+// refresh failed, then a long store-code lookup). A 401 means Google created
+// nothing: one refresh, the POST once more, and a flag only when the refresh is
+// terminal (the refresh flags) or a fresh token's 401 repeats.
+describe("googleBusinessProfileClient: a 401 on the post with a token that ran out on the way", () => {
+  const MINUTE = 60 * 1000;
+  const expiring = () => {
+    const ctx = makeContext();
+    ctx.socialConnection = { ...ctx.socialConnection, expiresAt: new Date(Date.now() + MINUTE) } as SocialConnection;
+    return ctx;
+  };
+  const renewed = () => ({ ...makeContext().socialConnection, accessToken: "fresh", expiresAt: new Date(Date.now() + 60 * MINUTE) });
+  const busy = () => Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" });
+  const auth: (string | null)[] = [];
+  function stubPost(answer: (bearer: string | null) => Response) {
+    auth.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("Authorization");
+        auth.push(bearer);
+        return answer(bearer);
+      }),
+    );
+  }
+  const expiredAnswer = (ok: () => Response) => (bearer: string | null) => {
+    if (bearer === "Bearer access-token") {
+      vi.setSystemTime(Date.now() + 2 * MINUTE);
+      return new Response("{}", { status: 401 });
+    }
+    return ok();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+    refreshConnectionTokenMock.mockReset();
+  });
+  afterEach(() => {
+    refreshConnectionTokenMock.mockReset();
+    refreshConnectionTokenMock.mockImplementation((snapshot, refresh) => refresh(snapshot));
+  });
+
+  it.each([
+    ["a photo post", (ctx: PublishContext) => googleBusinessProfileClient.publishVideo(ctx)],
+    [
+      "a text post",
+      (ctx: PublishContext) => {
+        const { mediaItem: _m, ...text } = ctx;
+        void _m;
+        return googleBusinessProfileClient.publishText!(text as unknown as Parameters<NonNullable<typeof googleBusinessProfileClient.publishText>>[0]);
+      },
+    ],
+  ])("%s: refreshed once, sent once more with the new token, posted, nothing flagged", async (_label, publish) => {
+    refreshConnectionTokenMock.mockRejectedValueOnce(busy()).mockResolvedValueOnce(renewed());
+    stubPost(expiredAnswer(() => Response.json({ name: "accounts/111/locations/999/localPosts/p1" })));
+
+    await expect(publish(expiring())).resolves.toEqual({ externalPostId: "accounts/111/locations/999/localPosts/p1" });
+    expect(auth).toEqual(["Bearer access-token", "Bearer fresh"]);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the refresh is terminal: its failure (the refresh flags the row itself), no second post", async () => {
+    const dead = Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      status: 400,
+      oauthError: "invalid_grant",
+    });
+    refreshConnectionTokenMock.mockRejectedValueOnce(busy()).mockRejectedValueOnce(dead);
+    stubPost(expiredAnswer(() => Response.json({ name: "never" })));
+
+    await expect(googleBusinessProfileClient.publishVideo(expiring())).rejects.toBe(dead);
+    expect(auth).toHaveLength(1);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the fresh token's 401 repeats: flagged with the new token, Reconnect", async () => {
+    refreshConnectionTokenMock.mockRejectedValueOnce(busy()).mockResolvedValueOnce(renewed());
+    stubPost(expiredAnswer(() => new Response("{}", { status: 401 })));
+
+    await expect(googleBusinessProfileClient.publishVideo(expiring())).rejects.toMatchObject({ code: "GBP_RECONNECT_REQUIRED" });
+    expect(flagRejectedTokenMock).toHaveBeenCalledTimes(1);
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "conn-gbp", accessToken: "fresh", refreshToken: "refresh-token" },
+      "GBP_RECONNECT_REQUIRED",
+    );
   });
 });

@@ -7,6 +7,7 @@ import {
   YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
   YOUTUBE_UPLOAD_REFUSED_TEXT,
   asStorageReadFailure,
+  googleSetupRefusedMessage,
 } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { fitTitle, truncateUnits } from "@/lib/truncate";
@@ -14,7 +15,7 @@ import {
   expiredTokenFailure,
   isExpiredTokenFailure,
   isExpiredTokenRejection,
-  isGoogleScopeRefusal,
+  googlePublish403,
 } from "@/server/googleFailure";
 import {
   YOUTUBE_UPLOAD_STATE_KIND,
@@ -352,11 +353,12 @@ function youtubeUploadError(message: string, status?: number): Error & { code: s
  * checks): a quota or rate limit becomes RATE_LIMITED (2026-11-01 scale audit,
  * platform limits), anything else YOUTUBE_UPLOAD_FAILED with its status.
  *
- * R26 platform-clients L4: a 403 left after that is about the channel, not the
- * video breaking YouTube's rules. A missing upload scope reads Reconnect and is
- * marked `uploadScopeMissing`, so flagRejectedYouTubeToken flags the row and
- * the card shows that Reconnect. Any other 403 names no control (nothing is
- * flagged, so the card has no Reconnect): check the channel in YouTube Studio.
+ * R26 platform-clients L4: a 403 left after that follows the one rule for
+ * Google posts (googlePublish403). Our own API setup reads try-later (and is
+ * logged there). A missing upload scope reads Reconnect and is marked
+ * `uploadScopeMissing`, so flagRejectedYouTubeToken flags the row and the card
+ * shows that Reconnect. Any other 403 names no control (nothing is flagged, so
+ * the card has no Reconnect): check the channel in YouTube Studio.
  */
 async function rejectedByYouTube(response: Response, prefix: string): Promise<never> {
   const limited = await classifyRateLimit("youtube", response);
@@ -364,9 +366,10 @@ async function rejectedByYouTube(response: Response, prefix: string): Promise<ne
   const reasons = response.status === 403 ? await readGoogleErrorReasons(response) : null;
   await assertOk(response, { code: "YOUTUBE_UPLOAD_FAILED", prefix }).catch((error: Error) => {
     if (!reasons) throw error;
-    const scopeMissing = isMissingUploadScope(reasons);
-    error.message = scopeMissing ? YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT : YOUTUBE_UPLOAD_REFUSED_TEXT;
-    throw scopeMissing ? Object.assign(error, { uploadScopeMissing: true }) : error;
+    const kind = googlePublish403("youtube", reasons);
+    if (kind === "setup") error.message = googleSetupRefusedMessage("youtube");
+    else error.message = kind === "scope" ? YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT : YOUTUBE_UPLOAD_REFUSED_TEXT;
+    throw kind === "scope" ? Object.assign(error, { uploadScopeMissing: true }) : error;
   });
   // assertOk throws for every response that is not ok; this is for the types.
   throw youtubeUploadError(`${prefix} (status ${response.status})`, response.status);
@@ -965,15 +968,6 @@ async function setYouTubeCover(
     console.warn("[YouTube] Cover not sent", { videoId, code: (error as { code?: unknown } | null)?.code });
     return YOUTUBE_COVER_FAILED_NOTE;
   }
-}
-
-/**
- * A 403 for a token without the upload scope: Google's shared scope reason, or
- * YouTube's own `insufficientPermissions` ("The OAuth 2.0 token provided for
- * the request specifies scopes that are insufficient", YouTube Data API errors).
- */
-function isMissingUploadScope(reasons: readonly string[]): boolean {
-  return isGoogleScopeRefusal(reasons) || reasons.includes("insufficientpermissions");
 }
 
 /** The code a row is flagged with when YouTube refuses its token (an API 401). */

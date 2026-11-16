@@ -84,6 +84,10 @@ const LINKEDIN_NOT_SUPER_ADMIN =
  */
 export const GBP_ACCESS_REFUSED_TEXT =
   "Google refused this post, so nothing was posted: the connected Google account may no longer manage this Business Profile listing. Sign in to Google again on the Google Business Profile card in Settings, with the account that manages this listing, then retry.";
+/** A Google 403 for our own API setup or quota (googleFailure.ts googlePublish403 "setup"): try later. */
+export function googleSetupRefusedMessage(platform: Platform): string {
+  return `${platformLabel(platform)} isn't answering for Vibe Socials right now, so nothing was posted. Try again later.`;
+}
 /** YouTube, a 403 for the missing upload scope: the row is flagged too, so the card shows Reconnect. */
 export const YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT =
   "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.";
