@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
-import { readWorkspaceListOnce, watchWorkspaceList } from "./account-menu";
+import { closeOnEscape, focusWhenPending, readWorkspaceListOnce, watchWorkspaceList } from "./account-menu";
 
 // R16 L1 (all four reviewers): a rename no longer loads the page again, so the
 // menu reads its list again when the Team card announces it, and its button
@@ -126,5 +126,59 @@ describe("AccountMenu: who it is for", () => {
 
   it("while the session loads in the app frame: the button shows, as today", async () => {
     expect(await menu({ status: "loading", data: undefined })).toContain("Account menu for");
+  });
+});
+
+// R24 pages L6: the menu is a disclosure (a button that shows a group), so
+// focus stays where the person put it, and Cancel in the New workspace form
+// hands focus to the "New workspace" button that comes back in its place.
+describe("AccountMenu: focus and the button's attributes", () => {
+  it("Cancel: focus moves to the New workspace button once it is back", () => {
+    const pending = { current: true };
+    const button = { focus: vi.fn() };
+    focusWhenPending(button, pending);
+    expect(button.focus).toHaveBeenCalledTimes(1);
+    expect(pending.current).toBe(false);
+
+    // Later renders (or the first open, with no Cancel) leave focus alone.
+    focusWhenPending(button, pending);
+    focusWhenPending(null, { current: true });
+    expect(button.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("the New workspace button takes focus through that ref, and Cancel asks for it", () => {
+    const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/ref=\{\(node\) => focusWhenPending\(node, focusNewWorkspaceButton\)\}/);
+    const cancel = source.slice(source.indexOf("setCreatingWorkspace(false);") - 200, source.indexOf("setCreatingWorkspace(false);"));
+    expect(cancel).toContain("focusNewWorkspaceButton.current = true;");
+  });
+
+  it("Escape closes the menu and returns focus to its button; other keys do nothing", () => {
+    const close = vi.fn();
+    const focusButton = vi.fn();
+    expect(closeOnEscape("Enter", close, focusButton)).toBe(false);
+    expect(close).not.toHaveBeenCalled();
+    expect(closeOnEscape("Escape", close, focusButton)).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(focusButton).toHaveBeenCalledTimes(1);
+  });
+
+  it("the button: aria-expanded, no aria-haspopup (the panel is a group, not a dialog)", async () => {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { SessionContext } = await import("next-auth/react");
+    const { AccountMenu } = await import("./account-menu");
+    const html = renderToStaticMarkup(
+      createElement(
+        SessionContext.Provider as never,
+        { value: { status: "authenticated", data: { user: { name: "Owner", email: "owner@example.com" }, expires: "2099-01-01T00:00:00Z" } } } as never,
+        createElement(AccountMenu),
+      ),
+    );
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("aria-haspopup");
+    const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
+    expect(source).toContain("aria-controls={open ? panelId : undefined}");
+    expect(source).toMatch(/role="group"\s+aria-label="Account"/);
   });
 });

@@ -81,6 +81,24 @@ export function watchWorkspaceList(
   };
 }
 
+/** Escape closes the menu and puts focus back on its button. */
+export function closeOnEscape(key: string, close: () => void, focusButton: () => void): boolean {
+  if (key !== "Escape") return false;
+  close();
+  focusButton();
+  return true;
+}
+
+/**
+ * R24 pages L6: Cancel in the New workspace form removes the focused button, so
+ * the "New workspace" button that comes back takes focus (once, when asked).
+ */
+export function focusWhenPending(node: { focus(): void } | null, pending: { current: boolean }): void {
+  if (!node || !pending.current) return;
+  pending.current = false;
+  node.focus();
+}
+
 /**
  * Account dropdown: signed-in email, workspace switcher, theme toggle, Help, Contact us,
  * "Install app" (hidden when already installed) and sign-out. Implemented as a labelled popover (not an ARIA menu, since it
@@ -116,6 +134,7 @@ export function AccountMenu() {
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
+  const focusNewWorkspaceButton = useRef(false);
   // The page-load, menu-open and announce reads share one order: the later one shows.
   const [reads] = useState(newestAnswer);
 
@@ -127,10 +146,7 @@ export function AccountMenu() {
       setOpen(false);
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-        buttonRef.current?.focus();
-      }
+      closeOnEscape(event.key, () => setOpen(false), () => buttonRef.current?.focus());
     }
 
     document.addEventListener("mousedown", onPointerDown);
@@ -263,7 +279,6 @@ export function AccountMenu() {
         onClick={() => setOpen((value) => !value)}
         // On a phone the label is hidden and the initials are decorative, so this names the button.
         aria-label={`Account menu for ${accountLabel(name, email)}${workspaceLine ? `, workspace ${workspaceLine}` : ""}`}
-        aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-card px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -386,6 +401,7 @@ export function AccountMenu() {
                       variant="ghost"
                       disabled={createBusy}
                       onClick={() => {
+                        focusNewWorkspaceButton.current = true;
                         setCreatingWorkspace(false);
                         setNewWorkspaceName("");
                       }}
@@ -399,6 +415,7 @@ export function AccountMenu() {
                 </form>
               ) : (
                 <button
+                  ref={(node) => focusWhenPending(node, focusNewWorkspaceButton)}
                   type="button"
                   onClick={() => setCreatingWorkspace(true)}
                   disabled={switchingId !== null}
