@@ -57,8 +57,11 @@ describe("the connect link's account choice", () => {
     expect(html).toMatch(/<p role="alert"[^>]*>This choice has ended.<\/p>/);
   });
 
-  it("says it is loading as a status", () => {
-    expect(view({ state: { status: "loading" } })).toContain('role="status"');
+  // R30 lead review: the loading view comes and goes, so the line is read through
+  // the page's announcer (components/ui/announcer.tsx), not a region of its own.
+  it("says it is loading, read through the announcer", () => {
+    const html = view({ state: { status: "loading" } });
+    expect(html).toBe('<p class="text-sm text-muted-foreground">Loading the accounts…</p>');
   });
 });
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, MessageSquare } from "lucide-react";
 
 import { SignInAgainLink } from "@/components/gbp-sign-in-link";
+import { AnnouncedText, useAnnounceOnShow } from "@/components/ui/announcer";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -109,11 +110,15 @@ export function locationsSignIn(data: { notice?: unknown; signIn?: unknown } | n
 
 const HEADING_CLASS = "text-2xl font-bold tracking-tight text-foreground outline-none";
 
-/** R13-pages L1: skeletons are hidden, so loading is said in words (as Activity and Queue). */
+/**
+ * R13-pages L1: skeletons are hidden, so loading is said in words (as Activity
+ * and Queue). R30 lead review: the list comes and goes with loading (Try
+ * again), so the line is read through the announcer.
+ */
 export function ReviewsLoadingList() {
   return (
     <>
-      <p role="status" className="sr-only">Loading reviews…</p>
+      <AnnouncedText className="sr-only" text="Loading reviews…" />
       <div className="space-y-4" aria-hidden>
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-40 w-full" />
@@ -130,8 +135,10 @@ export function ReviewsLoadingList() {
  * R26 client-journey L3: with the owner's sign-in when the answer asks for it.
  */
 export function LocationsNotice({ notice, signInUrl }: { notice: string | null; signInUrl: string | null }) {
+  // R30 lead review: the views it sits in come and go, so the notice is read through the announcer.
+  useAnnounceOnShow(() => notice ?? "", true);
   return (
-    <div role="status" className="mb-6 flex flex-col items-start gap-3 empty:mb-0 empty:sr-only">
+    <div className="mb-6 flex flex-col items-start gap-3 empty:mb-0 empty:sr-only">
       {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
       {notice && signInUrl ? <SignInAgainLink href={signInUrl} /> : null}
     </div>

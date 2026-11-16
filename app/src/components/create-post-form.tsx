@@ -36,6 +36,7 @@ import { SetPostingTimesPrompt } from "./posting-times-prompt";
 import { VideoCoverPicker } from "./video-cover-picker";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
+import { AnnouncedText } from "@/components/ui/announcer";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -185,13 +186,13 @@ export function captionsAfterReuseLoaded(
   };
 }
 
-/** R29 pages L6: on the page from the first render; only its text changes. */
+/**
+ * R29 pages L6: on the page from the first render; only its text changes.
+ * R30 lead review: kept in a variable that the composer's gates render, so it
+ * is read through the announcer (components/ui/announcer.tsx).
+ */
 export function LibraryFileStatus({ loading }: { loading: boolean }) {
-  return (
-    <p role="status" className="sr-only">
-      {loading ? "Loading the file from your library…" : ""}
-    </p>
-  );
+  return <AnnouncedText className="sr-only" text={loading ? "Loading the file from your library…" : ""} />;
 }
 
 /**
@@ -201,11 +202,8 @@ export function LibraryFileStatus({ loading }: { loading: boolean }) {
  * for the eye only.
  */
 export function UntouchedSubmitStatus({ message }: { message: string | null }) {
-  return (
-    <p role="status" className="sr-only">
-      {message ?? ""}
-    </p>
-  );
+  // R30 lead review: read through the announcer, as LibraryFileStatus.
+  return <AnnouncedText className="sr-only" text={message ?? ""} />;
 }
 
 export function hasNoFile(state: {
@@ -3092,10 +3090,11 @@ function RepeatControls(props: {
  * ever, actually seen. */
 export function CreatePostFormSkeleton({ status = "Loading…" }: { status?: string }) {
   // R28 pages addendum L8: what is loading, for a screen reader (as
-  // ReviewsLoadingList); the textless skeletons are hidden from it.
+  // ReviewsLoadingList); the textless skeletons are hidden from it. R30 lead
+  // review: Retry brings the skeleton back, so the line is read through the announcer.
   return (
     <Card className="p-6">
-      <p role="status" className="sr-only">{status}</p>
+      <AnnouncedText className="sr-only" text={status} />
       <div className="space-y-5" aria-hidden>
         <Skeleton className="h-5 w-40" />
         <Skeleton className="h-24 w-full" />

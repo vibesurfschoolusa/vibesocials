@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter } from "next/navigation";
 
+import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { answerLostText } from "@/lib/answerLost";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
@@ -176,15 +177,12 @@ export interface ConnectLinkChoiceViewProps {
 
 /**
  * The choice as it renders. R5-pages L9: what a press or the load answers comes
- * later, so it is announced (role="alert"), as is the loading line (status).
+ * later, so it is announced (role="alert"); the loading line is read through the announcer.
  */
 export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, goneRef }: ConnectLinkChoiceViewProps) {
   if (state.status === "loading") {
-    return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading the accounts…
-      </p>
-    );
+    // R30 lead review: this view comes and goes, so the line is read through the announcer.
+    return <AnnouncedText className="text-sm text-muted-foreground" text="Loading the accounts…" />;
   }
   if (state.status === "gone") {
     return (

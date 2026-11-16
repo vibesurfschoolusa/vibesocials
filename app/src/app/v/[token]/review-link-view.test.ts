@@ -118,7 +118,9 @@ describe("ReviewListMore", () => {
 // new state was not announced. The state line is a live region from the first
 // render, and focus goes to it (lib/focusAfter).
 describe("ReviewPostCard: the answer to a decision", () => {
-  const statusRegion = /<div role="status"[^>]*>(.*?)<\/div>/;
+  // R30 lead review: a card is one of many in a list, so the line has no region of its
+  // own; a change of its text is read through the page's announcer.
+  const statusRegion = /<div class="empty:sr-only">(.*?)<\/div>/;
 
   it("has an empty status region before any decision", () => {
     const match = render(post()).match(statusRegion);
@@ -140,6 +142,8 @@ describe("ReviewPostCard: the answer to a decision", () => {
     expect(source).toMatch(/void decide\(\{ decision: "change", note \}, sendRef\.current\);/);
     expect(source).toMatch(/<Button ref=\{sendRef\} type="submit"/);
     expect(source).toMatch(/<p\s+ref=\{stateRef\}/);
+    // Only a change is read out: the cards a reload brings are not each read.
+    expect(source).toContain('useAnnounceOnShow(() => state ?? "", true, false);');
   });
 });
 
@@ -148,8 +152,8 @@ describe("ReviewPostCard: the answer to a decision", () => {
 describe("ReviewPostCard: the empty status region takes no space", () => {
   it("is visually hidden while empty, never display:none", () => {
     const html = render(post());
-    expect(html).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
-    expect(html).not.toMatch(/<div role="status"[^>]*(hidden|display:\s*none)/);
+    expect(html).toMatch(/<div class="empty:sr-only"><\/div>/);
+    expect(html).not.toContain('role="status"');
   });
 });
 

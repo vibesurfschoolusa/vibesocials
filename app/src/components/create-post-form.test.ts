@@ -224,7 +224,7 @@ describe("noFileSubmitError", () => {
 describe("CreatePostFormSkeleton", () => {
   it("says what is loading in a status line and hides the skeletons", () => {
     const html = renderToStaticMarkup(createElement(CreatePostFormSkeleton, { status: "Loading your connections…" }));
-    expect(html).toMatch(/<p role="status" class="sr-only">Loading your connections…<\/p>/);
+    expect(html).toMatch(/<p class="sr-only">Loading your connections…<\/p>/);
     expect(html).toMatch(/<div[^>]*aria-hidden="true"[^>]*>(?:<div[^>]*><\/div>){4}<\/div>/);
   });
 
@@ -1213,9 +1213,9 @@ describe("Create at phone width and its status line", () => {
   // with the library line as the first children of every view (UntouchedSubmitStatus);
   // the visible copy by the button is hidden from screen readers.
   it("the line by the button for an untouched form is a region from the first render", () => {
-    expect(renderToStaticMarkup(createElement(UntouchedSubmitStatus, { message: null }))).toBe('<p role="status" class="sr-only"></p>');
+    expect(renderToStaticMarkup(createElement(UntouchedSubmitStatus, { message: null }))).toBe('<p class="sr-only"></p>');
     expect(renderToStaticMarkup(createElement(UntouchedSubmitStatus, { message: "Add a file" }))).toBe(
-      '<p role="status" class="sr-only">Add a file</p>',
+      '<p class="sr-only">Add a file</p>',
     );
     expect(source).toContain("const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage} />;");
     expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" aria-hidden>\s*\{untouchedMessage\}\s*<\/p>/);
@@ -1278,10 +1278,10 @@ describe("captionsAfterReuseDismissed", () => {
 describe("LibraryFileStatus", () => {
   it("says the file is loading, and is empty otherwise", () => {
     expect(renderToStaticMarkup(createElement(LibraryFileStatus, { loading: true }))).toBe(
-      '<p role="status" class="sr-only">Loading the file from your library…</p>',
+      '<p class="sr-only">Loading the file from your library…</p>',
     );
     expect(renderToStaticMarkup(createElement(LibraryFileStatus, { loading: false }))).toBe(
-      '<p role="status" class="sr-only"></p>',
+      '<p class="sr-only"></p>',
     );
   });
 

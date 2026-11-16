@@ -231,7 +231,8 @@ describe("ReviewsView and accounts Google would not list", () => {
     const region = main.indexOf('<LocationsNotice key="locations-notice"');
     expect(region).toBeGreaterThan(main.indexOf("<LocationPicker"));
     expect(region).toBeLessThan(main.indexOf('aria-label="Review filter"'));
-    expect(source).toMatch(/<div role="status"[^>]*empty:sr-only[^>]*>\s*\{notice \? <p/);
+    // R30 lead review: read through the announcer, as the views it sits in come and go.
+    expect(source).toMatch(/useAnnounceOnShow\(\(\) => notice \?\? "", true\);\s+return \(\s+<div className="[^"]*empty:sr-only">\s*\{notice \? <p/);
   });
 
   // Lead review: a live region that first appears already filled may not be
@@ -321,12 +322,12 @@ describe("ReviewsView and an empty listing's notice", () => {
       createElement(LocationsNotice, { notice, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-A" }),
     );
     expect(html).toMatch(
-      /^<div role="status"[^>]*><p[^>]*>Google found no locations for this Google account\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again /,
+      /^<div class="mb-6[^>]*><p[^>]*>Google found no locations for this Google account\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again /,
     );
     const plain = renderToStaticMarkup(createElement(LocationsNotice, { notice, signInUrl: null }));
     expect(plain).not.toContain("<a ");
     expect(renderToStaticMarkup(createElement(LocationsNotice, { notice: null, signInUrl: null }))).toMatch(
-      /^<div role="status"[^>]*><\/div>$/,
+      /^<div class="mb-6[^>]*><\/div>$/,
     );
   });
 
@@ -471,7 +472,7 @@ describe("ReviewsView when the page was drawn for another workspace", () => {
 
   it("renders the empty region on the first render", () => {
     const html = renderToStaticMarkup(createElement(ReviewsView, { savedLocation: null, isMember: false, workspaceId: "ws-1" }));
-    expect(html).toContain('<div role="status" class="mb-6 flex flex-col items-start gap-3 empty:mb-0 empty:sr-only"></div><div role="status"');
+    expect(html).toContain('<div class="mb-6 flex flex-col items-start gap-3 empty:mb-0 empty:sr-only"></div><div role="status"');
   });
 });
 

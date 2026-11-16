@@ -57,10 +57,12 @@ export function useAnnounce(): (text: string) => void {
 function noop() {}
 
 /**
- * Announces `read()` when the element mounts after the page's first render,
- * and whenever its text changes (shouldAnnounce). Checked after every render.
+ * Announces `read()` when the element mounts after the page's first render
+ * (unless `onMount` is false: one of many items in a list, which says only
+ * its changes), and whenever its text changes (shouldAnnounce). Checked after
+ * every render.
  */
-export function useAnnounceOnShow(read: () => string, enabled: boolean): void {
+export function useAnnounceOnShow(read: () => string, enabled: boolean, onMount = true): void {
   const announcer = useContext(AnnouncerContext);
   const last = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -68,6 +70,17 @@ export function useAnnounceOnShow(read: () => string, enabled: boolean): void {
     const text = read().replace(/\s+/g, " ").trim();
     const previous = last.current;
     last.current = text;
-    if (shouldAnnounce({ pageReady: announcer.pageReady(), last: previous, text })) announcer.announce(text);
+    if (shouldAnnounce({ pageReady: onMount && announcer.pageReady(), last: previous, text })) announcer.announce(text);
   });
+}
+
+/**
+ * R30 lead review: a line that is read out when it appears after the page's
+ * first render or its text changes, for a line that comes and goes with its
+ * view (a loading line), where a status region of its own would appear
+ * already filled.
+ */
+export function AnnouncedText({ text, className }: { text: string; className?: string }) {
+  useAnnounceOnShow(() => text, true);
+  return <p className={className}>{text}</p>;
 }

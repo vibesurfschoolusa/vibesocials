@@ -32,10 +32,12 @@ describe("Reset password success line", () => {
   const source = readFileSync(join(__dirname, "reset-password-form.tsx"), "utf8");
 
   // R30 PP2: one card with one return; statusLines.guard.test.ts keeps the region out of any branch.
-  it("the card starts with the status region, and the success sits inside it", () => {
+  it("the card starts with the success Alert, which announces itself", () => {
     const card = source.slice(source.indexOf("function ResetPasswordCard("));
     expect(card.match(/\breturn \(/g)).toHaveLength(1);
-    expect(card).toMatch(/<CardShell[\s\S]*?>\s+<div role="status" className="empty:sr-only">\s+\{done \? \(\s+<Alert variant="success" role=\{undefined\}[^>]*>\s+You can now log in with your new password\./);
+    // R30 lead review: the success Alert announces itself (no region of its own).
+    expect(card).toMatch(/<CardShell[\s\S]*?>\s+(\{\/\*[^\n]*\*\/\}\s+)?\{done \? \(\s+<Alert variant="success" className="mb-4">\s+You can now log in with your new password\./);
+    expect(card).not.toContain('role="status"');
   });
 
   it("sends through fetchOrNoAnswer", () => {

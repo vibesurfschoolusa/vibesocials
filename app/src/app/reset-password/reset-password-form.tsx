@@ -96,9 +96,8 @@ export function ResetPasswordForm() {
 
 /**
  * The form, then "Password updated" in the same card. R28 NN2 (pages L6): the
- * status region is in the card from the form's first render, so the success
- * that replaces the form is announced; only its text changes. R30 PP2: one
- * return, so the region can't be left out of a branch.
+ * success that replaces the form must be announced; R30 lead review: the
+ * success Alert announces itself through the page's announcer.
  */
 function ResetPasswordCard({ token, onLinkDead }: { token: string; onLinkDead: () => void }) {
   const [password, setPassword] = useState("");
@@ -137,13 +136,12 @@ function ResetPasswordCard({ token, onLinkDead }: { token: string; onLinkDead: (
       title={done ? "Password updated" : "Choose a new password"}
       description={done ? "Your password has been reset." : "Enter a new password for your account."}
     >
-      <div role="status" className="empty:sr-only">
-        {done ? (
-          <Alert variant="success" role={undefined} className="mb-4">
-            You can now log in with your new password.
-          </Alert>
-        ) : null}
-      </div>
+      {/* R30 lead review: the success Alert announces itself (components/ui/announcer.tsx). */}
+      {done ? (
+        <Alert variant="success" className="mb-4">
+          You can now log in with your new password.
+        </Alert>
+      ) : null}
       {done ? (
         <Link
           href="/login"

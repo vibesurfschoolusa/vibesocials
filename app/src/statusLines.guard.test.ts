@@ -22,9 +22,11 @@ import { describe, expect, it } from "vitest";
  *
  * role="alert" is out of scope: an alert is read when it is added.
  *
- * Known limits: an element kept in a variable or returned by a helper that
- * the caller renders conditionally is not followed; a component imported
- * from another file and rendered conditionally is not followed.
+ * A line inside a component of the same file is judged where that component
+ * is rendered, and a line kept in a variable where the variable is used.
+ *
+ * Known limits: a line returned by a plain helper call, and a component
+ * imported from another file and rendered conditionally, are not followed.
  *
  * The shared Alert (info, success) and a labelled Spinner may be rendered
  * conditionally: they have no role="status" of their own and announce their
@@ -53,12 +55,6 @@ const MOUNTS_WITH_CONTENT: Array<{ file: string; contains: string; why: string }
     file: "components/create-post-form.tsx",
     contains: 'className="text-sm text-muted-foreground" role="status"',
     why: "The TikTok: line by the button (tiktokBlock), a frozen TikTok part of the Create page (F-common); to convert when the freeze lifts.",
-  },
-  {
-    // TEMPORARY (R30): remove when PP2 is rebased on PP1 and converts this site.
-    file: "app/c/[token]/connect-link-choice.tsx",
-    contains: '<p role="status" className="text-sm text-muted-foreground">',
-    why: "PP1 owns this file in round 30; PP2 converts it after the lead rebases PP2 on PP1.",
   },
   {
     file: "components/settings-form.tsx",
@@ -115,8 +111,34 @@ function ownReturns(fn: ts.FunctionLikeDeclaration): number {
   return count;
 }
 
-/** Why this element is rendered only sometimes, or null when it is always there. */
-function conditionalReason(el: ts.Node): string | null {
+/** The name a component function is known by in its file, or null. */
+function componentName(fn: ts.FunctionLikeDeclaration): string | null {
+  let name: string | null = null;
+  if (ts.isFunctionDeclaration(fn) && fn.name) name = fn.name.text;
+  else if (ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)) name = fn.parent.name.text;
+  else if (ts.isCallExpression(fn.parent) && ts.isVariableDeclaration(fn.parent.parent) && ts.isIdentifier(fn.parent.parent.name)) {
+    name = fn.parent.parent.name.text; // forwardRef(function X() {...}) and the like
+  }
+  return name && /^[A-Z]/.test(name) ? name : null;
+}
+
+function nodesWhere(root: ts.Node, test: (n: ts.Node) => boolean): ts.Node[] {
+  const out: ts.Node[] = [];
+  const visit = (n: ts.Node) => {
+    if (test(n)) out.push(n);
+    n.forEachChild(visit);
+  };
+  visit(root);
+  return out;
+}
+
+/**
+ * Why this element is rendered only sometimes, or null when it is always
+ * there. R30 lead review: a line inside a component of the same file is
+ * judged where that component is rendered, and a line kept in a variable
+ * where the variable is used.
+ */
+function conditionalReason(el: ts.Node, seen: Set<ts.Node> = new Set()): string | null {
   let child: ts.Node = el;
   let parent: ts.Node | undefined = el.parent;
   while (parent) {
@@ -133,6 +155,19 @@ function conditionalReason(el: ts.Node): string | null {
       return "in an if branch";
     }
     if (ts.isCaseClause(parent) || ts.isDefaultClause(parent)) return "in a switch case";
+    if (ts.isVariableDeclaration(parent) && child === parent.initializer && ts.isIdentifier(parent.name)) {
+      if (seen.has(parent)) return null;
+      seen.add(parent);
+      const name = parent.name.text;
+      const declaration = parent.name;
+      let scope: ts.Node = parent;
+      while (scope.parent && !isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
+      for (const use of nodesWhere(scope, (n) => ts.isIdentifier(n) && n.text === name && n !== declaration)) {
+        const reason = conditionalReason(use, seen);
+        if (reason) return `kept in ${name}, used ${reason}`;
+      }
+      return null;
+    }
     if (isFunctionLike(parent)) {
       if (ownReturns(parent) > 1) return "in a function with an early return";
       const call = parent.parent;
@@ -144,6 +179,18 @@ function conditionalReason(el: ts.Node): string | null {
         /^(map|flatMap)$/.test(call.expression.name.text)
       ) {
         return "in a .map callback (one line per item, each added already filled)";
+      }
+      const name = componentName(parent);
+      if (name && !seen.has(parent)) {
+        seen.add(parent);
+        const uses = nodesWhere(
+          parent.getSourceFile(),
+          (n) => (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText() === name,
+        );
+        for (const use of uses) {
+          const reason = conditionalReason(ts.isJsxOpeningElement(use) ? use.parent : use, seen);
+          if (reason) return `in <${name}>, rendered ${reason}`;
+        }
       }
       return null;
     }
@@ -221,6 +268,11 @@ describe("status lines are on the page from the first render (R30 PP2)", () => {
     expect(probe(`function A({m}) { return <p role="status" className="empty:sr-only">{m}</p>; }`)).toBeNull();
     expect(probe(`function A({m}) { return <p role="alert">{m}</p>; }`)).toBeUndefined();
     expect(probe(`function A({m}) { return <p aria-live="off">{m}</p>; }`)).toBeUndefined();
+    // R30 lead review: a same-file component rendered conditionally, and a line kept in a variable.
+    expect(probe(`function L() { return <p role="status">Loading</p>; } function A({m}) { return <div>{m ? <L /> : null}</div>; }`)).toMatch(/in <L>, rendered in a ternary/);
+    expect(probe(`function A({m}) { const line = <p role="status">{m}</p>; return <div>{m && line}</div>; }`)).toMatch(/kept in line, used on the right of &&/);
+    expect(probe(`function A({m}) { const line = <p role="status">{m}</p>; return <div>{line}</div>; }`)).toBeNull();
+    expect(probe(`function L({m}) { return <p role="status">{m}</p>; } function A({m}) { return <div><L m={m} /></div>; }`)).toBeNull();
     // R30 PP2 (lead): these announce through the announcer, so they may come and go.
     expect(probe(`function A({m}) { return <div>{m && <Alert variant="success">{m}</Alert>}</div>; }`)).toBeUndefined();
     expect(probe(`function A({m}) { return <div>{m ? <Spinner label="Loading" /> : null}</div>; }`)).toBeUndefined();

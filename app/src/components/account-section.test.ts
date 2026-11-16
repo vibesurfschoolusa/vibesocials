@@ -258,23 +258,18 @@ describe("Settings, Account: delete account when the answer is lost", () => {
 describe("Settings, Account: success lines are on the page from the first render", () => {
   const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
 
-  it("Change email and Change password render an empty status region before any press", () => {
-    const email = renderToStaticMarkup(createElement(ChangeEmailForm, { email: "old@example.com" }));
-    expect(email).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
-    const emailOpen = renderToStaticMarkup(createElement(ChangeEmailForm, { email: "old@example.com", startOpen: true }));
-    expect(emailOpen).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
-    expect(render(true).match(/<div role="status" class="empty:sr-only"><\/div>/g)?.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("the success Alert sits inside that region, not in its own return", () => {
+  // R30 lead review: the forms sit in views that come and go, so the success
+  // Alert announces itself through the page's announcer (no region of its own).
+  it("the success is an Alert with no role of its own, so it announces itself", () => {
     for (const [start, end, text] of [
       ["export function ChangeEmailForm", "const EMAIL_CHANGE_NOT_STARTED", "emailChangeSentMessage(sentTo, email)"],
       ["function ChangePasswordForm", "function DeleteAccount", "PASSWORD_CHANGED"],
     ]) {
       const form = source.slice(source.indexOf(start), source.indexOf(end));
-      const region = form.indexOf('<div role="status" className="empty:sr-only">');
-      expect(region, start).toBeGreaterThan(-1);
-      expect(form.indexOf(text, region), start).toBeGreaterThan(region);
+      expect(form, start).not.toContain('role="status"');
+      const alert = form.indexOf('<Alert variant="success">');
+      expect(alert, start).toBeGreaterThan(-1);
+      expect(form.indexOf(`{${text}}`, alert), start).toBeGreaterThan(alert);
       expect(form, start).not.toMatch(/if \((sentTo|changed)\) \{\s+return <Alert/);
     }
   });

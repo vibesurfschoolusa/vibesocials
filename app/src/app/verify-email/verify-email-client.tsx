@@ -108,14 +108,12 @@ export function VerifyResult({
           {view.message}
         </p>
       )}
-      {/* R28 NN2 (pages L6): on the card from the first render, so "We sent a new link" is announced. */}
-      <div role="status" className="empty:sr-only">
-        {resend.result?.ok ? (
-          <Alert variant="success" role={undefined} className="mt-4">
-            {resend.result.message}
-          </Alert>
-        ) : null}
-      </div>
+      {/* R30 lead review: the success Alert announces itself (components/ui/announcer.tsx). */}
+      {resend.result?.ok ? (
+        <Alert variant="success" className="mt-4">
+          {resend.result.message}
+        </Alert>
+      ) : null}
       {resend.result && !resend.result.ok ? (
         <Alert variant="danger" className="mt-4">
           {resend.result.message}

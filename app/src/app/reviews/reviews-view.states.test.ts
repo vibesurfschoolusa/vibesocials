@@ -12,7 +12,8 @@ import { ReviewsLoadFailedPage, ReviewsLoadingList, ReviewsView } from "./review
 
 const source = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
 const H1 = /<h1[^>]*>Google Reviews<\/h1>/;
-const STATUS = /<p role="status" class="sr-only">Loading reviews…<\/p>/;
+// R30 lead review: read through the announcer (components/ui/announcer.tsx).
+const STATUS = /<p class="sr-only">Loading reviews…<\/p>/;
 
 // R13-pages L1: the page is named in every state, and loading is announced.
 describe("ReviewsView states", () => {

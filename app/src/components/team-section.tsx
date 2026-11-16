@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { Copy } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
+import { AnnouncedText } from "@/components/ui/announcer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
@@ -610,8 +611,8 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
 
       <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
         <h4 className="text-sm font-medium text-foreground">Members</h4>
-        {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
-        <p role="status" className="sr-only">{rosterLoading ? "Loading members…" : ""}</p>
+        {/* R30 lead review: this view comes and goes, so the line is read through the announcer. */}
+        <AnnouncedText className="sr-only" text={rosterLoading ? "Loading members…" : ""} />
         {rosterLoading ? (
           <>
             <div className="flex flex-col gap-2" aria-hidden>
@@ -1083,7 +1084,7 @@ function OwnerView({
           accounts.
         </p>
 
-        <p role="status" className="sr-only">{inviteLoading ? "Loading invite link…" : ""}</p>
+        <AnnouncedText className="sr-only" text={inviteLoading ? "Loading invite link…" : ""} />
         {inviteLoading ? (
           <Skeleton className="mt-1 h-9 w-full max-w-sm" />
         ) : invite ? (
@@ -1131,7 +1132,7 @@ function OwnerView({
       {/* Members */}
       <div className="flex flex-col gap-2 border-t border-border pt-6">
         <h3 className="text-sm font-medium text-foreground">Members</h3>
-        <p role="status" className="sr-only">{membersLoading ? "Loading members…" : ""}</p>
+        <AnnouncedText className="sr-only" text={membersLoading ? "Loading members…" : ""} />
         {membersLoading ? (
           <>
             <div className="flex flex-col gap-2" aria-hidden>

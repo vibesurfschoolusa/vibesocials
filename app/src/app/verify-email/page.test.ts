@@ -50,10 +50,11 @@ describe("verify-email page", () => {
   // R28 NN2 (pages L6, new-customer L4): "We sent a new link" appeared already
   // filled as the button went; the status region is on the card from the
   // first render, and only its text changes.
-  it("keeps an empty status region for the resend answer from the first render", () => {
+  // R30 lead review: the resend success is an Alert that announces itself (no region of its own).
+  it("shows the resend success as a success Alert with no role of its own", () => {
     const view = verifyView("invalid", "unverified");
     const before = renderToStaticMarkup(createElement(VerifyResult, { view, resend: idle, onResend: noop, onRetry: noop }));
-    expect(before).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
+    expect(before).not.toContain("We sent a new link.");
     const after = renderToStaticMarkup(
       createElement(VerifyResult, {
         view,
@@ -62,6 +63,7 @@ describe("verify-email page", () => {
         onRetry: noop,
       }),
     );
-    expect(after).toMatch(/<div role="status" class="empty:sr-only"><div[^>]*>[\s\S]*We sent a new link\./);
+    expect(after).toMatch(/<div class="[^"]*bg-success\/10[^"]*"><span[\s\S]*We sent a new link\./);
+    expect(after).not.toContain('role="status"');
   });
 });

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -135,6 +136,8 @@ export function ReviewPostCard({
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const askRef = useRef<HTMLButtonElement>(null);
   const state = stateText(post);
+  // R30 lead review: one card of many, so only a change of its state is read out.
+  useAnnounceOnShow(() => state ?? "", true, false);
   // Whole characters, as the server counts them (an emoji is one, not two).
   const noteLength = Array.from(note.trim()).length;
   const noteTooShort = noteLength === 0;
@@ -214,9 +217,9 @@ export function ReviewPostCard({
           </ul>
         ) : null}
 
-        {/* R27 MM3: on the page from the first render, so a decision's new state is announced. */}
-        {/* Visually hidden while empty, so it takes no room but stays a live region. */}
-        <div role="status" className="empty:sr-only">
+        {/* R27 MM3: a decision's new state is announced (useAnnounceOnShow above). */}
+        {/* Visually hidden while empty, so it takes no room. */}
+        <div className="empty:sr-only">
           {state ? (
             <p
               ref={stateRef}

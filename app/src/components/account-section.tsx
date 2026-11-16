@@ -194,13 +194,12 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
   // render in every state and only its text changes.
   return (
     <>
-      <div role="status" className="empty:sr-only">
-        {sentTo ? (
-          <Alert variant="success" role={undefined}>
-            {emailChangeSentMessage(sentTo, email)}
-          </Alert>
-        ) : null}
-      </div>
+      {/* R30 lead review: the success Alert announces itself (components/ui/announcer.tsx). */}
+      {sentTo ? (
+        <Alert variant="success">
+          {emailChangeSentMessage(sentTo, email)}
+        </Alert>
+      ) : null}
       {sentTo ? null : !open ? (
         <div>
           <Button
@@ -367,13 +366,12 @@ function ChangePasswordForm() {
   // R30 PP2: one return, so the status line can't be left out of a branch.
   return (
     <>
-      <div role="status" className="empty:sr-only">
-        {changed ? (
-          <Alert variant="success" role={undefined}>
-            {PASSWORD_CHANGED}
-          </Alert>
-        ) : null}
-      </div>
+      {/* R30 lead review: the success Alert announces itself (components/ui/announcer.tsx). */}
+      {changed ? (
+        <Alert variant="success">
+          {PASSWORD_CHANGED}
+        </Alert>
+      ) : null}
       {changed ? null : (
         <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
           <div className="flex flex-col gap-1.5">
