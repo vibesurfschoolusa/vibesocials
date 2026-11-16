@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ExternalLink } from "@/components/external-link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
@@ -97,14 +98,9 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
           This app posts to LinkedIn company pages, not personal profiles. The LinkedIn account
           signed in to this browser is the one being connected, and it must be an administrator
           of the page. Wrong account?{" "}
-          <a
-            href={LINKEDIN_SIGN_OUT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium underline underline-offset-2"
-          >
+          <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="font-medium underline underline-offset-2">
             Sign out of LinkedIn
-          </a>
+          </ExternalLink>
           , then close this and click Connect again.
         </Alert>
 

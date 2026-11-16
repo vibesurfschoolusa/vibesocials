@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ExternalLink } from "@/components/external-link";
 import { MediaThumb } from "@/components/media-thumb";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -120,9 +121,9 @@ function PostRow({ post }: { post: ReportPost }) {
               {p.url ? (
                 <>
                   {" "}
-                  <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                  <ExternalLink href={p.url} className="text-primary underline">
                     View post
-                  </a>
+                  </ExternalLink>
                   <span data-report-url className="ml-1 hidden break-all text-xs">
                     {p.url}
                   </span>

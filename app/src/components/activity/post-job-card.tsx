@@ -2,9 +2,10 @@
 
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ExternalLink } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
+import { ExternalLink } from "@/components/external-link";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -553,16 +554,13 @@ export function PostJobCard({
             const url = postUrl(result);
             if (!url) return null;
             return (
-              <a
+              <ExternalLink
                 key={result.platform}
                 href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded text-xs font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                className="rounded text-xs font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
               >
                 View on {platformLabel(result.platform)}
-                <ExternalLink aria-hidden className="h-3 w-3" />
-              </a>
+              </ExternalLink>
             );
           })}
         </div>

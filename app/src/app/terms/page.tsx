@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ExternalLink } from "@/components/external-link";
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { billingEnabled, trialDays } from "@/lib/billing";
 import {
@@ -24,9 +25,9 @@ export const metadata = {
 const mail = <a href={`mailto:${SUPPORT_EMAIL}`} className="underline underline-offset-2">{SUPPORT_EMAIL}</a>;
 
 const externalLink = (href: string, label: string) => (
-  <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+  <ExternalLink href={href} className="underline underline-offset-2">
     {label}
-  </a>
+  </ExternalLink>
 );
 
 // Billing on adds payment wording (src/lib/billingTerms.ts). Each billing-off

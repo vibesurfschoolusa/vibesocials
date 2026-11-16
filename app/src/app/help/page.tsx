@@ -1,3 +1,4 @@
+import { ExternalLink } from "@/components/external-link";
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
@@ -100,9 +101,9 @@ export default function HelpPage() {
               connected (for a LinkedIn or Facebook page, with an account that manages that page), then
               press Reconnect again. LinkedIn reuses the account signed in to LinkedIn in this browser, so
               sign out of LinkedIn first (
-              <a href={LINKEDIN_SIGN_OUT_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+              <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="underline underline-offset-2">
                 open LinkedIn sign-out
-              </a>
+              </ExternalLink>
               ; Reconnect shows the steps). To use the other account instead, use Switch account.
             </li>
             <li>

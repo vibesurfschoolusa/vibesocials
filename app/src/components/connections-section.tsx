@@ -21,6 +21,7 @@ import {
 import { PLATFORM_GUIDES, platformHelpHref } from "@/lib/platformGuides";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import type { Platform } from "@prisma/client";
+import { ExternalLink } from "@/components/external-link";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -237,14 +238,12 @@ export function ConnectionsSection({
                       </p>
                     ) : null}
                     {!connection && !readOnly ? (
-                      <a
+                      <ExternalLink
                         href={platformHelpHref(key)}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline"
                       >
                         How to connect
-                      </a>
+                      </ExternalLink>
                     ) : null}
                   </div>
                 </div>
