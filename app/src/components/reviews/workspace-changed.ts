@@ -22,3 +22,19 @@ export function isWorkspaceChanged(body: { code?: unknown } | null | undefined):
 export function workspaceChangedAfter(prev: "load" | "press" | null, next: "load" | "press"): "load" | "press" {
   return prev === "press" ? "press" : next;
 }
+
+/**
+ * R27 lead's second review: what a page that knows it belongs to another
+ * workspace shows. A refused list puts the selection back to the location whose
+ * reviews are on screen, so the list is hidden only when none is selected. The
+ * copy hint shows after a refused press, or whenever a reply box holds text.
+ * The picker stays locked until Reload.
+ */
+export function refusedPageView(
+  kind: "load" | "press" | null,
+  selectedLocation: string | null,
+  typedReply: boolean,
+): { hideList: boolean; copyHint: boolean; locked: boolean } {
+  if (kind === null) return { hideList: false, copyHint: false, locked: false };
+  return { hideList: kind === "load" && selectedLocation === null, copyHint: kind === "press" || typedReply, locked: true };
+}

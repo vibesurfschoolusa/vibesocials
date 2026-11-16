@@ -13,6 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { qrSvg } from "@/lib/qrSvg";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
+import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "@/components/reviews/workspace-changed";
+import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
 
 /** The message an owner sends a customer to ask for a review; fits any kind of business. */
 export function reviewRequestMessage(link: string): string {
@@ -22,9 +24,24 @@ export function reviewRequestMessage(link: string): string {
 export type ReviewLinkState =
   | { status: "loading" }
   | { status: "ready"; url: string }
-  | { status: "none"; reason: string; signIn?: true };
+  | { status: "none"; reason: string; signIn?: true }
+  /** R27 lead's second review: the route refused a page drawn for another workspace. */
+  | { status: "workspace_changed" };
 
 const LOAD_FAILED = "Couldn't load your review link. Reload this page to try again.";
+
+/** What an answer from GET /api/reviews/link shows. Only flags and the code are read: a URL elsewhere is never followed. */
+export function reviewLinkStateFrom(
+  ok: boolean,
+  body: { url?: unknown; reason?: unknown; signIn?: unknown; code?: unknown } | null,
+): ReviewLinkState {
+  if (isWorkspaceChanged(body)) return { status: "workspace_changed" };
+  if (ok && typeof body?.url === "string") return { status: "ready", url: body.url };
+  const reason = typeof body?.reason === "string" ? body.reason : LOAD_FAILED;
+  // JJ3 lead review: the route only says an owner should sign in again;
+  // the link is built from this page's workspace (lib/gbpSignIn.ts).
+  return body?.signIn === true ? { status: "none", reason, signIn: true } : { status: "none", reason };
+}
 
 /**
  * The "Get more reviews" panel (2026-11-10): the workspace's Google review link,
@@ -35,11 +52,14 @@ export function ReviewLinkPanel({
   workspaceId,
   isMember,
   signInShownAbove = false,
+  workspaceNoticeShownAbove = false,
 }: {
   workspaceId: string;
   isMember: boolean;
   /** R25 lead review: the page's error card already offers the sign-in, so this panel adds no second button. */
   signInShownAbove?: boolean;
+  /** The page's workspace notice (with Reload) already shows, so this panel adds no second Reload. */
+  workspaceNoticeShownAbove?: boolean;
 }) {
   const [state, setState] = useState<ReviewLinkState>({ status: "loading" });
 
@@ -47,19 +67,13 @@ export function ReviewLinkPanel({
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/reviews/link");
+        // R27 lead's second review: the route refuses a page drawn for another workspace.
+        const response = await fetch(withWorkspaceId("/api/reviews/link", workspaceId));
         const body = (await response.json().catch(() => null)) as
-          | { url?: unknown; reason?: unknown; signIn?: unknown }
+          | { url?: unknown; reason?: unknown; signIn?: unknown; code?: unknown }
           | null;
         if (cancelled) return;
-        if (response.ok && typeof body?.url === "string") {
-          setState({ status: "ready", url: body.url });
-        } else {
-          const reason = typeof body?.reason === "string" ? body.reason : LOAD_FAILED;
-          // JJ3 lead review: the route only says an owner should sign in again;
-          // the link is built from this page's workspace (lib/gbpSignIn.ts).
-          setState(body?.signIn === true ? { status: "none", reason, signIn: true } : { status: "none", reason });
-        }
+        setState(reviewLinkStateFrom(response.ok, body));
       } catch {
         if (!cancelled) setState({ status: "none", reason: LOAD_FAILED });
       }
@@ -67,10 +81,16 @@ export function ReviewLinkPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   return (
-    <ReviewLinkPanelView state={state} workspaceId={workspaceId} isMember={isMember} signInShownAbove={signInShownAbove} />
+    <ReviewLinkPanelView
+      state={state}
+      workspaceId={workspaceId}
+      isMember={isMember}
+      signInShownAbove={signInShownAbove}
+      workspaceNoticeShownAbove={workspaceNoticeShownAbove}
+    />
   );
 }
 
@@ -109,6 +129,7 @@ export function ReviewLinkPanelView({
   workspaceId,
   isMember,
   signInShownAbove = false,
+  workspaceNoticeShownAbove = false,
 }: {
   state: ReviewLinkState;
   workspaceId: string;
@@ -116,6 +137,8 @@ export function ReviewLinkPanelView({
   isMember: boolean;
   /** The page's error card already shows the sign-in: one button per page. */
   signInShownAbove?: boolean;
+  /** The page's workspace notice already offers Reload: one per page. */
+  workspaceNoticeShownAbove?: boolean;
 }) {
   const toast = useToast();
 
@@ -134,6 +157,14 @@ export function ReviewLinkPanelView({
       {state.status === "loading" ? (
         <div className="mt-4" aria-hidden>
           <Skeleton className="h-24 w-full" />
+        </div>
+      ) : state.status === "workspace_changed" ? (
+        <div className="mt-2">
+          {workspaceNoticeShownAbove ? (
+            <p className="text-sm text-muted-foreground">{WORKSPACE_CHANGED_RELOAD_MESSAGE}</p>
+          ) : (
+            <WorkspaceChangedNotice shown />
+          )}
         </div>
       ) : state.status === "none" ? (
         <>

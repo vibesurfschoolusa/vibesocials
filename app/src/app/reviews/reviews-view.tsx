@@ -27,6 +27,7 @@ import {
   EMPTY_REPLY_BOXES,
   focusBoxAfterCardDraft,
   focusBoxOnOpen,
+  hasTypedReply,
   openAfterDraft,
   replyRefusalAfterFailure,
   replyRefusalCleared,
@@ -52,7 +53,7 @@ import {
   tabLabel,
 } from "@/components/reviews/reviews-page";
 import type { GoogleReview, Location } from "@/components/reviews/types";
-import { workspaceChangedAfter } from "@/components/reviews/workspace-changed";
+import { refusedPageView, workspaceChangedAfter } from "@/components/reviews/workspace-changed";
 import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
 
 import { ReviewLinkPanel } from "./review-link-panel";
@@ -215,7 +216,10 @@ export function ReviewsView({
   // the locations or the list (the list is not shown); "press": a reply or
   // draft (the list and typed text stay, so the notice says to copy it first).
   const [workspaceChanged, setWorkspaceChanged] = useState<"load" | "press" | null>(null);
-  const listRefused = workspaceChanged === "load";
+  const refused = refusedPageView(workspaceChanged, selectedLocation, hasTypedReply(replyText));
+  const listRefused = refused.hideList;
+  // The location whose reviews are on screen: a refused list for another one puts the selection back to it.
+  const shownLocation = useRef<string | null>(null);
   const reloadRef = useRef<HTMLButtonElement>(null);
   // Set only by a refusal, so Reload takes focus right after it and never on a later dialog Cancel.
   const [reloadFocusPending, setReloadFocusPending] = useState(false);
@@ -266,20 +270,25 @@ export function ReviewsView({
   }, [savedLocation, isMember, workspaceId]);
 
   const loadReviews = useCallback(async () => {
-    if (!selectedLocation) return;
+    // Once the page knows it belongs to another workspace, nothing is asked for until Reload.
+    if (!selectedLocation || workspaceChanged) return;
+    const location = selectedLocation;
     setLoading(true);
     setReviewsError(null);
-    await loadReviewsFor(selectedLocation, workspaceId, nextReviewsRequest(), (outcome) => {
+    await loadReviewsFor(location, workspaceId, nextReviewsRequest(), (outcome) => {
       if ("error" in outcome) {
-        if (outcome.error.reload) refuseForWorkspace("load");
-        else setReviewsError(outcome.error);
+        if (outcome.error.reload) {
+          refuseForWorkspace("load");
+          setSelectedLocation(shownLocation.current);
+        } else setReviewsError(outcome.error);
       } else {
         setReviews(outcome.reviews);
         setTruncated(outcome.truncated);
+        shownLocation.current = location;
       }
       setLoading(false);
     });
-  }, [selectedLocation, workspaceId, nextReviewsRequest]);
+  }, [selectedLocation, workspaceId, nextReviewsRequest, workspaceChanged]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
@@ -504,7 +513,7 @@ export function ReviewsView({
       <div className={APP_PAGE_CLASS}>
         <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
         <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
-        <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />
+        <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={refused.copyHint} reloadRef={reloadRef} />
         <ReviewsLoadingList />
       </div>
     );
@@ -552,12 +561,12 @@ export function ReviewsView({
           locations={locations}
           selectedLocation={selectedLocation}
           onChange={setSelectedLocation}
-          locked={workspaceChanged !== null}
+          locked={refused.locked}
         />
       )}
 
       <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
-      <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />
+      <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={refused.copyHint} reloadRef={reloadRef} />
 
       {/* Tabs */}
       {selectedLocation && !reviewsError && !listRefused && (
@@ -652,6 +661,7 @@ export function ReviewsView({
           // One sign-in button per page: the locations notice's or the reviews
           // error card's, when one shows it.
           signInShownAbove={Boolean(locationsSignInUrl || (reviewsError && signInHref(reviewsError, workspaceId)))}
+          workspaceNoticeShownAbove={workspaceChanged !== null}
         />
       )}
 

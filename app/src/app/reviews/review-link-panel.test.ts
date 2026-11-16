@@ -8,7 +8,9 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: () => {}, 
 
 import { qrSvg } from "@/lib/qrSvg";
 
-import { PrintCardLinkView, ReviewLinkPanelView, reviewRequestMessage } from "./review-link-panel";
+import { WORKSPACE_CHANGED_RELOAD_MESSAGE } from "@/components/reviews/workspace-changed";
+
+import { PrintCardLinkView, ReviewLinkPanelView, reviewLinkStateFrom, reviewRequestMessage } from "./review-link-panel";
 
 const LINK = "https://g.page/r/abc/review";
 const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"], workspaceId = "ws-A", isMember = false) =>
@@ -130,5 +132,47 @@ describe("Print card names the page's workspace", () => {
     expect(render({ status: "ready", url: LINK }, "ws-B")).toContain('href="/reviews/print-card?workspaceId=ws-B"');
     const source = readFileSync(path.join(__dirname, "review-link-panel.tsx"), "utf8");
     expect(source).not.toContain('href="/reviews/print-card"');
+  });
+});
+
+// R27 lead's second review: in a stale tab the panel showed the other client's
+// review link. It asks with the page's workspace; a 409 shows the notice instead.
+describe("the review link and the page's workspace", () => {
+  const LOAD_FAILED = "Couldn't load your review link. Reload this page to try again.";
+
+  it("asks with the page's workspaceId", () => {
+    const source = readFileSync(path.join(__dirname, "review-link-panel.tsx"), "utf8");
+    expect(source).toContain('fetch(withWorkspaceId("/api/reviews/link", workspaceId))');
+    expect(source).toContain("setState(reviewLinkStateFrom(response.ok, body));");
+  });
+
+  it("reads each answer as today, and a 409 WORKSPACE_CHANGED as the workspace notice", () => {
+    expect(reviewLinkStateFrom(true, { url: LINK })).toEqual({ status: "ready", url: LINK });
+    expect(reviewLinkStateFrom(true, { url: null, reason: "Connect first." })).toEqual({ status: "none", reason: "Connect first." });
+    expect(reviewLinkStateFrom(true, { url: null, reason: "Sign in.", signIn: true })).toEqual({ status: "none", reason: "Sign in.", signIn: true });
+    expect(reviewLinkStateFrom(false, null)).toEqual({ status: "none", reason: LOAD_FAILED });
+    expect(reviewLinkStateFrom(false, { code: "WORKSPACE_CHANGED", reason: "x" })).toEqual({ status: "workspace_changed" });
+  });
+
+  it("shows the notice with Reload, and no link", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReviewLinkPanelView, { state: { status: "workspace_changed" }, workspaceId: "ws-A", isMember: false }),
+    );
+    expect(html).toContain(WORKSPACE_CHANGED_RELOAD_MESSAGE.replace("'", "&#x27;"));
+    expect(html).toMatch(/<button[^>]*>Reload<\/button>/);
+    expect(html).not.toContain("print-card");
+  });
+
+  it("with the page's notice above: the sentence only, one Reload per page", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReviewLinkPanelView, {
+        state: { status: "workspace_changed" },
+        workspaceId: "ws-A",
+        isMember: false,
+        workspaceNoticeShownAbove: true,
+      }),
+    );
+    expect(html).toContain(WORKSPACE_CHANGED_RELOAD_MESSAGE.replace("'", "&#x27;"));
+    expect(html).not.toContain(">Reload</button>");
   });
 });

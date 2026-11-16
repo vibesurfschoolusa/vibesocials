@@ -59,6 +59,11 @@ export interface ReplyRefusal {
   signIn: boolean;
 }
 
+/** R27 lead's second review: whether any reply box holds text the person typed or kept. */
+export function hasTypedReply(text: Readonly<Record<string, string>>): boolean {
+  return Object.values(text).some((value) => value.trim() !== "");
+}
+
 export function replyRefusalAfterFailure(reviewId: string, shown: ShownError, isMember: boolean): ReplyRefusal {
   return { reviewId, message: shown.message, signIn: shown.signIn === true && !isMember };
 }

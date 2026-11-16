@@ -515,3 +515,37 @@ describe("GET /api/reviews/link and a 401 on a token that ran out on the way", (
     }
   });
 });
+
+// R27 lead review: in a stale tab the panel showed the other client's link,
+// which an owner could send to this client's customers. The panel names the
+// workspace it was drawn for; another one is refused before any Google call.
+describe("GET /api/reviews/link and the page's workspace", () => {
+  const at = (query: string) => new Request(`http://localhost/api/reviews/link${query}`);
+
+  it("refuses a page drawn for another workspace with 409 WORKSPACE_CHANGED, reading nothing", async () => {
+    const response = await GET(at("?workspaceId=ws-other"));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
+  });
+
+  it("serves the page's own workspace as today", async () => {
+    mocks.findFirst.mockResolvedValue(connection({ metadata: { locationName: LOCATION, newReviewUri: LINK, newReviewUriFor: LOCATION } }));
+
+    const response = await GET(at("?workspaceId=ws-1"));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ url: LINK });
+  });
+
+  it("a page that sent no id (drawn before it did) is served as before", async () => {
+    mocks.findFirst.mockResolvedValue(connection({ metadata: { locationName: LOCATION, newReviewUri: LINK, newReviewUriFor: LOCATION } }));
+
+    const response = await GET(at(""));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ url: LINK });
+  });
+});

@@ -29,6 +29,7 @@ import {
   replyBoxAfterPost,
   replyBoxAfterTyping,
   replyBoxAfterUndo,
+  hasTypedReply,
 } from "./reply-form";
 
 // R17-client-journey addendum L1: Google takes at most 4096 bytes, so the box
@@ -576,5 +577,14 @@ describe("focus when the form opens from Reply", () => {
     expect(focusBoxOnOpen(null, "r1")).toBe(false);
     expect(focusBoxOnOpen("r1", "r2")).toBe(false);
     expect(focusBoxOnOpen("r1", null)).toBe(false);
+  });
+});
+
+// R27 lead's second review: a refused page says to copy typed text whenever a box holds some.
+describe("hasTypedReply", () => {
+  it("is true when any box holds more than spaces", () => {
+    expect(hasTypedReply({})).toBe(false);
+    expect(hasTypedReply({ a: "", b: "   " })).toBe(false);
+    expect(hasTypedReply({ a: "", b: "Thanks!" })).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import {
   GOOGLE_NOT_ANSWERING_MESSAGE,
   fetchNewReviewUri,
@@ -56,11 +57,18 @@ async function saveLinkIfUnchanged(id: string, locationName: string, url: string
  * for the chosen location, then kept in the connection's metadata, so a page
  * load normally costs no Google request.
  */
-export async function GET() {
+export async function GET(request?: Request) {
   const context = await getWorkspaceContext();
   if (!context) {
     return signedOutResponse();
   }
+
+  // R27 lead review: the workspace the panel was drawn for, refused when it is
+  // not the active one, so a stale tab never shows another client's link. No
+  // id is a page drawn before the id was sent: it reads the active workspace.
+  const sent = request ? new URL(request.url).searchParams.get("workspaceId") : null;
+  const refusal = sent === null ? null : renderedWorkspaceRefusal(sent, context.workspace.id);
+  if (refusal) return refusal;
 
   const rateLimit = await checkRateLimit({
     userId: context.user.id,

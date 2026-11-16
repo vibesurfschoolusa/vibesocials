@@ -397,7 +397,7 @@ describe("ReviewsView loads only the selected location's reviews", () => {
     const load = source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
     expect(source).toContain('from "@/components/reviews/load-reviews"');
     expect(source).toContain("useState(latestRequests)");
-    expect(load).toContain("loadReviewsFor(selectedLocation, workspaceId, nextReviewsRequest(),");
+    expect(load).toContain("loadReviewsFor(location, workspaceId, nextReviewsRequest(),");
     expect(load).not.toContain("fetch(");
     expect(load).not.toContain("finally");
   });
@@ -432,7 +432,7 @@ describe("ReviewsView when the page was drawn for another workspace", () => {
   });
 
   it("draws the notice from the first render in both views, and focuses Reload once the dialog closes", () => {
-    expect(source.split('<WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />').length - 1).toBe(2);
+    expect(source.split('<WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={refused.copyHint} reloadRef={reloadRef} />').length - 1).toBe(2);
     // R27 lead review: only right after a refusal, so a later Cancel restores focus as usual.
     expect(source).toMatch(/if \(!reloadFocusPending \|\| confirmTarget\) return;\s*reloadRef\.current\?\.focus\(\);\s*(\/\/[^\n]*\n\s*)*setReloadFocusPending\(false\);/);
     expect(source).toMatch(/const refuseForWorkspace = \(kind: "load" \| "press"\) => \{\s*setWorkspaceChanged\(\(prev\) => workspaceChangedAfter\(prev, kind\)\);\s*setReloadFocusPending\(true\);\s*\};/);
@@ -460,11 +460,12 @@ describe("ReviewsView loads for the page's workspace", () => {
 
   it("a refused list load: the notice, not the error card", () => {
     const load = source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
-    expect(load).toMatch(/if \(outcome\.error\.reload\) refuseForWorkspace\("load"\);\s*else setReviewsError\(outcome\.error\);/);
+    expect(load).toMatch(/if \(outcome\.error\.reload\) \{\s*refuseForWorkspace\("load"\);[^}]*\} else setReviewsError\(outcome\.error\);/);
   });
 
   it("hides the tabs and the list after a refused load, but keeps them after a refused press", () => {
-    expect(source).toContain('const listRefused = workspaceChanged === "load";');
+    expect(source).toContain("const refused = refusedPageView(workspaceChanged, selectedLocation, hasTypedReply(replyText));");
+    expect(source).toContain("const listRefused = refused.hideList;");
     expect(source).toContain("{selectedLocation && !reviewsError && !listRefused && (");
     expect(source).toContain("{listRefused ? null : !selectedLocation && locations.length === 0 && locationsNotice ? null");
     // The subtitle's count and the cap note would describe a list that never loaded.
@@ -484,7 +485,27 @@ describe("ReviewsView tab counts", () => {
 // selected location (which drives the list request) never changes.
 describe("ReviewsView locks the picker after a workspace refusal", () => {
   it("passes the lock, and changes the location only through the picker", () => {
-    expect(source).toMatch(/<LocationPicker\s+locations=\{locations\}\s+selectedLocation=\{selectedLocation\}\s+onChange=\{setSelectedLocation\}\s+locked=\{workspaceChanged !== null\}/);
-    expect(source.split("setSelectedLocation(").length - 1).toBe(1);
+    expect(source).toMatch(/<LocationPicker\s+locations=\{locations\}\s+selectedLocation=\{selectedLocation\}\s+onChange=\{setSelectedLocation\}\s+locked=\{refused\.locked\}/);
+    // The initial pick, and a refused list putting back the location on screen.
+    expect(source.split("setSelectedLocation(").length - 1).toBe(2);
+  });
+});
+
+// R27 lead's second review: A with a typed reply, pick B, B's list refused.
+describe("ReviewsView when another location's list is refused", () => {
+  const load = () => source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
+
+  it("puts the selection back to the location whose reviews are on screen and keeps that list", () => {
+    expect(load()).toMatch(/if \(outcome\.error\.reload\) \{\s*refuseForWorkspace\("load"\);\s*setSelectedLocation\(shownLocation\.current\);\s*\}/);
+    expect(load()).toMatch(/setReviews\(outcome\.reviews\);\s*setTruncated\(outcome\.truncated\);\s*shownLocation\.current = location;/);
+    expect(load()).not.toContain("setReviews([])");
+  });
+
+  it("sends no list request once the page knows it belongs to another workspace", () => {
+    expect(load()).toMatch(/if \(!selectedLocation \|\| workspaceChanged\) return;/);
+  });
+
+  it("tells the panel when the page's notice already shows", () => {
+    expect(source).toContain("workspaceNoticeShownAbove={workspaceChanged !== null}");
   });
 });

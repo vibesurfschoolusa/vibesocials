@@ -6,7 +6,12 @@ import { describe, expect, it } from "vitest";
 
 import { WORKSPACE_CHANGED_CODE } from "@/lib/workspaceChanged";
 
-import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE, workspaceChangedAfter } from "./workspace-changed";
+import {
+  isWorkspaceChanged,
+  refusedPageView,
+  WORKSPACE_CHANGED_RELOAD_MESSAGE,
+  workspaceChangedAfter,
+} from "./workspace-changed";
 import { COPY_BEFORE_RELOAD, WorkspaceChangedNotice } from "./workspace-changed-notice";
 
 const source = readFileSync(path.join(__dirname, "workspace-changed-notice.tsx"), "utf8");
@@ -69,5 +74,27 @@ describe("workspaceChangedAfter", () => {
     expect(workspaceChangedAfter(null, "load")).toBe("load");
     expect(workspaceChangedAfter(null, "press")).toBe("press");
     expect(workspaceChangedAfter("load", "press")).toBe("press");
+  });
+});
+
+// R27 lead's second review: a reply typed on A, then B picked and B's list
+// refused. The selection goes back to A (whose reviews are on screen), so A's
+// list and box stay, the hint shows because a box holds text, and the picker is locked.
+describe("refusedPageView", () => {
+  it("A with typed text, B refused: A's list and box stay, with the hint, locked", () => {
+    expect(refusedPageView("load", "A", true)).toEqual({ hideList: false, copyHint: true, locked: true });
+  });
+
+  it("a refused load with nothing on screen hides the list; no hint without typed text", () => {
+    expect(refusedPageView("load", null, false)).toEqual({ hideList: true, copyHint: false, locked: true });
+    expect(refusedPageView("load", "A", false)).toEqual({ hideList: false, copyHint: false, locked: true });
+  });
+
+  it("a refused press keeps the list and shows the hint", () => {
+    expect(refusedPageView("press", "A", false)).toEqual({ hideList: false, copyHint: true, locked: true });
+  });
+
+  it("before any refusal: as today", () => {
+    expect(refusedPageView(null, "A", true)).toEqual({ hideList: false, copyHint: false, locked: false });
   });
 });
