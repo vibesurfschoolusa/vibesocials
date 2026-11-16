@@ -76,6 +76,15 @@ export const REPLY_ANSWER_LOST_MESSAGE = answerLostText(
 export function replyFailureShown(error: unknown): ShownError {
   return isNoAnswer(error) ? { message: REPLY_ANSWER_LOST_MESSAGE, settingsLink: false } : shownError(error, REPLY_FAILED);
 }
+/**
+ * R28 lead follow-up: a draft lands only on the location it was pressed on.
+ * One that comes back after another location was picked is dropped, as a late
+ * list answer is (load-reviews.ts): its review's form would open hidden, and
+ * its text would replace whatever was typed in that box.
+ */
+export function draftStillShown(pressedOn: string | null, current: string | null): boolean {
+  return pressedOn === current;
+}
 const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
 export const DRAFT_OFFLINE_MESSAGE =
   "We couldn't reach Vibe Socials, so no draft was written. Check your connection and try again.";
@@ -441,7 +450,14 @@ export function ReviewsView({
     }
   };
 
+  // The location picked now, for a draft that lands later (draftStillShown).
+  const selectedLocationRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedLocationRef.current = selectedLocation;
+  }, [selectedLocation]);
+
   const handleDraftAI = async (review: GoogleReview) => {
+    const pressedOn = selectedLocation;
     try {
       setGeneratingAI((prev) => draftingAfterStart(prev, review.reviewId));
 
@@ -465,6 +481,8 @@ export function ReviewsView({
 
       const data = await response.json();
       const draftResponse = data.draftResponse;
+      // Another location was picked meanwhile: dropped, nothing opened or replaced.
+      if (!draftStillShown(pressedOn, selectedLocationRef.current)) return;
 
       // Populate the reply text box with AI-generated response.
       // Typed text it replaces is kept for Undo (reply-form.tsx).

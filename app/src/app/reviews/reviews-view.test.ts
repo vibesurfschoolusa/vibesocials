@@ -27,6 +27,7 @@ import {
   LocationsNotice,
   locationsSignIn,
   REPLY_ANSWER_LOST_MESSAGE,
+  draftStillShown,
   replyFailureShown,
   ReviewsView,
 } from "./reviews-view";
@@ -153,6 +154,24 @@ describe("ReviewsView when a reply form closes", () => {
     // Only openReply and the draft landing (which opens only when none is open) set it.
     expect(source.split("setReplyingTo(").length - 1).toBe(2);
     expect(source).toContain("setReplyingTo((open) => openAfterDraft(open, review.reviewId))");
+  });
+
+  // R28 lead follow-up: a draft pressed on A that lands after B was picked
+  // is dropped, as a late list answer is: no hidden form opens on A, and
+  // nothing typed is replaced.
+  it("a draft that lands after the location changed is dropped", () => {
+    expect(draftStillShown("accounts/1/locations/A", "accounts/1/locations/A")).toBe(true);
+    expect(draftStillShown("accounts/1/locations/A", "accounts/1/locations/B")).toBe(false);
+    expect(draftStillShown(null, null)).toBe(true);
+    const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
+    expect(draft).toContain("const pressedOn = selectedLocation;");
+    const landed = draft.slice(draft.indexOf("const draftResponse"));
+    // Checked before the box is filled or opened.
+    const check = landed.indexOf("if (!draftStillShown(pressedOn, selectedLocationRef.current)) return;");
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(landed.indexOf("setReplyBoxes"));
+    expect(check).toBeLessThan(landed.indexOf("setReplyingTo"));
+    expect(source).toMatch(/useEffect\(\(\) => \{\s*selectedLocationRef\.current = selectedLocation;\s*\}, \[selectedLocation\]\);/);
   });
 
   // R28 client-journey L2: a form left open on A kept B's Draft from opening its box.
