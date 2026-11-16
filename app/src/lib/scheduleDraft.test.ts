@@ -109,7 +109,7 @@ describe("scheduleDraft — (c)/(d) a failed publish reports the server error an
       {
         kind: "failed",
         reason: "publish_failed",
-        error: "This post is waiting for an owner's approval.",
+        error: "This post is waiting for an owner's approval. Your caption changes were saved.",
         captionSaved: true,
         movedOn: { reload: true },
       },
@@ -121,7 +121,7 @@ describe("scheduleDraft — (c)/(d) a failed publish reports the server error an
       {
         kind: "failed",
         reason: "publish_failed",
-        error: "Couldn't start publishing. Please try again.",
+        error: "Couldn't start publishing. Please try again. Your caption changes were saved.",
         captionSaved: true,
         movedOn: { reload: true },
       },
@@ -236,7 +236,7 @@ describe("scheduleDraft — no answer", () => {
 
   it("the route's own 5xx stays a refusal with its sentence", async () => {
     const { result } = await run([json(200, { ok: true }), json(503, { code: "DISPATCH_FAILED", error: "Couldn't start." })]);
-    expect(result).toMatchObject({ kind: "failed", reason: "publish_failed", error: "Couldn't start." });
+    expect(result).toMatchObject({ kind: "failed", reason: "publish_failed", error: "Couldn't start. Your caption changes were saved." });
   });
 });
 
@@ -330,7 +330,7 @@ describe("scheduleDraft — a post that moved on", () => {
     expect(result).toEqual({
       kind: "failed",
       reason: "publish_failed",
-      error: "Only a draft can be scheduled here.",
+      error: "Only a draft can be scheduled here. Your caption changes were saved.",
       captionSaved: true,
       movedOn: { reload: true },
     });
@@ -345,5 +345,28 @@ describe("scheduleDraft — a post that moved on", () => {
   it("a draft still editable: a plain refusal (429) is not moved on", async () => {
     const { result } = await run([json(200, { ok: true }), json(429, { error: "Daily limit reached." })]);
     expect(result).toEqual({ kind: "failed", reason: "publish_failed", error: "Daily limit reached.", captionSaved: true });
+  });
+});
+
+// Lead review: the caption PATCH landed, then the publish found the draft
+// scheduled by someone else. The sentence says the caption was saved, so the
+// dialog does not tell the person to copy what they typed.
+describe("scheduleDraft — the caption was saved, then the post moved on", () => {
+  it("says the new time wasn't saved and the caption was", async () => {
+    const error = "This post is scheduled now (someone else scheduled it), so the new time wasn't saved.";
+    const { result } = await run([json(200, { ok: true }), json(409, { error, code: "NOT_A_DRAFT" })]);
+    expect(result).toEqual({
+      kind: "failed",
+      reason: "publish_failed",
+      error: `${error} Your caption changes were saved.`,
+      captionSaved: true,
+      movedOn: { reload: true },
+    });
+  });
+
+  it("nothing saved: the route's sentence alone", async () => {
+    const error = "This post is scheduled now (someone else scheduled it), so the new time wasn't saved.";
+    const { result } = await run([json(409, { error, code: "NOT_A_DRAFT" })], { originalCaption: "New caption" });
+    expect(result).toMatchObject({ error, captionSaved: false, movedOn: { reload: true } });
   });
 });

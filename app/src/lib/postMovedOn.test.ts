@@ -66,4 +66,9 @@ describe("postMovedOnText", () => {
     expect(postMovedOnText("draft", "deleted")).toBeNull();
     expect(postMovedOnText("scheduled", "published")).toBeNull();
   });
+
+  // Lead review: Edit on a draft a teammate scheduled said "Only a draft can be scheduled here."
+  it("a draft that is scheduled now, given a time: says someone else scheduled it", () => {
+    expect(postMovedOnText("scheduled", "scheduled")).toBe("This post is scheduled now (someone else scheduled it), so the new time wasn't saved.");
+  });
 });

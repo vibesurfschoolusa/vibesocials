@@ -727,9 +727,10 @@ function QueueEditDialog({
           onPartialSave({ caption: trimmed, ...overridesPatch }, pairFetch.lastAnswer());
         }
         if (result.movedOn) {
-          // R31 publishing L3: the same rule as a scheduled post's save, above.
+          // R31 publishing L3: the same rule as a scheduled post's save, above. Once the
+          // caption is saved there is nothing to copy (lead review).
           focusAfterPress(saveRef.current, () => movedOnRef.current);
-          setMovedOn(editMovedOnText(result.error));
+          setMovedOn(result.captionSaved ? result.error : editMovedOnText(result.error));
           if (result.movedOn.reload) onStale();
           setSaving(false);
           return;

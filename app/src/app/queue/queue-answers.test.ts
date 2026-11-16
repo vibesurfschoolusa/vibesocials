@@ -147,7 +147,7 @@ describe("Queue: a refused post action, one rule", () => {
   it("Edit, a draft given a time: the same, keeping the dialog and what was typed", () => {
     const failed = between('if (result.kind === "failed") {', "toast.success(withPairNote(result.message");
     expect(failed).toMatch(
-      /if \(result\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(editMovedOnText\(result\.error\)\);\s+if \(result\.movedOn\.reload\) onStale\(\);\s+setSaving\(false\);\s+return;\s+\}/,
+      /if \(result\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(result\.captionSaved \? result\.error : editMovedOnText\(result\.error\)\);\s+if \(result\.movedOn\.reload\) onStale\(\);\s+setSaving\(false\);\s+return;\s+\}/,
     );
     expect(failed).not.toContain("onClose()");
   });

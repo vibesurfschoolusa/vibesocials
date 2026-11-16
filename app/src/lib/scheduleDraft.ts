@@ -66,6 +66,8 @@ export type ScheduleDraftResult =
     };
 
 export const SAVE_FALLBACK_ERROR = "Couldn't save your changes.";
+/** Added to a moved-on refusal that came after the caption was saved. */
+export const CAPTION_SAVED_NOTE = "Your caption changes were saved.";
 export const UNREADABLE_PUBLISH_ERROR =
   "Couldn't confirm what happened to this post. Check the Queue before trying again.";
 
@@ -164,6 +166,11 @@ export async function scheduleDraft(input: {
         submitsForApproval ? "Couldn't submit this post for approval." : "Couldn't schedule this post.",
       );
       if (refusal === null) return noAnswer();
+      // Lead review: the post moved on after the caption landed: say it was saved, so
+      // the dialog does not ask the person to copy text that is already kept.
+      if (refusal.movedOn && captionSaved) {
+        return { kind: "failed", reason: "publish_failed", ...refusal, error: `${refusal.error} ${CAPTION_SAVED_NOTE}`, captionSaved };
+      }
       return { kind: "failed", reason: "publish_failed", ...refusal, captionSaved };
     }
 

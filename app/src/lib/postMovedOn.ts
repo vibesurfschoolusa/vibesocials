@@ -41,6 +41,8 @@ export function postMovedOnText(status: PostJobStatus | null | undefined, verb: 
     case "cancelled":
       return verb === "cancelled" ? "This post was already cancelled." : `This post was cancelled, so it can't be ${verb}.`;
     case "scheduled":
+      // Lead review: a draft given a time in an Edit left open, that a teammate scheduled meanwhile.
+      if (verb === "scheduled") return "This post is scheduled now (someone else scheduled it), so the new time wasn't saved.";
       return verb === "deleted" ? "This post is scheduled now, so it can't be deleted. Cancel it first, then delete it." : null;
     default:
       return null;

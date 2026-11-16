@@ -1823,9 +1823,9 @@ describe("POST /api/posts/[postJobId]/publish: a post that moved on", () => {
     });
   });
 
-  it("scheduling a draft someone already scheduled keeps its own sentence", async () => {
+  it("scheduling a draft someone already scheduled: says so", async () => {
     findFirstMock.mockResolvedValue({ status: "scheduled" });
     const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
-    expect((await res.json()).error).toBe("Only a draft can be scheduled here.");
+    await expect(res.json()).resolves.toEqual({ error: "This post is scheduled now (someone else scheduled it), so the new time wasn't saved.", code: "NOT_A_DRAFT" });
   });
 });
