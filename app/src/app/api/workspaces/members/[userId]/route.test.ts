@@ -234,12 +234,26 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
   });
 
   it("returns 404 when the atomic delete matches nothing (membership raced away) and revokes NO invites", async () => {
+    findFirstMock.mockResolvedValueOnce({ role: "member" }).mockResolvedValueOnce(null);
     deleteManyMock.mockResolvedValue({ count: 0 });
 
     const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
+    expect(inviteUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  // Lead follow-up: the same rule as the role change. Made owner between the
+  // read and the delete, the person is still here: 409 roleChanged, row kept.
+  it("the atomic delete matches nothing but the person is still in the workspace: 409 roleChanged", async () => {
+    findFirstMock.mockResolvedValueOnce({ role: "member" }).mockResolvedValueOnce({ role: "owner" });
+    deleteManyMock.mockResolvedValue({ count: 0 });
+
+    const response = await DELETE(deleteReq(), ctx("user-2"));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual(ROLE_CHANGED_ANSWER);
     expect(inviteUpdateManyMock).not.toHaveBeenCalled();
   });
 

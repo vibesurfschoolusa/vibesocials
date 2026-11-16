@@ -67,7 +67,7 @@ interface MemberRouteContext {
  * guard is REPEATED in the delete's where clause (`role: { not: "owner" }`,
  * conditional-mutation pattern) so a promotion racing between the read and the
  * delete still can't remove an owner — the delete then matches nothing and
- * 404s. To remove a co-owner: demote them via PATCH first, then DELETE.
+ * answers 409 roleChanged (404 gone if they left). To remove a co-owner: demote them via PATCH first, then DELETE.
  *
  * Removal also REVOKES the workspace's active invite links (2026-11-01 audit):
  * the join link is 7-day / unlimited-use, so a removed member holding it could
@@ -140,8 +140,10 @@ export async function DELETE(request: Request, { params }: MemberRouteContext) {
     return { invitesRevoked: revoked.count };
   });
 
+  // The delete matched nothing: gone, or (the role change's rule) made owner
+  // meanwhile and still here.
   if (!outcome) {
-    return memberGone();
+    return (await stillMember(prisma, context.workspace.id, targetUserId)) ? roleChanged() : memberGone();
   }
 
   return NextResponse.json({ ok: true, invitesRevoked: outcome.invitesRevoked }, { status: 200 });
