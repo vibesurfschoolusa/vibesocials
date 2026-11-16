@@ -17,9 +17,14 @@ describe("SignInAgainLink", () => {
     expect(html).toMatch(/<a [^>]*rel="noopener noreferrer"/);
   });
 
-  it("says it opens in a new tab, and keeps its visible words", () => {
-    expect(html).toMatch(/<a [^>]*aria-label="Sign in to Google again \(opens in a new tab\)"/);
-    expect(html).toMatch(/>Sign in to Google again<\/a>/);
+  // Lead follow-up: the hint is visible too, and is part of the link's own
+  // text, so the accessible name is what sighted users read (label in name).
+  it("shows that it opens in a new tab, as part of the link's text", () => {
+    expect(html).toMatch(/>Sign in to Google again <span class="[^"]*">\(opens in a new tab\)<\/span><\/a>/);
+  });
+
+  it("has no aria-label overriding the visible text", () => {
+    expect(html).not.toContain("aria-label");
   });
 
   it("goes to the given start URL", () => {

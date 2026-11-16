@@ -538,7 +538,7 @@ describe("a reply Google refused", () => {
       }),
     );
     expect(html).toMatch(
-      /<div[^>]*role="status"[^>]*><p[^>]*>Sign in to Google again with the account that manages this location\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a><\/div>/,
+      /<div[^>]*role="status"[^>]*><p[^>]*>Sign in to Google again with the account that manages this location\.<\/p><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again <span[^>]*>\(opens in a new tab\)<\/span><\/a><\/div>/,
     );
     expect(render("Thanks")).not.toContain("/api/auth/");
   });

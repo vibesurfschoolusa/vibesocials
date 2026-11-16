@@ -5,7 +5,8 @@ import { buttonVariants } from "@/components/ui/button";
  * Reconnect button's own start. A plain anchor: /api/auth/* is a redirect
  * handler, not a Next.js page. Shown only to an owner; the routes give a
  * member no URL. R25 pages L2: it opens in a new tab, so this page, and a
- * reply or anything else typed on it, stays; the name says so.
+ * reply or anything else typed on it, stays. The hint is visible and part of
+ * the link's text, so its name is what sighted users read.
  */
 export function SignInAgainLink({ href, size = "sm" }: { href: string; size?: "sm" | "md" }) {
   return (
@@ -13,10 +14,9 @@ export function SignInAgainLink({ href, size = "sm" }: { href: string; size?: "s
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label="Sign in to Google again (opens in a new tab)"
       className={buttonVariants({ variant: "primary", size })}
     >
-      Sign in to Google again
+      Sign in to Google again <span className="text-xs font-normal opacity-90">(opens in a new tab)</span>
     </a>
   );
 }

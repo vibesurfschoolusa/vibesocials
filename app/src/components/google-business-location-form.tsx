@@ -103,7 +103,8 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
   // R25 pages L4: the last fetch or save's failure, and what the loaded list
-  // says; shown in the status region instead of toasts that vanish.
+  // says; shown in the status region, which stays, and only there (no toast),
+  // so a screen reader hears each once. A save's success is still a toast.
   const [failure, setFailure] = useState<PickerStatus | null>(null);
   const [listNote, setListNote] = useState<PickerStatus | null>(null);
 
@@ -130,7 +131,6 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
       if (!response.ok) {
         const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
-        toast.error(failed.message);
         setFailure({ message: failed.message, signInUrl: failed.signInUrl });
         setSaving(false);
         if (failed.reconnect) router.refresh();
@@ -145,7 +145,6 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       // Settings' "Connected as" label is server-rendered from the saved name.
       router.refresh();
     } catch {
-      toast.error(LOCATION_MESSAGES.saveOffline);
       setFailure({ message: LOCATION_MESSAGES.saveOffline, signInUrl: null });
       setSaving(false);
     }
@@ -156,7 +155,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
     const trimmed = locationName.trim();
     if (!trimmed) {
-      toast.error("Enter a location resource name or store code.");
+      setFailure({ message: "Enter a location resource name or store code.", signInUrl: null });
       return;
     }
     await saveLocation(trimmed, null);
@@ -176,7 +175,6 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       if (!response.ok) {
         setLocations(null);
         const failed = locationFailure(data, LOCATION_MESSAGES.loadFailed, workspaceId);
-        toast.error(failed.message);
         setFailure({ message: failed.message, signInUrl: failed.signInUrl });
         setLoadingLocations(false);
         if (failed.reconnect) router.refresh();
@@ -190,7 +188,6 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       setLoadingLocations(false);
     } catch {
       setLocations(null);
-      toast.error(LOCATION_MESSAGES.loadOffline);
       setFailure({ message: LOCATION_MESSAGES.loadOffline, signInUrl: null });
       setLoadingLocations(false);
     }

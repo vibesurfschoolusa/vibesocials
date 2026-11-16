@@ -77,7 +77,7 @@ describe("Google location form: a failed answer", () => {
   });
 
   it("the form shows the link while a sign-in is asked for", () => {
-    expect(signInLinkHtml("/api/auth/google_business_profile/start?workspaceId=ws-1")).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again<\/a>/);
+    expect(signInLinkHtml("/api/auth/google_business_profile/start?workspaceId=ws-1")).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
   });
 
   it("any other error keeps its text and does not refresh", () => {
@@ -129,6 +129,14 @@ describe("Google location form: where its sentences show", () => {
     const region = formSource.slice(formSource.indexOf('<div role="status"'), formSource.indexOf("Primary flow"));
     expect(region).toContain("{failure ? <PickerStatusLine status={failure} /> : null}");
     expect(region).toContain("{listNote ? <PickerStatusLine status={listNote} /> : null}");
+  });
+
+  // Lead follow-up: each failure is said once, in the region that stays, so a
+  // screen reader hears it once; only the success of a save is a toast.
+  it("no failure is also a toast", () => {
+    expect(formSource).not.toContain("toast.error(");
+    expect(formSource).toContain("toast.success(");
+    expect(formSource).toContain('setFailure({ message: "Enter a location resource name or store code.", signInUrl: null })');
   });
 
   it("the access wording is the route's, not the form's own", () => {

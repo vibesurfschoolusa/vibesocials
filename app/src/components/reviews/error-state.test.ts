@@ -31,7 +31,7 @@ describe("ErrorState", () => {
 describe("ErrorState: signing in to Google again", () => {
   it("an owner gets a Sign in to Google again link to the start URL", () => {
     const html = render({ message: "Google didn't accept the connection.", settingsLink: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
-    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
   });
 
   it("a member never does", () => {

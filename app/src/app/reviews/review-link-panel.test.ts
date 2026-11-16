@@ -47,7 +47,7 @@ describe("ReviewLinkPanelView", () => {
   // JJ3 lead review: an owner's in-place Google sign-in, for the page's own workspace.
   it("offers Sign in to Google again for the page's workspace when the route says so", () => {
     const html = render({ status: "none", reason: "Google didn't accept the connection.", signIn: true }, "ws-A");
-    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
     expect(render({ status: "none", reason: "Something else." })).not.toContain("/api/auth/");
   });
 
