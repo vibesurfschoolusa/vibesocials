@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { isInstalledApp } from "@/lib/installedApp";
 import {
   Dialog,
   DialogBody,
@@ -25,9 +26,8 @@ interface BeforeInstallPromptEvent extends Event {
 export function useInstallApp() {
   // Already running from the home screen: nothing to install. Read once on the
   // client; the entry only renders after a click, so the server value is unused.
-  const [installed] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches,
-  );
+  // One rule (lib/installedApp), iOS's home-screen app included.
+  const [installed] = useState(() => isInstalledApp(typeof window === "undefined" ? undefined : window));
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
 

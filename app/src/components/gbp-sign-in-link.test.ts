@@ -61,9 +61,10 @@ describe("SignInAgainLinkView in the installed app", () => {
   });
 
   it("says to copy a typed reply first, as part of the link's text", () => {
-    expect(INSTALLED_APP_HINT).toBe("(you'll leave this page: copy any reply you typed first)");
+    // LL2 lead review: the link shows in Settings and the locations notice too, where there is no reply.
+    expect(INSTALLED_APP_HINT).toBe("(you'll leave this page: copy anything you typed first)");
     expect(html.replace(/&#x27;/g, "'")).toMatch(
-      /<a [^>]*>Sign in to Google again <span class="[^"]*">\(you'll leave this page: copy any reply you typed first\)<\/span><\/a>/,
+      /<a [^>]*>Sign in to Google again <span class="[^"]*">\(you'll leave this page: copy anything you typed first\)<\/span><\/a>/,
     );
     expect(html).not.toContain("new tab");
   });

@@ -13,8 +13,12 @@ export function NewTabHint() {
   return <span className={HINT_CLASS}>(opens in a new tab)</span>;
 }
 
-/** R26 pages L3: in the installed app the sign-in leaves this page, so a typed reply must be copied first. */
-export const INSTALLED_APP_HINT = "(you'll leave this page: copy any reply you typed first)";
+/**
+ * R26 pages L3: in the installed app the sign-in leaves this page, so anything
+ * typed must be copied first. Neutral wording: the link shows in Settings and
+ * the locations notice too, where there is no reply.
+ */
+export const INSTALLED_APP_HINT = "(you'll leave this page: copy anything you typed first)";
 
 const noSubscribe = () => () => {};
 

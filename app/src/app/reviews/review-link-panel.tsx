@@ -130,7 +130,8 @@ export function ReviewLinkPanelView({
                 rel="noopener noreferrer"
                 className="break-all text-sm text-primary underline-offset-4 hover:underline"
               >
-                {state.url} <NewTabHint />
+                {/* The hint doesn't inherit break-all: it breaks only between words. */}
+                {state.url} <span className="break-normal"><NewTabHint /></span>
               </a>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => copy(state.url, "Link")}>

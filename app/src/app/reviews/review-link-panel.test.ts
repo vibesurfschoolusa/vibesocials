@@ -78,7 +78,8 @@ describe("ReviewLinkPanelView", () => {
     const html = render({ status: "ready", url: LINK });
     const hint = '<span class="text-xs font-normal opacity-90">(opens in a new tab)</span>';
     expect(html).toContain(
-      `<a href="${LINK}" target="_blank" rel="noopener noreferrer" class="break-all text-sm text-primary underline-offset-4 hover:underline">${LINK} ${hint}</a>`,
+      // LL2 lead review: the hint doesn't inherit the URL's break-all, so it breaks only between words.
+      `<a href="${LINK}" target="_blank" rel="noopener noreferrer" class="break-all text-sm text-primary underline-offset-4 hover:underline">${LINK} <span class="break-normal">${hint}</span></a>`,
     );
     expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
     expect(html).toMatch(/<a [^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Print card/);

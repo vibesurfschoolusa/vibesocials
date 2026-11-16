@@ -95,6 +95,9 @@ export function locationsLoadedStatus(
   return { message, signInUrl: data?.signIn === true ? gbpSignInUrl(workspaceId) : null };
 }
 
+/** LL2 lead review: said by the dropdown while a save runs, so a change that springs back has a reason. */
+export const PICK_SAVING_STATUS = "Saving…";
+
 /** Lead review: which control a save came from, so its failure shows by that control. */
 export type SavePlace = "pick" | "field";
 
@@ -300,6 +303,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
               value={picked}
               onChange={handleSelectLocation}
               aria-disabled={saving}
+              className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             >
               <option value="">Select a location</option>
               {locations.map((loc) => {
@@ -318,7 +322,8 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
               })}
             </Select>
             <div id="gbp-pick-status" role="status" className="empty:sr-only">
-              {pickFailure ? <PickerStatusLine status={pickFailure} /> : null}
+              {saving ? <p className="text-sm text-muted-foreground">{PICK_SAVING_STATUS}</p> : null}
+              {!saving && pickFailure ? <PickerStatusLine status={pickFailure} /> : null}
             </div>
           </div>
         ) : null}

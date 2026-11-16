@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -41,5 +41,28 @@ describe("isInstalledApp", () => {
     }
     const link = readFileSync(path.join(__dirname, "../components/gbp-sign-in-link.tsx"), "utf8");
     expect(link).not.toContain("signed-out-alert");
+  });
+
+  // LL2 lead review: install-app.tsx had its own check, without iOS's part.
+  it("no other file in src checks for the installed app itself", () => {
+    const src = path.join(__dirname, "..");
+    const own = path.join(__dirname, "installedApp.ts");
+    const found: string[] = [];
+    for (const entry of readdirSync(src, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) continue;
+      const file = path.join(entry.parentPath, entry.name);
+      if (file === own) continue;
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, index) => {
+          if (/^\s*(\*|\/\/)/.test(line)) return; // comments may name the rule
+          if (/display-mode|navigator\.standalone|\.standalone|standalone\?:/.test(line)) {
+            found.push(`${path.relative(src, file)}:${index + 1}`);
+          }
+        });
+    }
+    expect(found).toEqual([]);
+    const installApp = readFileSync(path.join(src, "components/shell/install-app.tsx"), "utf8");
+    expect(installApp).toContain('import { isInstalledApp } from "@/lib/installedApp";');
   });
 });

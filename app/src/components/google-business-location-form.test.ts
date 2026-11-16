@@ -12,6 +12,7 @@ import {
 import {
   LOCATION_MESSAGES,
   LOCATION_RECONNECT_CODE,
+  PICK_SAVING_STATUS,
   PickerStatusLine,
   locationFailure,
   locationsLoadedStatus,
@@ -242,5 +243,23 @@ describe("Google location form: the dropdown after a save", () => {
     expect(formSource).toContain("{savedLocationLine(savedTitle, savedName)}");
     const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
     expect(save).toContain("setSavedName(name);");
+  });
+});
+
+// LL2 lead review: while a save runs the dropdown looks unavailable, and its
+// status region says why a change springs back.
+describe("Google location form: the dropdown while saving", () => {
+  const select = formSource.slice(formSource.indexOf("<Select\n"), formSource.indexOf("</Select>"));
+
+  it("has the unavailable look while aria-disabled", () => {
+    expect(select).toContain("aria-disabled={saving}");
+    expect(select).toContain('className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"');
+  });
+
+  it("says Saving… in the status region by the dropdown, then the failure if any", () => {
+    expect(PICK_SAVING_STATUS).toBe("Saving…");
+    const region = formSource.slice(formSource.indexOf('<div id="gbp-pick-status"'), formSource.indexOf("</div>", formSource.indexOf('<div id="gbp-pick-status"')));
+    expect(region).toContain('{saving ? <p className="text-sm text-muted-foreground">{PICK_SAVING_STATUS}</p> : null}');
+    expect(region).toContain("{!saving && pickFailure ? <PickerStatusLine status={pickFailure} /> : null}");
   });
 });
