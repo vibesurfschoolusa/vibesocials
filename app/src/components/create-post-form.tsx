@@ -73,7 +73,7 @@ import {
   photoPickProblem,
   removePhoto,
 } from "@/lib/postMedia";
-import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
+import { isHeicFile, preparedTypeOf, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { platformAcceptsTextOnly, textPostsEnabled } from "@/lib/platformLimits";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
@@ -540,30 +540,29 @@ export function photosFailureLosesFile(input: { attachedBefore: number }): boole
   return input.attachedBefore === 0;
 }
 
+type JudgedPhoto = { file: { name: string; type: string; size: number }; status: string };
+
 /**
- * The attached photos' types, in order, as one key, leaving out photos still
- * "preparing": those hold the picked file (a Windows HEIC reads "", a big WebP
- * is re-encoded), and sending waits for them anyway (R22 new-customer L1).
+ * A photo's type for the platform list. One still "preparing" holds the picked
+ * file (a Windows HEIC reads "", a big WebP is re-encoded), so it is judged by
+ * the type it will have (preparedTypeOf); a prepared one by its own (R22 M1).
  */
-export function photoSetTypeKeyOf(photos: readonly { file: { type: string }; status: string }[]): string {
-  return photos
-    .filter((photo) => photo.status !== "preparing")
-    .map((photo) => photo.file.type)
-    .join(" ");
+function judgedPhotoType(photo: JudgedPhoto): string {
+  return photo.status === "preparing" ? preparedTypeOf(photo.file) : photo.file.type;
 }
 
 /**
- * The one type the platform list is judged on when the set has fewer than two
- * ready photos: the first ready photo's, or nothing (null) while every attached
- * photo is still "preparing", so a pick of Windows HEICs shows no false reason
- * while they convert. With no photo set, the single file's type as before.
+ * Every attached photo's type, in order, as one key, so "photo N" is always
+ * the photo's real place (R22 L4) and the list only changes when a type or
+ * the order does.
  */
-export function judgedMimeType(
-  photos: readonly { file: { type: string }; status: string }[],
-  activeMimeType: string | null,
-): string | null {
-  if (photos.length === 0) return activeMimeType;
-  return photos.find((photo) => photo.status !== "preparing")?.file.type ?? null;
+export function photoSetTypeKeyOf(photos: readonly JudgedPhoto[]): string {
+  return photos.map(judgedPhotoType).join(" ");
+}
+
+/** The one type the page is judged on: the first photo's, or, with no photo set, the single file's. */
+export function judgedMimeType(photos: readonly JudgedPhoto[], activeMimeType: string | null): string | null {
+  return photos.length > 0 ? judgedPhotoType(photos[0]) : activeMimeType;
 }
 
 /** The first press while the notice is fresh stops there, before any dialog. */

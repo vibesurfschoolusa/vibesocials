@@ -64,6 +64,18 @@ export function unsupportedTypeMessage(type: string): string {
 export const HEIC_CONVERSION_FAILED_MESSAGE =
   "We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG and try again.";
 
+/**
+ * The type `file` will have once prepareUploadFile is done, decided the same
+ * way without doing the work: a HEIC becomes a JPEG, a JPEG, WebP or PNG over
+ * {@link MAX_UPLOAD_PHOTO_BYTES} is re-encoded as one, anything else keeps its
+ * type. The Create page judges a photo still being prepared by it (R22 M1).
+ */
+export function preparedTypeOf(file: { name: string; type: string; size: number }): string {
+  if (isHeicFile(file)) return "image/jpeg";
+  if (SHRINKABLE_TYPES.has(file.type) && file.size > MAX_UPLOAD_PHOTO_BYTES) return "image/jpeg";
+  return file.type;
+}
+
 /** The browser work, injectable so the decisions above can be tested without a browser. */
 export interface PrepareUploadDeps {
   convertHeicToJpeg(file: Blob, quality: number): Promise<Blob>;

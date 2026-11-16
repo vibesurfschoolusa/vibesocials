@@ -1882,7 +1882,7 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
       expect(error?.code).toBe("X_VIDEO_APPEND_FAILED");
       // R22 platform-clients L3: parts count from 1, and the text is plain.
       expect(error?.message).toBe(
-        "X did not answer while part 11 of the video was uploading, even after a second try. Nothing was posted. Try again.",
+        "X had a problem with the upload of part 11 of the video, even after a second try. Nothing was posted. Try again.",
       );
       expect(publishErrorMessage("x", error!)).toBe(error?.message);
       expect(x.appends()).toHaveLength(1);
@@ -2082,7 +2082,7 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
       expect(error?.code).toBe("X_VIDEO_FINALIZE_FAILED");
       expect(error?.status).toBeUndefined();
       expect(error?.message).toBe(
-        "X did not answer when the video upload was finishing, even after a second try. Nothing was posted. Try again.",
+        "X had a problem with the upload while it was finishing, even after a second try. Nothing was posted. Try again.",
       );
       expect(x.tweets()).toHaveLength(0);
     });

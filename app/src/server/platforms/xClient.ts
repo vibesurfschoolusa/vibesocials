@@ -1373,7 +1373,7 @@ async function publishChunked(args: {
             return await retryOrFail(attempt.failure, () =>
               xUploadError(
                 "X_VIDEO_APPEND_FAILED",
-                `X did not answer while part ${index + 1} of the video was uploading, even after a second try. Nothing was posted. Try again.`,
+                `X had a problem with the upload of part ${index + 1} of the video, even after a second try. Nothing was posted. Try again.`,
               ),
             );
           }
@@ -1406,7 +1406,7 @@ async function publishChunked(args: {
           return await retryOrFail(attempt.failure, () =>
             xUploadError(
               "X_VIDEO_FINALIZE_FAILED",
-              "X did not answer when the video upload was finishing, even after a second try. Nothing was posted. Try again.",
+              "X had a problem with the upload while it was finishing, even after a second try. Nothing was posted. Try again.",
             ),
           );
         }

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { Platform } from "@prisma/client";
 import { deriveComposerPlatforms } from "@/lib/postTargets";
 import { REPEAT_X_NOTE } from "@/lib/repeatSchedule";
 
@@ -50,65 +51,62 @@ import {
   untouchedSubmitMessage,
 } from "./create-post-form";
 
-// R22 new-customer L1: a photo still being prepared holds the picked file (a
-// Windows HEIC reads "", a big WebP is re-encoded), so it is not judged yet.
-describe("photoSetTypeKeyOf", () => {
-  const photo = (type: string, status: "preparing" | "waiting" | "uploaded") => ({
-    file: new File(["x"], "p", { type }),
+// R22 new-customer L1 (review M1, L4): a photo still being prepared holds the
+// picked file, so it is judged by the type it will have once prepared
+// (preparedTypeOf), and every photo keeps its place in the numbering.
+describe("photoSetTypeKeyOf and judgedMimeType", () => {
+  type Status = "preparing" | "waiting" | "uploaded";
+  const photo = (name: string, type: string, status: Status, size = 10) => ({
+    file: new File([new Uint8Array(size)], name, { type }),
     status,
   });
-
-  it("leaves out photos still being prepared", () => {
-    expect(
-      photoSetTypeKeyOf([photo("image/jpeg", "uploaded"), photo("", "preparing"), photo("image/webp", "preparing")]),
-    ).toBe("image/jpeg");
-  });
-
-  it("is empty while every photo is being prepared", () => {
-    expect(photoSetTypeKeyOf([photo("", "preparing")])).toBe("");
-  });
-
-  it("judges each prepared photo, in order", () => {
-    expect(photoSetTypeKeyOf([photo("image/png", "waiting"), photo("image/webp", "uploaded")])).toBe(
-      "image/png image/webp",
-    );
-  });
-});
-
-// R22 new-customer L1 follow-up: the single type the platform list is judged on.
-describe("judgedMimeType", () => {
-  const photo = (type: string, status: "preparing" | "waiting" | "uploaded") => ({
-    file: new File(["x"], "p", { type }),
-    status,
-  });
-
-  it("judges nothing while every photo is still being prepared", () => {
-    expect(judgedMimeType([photo("", "preparing"), photo("", "preparing"), photo("", "preparing")], "")).toBeNull();
-  });
-
-  it("once one is ready, judges the first ready photo", () => {
-    expect(judgedMimeType([photo("", "preparing"), photo("image/jpeg", "waiting")], "")).toBe("image/jpeg");
-  });
-
-  it("with no photo set, the single file's type as before", () => {
-    expect(judgedMimeType([], "video/mp4")).toBe("video/mp4");
-    expect(judgedMimeType([], null)).toBeNull();
-  });
-
-  it("three Windows HEICs being prepared: no platform greyed out, no alert", () => {
-    const preparing = [photo("", "preparing"), photo("", "preparing"), photo("", "preparing")];
+  const all: Platform[] = ["instagram", "facebook_page", "linkedin", "x", "tiktok", "youtube"];
+  const reasons = (photos: ReturnType<typeof photo>[]) => {
+    const key = photoSetTypeKeyOf(photos);
     const v = composerPageView({
       pageState: "file",
-      connected: ["instagram", "facebook_page", "linkedin", "x"],
+      connected: all,
       deselected: new Set(),
-      mimeType: judgedMimeType(preparing, ""),
-      mimeTypes: photoSetTypeKeyOf(preparing) ? photoSetTypeKeyOf(preparing).split(" ") : [],
+      mimeType: judgedMimeType(photos, null),
+      mimeTypes: key ? key.split(" ") : [],
       mode: "now",
       loading: false,
       triedSend: true,
     });
-    expect(v.choices.every((c) => c.disabledReason === null)).toBe(true);
+    return { v, by: Object.fromEntries(v.choices.map((c) => [c.platform, c.disabledReason])) };
+  };
+
+  it("4 Windows HEICs being prepared: TikTok and YouTube greyed from the first frame, no false reason for the photo platforms", () => {
+    const heics = [1, 2, 3, 4].map((n) => photo(`IMG_${n}.HEIC`, "", "preparing"));
+    expect(photoSetTypeKeyOf(heics)).toBe("image/jpeg image/jpeg image/jpeg image/jpeg");
+    const { v, by } = reasons(heics);
+    expect(by.tiktok).not.toBeNull();
+    expect(by.youtube).not.toBeNull();
+    expect([by.instagram, by.facebook_page, by.linkedin, by.x]).toEqual([null, null, null, null]);
+    expect(v.selected).toEqual(["instagram", "facebook_page", "linkedin", "x"]);
     expect(v.platformAlert).toBeNull();
+  });
+
+  it("a big WebP in place 2 being prepared is judged as the JPEG it becomes", () => {
+    const set = [photo("a.jpg", "image/jpeg", "uploaded"), photo("b.webp", "image/webp", "preparing", 4_600_000)];
+    expect(photoSetTypeKeyOf(set)).toBe("image/jpeg image/jpeg");
+    expect(reasons(set).by.facebook_page).toBeNull();
+    expect(reasons(set).by.linkedin).toBeNull();
+  });
+
+  it("numbers every photo over the whole set, preparing ones included, after a move", () => {
+    const heic = photo("IMG_1.HEIC", "", "preparing");
+    const jpg = photo("a.jpg", "image/jpeg", "uploaded");
+    const webp = photo("small.webp", "image/webp", "preparing");
+    expect(reasons([heic, jpg, webp]).by.linkedin).toBe("photo 3 is WebP; JPG or PNG only");
+    expect(reasons([webp, heic, jpg]).by.linkedin).toBe("photo 1 is WebP; JPG or PNG only");
+  });
+
+  it("a ready photo is judged by its own type; with no set, the single file's", () => {
+    expect(photoSetTypeKeyOf([photo("a.png", "image/png", "waiting")])).toBe("image/png");
+    expect(judgedMimeType([photo("IMG_1.HEIC", "", "preparing")], null)).toBe("image/jpeg");
+    expect(judgedMimeType([], "video/mp4")).toBe("video/mp4");
+    expect(judgedMimeType([], null)).toBeNull();
   });
 });
 

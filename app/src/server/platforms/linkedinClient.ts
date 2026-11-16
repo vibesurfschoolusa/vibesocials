@@ -1816,10 +1816,11 @@ function assertMultiImageMedia(items: readonly MediaItem[]): void {
     const refused = isImage ? unsupportedMediaReason("linkedin", item.mimeType) !== null : true;
     if (refused) {
       // A scheduled post made before the composer refused this (#179) fails the
-      // same way on every retry, so the text ends with the step that helps.
+      // same way on every retry, and the other platforms have published by
+      // then, so the text ends with the one step that helps.
       throw linkedinCodedError(
         "LINKEDIN_UNSUPPORTED_MEDIA",
-        `LinkedIn can't post file ${index + 1} of ${items.length} in a post with several photos: ${isImage ? photoSetFormatsReason("linkedin") : "images only"}. Nothing was posted. Remove LinkedIn from this post, or create it again with JPG or PNG photos.`,
+        `LinkedIn can't post file ${index + 1} of ${items.length} in a post with several photos: ${isImage ? photoSetFormatsReason("linkedin") : "images only"}. Nothing was posted on LinkedIn. Create the post again for LinkedIn with JPG or PNG photos.`,
       );
     }
   }

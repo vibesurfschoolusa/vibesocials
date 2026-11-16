@@ -4282,7 +4282,7 @@ describe("linkedinClient — several photos in one post", () => {
     expect(error?.code).toBe("LINKEDIN_UNSUPPORTED_MEDIA");
     expect(error?.message).toBe(
       // R22 platform-clients L2: Retry fails the same way, so the text names the step.
-      `LinkedIn can't post file 2 of 3 in a post with several photos: ${reason}. Nothing was posted. Remove LinkedIn from this post, or create it again with JPG or PNG photos.`,
+      `LinkedIn can't post file 2 of 3 in a post with several photos: ${reason}. Nothing was posted on LinkedIn. Create the post again for LinkedIn with JPG or PNG photos.`,
     );
     expect(li.fetchMock).not.toHaveBeenCalled();
   });

@@ -9,6 +9,7 @@ import {
   isHeicFile,
   jpegFileName,
   prepareUploadFile,
+  preparedTypeOf,
   type PrepareUploadDeps,
 } from "./prepareUploadFile";
 
@@ -147,5 +148,25 @@ describe("prepareUploadFile", () => {
     const original = file("odd.jpg", "image/jpeg", MAX_UPLOAD_PHOTO_BYTES + 1);
     const bigger = vi.fn(async () => new Blob([bytes(MAX_UPLOAD_PHOTO_BYTES + 50)]));
     await expect(prepareUploadFile(original, fakeDeps({ reencodeAsJpeg: bigger }))).resolves.toBe(original);
+  });
+});
+
+// R22 new-customer L1 (review M1): the Create page judges a photo still being
+// prepared by the type it will have, so this must agree with prepareUploadFile.
+describe("preparedTypeOf", () => {
+  const big = MAX_UPLOAD_PHOTO_BYTES + 1;
+  it.each([
+    ["a Windows HEIC with no type", file("IMG_1.HEIC", ""), "image/jpeg"],
+    ["a HEIC", file("IMG_1.heic", "image/heic"), "image/jpeg"],
+    ["a big JPEG", file("a.jpg", "image/jpeg", big), "image/jpeg"],
+    ["a big PNG", file("a.png", "image/png", big), "image/jpeg"],
+    ["a big WebP", file("a.webp", "image/webp", big), "image/jpeg"],
+    ["a small WebP", file("a.webp", "image/webp"), "image/webp"],
+    ["a small PNG", file("a.png", "image/png"), "image/png"],
+    ["a big GIF", file("a.gif", "image/gif", big), "image/gif"],
+    ["a video", file("a.mp4", "video/mp4", big), "video/mp4"],
+  ])("%s: %s", async (_label, picked, expected) => {
+    expect(preparedTypeOf(picked)).toBe(expected);
+    expect((await prepareUploadFile(picked, fakeDeps())).type).toBe(expected);
   });
 });
