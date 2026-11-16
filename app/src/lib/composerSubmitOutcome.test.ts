@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   postDestination,
   COMPOSER_DISPATCH_FAILED_MESSAGE,
+  COMPOSER_DISPATCH_UNMARKED_MESSAGE,
   composerSubmitOutcome,
   type ComposerSubmitOutcome,
 } from "./composerSubmitOutcome";
@@ -41,7 +42,7 @@ describe("composerSubmitOutcome", () => {
     ["503 DISPATCH_FAILED", { ok: false, mode: "now", body: DISPATCH_FAILED_BODY }, {
       kind: "dispatch_failed",
       resetForm: true,
-      toast: "Saved, but publishing couldn't start. Check Activity before you try again, and retry it there once it shows as failed.",
+      toast: "Saved, but publishing couldn't start — retry it from Activity.",
     }],
 
     // --- not created: keep the form so the user can fix and resend ---
@@ -55,9 +56,29 @@ describe("composerSubmitOutcome", () => {
     expect(composerSubmitOutcome(input)).toEqual(expected);
   });
 
+  // KK4: the route could not mark the results failed, so Activity shows the
+  // post as publishing until the stuck-job reconciler fails it.
+  it("503 DISPATCH_FAILED with resultsMarked false: the post shows as publishing first", () => {
+    expect(
+      composerSubmitOutcome({ ok: false, mode: "now", body: { ...DISPATCH_FAILED_BODY, resultsMarked: false } }),
+    ).toEqual({ kind: "dispatch_failed", resetForm: true, toast: COMPOSER_DISPATCH_UNMARKED_MESSAGE });
+    expect(COMPOSER_DISPATCH_UNMARKED_MESSAGE).toBe(
+      "The post was saved but didn't start. In Activity it can show as publishing for up to 2 hours before it shows as failed; then retry it there. Don't press Post again.",
+    );
+  });
+
+  // KK4: a created post whose rows couldn't be read back still says nothing
+  // was sent, from the route's sentence, without a per-platform list.
+  it("a 200 with allFailed and notSentText but no list: the not-posted warning", () => {
+    const text = "The post was saved, but none of its platforms could be sent. Open Activity to see why.";
+    expect(
+      composerSubmitOutcome({ ok: true, mode: "now", body: { postJobId: "job-1", allFailed: true, notSentText: text } }),
+    ).toEqual({ ...success(text), notSent: { allFailed: true, text } });
+  });
+
   it("exports the dispatch-failed copy the banner shows", () => {
     expect(COMPOSER_DISPATCH_FAILED_MESSAGE).toBe(
-      "Saved, but publishing couldn't start. Check Activity before you try again, and retry it there once it shows as failed.",
+      "Saved, but publishing couldn't start — retry it from Activity.",
     );
   });
 });

@@ -9,7 +9,8 @@
  *   Keeping the form filled and saying "Please try again." invited a second
  *   Post press → a second job, and retrying the first one later published the
  *   same content twice. So the form resets exactly like a success and the user
- *   is sent to Activity to retry the job that exists.
+ *   is sent to Activity to retry the job that exists. With `resultsMarked:
+ *   false` the job may show as publishing first (KK4), and the toast says so.
  * - `workspace_changed` — 409 `{ code: "WORKSPACE_CHANGED" }` (2026-11-01 audit,
  *   M3): the workspace cookie changed in another tab, so the server refused
  *   before writing anything. Nothing was created and the form is kept (the
@@ -42,11 +43,16 @@ export type ComposerSubmitOutcome =
   | { kind: "workspace_changed"; resetForm: false; toast: string }
   | { kind: "error"; resetForm: false; toast: string };
 
-// KK4: true whether or not the route could mark the results failed. If it
-// couldn't, Activity shows the post as publishing until the stuck-job
-// reconciler fails it (about 2 hours); Retry is offered from then on.
 export const COMPOSER_DISPATCH_FAILED_MESSAGE =
-  "Saved, but publishing couldn't start. Check Activity before you try again, and retry it there once it shows as failed.";
+  "Saved, but publishing couldn't start — retry it from Activity.";
+
+/**
+ * KK4: the 503 says `resultsMarked: false` when the route couldn't mark the
+ * results failed. Activity then shows the post as publishing until the
+ * stuck-job reconciler fails it (2 hours); Retry is offered from then on.
+ */
+export const COMPOSER_DISPATCH_UNMARKED_MESSAGE =
+  "The post was saved but didn't start. In Activity it can show as publishing for up to 2 hours before it shows as failed; then retry it there. Don't press Post again.";
 
 const FALLBACK_ERROR = "Failed to create post.";
 
@@ -101,17 +107,27 @@ export function composerSubmitOutcome(input: {
     const heldForApproval = field(body, "awaitingApproval") === true;
     const created = { kind: "success", resetForm: true, heldForApproval, toast: successToast(mode, heldForApproval) } as const;
     const notSent = readNotSent(field(body, "notSent"));
-    if (notSent.length === 0) return created;
     const allFailed = field(body, "allFailed") === true;
     // R10-client-journey L1: the server words it for its reader (a member
     // names the owner); an answer without it gets the owner's sentence.
     const serverText = field(body, "notSentText");
+    // KK4: nothing could be sent, but the rows naming why couldn't be read
+    // back, so the route sends its sentence without the list.
+    if (notSent.length === 0 && allFailed && typeof serverText === "string" && serverText) {
+      return { ...created, toast: serverText, notSent: { allFailed: true, text: serverText } };
+    }
+    if (notSent.length === 0) return created;
     const text = typeof serverText === "string" && serverText ? serverText : notSentSentence(notSent, allFailed);
     return { ...created, ...(allFailed ? { toast: text } : {}), notSent: { allFailed, text } };
   }
 
   if (field(body, "code") === "DISPATCH_FAILED") {
-    return { kind: "dispatch_failed", resetForm: true, toast: COMPOSER_DISPATCH_FAILED_MESSAGE };
+    const unmarked = field(body, "resultsMarked") === false;
+    return {
+      kind: "dispatch_failed",
+      resetForm: true,
+      toast: unmarked ? COMPOSER_DISPATCH_UNMARKED_MESSAGE : COMPOSER_DISPATCH_FAILED_MESSAGE,
+    };
   }
 
   const message = field(body, "message");

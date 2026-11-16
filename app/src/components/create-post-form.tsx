@@ -1929,9 +1929,11 @@ function CreatePostFormInner({
       }
 
       // The post exists — created, or (DISPATCH_FAILED, final review M3) saved
-      // but its publishing never started, so it already sits `failed` in
-      // Activity. Either way the form resets: pressing Post again would create
-      // a second job, and retrying the first later would publish it twice.
+      // but its publishing never started, so it sits `failed` in Activity (or,
+      // when the route couldn't mark it, shows as publishing until the stuck-job
+      // reconciler fails it; KK4). Either way the form resets: pressing Post
+      // again would create a second job, and retrying the first later would
+      // publish it twice.
       const postNotSent = outcome.kind === "success" ? (outcome.notSent ?? null) : null;
       if (outcome.kind === "dispatch_failed" || postNotSent?.allFailed) {
         toast.error(outcome.toast);

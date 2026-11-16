@@ -1504,9 +1504,11 @@ export async function POST(request: Request) {
         // KK4: the post exists, so marking its results is best-effort; a throw
         // here must not become the 500 that invites a second copy. A job left
         // pending is failed by the stuck-job reconciler (scheduledScanner.ts).
+        const marked: string[] = [];
         for (const id of storyPostJobId ? [postJobId, storyPostJobId] : [postJobId]) {
           try {
             await failPendingPostJobResults(id, DISPATCH_FAILURE);
+            marked.push(id);
           } catch (markError: unknown) {
             logger.error("[POST /api/posts] Couldn't mark the undispatched results failed", {
               error: markError,
@@ -1515,13 +1517,22 @@ export async function POST(request: Request) {
             });
           }
         }
-        // Not handed to publishing: the post counts toward no day until it is.
-        if (sendsWritten) await withdrawSend(sendsWritten);
+        const resultsMarked = marked.length === (storyPostJobId ? 2 : 1);
+        // A job whose results were marked failed won't publish, so it counts
+        // toward no day until it is retried. One left pending may still
+        // publish (the send may have arrived), so its count stays, as for any
+        // post the stuck-job reconciler later fails.
+        if (sendsWritten) {
+          const withdrawn = sendsWritten.postJobIds.filter((id) => marked.includes(id));
+          if (withdrawn.length > 0) await withdrawSend({ ...sendsWritten, postJobIds: withdrawn });
+        }
         return NextResponse.json(
           {
             code: DISPATCH_FAILURE.errorCode,
             error: DISPATCH_FAILURE.errorMessage,
             postJobId,
+            // Create says the post can show as publishing for a while first.
+            ...(resultsMarked ? {} : { resultsMarked: false }),
           },
           { status: 503 },
         );
@@ -1587,16 +1598,17 @@ export async function POST(request: Request) {
         userId: context.user.id,
         workspaceId: context.workspace.id,
       });
-      // Without the rows the reason is unknown, but not that nothing was handed off.
+      // Without the rows the platforms and reasons are unknown, but not that
+      // nothing was handed off: Create warns "Not posted" as it would have.
       const nothingSent = effectiveIntent === "immediate" && !mainSends && !storySends;
+      const nothingSentText = "The post was saved, but none of its platforms could be sent. Open Activity to see why.";
       return NextResponse.json({
         postJob: null,
         results: [],
         postJobId,
-        message: nothingSent
-          ? "The post was saved, but none of its platforms could be sent. Open Activity to see why."
-          : createdMessage(),
+        message: nothingSent ? nothingSentText : createdMessage(),
         ...known,
+        ...(nothingSent ? { allFailed: true, notSentText: nothingSentText } : {}),
       });
     }
     const upFront =

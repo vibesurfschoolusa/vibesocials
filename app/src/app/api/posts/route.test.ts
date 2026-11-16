@@ -113,7 +113,11 @@ import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH, canonicalBlobUrl } from
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
-import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
+import {
+  COMPOSER_DISPATCH_FAILED_MESSAGE,
+  COMPOSER_DISPATCH_UNMARKED_MESSAGE,
+  composerSubmitOutcome,
+} from "@/lib/composerSubmitOutcome";
 import { POST } from "./route";
 
 /**
@@ -821,12 +825,15 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
         code: "DISPATCH_FAILED",
         error: "Couldn't start publishing. Please try again.",
         postJobId: "job-1",
+        resultsMarked: false,
       });
-      // Nothing re-sends the post, so it counts toward no day.
-      expect(withdrawSendMock).toHaveBeenCalledWith(sendsWritten);
-      expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" })).toMatchObject({
+      // The send may have arrived and its pending results may still publish,
+      // so the count stays, as for any post the reconciler later fails.
+      expect(withdrawSendMock).not.toHaveBeenCalled();
+      expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" })).toEqual({
         kind: "dispatch_failed",
         resetForm: true,
+        toast: COMPOSER_DISPATCH_UNMARKED_MESSAGE,
       });
     });
 
@@ -856,7 +863,53 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
 
       expect(response.status).toBe(503);
       expect(failPendingMock).toHaveBeenCalledWith("job-s", expect.objectContaining({ errorCode: "DISPATCH_FAILED" }));
-      await expect(response.json()).resolves.toMatchObject({ code: "DISPATCH_FAILED", postJobId: "job-1" });
+      await expect(response.json()).resolves.toMatchObject({ code: "DISPATCH_FAILED", postJobId: "job-1", resultsMarked: false });
+    });
+
+    it("a pair whose feed marking fails takes back only the Story's send, which was marked", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const day = new Date("2026-11-14T15:00:00Z");
+      createPostJobOnlyMock.mockResolvedValue({
+        postJobId: "job-1",
+        storyPostJobId: "job-s",
+        mediaItemId: "media-1",
+        resultIds: ["r1"],
+        sendsWritten: { postJobIds: ["job-1", "job-s"], day },
+      });
+      inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+      failPendingMock.mockImplementation(async (postJobId: string) => {
+        if (postJobId === "job-1") throw new Error("database blip");
+        return { failedCount: 1, status: "failed" };
+      });
+
+      await POST(
+        jsonRequest({
+          blobUrl: "https://test.public.blob.vercel-storage.com/p.jpg",
+          mimeType: "image/jpeg",
+          baseCaption: "hi",
+          platforms: ["instagram"],
+          instagramMetadata: { placement: "both" },
+        }),
+      );
+
+      expect(withdrawSendMock).toHaveBeenCalledTimes(1);
+      expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["job-s"], day });
+    });
+
+    it("hand-off fails and marking works: today's answer, without resultsMarked, and the usual sentence", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+      const response = await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+      const body = await response.json();
+
+      expect(body).not.toHaveProperty("resultsMarked");
+      expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" })).toEqual({
+        kind: "dispatch_failed",
+        resetForm: true,
+        toast: COMPOSER_DISPATCH_FAILED_MESSAGE,
+      });
     });
 
     it("does not touch results when the dispatch succeeds", async () => {
@@ -3634,8 +3687,14 @@ describe("POST /api/posts - after the create has committed", () => {
 
     expect(response.status).toBe(200);
     expect(inngestSendMock).not.toHaveBeenCalled();
-    expect(body).toMatchObject({ postJobId: "job-1" });
-    expect(body.message).not.toMatch(/in progress/);
+    const text = "The post was saved, but none of its platforms could be sent. Open Activity to see why.";
+    expect(body).toMatchObject({ postJobId: "job-1", message: text, allFailed: true, notSentText: text });
+    // Create warns "Not posted", as it would have with the rows, not "Post queued".
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" })).toMatchObject({
+      kind: "success",
+      toast: text,
+      notSent: { allFailed: true, text },
+    });
   });
 
   it("reuse path: a read failure after the create is a 200 too", async () => {
