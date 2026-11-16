@@ -6,25 +6,36 @@ import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
  * locations and link routes, and the Settings location picker. Each surface
  * words the kind itself, for an owner or a member.
  *
- * - reconnect: the person's grant is the problem, and reconnecting fixes it.
- *   An API 401; a row already flagged or gone; no refresh token; a refresh
- *   failure that flags the row (the flag rule itself, isTerminalRefreshFailure);
- *   a 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT (a reconnect grants the scope; the
- *   row is not flagged for it).
+ * Each kind's next step names a control the person can see (JJ3 lead review):
+ * Settings' Google Business Profile card shows Reconnect only for a flagged row,
+ * and Connected, Switch account and Disconnect otherwise (connection-actions.tsx).
+ *
+ * - reconnect: the row is flagged (or gone), so the card shows Reconnect. A row
+ *   already flagged or gone; no refresh token; a refresh failure that flags the
+ *   row (the flag rule itself, isTerminalRefreshFailure).
+ * - signInAgain: Google refused the token but nothing is flagged, so the card
+ *   still shows Switch account. An API 401 (after any refresh); a 403
+ *   ACCESS_TOKEN_SCOPE_INSUFFICIENT (signing in again grants the scope).
  * - access: a 403 with a permission reason or none. The connected account
- *   does not manage what was asked for; reconnecting with the same account
- *   does not help. Never flagged.
+ *   does not manage what was asked for; the same account again does not help.
+ *   Never flagged.
+ * - notFound: a 404 on the chosen location's own calls (its reviews, its review
+ *   link): the location was removed from Google Business Profile. A 404 on any
+ *   other call (a review being replied to, say) is "other".
  * - tryLater: Google or our own setup, not the person: a 403 SERVICE_DISABLED,
  *   accessNotConfigured or quota reason, a 429, a 5xx, no answer, our own
  *   timeout, invalid_client, missing OAuth credentials, another refresh holding
  *   the lock.
- * - other: anything else (a 404, a body we could not read, a bug).
+ * - other: anything else (another 404, a body we could not read, a bug).
  *
  * `googleReasons` on the error are googleErrorReasons' normalized form
  * (platforms/rateLimited.ts), set where the response is read (googleReviews.ts,
  * gbpLocations.ts).
  */
-export type GoogleFailureKind = "reconnect" | "access" | "tryLater" | "other";
+export type GoogleFailureKind = "reconnect" | "signInAgain" | "access" | "notFound" | "tryLater" | "other";
+
+/** The calls on the chosen location itself, whose 404 means the location is gone (googleReviews.ts). */
+const LOCATION_CALL_CODES: ReadonlySet<string> = new Set(["GBP_REVIEWS_FETCH_FAILED", "GBP_REVIEW_LINK_FETCH_FAILED"]);
 
 const RECONNECT_CODES: ReadonlySet<string> = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE", "GOOGLE_NO_REFRESH_TOKEN"]);
 /**
@@ -83,10 +94,11 @@ export function googleFailureKind(error: unknown): GoogleFailureKind {
   if (code && RECONNECT_CODES.has(code)) return "reconnect";
   if (code && TRY_LATER_CODES.has(code)) return "tryLater";
 
-  if (status === 401) return "reconnect";
+  if (status === 401) return "signInAgain";
+  if (status === 404) return code && LOCATION_CALL_CODES.has(code) ? "notFound" : "other";
   if (status === 403) {
     const reasons = reasonsOf(fields);
-    if (reasons.some((reason) => SCOPE_REASONS.has(reason))) return "reconnect";
+    if (reasons.some((reason) => SCOPE_REASONS.has(reason))) return "signInAgain";
     if (reasons.some((reason) => SERVICE_REASONS.has(reason))) return "tryLater";
     return "access";
   }

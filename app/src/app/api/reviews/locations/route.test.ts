@@ -142,7 +142,8 @@ describe("GET /api/reviews/locations", () => {
   // F7 (R1 M5): what the page shows is a plain sentence, with a reconnect step
   // when Google refused.
   // JJ3 lead review: a 403 is not a dead grant (googleForbiddenMessage).
-  it.each([401])("asks for a reconnect when Google answers %i", async (status) => {
+  // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
+  it.each([401])("says to press Switch account when Google answers %i", async (status) => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue({
@@ -155,25 +156,26 @@ describe("GET /api/reviews/locations", () => {
     const body = await (await GET()).json();
 
     expect(body).toEqual({
-      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      error: "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.",
       reconnect: true,
     });
   });
 
   // JJ3 lead review: no location is chosen here yet, so the sentence is about the account.
-  it("a 403 says to check that the account still manages the business, with no reconnect flag", async () => {
+  it("a 403 says to check that the account still manages the business, with the Settings link", async () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 403 })) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
       error:
-        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or reconnect with an account that does.",
+        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
+      reconnect: true,
     });
   });
 
   // R12 L1: a member reads who can reconnect, and the page gets no Settings link.
-  it("a member: who can reconnect when Google refuses", async () => {
+  it("a member: who can sign in again when Google refuses the token", async () => {
     getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -185,7 +187,7 @@ describe("GET /api/reviews/locations", () => {
     }) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
-      error: "Google refused the request. The workspace owner can reconnect Google Business Profile.",
+      error: "Google refused the request. The workspace owner can sign in to Google Business Profile again.",
     });
   });
 

@@ -114,6 +114,10 @@ function linkFailureReason(kind: GoogleFailureKind, role: ReviewsReader): string
   switch (kind) {
     case "reconnect":
       return reviewLinkReason("needs_reconnect", role);
+    case "signInAgain":
+      return reviewLinkReason("sign_in_again", role);
+    case "notFound":
+      return reviewLinkReason("location_removed", role);
     case "access":
       return googleAccessRefusedMessage("location", role);
     case "tryLater":

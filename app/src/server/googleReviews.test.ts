@@ -294,8 +294,11 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
-  it("reconnect: the owner gets the step and the Settings link, a member who can take it", () => {
-    for (const error of [failing({ status: 401 }), failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })]) {
+  it("reconnect (a flagged row, whose card shows Reconnect): the owner gets the step and the Settings link", () => {
+    for (const error of [
+      failing({ code: "RECONNECT_REQUIRED" }),
+      failing({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 400, oauthError: "invalid_grant" }),
+    ]) {
       expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
       expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
     }
@@ -305,12 +308,37 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     );
   });
 
-  it("access, about a location (list, reply): no reconnect flag", () => {
+  // JJ3 lead review: an unflagged row's card shows Connected, Switch account and Disconnect.
+  it("signInAgain (the card shows Switch account): the owner is told to press it", () => {
+    for (const error of [failing({ status: 401 }), failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })]) {
+      expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({
+        error:
+          "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.",
+        reconnect: true,
+      });
+      expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({
+        error: "Google refused the request. The workspace owner can sign in to Google Business Profile again.",
+      });
+    }
+  });
+
+  it("notFound: the chosen location was removed; the owner chooses another in Settings", () => {
+    const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({
+      error: "This location is no longer in Google Business Profile. Choose another location in Settings.",
+      reconnect: true,
+    });
+    expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
+    });
+  });
+
+  it("access, about a location (list, reply): the Switch account step, linked to Settings for an owner", () => {
     const error = failing({ status: 403, googleReasons: ["forbidden"] });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE });
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE, reconnect: true });
     expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE });
     expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe(
-      "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.",
+      "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
     );
     expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe(
       "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
@@ -321,7 +349,8 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     const error = failing({ status: 403 });
     expect(reviewsErrorBody(error, "Fallback.", "owner", { subject: "account" })).toEqual({
       error:
-        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or reconnect with an account that does.",
+        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
+      reconnect: true,
     });
     expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({
       error:

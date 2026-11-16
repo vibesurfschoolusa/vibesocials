@@ -30,6 +30,11 @@ export const GBP_MAX_PAGES = 50;
  * tryLater: Google or our own setup failed; trying again later may work.
  */
 export const GOOGLE_NO_ANSWER_MESSAGE = "Google didn't answer. Try again in a minute.";
+/**
+ * signInAgain: Google refused the token, but the row is not flagged, so the
+ * card above shows Switch account, not Reconnect (JJ3 lead review).
+ */
+export const GBP_SIGN_IN_AGAIN_MESSAGE = "Google refused the request. Press Switch account above and sign in again.";
 /** access: this Google login may not read its Business Profile accounts. */
 export const GBP_ACCOUNTS_REFUSED_MESSAGE =
   "Google refused access to the Business Profile accounts of this Google account. Press Switch account above and sign in with the Google account that manages your listing.";
@@ -64,8 +69,8 @@ export interface ListedGbpLocation {
  * `complete` is false when an account's locations could not all be read (it
  * failed, or ran past GBP_MAX_PAGES): the picker still shows what was read,
  * but the location save must not treat a missing location as "not listed".
- * `unread` says why accounts were skipped: "access" when any refused access
- * (the person can fix that), "failed" when Google failed for them, else null.
+ * `unread` says why accounts were skipped: some refused access, some failed
+ * (Google, or a kind with no fix here), or both (JJ3 lead review: both are said).
  * `refusedOnly` is true when access refusals are the only reason the list is
  * not complete: a location missing from it is then not one this login manages.
  */
@@ -74,15 +79,23 @@ export type GbpLocationList =
       ok: true;
       locations: ListedGbpLocation[];
       complete: boolean;
-      unread: "access" | "failed" | null;
+      unread: UnreadAccounts;
       refusedOnly: boolean;
     }
   | { ok: false; response: NextResponse };
 
-/** The picker's line about skipped accounts, or null when none were skipped. */
-export function unreadAccountsNotice(unread: "access" | "failed" | null): string | null {
-  if (unread === "access") return GBP_SOME_ACCOUNTS_REFUSED_NOTICE;
-  return unread === "failed" ? GBP_SOME_ACCOUNTS_FAILED_NOTICE : null;
+export interface UnreadAccounts {
+  access: boolean;
+  failed: boolean;
+}
+
+/** The picker's line about skipped accounts, each reason with its own step; null when none were skipped. */
+export function unreadAccountsNotice(unread: UnreadAccounts): string | null {
+  const parts = [
+    unread.access ? GBP_SOME_ACCOUNTS_REFUSED_NOTICE : null,
+    unread.failed ? GBP_SOME_ACCOUNTS_FAILED_NOTICE : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 function refused(body: { error: string; code?: string }, init: { status: number }): GbpLocationList {
@@ -97,6 +110,8 @@ function accountsRefusal(kind: GoogleFailureKind): GbpLocationList {
   switch (kind) {
     case "reconnect":
       return reconnectRefusal();
+    case "signInAgain":
+      return refused({ error: GBP_SIGN_IN_AGAIN_MESSAGE }, { status: 409 });
     case "access":
       return refused({ error: GBP_ACCOUNTS_REFUSED_MESSAGE }, { status: 403 });
     case "tryLater":
@@ -242,7 +257,7 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
     if (!accounts.ok) return accountsRefusal(kindOf(accounts.failure));
 
     let complete = accounts.complete;
-    let unread: "access" | "failed" | null = null;
+    const unread: UnreadAccounts = { access: false, failed: false };
     // Not complete for a reason other than an account refusing access.
     let partlyUnread = !accounts.complete;
     const allLocations: ListedGbpLocation[] = [];
@@ -261,11 +276,15 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
       const locations = await readAllPages<GbpLocation>(url, "locations", get);
       if (!locations.ok) {
         const kind = kindOf(locations.failure);
-        if (kind === "reconnect") return reconnectRefusal();
-        // Skipped, and said so (unreadAccountsNotice): access refused is what
-        // the person can fix, so it outranks Google failing.
-        unread = kind === "access" || unread === "access" ? "access" : "failed";
-        if (kind !== "access") partlyUnread = true;
+        // The token itself was refused: the whole list ends with that step.
+        if (kind === "reconnect" || kind === "signInAgain") return accountsRefusal(kind);
+        // Skipped, and said so (unreadAccountsNotice), with why.
+        if (kind === "access") {
+          unread.access = true;
+        } else {
+          unread.failed = true;
+          partlyUnread = true;
+        }
         complete = false;
         continue;
       }

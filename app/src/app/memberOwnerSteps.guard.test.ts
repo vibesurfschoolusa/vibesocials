@@ -89,6 +89,9 @@ const OWNER_STEPS: RegExp[] = [
   /\bAdd one in Google Business Profile\b/,
   /\bCheck that the listing is verified\b/,
   /\bCheck that the connected Google account still manages\b/,
+  // JJ3 lead review: the card's own control, and the location step.
+  /\bSwitch account\b/,
+  /\bChoose another location\b/,
   /href="\/settings#(connections|plan|posting-times|connect-link|team)"/,
   /href="\/api\/auth\//,
   // Review of X1: owner-only steps other pages say, so a leak of any of them to a member fails here.
@@ -169,10 +172,15 @@ async function tiktokReconnectAnswer(role: Role): Promise<string> {
   return JSON.stringify(await response.json());
 }
 
-// JJ3 lead review: a 401 is the refusal that asks for a reconnect; a 403 says
-// to check the account (googleForbiddenMessage), guarded below too.
+// JJ3 lead review: a flagged row asks for a reconnect; a 403 says
+// to check the account (googleFailure.ts kinds), guarded below too.
 function reviewsRefused(role: Role, status = 401, subject: "location" | "account" = "location"): string {
-  const body = reviewsErrorBody({ status }, "Couldn't load your Google reviews.", role, { subject });
+  // A 401 is a flagged row here (the card shows Reconnect): RECONNECT_REQUIRED.
+  return reviewsRefusedBy(role, status === 401 ? { code: "RECONNECT_REQUIRED" } : { status }, subject);
+}
+
+function reviewsRefusedBy(role: Role, error: object, subject: "location" | "account" = "location"): string {
+  const body = reviewsErrorBody(error, "Couldn't load your Google reviews.", role, { subject });
   return render(
     createElement(ErrorState, {
       title: "Couldn't load reviews",
@@ -184,7 +192,14 @@ function reviewsRefused(role: Role, status = 401, subject: "location" | "account
   );
 }
 
-const LINK_PROBLEMS: ReviewLinkProblem[] = ["not_connected", "no_location", "needs_reconnect", "google_has_none"];
+const LINK_PROBLEMS: ReviewLinkProblem[] = [
+  "not_connected",
+  "no_location",
+  "needs_reconnect",
+  "sign_in_again",
+  "location_removed",
+  "google_has_none",
+];
 
 /** Each surface: what an owner and a member read in the same state. */
 const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
@@ -195,6 +210,11 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
   "Reviews, Google refused (error card)": (role) => reviewsRefused(role),
   "Reviews, Google refused access to the location (error card)": (role) => reviewsRefused(role, 403),
   "Reviews, Google refused access to the account (error card)": (role) => reviewsRefused(role, 403, "account"),
+  // JJ3 lead review: an unflagged refusal (Switch account) and a removed location.
+  "Reviews, Google refused, row not flagged (error card)": (role) =>
+    reviewsRefusedBy(role, { status: 403, googleReasons: ["accesstokenscopeinsufficient"] }),
+  "Reviews, location removed (error card)": (role) =>
+    reviewsRefusedBy(role, { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }),
   ...Object.fromEntries(
     LINK_PROBLEMS.map((problem) => [`Reviews, Get more reviews (${problem})`, (role: Role) => reviewLinkReason(problem, role)]),
   ),

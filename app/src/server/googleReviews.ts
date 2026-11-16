@@ -217,7 +217,13 @@ export function googleRefusedBody(role: ReviewsReader): { error: string; reconne
 }
 
 /** Why GET /api/reviews/link has no link for the "Get more reviews" panel. */
-export type ReviewLinkProblem = "not_connected" | "no_location" | "needs_reconnect" | "google_has_none";
+export type ReviewLinkProblem =
+  | "not_connected"
+  | "no_location"
+  | "needs_reconnect"
+  | "sign_in_again"
+  | "location_removed"
+  | "google_has_none";
 
 const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, string>> = {
   not_connected: {
@@ -232,6 +238,16 @@ const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, strin
   needs_reconnect: {
     owner: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
     member: "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
+  },
+  // JJ3 lead review: Google refused, nothing flagged: the card shows Switch account.
+  sign_in_again: {
+    owner:
+      "Press Switch account on the Google Business Profile card in Settings and sign in again to get your review link.",
+    member: "The workspace owner can sign in to Google Business Profile again; then the review link shows here.",
+  },
+  location_removed: {
+    owner: "This location is no longer in Google Business Profile. Choose another location in Settings.",
+    member: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
   },
   google_has_none: {
     owner:
@@ -254,11 +270,16 @@ export function reviewLinkReason(problem: ReviewLinkProblem, role: ReviewsReader
  * neither, so it carries no reconnect flag, and nothing is flagged.
  */
 export const GOOGLE_ACCESS_REFUSED_MESSAGE =
-  "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.";
+  "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.";
 export const GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE =
   "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.";
 const GOOGLE_ACCOUNT_REFUSED_MESSAGE =
-  "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or reconnect with an account that does.";
+  "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.";
+/** signInAgain: refused, nothing flagged, so the card offers Switch account, not Reconnect. */
+export const GOOGLE_SIGN_IN_AGAIN_MESSAGE =
+  "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.";
+export const GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE =
+  "Google refused the request. The workspace owner can sign in to Google Business Profile again.";
 const GOOGLE_ACCOUNT_REFUSED_MEMBER_MESSAGE =
   "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile.";
 /** Google or our own setup failed, not the person: the same words for everyone. */
@@ -283,6 +304,11 @@ export function googleAccessRefusedMessage(subject: AccessSubject, role: Reviews
  * Settings), and only for an owner (googleRefusedBody). `fallback` is the
  * route's own sentence for anything else: an error's own text is never shown.
  */
+/** An owner's answer carries `reconnect: true`: the page links to Settings, where the step is. */
+function ownerStep(role: ReviewsReader, owner: string, member: string): { error: string; reconnect?: true } {
+  return role === "member" ? { error: member } : { error: owner, reconnect: true };
+}
+
 export function reviewsErrorBody(
   error: unknown,
   fallback: string,
@@ -293,8 +319,14 @@ export function reviewsErrorBody(
   switch (kind) {
     case "reconnect":
       return googleRefusedBody(role);
-    case "access":
-      return { error: googleAccessRefusedMessage(options.subject ?? "location", role) };
+    case "signInAgain":
+      return ownerStep(role, GOOGLE_SIGN_IN_AGAIN_MESSAGE, GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE);
+    case "access": {
+      const subject = options.subject ?? "location";
+      return ownerStep(role, googleAccessRefusedMessage(subject, "owner"), googleAccessRefusedMessage(subject, "member"));
+    }
+    case "notFound":
+      return ownerStep(role, reviewLinkReason("location_removed", "owner"), reviewLinkReason("location_removed", "member"));
     case "tryLater":
       return { error: GOOGLE_NOT_ANSWERING_MESSAGE };
     default:

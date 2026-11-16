@@ -24,6 +24,7 @@ vi.mock("@/server/platforms/connectionRefresh", () => ({
 vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: h.refreshGoogle }));
 
 import {
+  GBP_SIGN_IN_AGAIN_MESSAGE,
   GBP_ACCOUNTS_REFUSED_MESSAGE,
   GBP_ACCOUNTS_NOT_SENT_MESSAGE,
   GBP_SOME_ACCOUNTS_FAILED_NOTICE,
@@ -325,6 +326,17 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
   });
 
+  it.each(routes)("%s: a 401 again after a refresh that works says to press Switch account", async (_label, call) => {
+    googleInTurn({ status: 401 }, { status: 401 });
+    h.refresh.mockResolvedValue({ ...CONNECTION, accessToken: "fresh" });
+
+    const res = await call();
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE });
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
   it.each(routes)("%s: a 401 with a refresh that works is retried and listed", async (_label, call) => {
     const fetchMock = googleInTurn(
       { status: 401 },
@@ -372,13 +384,15 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     body: { error: { code: status, ...(reason ? { details: [{ reason }] } : {}) } },
   });
 
-  it.each(routes)("%s: a 403 for a missing scope says reconnect, flags nothing and refreshes nothing", async (_label, call) => {
+  // JJ3 lead review: nothing is flagged, so the card shows Switch account (not Reconnect).
+  it.each(routes)("%s: a 403 for a missing scope says to press Switch account, flags nothing and refreshes nothing", async (_label, call) => {
     googleInTurn(googleError(403, "ACCESS_TOKEN_SCOPE_INSUFFICIENT"));
 
     const res = await call();
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE });
+    expect(GBP_SIGN_IN_AGAIN_MESSAGE).toBe("Google refused the request. Press Switch account above and sign in again.");
     expect(h.refresh).not.toHaveBeenCalled();
     expect(h.refreshGoogle).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
@@ -483,7 +497,8 @@ describe("some accounts' locations could not be read", () => {
     expect((await (await GET()).json()).notice).toBe(GBP_SOME_ACCOUNTS_FAILED_NOTICE);
   });
 
-  it("refused access outranks a failure: the notice names what the person can fix", async () => {
+  // JJ3 lead review: both are said, each with its own next step.
+  it("one account refusing access and another failing: the notice names both", async () => {
     google({
       [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }, { name: "accounts/3" }] } },
       [`${INFO}/accounts/1/locations|`]: { status: 503 },
@@ -491,7 +506,9 @@ describe("some accounts' locations could not be read", () => {
       [`${INFO}/accounts/3/locations|`]: { body: { locations: [location(3, 1)] } },
     });
 
-    expect((await (await GET()).json()).notice).toBe(GBP_SOME_ACCOUNTS_REFUSED_NOTICE);
+    expect((await (await GET()).json()).notice).toBe(
+      `${GBP_SOME_ACCOUNTS_REFUSED_NOTICE} ${GBP_SOME_ACCOUNTS_FAILED_NOTICE}`,
+    );
   });
 
   it("every account read: no notice", async () => {

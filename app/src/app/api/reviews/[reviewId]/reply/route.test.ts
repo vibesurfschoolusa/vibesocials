@@ -18,7 +18,7 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   refreshAccessToken: vi.fn(),
 }));
 
-import { GOOGLE_REFUSED_MEMBER_MESSAGE, GOOGLE_REFUSED_MESSAGE, refreshAccessToken } from "@/server/googleReviews";
+import { GOOGLE_REFUSED_MESSAGE, refreshAccessToken } from "@/server/googleReviews";
 
 import { POST } from "./route";
 
@@ -72,13 +72,14 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
-  it("asks for a reconnect when Google refuses the reply", async () => {
+  // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
+  it("says to press Switch account when Google refuses the reply", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.", reconnect: true });
   });
 
   it("gives a plain sentence for any other failure", async () => {
@@ -150,25 +151,25 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
-  it("asks for a reconnect when Google refuses the listing", async () => {
+  it("says to press Switch account when Google refuses the listing", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     listGbpLocationsMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: "Google refused the request. Press Switch account on the Google Business Profile card in Settings and sign in again.", reconnect: true });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 });
 
 // R12 L1: a member may reply, but only an owner can reconnect.
 describe("POST /api/reviews/[reviewId]/reply for a member", () => {
-  it("Google refuses: who can reconnect, no Settings link", async () => {
+  it("Google refuses the token: who can sign in again, no Settings link", async () => {
     replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
+    await expect(response.json()).resolves.toEqual({ error: "Google refused the request. The workspace owner can sign in to Google Business Profile again." });
   });
 });
 

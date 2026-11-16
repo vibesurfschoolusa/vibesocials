@@ -21,6 +21,8 @@ import {
   GOOGLE_NOT_ANSWERING_MESSAGE,
   GOOGLE_REFUSED_MEMBER_MESSAGE,
   GOOGLE_REFUSED_MESSAGE,
+  GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE,
+  GOOGLE_SIGN_IN_AGAIN_MESSAGE,
   refreshAccessToken,
 } from "@/server/googleReviews";
 
@@ -55,7 +57,8 @@ describe("GET /api/reviews", () => {
     expect(fetchAllReviewsMock).toHaveBeenCalledWith("tok", "accounts/1/locations/2");
   });
 
-  it("asks for a reconnect when Google refuses the token (401)", async () => {
+  // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
+  it("says to press Switch account when Google refuses the token (401)", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed to fetch Google Business Profile reviews (status 401)"), { status: 401 }),
@@ -64,17 +67,17 @@ describe("GET /api/reviews", () => {
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_SIGN_IN_AGAIN_MESSAGE, reconnect: true });
   });
 
   // JJ3 lead review: a 403 is not a dead grant; reconnecting fixes neither case.
-  it("a 403 permission refusal says to check the account, with no reconnect flag", async () => {
+  it("a 403 permission refusal says to check the account, with the Settings link", async () => {
     getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed (status 403)"), { status: 403, googleReasons: ["forbidden"] }),
     );
 
-    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE });
+    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE, reconnect: true });
   });
 
   it("a 403 for a disabled service says to try later", async () => {
@@ -110,13 +113,13 @@ describe("GET /api/reviews", () => {
 // R12 L1: only an owner can reconnect, so a member reads who can, without the
 // reconnect flag that makes the page link to Settings.
 describe("GET /api/reviews for a member", () => {
-  it("Google refuses: who can reconnect, no Settings link", async () => {
+  it("Google refuses the token: who can sign in again, no Settings link", async () => {
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("401"), { status: 401 }));
 
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE });
   });
 
   // JJ3 lead review: each kind, for a member, and one log line per failure.
@@ -132,6 +135,23 @@ describe("GET /api/reviews for a member", () => {
     const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
     expect(lines).toHaveLength(1);
     expect(lines[0][1]).toMatchObject({ where: "GET /api/reviews", kind: "access", status: 403 });
+  });
+
+  // JJ3 lead review: the chosen location was removed from Google Business Profile.
+  it("a 404 on the location's reviews: it is gone; owner chooses another, a member reads who can", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gone = Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
+    fetchAllReviewsMock.mockRejectedValue(gone);
+
+    await expect((await get()).json()).resolves.toEqual({
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
+    });
+
+    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    await expect((await get()).json()).resolves.toEqual({
+      error: "This location is no longer in Google Business Profile. Choose another location in Settings.",
+      reconnect: true,
+    });
   });
 
   it("Google down: the same try-later sentence as an owner's", async () => {

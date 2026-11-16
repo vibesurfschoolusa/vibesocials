@@ -17,9 +17,24 @@ const refresh = (status: number | undefined, oauthError?: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("googleFailureKind", () => {
+  // JJ3 lead review: "reconnect" is a flagged row (the card shows Reconnect);
+  // an unflagged one still shows Connected and Switch account: "signInAgain".
   it.each([
-    ["an API 401", failure({ status: 401 })],
-    ["a 403 for a missing scope (a reconnect grants it)", failure({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })],
+    ["an API 401 (the stored token no longer works; nothing flagged)", failure({ status: 401 })],
+    ["a 403 for a missing scope (signing in again grants it)", failure({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })],
+  ])("signInAgain: %s", (_label, error) => {
+    expect(googleFailureKind(error)).toBe("signInAgain");
+  });
+
+  // JJ3 lead review: the chosen location was removed from Google Business Profile.
+  it.each([
+    ["the reviews of the location", failure({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" })],
+    ["the location's review link", failure({ status: 404, code: "GBP_REVIEW_LINK_FETCH_FAILED" })],
+  ])("notFound: a 404 on %s", (_label, error) => {
+    expect(googleFailureKind(error)).toBe("notFound");
+  });
+
+  it.each([
     ["a row already flagged", failure({ code: "RECONNECT_REQUIRED" })],
     ["a row removed meanwhile", failure({ code: "CONNECTION_GONE" })],
     ["no refresh token", failure({ code: "GOOGLE_NO_REFRESH_TOKEN" })],
@@ -60,7 +75,8 @@ describe("googleFailureKind", () => {
   });
 
   it.each([
-    ["a 404", failure({ status: 404 })],
+    ["a 404 with no call named", failure({ status: 404 })],
+    ["a 404 on a reply (the review, not the location)", failure({ status: 404, code: "GBP_REVIEWS_REPLY_FAILED" })],
     ["a refresh 403 (not flagged)", refresh(403, "unauthorized_client")],
     ["a JSON parse error", new SyntaxError("Unexpected token < in JSON at position 0")],
     ["a programming TypeError", new TypeError("Cannot read properties of undefined")],

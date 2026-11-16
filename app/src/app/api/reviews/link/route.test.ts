@@ -240,11 +240,30 @@ describe("GET /api/reviews/link", () => {
       mocks.findFirst.mockResolvedValue(connection());
     });
 
-    it("a 401 says reconnect", async () => {
+    // JJ3 lead review: an API 401 flags nothing, so the card shows Switch account, not Reconnect.
+    it("a 401 says to press Switch account and sign in again", async () => {
       mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 401, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
 
       expect((await (await GET()).json()).reason).toBe(
+        "Press Switch account on the Google Business Profile card in Settings and sign in again to get your review link.",
+      );
+    });
+
+    it("a refresh that flags the row says Reconnect, as the card does", async () => {
+      mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() - 60 * 1000) }));
+      mocks.refreshAccessToken.mockRejectedValue(failing({ code: "RECONNECT_REQUIRED" }));
+
+      expect((await (await GET()).json()).reason).toBe(
         "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+      );
+    });
+
+    // JJ3 lead review: the chosen location was removed from Google Business Profile.
+    it("a 404 on the location says it is gone and to choose another", async () => {
+      mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 404, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
+
+      expect((await (await GET()).json()).reason).toBe(
+        "This location is no longer in Google Business Profile. Choose another location in Settings.",
       );
     });
 
@@ -254,7 +273,7 @@ describe("GET /api/reviews/link", () => {
       );
 
       expect((await (await GET()).json()).reason).toBe(
-        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.",
+        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or press Switch account on the Google Business Profile card in Settings and sign in with an account that does.",
       );
       expect(mocks.update).not.toHaveBeenCalled();
     });
@@ -275,7 +294,12 @@ describe("GET /api/reviews/link", () => {
       mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "member"));
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 401 }));
       expect((await (await GET()).json()).reason).toBe(
-        "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
+        "The workspace owner can sign in to Google Business Profile again; then the review link shows here.",
+      );
+
+      mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 404, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
+      expect((await (await GET()).json()).reason).toBe(
+        "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
       );
 
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 403 }));
