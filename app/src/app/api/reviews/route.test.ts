@@ -280,7 +280,7 @@ describe("GET /api/reviews for a member", () => {
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
 
     await expect((await get()).json()).resolves.toEqual({
-      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
     });
 
     getWorkspaceContextMock.mockResolvedValue(OWNER);
@@ -331,14 +331,14 @@ describe("GET /api/reviews for a member", () => {
     });
   });
 
-  it("a member's saved store code gone: the owner can choose another in Settings, never 'pick above'", async () => {
+  it("a member's saved store code gone: the owner can choose another, never 'pick above'", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     findFirstMock.mockResolvedValue({ id: "c1", accessToken: "tok", expiresAt: null, metadata: { locationName: "FTL-01" } });
     listMock.mockResolvedValue(listing([listed("accounts/1/locations/2", "FTL-01"), listed("accounts/1/locations/3")]));
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
 
     await expect((await get()).json()).resolves.toEqual({
-      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
     });
   });
 

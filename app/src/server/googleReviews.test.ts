@@ -341,7 +341,7 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
       reconnect: true,
     });
     expect(reviewsErrorBody(error, "Fallback.", "member", { location: "saved" })).toEqual({
-      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
     });
   });
 
@@ -349,7 +349,7 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
     expect(reviewsErrorBody(error, "Fallback.", "owner", { location: "picked" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
     expect(reviewsErrorBody(error, "Fallback.", "member", { location: "picked" })).toEqual({
-      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
     });
   });
 

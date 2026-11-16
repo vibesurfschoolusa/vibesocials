@@ -317,7 +317,7 @@ const LOCATION_GONE_SAVED_MESSAGE =
   "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).";
 /** R26 client-journey L1: a member has no picker (they read the saved location only). */
 const LOCATION_GONE_MEMBER_MESSAGE =
-  "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.";
+  "This location is no longer in Google Business Profile. The workspace owner can choose another location.";
 /** Google or our own setup failed, not the person: the same words for everyone. */
 export const GOOGLE_NOT_ANSWERING_MESSAGE =
   "Google Business Profile isn't answering for Vibe Socials right now. Try again later.";
