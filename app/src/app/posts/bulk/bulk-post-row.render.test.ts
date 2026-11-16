@@ -99,7 +99,9 @@ describe("Add many row: Improve", () => {
     const html = render(row({ improving: true }));
     expect(textarea(html)).toContain("readOnly");
     const improve = html.match(/<button[^>]*>(?:(?!<\/button>).)*Improv(?:(?!<\/button>).)*<\/button>/)![0];
-    expect(improve).toContain("disabled");
+    // A loading Button keeps focus: aria-disabled, not the real attribute (R25 pages L6).
+    expect(improve).toContain('aria-disabled="true"');
+    expect(improve).not.toMatch(/\sdisabled=""/);
     expect(improve).toMatch(/aria-busy="true"|Improving/);
     expect(textarea(render(row()))).not.toContain("readOnly");
   });

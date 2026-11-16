@@ -48,7 +48,7 @@ describe("ReviewPostCard", () => {
   it("shows the approved state clearly and disables approving again", () => {
     const html = render(post({ state: "approved" }));
     expect(html).toContain("You approved this");
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Looks good<\/button>/);
+    expect(html).toMatch(/<button[^>]*\sdisabled=""[^>]*>Looks good<\/button>/);
   });
 
   it("shows a change request with the client's note and no buttons", () => {
