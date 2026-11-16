@@ -832,7 +832,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         clientPayload: uploadSizePayload(prepared),
         onUploadProgress: (progressEvent) => setUploadProgress(progressEvent.percentage),
       }).catch(async (uploadError: unknown) => {
-        throw await explainUploadFailure(uploadError);
+        throw await explainUploadFailure(uploadError, workspaceId);
       });
 
       const response = await fetchOrNoAnswer("/api/media", {

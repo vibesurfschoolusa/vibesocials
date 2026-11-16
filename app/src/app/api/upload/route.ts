@@ -11,7 +11,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { MISSING_WORKSPACE_ID_CODE, renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { MISSING_WORKSPACE_ID_CODE, renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
 import {
@@ -40,11 +40,15 @@ function isSignablePathname(pathname: string, workspaceId: string): boolean {
  * and throws a generic error, so Create and the Media page ask here to show the
  * storage sentence instead (lib/uploadFailure.ts).
  */
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: Request): Promise<Response> {
   const context = await getWorkspaceContext();
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32: the page's workspace (every upload path has it through uploadRouteUrl), so a tab left on another one is told to reload, never given this workspace's storage.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   // Why this person's last token was refused (uploadRefusal.ts): one row read,
   // so it is answered before the throttle below. `storageFull: true` too,
   // because a tab opened before this release shows `error` only with it, and

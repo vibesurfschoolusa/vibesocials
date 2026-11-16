@@ -75,6 +75,17 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
   { file: "lib/uploadFailure.ts", constant: "UPLOAD_REFUSED_MESSAGE", why: UPLOAD_STEP },
   { file: "lib/uploadFailure.ts", constant: "UPLOAD_STORAGE_UNREACHABLE_MESSAGE", why: UPLOAD_STEP },
   { file: "components/media-library.tsx", constant: "uploadNetwork", why: UPLOAD_STEP },
+  // R32: explainUploadFailure's question is refused for a page drawn for another workspace (or sent no id).
+  {
+    file: "lib/workspaceChanged.ts",
+    constant: "WORKSPACE_CHANGED_SAVE_MESSAGE",
+    why: `${UPLOAD_STEP} The page is for another workspace, so its upload token is refused too; the sentence says to reload and try again, not that nothing happened.`,
+  },
+  {
+    file: "lib/workspaceChanged.ts",
+    constant: "MISSING_WORKSPACE_ID_MESSAGE",
+    why: `${UPLOAD_STEP} A page from before the id was sent gets no upload token either; the sentence says to reload and try again.`,
+  },
   { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_COVER_FAILED_TEXT", why: UPLOAD_STEP },
   { file: "app/posts/bulk/bulk-posts-form.tsx", text: "The upload failed. Retry it or remove it.", why: UPLOAD_STEP },
   { file: "app/u/[token]/send-file.ts", constant: "UPLOAD_FAILED_MESSAGE", why: `${UPLOAD_STEP} On /u the token and storage steps register nothing; the last step says the file may have arrived.` },

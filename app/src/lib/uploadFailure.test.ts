@@ -7,6 +7,11 @@ import {
   UPLOAD_STORAGE_UNREACHABLE_MESSAGE,
   UploadRefusedError,
 } from "./uploadFailure";
+import {
+  MISSING_WORKSPACE_ID_MESSAGE,
+  renderedWorkspaceRefusal,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "./workspaceChanged";
 
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
@@ -21,9 +26,9 @@ describe("explainUploadFailure", () => {
       jsonResponse({ storageFull: true, error: FULL, code: "WORKSPACE_STORAGE_FULL" }),
     );
 
-    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), "ws-1", fetchMock);
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/upload", { method: "GET" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/upload?workspaceId=ws-1", { method: "GET" });
     expect(explained).toBeInstanceOf(UploadRefusedError);
     expect(explained.message).toBe(FULL);
   });
@@ -32,7 +37,7 @@ describe("explainUploadFailure", () => {
     const sentence = "This page is out of date. Reload it, then try again.";
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ refused: true, error: sentence, code: "UPLOAD_PAGE_OUT_OF_DATE" }));
 
-    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), "ws-1", fetchMock);
 
     expect(explained).toBeInstanceOf(UploadRefusedError);
     expect(explained.message).toBe(sentence);
@@ -42,27 +47,27 @@ describe("explainUploadFailure", () => {
     const original = new Error("network down");
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
 
-    await expect(explainUploadFailure(original, fetchMock)).resolves.toBe(original);
+    await expect(explainUploadFailure(original, "ws-1", fetchMock)).resolves.toBe(original);
   });
 
   it("keeps the original error when the question itself fails", async () => {
     const original = new Error("network down");
     const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
 
-    await expect(explainUploadFailure(original, fetchMock)).resolves.toBe(original);
+    await expect(explainUploadFailure(original, "ws-1", fetchMock)).resolves.toBe(original);
   });
 
   it("keeps the original error on a non-ok answer", async () => {
     const original = new Error("x");
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "Unauthorized" }, false));
 
-    await expect(explainUploadFailure(original, fetchMock)).resolves.toBe(original);
+    await expect(explainUploadFailure(original, "ws-1", fetchMock)).resolves.toBe(original);
   });
 
   it("wraps a non-Error throw so callers always get an Error", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
 
-    const explained = await explainUploadFailure("boom", fetchMock);
+    const explained = await explainUploadFailure("boom", "ws-1", fetchMock);
     expect(explained).toBeInstanceOf(Error);
   });
 
@@ -72,7 +77,7 @@ describe("explainUploadFailure", () => {
       "Vercel Blob: Failed to  retrieve the client token",
       "Vercel Blob: Failed to retrieve the client token",
     ]) {
-      const explained = await explainUploadFailure(new Error(libraryMessage), fetchMock);
+      const explained = await explainUploadFailure(new Error(libraryMessage), "ws-1", fetchMock);
       expect(explained).toBeInstanceOf(UploadRefusedError);
       expect(explained.message).toBe(
         "The upload was refused. If you are adding many files, wait a few minutes and try again.",
@@ -83,13 +88,13 @@ describe("explainUploadFailure", () => {
 
   it("a refused token says to wait even when the storage question fails", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
-    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), "ws-1", fetchMock);
     expect(explained.message).toBe(UPLOAD_REFUSED_MESSAGE);
   });
 
   it("storage full still wins over the refusal sentence", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: true, error: FULL }));
-    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), "ws-1", fetchMock);
     expect(explained.message).toBe(FULL);
   });
   // R20 new-customer L2: an upload from a tab whose session ended. The blob
@@ -101,32 +106,32 @@ describe("explainUploadFailure", () => {
 
     it("a 401 answer shows the route's sentence", async () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: SIGNED_OUT }, false, 401));
-      const explained = await explainUploadFailure(TOKEN_ERROR, fetchMock);
+      const explained = await explainUploadFailure(TOKEN_ERROR, "ws-1", fetchMock);
       expect(explained).toBeInstanceOf(UploadRefusedError);
       expect(explained.message).toBe(SIGNED_OUT);
     });
 
     it("whatever the upload threw (a 401 is about the person, not the file)", async () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: SIGNED_OUT }, false, 401));
-      const explained = await explainUploadFailure(new Error("network down"), fetchMock);
+      const explained = await explainUploadFailure(new Error("network down"), "ws-1", fetchMock);
       expect(explained).toBeInstanceOf(UploadRefusedError);
       expect(explained.message).toBe(SIGNED_OUT);
     });
 
     it("a 401 whose body cannot be read still says signed out", async () => {
       const unreadable = { ok: false, status: 401, json: async () => Promise.reject(new SyntaxError("x")) } as unknown as Response;
-      const explained = await explainUploadFailure(TOKEN_ERROR, vi.fn().mockResolvedValue(unreadable));
+      const explained = await explainUploadFailure(TOKEN_ERROR, "ws-1", vi.fn().mockResolvedValue(unreadable));
       expect(explained.message).toBe(SIGNED_OUT);
       const empty = jsonResponse({}, false, 401);
-      expect((await explainUploadFailure(TOKEN_ERROR, vi.fn().mockResolvedValue(empty))).message).toBe(SIGNED_OUT);
+      expect((await explainUploadFailure(TOKEN_ERROR, "ws-1", vi.fn().mockResolvedValue(empty))).message).toBe(SIGNED_OUT);
     });
 
     it("any other refused answer keeps today's text", async () => {
       for (const status of [403, 429, 500, 503]) {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "Something" }, false, status));
-        expect((await explainUploadFailure(TOKEN_ERROR, fetchMock)).message, String(status)).toBe(UPLOAD_REFUSED_MESSAGE);
+        expect((await explainUploadFailure(TOKEN_ERROR, "ws-1", fetchMock)).message, String(status)).toBe(UPLOAD_REFUSED_MESSAGE);
         const original = new Error("network down");
-        await expect(explainUploadFailure(original, fetchMock)).resolves.toBe(original);
+        await expect(explainUploadFailure(original, "ws-1", fetchMock)).resolves.toBe(original);
       }
     });
   });
@@ -141,7 +146,7 @@ describe("explainUploadFailure", () => {
     it.each(["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."])(
       "the browser's %s with the question failing too: our sentence",
       async (browserText) => {
-        const explained = await explainUploadFailure(new TypeError(browserText), offline);
+        const explained = await explainUploadFailure(new TypeError(browserText), "ws-1", offline);
         expect(explained.message).toBe(UPLOAD_OFFLINE_MESSAGE);
         expect(explained.message).toBe(
           "We couldn't reach Vibe Socials, so the file wasn't uploaded. Check your connection and try again.",
@@ -160,7 +165,7 @@ describe("explainUploadFailure", () => {
     ] as const;
 
     it.each(answeredStatuses)("the browser's TypeError, our question %s: the storage sentence", async (_name, answer) => {
-      const explained = await explainUploadFailure(new TypeError("Load failed"), vi.fn().mockResolvedValue(answer));
+      const explained = await explainUploadFailure(new TypeError("Load failed"), "ws-1", vi.fn().mockResolvedValue(answer));
       expect(explained).toBeInstanceOf(UploadRefusedError);
       expect(explained.message).toBe(UPLOAD_STORAGE_UNREACHABLE_MESSAGE);
       expect(UPLOAD_STORAGE_UNREACHABLE_MESSAGE).toBe(
@@ -169,23 +174,23 @@ describe("explainUploadFailure", () => {
     });
 
     it("the blob service unavailable while we cannot be reached: our sentence", async () => {
-      expect((await explainUploadFailure(new Error(UNAVAILABLE), offline)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
+      expect((await explainUploadFailure(new Error(UNAVAILABLE), "ws-1", offline)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
     });
 
     it.each(answeredStatuses)("the blob service unavailable, our question %s: the storage sentence", async (_name, answer) => {
-      const explained = await explainUploadFailure(new Error(UNAVAILABLE), vi.fn().mockResolvedValue(answer));
+      const explained = await explainUploadFailure(new Error(UNAVAILABLE), "ws-1", vi.fn().mockResolvedValue(answer));
       expect(explained).toBeInstanceOf(UploadRefusedError);
       expect(explained.message).toBe(UPLOAD_STORAGE_UNREACHABLE_MESSAGE);
     });
 
     it("signed out still wins over a dropped request", async () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "You were signed out. Sign in again." }, false, 401));
-      expect((await explainUploadFailure(new TypeError("Failed to fetch"), fetchMock)).message).toBe("You were signed out. Sign in again.");
+      expect((await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", fetchMock)).message).toBe("You were signed out. Sign in again.");
     });
 
     it("a reason the route gives still wins", async () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: true, error: FULL }));
-      expect((await explainUploadFailure(new TypeError("Failed to fetch"), fetchMock)).message).toBe(FULL);
+      expect((await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", fetchMock)).message).toBe(FULL);
     });
   });
 });
@@ -217,5 +222,19 @@ describe("uploadRouteUrl", () => {
     );
     expect(uses.length).toBeGreaterThanOrEqual(6);
     expect(uses.filter((use) => !/: uploadRouteUrl\(workspaceId\)$/.test(use))).toEqual([]);
+  });
+});
+
+// R32 lead follow-up: the question names the page's workspace; a page left on
+// another one gets the switch sentence, whatever the blob client threw.
+describe("explainUploadFailure and the page's workspace", () => {
+  it.each([
+    ["another workspace", "ws-2", WORKSPACE_CHANGED_SAVE_MESSAGE],
+    ["a page that sent no id", undefined, MISSING_WORKSPACE_ID_MESSAGE],
+  ])("%s: the refusal's sentence", async (_name, active, text) => {
+    const refusal = renderedWorkspaceRefusal(active === undefined ? undefined : "ws-1", active ?? "ws-1") as Response;
+    const explained = await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", vi.fn().mockResolvedValue(refusal));
+    expect(explained).toBeInstanceOf(UploadRefusedError);
+    expect(explained.message).toBe(text);
   });
 });

@@ -8,7 +8,7 @@
  */
 
 import { SIGNED_OUT_ERROR } from "./signedOutMessage";
-import { withWorkspaceId } from "./workspaceChanged";
+import { readWorkspaceRefusalText, withWorkspaceId } from "./workspaceChanged";
 
 /**
  * An upload failure explained in a sentence the user can act on (refused,
@@ -58,6 +58,7 @@ const BLOB_SERVICE_UNAVAILABLE = /blob service is currently not available/i;
  */
 export async function explainUploadFailure(
   error: unknown,
+  workspaceId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Error> {
   const original = error instanceof Error ? error : new Error(String(error));
@@ -68,7 +69,8 @@ export async function explainUploadFailure(
   const refused = TOKEN_REFUSED.test(original.message) ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE) : null;
   let response: Response;
   try {
-    response = await fetchImpl("/api/upload", { method: "GET" });
+    // R32: asked for the workspace the page was drawn for, as the upload itself is.
+    response = await fetchImpl(uploadRouteUrl(workspaceId), { method: "GET" });
   } catch {
     return refused ?? (dropped ? new UploadRefusedError(UPLOAD_OFFLINE_MESSAGE) : original);
   }
@@ -78,6 +80,10 @@ export async function explainUploadFailure(
     // That is why the upload failed, whatever the blob client threw; the
     // route's own sentence says so.
     if (response.status === 401) return new UploadRefusedError(await signedOutText(response));
+    // R32: the page is for another workspace (or from before the id was sent):
+    // that is why the upload was refused too, so the shared sentence says it.
+    const workspaceRefusal = await readWorkspaceRefusalText(response);
+    if (workspaceRefusal) return new UploadRefusedError(workspaceRefusal);
     if (!response.ok) return otherwise;
     // `refused`: the route remembered why it refused this person's token (an
     // out-of-date page, the day's 20 GB), app/api/upload/uploadRefusal.ts.

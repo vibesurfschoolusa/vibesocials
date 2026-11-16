@@ -135,7 +135,7 @@ describe("the media library's error sentences", () => {
   // lib/uploadFailure.ts) and the save's failed fetch read as one sentence.
   it("offline: the upload and the save say the same sentence", async () => {
     const offline = (() => Promise.reject(new TypeError("Failed to fetch"))) as unknown as typeof fetch;
-    const explained = await explainUploadFailure(new TypeError("Failed to fetch"), offline);
+    const explained = await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", offline);
     expect(explained.message).toBe(UPLOAD_OFFLINE_MESSAGE);
     expect(uploadErrorMessage(explained)).toBe(MEDIA_MESSAGES.uploadNetwork);
     expect(uploadErrorMessage(new TypeError("Failed to fetch"))).toBe(MEDIA_MESSAGES.uploadNetwork);

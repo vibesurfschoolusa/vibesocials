@@ -415,7 +415,7 @@ export function BulkPostsForm({
         async (error: unknown) => {
           settled = true;
           // A full workspace storage reaches the user as its own sentence.
-          throw await explainUploadFailure(error);
+          throw await explainUploadFailure(error, workspaceId);
         },
       );
       updateRow(id, {
@@ -573,7 +573,7 @@ export function BulkPostsForm({
     } catch (error: unknown) {
       console.error("[Add many] Cover upload failed", error);
       // R21 publishing-flow L1: why it failed (signed out, storage full), as a file's upload says.
-      return { image: null, error: await coverUploadFailedText(error) };
+      return { image: null, error: await coverUploadFailedText(error, workspaceId) };
     }
   }
 

@@ -527,27 +527,27 @@ describe("signed out, and cover upload failures", () => {
 
   it("a cover upload refused because the session ended: the signed-out sentence", async () => {
     const fetchImpl = answer(401, { error: SIGNED_OUT });
-    await expect(coverUploadFailedText(new Error("Failed to retrieve the client token"), fetchImpl)).resolves.toBe(SIGNED_OUT);
-    expect(fetchImpl).toHaveBeenCalledWith("/api/upload", { method: "GET" });
+    await expect(coverUploadFailedText(new Error("Failed to retrieve the client token"), "ws-1", fetchImpl)).resolves.toBe(SIGNED_OUT);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/upload?workspaceId=ws-1", { method: "GET" });
   });
 
   it("a cover upload refused because storage is full: the route's sentence", async () => {
     const full = "Your workspace's storage is full. Delete files in Media, then try again.";
     const fetchImpl = answer(200, { storageFull: true, error: full });
-    await expect(coverUploadFailedText(new Error("Failed to retrieve the client token"), fetchImpl)).resolves.toBe(full);
+    await expect(coverUploadFailedText(new Error("Failed to retrieve the client token"), "ws-1", fetchImpl)).resolves.toBe(full);
   });
 
   // R24 JJ2 follow-up: a cover that never reached us says so, on Create and in Add many.
   it("a cover upload offline: the offline upload sentence", async () => {
     const offline = vi.fn(async () => Promise.reject(new TypeError("Failed to fetch")));
-    await expect(coverUploadFailedText(new TypeError("Load failed"), offline as unknown as typeof fetch)).resolves.toBe(
+    await expect(coverUploadFailedText(new TypeError("Load failed"), "ws-1", offline as unknown as typeof fetch)).resolves.toBe(
       "We couldn't reach Vibe Socials, so the file wasn't uploaded. Check your connection and try again.",
     );
   });
 
   it("any other failure: the cover sentence", async () => {
     const fetchImpl = answer(200, {});
-    await expect(coverUploadFailedText(new Error("network down"), fetchImpl)).resolves.toBe(BULK_COVER_FAILED_TEXT);
+    await expect(coverUploadFailedText(new Error("network down"), "ws-1", fetchImpl)).resolves.toBe(BULK_COVER_FAILED_TEXT);
   });
 });
 

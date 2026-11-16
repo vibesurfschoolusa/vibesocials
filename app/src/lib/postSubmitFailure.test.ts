@@ -11,13 +11,13 @@ describe("Create's submit failure", () => {
   const FULL = "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
 
   it("upload offline at submit: the upload sentence", async () => {
-    const explained = await explainUploadFailure(new TypeError("Failed to fetch"), offline);
+    const explained = await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", offline);
     expect(submitErrorText(explained, NOW)).toBe(UPLOAD_OFFLINE_MESSAGE);
   });
 
   it("storage full: as today", async () => {
     const answer = (async () => Response.json({ storageFull: true, error: FULL })) as unknown as typeof fetch;
-    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), answer);
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), "ws-1", answer);
     expect(submitErrorText(explained, NOW)).toBe(FULL);
   });
 

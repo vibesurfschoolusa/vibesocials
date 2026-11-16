@@ -49,8 +49,12 @@ export const BULK_COVER_FAILED_TEXT =
  * publishing-flow L1): the reason explainUploadFailure finds (signed out,
  * storage full, the upload refused), else the cover sentence.
  */
-export async function coverUploadFailedText(error: unknown, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const explained = await explainUploadFailure(error, fetchImpl);
+export async function coverUploadFailedText(
+  error: unknown,
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const explained = await explainUploadFailure(error, workspaceId, fetchImpl);
   return explained instanceof UploadRefusedError ? explained.message : BULK_COVER_FAILED_TEXT;
 }
 

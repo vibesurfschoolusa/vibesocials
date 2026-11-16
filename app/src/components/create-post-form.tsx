@@ -1465,7 +1465,7 @@ function CreatePostFormInner({
         }
         // A full workspace storage reaches the user as its own sentence, not
         // as the blob client's generic token failure (lib/uploadFailure.ts).
-        throw await explainUploadFailure(err);
+        throw await explainUploadFailure(err, workspaceId);
       },
     );
 
@@ -1669,7 +1669,7 @@ function CreatePostFormInner({
       return { image: { url: blob.url, mimeType: file.type, sizeBytes: file.size }, error: null };
     } catch (err: unknown) {
       // R21 publishing-flow L1: why it failed (signed out, storage full), as a photo's upload says.
-      return { image: null, error: await coverUploadFailedText(err) };
+      return { image: null, error: await coverUploadFailedText(err, workspaceId) };
     }
   }
 
@@ -1689,7 +1689,7 @@ function CreatePostFormInner({
       });
       return { url: newBlob.url, filename: file.name, mimeType: file.type, sizeBytes: file.size };
     } catch (err: unknown) {
-      throw await explainUploadFailure(err);
+      throw await explainUploadFailure(err, workspaceId);
     } finally {
       settled = true;
     }

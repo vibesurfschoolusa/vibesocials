@@ -57,7 +57,19 @@ import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE, COVER_IMAGE_TYPES } from "@/li
 
 import { explainUploadFailure } from "@/lib/uploadFailure";
 
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { GET, POST } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/upload${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 import { UPLOAD_BYTES_LIMIT_MESSAGE, UPLOAD_SIZE_MISSING_MESSAGE } from "./uploadBudget";
 import { UPLOAD_DAY_LIMIT_MESSAGE, UPLOAD_PAGE_OUT_OF_DATE_MESSAGE } from "./uploadRefusal";
 
@@ -386,7 +398,7 @@ describe("a refused upload's sentence reaches the person", () => {
     );
   /** What the page shows: explainUploadFailure asking this route's GET. */
   const shown = async () =>
-    (await explainUploadFailure(BLOB_CLIENT_ERROR, (async () => GET()) as unknown as typeof fetch)).message;
+    (await explainUploadFailure(BLOB_CLIENT_ERROR, "ws-1", (async () => GET(req())) as unknown as typeof fetch)).message;
 
   it("a tab opened before sizes were sent (no clientPayload) is told to reload", async () => {
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false })).status).toBe(400);
@@ -441,7 +453,7 @@ describe("a refused upload's sentence reaches the person", () => {
   it("a later upload that is signed clears the reason, so a new failure is not blamed on the old one", async () => {
     await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(200);
-    await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
+    await expect(GET(req()).then((r) => r.json())).resolves.toEqual({ storageFull: false });
   });
 
   it("a too-large cover is told the cover rule", async () => {
@@ -464,14 +476,14 @@ describe("a refused upload's sentence reaches the person", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(429);
     checkRateLimitMock.mockResolvedValue({ allowed: true });
-    await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
+    await expect(GET(req()).then((r) => r.json())).resolves.toEqual({ storageFull: false });
   });
 
   it("is answered even when the storage question is rate limited, without summing storage", async () => {
     await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
 
-    await expect(GET().then((r) => r.json())).resolves.toEqual({
+    await expect(GET(req()).then((r) => r.json())).resolves.toEqual({
       storageFull: true,
       refused: true,
       error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE,
@@ -483,7 +495,7 @@ describe("a refused upload's sentence reaches the person", () => {
   it("one person's refusal is not shown to another", async () => {
     await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ userId: "user-2" }));
-    await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
+    await expect(GET(req()).then((r) => r.json())).resolves.toEqual({ storageFull: false });
   });
 });
 
@@ -506,21 +518,41 @@ describe("POST /api/upload — token rate limit", () => {
   });
 });
 
+// R32 lead follow-up: a page drawn for another workspace (another tab
+// switched) gets the switch sentence; a page that sent no id, the reload one.
+describe("GET /api/upload - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/upload — why an upload was refused", () => {
   it("401s when signed out", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(req());
     expect(res.status).toBe(401);
   });
 
   it("says nothing is wrong under the limit", async () => {
-    const res = await GET();
+    const res = await GET(req());
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ storageFull: false });
   });
 
   it("is rate limited per user at 60 per 5 minutes", async () => {
-    await GET();
+    await GET(req());
 
     expect(checkRateLimitMock).toHaveBeenCalledWith({
       userId: "user-1",
@@ -534,7 +566,7 @@ describe("GET /api/upload — why an upload was refused", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
 
-    const res = await GET();
+    const res = await GET(req());
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ storageFull: false });
@@ -544,7 +576,7 @@ describe("GET /api/upload — why an upload was refused", () => {
   it("gives the storage sentence when the workspace is full", async () => {
     checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
 
-    const res = await GET();
+    const res = await GET(req());
 
     await expect(res.json()).resolves.toEqual({
       storageFull: true,
@@ -576,7 +608,7 @@ describe("POST /api/upload: the page's workspace id", () => {
     expect((await res.json()).code).toBe("MISSING_WORKSPACE_ID");
     expect(handleUploadMock).not.toHaveBeenCalled();
     expect(consumeDayBytesMock).not.toHaveBeenCalled();
-    await expect((await GET()).json()).resolves.toMatchObject({
+    await expect((await GET(req())).json()).resolves.toMatchObject({
       refused: true,
       error: "This page is out of date. Reload it, then try again.",
       code: "MISSING_WORKSPACE_ID",
@@ -589,7 +621,7 @@ describe("POST /api/upload: the page's workspace id", () => {
     expect((await res.json()).code).toBe("WORKSPACE_CHANGED");
     expect(handleUploadMock).not.toHaveBeenCalled();
     expect(checkStorageLimitMock).not.toHaveBeenCalled();
-    await expect((await GET()).json()).resolves.toMatchObject({
+    await expect((await GET(req())).json()).resolves.toMatchObject({
       refused: true,
       error: "You switched workspace in another tab. Reload this page, then try again.",
       code: "WORKSPACE_CHANGED",
