@@ -95,13 +95,13 @@ type RouteCase = {
 
 const GATED: RouteCase[] = [
   { name: "POST /api/posts (create, any intent)", load: () => import("./posts/route"), method: "POST", body: { intent: "draft" } },
-  { name: "POST /api/posts/[id]/publish (schedule or publish a draft)", load: () => import("./posts/[postJobId]/publish/route"), method: "POST", params: { postJobId: "job-1" }, body: {} },
-  { name: "POST /api/posts/[id]/approval", load: () => import("./posts/[postJobId]/approval/route"), method: "POST", params: { postJobId: "job-1" }, body: { decision: "approve" } },
-  { name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: {} },
-  { name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" } },
+  { name: "POST /api/posts/[id]/publish (schedule or publish a draft)", load: () => import("./posts/[postJobId]/publish/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
+  { name: "POST /api/posts/[id]/approval", load: () => import("./posts/[postJobId]/approval/route"), method: "POST", params: { postJobId: "job-1" }, body: { decision: "approve", workspaceId: "ws-1" } },
+  { name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
+  { name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" }, query: "?workspaceId=ws-1" },
   { name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: {} },
-  { name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: {} },
-  { name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: {} },
+  { name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
+  { name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { name: "POST /api/reviews/draft-response", load: () => import("./reviews/draft-response/route"), method: "POST", body: {} },
   { name: "POST /api/reviews/[id]/reply", load: () => import("./reviews/[reviewId]/reply/route"), method: "POST", params: { reviewId: "r-1" }, body: { comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/3" } },
 ];
@@ -203,5 +203,26 @@ describe("routes a paused workspace keeps", () => {
     }
     // It went on to do its work: it read, counted or wrote something.
     expect(calls.length + checkRateLimitMock.mock.calls.length).toBeGreaterThan(0);
+  });
+});
+
+// Lead review: the page's workspace is checked before the pause, so a tab drawn
+// for another workspace is told to reload, never given the cookie workspace's pause.
+describe("a page drawn for another workspace, while the cookie's workspace is paused", () => {
+  const OTHER: RouteCase[] = [
+    { name: "POST /api/posts/[id]/publish", load: () => import("./posts/[postJobId]/publish/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-2" } },
+    { name: "POST /api/posts/[id]/approval", load: () => import("./posts/[postJobId]/approval/route"), method: "POST", params: { postJobId: "job-1" }, body: { decision: "approve", workspaceId: "ws-2" } },
+    { name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-2" } },
+    { name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" }, query: "?workspaceId=ws-2" },
+    { name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: { workspaceId: "ws-2" } },
+    { name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: { workspaceId: "ws-2" } },
+  ];
+
+  it.each(OTHER)("$name answers 409 WORKSPACE_CHANGED, not the pause", async (route) => {
+    getWorkspaceContextMock.mockResolvedValue(paused());
+    const result = await call(route);
+    expect(result).toMatchObject({ status: 409, body: { code: "WORKSPACE_CHANGED" } });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
   });
 });

@@ -86,14 +86,16 @@ type RouteCase = {
   method: "POST";
   params?: Record<string, string>;
   body?: unknown;
+  /** Added to the request's url, e.g. "?workspaceId=ws-1" for the upload route. */
+  query?: string;
 };
 
 const GATED: RouteCase[] = [
   { file: "posts/route.ts", name: "POST /api/posts (create, any intent)", load: () => import("./posts/route"), method: "POST", body: { intent: "draft" } },
-  { file: "posts/[postJobId]/publish/route.ts", name: "POST /api/posts/[id]/publish (schedule or publish a draft)", load: () => import("./posts/[postJobId]/publish/route"), method: "POST", params: { postJobId: "job-1" }, body: {} },
-  { file: "posts/[postJobId]/approval/route.ts", name: "POST /api/posts/[id]/approval", load: () => import("./posts/[postJobId]/approval/route"), method: "POST", params: { postJobId: "job-1" }, body: { decision: "approve" } },
-  { file: "posts/[postJobId]/retry/route.ts", name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: {} },
-  { file: "upload/route.ts", name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" } },
+  { file: "posts/[postJobId]/publish/route.ts", name: "POST /api/posts/[id]/publish (schedule or publish a draft)", load: () => import("./posts/[postJobId]/publish/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
+  { file: "posts/[postJobId]/approval/route.ts", name: "POST /api/posts/[id]/approval", load: () => import("./posts/[postJobId]/approval/route"), method: "POST", params: { postJobId: "job-1" }, body: { decision: "approve", workspaceId: "ws-1" } },
+  { file: "posts/[postJobId]/retry/route.ts", name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
+  { file: "upload/route.ts", name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" }, query: "?workspaceId=ws-1" },
   { file: "media/route.ts", name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { file: "posts/auto-caption/route.ts", name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { file: "posts/enhance-caption/route.ts", name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
@@ -131,7 +133,7 @@ type Result = { status: number; body: unknown } | { threw: unknown };
 async function call(route: RouteCase): Promise<Result> {
   const mod = await route.load();
   const handler = mod[route.method] as Handler;
-  const request = new Request("http://localhost/api/test", {
+  const request = new Request(`http://localhost/api/test${route.query ?? ""}`, {
     method: route.method,
     headers: { "content-type": "application/json" },
     ...(route.body !== undefined ? { body: JSON.stringify(route.body) } : {}),

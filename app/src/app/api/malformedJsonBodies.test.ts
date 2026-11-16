@@ -104,7 +104,8 @@ const BAD_BODIES: Array<[string, string]> = [
 ];
 
 function requestWith(raw: string): Request {
-  return new Request("http://localhost/api/x", {
+  // The upload route reads the page's workspace from the query before the body (R31).
+  return new Request("http://localhost/api/x?workspaceId=ws-1", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: raw || undefined,

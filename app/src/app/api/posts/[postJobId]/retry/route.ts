@@ -99,6 +99,16 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     return signedOutResponse();
   }
 
+  const rawBody = await readJsonObject(request);
+  if (!rawBody) {
+    return invalidJsonBodyResponse();
+  }
+  // R31 pages L2: the page's workspace first (lead review: before the pause and plan
+  // checks), so a tab left on another workspace acts on nothing and never gets that
+  // workspace's pause sentence.
+  const workspaceRefusal = renderedWorkspaceRefusal(rawBody.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
+
   // Pause (2026-11-10): a paused workspace cannot create or move work.
   const blocked = accessBlockResponse(workspaceContext);
   if (blocked) return blocked;
@@ -127,13 +137,6 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
 
   const { postJobId } = await Promise.resolve(context.params);
 
-  const rawBody = await readJsonObject(request);
-  if (!rawBody) {
-    return invalidJsonBodyResponse();
-  }
-  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
-  const workspaceRefusal = renderedWorkspaceRefusal(rawBody.workspaceId, workspaceContext.workspace.id);
-  if (workspaceRefusal) return workspaceRefusal;
 
   const target = parseRetryBody(rawBody);
   if ("error" in target) {

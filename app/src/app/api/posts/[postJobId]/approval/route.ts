@@ -119,6 +119,16 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return signedOutResponse();
   }
 
+  const parsedBody = await readJsonObject(request);
+  if (!parsedBody) {
+    return invalidJsonBodyResponse();
+  }
+  // R31 pages L2: the page's workspace first (lead review: before the pause and plan
+  // checks), so a tab left on another workspace acts on nothing and never gets that
+  // workspace's pause sentence.
+  const workspaceRefusal = renderedWorkspaceRefusal(parsedBody.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
+
   // Pause (2026-11-10): a paused workspace cannot create or move work.
   const blocked = accessBlockResponse(workspaceContext);
   if (blocked) return blocked;
@@ -144,13 +154,6 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // route's params bug: an undefined id makes Prisma match the first row).
   const { postJobId } = await Promise.resolve(context.params);
 
-  const parsedBody = await readJsonObject(request);
-  if (!parsedBody) {
-    return invalidJsonBodyResponse();
-  }
-  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
-  const workspaceRefusal = renderedWorkspaceRefusal(parsedBody.workspaceId, workspaceContext.workspace.id);
-  if (workspaceRefusal) return workspaceRefusal;
   const body = parsedBody as ApprovalBody;
 
   if (body.decision !== "approve" && body.decision !== "reject") {

@@ -85,18 +85,19 @@ export async function POST(request: Request) {
       return signedOutResponse();
     }
 
-    // Pause (2026-11-10): a paused workspace cannot create or move work.
-    const blocked = accessBlockResponse(context);
-    if (blocked) return blocked;
-
     const body = await readJsonObject(request);
     if (!body) {
       return invalidJsonBodyResponse();
     }
     // R31: the page's workspace, whose AI allowance, brand voice and recent
     // captions this uses; a tab left on another workspace uses none of them.
+    // Before the pause check, so such a tab never gets that workspace's pause.
     const workspaceRefusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
     if (workspaceRefusal) return workspaceRefusal;
+
+    // Pause (2026-11-10): a paused workspace cannot create or move work.
+    const blocked = accessBlockResponse(context);
+    if (blocked) return blocked;
     const { caption, platform, maxLength } = body;
 
     // 2026-11-01 scale audit (W6): cap the prompt text BEFORE any limiter
