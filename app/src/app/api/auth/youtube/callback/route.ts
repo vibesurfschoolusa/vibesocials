@@ -8,6 +8,8 @@ import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { withConnectLink } from "@/server/connectLink/callback";
 
+const YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+
 interface GoogleTokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -107,6 +109,15 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     }
 
     const tokenJson = (await tokenResponse.json()) as GoogleTokenResponse;
+
+    // R27 platform-clients L3: "Manage your YouTube videos" unticked on
+    // Google's screen grants no upload, and every post would fail. Nothing is
+    // saved; the page says to allow it. A token answer without `scope` (Google
+    // always sends it) is taken as before.
+    if (tokenJson.scope !== undefined && !tokenJson.scope.split(" ").includes(YOUTUBE_UPLOAD_SCOPE)) {
+      console.warn("[YouTube OAuth] Connected without the upload permission; nothing saved");
+      return NextResponse.redirect(new URL(`/settings?error=youtube_upload_not_allowed`, request.url));
+    }
 
     // Get channel info to use as accountIdentifier
     const channelResponse = await fetch(

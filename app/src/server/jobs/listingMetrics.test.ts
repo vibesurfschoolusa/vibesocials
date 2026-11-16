@@ -578,6 +578,51 @@ describe("syncListingMetrics and a token Google refuses", () => {
     expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GOOGLE_API_TOKEN_REJECTED");
   });
 
+  // R27 platform-clients L1: the early refresh failed, and the token ran out
+  // while the request was on its way. Refreshed once and asked once more; nothing flagged.
+  it("a 401 on a token that ran out on the way refreshes once, asks again, and flags nothing", async () => {
+    const expiresAt = new Date(NOW.getTime() + 60_000);
+    const expiring = conn({ expiresAt });
+    useRows([expiring]);
+    refreshMock
+      .mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }))
+      .mockResolvedValueOnce({ ...expiring, accessToken: "gbp-access-2", expiresAt: new Date(NOW.getTime() + HOUR) });
+    fetchMock
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(expiresAt.getTime() + 1_000));
+        return refused(401);
+      })
+      .mockResolvedValueOnce(okResponse(answer({ CALL_CLICKS: [["2026-11-09", "1"]] })));
+
+    const result = await syncListingMetrics(NOW, () => 0);
+
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ failed: 0, days: 1 });
+  });
+
+  it("a 401 on a store-code lookup with a token that ran out on the way is retried too", async () => {
+    const expiresAt = new Date(NOW.getTime() + 60_000);
+    const expiring = conn({ expiresAt, metadata: { locationName: "STORE-1" } });
+    useRows([expiring]);
+    refreshMock
+      .mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }))
+      .mockResolvedValueOnce({ ...expiring, accessToken: "gbp-access-2", expiresAt: new Date(NOW.getTime() + HOUR) });
+    resolveMock
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(expiresAt.getTime() + 1_000));
+        throw Object.assign(new Error("Google list failed"), { status: 401 });
+      })
+      .mockResolvedValueOnce(LOCATION);
+
+    const result = await syncListingMetrics(NOW, () => 0);
+
+    expect(resolveMock.mock.calls.map((call) => call[0])).toEqual(["gbp-access", "gbp-access-2"]);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(result.failed).toBe(0);
+  });
+
   it("a 5xx flags nothing", async () => {
     useRows([conn()]);
     fetchMock.mockResolvedValue(refused(503));

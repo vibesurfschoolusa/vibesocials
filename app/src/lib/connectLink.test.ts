@@ -118,6 +118,15 @@ describe("the sentence the visitor reads after a flow", () => {
     }
   });
 
+  // R27 platform-clients L3: the visitor unticked the upload permission.
+  it("YouTube without the upload permission: what to allow, in the visitor's words", () => {
+    expect(describe_({ error: "youtube_upload_not_allowed" })).toEqual({
+      variant: "danger",
+      message:
+        "YouTube wasn't connected: the permission to upload videos wasn't allowed. Press Connect again and, on Google's screen, allow \"Manage your YouTube videos\".",
+    });
+  });
+
   it("a place already taken", () => {
     expect(describe_({ error: "facebook_page_already_connected" })?.message).toBe(
       "Facebook Page is already connected. Ask the person who sent you this link if it should be changed.",
@@ -130,6 +139,7 @@ describe("the sentence the visitor reads after a flow", () => {
       instagram_no_instagram_account: /Instagram/,
       linkedin_no_admin_pages: /Super admin/,
       pinterest_no_boards: /board/,
+      youtube_upload_not_allowed: /Manage your YouTube videos/,
     };
     for (const [error, pattern] of Object.entries(causes)) {
       const message = describe_({ error })?.message ?? "";

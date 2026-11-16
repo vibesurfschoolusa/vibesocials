@@ -97,8 +97,8 @@ const GATED: RouteCase[] = [
   { file: "media/route.ts", name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { file: "posts/auto-caption/route.ts", name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: {} },
   { file: "posts/enhance-caption/route.ts", name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: {} },
-  { file: "reviews/draft-response/route.ts", name: "POST /api/reviews/draft-response", load: () => import("./reviews/draft-response/route"), method: "POST", body: {} },
-  { file: "reviews/[reviewId]/reply/route.ts", name: "POST /api/reviews/[id]/reply", load: () => import("./reviews/[reviewId]/reply/route"), method: "POST", params: { reviewId: "r-1" }, body: { comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/3" } },
+  { file: "reviews/draft-response/route.ts", name: "POST /api/reviews/draft-response", load: () => import("./reviews/draft-response/route"), method: "POST", body: { workspaceId: "ws-1" } },
+  { file: "reviews/[reviewId]/reply/route.ts", name: "POST /api/reviews/[id]/reply", load: () => import("./reviews/[reviewId]/reply/route"), method: "POST", params: { reviewId: "r-1" }, body: { workspaceId: "ws-1", comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/3" } },
 ];
 
 const NOW = new Date("2026-12-10T12:00:00Z");

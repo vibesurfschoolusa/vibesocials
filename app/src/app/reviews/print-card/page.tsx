@@ -17,11 +17,34 @@ export const metadata: Metadata = {
  * The printable review card (2026-11-10), opened from the "Get more reviews"
  * panel. Any member may open it. It prints the review link the panel already
  * saved for the workspace and never asks Google itself.
+ *
+ * R27 security-billing L2: the panel links it with `?workspaceId=` of the
+ * workspace the Reviews page was rendered for; another workspace's id (a switch
+ * in another tab) gets a plain page instead of the cookie workspace's card. A
+ * link without one (an old link, a bookmark) prints the active workspace's card.
  */
-export default async function ReviewPrintCardPage() {
+export default async function ReviewPrintCardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sent = (await searchParams).workspaceId;
+  const workspaceId = typeof sent === "string" && sent ? sent : null;
   const context = await getWorkspaceContext();
   if (!context) {
-    redirect(`/login?callbackUrl=${encodeURIComponent("/reviews/print-card")}`);
+    const back = workspaceId ? `/reviews/print-card?workspaceId=${encodeURIComponent(workspaceId)}` : "/reviews/print-card";
+    redirect(`/login?callbackUrl=${encodeURIComponent(back)}`);
+  }
+
+  if (workspaceId && workspaceId !== context.workspace.id) {
+    return (
+      <div className="mx-auto max-w-xl px-4 py-8">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Review card</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          This page was opened for another workspace. Go back and open Print card again.
+        </p>
+      </div>
+    );
   }
 
   const connection = await prisma.socialConnection.findFirst({

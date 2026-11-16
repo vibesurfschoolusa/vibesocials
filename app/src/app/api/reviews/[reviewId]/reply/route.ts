@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
@@ -58,6 +59,11 @@ export async function POST(request: Request) {
     if (!body) {
       return invalidJsonBodyResponse();
     }
+    // R27 security-billing L1: the workspace the page was rendered for, never
+    // the cookie alone: a stale tab would post publicly through another
+    // workspace's connection. Before any Google call.
+    const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+    if (refusal) return refusal;
     const { comment, reviewName } = body;
 
     if (!comment || typeof comment !== "string" || comment.trim().length === 0) {

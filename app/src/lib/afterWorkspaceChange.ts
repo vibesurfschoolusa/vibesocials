@@ -34,7 +34,8 @@ export function afterWorkspaceChange(
  * Address parameters that belong to the workspace active at the time: what
  * just happened there (OAuth returns: success, error, location_cleared,
  * same_end, signed_in_as; /go's notice), its connection dialogs (choose,
- * linkedin_setup), and its items (Create's mediaItemId, Add many's media),
+ * linkedin_setup), its items (Create's mediaItemId, Add many's media), and
+ * the workspace a page was opened for (Print card's workspaceId),
  * which the next workspace could only fail to load. afterWorkspaceChange.test.ts
  * fails a parameter a page reads that is neither here, in ONE_TIME_VALUES, nor
  * kept on purpose.
@@ -50,6 +51,8 @@ export const ONE_TIME_PARAMS: readonly string[] = [
   "linkedin_setup",
   "mediaItemId",
   "media",
+  // R27: Print card's page workspace; after a switch the card is the new workspace's.
+  "workspaceId",
 ];
 
 /**

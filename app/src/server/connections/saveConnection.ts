@@ -10,7 +10,9 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
+import { googleFailureKind } from "@/server/googleFailure";
 import { exactStoreCodeMatches, readGbpLocations, storeCodeFilter } from "@/server/platforms/gbpLocation";
+import { readGoogleErrorReasons } from "@/server/platforms/rateLimited";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -136,11 +138,12 @@ async function checkGbpStoreCode(storeCode: string, accessToken: string): Promis
 /**
  * R6 third review: whether the location this Business Profile connection
  * posts to can be used by the Google account just signed in to, read with the
- * NEW token (one Business Information call, readMask=name). 200: kept;
- * 403/404 (another account, or the location deleted on Google): unavailable,
- * and the location is cleared so the chooser asks again; anything else (429,
- * 5xx, network): it couldn't be told, and nothing is written. No location
- * chosen yet: nothing to check.
+ * NEW token (one Business Information call, readMask=name). 200: kept; an
+ * access 403 or a 404 (another account, or the location deleted on Google):
+ * unavailable, and the location is cleared so the chooser asks again;
+ * anything else (a 403 for our own setup or quota, 429, 5xx, network): it
+ * couldn't be told, and nothing is written. No location chosen yet: nothing
+ * to check.
  */
 async function checkGbpLocation(existing: StoredConnection, accessToken: unknown): Promise<GbpLocationCheck> {
   const metadata = (existing.metadata ?? {}) as Record<string, unknown>;
@@ -155,7 +158,15 @@ async function checkGbpLocation(existing: StoredConnection, accessToken: unknown
       accessToken,
     );
     if (response.ok) return "kept";
-    if (response.status === 403 || response.status === 404) return "unavailable";
+    if (response.status === 404) return "unavailable";
+    // R27 client-journey L4: only an access 403 is another account. Our own
+    // API setup or quota (googleFailureKind "tryLater") says nothing about it.
+    if (response.status === 403) {
+      const googleReasons = await readGoogleErrorReasons(response);
+      if (googleFailureKind({ status: 403, googleReasons }) === "access") return "unavailable";
+      logger.warn("[GBP] Couldn't check the location with the new sign-in", { connectionId: existing.id, status: 403, reasons: googleReasons });
+      return "check_failed";
+    }
     logger.warn("[GBP] Couldn't check the location with the new sign-in", { connectionId: existing.id, status: response.status });
     return "check_failed";
   } catch (error) {

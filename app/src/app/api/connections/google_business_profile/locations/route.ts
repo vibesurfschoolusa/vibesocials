@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 
 import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform } from "@prisma/client";
 
-import { googleRouteRateLimit, listGbpLocations, listingNotice } from "../gbpLocations";
+import { GBP_DISCONNECTED_MESSAGE, googleRouteRateLimit, listGbpLocations, listingNotice } from "../gbpLocations";
 
 export const runtime = "nodejs";
 
@@ -14,13 +15,22 @@ export const runtime = "nodejs";
  * it feeds the location POST above, which is itself owner-only (Team
  * Workspaces — design §1: GBP location selection is owner-only, not just
  * member-readable).
+ *
+ * R27 new-customer L6: `?workspaceId=` is the workspace the Settings page was
+ * rendered for; another one (a switch in another tab) is refused (409
+ * WORKSPACE_CHANGED) before anything is read, so the list is never another
+ * workspace's.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
   const { user, workspace } = contextOrError;
+
+  const sent = new URL(request.url).searchParams.get("workspaceId");
+  const refusal = renderedWorkspaceRefusal(sent ?? undefined, workspace.id);
+  if (refusal) return refusal;
 
   const limited = await googleRouteRateLimit(user.id, "google_business_profile/locations");
   if (limited) return limited;
@@ -33,10 +43,7 @@ export async function GET() {
   });
 
   if (!connection) {
-    return NextResponse.json(
-      { error: "No Google Business Profile connection found" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: GBP_DISCONNECTED_MESSAGE }, { status: 400 });
   }
 
   const listed = await listGbpLocations(connection);

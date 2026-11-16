@@ -87,6 +87,15 @@ function describeCode(params: {
     if (Object.hasOwn(NOTHING_TO_POST_TO, error)) {
       return { variant: "danger", message: NOTHING_TO_POST_TO[error] };
     }
+    // R27 platform-clients L3: the upload permission was unticked on Google's
+    // screen (app/api/auth/youtube/callback/route.ts); nothing was saved.
+    if (error === "youtube_upload_not_allowed") {
+      return {
+        variant: "danger",
+        message:
+          "YouTube wasn't connected: the permission to upload videos wasn't allowed. Click Connect again and, on Google's screen, allow \"Manage your YouTube videos\".",
+      };
+    }
     // Pinterest: a Pin always goes on a board, and GET /boards listed none
     // (app/api/auth/pinterest/callback/route.ts). Secret boards are not listed:
     // the app does not ask for boards:read_secret.

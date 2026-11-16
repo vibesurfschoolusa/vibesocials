@@ -1328,6 +1328,56 @@ describe("googleBusinessProfileClient: a 403 on a post", () => {
   );
 });
 
+// R27 platform-clients L2: a 403 while the saved store code is looked up
+// follows the same 403 rule as the post (googlePublish403), never "post rules".
+describe("googleBusinessProfileClient: a 403 in the store-code lookup", () => {
+  const googleError = (reason: string) =>
+    new Response(JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason }] } }), { status: 403 });
+  const storeCodeCtx = () => {
+    const ctx = makeContext();
+    (ctx.socialConnection as { metadata: unknown }).metadata = { locationName: "STORE-1" };
+    return ctx;
+  };
+
+  it.each([
+    ["the accounts list", (reason: string) => () => googleError(reason)],
+    [
+      "every account's locations",
+      (reason: string) => (url: string) =>
+        url.includes("/locations") ? googleError(reason) : Response.json({ accounts: [{ name: "accounts/111" }] }),
+    ],
+  ])("%s refused for access: the access sentence, code and status kept", async (_label, answer) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reply = answer("PERMISSION_DENIED");
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => reply(String(input))));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(GBP_ACCESS_REFUSED);
+  });
+
+  it.each([
+    ["the accounts list", (reason: string) => () => googleError(reason)],
+    [
+      "every account's locations",
+      (reason: string) => (url: string) =>
+        url.includes("/locations") ? googleError(reason) : Response.json({ accounts: [{ name: "accounts/111" }] }),
+    ],
+  ])("%s refused by our own setup: try later, code and status kept", async (_label, answer) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reply = answer("SERVICE_DISABLED");
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => reply(String(input))));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(
+      "Google Business Profile isn't answering for Vibe Socials right now, so nothing was posted. Try again later.",
+    );
+  });
+});
+
 // R26 lead review: the post itself sent after the token expired (the early
 // refresh failed, then a long store-code lookup). A 401 means Google created
 // nothing: one refresh, the POST once more, and a flag only when the refresh is

@@ -1,10 +1,12 @@
+import type { SocialConnection } from "@prisma/client";
+
 import { prisma } from "@/lib/db";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
-import { locationIdOf } from "@/server/googleReviews";
+import { locationIdOf, refreshAccessToken } from "@/server/googleReviews";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
-import { flagIfTokenRejected } from "@/server/googleFailure";
-import { accessTokenOf } from "@/server/jobs/reviewAlerts";
+import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
+import { flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
 
 /**
  * Google listing numbers (2026-11-10). The `google-listing-metrics-sync` cron
@@ -347,18 +349,22 @@ export async function syncListingMetrics(
     }
 
     result.checked++;
-    // The tokens this run sends, from the row already loaded (the refresh keeps the refresh token).
-    let used: { id: string; accessToken: string; refreshToken: string | null } | null = null;
+    // The row whose tokens this run sends, with their stored expiry: a 401 on
+    // a token that ran out on the way (the early refresh failed) is refreshed
+    // once and asked once more, never flagged (R27 platform-clients L1).
+    let used: SocialConnection | null = null;
     try {
-      const accessToken = await accessTokenOf(connection);
-      used = { id: connection.id, accessToken, refreshToken: connection.refreshToken };
+      used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
       const newest = await prisma.locationMetricDaily.findFirst({
         where: { workspaceId: connection.workspaceId, locationName },
         orderBy: { day: "desc" },
         select: { day: true },
       });
       const range = listingMetricsRangeAfter(now, newest?.day ?? null);
-      const days = await fetchListingDailyMetrics(accessToken, locationName, range);
+      const days = await withGoogleTokenRetry(used, refreshAccessToken, (row) => {
+        used = row;
+        return fetchListingDailyMetrics(row.accessToken ?? "", locationName, range);
+      });
 
       if (days.length > 0) {
         await prisma.$transaction(

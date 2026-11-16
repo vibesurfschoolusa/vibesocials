@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planIncludes } from "@/lib/planFeatures";
 import { utcDayKey } from "@/lib/usageLimits";
-import { flagIfTokenRejected } from "@/server/googleFailure";
+import { flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
 import { fetchReviews, refreshAccessToken, type GoogleReview } from "@/server/googleReviews";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
@@ -242,9 +242,10 @@ export interface ReviewCheckResult {
  * refresh path). R23 client-journey L1: judged by refreshGoogleTokenEarly (5
  * minutes early, real clock), not a run's collect-time `now`: a step runs for up
  * to its time budget and the send step after the check, so a token fine at
- * collect time can die mid-run. listingMetrics.ts uses it too.
+ * collect time can die mid-run. The check and listingMetrics.ts refresh the
+ * row the same way, keeping it for the one retry after an expired-token 401.
  */
-export async function accessTokenOf(connection: SocialConnection): Promise<string> {
+async function accessTokenOf(connection: SocialConnection): Promise<string> {
   return (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
 }
 
@@ -289,12 +290,16 @@ export async function checkReviewConnections(
     }
 
     result.checked++;
-    // The tokens this check sends, from the row already loaded (a Google refresh keeps the refresh token).
-    let used: { id: string; accessToken: string; refreshToken: string | null } | null = null;
+    // The row whose tokens this check sends, with their stored expiry: a 401 on
+    // a token that ran out on the way (the early refresh failed) is refreshed
+    // once and read once more, never flagged (R27 platform-clients L1).
+    let used: SocialConnection | null = null;
     try {
-      const accessToken = await accessTokenOf(connection);
-      used = { id: connection.id, accessToken, refreshToken: connection.refreshToken };
-      const reviews = await fetchReviews(accessToken, locationName, { newestFirst: true });
+      used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
+      const reviews = await withGoogleTokenRetry(used, refreshAccessToken, (row) => {
+        used = row;
+        return fetchReviews(row.accessToken ?? "", locationName, { newestFirst: true });
+      });
       const found = findNewReviews(reviews, seenThroughFor(metadata, locationName), now);
 
       if (found.newReviews.length === 0) {

@@ -32,6 +32,9 @@ vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.checkRateLimit }));
 
 import {
   GBP_ACCOUNTS_REFUSED_MESSAGE,
+  GBP_DISCONNECTED_MESSAGE,
+  GBP_LIST_FAILED_MESSAGE,
+  GBP_NO_SIGN_IN_SAVED_MESSAGE,
   GBP_NO_LISTING_NOTICE,
   GBP_ACCOUNTS_NOT_SENT_MESSAGE,
   GBP_SOME_ACCOUNTS_FAILED_NOTICE,
@@ -71,6 +74,12 @@ function google(pages: Record<string, Page>) {
 
 const location = (account: number, id: number) => ({ name: `locations/${id}`, title: `Shop ${account}-${id}` });
 const CONNECTION = { id: "conn-1", workspaceId: "ws-1", accessToken: "token", refreshToken: "refresh", metadata: {} };
+
+/** The picker's GET, sent with the workspace the Settings page was rendered for (R27 new-customer L6). */
+function list(workspaceId: string | null = "ws-1") {
+  const query = workspaceId === null ? "" : `?workspaceId=${encodeURIComponent(workspaceId)}`;
+  return GET(new Request(`http://localhost/api/connections/google_business_profile/locations${query}`));
+}
 
 function save(locationName: string) {
   return POST(
@@ -261,7 +270,7 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
   }
 
   const routes: Array<[string, () => Promise<Response>]> = [
-    ["GET .../locations", () => GET()],
+    ["GET .../locations", () => list()],
     ["POST .../location", () => save("accounts/1/locations/1")],
   ];
 
@@ -478,7 +487,7 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     googleInTurn(googleError(403, "PERMISSION_DENIED"));
 
-    await GET();
+    await list();
 
     const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
     expect(lines).toHaveLength(1);
@@ -491,7 +500,7 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
       [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
     });
 
-    const res = await GET();
+    const res = await list();
 
     expect(res.status).toBe(200);
     expect((await res.json()).locations).toHaveLength(1);
@@ -520,7 +529,7 @@ describe("some accounts' locations could not be read", () => {
       [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
     });
 
-    const res = await GET();
+    const res = await list();
 
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -535,7 +544,7 @@ describe("some accounts' locations could not be read", () => {
       [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
     });
 
-    expect((await (await GET()).json()).notice).toBe(GBP_SOME_ACCOUNTS_FAILED_NOTICE);
+    expect((await (await list()).json()).notice).toBe(GBP_SOME_ACCOUNTS_FAILED_NOTICE);
   });
 
   // JJ3 lead review: both are said, each with its own next step.
@@ -547,7 +556,7 @@ describe("some accounts' locations could not be read", () => {
       [`${INFO}/accounts/3/locations|`]: { body: { locations: [location(3, 1)] } },
     });
 
-    expect((await (await GET()).json()).notice).toBe(
+    expect((await (await list()).json()).notice).toBe(
       `${GBP_SOME_ACCOUNTS_REFUSED_NOTICE} ${GBP_SOME_ACCOUNTS_FAILED_NOTICE}`,
     );
   });
@@ -559,7 +568,7 @@ describe("some accounts' locations could not be read", () => {
       [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
     });
 
-    expect(await (await GET()).json()).not.toHaveProperty("notice");
+    expect(await (await list()).json()).not.toHaveProperty("notice");
   });
 
   it("the save: a location not listed while an account refused access is not one this login manages (400)", async () => {
@@ -584,7 +593,7 @@ describe("some accounts' locations could not be read", () => {
       [`${INFO}/accounts/2/locations|`]: { status: 503 },
     });
 
-    await GET();
+    await list();
 
     const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
     expect(lines.map(([, fields]) => (fields as { kind: string }).kind)).toEqual(["access", "tryLater"]);
@@ -593,7 +602,7 @@ describe("some accounts' locations could not be read", () => {
 
 function routes2(): Array<[string, () => Promise<Response>]> {
   return [
-    ["GET .../locations", () => GET()],
+    ["GET .../locations", () => list()],
     ["POST .../location", () => save("accounts/1/locations/1")],
   ];
 }
@@ -631,7 +640,7 @@ describe("nothing could be read", () => {
       [`${INFO}/accounts/1/locations|`]: { body: {} },
     });
 
-    const res = await GET();
+    const res = await list();
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ locations: [], notice: GBP_NO_LISTING_NOTICE, signIn: true });
@@ -648,7 +657,7 @@ it("each Google request is sent with a timeout signal", async () => {
     [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
   });
 
-  await GET();
+  await list();
 
   expect(fetchMock).toHaveBeenCalledTimes(2);
   for (const call of fetchMock.mock.calls as unknown as Array<[string, RequestInit]>) {
@@ -673,7 +682,7 @@ describe("rate limit", () => {
 
   it("each route is limited per person, 60 every 5 minutes", async () => {
     google({ [`${ACCOUNTS}|`]: { body: { accounts: [] } } });
-    await GET();
+    await list();
     google({ [`${ACCOUNTS}|`]: { body: { accounts: [] } } });
     await save("accounts/1/locations/1");
 
@@ -714,7 +723,7 @@ describe("listingNotice: what both location lists add to their list", () => {
     h.checkRateLimit.mockResolvedValue({ allowed: true });
     google({ [`${ACCOUNTS}|`]: { body: { accounts: [] } } });
 
-    await expect((await GET()).json()).resolves.toEqual({ locations: [], notice: GBP_NO_LISTING_NOTICE, signIn: true });
+    await expect((await list()).json()).resolves.toEqual({ locations: [], notice: GBP_NO_LISTING_NOTICE, signIn: true });
   });
 });
 
@@ -731,5 +740,90 @@ describe("unreadAccountsNotice for a member", () => {
     expect(unreadAccountsNotice({ access: false, failed: true }, "reviews", "member")).toBe(
       unreadAccountsNotice({ access: false, failed: true }, "reviews"),
     );
+  });
+});
+
+// R27 new-customer L6: the picker's GET acts on the workspace the page was
+// rendered for, and every failure says what happened and what to do next.
+describe("the picker's GET: the page's workspace", () => {
+  it("another workspace's id: 409 WORKSPACE_CHANGED, no connection read and nothing asked of Google", async () => {
+    const fetchMock = google({});
+
+    const res = await list("ws-other");
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED", error: expect.any(String) });
+    expect(h.findFirst).not.toHaveBeenCalled();
+    expect(h.checkRateLimit).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("no id: 400 MISSING_WORKSPACE_ID, nothing asked of Google", async () => {
+    const fetchMock = google({});
+
+    const res = await list(null);
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the active workspace's id: listed as before", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
+    });
+
+    const res = await list("ws-1");
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).locations).toHaveLength(1);
+  });
+});
+
+describe("the picker's plain failures", () => {
+  it("says each with its step", () => {
+    expect(GBP_DISCONNECTED_MESSAGE).toBe(
+      "Google Business Profile was disconnected, maybe in another tab. Reload this page, then connect it again.",
+    );
+    expect(GBP_NO_SIGN_IN_SAVED_MESSAGE).toBe(
+      "The Google sign-in for Business Profile wasn't saved, so its locations can't be listed. Sign in to Google again with the account that manages your listing.",
+    );
+    expect(GBP_LIST_FAILED_MESSAGE).toBe(
+      "Something went wrong while listing your Business Profile locations. Press Fetch locations from Google again in a minute.",
+    );
+  });
+
+  it.each([
+    ["GET .../locations", () => list()],
+    ["POST .../location", () => save("accounts/1/locations/1")],
+  ])("%s after a disconnect in another tab: 400, it was disconnected, reload or connect again", async (_label, call) => {
+    h.findFirst.mockResolvedValue(null);
+
+    const res = await call();
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: GBP_DISCONNECTED_MESSAGE });
+  });
+
+  it("a row with no access token: 400, with the in-place sign-in", async () => {
+    h.findFirst.mockResolvedValue({ ...CONNECTION, accessToken: null });
+
+    const res = await list();
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: GBP_NO_SIGN_IN_SAVED_MESSAGE, signIn: true });
+  });
+
+  it("an unexpected failure while listing: 500, fetch again in a minute", async () => {
+    // A 401 after a refresh, and the flag write itself throwing: the reader's caller catches it.
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({}, { status: 401 })));
+    h.refresh.mockResolvedValue({ ...CONNECTION, accessToken: "token-2" });
+    h.flagRejectedToken.mockRejectedValue(new Error("database down"));
+
+    const res = await list();
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: GBP_LIST_FAILED_MESSAGE });
   });
 });

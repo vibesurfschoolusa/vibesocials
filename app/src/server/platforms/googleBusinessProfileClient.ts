@@ -478,7 +478,31 @@ async function ensureLocationName(
   return withGoogleTokenRetry(socialConnection, renew, async (connection) => {
     const accessToken = connection.accessToken ?? "";
     const used = { id: connection.id, accessToken, refreshToken: connection.refreshToken, expiresAt: connection.expiresAt };
-    const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline, used);
-    return { locationName, connection, accessToken };
+    try {
+      const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline, used);
+      return { locationName, connection, accessToken };
+    } catch (error) {
+      throw lookupForbidden(error) ?? error;
+    }
   });
+}
+
+/**
+ * R27 platform-clients L2: a 403 while the store code is looked up follows the
+ * post's 403 rule (googlePublish403, from the reasons gbpLocation.ts keeps):
+ * our own setup or quota reads try-later, anything else access; never the
+ * post's rules. The same error with that text, code and status kept; null for
+ * any other failure.
+ */
+function lookupForbidden(error: unknown): unknown {
+  const fields = (error ?? {}) as { code?: unknown; status?: unknown; googleReasons?: unknown };
+  if (fields.code !== "GBP_ACCOUNTS_LIST_FAILED" || fields.status !== 403 || !(error instanceof Error)) return null;
+  const reasons = Array.isArray(fields.googleReasons)
+    ? fields.googleReasons.filter((reason): reason is string => typeof reason === "string")
+    : [];
+  error.message =
+    googlePublish403("google_business_profile", reasons) === "setup"
+      ? googleSetupRefusedMessage("google_business_profile")
+      : GBP_ACCESS_REFUSED_TEXT;
+  return error;
 }

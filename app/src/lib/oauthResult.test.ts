@@ -288,6 +288,18 @@ describe("describeOAuthResult — LinkedIn account that administers no page", ()
   });
 });
 
+// R27 platform-clients L3: the upload permission was unticked on Google's screen.
+describe("describeOAuthResult — YouTube without the upload permission", () => {
+  it("says nothing was connected and to allow Manage your YouTube videos", () => {
+    expect(describeOAuthResult({ error: "youtube_upload_not_allowed", success: null })).toEqual({
+      variant: "danger",
+      platform: "youtube",
+      message:
+        "YouTube wasn't connected: the permission to upload videos wasn't allowed. Click Connect again and, on Google's screen, allow \"Manage your YouTube videos\".",
+    });
+  });
+});
+
 describe("describeOAuthResult — Pinterest", () => {
   it("an account with no board we can post to is told to create one", () => {
     expect(describeOAuthResult({ error: "pinterest_no_boards", success: null })).toMatchObject({

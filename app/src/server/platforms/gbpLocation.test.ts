@@ -6,6 +6,7 @@ vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
   flagRejectedToken: flagRejectedTokenMock,
 }));
 
+import { googleFailureKind } from "@/server/googleFailure";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
@@ -107,6 +108,52 @@ describe("resolveGbpLocationName", () => {
     expect(error?.message).not.toContain("SECRET_TOKEN");
     // Logged by kind and status only (googleFailure.ts), never Google's body.
     expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain("SECRET_TOKEN");
+  });
+
+  // R27 platform-clients L2: Google's reasons stay on the lookup's failure, so
+  // Reviews tells our own setup or quota (try later) from the account's access.
+  describe("a 403 during the lookup keeps Google's reasons", () => {
+    const refused = (reason: string) =>
+      jsonResponse({ error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason }] } }, 403);
+
+    beforeEach(() => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    it.each([
+      ["SERVICE_DISABLED", "tryLater", ["servicedisabled"]],
+      ["PERMISSION_DENIED", "access", ["permissiondenied"]],
+    ])("the accounts list refused with %s reads %s", async (reason, kind, reasons) => {
+      vi.stubGlobal("fetch", vi.fn(async () => refused(reason)));
+
+      const error = await resolveGbpLocationName("token-abc", "STORE-1").then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403, googleReasons: reasons });
+      expect(googleFailureKind(error)).toBe(kind);
+    });
+
+    it.each([
+      ["SERVICE_DISABLED", "tryLater"],
+      ["PERMISSION_DENIED", "access"],
+    ])("every account's locations refused with %s reads %s", async (reason, kind) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL) =>
+          String(input).includes("/locations") ? refused(reason) : jsonResponse({ accounts: [{ name: "accounts/111" }] }),
+        ),
+      );
+
+      const error = await resolveGbpLocationName("token-abc", "STORE-1").then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+      expect(googleFailureKind(error)).toBe(kind);
+    });
   });
 
   // 2026-11-01 scale audit (platform limits, V17): the account and location

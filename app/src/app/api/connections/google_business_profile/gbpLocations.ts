@@ -83,6 +83,21 @@ export const GBP_SOME_ACCOUNTS_FAILED_REVIEWS_NOTICE =
   "Google didn't send the locations of some of your Business Profile accounts. Reload this page in a minute to see them all.";
 
 /**
+ * R27 new-customer L6: the picker's own failures, each with its step (the
+ * form shows the route's `error` as it is).
+ * No connection row: both picker routes answer 400 with it after a disconnect
+ * in another tab; after a reload the card shows Connect.
+ */
+export const GBP_DISCONNECTED_MESSAGE =
+  "Google Business Profile was disconnected, maybe in another tab. Reload this page, then connect it again.";
+/** A row with no access token: the in-place sign-in (`signIn: true`) saves a new one. */
+export const GBP_NO_SIGN_IN_SAVED_MESSAGE =
+  "The Google sign-in for Business Profile wasn't saved, so its locations can't be listed. Sign in to Google again with the account that manages your listing.";
+/** Our own failure while listing (a bug, the database): trying again may work. */
+export const GBP_LIST_FAILED_MESSAGE =
+  "Something went wrong while listing your Business Profile locations. Press Fetch locations from Google again in a minute.";
+
+/**
  * R24 platform-clients L1: the grant is dead (the row is flagged, or Google
  * refused the token), so only a reconnect helps. `code` lets the form tell
  * it apart and show the card's Reconnect state; `signIn: true` keeps the
@@ -201,10 +216,7 @@ export async function listGbpLocationsWithToken(
  */
 export async function listGbpLocations(connection: SocialConnection): Promise<GbpLocationList> {
   if (!connection.accessToken) {
-    return refused(
-      { error: "Missing access token for Google Business Profile" },
-      { status: 400 },
-    );
+    return refused({ error: GBP_NO_SIGN_IN_SAVED_MESSAGE, signIn: true }, { status: 400 });
   }
 
   // A row already flagged asks for a reconnect without asking Google, as the
@@ -240,9 +252,6 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
     return listing.ok ? listing : pickerRefusal(listing.kind);
   } catch (error) {
     console.error("[GBP] Unexpected error while listing locations", { error });
-    return refused(
-      { error: "Unexpected error while listing Google Business Profile locations" },
-      { status: 500 },
-    );
+    return refused({ error: GBP_LIST_FAILED_MESSAGE }, { status: 500 });
   }
 }

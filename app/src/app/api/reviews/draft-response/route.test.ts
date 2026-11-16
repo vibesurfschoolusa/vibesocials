@@ -35,7 +35,8 @@ function post(body: Record<string, unknown>): Promise<Response> {
     new Request("http://localhost/api/reviews/draft-response", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      // R27 security-billing L1: the page sends the workspace it was rendered for.
+      body: JSON.stringify({ workspaceId: "ws-1", ...body }),
     }),
   );
 }
@@ -81,6 +82,26 @@ describe("POST /api/reviews/draft-response", () => {
     const response = await post(validBody);
 
     expect(response.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // R27 security-billing L1: a tab rendered for another workspace drafts nothing
+  // (no brand voice, no AI quota, no provider call) in the cookie's workspace.
+  it("refuses a workspaceId that is not the active workspace: 409, no limiter, quota or provider call", async () => {
+    const response = await post({ ...validBody, workspaceId: "ws-other" });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED", error: expect.any(String) });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(memberFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request without the page's workspaceId (400 MISSING_WORKSPACE_ID), no provider call", async () => {
+    const response = await post({ ...validBody, workspaceId: undefined });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -13,6 +13,7 @@ import { BRAND_VOICE_REVIEW_LINE, workspaceBrandVoicePrompt } from "@/lib/brandV
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { signedOutResponse } from "@/lib/signedOutResponse";
@@ -47,6 +48,10 @@ export async function POST(request: Request) {
     if (!body) {
       return invalidJsonBodyResponse();
     }
+    // R27 security-billing L1: the workspace the page was rendered for, never
+    // the cookie alone (its brand voice and AI quota). Before any limiter or AI call.
+    const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+    if (refusal) return refusal;
     const { starRating } = body;
 
     // 2026-11-01 scale audit (W6): cap every client string that reaches the

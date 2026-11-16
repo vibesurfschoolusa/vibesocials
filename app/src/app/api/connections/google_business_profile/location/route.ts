@@ -8,7 +8,7 @@ import { Platform, Prisma } from "@prisma/client";
 
 import { STORE_CODE_NOT_UNIQUE_MESSAGE, exactStoreCodeMatches } from "@/server/platforms/gbpLocation";
 
-import { GOOGLE_NO_ANSWER_MESSAGE, googleRouteRateLimit, listGbpLocations } from "../gbpLocations";
+import { GBP_DISCONNECTED_MESSAGE, GOOGLE_NO_ANSWER_MESSAGE, googleRouteRateLimit, listGbpLocations } from "../gbpLocations";
 
 export const runtime = "nodejs";
 
@@ -81,10 +81,7 @@ export async function POST(request: Request) {
   });
 
   if (!connection) {
-    return NextResponse.json(
-      { error: "No Google Business Profile connection found" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: GBP_DISCONNECTED_MESSAGE }, { status: 400 });
   }
 
   const listed = await listGbpLocations(connection);

@@ -1222,3 +1222,44 @@ describe("a reconnect keeps the same account", () => {
     expect(update.data.accountIdentifier).toBe("google_business_profile");
   });
 });
+
+// R27 platform-clients L3: a YouTube connect with "Manage your YouTube videos"
+// unticked can't upload, so nothing is saved and Settings says to allow it.
+describe("youtube OAuth callback: the upload permission", () => {
+  const youtubeProvider = (scope: string | undefined) => (url: string) =>
+    url.includes("youtube/v3/channels")
+      ? json({ items: [{ id: "chan-1", snippet: { title: "My Channel" } }] })
+      : json({ access_token: "yt-access", expires_in: 3600, token_type: "Bearer", ...(scope === undefined ? {} : { scope }) });
+
+  beforeEach(() => {
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+  });
+
+  it("granted without youtube.upload: saves nothing and redirects with youtube_upload_not_allowed", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) =>
+      youtubeProvider("https://www.googleapis.com/auth/youtube.readonly")(String(input)),
+    );
+
+    const res = await youtubeGET(callbackRequest("youtube", signedState()));
+
+    const loc = location(res);
+    expect(loc.pathname).toBe("/settings");
+    expect(loc.searchParams.get("error")).toBe("youtube_upload_not_allowed");
+    expect(loc.searchParams.get("success")).toBeNull();
+    expectNoConnectionWrites();
+  });
+
+  it("granted with youtube.upload: connects as before and keeps the scopes", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) =>
+      youtubeProvider(
+        "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
+      )(String(input)),
+    );
+
+    const res = await youtubeGET(callbackRequest("youtube", signedState()));
+
+    expect(location(res).searchParams.get("success")).toBe("youtube_connected");
+    const args = createMock.mock.calls[0][0] as { data: { scopes: string[] } };
+    expect(args.data.scopes).toContain("https://www.googleapis.com/auth/youtube.upload");
+  });
+});

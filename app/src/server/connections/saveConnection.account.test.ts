@@ -387,6 +387,26 @@ describe("saveSocialConnection: Google Business Profile", () => {
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 
+  // R27 client-journey L4: a 403 for our own API setup or quota says nothing
+  // about the account; the location stays, and nothing is written.
+  it.each(["SERVICE_DISABLED", "accessNotConfigured", "quotaExceeded"])(
+    "a %s 403 on the location: couldn't check, the location kept and nothing written",
+    async (reason) => {
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(answer(403, { error: { code: 403, errors: [{ reason }], details: [{ reason }] } }));
+
+      await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
+      expect(h.updateMany).not.toHaveBeenCalled();
+    },
+  );
+
+  it("an access 403 with Google's reason on the location: cleared for the chooser", async () => {
+    h.findUnique.mockResolvedValue(withLocation);
+    h.fetch.mockResolvedValue(answer(403, { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "PERMISSION_DENIED" }] } }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+  });
+
   it("a network failure: nothing written, try again", async () => {
     h.findUnique.mockResolvedValue(withLocation);
     h.fetch.mockRejectedValue(new TypeError("fetch failed"));

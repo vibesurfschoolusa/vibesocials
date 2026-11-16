@@ -44,7 +44,8 @@ function post(body: Record<string, unknown>): Promise<Response> {
     new Request("http://localhost/api/reviews/r1/reply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      // R27 security-billing L1: the page sends the workspace it was rendered for.
+      body: JSON.stringify({ workspaceId: "ws-1", ...body }),
     }),
   );
 }
@@ -89,6 +90,26 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
     expect(response.status).toBe(200);
     expect(replyToReviewMock).toHaveBeenCalledWith("tok", "accounts/1/locations/2/reviews/r1", "Thanks");
+  });
+
+  // R27 security-billing L1: a tab rendered for another workspace never posts
+  // through the cookie's connection.
+  it("refuses a workspaceId that is not the active workspace: 409, no connection read, nothing sent to Google", async () => {
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1", workspaceId: "ws-other" });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED", error: expect.any(String) });
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(listGbpLocationsMock).not.toHaveBeenCalled();
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request without the page's workspaceId (400 MISSING_WORKSPACE_ID), nothing sent", async () => {
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1", workspaceId: undefined });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
+    expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
   it.each([

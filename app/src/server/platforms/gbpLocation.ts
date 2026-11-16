@@ -291,13 +291,20 @@ export function exactStoreCodeMatches<T extends { storeCode: string | null }>(lo
   return locations.filter((location) => location.storeCode === storeCode);
 }
 
-/** The store-code lookup's failure when the accounts call failed, or no account's locations could be read. */
+/**
+ * The store-code lookup's failure when the accounts call failed, or no
+ * account's locations could be read. Google's reasons are kept (R27
+ * platform-clients L2), so a 403 for our own setup or quota reads try-later
+ * on Reviews (googleFailureKind) and on a post (googleBusinessProfileClient).
+ */
 function accountsListFailed(failure: unknown): Error {
-  const status = (failure as { status?: unknown } | null)?.status;
+  const fields = (failure ?? {}) as { status?: unknown; googleReasons?: unknown };
+  const status = fields.status;
   const known = typeof status === "number";
+  const googleReasons = Array.isArray(fields.googleReasons) ? fields.googleReasons : undefined;
   return Object.assign(
     new Error(`Failed to list Google Business Profile accounts while resolving location${known ? ` (status ${status})` : ""}`),
-    { code: "GBP_ACCOUNTS_LIST_FAILED", ...(known ? { status } : {}) },
+    { code: "GBP_ACCOUNTS_LIST_FAILED", ...(known ? { status } : {}), ...(googleReasons ? { googleReasons } : {}) },
   );
 }
 

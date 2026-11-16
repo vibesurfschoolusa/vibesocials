@@ -777,6 +777,53 @@ describe("checkReviewConnections and a token Google refuses", () => {
     expect(db.connectionFindUnique).toHaveBeenCalledTimes(2);
   });
 
+  // R27 platform-clients L1: the early refresh failed, and the token ran out
+  // while the check was on its way. Refreshed once and read once more; nothing flagged.
+  it("a 401 on a token that ran out on the way refreshes once, reads again, and flags nothing", async () => {
+    const expiresAt = new Date(NOW.getTime() + 60_000);
+    const expiring = row({ expiresAt });
+    useRows([expiring]);
+    refreshMock
+      .mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }))
+      .mockResolvedValueOnce({ ...expiring, accessToken: "gbp-access-2", expiresAt: new Date(NOW.getTime() + HOUR) });
+    fetchReviewsMock
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(expiresAt.getTime() + 1_000));
+        throw Object.assign(new Error("Failed (status 401)"), { status: 401 });
+      })
+      .mockResolvedValueOnce([]);
+
+    const result = await checkReviewConnections(["conn-1"], NOW);
+
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    expect(fetchReviewsMock.mock.calls.map((call) => call[0])).toEqual(["gbp-access", "gbp-access-2"]);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(result.failed).toBe(0);
+  });
+
+  it("a second 401, on the refreshed token, flags the row with the new tokens", async () => {
+    const expiresAt = new Date(NOW.getTime() + 60_000);
+    const expiring = row({ expiresAt });
+    useRows([expiring]);
+    refreshMock
+      .mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }))
+      .mockResolvedValueOnce({ ...expiring, accessToken: "gbp-access-2", expiresAt: new Date(NOW.getTime() + HOUR) });
+    fetchReviewsMock
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(expiresAt.getTime() + 1_000));
+        throw Object.assign(new Error("Failed (status 401)"), { status: 401 });
+      })
+      .mockRejectedValueOnce(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
+
+    const result = await checkReviewConnections(["conn-1"], NOW);
+
+    expect(result.failed).toBe(1);
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "conn-1", accessToken: "gbp-access-2", refreshToken: "gbp-refresh" },
+      "GOOGLE_API_TOKEN_REJECTED",
+    );
+  });
+
   it("a 5xx flags nothing, with the same reads", async () => {
     useRows([row()]);
     fetchReviewsMock.mockRejectedValue(Object.assign(new Error("Failed (status 503)"), { status: 503 }));
