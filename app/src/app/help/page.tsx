@@ -86,7 +86,8 @@ export default function HelpPage() {
           <ul className="list-disc space-y-1 pl-5">
             <li>
               <span className="text-foreground">You cancelled on the platform&apos;s screen.</span>{" "}
-              Nothing was connected. Click Connect to try again.
+              Nothing changed. Click Connect (or Reconnect, if the platform is already connected) to try
+              again.
             </li>
             <li>
               <span className="text-foreground">

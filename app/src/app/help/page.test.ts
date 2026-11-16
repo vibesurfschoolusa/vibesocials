@@ -66,3 +66,16 @@ describe("Help: the retry step names both buttons", () => {
     expect(source).not.toContain("click Connect again");
   });
 });
+
+// R29 lead review: after a cancelled Reconnect the existing connection is
+// unchanged, so the cancel line neither says nothing was connected nor names
+// only Connect.
+describe("Help: a cancelled sign-in", () => {
+  it("says nothing changed, and names Connect or Reconnect", () => {
+    const section = renderToStaticMarkup(HelpPage()).split('id="troubleshooting"')[1];
+    expect(section).toContain(
+      "Nothing changed. Click Connect (or Reconnect, if the platform is already connected) to try again.",
+    );
+    expect(section).not.toContain("Nothing was connected. Click Connect to try again.");
+  });
+});
