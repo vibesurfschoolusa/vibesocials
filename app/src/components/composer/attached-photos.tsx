@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ALT_TEXT_MAX, cleanAltText } from "@/lib/altText";
 import { cn } from "@/lib/cn";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 
 /**
@@ -89,11 +90,15 @@ export async function requestPhotoDescription(
 ): Promise<string> {
   let response: Response;
   try {
-    response = await fetchImpl("/api/posts/auto-caption", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blobUrl: blob.url, mimeType: blob.mimeType, purpose: "altText" }),
-    });
+    response = await fetchOrNoAnswer(
+      "/api/posts/auto-caption",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blobUrl: blob.url, mimeType: blob.mimeType, purpose: "altText" }),
+      },
+      fetchImpl,
+    );
   } catch {
     throw new Error(PHOTO_DESCRIPTION_OFFLINE_MESSAGE);
   }

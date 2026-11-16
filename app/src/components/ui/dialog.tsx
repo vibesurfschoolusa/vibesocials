@@ -17,6 +17,7 @@ import { X } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { Button, type ButtonVariant } from "@/components/ui/button";
+import { isNoAnswer } from "@/lib/requestNoAnswer";
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -314,21 +315,22 @@ export class ConfirmFailureShown extends Error {
 
 export const CONFIRM_UNREACHABLE_MESSAGE =
   "We couldn't reach Vibe Socials, so nothing changed. Check your connection and try again.";
-export const CONFIRM_FAILED_MESSAGE =
-  "Something went wrong, so this may not have finished. Reload the page to see what changed, then try again.";
+export const CONFIRM_FAILED_MESSAGE = "Something went wrong, nothing changed. Try again.";
 
 /**
- * What ConfirmDialog says when `onConfirm` throws (R25 new-customer L1): nothing
- * for a ConfirmFailureShown; for a request that never left (fetch rejects with
- * a TypeError: "Failed to fetch", "Load failed", ...) `unreachableText`; for
- * anything else a plain sentence, never the raw error.
+ * What ConfirmDialog (and a page's own Create link) says when a request
+ * fails (R25 new-customer L1): nothing for a ConfirmFailureShown; for a request
+ * that got no answer (lib/requestNoAnswer: a rejection of the fetch call
+ * itself, not any TypeError) `unreachableText`; for anything else a plain
+ * sentence, never the raw error, and the error goes to the console.
  */
 export function confirmFailureText(
   error: unknown,
   unreachableText: string = CONFIRM_UNREACHABLE_MESSAGE,
 ): string | null {
   if (error instanceof ConfirmFailureShown) return null;
-  if (error instanceof TypeError) return unreachableText;
+  if (isNoAnswer(error)) return unreachableText;
+  console.error("[ConfirmDialog] Unexpected failure:", error);
   return CONFIRM_FAILED_MESSAGE;
 }
 

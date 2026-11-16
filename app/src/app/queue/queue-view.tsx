@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   ConfirmDialog,
   ConfirmFailureShown,
+  confirmFailureText,
   Dialog,
   DialogBody,
   DialogFooter,
@@ -23,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { CaptionCounter } from "@/components/caption-counter";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { PlatformCaptionEditor } from "@/components/composer/platform-caption-editor";
@@ -767,7 +769,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
 
   // Create and Replace are the same call: the server revokes any old link.
   const makeLink = useCallback(async () => {
-    const response = await fetch("/api/workspaces/review-link", {
+    const response = await fetchOrNoAnswer("/api/workspaces/review-link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -784,7 +786,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   }, [toast, workspaceId]);
 
   const turnOff = useCallback(async () => {
-    const response = await fetch("/api/workspaces/review-link", {
+    const response = await fetchOrNoAnswer("/api/workspaces/review-link", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -803,8 +805,9 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
     setBusy(true);
     try {
       await makeLink();
-    } catch {
-      // Already shown as a toast.
+    } catch (error) {
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
     } finally {
       setBusy(false);
     }
@@ -1190,7 +1193,7 @@ export function QueueView({
   const confirmCancel = useCallback(async () => {
     if (!cancelTarget) return;
     const request = cancelRequest(cancelTarget, cancelScope);
-    const response = await fetch(request.url, request.init);
+    const response = await fetchOrNoAnswer(request.url, request.init);
     const data = (await response.json().catch(() => null)) as
       | { error?: string; cancelled?: number; notCancelled?: number }
       | null;
@@ -1215,7 +1218,7 @@ export function QueueView({
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
-    const response = await fetch(`/api/posts/${deleteTarget.id}`, cardRequest(deleteTarget, "DELETE"));
+    const response = await fetchOrNoAnswer(`/api/posts/${deleteTarget.id}`, cardRequest(deleteTarget, "DELETE"));
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't delete this draft.");
@@ -1230,7 +1233,7 @@ export function QueueView({
   // submission keeps the card as a pending draft, publishing removes it.
   const confirmPublish = useCallback(async () => {
     if (!publishTarget) return;
-    const response = await fetch(`/api/posts/${publishTarget.id}/publish`, cardRequest(publishTarget, "POST"));
+    const response = await fetchOrNoAnswer(`/api/posts/${publishTarget.id}/publish`, cardRequest(publishTarget, "POST"));
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't publish this post.");

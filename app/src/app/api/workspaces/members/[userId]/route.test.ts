@@ -80,6 +80,11 @@ const MEMBER_GONE_ANSWER = {
   gone: true,
 };
 
+const ROLE_CHANGED_ANSWER = {
+  error: "Their role changed in the meantime. Reload the page to see the current members.",
+  roleChanged: true,
+};
+
 const OWNER_CONTEXT = {
   user: { id: "user-1", email: "owner@example.com", name: "Owner" },
   workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
@@ -431,7 +436,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
   });
 
   it("returns 404 when a promote's conditional updateMany matches nothing (member raced away)", async () => {
-    findFirstMock.mockResolvedValue({ role: "member" });
+    findFirstMock.mockResolvedValueOnce({ role: "member" }).mockResolvedValueOnce(null);
     updateManyMock.mockResolvedValue({ count: 0 });
 
     const response = await PATCH(patchReq("owner"), ctx("user-2"));
@@ -579,7 +584,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
   });
 
   it("returns 404 when a demote's conditional updateMany matches nothing (owner raced away under the lock)", async () => {
-    findFirstMock.mockResolvedValue({ role: "owner" });
+    findFirstMock.mockResolvedValueOnce({ role: "owner" }).mockResolvedValueOnce(null);
     countMock.mockResolvedValue(2);
     updateManyMock.mockResolvedValue({ count: 0 });
 
@@ -587,6 +592,38 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
+  });
+});
+
+// KK3 follow-up: a promote or demote that matched nothing may mean the person
+// is still there with a role another owner changed meanwhile. Told apart from
+// gone, so the card keeps their row.
+describe("PATCH when the role changed in the meantime", () => {
+  it("promote: still a member of the workspace, now an owner -> 409 roleChanged", async () => {
+    findFirstMock.mockResolvedValueOnce({ role: "member" }).mockResolvedValueOnce({ role: "owner" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const response = await PATCH(patchReq("owner"), ctx("user-2"));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual(ROLE_CHANGED_ANSWER);
+    expect(findFirstMock).toHaveBeenLastCalledWith({
+      where: { workspaceId: "ws-1", userId: "user-2" },
+      select: { role: true },
+    });
+  });
+
+  it("demote: still in the workspace under the lock, no longer an owner -> 409 roleChanged", async () => {
+    noticeMock.mockClear();
+    findFirstMock.mockResolvedValueOnce({ role: "owner" }).mockResolvedValueOnce({ role: "member" });
+    countMock.mockResolvedValue(2);
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const response = await PATCH(patchReq("member"), ctx("user-2"));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual(ROLE_CHANGED_ANSWER);
+    expect(noticeMock).not.toHaveBeenCalled();
   });
 });
 

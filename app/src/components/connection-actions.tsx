@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { platformLabel } from "@/lib/platforms";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
@@ -159,11 +160,11 @@ export async function requestDisconnect(
 ): Promise<void> {
   let response: Response;
   try {
-    response = await fetchImpl(`/api/connections/${platform}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    response = await fetchOrNoAnswer(
+      `/api/connections/${platform}`,
+      { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId }) },
+      fetchImpl,
+    );
   } catch {
     throw new Error(DISCONNECT_OFFLINE_MESSAGE);
   }

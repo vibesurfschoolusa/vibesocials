@@ -7,6 +7,7 @@ import type { Platform } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
@@ -41,11 +42,11 @@ export async function changeConnectLink(
   body: object,
   announce: () => void = () => announceClientLinksReplaced("connect-link"),
 ): Promise<{ ok: true; link: ConnectLinkDto | null } | { ok: false; error: string | null }> {
-  const response = await fetchImpl("/api/workspaces/connect-link", {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const response = await fetchOrNoAnswer(
+    "/api/workspaces/connect-link",
+    { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    fetchImpl,
+  );
   const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto; error?: string } | null;
   if (!response.ok || (method === "POST" && !data?.link)) {
     return { ok: false, error: typeof data?.error === "string" ? data.error : null };
@@ -224,7 +225,9 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     async (method: "POST" | "DELETE", body: object) => {
       try {
         return await changeConnectLink(fetch, method, body);
-      } catch {
+      } catch (error) {
+        // Anything but a request that got no answer is the dialog's to say.
+        if (!isNoAnswer(error)) throw error;
         toast.error("Couldn't reach Vibe Socials. Check your connection and try again.");
         throw new ConfirmFailureShown("UNREACHABLE");
       }

@@ -5,6 +5,8 @@
  * act on, the way requestDisconnect does it for Connections.
  */
 
+import { fetchOrNoAnswer } from "./requestNoAnswer";
+
 export const CAPTION_OFFLINE_MESSAGE =
   "We couldn't reach Vibe Socials, so your caption is unchanged. Check your connection and try again.";
 export const CAPTION_FAILED_MESSAGE =
@@ -30,11 +32,11 @@ export async function requestCaption(
 ): Promise<CaptionRequestResult> {
   let response: Response;
   try {
-    response = await fetchImpl(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    response = await fetchOrNoAnswer(
+      url,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+      fetchImpl,
+    );
   } catch {
     return { ok: false, error: CAPTION_OFFLINE_MESSAGE };
   }

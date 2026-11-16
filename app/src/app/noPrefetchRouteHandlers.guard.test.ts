@@ -251,7 +251,8 @@ export function workspaceChangeCalls(
   listed = WORKSPACE_CHANGES,
 ): Array<{ index: number; route: string; method: string }> {
   const out: Array<{ index: number; route: string; method: string }> = [];
-  for (const match of source.matchAll(/\b(?:fetch|fetchImpl)\(/g)) {
+  // fetchOrNoAnswer (lib/requestNoAnswer) is fetch with its no-answer case marked.
+  for (const match of source.matchAll(/\b(?:fetch|fetchImpl|fetchOrNoAnswer)\(/g)) {
     const open = match.index + match[0].length - 1;
     const call = balanced(source, open, "(", ")");
     const first = firstArgument(source, open);
@@ -365,6 +366,7 @@ describe("a full page load after the workspaces change", () => {
       ['await fetch("/api/workspaces/leave", { method: "POST" }); router.refresh();', ["POST /api/workspaces/leave"]],
       ['await fetch("/api/workspaces/active", {\n  method: "PATCH",\n});\nafterWorkspaceChange();', []],
       ['await fetchImpl(`/api/invites/${token}/accept`, { method: "POST" });', ["POST /api/invites/[token]/accept"]],
+      ['await fetchOrNoAnswer("/api/workspaces/leave", { method: "POST" });', ["POST /api/workspaces/leave"]],
       // The menu's reads change nothing.
       ['await fetch("/api/workspaces"); await fetch("/api/workspaces/status");', []],
       // One full load after the second of two calls covers only the second.

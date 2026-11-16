@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { NoAnswerError } from "@/lib/requestNoAnswer";
 
 import { CONFIRM_FAILED_MESSAGE, CONFIRM_UNREACHABLE_MESSAGE, ConfirmFailureShown, confirmFailureText } from "./dialog";
 
@@ -76,25 +78,41 @@ describe("ConfirmDialog failures", () => {
     expect(new ConfirmFailureShown("REMOVE_FAILED")).toBeInstanceOf(Error);
   });
 
-  it("a request that never left (Chrome, Safari, Firefox): nothing changed, check the connection", () => {
-    for (const message of ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."]) {
-      expect(confirmFailureText(new TypeError(message)), message).toBe(CONFIRM_UNREACHABLE_MESSAGE);
-    }
+  it("a request that got no answer (lib/requestNoAnswer): nothing changed, check the connection", () => {
+    expect(confirmFailureText(new NoAnswerError(new TypeError("Failed to fetch")))).toBe(CONFIRM_UNREACHABLE_MESSAGE);
     expect(CONFIRM_UNREACHABLE_MESSAGE).toBe(
       "We couldn't reach Vibe Socials, so nothing changed. Check your connection and try again.",
     );
   });
 
   it("a caller can word the unreachable case itself (Queue's Publish)", () => {
-    expect(confirmFailureText(new TypeError("Failed to fetch"), "Check Activity.")).toBe("Check Activity.");
+    expect(confirmFailureText(new NoAnswerError(new TypeError("Load failed")), "Check Activity.")).toBe("Check Activity.");
   });
 
-  it("anything else: a plain sentence, never the raw error", () => {
-    for (const error of [new Error("REMOVE_FAILED"), "oops", null, undefined]) {
-      const text = confirmFailureText(error);
-      expect(text).toBe(CONFIRM_FAILED_MESSAGE);
+  it("a coding TypeError is not 'couldn't reach': the plain sentence, and it is logged", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const coding = new TypeError("Cannot read properties of undefined (reading 'id')");
+    expect(confirmFailureText(coding)).toBe(CONFIRM_FAILED_MESSAGE);
+    expect(log).toHaveBeenCalledWith(expect.any(String), coding);
+    log.mockRestore();
+  });
+
+  it("anything else: a plain sentence, never the raw error, and logged", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const error of [new Error("REMOVE_FAILED"), new TypeError("Failed to fetch"), "oops", null, undefined]) {
+      expect(confirmFailureText(error)).toBe(CONFIRM_FAILED_MESSAGE);
     }
-    expect(CONFIRM_FAILED_MESSAGE).not.toMatch(/REMOVE_FAILED|undefined/);
+    expect(log).toHaveBeenCalledTimes(5);
+    expect(CONFIRM_FAILED_MESSAGE).toBe("Something went wrong, nothing changed. Try again.");
+    log.mockRestore();
+  });
+
+  it("an already-shown failure and a request with no answer are not logged", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    confirmFailureText(new ConfirmFailureShown("X"));
+    confirmFailureText(new NoAnswerError(new TypeError("Failed to fetch")));
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 
   const confirmDialog = source.slice(source.indexOf("export function ConfirmDialog"));
@@ -129,8 +147,40 @@ describe("ConfirmDialog callers", () => {
     it(`${path} throws ConfirmFailureShown after it has told the person`, () => {
       const caller = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
       expect(caller).not.toMatch(/throw new Error\("[A-Z_]+"\)/);
-      expect(caller).not.toMatch(/throw (err|error);/);
+      // A rethrow right after its own toast would be shown twice.
+      expect(caller).not.toMatch(/toast\.error\([^;]*\);\s*throw (err|error);/);
       expect(caller).toMatch(/ConfirmFailureShown/);
+    });
+  }
+
+  // KK3 follow-up: the dialog only says "couldn't reach" for a request that got
+  // no answer, so the confirm handlers' requests go through fetchOrNoAnswer.
+  for (const [path, handlers] of [
+    ["../../app/queue/queue-view.tsx", ["confirmCancel", "confirmDelete", "confirmPublish", "makeLink", "turnOff"]],
+    ["../team-section.tsx", ["handleLeave", "revokeInvite", "confirmRemove", "confirmPromote", "confirmDemote"]],
+    ["../media-library.tsx", ["makeLink", "turnOff"]],
+  ] as const) {
+    it(`${path}: ${handlers.join(", ")} send through fetchOrNoAnswer`, () => {
+      const caller = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+      for (const handler of handlers) {
+        let at = caller.indexOf(`const ${handler} = useCallback`);
+        expect(at, handler).toBeGreaterThan(-1);
+        while (at !== -1) {
+          const body = caller.slice(at, caller.indexOf("}, [", at));
+          expect(body, handler).toMatch(/await fetchOrNoAnswer\(/);
+          expect(body, handler).not.toMatch(/await fetch\(/);
+          at = caller.indexOf(`const ${handler} = useCallback`, at + 1);
+        }
+      }
+    });
+  }
+
+  // KK3 follow-up: Create link (no dialog) swallowed an offline failure.
+  for (const path of ["../../app/queue/queue-view.tsx", "../media-library.tsx"]) {
+    it(`${path}: Create link says a failure through the same texts`, () => {
+      const caller = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+      const body = caller.slice(caller.indexOf("async function handleCreate()"), caller.indexOf("async function copyUrl()"));
+      expect(body).toMatch(/catch \(error\) \{\s+const text = confirmFailureText\(error\);\s+if \(text\) toast\.error\(text\);/);
     });
   }
 });

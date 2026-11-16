@@ -28,6 +28,7 @@ import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 import { personLabel } from "@/lib/usageLimits";
 import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
@@ -172,6 +173,17 @@ export interface ClientLinksState {
  */
 export function memberIsGone(status: number, body: unknown): boolean {
   return status === 404 && typeof body === "object" && body !== null && (body as { gone?: unknown }).gone === true;
+}
+
+/**
+ * KK3 follow-up: a role change found the person's role already changed by
+ * another owner (409 `roleChanged`). They are still here: the row stays and the
+ * dialog closes, and the toast says to reload.
+ */
+export function memberRoleChanged(status: number, body: unknown): boolean {
+  return (
+    status === 409 && typeof body === "object" && body !== null && (body as { roleChanged?: unknown }).roleChanged === true
+  );
 }
 
 /**
@@ -495,7 +507,7 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
   // error is already surfaced via toast here, mirrors revokeInvite/
   // confirmRemove below).
   const handleLeave = useCallback(async () => {
-    const response = await fetch("/api/workspaces/leave", {
+    const response = await fetchOrNoAnswer("/api/workspaces/leave", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -687,7 +699,7 @@ function OwnerView({
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here).
   const revokeInvite = useCallback(async () => {
-    const response = await fetch("/api/workspaces/invites", {
+    const response = await fetchOrNoAnswer("/api/workspaces/invites", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -772,7 +784,7 @@ function OwnerView({
   // ConfirmFailureShown; a request that never left is said by the dialog.
   const confirmRemove = useCallback(async () => {
     if (!removeTarget) return;
-    const response = await fetch(`/api/workspaces/members/${removeTarget.userId}`, {
+    const response = await fetchOrNoAnswer(`/api/workspaces/members/${removeTarget.userId}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -808,7 +820,7 @@ function OwnerView({
   // owner row, which shows "Make member", not "Make owner").
   const confirmPromote = useCallback(async () => {
     if (!promoteTarget) return;
-    const response = await fetch(`/api/workspaces/members/${promoteTarget.userId}`, {
+    const response = await fetchOrNoAnswer(`/api/workspaces/members/${promoteTarget.userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: "owner", workspaceId }),
@@ -820,6 +832,7 @@ function OwnerView({
         dropMember(promoteTarget.userId);
         return;
       }
+      if (memberRoleChanged(response.status, data)) return;
       throw new ConfirmFailureShown("PROMOTE_FAILED");
     }
     setMembers((prev) =>
@@ -838,7 +851,7 @@ function OwnerView({
   // last-owner demote is refused there and surfaced via toast.
   const confirmDemote = useCallback(async () => {
     if (!demoteTarget) return;
-    const response = await fetch(`/api/workspaces/members/${demoteTarget.userId}`, {
+    const response = await fetchOrNoAnswer(`/api/workspaces/members/${demoteTarget.userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: "member", workspaceId }),
@@ -850,6 +863,7 @@ function OwnerView({
         dropMember(demoteTarget.userId);
         return;
       }
+      if (memberRoleChanged(response.status, data)) return;
       throw new ConfirmFailureShown("DEMOTE_FAILED");
     }
     if (demoteTarget.userId === currentUserId) {
@@ -919,7 +933,7 @@ function OwnerView({
   // Leave control is disabled below until then; the server backstops with a
   // 400 either way).
   const handleLeave = useCallback(async () => {
-    const response = await fetch("/api/workspaces/leave", {
+    const response = await fetchOrNoAnswer("/api/workspaces/leave", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),

@@ -24,6 +24,27 @@ function memberGone() {
   );
 }
 
+/**
+ * KK3 follow-up: a promote or demote matched nothing, but the person is still
+ * in the workspace: another owner changed their role meanwhile. Not "gone", so
+ * the Team card keeps the row.
+ */
+function roleChanged() {
+  return NextResponse.json(
+    { error: "Their role changed in the meantime. Reload the page to see the current members.", roleChanged: true },
+    { status: 409 },
+  );
+}
+
+async function stillMember(
+  db: Pick<typeof prisma, "workspaceMember">,
+  workspaceId: string,
+  userId: string,
+): Promise<boolean> {
+  const membership = await db.workspaceMember.findFirst({ where: { workspaceId, userId }, select: { role: true } });
+  return membership !== null;
+}
+
 interface MemberRouteContext {
   params: Promise<{ userId: string }>;
 }
@@ -210,7 +231,7 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
       data: { role: "owner" },
     });
     if (count === 0) {
-      return memberGone();
+      return (await stillMember(prisma, workspaceId, targetUserId)) ? roleChanged() : memberGone();
     }
     return NextResponse.json({ ok: true, role }, { status: 200 });
   }
@@ -231,7 +252,9 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
       where: { workspaceId, userId: targetUserId, role: "owner" },
       data: { role: "member" },
     });
-    if (count === 0) return "not_found" as const;
+    if (count === 0) {
+      return (await stillMember(tx, workspaceId, targetUserId)) ? ("role_changed" as const) : ("not_found" as const);
+    }
     // R8-client-journey L1 / security L2: as on leave, the invite links they
     // made as an owner stop working with their ownership (same transaction),
     // so a copy they kept can't add anyone.
@@ -246,6 +269,9 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
   }
   if (outcome === "not_found") {
     return memberGone();
+  }
+  if (outcome === "role_changed") {
+    return roleChanged();
   }
 
   // R5-security L1: as an owner they could copy the client links, which keep

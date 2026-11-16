@@ -27,7 +27,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
-import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
+import { ConfirmDialog, ConfirmFailureShown, confirmFailureText } from "@/components/ui/dialog";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -413,7 +414,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
 
   // Create and Replace are the same call: the server revokes any old link.
   const makeLink = useCallback(async () => {
-    const response = await fetch("/api/workspaces/upload-link", {
+    const response = await fetchOrNoAnswer("/api/workspaces/upload-link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -430,7 +431,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   }, [toast, workspaceId]);
 
   const turnOff = useCallback(async () => {
-    const response = await fetch("/api/workspaces/upload-link", {
+    const response = await fetchOrNoAnswer("/api/workspaces/upload-link", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -449,8 +450,9 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
     setBusy(true);
     try {
       await makeLink();
-    } catch {
-      // Already shown as a toast.
+    } catch (error) {
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
     } finally {
       setBusy(false);
     }

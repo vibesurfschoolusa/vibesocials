@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { memberIsGone, teamMemberLines } from "./team-section";
+import { memberIsGone, memberRoleChanged, teamMemberLines } from "./team-section";
 
 // R5 pages L10: the field that shows a new invite link has a name for screen
 // readers. It only renders right after a link is made (client state), so the
@@ -82,5 +82,27 @@ describe("the owners' member rows on a phone", () => {
       '<li key={member.userId} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">',
     );
     expect(source).toContain('<div className="flex flex-wrap items-center gap-2 sm:shrink-0">');
+  });
+});
+
+// KK3 follow-up: a promote or demote that found the person's role already
+// changed (another owner, meanwhile) keeps their row: it is not "gone".
+describe("a member whose role changed in the meantime", () => {
+  const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+
+  it("is read from the route's roleChanged answer only", () => {
+    expect(memberRoleChanged(409, { error: "Their role changed in the meantime.", roleChanged: true })).toBe(true);
+    expect(memberRoleChanged(409, { error: "Switched workspace." })).toBe(false);
+    expect(memberRoleChanged(404, { roleChanged: true })).toBe(false);
+    expect(memberRoleChanged(409, null)).toBe(false);
+    expect(memberIsGone(409, { roleChanged: true })).toBe(false);
+  });
+
+  it("Make owner and Make member keep the row and close on that answer", () => {
+    for (const handler of ["confirmPromote", "confirmDemote"]) {
+      const body = source.slice(source.indexOf(`const ${handler} = useCallback`));
+      const end = body.indexOf("}, [");
+      expect(body.slice(0, end), handler).toMatch(/if \(memberRoleChanged\(response\.status, data\)\) return;/);
+    }
   });
 });
