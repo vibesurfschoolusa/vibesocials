@@ -573,6 +573,52 @@ describe("describeOAuthResult — every sentence names only the button the row s
     );
   });
 
+  // R29 OO1 lead follow-up 3: every sign-in that failed or was cancelled
+  // with a row present says the row's connection is unchanged and names the
+  // button the row shows (none on a working row), on Settings as on /c.
+  // Left out, with why: the Google permission codes (their own "wasn't
+  // reconnected" sentence, R28), another workspace's tab (refused before any
+  // sign-in), owner-only, not configured and session mismatch (no sign-in of
+  // this row's ran).
+  const FAILURE_CODES = [
+    "linkedin_no_admin_pages",
+    "facebook_page_no_pages",
+    "instagram_no_instagram_account",
+    "youtube_no_channel",
+    "pinterest_no_boards",
+    "x_auth_denied",
+    "youtube_oauth_denied",
+    "linkedin_auth_failed",
+    "pinterest_access_denied",
+    "google_business_profile_oauth_denied",
+    "tiktok_oauth_denied",
+    "x_invalid_state",
+    "instagram_missing_params",
+    "youtube_connect_failed",
+    "tiktok_token_exchange_failed",
+  ];
+  it.each(FAILURE_CODES.flatMap((code) => (["reconnect", "connected"] as const).map((shown) => [code, shown] as const)))(
+    "%s with a row showing %s: unchanged, and only the shown button",
+    (code, shown) => {
+      const message = describe_(code, shown);
+      expect(message).toMatch(/connection is unchanged/);
+      if (shown === "reconnect") expect(message).toMatch(/\b[Cc]lick Reconnect\b/);
+      else expect(message).not.toMatch(/\b(Re)?[Cc]onnect\b(?! connection)/);
+    },
+  );
+
+  it("a failed Reconnect (transient or not secure) on Settings", () => {
+    expect(describe_("youtube_connect_failed", "reconnect")).toBe(
+      "We couldn't reconnect YouTube, so your YouTube connection is unchanged. Click Reconnect to try again.",
+    );
+    expect(describe_("x_invalid_state", "connected")).toBe("We couldn't reconnect X, so your X connection is unchanged.");
+    // With no row, as before.
+    expect(describe_("youtube_connect_failed", "connect")).toBe("YouTube couldn't be connected. Please try again.");
+    expect(describe_("instagram_missing_params", "connect")).toBe(
+      "The Instagram sign-in couldn't be completed securely. Please try connecting again.",
+    );
+  });
+
   it("another workspace's tab: the button this page shows for it", () => {
     expect(describe_("x_workspace_changed", "reconnect")).toBe(
       "That tab was for another workspace, so nothing changed. This page shows the workspace you are in now: click Reconnect to reconnect it here.",

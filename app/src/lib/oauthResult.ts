@@ -73,6 +73,17 @@ export function signInLeft(shown: ShownControl, label: string | null): string {
   return label ? `your ${label} connection is unchanged` : "your existing connection is unchanged";
 }
 
+/**
+ * R29 OO1 lead follow-up 3: a sign-in that failed with a row present (a
+ * Reconnect): the row's connection is unchanged. Null without a row, where
+ * each page keeps its own "couldn't connect" sentence. One rule for Settings
+ * and the connect link page; each adds its own next step.
+ */
+export function reconnectFailedText(shown: ShownControl, label: string | null): string | null {
+  if (shown === "connect") return null;
+  return `We couldn't reconnect ${label ?? "the account"}, so ${signInLeft(shown, label)}.`;
+}
+
 /** The step that tries the sign-in once more: "Click Connect again", "Click Reconnect". */
 function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
   return button === "Connect" ? `${press} Connect again` : `${press} ${button}`;
@@ -235,7 +246,14 @@ function describeCode(
         }`,
       };
     }
+    // A row present: its connection is unchanged, and the row's button tries again.
+    const signInFailed = (): { variant: "danger"; message: string } | null => {
+      const failed = reconnectFailedText(shown, label);
+      return failed ? { variant: "danger", message: `${failed}${button ? ` Click ${button} to try again.` : ""}` } : null;
+    };
     if (error.includes("missing_params") || error.includes("invalid_state")) {
+      const failed = signInFailed();
+      if (failed) return failed;
       return {
         variant: "danger",
         message: label
@@ -266,6 +284,8 @@ function describeCode(
     }
     // Everything else, including the callbacks' unexpected-error code
     // `<platform>_connect_failed` (network/parse/DB failure: transient).
+    const failed = signInFailed();
+    if (failed) return failed;
     return {
       variant: "danger",
       message: label

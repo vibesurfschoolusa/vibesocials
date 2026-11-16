@@ -19,8 +19,10 @@ const refuseNotValid = () => NextResponse.json({ error: NOT_VALID, reason: "not_
 // (server/auth/undoWindow.ts), so a link not found may be an expired one.
 // R29 OO1 (security L2): or one already used, so it claims neither.
 const NOT_VALID = `This link has expired or was already used: undo links work for 72 hours. If you already undid the change, sign in with your old address (reset your password if it doesn't work). If not, write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
-// R29 OO1 (security L1): the undo cleared the password, so say how to get back in.
-const USED = `This link was already used, so the change was already undone. Your password stopped working then, and we emailed a link to set a new one to the restored address. If you can't find it, press Reset your password below.`;
+// R29 OO1 (security L1): the undo cleared the password, so say how to get back
+// in. Not that a reset link went: that email may have failed.
+const USED =
+  "This link was already used, so the change was undone and your password stopped working. Use Reset your password to set a new one.";
 const EXPIRED = `This link has expired: it worked for 72 hours. Write to ${SUPPORT_EMAIL} and we'll help you get the account back.`;
 // R7-new-customer H1: no link is sent for such a change; this is the backstop.
 const UNCONFIRMED = `This change can't be undone with a link, because the address it replaced was never confirmed. If this is your account, write to ${SUPPORT_EMAIL}.`;

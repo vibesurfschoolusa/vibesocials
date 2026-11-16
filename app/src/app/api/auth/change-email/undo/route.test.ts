@@ -191,7 +191,8 @@ describe("POST /api/auth/change-email/undo", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       // R29 OO1 (security L1): the undo cleared the password and sent a reset link.
-      error: `This link was already used, so the change was already undone. Your password stopped working then, and we emailed a link to set a new one to the restored address. If you can't find it, press Reset your password below.`,
+      // Lead follow-up: the reset email may have failed, so the answer doesn't claim it went.
+      error: "This link was already used, so the change was undone and your password stopped working. Use Reset your password to set a new one.",
       // Lead review (R28 NN2): the page titles it "already used", not "wasn't undone".
       used: true,
     });

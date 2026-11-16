@@ -1,6 +1,13 @@
 import type { Platform } from "@prisma/client";
 
-import { causeMessage, googlePermissionMessage, isGooglePermissionCode, signInLeft, type ShownControl } from "@/lib/oauthResult";
+import {
+  causeMessage,
+  googlePermissionMessage,
+  isGooglePermissionCode,
+  reconnectFailedText,
+  signInLeft,
+  type ShownControl,
+} from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 
 /**
@@ -208,9 +215,8 @@ export function describeConnectLinkResult(
     const cause = platform && VISITOR_CAUSES.has(error) ? causeMessage(error, shown ? shown(platform) : "connect", "press") : null;
     if (cause) return { variant: "danger", message: cause };
     const tellThem = "Try again, or tell the person who sent you this link.";
-    if (label && rowShown !== "connect") {
-      return { variant: "danger", message: `We couldn't reconnect ${label}, so ${signInLeft(rowShown, label)}. ${tellThem}` };
-    }
+    const failed = reconnectFailedText(rowShown, label);
+    if (failed) return { variant: "danger", message: `${failed} ${tellThem}` };
     return {
       variant: "danger",
       message: label ? `We couldn't connect ${label}. ${tellThem}` : `We couldn't connect the account. ${tellThem}`,
