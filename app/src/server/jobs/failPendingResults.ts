@@ -23,6 +23,16 @@ export const DISPATCH_FAILURE = {
 } as const satisfies PendingResultFailure;
 
 /**
+ * A pending result no run will finish and nobody claimed: it never reached the
+ * platform, so it can be retried. Written by the 2-hour stuck-job reconciler
+ * (scheduledScanner.ts) and, since R27 MM4, by the 6-hour stale sweep.
+ */
+export const PUBLISH_STALLED_FAILURE = {
+  errorCode: "PUBLISH_STALLED",
+  errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+} as const satisfies PendingResultFailure;
+
+/**
  * What a result is failed with when its connection was removed (Disconnect /
  * Switch account) after the job was dispatched (2026-11-02 scale audit,
  * correctness L1). The same code and copy `publishToPlatform` writes when the

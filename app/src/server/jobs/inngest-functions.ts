@@ -17,6 +17,7 @@ import {
   CONNECTION_GONE_FAILURE,
   failPendingPostJobResults,
   finishPostJob,
+  PUBLISH_STALLED_FAILURE,
   recomputeAndStorePostJobStatus,
   type PendingResultFailure,
 } from "@/server/jobs/failPendingResults";
@@ -2247,7 +2248,26 @@ export const stalePostJobSweep = inngest.createFunction(
       let count = 0;
       const closed: Array<{ id: string; name: "notification.requested"; data: { userId: string; postJobId: string } }> = [];
       for (const { id, userId, updatedAt } of candidates) {
-        const failed = await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
+        // R27 MM4: a job closed with results still pending kept them pending for
+        // good (the 2-hour reconciler takes only in_progress jobs, Retry only
+        // failed rows). They go through the shared transactional rule instead:
+        // unclaimed rows stalled (retryable), claimed ones PUBLISH_UNCONFIRMED
+        // (they may be live), the job recomputed and its media stamped in the same
+        // transaction. Each row write is conditional on `pending`, so rows the
+        // reconciler (or an earlier sweep) already marked are left as they are,
+        // and a job nothing was marked for is neither counted nor announced.
+        const stillPending = await prisma.postJobResult.findMany({
+          where: { postJobId: id, status: "pending" },
+          select: { id: true },
+          take: 1,
+        });
+        let failed = 0;
+        if (stillPending.length > 0) {
+          const marked = await failPendingPostJobResults(id, PUBLISH_STALLED_FAILURE);
+          failed = marked.failedCount + marked.unconfirmedCount > 0 && marked.status !== "in_progress" ? 1 : 0;
+        } else {
+          failed = await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
+        }
         count += failed;
         // The id carries the stale heartbeat: a re-run of this sweep for the same
         // stuck job sends the same id, which Inngest dedupes.

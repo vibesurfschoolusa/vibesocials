@@ -168,7 +168,7 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
 });
 
 import { EmailRetryableError } from "@/server/notifications/email";
-import { CONNECTION_GONE_FAILURE } from "./failPendingResults";
+import { CONNECTION_GONE_FAILURE, PUBLISH_STALLED_FAILURE } from "./failPendingResults";
 import {
   failInterruptedPublishRun,
   failInterruptedRetryRun,
@@ -4106,12 +4106,61 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
     vi.setSystemTime(NOW);
     db.postJobFindMany.mockResolvedValue([]);
     db.postJobUpdateMany.mockResolvedValue({ count: 0 });
+    // No pending results unless a test says so: the job is ended through finishPostJob.
+    db.resultFindMany.mockResolvedValue([]);
     healResultWorkspaceIdsMock.mockReset();
     healResultWorkspaceIdsMock.mockResolvedValue({ healed: 0 });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // R27 MM4: a job closed here with results still pending used to keep them
+  // pending for good: the 2-hour reconciler takes only in_progress jobs, and
+  // Retry only failed rows. They now go through the shared transactional rule.
+  describe("a stale job with results still pending", () => {
+    const STALE = new Date(NOW - 7 * 3_600_000);
+    const sweep = (step = fakeStep()) =>
+      handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step }).then((out) => ({ out, step }));
+
+    beforeEach(() => {
+      db.postJobFindMany.mockResolvedValue([{ id: "stale-1", userId: "user-1", updatedAt: STALE }]);
+      db.resultFindMany.mockResolvedValue([{ id: "r1" }]);
+      finishSpy.mockReset();
+      finishSpy.mockResolvedValue(1);
+    });
+
+    it("marks them through failPendingPostJobResults with the stalled reason (claimed ones become unconfirmed there), not finishPostJob", async () => {
+      failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 1, status: "failed" });
+
+      const { out, step } = await sweep();
+
+      expect(db.resultFindMany).toHaveBeenCalledWith({
+        where: { postJobId: "stale-1", status: "pending" },
+        select: { id: true },
+        take: 1,
+      });
+      expect(failPendingMock).toHaveBeenCalledWith("stale-1", PUBLISH_STALLED_FAILURE);
+      expect(finishSpy).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ swept: 1 });
+      expect(step.sendEvent).toHaveBeenCalledWith("notify-stale-closed", [
+        {
+          id: `notify-stale-stale-1-${STALE.getTime()}`,
+          name: "notification.requested",
+          data: { userId: "user-1", postJobId: "stale-1" },
+        },
+      ]);
+    });
+
+    it("rows another sweep or the reconciler already marked: nothing changes, nothing is counted or announced", async () => {
+      failPendingMock.mockResolvedValue({ failedCount: 0, unconfirmedCount: 0, status: "failed" });
+
+      const { out, step } = await sweep();
+
+      expect(out).toMatchObject({ swept: 0 });
+      expect(step.sendEvent).not.toHaveBeenCalled();
+    });
   });
 
   it("does not fail a job that has a pending result deferred to a platform limit", async () => {
@@ -4255,6 +4304,8 @@ describe("stalePostJobSweep - result workspace heal step", () => {
     vi.setSystemTime(NOW);
     db.postJobFindMany.mockResolvedValue([]);
     db.postJobUpdateMany.mockResolvedValue({ count: 0 });
+    // No pending results: each job is ended through finishPostJob.
+    db.resultFindMany.mockResolvedValue([]);
     healResultWorkspaceIdsMock.mockReset();
     healResultWorkspaceIdsMock.mockResolvedValue({ healed: 0 });
   });

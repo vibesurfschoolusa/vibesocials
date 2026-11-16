@@ -50,6 +50,9 @@ import {
   type PostOutcomeResultSummary,
 } from "@/server/notifications/postOutcomeEmail";
 import { STUCK_IN_PROGRESS_MS } from "@/server/jobs/scheduledScanner";
+import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+
+const escapeForHtml = (text: string) => text.replace(/'/g, "&#39;");
 
 /** The workspace and caption every built email in these tests is for (F4). */
 const WS = { workspaceId: "ws_1", workspaceName: "Surf Co", caption: "Dawn patrol tomorrow at 6" };
@@ -110,6 +113,39 @@ describe("shouldSendPostOutcomeEmail", () => {
 });
 
 describe("buildPostOutcomeEmail", () => {
+  // R27 MM4: what each row of a job the stale sweep closed says, matching what
+  // the Activity card shows for it (Retry for a stalled row; check the platform
+  // first for one that may already be live).
+  describe("rows the stale sweep closed", () => {
+    const html = (row: PostOutcomeResultSummary) =>
+      buildPostOutcomeEmail({ results: [row], appBaseUrl: null, ...WS }).html;
+
+    it("stalled: never reached the platform; retry it in Activity", () => {
+      expect(
+        html({
+          platform: "instagram",
+          status: "failed",
+          errorCode: "PUBLISH_STALLED",
+          errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+        }),
+      ).toContain("<li>Instagram: Not sent — publishing stopped before it reached Instagram. Retry it in Activity.</li>");
+    });
+
+    it("unconfirmed: the shared sentence, check the platform first", () => {
+      const out = html({ platform: "x", status: "failed", errorCode: PUBLISH_UNCONFIRMED_CODE, errorMessage: PUBLISH_UNCONFIRMED_MESSAGE });
+      expect(out).toContain(`<li>X: ${escapeForHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`);
+      expect(out).not.toContain("Failed —");
+    });
+
+    it("a row still pending in a closed job (closed before this fix) names no control it lacks", () => {
+      const out = html({ platform: "instagram", status: "pending", notSent: true });
+      expect(out).toContain(
+        "<li>Instagram: Not sent — publishing stopped before it reached Instagram. Open the post in Activity to see where it stands.</li>",
+      );
+      expect(out).not.toMatch(/Create|send it again/);
+    });
+  });
+
   const mixedResults: PostOutcomeResultSummary[] = [
     { platform: "tiktok", status: "success", errorMessage: null },
     { platform: "youtube", status: "failed", errorMessage: "Quota exceeded" },
@@ -845,7 +881,8 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     });
 
     expect(sent(0).subject).toBe("Surf Co: your post and Story finished: 2 of 4 succeeded");
-    expect(sent(0).html).toContain("<li>Instagram Story: Failed — We could not confirm this post.</li>");
+    // R27 MM4: an unconfirmed row says the shared sentence (it may already be live).
+    expect(sent(0).html).toContain(`<li>Instagram Story: ${escapeForHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`);
     expect(keyOf(0)).toBe(keyOf(1));
   });
 
@@ -950,7 +987,7 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
     expect(sent(0).html).toContain(
-      "<li>Instagram Story: Not sent — publishing stopped before it reached Instagram. Activity has no retry for it, so post it again from Create.</li>",
+      "<li>Instagram Story: Not sent — publishing stopped before it reached Instagram. Open the post in Activity to see where it stands.</li>",
     );
     expect(keyOf(0)).toBe("post-outcome/job-story/first");
   });

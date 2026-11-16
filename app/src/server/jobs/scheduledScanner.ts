@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { finishPostJob, stampPostMediaLastUsed } from "@/server/jobs/failPendingResults";
+import { finishPostJob, PUBLISH_STALLED_FAILURE, stampPostMediaLastUsed } from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import {
   buildPublishEvent,
@@ -509,12 +509,7 @@ export async function reconcileStuckInProgressJobs(
     if (unclaimedIds.length > 0) {
       await prisma.postJobResult.updateMany({
         where: { id: { in: unclaimedIds }, status: "pending", claimRunId: null },
-        data: {
-          status: "failed",
-          errorCode: "PUBLISH_STALLED",
-          errorMessage:
-            "Publish did not complete (stalled). You can retry this platform.",
-        },
+        data: { status: "failed", ...PUBLISH_STALLED_FAILURE },
       });
     }
 

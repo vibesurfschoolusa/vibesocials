@@ -42,6 +42,7 @@ const finishDb = {
 
 import {
   CONNECTION_GONE_FAILURE,
+  PUBLISH_STALLED_FAILURE,
   DISPATCH_FAILURE,
   PUBLISH_UNCONFIRMED,
   RECOMPUTE_TX_MAX_WAIT_MS,
@@ -114,6 +115,29 @@ describe("CONNECTION_GONE_FAILURE", () => {
         errorCode: PUBLISH_UNCONFIRMED_CODE,
         errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
       },
+    });
+  });
+});
+
+// R27 MM4: the 6-hour stale sweep closes a job through failPendingPostJobResults
+// with the stalled reason, the same code and message the 2-hour reconciler writes.
+describe("PUBLISH_STALLED_FAILURE", () => {
+  it("is the reconciler's stalled code and message", () => {
+    expect(PUBLISH_STALLED_FAILURE).toEqual({
+      errorCode: "PUBLISH_STALLED",
+      errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+    });
+  });
+
+  it("an unclaimed pending row becomes stalled; a claimed one PUBLISH_UNCONFIRMED (it may be live)", async () => {
+    await failPendingPostJobResults("job-1", PUBLISH_STALLED_FAILURE);
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: null },
+      data: { status: "failed", ...PUBLISH_STALLED_FAILURE },
+    });
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: { not: null } },
+      data: { status: "failed", errorCode: PUBLISH_UNCONFIRMED_CODE, errorMessage: PUBLISH_UNCONFIRMED_MESSAGE },
     });
   });
 });

@@ -2,9 +2,11 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
+import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
+import { PUBLISH_STALLED_FAILURE } from "@/server/jobs/failPendingResults";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import { emailSettingsLine, workspaceLink } from "@/server/notifications/links";
 
@@ -56,6 +58,8 @@ export function shouldSendPostOutcomeEmail({
 export interface PostOutcomeResultSummary {
   platform: Platform;
   status: PostJobResultStatus;
+  /** Internal code, read only to word a stalled or unconfirmed row (R27 MM4). */
+  errorCode?: string | null;
   errorMessage?: string | null;
   /** Sent as a Story: the row reads "Instagram Story" (R5-client-journey L3). */
   story?: boolean;
@@ -155,10 +159,20 @@ function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
 // module's DTO type can never leak into the email body.
 function renderResultRow(result: PostOutcomeResultSummary): string {
   const label = escapeHtml(`${platformLabel(result.platform)}${result.story ? " Story" : ""}`);
+  const stopped = `Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}.`;
+  // R27 MM4: the stale sweep now marks a closed job's pending rows (stalled, or
+  // unconfirmed when a step had claimed them), so a row still pending is one a
+  // job closed before that; Activity offers it no control, so none is named.
   if (result.notSent) {
-    // R27 MM4 review: the Activity card offers Retry only for a failed result and
-    // Send again only for a post with none; a row still pending gets neither.
-    return `<li>${label}: Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}. Activity has no retry for it, so post it again from Create.</li>`;
+    return `<li>${label}: ${stopped} Open the post in Activity to see where it stands.</li>`;
+  }
+  // As the card: a stalled row never reached the platform and has Retry; an
+  // unconfirmed one may already be live, so the platform is checked first.
+  if (result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode) {
+    return `<li>${label}: ${stopped} Retry it in Activity.</li>`;
+  }
+  if (result.status === "failed" && result.errorCode === PUBLISH_UNCONFIRMED_CODE) {
+    return `<li>${label}: ${escapeHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`;
   }
   if (result.status === "success") {
     return `<li>${label}: Succeeded</li>`;
