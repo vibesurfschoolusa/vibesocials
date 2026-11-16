@@ -17,12 +17,20 @@ export interface CheckRateLimitOptions {
    * publishing down.
    */
   failClosed?: boolean;
+  /**
+   * R32 (Log in): with failClosed, mark a denial caused by a store error with
+   * `unavailable: true`, so the caller can tell it from a used-up limit.
+   * Opt-in, so every other caller's answers stay exactly as they were.
+   */
+  markUnavailable?: boolean;
 }
 
 export interface RateLimitResult {
   allowed: boolean;
   /** Seconds until the current window resets (only set when blocked). */
   retryAfterSeconds?: number;
+  /** Only with markUnavailable: the store failed, so nothing was counted or checked. */
+  unavailable?: true;
 }
 
 /** Options of {@link consumeFixedWindow}: one explicit window, no bucketing. */
@@ -35,6 +43,8 @@ export interface ConsumeFixedWindowOptions {
   resetAt: Date;
   /** Same meaning as {@link CheckRateLimitOptions.failClosed}. */
   failClosed?: boolean;
+  /** Same meaning as {@link CheckRateLimitOptions.markUnavailable}. */
+  markUnavailable?: boolean;
 }
 
 /**
@@ -54,7 +64,7 @@ export interface ConsumeFixedWindowOptions {
 export async function consumeFixedWindow(
   opts: ConsumeFixedWindowOptions,
 ): Promise<RateLimitResult> {
-  const { key, limit, resetAt, failClosed = false } = opts;
+  const { key, limit, resetAt, failClosed = false, markUnavailable = false } = opts;
   const now = Date.now();
 
   try {
@@ -87,7 +97,7 @@ export async function consumeFixedWindow(
   } catch (error) {
     if (failClosed) {
       console.error("[rateLimit] store error, failing closed", error);
-      return { allowed: false, retryAfterSeconds: 60 };
+      return markUnavailable ? { allowed: false, retryAfterSeconds: 60, unavailable: true } : { allowed: false, retryAfterSeconds: 60 };
     }
     console.error("[rateLimit] store error, failing open", error);
     return { allowed: true };
@@ -134,12 +144,12 @@ export async function exhaustFixedWindow(opts: {
 export async function checkRateLimit(
   opts: CheckRateLimitOptions,
 ): Promise<RateLimitResult> {
-  const { userId, route, limit, windowMs, failClosed = false } = opts;
+  const { userId, route, limit, windowMs, failClosed = false, markUnavailable = false } = opts;
 
   const now = Date.now();
   const bucket = Math.floor(now / windowMs);
   const key = `${userId}:${route}:${bucket}`;
   const resetAt = new Date((bucket + 1) * windowMs);
 
-  return consumeFixedWindow({ key, limit, resetAt, failClosed });
+  return consumeFixedWindow({ key, limit, resetAt, failClosed, markUnavailable });
 }

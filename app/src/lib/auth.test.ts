@@ -51,7 +51,7 @@ import {
   serverSessionAuthOptions,
 } from "./auth";
 import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
-import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "./signInErrorCodes";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED, signInLimitedCode } from "./signInErrorCodes";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
@@ -178,6 +178,7 @@ describe("authorizeCredentials — rate limits", () => {
         limit: 10,
         windowMs: FIFTEEN_MINUTES,
         failClosed: true,
+        markUnavailable: true,
       },
       {
         userId: "ip:203.0.113.7",
@@ -185,6 +186,7 @@ describe("authorizeCredentials — rate limits", () => {
         limit: 30,
         windowMs: FIFTEEN_MINUTES,
         failClosed: true,
+        markUnavailable: true,
       },
       {
         userId: "email:victim@example.com",
@@ -192,6 +194,7 @@ describe("authorizeCredentials — rate limits", () => {
         limit: 100,
         windowMs: ONE_HOUR,
         failClosed: true,
+        markUnavailable: true,
       },
     ]);
   });
@@ -211,10 +214,38 @@ describe("authorizeCredentials — rate limits", () => {
 
       await expect(
         authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.1.1.1")),
-      ).rejects.toThrow(new Error(SIGN_IN_LIMITED));
+      ).rejects.toThrow(new Error(signInLimitedCode(60)));
       expect(findUniqueMock).not.toHaveBeenCalled();
     },
   );
+
+  // R32 lead: the sentence states a true wait, so the code carries the
+  // limiter's own reset time; the hourly per-address limit is not 15 minutes.
+  it("the limit code carries the limiter's wait in whole minutes, rounded up", async () => {
+    let call = 0;
+    checkRateLimitMock.mockImplementation(async () =>
+      call++ === 2 ? { allowed: false, retryAfterSeconds: 2701 } : { allowed: true },
+    );
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error("SignInLimited-46"),
+    );
+    checkRateLimitMock.mockResolvedValue({ allowed: false });
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error(SIGN_IN_LIMITED),
+    );
+  });
+
+  // R32 lead: a limiter store that can't answer is "couldn't check", not a used-up limit.
+  it.each([0, 1, 2])("a store error on limit #%i throws the couldn't-check code", async (failingIndex) => {
+    let call = 0;
+    checkRateLimitMock.mockImplementation(async () =>
+      call++ === failingIndex ? { allowed: false, retryAfterSeconds: 60, unavailable: true } : { allowed: true },
+    );
+    await expect(authorizeCredentials({ email: USER.email, password: "x" }, reqFrom("1.1.1.1"))).rejects.toThrow(
+      new Error(SIGN_IN_UNCHECKED),
+    );
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
 
   it("one IP hammering a victim's email can no longer lock the victim out from their own IP", async () => {
     installFakeLimiter();
@@ -281,8 +312,8 @@ describe("authorizeCredentials — a password that couldn't be checked", () => {
   });
 
   it("the codes are plain words that survive a URL's query unchanged", () => {
-    for (const code of [SIGN_IN_LIMITED, SIGN_IN_UNCHECKED]) {
-      expect(code).toMatch(/^[A-Za-z]+$/);
+    for (const code of [SIGN_IN_LIMITED, signInLimitedCode(600), SIGN_IN_UNCHECKED]) {
+      expect(code).toMatch(/^[A-Za-z]+(-\d+)?$/);
       expect(new URLSearchParams(`error=${encodeURIComponent(code)}`).get("error")).toBe(code);
     }
     expect(SIGN_IN_LIMITED).not.toBe(SIGN_IN_UNCHECKED);

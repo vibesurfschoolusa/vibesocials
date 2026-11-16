@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next-auth/react", () => ({ getSession: vi.fn(async () => null), signOut: vi.fn() }));
 
 import { credentialsSignInChecked, googleSignInChecked, signInReachable } from "./signInChecked";
-import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "./signInErrorCodes";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED, signInLimitedCode } from "./signInErrorCodes";
 
 type Answers = Partial<Record<"providers" | "csrf" | "session", () => Promise<Response>>>;
 
@@ -85,6 +85,12 @@ describe("credentialsSignInChecked", () => {
     await expect(credentialsSignInChecked(answer(SIGN_IN_LIMITED), "a@example.test", "x", server())).resolves.toEqual({
       ok: false,
       reason: "limited",
+      waitMinutes: null,
+    });
+    await expect(credentialsSignInChecked(answer(signInLimitedCode(720)), "a@example.test", "x", server())).resolves.toEqual({
+      ok: false,
+      reason: "limited",
+      waitMinutes: 12,
     });
     await expect(credentialsSignInChecked(answer(SIGN_IN_UNCHECKED), "a@example.test", "x", server())).resolves.toEqual({
       ok: false,

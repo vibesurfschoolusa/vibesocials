@@ -1,5 +1,5 @@
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
-import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "@/lib/signInErrorCodes";
+import { SIGN_IN_UNCHECKED, signInLimitedWait } from "@/lib/signInErrorCodes";
 import { beforeSignIn } from "@/lib/staleSignOut";
 
 // A plain module (not "use client"): Log in's helper and the Register form
@@ -24,7 +24,8 @@ import { beforeSignIn } from "@/lib/staleSignOut";
  */
 export type SignInCheck =
   | { ok: true }
-  | { ok: false; reason: "not_sent" | "refused" | "unfinished" | "lost" | "limited" | "unchecked" };
+  | { ok: false; reason: "limited"; waitMinutes: number | null }
+  | { ok: false; reason: "not_sent" | "refused" | "unfinished" | "lost" | "unchecked" };
 
 async function readJson(path: string, fetchImpl: typeof fetch): Promise<Record<string, unknown> | null> {
   const response = await fetchOrNoAnswer(path, { cache: "no-store" }, fetchImpl);
@@ -88,7 +89,8 @@ export async function credentialsSignInChecked(
   } catch {
     return { ok: false, reason: "lost" };
   }
-  if (result?.error === SIGN_IN_LIMITED) return { ok: false, reason: "limited" };
+  const waitMinutes = signInLimitedWait(result?.error);
+  if (waitMinutes !== undefined) return { ok: false, reason: "limited", waitMinutes };
   if (result?.error === SIGN_IN_UNCHECKED) return { ok: false, reason: "unchecked" };
   if (result?.ok !== true || result.error) return { ok: false, reason: "refused" };
   if (saysCsrf(result.url)) return { ok: false, reason: "unfinished" };

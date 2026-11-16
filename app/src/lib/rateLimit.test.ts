@@ -133,6 +133,30 @@ describe("consumeFixedWindow", () => {
     ).toEqual({ allowed: false, retryAfterSeconds: 1 });
   });
 
+  // R32 lead: a caller that asks (Log in) can tell a store error from a real
+  // limit; every other caller gets exactly the answers above.
+  it("markUnavailable: a fail-closed store error says unavailable; a real limit and a pass don't", async () => {
+    upsertMock.mockRejectedValueOnce(new Error("db down"));
+    expect(
+      await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true, markUnavailable: true }),
+    ).toEqual({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    upsertMock.mockResolvedValueOnce({ count: 1 });
+    expect(await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true, markUnavailable: true })).toEqual({
+      allowed: true,
+    });
+    upsertMock.mockResolvedValueOnce({ count: 2 });
+    const limited = await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true, markUnavailable: true });
+    expect(limited.allowed).toBe(false);
+    expect(limited).not.toHaveProperty("unavailable");
+  });
+
+  it("checkRateLimit passes markUnavailable through", async () => {
+    upsertMock.mockRejectedValue(new Error("db down"));
+    expect(
+      await checkRateLimit({ userId: "u1", route: "r", limit: 5, windowMs: 1000, failClosed: true, markUnavailable: true }),
+    ).toEqual({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+  });
+
   it("fails open on a store error, and closed with failClosed", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
 

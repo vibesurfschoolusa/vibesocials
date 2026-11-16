@@ -12,7 +12,7 @@ import { logger } from "./logger";
 import { LOGIN_EMAIL_IP_LIMIT, loginEmailIpUserId } from "./loginLimit";
 import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 import { checkRateLimit } from "./rateLimit";
-import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "./signInErrorCodes";
+import { SIGN_IN_UNCHECKED, signInLimitedCode } from "./signInErrorCodes";
 
 // Login throttles (all fail-closed). Keyed per (email, IP) rather than per
 // email so one IP guessing at a victim's address exhausts only ITS bucket —
@@ -77,16 +77,18 @@ export async function authorizeCredentials(
   // own buckets are exhausted never count toward the per-email backstop.
   // R32 new-customer L1: an exhausted limit throws its own code, so Log in
   // says so instead of "Invalid email or password." No oracle: every bucket
-  // counts every try for any address, account or not.
+  // counts every try for any address, account or not. The code carries the
+  // limiter's own wait (the hourly backstop's is not 15 minutes). A store
+  // that can't answer is "couldn't check", not a used-up limit.
   const limits = [
     { userId: loginEmailIpUserId(email, ip), ...LOGIN_EMAIL_IP_LIMIT },
     { userId: `ip:${ip}`, ...LOGIN_IP_LIMIT },
     { userId: `email:${email}`, ...LOGIN_EMAIL_LIMIT },
   ];
   for (const limit of limits) {
-    const result = await checkRateLimit({ ...limit, failClosed: true });
+    const result = await checkRateLimit({ ...limit, failClosed: true, markUnavailable: true });
     if (!result.allowed) {
-      throw new Error(SIGN_IN_LIMITED);
+      throw new Error(result.unavailable ? SIGN_IN_UNCHECKED : signInLimitedCode(result.retryAfterSeconds));
     }
   }
 

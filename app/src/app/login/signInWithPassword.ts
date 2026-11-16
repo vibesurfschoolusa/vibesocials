@@ -4,8 +4,15 @@ import { answerLostText } from "@/lib/answerLost";
 import { credentialsSignInChecked } from "@/lib/signInChecked";
 
 export const LOGIN_FAILED_MESSAGE = "Invalid email or password.";
-/** R32 new-customer L1: authorize's limit code (auth.ts); Forgot password and the others name their limits too. */
-export const LOGIN_LIMITED_MESSAGE = "Too many sign-in tries from this network. Wait 15 minutes, then try again.";
+/**
+ * R32 new-customer L1: authorize's limit code (auth.ts); Forgot password and
+ * the others name their limits too. R32 lead: the wait is the limiter's own
+ * (the hourly per-address limit is not 15 minutes), and no number without one.
+ */
+export function loginLimitedText(waitMinutes: number | null): string {
+  if (waitMinutes === null) return "Too many sign-in tries. Wait a while, then try again.";
+  return `Too many sign-in tries. Wait about ${waitMinutes} ${waitMinutes === 1 ? "minute" : "minutes"}, then try again.`;
+}
 /** R32 new-customer L1: authorize couldn't read the account or compare the password. */
 export const LOGIN_UNCHECKED_MESSAGE = "We couldn't check your password just now. Try again in a minute.";
 /** Lead review 3 (R28 NN2): the sign-in may have set the session before the answer was lost. */
@@ -51,12 +58,12 @@ export async function signInWithPassword(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const check = await credentialsSignInChecked(signIn, email, password, fetchImpl);
   if (check.ok) return { ok: true };
+  if (check.reason === "limited") return { ok: false, error: loginLimitedText(check.waitMinutes) };
   const error = {
     not_sent: LOGIN_NOT_SENT_MESSAGE,
     refused: LOGIN_FAILED_MESSAGE,
     unfinished: LOGIN_UNFINISHED_MESSAGE,
     lost: LOGIN_UNREACHABLE_MESSAGE,
-    limited: LOGIN_LIMITED_MESSAGE,
     unchecked: LOGIN_UNCHECKED_MESSAGE,
   }[check.reason];
   return { ok: false, error };

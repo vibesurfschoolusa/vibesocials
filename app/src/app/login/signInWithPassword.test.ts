@@ -4,12 +4,11 @@ const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn(async () =>
 vi.mock("next-auth/react", () => ({ getSession: getSessionMock, signOut: vi.fn() }));
 
 import { signInReachable } from "@/lib/signInChecked";
-import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "@/lib/signInErrorCodes";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED, signInLimitedCode } from "@/lib/signInErrorCodes";
 
 import {
   GOOGLE_NOT_SENT_MESSAGE,
   LOGIN_FAILED_MESSAGE,
-  LOGIN_LIMITED_MESSAGE,
   LOGIN_NOT_SENT_MESSAGE,
   LOGIN_UNCHECKED_MESSAGE,
   LOGIN_UNFINISHED_MESSAGE,
@@ -57,10 +56,27 @@ describe("signInWithPassword", () => {
   });
 
   // R32 new-customer L1: a used-up limit or a database blip is not a wrong password.
-  it("says the sign-in limit is used up, in its own sentence", async () => {
-    const signIn = vi.fn(async () => ({ ok: false, error: SIGN_IN_LIMITED, status: 401, url: null }));
-    await expect(signInWithPassword(signIn, "a@example.test", "x")).resolves.toEqual({ ok: false, error: LOGIN_LIMITED_MESSAGE });
-    expect(LOGIN_LIMITED_MESSAGE).toBe("Too many sign-in tries from this network. Wait 15 minutes, then try again.");
+  // R32 lead: a true wait, from the limiter's own reset time: the 15-minute
+  // limits and the hourly per-address one alike; no number when it gave none.
+  it("says the sign-in limit is used up, with the limiter's own wait", async () => {
+    const said = async (error: string) =>
+      signInWithPassword(vi.fn(async () => ({ ok: false, error, status: 401, url: null })), "a@example.test", "x");
+    await expect(said(signInLimitedCode(14 * 60 + 5))).resolves.toEqual({
+      ok: false,
+      error: "Too many sign-in tries. Wait about 15 minutes, then try again.",
+    });
+    await expect(said(signInLimitedCode(45 * 60))).resolves.toEqual({
+      ok: false,
+      error: "Too many sign-in tries. Wait about 45 minutes, then try again.",
+    });
+    await expect(said(signInLimitedCode(30))).resolves.toEqual({
+      ok: false,
+      error: "Too many sign-in tries. Wait about 1 minute, then try again.",
+    });
+    await expect(said(SIGN_IN_LIMITED)).resolves.toEqual({
+      ok: false,
+      error: "Too many sign-in tries. Wait a while, then try again.",
+    });
   });
 
   it("says the password couldn't be checked, in its own sentence", async () => {
