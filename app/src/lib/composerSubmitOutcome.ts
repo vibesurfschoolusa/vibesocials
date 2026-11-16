@@ -89,7 +89,11 @@ export type FailedStart = { resultsMarked: boolean; withoutResults: boolean };
  * still have pending results and go out, so its card is the one to check.
  */
 export function otherHalfStartText(name: "Story" | "feed post", start: FailedStart): string {
-  if (!start.resultsMarked) return `Its ${name} may not have started: check its card in Activity.`;
+  // Its card can show it publishing until the stuck-job pass (STUCK_IN_PROGRESS_MS)
+  // or the requeue's give-up (SEND_GIVE_UP_MS), both 2 hours, on a 10-minute scan.
+  if (!start.resultsMarked) {
+    return `Its ${name} may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.`;
+  }
   return start.withoutResults
     ? `Its ${name} was not sent: press Send again on its card in Activity.`
     : `Its ${name} couldn't start either: retry it on its card in Activity.`;

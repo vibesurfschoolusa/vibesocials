@@ -1261,9 +1261,9 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.resultsMarked).toBe(true);
-    expect(body.otherHalf.note).toBe("Its Story may not have started: check its card in Activity.");
+    expect(body.otherHalf.note).toBe("Its Story may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.");
     const email = sendEmailMock.mock.calls[0][0];
-    expect(htmlToPlainText(email.html as string)).toContain("Its Story may not have started: check its card in Activity.");
+    expect(htmlToPlainText(email.html as string)).toContain("Its Story may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.");
     expect(email.subject).not.toMatch(/nothing was sent/);
     expect(email.subject).toMatch(/but publishing may not have started$/);
   });

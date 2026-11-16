@@ -294,12 +294,12 @@ describe("otherHalfStartText", () => {
     [{ resultsMarked: true, withoutResults: true }, "Its Story was not sent: press Send again on its card in Activity."],
     [
       { resultsMarked: false, withoutResults: true },
-      "Its Story may not have started: check its card in Activity.",
+      "Its Story may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.",
     ],
     [{ resultsMarked: true, withoutResults: false }, "Its Story couldn't start either: retry it on its card in Activity."],
     [
       { resultsMarked: false, withoutResults: false },
-      "Its Story may not have started: check its card in Activity.",
+      "Its Story may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.",
     ],
   ])("%o", (start, text) => {
     expect(otherHalfStartText("Story", start)).toBe(text);

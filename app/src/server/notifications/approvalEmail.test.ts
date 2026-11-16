@@ -506,7 +506,7 @@ describe("approved, nothing sent for this post, the other half may have started"
   it("the subject says publishing may not have started", () => {
     const email = buildApprovalDecisionEmail({
       ...base,
-      otherHalfNote: "Its Story may not have started: check its card in Activity.",
+      otherHalfNote: "Its Story may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.",
       otherHalfMayHaveStarted: true,
     });
     expect(email.subject).toBe("Your post in Acme was approved, but publishing may not have started");

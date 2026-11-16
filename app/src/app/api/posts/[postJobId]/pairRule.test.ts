@@ -727,7 +727,7 @@ describe("failedStartAnswer", () => {
     const answer = failedStartAnswer("story-1", feed, dispatch({ withoutResults: ["feed-1"], unmarked: ["feed-1"] }));
     expect(answer.body.resultsMarked).toBe(true);
     expect(answer.body.otherHalf?.note).toBe(
-      "Its feed post may not have started: check its card in Activity.",
+      "Its feed post may not have started: check its card in Activity; it can show as publishing for about two hours, sometimes a little longer, before it shows what to do next.",
     );
     expect(answer.halfMayHaveStarted).toBe(true);
   });
