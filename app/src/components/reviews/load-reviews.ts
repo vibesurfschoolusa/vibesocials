@@ -1,3 +1,5 @@
+import { withWorkspaceId } from "@/lib/workspaceChanged";
+
 import { readApiError, shownError, type ShownError } from "./api-error";
 import type { GoogleReview } from "./types";
 
@@ -21,12 +23,14 @@ export function latestRequests(): () => () => boolean {
 /** Loads a location's reviews and hands `show` the outcome, only while `isCurrent()`. */
 export async function loadReviewsFor(
   location: string,
+  /** The workspace the page was drawn for; the route refuses another (409 WORKSPACE_CHANGED). */
+  workspaceId: string,
   isCurrent: () => boolean,
   show: (outcome: ReviewsOutcome) => void,
 ): Promise<void> {
   let outcome: ReviewsOutcome;
   try {
-    const response = await fetch(`/api/reviews?location=${encodeURIComponent(location)}`);
+    const response = await fetch(withWorkspaceId(`/api/reviews?location=${encodeURIComponent(location)}`, workspaceId));
     if (!response.ok) throw await readApiError(response, REVIEWS_FAILED);
     const data = await response.json();
     outcome = { reviews: data.reviews || [], truncated: data.truncated === true };

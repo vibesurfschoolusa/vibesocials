@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { asksReload, canRetry, readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
@@ -207,9 +208,12 @@ export function ReviewsView({
   const [boxFocusAfterDraft, setBoxFocusAfterDraft] = useState<{ reviewId: string; activeId: string } | null>(null);
   // R27 client-journey L1: only the latest reviews request may fill the list.
   const [nextReviewsRequest] = useState(latestRequests);
-  // R27 security-billing L1: a reply or draft was refused because this page was
-  // drawn for another workspace; the notice offers Reload, which takes focus.
-  const [workspaceChanged, setWorkspaceChanged] = useState(false);
+  // R27 security-billing L1: a request was refused because this page was drawn
+  // for another workspace; the notice offers Reload, which takes focus. "load":
+  // the locations or the list (the list is not shown); "press": a reply or
+  // draft (the list and typed text stay, so the notice says to copy it first).
+  const [workspaceChanged, setWorkspaceChanged] = useState<"load" | "press" | null>(null);
+  const listRefused = workspaceChanged === "load";
   const reloadRef = useRef<HTMLButtonElement>(null);
 
   // Every change of the open form but a draft landing (which opens one only
@@ -225,7 +229,7 @@ export function ReviewsView({
       setLocationsError(null);
       setLocationsNotice(null);
       setLocationsSignInAsked(false);
-      const response = await fetch("/api/reviews/locations");
+      const response = await fetch(withWorkspaceId("/api/reviews/locations", workspaceId));
 
       if (!response.ok) {
         throw await readApiError(response, LOCATIONS_FAILED);
@@ -245,26 +249,29 @@ export function ReviewsView({
       }
     } catch (err: unknown) {
       console.error("Error fetching locations:", err);
-      setLocationsError(shownError(err, LOCATIONS_FAILED));
+      const shown = shownError(err, LOCATIONS_FAILED);
+      if (shown.reload) setWorkspaceChanged("load");
+      else setLocationsError(shown);
     } finally {
       setLoadingLocations(false);
     }
-  }, [savedLocation, isMember]);
+  }, [savedLocation, isMember, workspaceId]);
 
   const loadReviews = useCallback(async () => {
     if (!selectedLocation) return;
     setLoading(true);
     setReviewsError(null);
-    await loadReviewsFor(selectedLocation, nextReviewsRequest(), (outcome) => {
+    await loadReviewsFor(selectedLocation, workspaceId, nextReviewsRequest(), (outcome) => {
       if ("error" in outcome) {
-        setReviewsError(outcome.error);
+        if (outcome.error.reload) setWorkspaceChanged("load");
+        else setReviewsError(outcome.error);
       } else {
         setReviews(outcome.reviews);
         setTruncated(outcome.truncated);
       }
       setLoading(false);
     });
-  }, [selectedLocation, nextReviewsRequest]);
+  }, [selectedLocation, workspaceId, nextReviewsRequest]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
@@ -389,10 +396,14 @@ export function ReviewsView({
     } catch (err: unknown) {
       console.error("Error posting reply:", err);
       const shown = replyFailureShown(err);
-      toast.error(shown.message);
-      // The typed reply stays in its box either way.
-      if (shown.reload) setWorkspaceChanged(true);
-      else setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
+      // The typed reply stays in its box either way. A page drawn for another
+      // workspace says so once, in the notice.
+      if (shown.reload) {
+        setWorkspaceChanged("press");
+      } else {
+        toast.error(shown.message);
+        setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
+      }
       // A reply a retry can't change (a 403) lets the dialog close; its form keeps the sentence.
       if (canRetry(shown)) throw new ConfirmFailureShown("REPLY_FAILED");
     } finally {
@@ -435,8 +446,8 @@ export function ReviewsView({
       setBoxFocusAfterDraft({ reviewId: review.reviewId, activeId: document.activeElement?.id ?? "" });
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
-      toast.error(draftFailureMessage(err));
-      if (asksReload(err)) setWorkspaceChanged(true);
+      if (asksReload(err)) setWorkspaceChanged("press");
+      else toast.error(draftFailureMessage(err));
     } finally {
       setGeneratingAI((prev) => draftingAfterEnd(prev, review.reviewId));
     }
@@ -483,7 +494,7 @@ export function ReviewsView({
       <div className={APP_PAGE_CLASS}>
         <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
         <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
-        <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged} reloadRef={reloadRef} />
+        <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />
         <ReviewsLoadingList />
       </div>
     );
@@ -513,11 +524,11 @@ export function ReviewsView({
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {reviewsSubtitle(
-            selectedLocation && !loading && !reviewsError ? needsReplyReviews.length : null,
+            selectedLocation && !loading && !reviewsError && !listRefused ? needsReplyReviews.length : null,
             reviews.length
           )}
         </p>
-        {selectedLocation && !loading && !reviewsError && reviewsCapNote(truncated) && (
+        {selectedLocation && !loading && !reviewsError && !listRefused && reviewsCapNote(truncated) && (
           <p className="mt-1 text-sm text-muted-foreground">{reviewsCapNote(truncated)}</p>
         )}
         {singleLocationName(locations) && (
@@ -535,10 +546,10 @@ export function ReviewsView({
       )}
 
       <LocationsNotice key="locations-notice" notice={locationsNotice} signInUrl={locationsSignInUrl} />
-      <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged} reloadRef={reloadRef} />
+      <WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />
 
       {/* Tabs */}
-      {selectedLocation && !reviewsError && (
+      {selectedLocation && !reviewsError && !listRefused && (
         <div className="mb-6">
           <div
             role="group"
@@ -572,7 +583,7 @@ export function ReviewsView({
 
       {/* Reviews List */}
       {/* With accounts left unread, "no locations yet" would be untrue: the notice says what happened. */}
-      {!selectedLocation && locations.length === 0 && locationsNotice ? null : !selectedLocation ? (
+      {listRefused ? null : !selectedLocation && locations.length === 0 && locationsNotice ? null : !selectedLocation ? (
         <ReviewsEmptyState locationsCount={locations.length} gbpConnected={gbpConnected} isMember={isMember} />
       ) : reviewsError ? (
         <ErrorState

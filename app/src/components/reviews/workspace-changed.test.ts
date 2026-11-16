@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { WORKSPACE_CHANGED_CODE } from "@/lib/workspaceChanged";
 
 import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "./workspace-changed";
-import { WorkspaceChangedNotice } from "./workspace-changed-notice";
+import { COPY_BEFORE_RELOAD, WorkspaceChangedNotice } from "./workspace-changed-notice";
 
 const source = readFileSync(path.join(__dirname, "workspace-changed-notice.tsx"), "utf8");
 
@@ -38,5 +38,21 @@ describe("workspace changed", () => {
 
   it("Reload reloads the page", () => {
     expect(source).toContain("window.location.reload()");
+  });
+});
+
+// R27 lead follow-up: Reload clears a typed reply, so after a refused reply or
+// draft the notice says to copy it first.
+describe("workspace changed: the copy hint", () => {
+  it("says to copy anything typed when a press was refused", () => {
+    expect(COPY_BEFORE_RELOAD).toBe("Copy anything you typed, then reload.");
+    const html = renderToStaticMarkup(createElement(WorkspaceChangedNotice, { shown: true, copyHint: true }));
+    expect(html).toContain(COPY_BEFORE_RELOAD);
+    expect(html.indexOf(COPY_BEFORE_RELOAD)).toBeLessThan(html.indexOf(">Reload</button>"));
+  });
+
+  it("not when only the page's loads were refused", () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceChangedNotice, { shown: true }));
+    expect(html).not.toContain(COPY_BEFORE_RELOAD);
   });
 });

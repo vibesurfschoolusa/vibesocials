@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { WORKSPACE_CHANGED_RELOAD_MESSAGE } from "./workspace-changed";
 import { latestRequests, loadReviewsFor, REVIEWS_FAILED, type ReviewsOutcome } from "./load-reviews";
 
 type Deferred = { resolve: (r: Response) => void; reject: (e: unknown) => void };
@@ -30,8 +31,8 @@ describe("loadReviewsFor", () => {
     const pending = controlledFetch();
     const next = latestRequests();
     const shown: ReviewsOutcome[] = [];
-    const a = loadReviewsFor("A", next(), (o) => shown.push(o));
-    const b = loadReviewsFor("B", next(), (o) => shown.push(o));
+    const a = loadReviewsFor("A", "ws-1", next(), (o) => shown.push(o));
+    const b = loadReviewsFor("B", "ws-1", next(), (o) => shown.push(o));
     await tick();
     pending.get("B")!.resolve(answer({ reviews: [review("b1")], truncated: false }));
     await b;
@@ -44,8 +45,8 @@ describe("loadReviewsFor", () => {
     const pending = controlledFetch();
     const next = latestRequests();
     const shown: ReviewsOutcome[] = [];
-    const a = loadReviewsFor("A", next(), (o) => shown.push(o));
-    const b = loadReviewsFor("B", next(), (o) => shown.push(o));
+    const a = loadReviewsFor("A", "ws-1", next(), (o) => shown.push(o));
+    const b = loadReviewsFor("B", "ws-1", next(), (o) => shown.push(o));
     await tick();
     pending.get("B")!.resolve(answer({ reviews: [] }));
     await b;
@@ -59,25 +60,39 @@ describe("loadReviewsFor", () => {
     const pending = controlledFetch();
     const next = latestRequests();
     const shown: ReviewsOutcome[] = [];
-    const a = loadReviewsFor("A", next(), (o) => shown.push(o));
+    const a = loadReviewsFor("A", "ws-1", next(), (o) => shown.push(o));
     await tick();
     pending.get("A")!.resolve(answer({ error: "Google refused." }, 500));
     await a;
     expect(shown).toEqual([{ error: { message: "Google refused.", settingsLink: false } }]);
 
-    const again = loadReviewsFor("A", next(), (o) => shown.push(o));
+    const again = loadReviewsFor("A", "ws-1", next(), (o) => shown.push(o));
     await tick();
     pending.get("A")!.reject(new TypeError("Failed to fetch"));
     await again;
     expect(shown[1]).toEqual({ error: { message: REVIEWS_FAILED, settingsLink: false } });
   });
 
-  it("asks for the location's reviews by its name", async () => {
+  it("asks for the location's reviews by its name, with the page's workspace", async () => {
     const pending = controlledFetch();
-    const done = loadReviewsFor("accounts/1/locations/2", latestRequests()(), () => {});
+    const done = loadReviewsFor("accounts/1/locations/2", "ws-1", latestRequests()(), () => {});
     await tick();
-    expect(fetch).toHaveBeenCalledWith(`/api/reviews?location=${encodeURIComponent("accounts/1/locations/2")}`);
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/reviews?location=${encodeURIComponent("accounts/1/locations/2")}&workspaceId=ws-1`,
+    );
     pending.get("accounts/1/locations/2")!.resolve(answer({ reviews: [] }));
     await done;
+  });
+
+  it("a 409 WORKSPACE_CHANGED: the reload error, not a list", async () => {
+    const pending = controlledFetch();
+    const shown: ReviewsOutcome[] = [];
+    const done = loadReviewsFor("A", "ws-1", latestRequests()(), (o) => shown.push(o));
+    await tick();
+    pending.get("A")!.resolve(answer({ code: "WORKSPACE_CHANGED", error: "x" }, 409));
+    await done;
+    expect(shown).toEqual([
+      { error: { message: WORKSPACE_CHANGED_RELOAD_MESSAGE, settingsLink: false, retry: false, reload: true } },
+    ]);
   });
 });

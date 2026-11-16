@@ -397,7 +397,7 @@ describe("ReviewsView loads only the selected location's reviews", () => {
     const load = source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
     expect(source).toContain('from "@/components/reviews/load-reviews"');
     expect(source).toContain("useState(latestRequests)");
-    expect(load).toContain("loadReviewsFor(selectedLocation, nextReviewsRequest(),");
+    expect(load).toContain("loadReviewsFor(selectedLocation, workspaceId, nextReviewsRequest(),");
     expect(load).not.toContain("fetch(");
     expect(load).not.toContain("finally");
   });
@@ -423,16 +423,16 @@ describe("ReviewsView when the page was drawn for another workspace", () => {
 
   it("shows the notice with Reload instead of the form's line, and keeps the typed reply", () => {
     const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
-    expect(perform).toMatch(/if \(shown\.reload\) setWorkspaceChanged\(true\);\s*else setReplyRefusal\(replyRefusalAfterFailure/);
+    expect(perform).toMatch(/if \(shown\.reload\) \{\s*setWorkspaceChanged\("press"\);\s*\} else \{\s*toast\.error\(shown\.message\);\s*setReplyRefusal\(replyRefusalAfterFailure/);
     const failed = perform.slice(perform.indexOf("} catch"));
     expect(failed).not.toContain("setReplyBoxes");
     const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
-    expect(draft).toContain("if (asksReload(err)) setWorkspaceChanged(true);");
+    expect(draft).toMatch(/if \(asksReload\(err\)\) setWorkspaceChanged\("press"\);\s*else toast\.error\(draftFailureMessage\(err\)\);/);
     expect(draft.slice(draft.indexOf("} catch"))).not.toContain("setReplyBoxes");
   });
 
   it("draws the notice from the first render in both views, and focuses Reload once the dialog closes", () => {
-    expect(source.split('<WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged} reloadRef={reloadRef} />').length - 1).toBe(2);
+    expect(source.split('<WorkspaceChangedNotice key="workspace-changed" shown={workspaceChanged !== null} copyHint={workspaceChanged === "press"} reloadRef={reloadRef} />').length - 1).toBe(2);
     expect(source).toMatch(/if \(!workspaceChanged \|\| confirmTarget\) return;\s*reloadRef\.current\?\.focus\(\);/);
   });
 
@@ -442,3 +442,28 @@ describe("ReviewsView when the page was drawn for another workspace", () => {
   });
 });
 
+// R27 lead follow-up: the list and locations requests name the page's
+// workspace too; a 409 there shows the notice instead of the list.
+describe("ReviewsView loads for the page's workspace", () => {
+  it("asks for the locations with the page's workspaceId", () => {
+    expect(source).toContain('fetch(withWorkspaceId("/api/reviews/locations", workspaceId))');
+  });
+
+  it("a refused locations load: the notice, not the error card", () => {
+    const locs = source.slice(at("const loadLocations = useCallback"), at("const loadReviews = useCallback"));
+    expect(locs).toMatch(/if \(shown\.reload\) setWorkspaceChanged\("load"\);\s*else setLocationsError\(shown\);/);
+  });
+
+  it("a refused list load: the notice, not the error card", () => {
+    const load = source.slice(at("const loadReviews = useCallback"), at("useEffect(() => {"));
+    expect(load).toMatch(/if \(outcome\.error\.reload\) setWorkspaceChanged\("load"\);\s*else setReviewsError\(outcome\.error\);/);
+  });
+
+  it("hides the tabs and the list after a refused load, but keeps them after a refused press", () => {
+    expect(source).toContain('const listRefused = workspaceChanged === "load";');
+    expect(source).toContain("{selectedLocation && !reviewsError && !listRefused && (");
+    expect(source).toContain("{listRefused ? null : !selectedLocation && locations.length === 0 && locationsNotice ? null");
+    // The subtitle's count and the cap note would describe a list that never loaded.
+    expect(source.split("selectedLocation && !loading && !reviewsError && !listRefused").length - 1).toBe(2);
+  });
+});
