@@ -105,8 +105,12 @@ function ctx(postJobId: string) {
   // Next 16 passes params as a promise — see the PR #41 lesson.
   return { params: Promise.resolve({ postJobId }) };
 }
+/** R31 pages L2: every request carries the page's workspace id (the context's "ws-1"). */
+function withWorkspace(body: unknown): unknown {
+  return body !== null && typeof body === "object" && !Array.isArray(body) ? { workspaceId: "ws-1", ...body } : body;
+}
 function req(body: unknown): NextRequest {
-  return { json: async () => body } as unknown as NextRequest;
+  return { json: async () => withWorkspace(body) } as unknown as NextRequest;
 }
 
 /** A pending submission: submitted, undecided, still a draft. */
@@ -1437,5 +1441,29 @@ describe("POST /api/posts/[postJobId]/approval - reserved before the claim", () 
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
     await POST(req({ decision: "reject" }), ctx("job-1"));
     expect(reserveSendNowMock).not.toHaveBeenCalled();
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("POST /api/posts/[postJobId]/approval: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no post is read", async () => {
+    const res = await POST({ json: async () => ({ decision: "approve", reviewedUpdatedAt: new Date().toISOString() }) } as unknown as NextRequest, ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no post is read", async () => {
+    const res = await POST(req({ decision: "approve", reviewedUpdatedAt: new Date().toISOString(), workspaceId: "ws-2" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 });

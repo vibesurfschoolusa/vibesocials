@@ -18,7 +18,7 @@ import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
-import { sendActionRequest } from "@/lib/queueActions";
+import { postActionRefusal, sendActionRequest } from "@/lib/queueActions";
 import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
 import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
@@ -108,9 +108,17 @@ export function ReconnectStep({ platform, role }: { platform: Platform; role: Vi
 /** One platform, or (R7-security L1) every failed platform of the post in one request. */
 export type RetryTarget = Platform | "all";
 
-/** The retry route's body for a target. */
-export function retryRequestBody(target: RetryTarget): { platform: Platform } | { retryAllFailed: true } {
-  return target === "all" ? { retryAllFailed: true } : { platform: target };
+/**
+ * The retry route's body for a target, with (R31 pages L2) the workspace the
+ * list was drawn for; with none yet it is left out and the route says to
+ * reload the page.
+ */
+export function retryRequestBody(
+  target: RetryTarget,
+  workspaceId: string | null,
+): ({ platform: Platform } | { retryAllFailed: true }) & { workspaceId?: string } {
+  const page = workspaceId ? { workspaceId } : {};
+  return target === "all" ? { retryAllFailed: true, ...page } : { platform: target, ...page };
 }
 
 function formatTimestamp(iso: string): string {
@@ -229,6 +237,7 @@ export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetc
  */
 export function createSendAgain(
   postJobId: string,
+  workspaceId: string | null,
   fetcher: (input: string, init: RequestInit) => Promise<Response> = fetch,
   online?: () => boolean,
 ): () => Promise<SendAgainOutcome> {
@@ -236,7 +245,13 @@ export function createSendAgain(
   return async () => {
     if (locked) return null;
     locked = true;
-    const answer = await sendActionRequest(`/api/posts/${postJobId}/publish`, { method: "POST" }, {
+    // R31 pages L2: with the workspace the list was drawn for.
+    const request = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(workspaceId ? { workspaceId } : {}),
+    };
+    const answer = await sendActionRequest(`/api/posts/${postJobId}/publish`, request, {
       fetchImpl: fetcher as typeof fetch,
       ...(online ? { online } : {}),
     });
@@ -258,6 +273,15 @@ export function createSendAgain(
     }
     const serverError = typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED;
     const dispatchFailed = body.code === "DISPATCH_FAILED";
+    // R31 (postActionRefusal): another workspace's answer is said without
+    // reading the list into that workspace; a post that is gone reads the list
+    // again (nothing is left to read on its own).
+    const refusal = postActionRefusal(response.status, body, SEND_AGAIN_FAILED);
+    if (refusal.movedOn && !refusal.reload) {
+      locked = false;
+      return { ok: false, error: refusal.text };
+    }
+    if (response.status === 404) return { ok: false, error: refusal.text, refetch: true };
     // R28 publishing L1: a 409 or 429 can come after the server claimed the
     // post (nothing could be sent; prepare wrote failed rows), like a failed
     // start, so the post is read again and the list with it.
@@ -335,10 +359,13 @@ export function PostJobCard({
   job,
   showAttribution = false,
   viewerRole = "owner",
+  workspaceId = null,
   onRetryAccepted,
 }: {
   job: PostJobDTO;
   showAttribution?: boolean;
+  /** R31 pages L2: the workspace the list was drawn for (usePostJobs), sent with Retry and Send again. */
+  workspaceId?: string | null;
   /** From the posts list answer (usePostJobs); a member gets the owner's step instead of Settings. */
   viewerRole?: ViewerRole;
   onRetryAccepted: (jobId: string) => void;
@@ -375,7 +402,7 @@ export function PostJobCard({
   // working Send again; an unchanged post keeps a used press used.
   const pressKey = sendAgainKey(job);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pressKey is the dependency on purpose
-  const pressSendAgain = useMemo(() => createSendAgain(job.id), [job.id, pressKey]);
+  const pressSendAgain = useMemo(() => createSendAgain(job.id, workspaceId), [job.id, workspaceId, pressKey]);
 
   const [prevJob, setPrevJob] = useState(job);
   if (job !== prevJob) {
@@ -501,7 +528,7 @@ export function PostJobCard({
         const answer = await sendActionRequest(`/api/posts/${job.id}/retry`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(retryRequestBody(target)),
+          body: JSON.stringify(retryRequestBody(target, workspaceId)),
         });
         if (answer.kind === "not_sent") {
           rollBack();
@@ -563,13 +590,17 @@ export function PostJobCard({
           return;
         }
 
-        toast.error(body.error ?? `Couldn't retry ${label}. Please try again.`);
+        // R31 publishing L3, pages L2: the shared rule. A post that moved on
+        // (already retried, gone) is read again; another workspace's is not.
+        const refusal = postActionRefusal(response.status, body, `Couldn't retry ${label}. Please try again.`);
+        toast.error(refusal.text);
+        if (refusal.reload) onRetryAccepted(job.id);
       } catch {
         rollBack();
         toast.error(`Couldn't retry ${label}. Please try again.`);
       }
     },
-    [job.id, onRetryAccepted, toast, viewerRole],
+    [job.id, onRetryAccepted, toast, viewerRole, workspaceId],
   );
 
   return (

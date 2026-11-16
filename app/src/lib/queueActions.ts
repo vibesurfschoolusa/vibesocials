@@ -4,7 +4,9 @@ import { dispatchFailedText } from "./composerSubmitOutcome";
 import { isRouteAnswer } from "./postSubmitFailure";
 import { fetchOrNoAnswer, isNoAnswer } from "./requestNoAnswer";
 import type { PostJobDTO } from "./postsDto";
+import { POST_GONE_TEXT } from "./postMovedOn";
 import { localDateTimeToUtcIso } from "./scheduling";
+import { INVALID_WORKSPACE_ID_CODE, MISSING_WORKSPACE_ID_CODE, WORKSPACE_CHANGED_CODE } from "./workspaceChanged";
 
 /**
  * Queue action / label rules (2026-11-01 audit, Task 2).
@@ -248,14 +250,46 @@ export function editOutcome(data: unknown): { patch: JobPatch; message: string }
 }
 
 /**
- * After a failed decision / publish, is the card we're showing stale (someone
- * else decided, the post changed, it was deleted, or the dispatch failed after
- * the approval stood)? If so the Queue re-fetches instead of leaving dead
- * buttons. 409 = NOT_PENDING_APPROVAL / CHANGED_SINCE_REVIEW / NO_CONNECTIONS /
- * AWAITING_APPROVAL / NOT_PUBLISHABLE; 503 = DISPATCH_FAILED; 404 = gone.
+ * R31 publishing L3-L5 and pages L2: the one rule for a refused post action,
+ * on every page (the Queue's Cancel, Cancel series, Publish now, Approve,
+ * Reject, Delete, Edit and calendar drag; Activity's Retry and Send again).
+ *
+ * - The page is for another workspace (409 WORKSPACE_CHANGED), or from before
+ *   the release (400 MISSING_WORKSPACE_ID / INVALID_WORKSPACE_ID): its sentence,
+ *   and no reload, which would read the other workspace's posts into this page.
+ * - The post moved on since the page was drawn (any other 409, a 404, a 400
+ *   NOT_SCHEDULED for a post that is now a draft, or the 503 DISPATCH_FAILED
+ *   after the claim): the route's sentence (a 404 always "This post no longer
+ *   exists.") and a quiet reload, so no dead buttons stay.
+ * - Anything else: the route's sentence, or `fallback`; the card stays.
+ *
+ * `button` (Publish now, Approve) words a DISPATCH_FAILED by Create's rule.
  */
-export function shouldRefetchAfterError(httpStatus: number): boolean {
-  return httpStatus === 409 || httpStatus === 503 || httpStatus === 404;
+export interface PostActionRefusal {
+  /** The page is out of date for this post: a dialog closes (Edit keeps what was typed). */
+  movedOn: boolean;
+  /** Read the list again quietly. */
+  reload: boolean;
+  text: string;
+}
+
+const OTHER_WORKSPACE_CODES = new Set<unknown>([WORKSPACE_CHANGED_CODE, MISSING_WORKSPACE_ID_CODE, INVALID_WORKSPACE_ID_CODE]);
+
+export function postActionRefusal(
+  httpStatus: number,
+  data: unknown,
+  fallback: string,
+  button?: "Publish" | "Approve",
+): PostActionRefusal {
+  const r = asRecord(data);
+  const said = typeof r.error === "string" && r.error ? r.error : fallback;
+  if (OTHER_WORKSPACE_CODES.has(r.code)) return { movedOn: true, reload: false, text: said };
+  const text = button ? queueFailureText(data, fallback, button) : said;
+  if (httpStatus === 404) return { movedOn: true, reload: true, text: POST_GONE_TEXT };
+  if (httpStatus === 409 || httpStatus === 503 || (httpStatus === 400 && r.code === "NOT_SCHEDULED")) {
+    return { movedOn: true, reload: true, text };
+  }
+  return { movedOn: false, reload: false, text };
 }
 
 /**

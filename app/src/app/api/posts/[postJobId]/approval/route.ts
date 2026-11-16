@@ -37,6 +37,7 @@ import {
   type SendNowReservation,
 } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -146,6 +147,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!parsedBody) {
     return invalidJsonBodyResponse();
   }
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(parsedBody.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const body = parsedBody as ApprovalBody;
 
   if (body.decision !== "approve" && body.decision !== "reject") {

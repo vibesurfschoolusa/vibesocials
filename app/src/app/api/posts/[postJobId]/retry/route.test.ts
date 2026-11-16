@@ -69,11 +69,15 @@ function ctx(postJobId: string) {
 }
 
 /** Minimal NextRequest stub: the handler only calls `request.json()`. */
+/** R31 pages L2: every request carries the page's workspace id (the context's "ws-1"). */
+function withWorkspace(body: unknown): unknown {
+  return body !== null && typeof body === "object" && !Array.isArray(body) ? { workspaceId: "ws-1", ...body } : body;
+}
 function req(body: unknown, throwOnJson = false): NextRequest {
   return {
     json: async () => {
       if (throwOnJson) throw new Error("bad json");
-      return body;
+      return withWorkspace(body);
     },
   } as unknown as NextRequest;
 }
@@ -407,7 +411,7 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
     resultUpdateManyMock.mockResolvedValue({ count: 1 });
 
-    await POST(req({ platform: "tiktok" }), ctx("job-1"));
+    await POST(req({ platform: "tiktok", workspaceId: "ws-shared-9" }), ctx("job-1"));
 
     const [event] = inngestSendMock.mock.calls[0] as [{ data: Record<string, unknown> }];
     expect(event.data.workspaceId).toBe("ws-shared-9");
@@ -542,7 +546,7 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     resultUpdateManyMock.mockResolvedValue({ count: 1 });
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-42" }));
 
-    await POST(req({ platform: "instagram" }), ctx("job-1"));
+    await POST(req({ platform: "instagram", workspaceId: "ws-42" }), ctx("job-1"));
 
     expect(connectionFindUniqueMock).toHaveBeenCalledWith({
       where: { workspaceId_platform: { workspaceId: "ws-42", platform: "instagram" } },
@@ -969,5 +973,29 @@ describe("POST /api/posts/[postJobId]/retry - the retry budgets", () => {
     expect(res.status).toBe(409);
     const { requestId } = reserveRetryMock.mock.calls[0][0] as { requestId: string };
     expect(withdrawRetryMock).toHaveBeenCalledWith({ postJobId: "job-1", requestId });
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("POST /api/posts/[postJobId]/retry: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no post is read", async () => {
+    const res = await POST({ json: async () => ({ platform: "instagram" }) } as unknown as NextRequest, ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(postJobFindFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no post is read", async () => {
+    const res = await POST(req({ platform: "instagram", workspaceId: "ws-2" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(postJobFindFirstMock).not.toHaveBeenCalled();
   });
 });

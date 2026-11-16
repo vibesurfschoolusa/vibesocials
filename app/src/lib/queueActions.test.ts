@@ -20,7 +20,7 @@ import {
   queueNotSentText,
   sendActionRequest,
   queueStatusBadge,
-  shouldRefetchAfterError,
+  postActionRefusal,
   type QueueViewer,
 } from "./queueActions";
 import { answerLostText } from "./answerLost";
@@ -296,19 +296,59 @@ describe("editOutcome (PATCH route response)", () => {
   });
 });
 
-describe("shouldRefetchAfterError", () => {
-  const rows: Array<[number, boolean]> = [
-    [409, true], // NOT_PENDING_APPROVAL / CHANGED_SINCE_REVIEW / NO_CONNECTIONS / AWAITING_APPROVAL
-    [503, true], // DISPATCH_FAILED — approval stands, job is now failed
-    [404, true], // post is gone
-    [400, false],
-    [401, false],
-    [403, false],
-    [429, false],
-    [500, false],
-  ];
-  it.each(rows)("HTTP %i -> %s", (status, expected) => {
-    expect(shouldRefetchAfterError(status)).toBe(expected);
+// R31 publishing L3-L5 and pages L2: one rule for a refused post action, on
+// every page (Queue's buttons, Edit, the calendar drag, Activity).
+describe("postActionRefusal", () => {
+  const FALLBACK = "Couldn't cancel this post.";
+  const moved = (text: string) => ({ movedOn: true, reload: true, text });
+
+  it.each([
+    ["started publishing", 409, "This post has started publishing, so it can't be cancelled. Check Activity to see how it goes."],
+    ["published", 409, "This post has already gone out, so it can't be cancelled. Check Activity to see it."],
+    ["failed", 409, "This post failed, so it can't be cancelled. Check Activity for what to do next."],
+    ["cancelled", 409, "This post was already cancelled."],
+  ])("%s: a quiet reload and the route's sentence", (_label, status, error) => {
+    expect(postActionRefusal(status, { error, code: "NOT_CANCELABLE" }, FALLBACK)).toEqual(moved(error));
+  });
+
+  it("deleted: a 404 says the post no longer exists, never the bare Not found", () => {
+    expect(postActionRefusal(404, { error: "This post no longer exists." }, FALLBACK)).toEqual(
+      moved("This post no longer exists."),
+    );
+    expect(postActionRefusal(404, { error: "Not found" }, FALLBACK)).toEqual(moved("This post no longer exists."));
+    expect(postActionRefusal(404, null, FALLBACK)).toEqual(moved("This post no longer exists."));
+  });
+
+  it("became a draft: the 400 NOT_SCHEDULED reloads too", () => {
+    const error = "This post is now a draft (a change was asked for, or it is waiting for approval).";
+    expect(postActionRefusal(400, { error, code: "NOT_SCHEDULED" }, FALLBACK)).toEqual(moved(error));
+  });
+
+  it("another workspace, or a page from before the release: the sentence, and no reload into another workspace", () => {
+    const changed = "You switched workspace in another tab. Reload this page, then try again.";
+    expect(postActionRefusal(409, { error: changed, code: "WORKSPACE_CHANGED" }, FALLBACK)).toEqual({
+      movedOn: true,
+      reload: false,
+      text: changed,
+    });
+    const missing = "This page is out of date. Reload it, then try again.";
+    expect(postActionRefusal(400, { error: missing, code: "MISSING_WORKSPACE_ID" }, FALLBACK)).toEqual({
+      movedOn: true,
+      reload: false,
+      text: missing,
+    });
+  });
+
+  it("publishing couldn't start (503 DISPATCH_FAILED): reload, with Create's sentence", () => {
+    const data = { code: "DISPATCH_FAILED", error: "x", resultsMarked: true };
+    expect(postActionRefusal(503, data, "Couldn't publish this post.", "Publish")).toEqual(
+      moved("Saved, but publishing couldn't start — retry it from Activity."),
+    );
+  });
+
+  it.each([400, 401, 403, 429, 500])("HTTP %i otherwise: the card stays as it is, with the route's sentence", (status) => {
+    expect(postActionRefusal(status, { error: "Refused." }, FALLBACK)).toEqual({ movedOn: false, reload: false, text: "Refused." });
+    expect(postActionRefusal(status, null, FALLBACK)).toEqual({ movedOn: false, reload: false, text: FALLBACK });
   });
 });
 

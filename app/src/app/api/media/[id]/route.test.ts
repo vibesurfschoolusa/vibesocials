@@ -49,9 +49,9 @@ vi.mock("@vercel/blob", () => ({
 
 import { DELETE, GET, isMediaDeletable } from "./route";
 
-// The handlers never read `_request`, so an empty stub is enough — avoids
-// constructing a real NextRequest in the node test environment.
-const dummyRequest = {} as NextRequest;
+// The handlers read only the request's url (DELETE's `?workspaceId=`), so a
+// stub is enough: no real NextRequest in the node test environment.
+const dummyRequest = { url: "http://localhost/api/media/x?workspaceId=ws-1" } as NextRequest;
 
 function ctx(id: string) {
   return { params: Promise.resolve({ id }) };
@@ -506,5 +506,29 @@ describe("DELETE /api/media/[id] - a file a client sent", () => {
 
     const { data } = mediaItemUpdateMock.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(Object.keys(data)).toEqual(["deletedAt"]);
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("DELETE /api/media/[id]: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no item is read", async () => {
+    const res = await DELETE({ url: "http://localhost/api/media/media-1" } as NextRequest, ctx("media-1"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no item is read", async () => {
+    const res = await DELETE({ url: "http://localhost/api/media/media-1?workspaceId=ws-2" } as NextRequest, ctx("media-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 });

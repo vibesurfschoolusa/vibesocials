@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { answerLostText } from "@/lib/answerLost";
 import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
-import { editOutcome, sendActionRequest, shouldRefetchAfterError, type JobPatch } from "@/lib/queueActions";
+import { editOutcome, postActionRefusal, sendActionRequest, type JobPatch } from "@/lib/queueActions";
 import {
   buildCalendarMonth,
   groupJobsByDay,
@@ -56,6 +56,8 @@ interface QueueCalendarProps {
   onRescheduled: (card: QueueCardPost, patch: JobPatch, answer: unknown) => void;
   /** Reads the Queue again without a spinner, after an answer that was lost. */
   onReload?: () => void;
+  /** R31 pages L2: the workspace the Queue was drawn for, sent with each move. */
+  workspaceId?: string | null;
 }
 
 /**
@@ -101,7 +103,14 @@ export const RESCHEDULE_MAYBE_MOVED_MESSAGE = answerLostText(
   "We're reloading the Queue: check its day before you move it again.",
 );
 
-export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList, onReload = () => {} }: QueueCalendarProps) {
+export function QueueCalendar({
+  jobs,
+  onEdit,
+  onRescheduled,
+  onShowList,
+  onReload = () => {},
+  workspaceId = null,
+}: QueueCalendarProps) {
   const toast = useToast();
   const [monthCursor, setMonthCursor] = useState(() => {
     const now = new Date();
@@ -144,7 +153,7 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList, onReloa
     setSavingId(job.id);
     try {
       // A Feed and Story chip moves both halves (R3-client-journey M1).
-      const answer = await sendActionRequest(`/api/posts/${job.id}`, cardRequest(job, "PATCH", { scheduledFor: nextIso }));
+      const answer = await sendActionRequest(`/api/posts/${job.id}`, cardRequest(job, "PATCH", workspaceId, { scheduledFor: nextIso }));
       if (answer.kind === "not_sent") {
         toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
         return;
@@ -156,10 +165,12 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList, onReloa
       }
       const { response } = answer;
       if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        toast.error(data?.error ?? "Couldn't reschedule this post.");
-        // R30 publishing L1: the chip is stale (it started publishing or went out): re-sync.
-        if (shouldRefetchAfterError(response.status)) onReload();
+        const data = (await response.json().catch(() => null)) as unknown;
+        const refusal = postActionRefusal(response.status, data, "Couldn't reschedule this post.");
+        toast.error(refusal.text);
+        // R30 publishing L1, R31: the chip is stale (it started publishing, went out, is now a
+        // draft, or is gone): re-sync, unless the page is for another workspace.
+        if (refusal.reload) onReload();
         return;
       }
       const data = await response.json().catch(() => null);

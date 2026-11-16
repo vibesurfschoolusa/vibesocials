@@ -82,25 +82,33 @@ describe("coverLabel and coverEditNote", () => {
 
 describe("cancelRequest", () => {
   it("cancels one post through the single cancel, and the rest of a series through cancel-series", () => {
-    expect(cancelRequest(job("a", { seriesId: "s1" }), "one")).toMatchObject({
+    expect(cancelRequest(job("a", { seriesId: "s1" }), "one", "ws-1")).toMatchObject({
       url: "/api/posts/a/cancel",
       series: false,
     });
-    expect(cancelRequest(job("a", { seriesId: "s1" }), "rest")).toMatchObject({
+    expect(cancelRequest(job("a", { seriesId: "s1" }), "rest", "ws-1")).toMatchObject({
       url: "/api/posts/a/cancel-series",
       series: true,
     });
     // A post without a series can only be cancelled on its own.
-    expect(cancelRequest(job("b"), "rest")).toMatchObject({ url: "/api/posts/b/cancel", series: false });
+    expect(cancelRequest(job("b"), "rest", "ws-1")).toMatchObject({ url: "/api/posts/b/cancel", series: false });
   });
 
   // R3-client-journey M1: a Feed and Story card's cancel asks for both halves.
   it("a pair card's cancel asks for both halves; another card's does not", () => {
-    expect(JSON.parse(cancelRequest({ ...job("f"), includePair: true }, "one").init.body)).toEqual({
+    expect(JSON.parse(cancelRequest({ ...job("f"), includePair: true }, "one", "ws-1").init.body)).toEqual({
+      workspaceId: "ws-1",
       includePair: true,
     });
-    expect(JSON.parse(cancelRequest(job("a"), "one").init.body)).toEqual({});
-    expect(cancelRequest(job("a"), "one").init.method).toBe("POST");
+    expect(JSON.parse(cancelRequest(job("a"), "one", "ws-1").init.body)).toEqual({ workspaceId: "ws-1" });
+    expect(cancelRequest(job("a"), "one", "ws-1").init.method).toBe("POST");
+  });
+
+  // R31 pages L2: both cancels carry the workspace the Queue was drawn for.
+  it("a series cancel carries the page's workspace id too, and never asks for a pair", () => {
+    expect(JSON.parse(cancelRequest({ ...job("a", { seriesId: "s1" }), includePair: true }, "rest", "ws-1").init.body)).toEqual({
+      workspaceId: "ws-1",
+    });
   });
 });
 
@@ -342,9 +350,10 @@ describe("Load more in the Queue", () => {
 describe("Queue's publish and approve failures", () => {
   const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
 
-  it("go through queueFailureText", () => {
-    expect(queueSource).toContain('queueFailureText(data, "Couldn\'t publish this post.", "Publish")');
-    expect(queueSource).toMatch(/queueFailureText\(\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\)/);
+  // R31: through postActionRefusal, which words DISPATCH_FAILED by queueFailureText.
+  it("go through postActionRefusal with their button", () => {
+    expect(queueSource).toContain('postActionRefusal(response.status, data, "Couldn\'t publish this post.", "Publish")');
+    expect(queueSource).toMatch(/postActionRefusal\(\s*response\.status,\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\)/);
   });
 });
 
@@ -368,7 +377,7 @@ describe("Queue focus after a press", () => {
     expect(queueSource).toMatch(/onClick=\{\(event\) => onDecide\(job, "reject", event\.currentTarget\)\}/);
     const decide = queueSource.slice(queueSource.indexOf("const handleDecide = useCallback("), queueSource.indexOf("const applyReschedule"));
     expect(decide).toMatch(/async \(job: QueueCardPost, decision: "approve" \| "reject", pressed: HTMLElement \| null\)/);
-    expect(decide).toMatch(/cardRequest\(job, "POST", \{ decision, reviewedUpdatedAt: job\.updatedAt \}\),\s*\);\s*\/\/[^\n]*\n\s*focusAfterPress\(pressed\);/);
+    expect(decide).toMatch(/cardRequest\(job, "POST", workspaceId, \{ decision, reviewedUpdatedAt: job\.updatedAt \}\),\s*\);\s*\/\/[^\n]*\n\s*focusAfterPress\(pressed\);/);
   });
 
   it("Create link focuses the new link's Copy button", () => {

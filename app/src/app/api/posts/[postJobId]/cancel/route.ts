@@ -12,6 +12,7 @@ import { finishPostJob } from "@/server/jobs/failPendingResults";
 
 import { applyToPair, readPairHalf, wantsPair } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -67,8 +68,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   const { postJobId } = await Promise.resolve(context.params);
-  // The body is optional: no body, or one that is not an object, cancels this post alone.
-  const includePair = wantsPair(await readJsonObject(request));
+  const body = await readJsonObject(request);
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(body?.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
+  // Without `includePair: true` this post is cancelled alone.
+  const includePair = wantsPair(body);
 
   // R30 publishing L1: a post that moved on says what happened and to check Activity.
   const notCancelable = (status: PostJobStatus | null | undefined) =>

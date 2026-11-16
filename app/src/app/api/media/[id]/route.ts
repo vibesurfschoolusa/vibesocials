@@ -8,6 +8,7 @@ import { deletedMediaData } from "@/server/jobs/deletedMediaData";
 import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface MediaItemRouteContext {
   params: Promise<{ id: string }> | { id: string };
@@ -95,12 +96,20 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
  * a concurrent reuse (which takes the same lock) — closing the check-then-act
  * race exactly as the retention sweep does.
  */
-export async function DELETE(_request: NextRequest, context: MediaItemRouteContext) {
+export async function DELETE(request: NextRequest, context: MediaItemRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
     return signedOutResponse();
   }
+
+  // R31 pages L2: the page's workspace (`?workspaceId=`; a DELETE has no body),
+  // so a library left open on another workspace deletes nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(
+    new URL(request.url).searchParams.get("workspaceId") ?? undefined,
+    workspaceContext.workspace.id,
+  );
+  if (workspaceRefusal) return workspaceRefusal;
 
   const { id } = await Promise.resolve(context.params);
 

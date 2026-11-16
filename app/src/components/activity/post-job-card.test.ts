@@ -219,7 +219,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
     it("calls the publish route once, even when pressed twice", async () => {
       let release!: (value: Response) => void;
       const fetcher = vi.fn(() => new Promise<Response>((resolve) => (release = resolve)));
-      const press = createSendAgain("job-9", fetcher);
+      const press = createSendAgain("job-9", "ws-1", fetcher);
 
       const first = press();
       const second = press();
@@ -229,7 +229,28 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       await expect(second).resolves.toBeNull();
       await expect(press()).resolves.toBeNull();
       expect(fetcher).toHaveBeenCalledTimes(1);
-      expect(fetcher).toHaveBeenCalledWith("/api/posts/job-9/publish", { method: "POST" });
+      // R31 pages L2: with the workspace Activity was drawn for.
+      expect(fetcher).toHaveBeenCalledWith("/api/posts/job-9/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: "ws-1" }),
+      });
+    });
+
+    // R31 publishing L4 and pages L2: the shared refusal rule (postActionRefusal).
+    it("deleted meanwhile: says it no longer exists and reads the list again", async () => {
+      const fetcher = vi.fn().mockResolvedValueOnce(response(404, { error: "This post no longer exists." }));
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
+      await expect(press()).resolves.toEqual({ ok: false, error: "This post no longer exists.", refetch: true });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("another workspace: the route's sentence, and no list read into that workspace", async () => {
+      const error = "You switched workspace in another tab. Reload this page, then try again.";
+      const fetcher = vi.fn().mockResolvedValueOnce(response(409, { error, code: "WORKSPACE_CHANGED" }));
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
+      await expect(press()).resolves.toEqual({ ok: false, error });
+      expect(fetcher).toHaveBeenCalledTimes(1);
     });
 
     it("shows the post as in progress once the server took it", () => {
@@ -252,7 +273,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         )
         .mockResolvedValueOnce(unsentPost())
         .mockResolvedValueOnce(response(202, { ok: true }));
-      const press = createSendAgain("job-9", fetcher);
+      const press = createSendAgain("job-9", "ws-1", fetcher);
 
       await expect(press()).resolves.toEqual({ ok: false, error: "An owner needs to approve this post first.", refetch: true });
       expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9", { method: "GET" });
@@ -266,7 +287,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         response(429, { code: "DAILY_LIMIT", error: "This workspace has reached its limit of 20 posts for today." }),
       ]) {
         const fetcher = vi.fn().mockResolvedValueOnce(answer).mockResolvedValueOnce(sentPost());
-        const press = createSendAgain("job-9", fetcher, () => true);
+        const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
         const outcome = await press();
         expect(outcome).toMatchObject({ ok: false, refetch: true });
         expect(outcome).not.toHaveProperty("note");
@@ -282,7 +303,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         .mockResolvedValueOnce(Response.json(body, { status: 503 }))
         .mockResolvedValueOnce(unsentPost())
         .mockResolvedValueOnce(response(202, { ok: true }));
-      const press = createSendAgain("job-9", fetcher, () => true);
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
       await expect(press()).resolves.toEqual({
         ok: false,
         error: "Publishing couldn't start, so nothing was sent. Press Send again to try once more.",
@@ -298,7 +319,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         .fn()
         .mockResolvedValueOnce(Response.json(body, { status: 503 }))
         .mockResolvedValueOnce(unsentPost());
-      const press = createSendAgain("job-9", fetcher, () => true);
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
       await expect(press()).resolves.toEqual({
         ok: false,
         error: "Publishing couldn't start, so nothing was sent. Press Send again to try once more.",
@@ -312,7 +333,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         .fn()
         .mockResolvedValueOnce(Response.json(body, { status: 503 }))
         .mockResolvedValueOnce(response(200, { postJob: { id: "job-9", status: "in_progress" }, results: [] }));
-      const press = createSendAgain("job-9", fetcher, () => true);
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
       await expect(press()).resolves.toEqual({
         ok: false,
         error:
@@ -323,7 +344,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
     });
 
     it("a refusal with no sentence says it could not send", async () => {
-      const noBody = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response("", { status: 400 })), () => true);
+      const noBody = createSendAgain("job-9", "ws-1", vi.fn().mockResolvedValue(new Response("", { status: 400 })), () => true);
       await expect(noBody()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });
       expect(SEND_AGAIN_FAILED).toBe("Couldn't send this post again. Please try again.");
     });
@@ -344,7 +365,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
           .fn()
           .mockResolvedValueOnce(Response.json(body, { status: 503 }))
           .mockResolvedValueOnce(fresh());
-        const press = createSendAgain("job-9", fetcher, () => true);
+        const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
         await expect(press()).resolves.toEqual({ ok: false, error: dispatchFailedText(body, "Send again"), refetch: true });
         expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9", { method: "GET" });
         await expect(press()).resolves.toBeNull();
@@ -362,7 +383,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         if (failedRead instanceof Error) fetcher.mockRejectedValueOnce(failedRead);
         else fetcher.mockResolvedValueOnce(failedRead);
         fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 202 }));
-        const press = createSendAgain("job-9", fetcher, () => true);
+        const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
         await expect(press()).resolves.toEqual({
           ok: false,
           error: dispatchFailedText(body, "Send again"),
@@ -382,9 +403,9 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       expect(SEND_AGAIN_NO_ANSWER).toBe(
         answerLostText("the post may have started sending", "Wait for this card to update and check it before you press Send again."),
       );
-      const lost = createSendAgain("job-9", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")), () => true);
+      const lost = createSendAgain("job-9", "ws-1", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")), () => true);
       await expect(lost()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NO_ANSWER, refetch: true });
-      const gateway = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response("<html>504</html>", { status: 504 })), () => true);
+      const gateway = createSendAgain("job-9", "ws-1", vi.fn().mockResolvedValue(new Response("<html>504</html>", { status: 504 })), () => true);
       await expect(gateway()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NO_ANSWER, refetch: true });
     });
 
@@ -393,7 +414,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
         "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.",
       );
       const fetcher = vi.fn();
-      const press = createSendAgain("job-9", fetcher, () => false);
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => false);
       await expect(press()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NOT_SENT });
       expect(fetcher).not.toHaveBeenCalled();
     });
@@ -408,6 +429,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       const body = dispatchBody(false);
       const first = createSendAgain(
         "job-9",
+        "ws-1",
         vi
           .fn()
           .mockResolvedValueOnce(Response.json(body, { status: 503 }))
@@ -419,10 +441,10 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
 
       expect(sendAgainKey(unsent)).not.toBe(sendAgainKey(inProgress));
       expect(sendAgainKey({ ...inProgress })).toBe(sendAgainKey(inProgress));
-      expect(cardSource).toMatch(/useMemo\(\(\) => createSendAgain\(job\.id\), \[job\.id, pressKey\]\)/);
+      expect(cardSource).toMatch(/useMemo\(\(\) => createSendAgain\(job\.id, workspaceId\), \[job\.id, workspaceId, pressKey\]\)/);
       expect(cardSource).toMatch(/const pressKey = sendAgainKey\(job\);/);
 
-      const later = createSendAgain("job-9", vi.fn().mockResolvedValueOnce(response(202, { ok: true })), () => true);
+      const later = createSendAgain("job-9", "ws-1", vi.fn().mockResolvedValueOnce(response(202, { ok: true })), () => true);
       await expect(later()).resolves.toEqual({ ok: true });
     });
 
@@ -496,8 +518,8 @@ describe("PostJobCard - Retry all failed", () => {
   });
 
   it("asks the server for one retry of every failed platform", () => {
-    expect(retryRequestBody("all")).toEqual({ retryAllFailed: true });
-    expect(retryRequestBody("x")).toEqual({ platform: "x" });
+    expect(retryRequestBody("all", "ws-1")).toEqual({ retryAllFailed: true, workspaceId: "ws-1" });
+    expect(retryRequestBody("x", "ws-1")).toEqual({ platform: "x", workspaceId: "ws-1" });
   });
 });
 
@@ -603,7 +625,7 @@ describe("PostJobCard - Retry all failed while it runs", () => {
 // nothing was sent.
 describe("Retry when the answer is lost", () => {
   const card = readFileSync(fileURLToPath(new URL("./post-job-card.tsx", import.meta.url)), "utf8");
-  const retry = card.slice(card.indexOf("const retry = useCallback("), card.indexOf("[job.id, onRetryAccepted, toast, viewerRole]"));
+  const retry = card.slice(card.indexOf("const retry = useCallback("), card.indexOf("[job.id, onRetryAccepted, toast, viewerRole, workspaceId]"));
 
   it("says what may have happened and where to check", async () => {
     const { retryNoAnswerText, retryNotSentText } = await import("./post-job-card");
@@ -620,5 +642,13 @@ describe("Retry when the answer is lost", () => {
     expect(retry).not.toMatch(/await fetch\(/);
     expect(retry).toMatch(/answer\.kind === "not_sent"\) \{\s+rollBack\(\);\s+toast\.error\(retryNotSentText\(label\)\);\s+return;/);
     expect(retry).toMatch(/answer\.kind === "no_answer"\) \{\s+rollBack\(\);\s+toast\.error\(retryNoAnswerText\(label\)\);\s+onRetryAccepted\(job\.id\);\s+return;/);
+  });
+
+  // R31 publishing L3 and pages L2: a refusal that means the post moved on (a
+  // 409, a 404) reads the post again with the route's sentence; another
+  // workspace's answer is said without reading the list into that workspace.
+  it("a refusal goes through postActionRefusal: the route's sentence, a reload when it says so", () => {
+    expect(retry).toMatch(/const refusal = postActionRefusal\(response\.status, body, `Couldn't retry \$\{label\}\. Please try again\.`\);\s+toast\.error\(refusal\.text\);\s+if \(refusal\.reload\) onRetryAccepted\(job\.id\);/);
+    expect(retry).toMatch(/JSON\.stringify\(retryRequestBody\(target, workspaceId\)\)/);
   });
 });

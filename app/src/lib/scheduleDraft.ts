@@ -1,7 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { isRouteBody } from "./postSubmitFailure";
-import { captionChanged, publishOutcome, queueMayHaveGoneThroughText, type JobPatch } from "./queueActions";
+import { captionChanged, postActionRefusal, publishOutcome, queueMayHaveGoneThroughText, type JobPatch } from "./queueActions";
 
 /**
  * "Schedule a draft" from the Queue's Edit dialog (2026-11-01 audit, Task 2),
@@ -56,17 +56,31 @@ export type ScheduleDraftResult =
       error: string;
       /** The caption PATCH landed in this call (so the card's caption changed). */
       captionSaved: boolean;
+      /**
+       * R31 publishing L3: the refusal means the post moved on (or the page is
+       * for another workspace), by the shared rule (postActionRefusal): the
+       * dialog keeps what was typed with Save off, and the Queue reloads when
+       * `reload` says so.
+       */
+      movedOn?: { reload: boolean };
     };
 
 export const SAVE_FALLBACK_ERROR = "Couldn't save your changes.";
 export const UNREADABLE_PUBLISH_ERROR =
   "Couldn't confirm what happened to this post. Check the Queue before trying again.";
 
-/** A refused request's answer: the route's sentence, or null for a 5xx that isn't the route's (no answer). */
-async function readRefusal(response: FetchResponseLike, fallback: string): Promise<string | null> {
-  const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+/**
+ * A refused request's answer by the shared rule (postActionRefusal), or null
+ * for a 5xx that isn't the route's (no answer).
+ */
+async function readRefusal(
+  response: FetchResponseLike,
+  fallback: string,
+): Promise<{ error: string; movedOn?: { reload: boolean } } | null> {
+  const data = (await response.json().catch(() => null)) as unknown;
   if (response.status >= 500 && !isRouteBody(data)) return null;
-  return typeof data?.error === "string" && data.error ? data.error : fallback;
+  const refusal = postActionRefusal(response.status, data, fallback);
+  return refusal.movedOn ? { error: refusal.text, movedOn: { reload: refusal.reload } } : { error: refusal.text };
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -95,6 +109,8 @@ export async function scheduleDraft(input: {
    * or `null` to remove them all. Leave it undefined when they were not edited.
    */
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+  /** R31 pages L2: the workspace the Queue was drawn for (null: none yet, left out). */
+  workspaceId: string | null;
 }): Promise<ScheduleDraftResult> {
   const {
     fetchFn,
@@ -104,7 +120,9 @@ export async function scheduleDraft(input: {
     scheduledForIso,
     submitsForApproval,
     perPlatformOverrides,
+    workspaceId,
   } = input;
+  const pageWorkspace = workspaceId ? { workspaceId } : {};
   let captionSaved = false;
   // Which request a lost answer belongs to, for what may have happened.
   let lost: "edit" | "schedule" | "submit" = "edit";
@@ -123,12 +141,13 @@ export async function scheduleDraft(input: {
         body: JSON.stringify({
           baseCaption: caption,
           ...(perPlatformOverrides !== undefined ? { perPlatformOverrides } : {}),
+          ...pageWorkspace,
         }),
       });
       if (!patchResponse.ok) {
-        const error = await readRefusal(patchResponse, SAVE_FALLBACK_ERROR);
-        if (error === null) return noAnswer();
-        return { kind: "failed", reason: "caption_save_failed", error, captionSaved: false };
+        const refusal = await readRefusal(patchResponse, SAVE_FALLBACK_ERROR);
+        if (refusal === null) return noAnswer();
+        return { kind: "failed", reason: "caption_save_failed", ...refusal, captionSaved: false };
       }
       captionSaved = true;
     }
@@ -137,15 +156,15 @@ export async function scheduleDraft(input: {
     const publishResponse = await fetchFn(`/api/posts/${jobId}/publish`, {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({ scheduledFor: scheduledForIso }),
+      body: JSON.stringify({ scheduledFor: scheduledForIso, ...pageWorkspace }),
     });
     if (!publishResponse.ok) {
-      const error = await readRefusal(
+      const refusal = await readRefusal(
         publishResponse,
         submitsForApproval ? "Couldn't submit this post for approval." : "Couldn't schedule this post.",
       );
-      if (error === null) return noAnswer();
-      return { kind: "failed", reason: "publish_failed", error, captionSaved };
+      if (refusal === null) return noAnswer();
+      return { kind: "failed", reason: "publish_failed", ...refusal, captionSaved };
     }
 
     // A schedule request has exactly two successful answers: 200 scheduled (with

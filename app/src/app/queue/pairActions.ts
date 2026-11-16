@@ -81,16 +81,23 @@ export function foldedPairLine(card: QueueCard, feedLabels: readonly string[]): 
   return `Feed and Story: the post goes to ${joinLabels(feedLabels)}, the Story to ${joinLabels(storyLabels) || "its platforms"}.`;
 }
 
-/** The request for an action on a card: JSON, asking for both halves on a pair card. */
+/**
+ * The request for an action on a card: JSON, asking for both halves on a pair
+ * card. R31 pages L2: it carries the workspace the Queue was drawn for, so a
+ * switch in another tab answers 409 instead of acting on that workspace; with
+ * none yet it is left out and the route says to reload the page.
+ */
 export function cardRequest(
   card: PairFlag,
   method: string,
+  workspaceId: string | null,
   body: Record<string, unknown> = {},
 ): { method: string; headers: Record<string, string>; body: string } {
+  const sent = { ...body, ...(workspaceId ? { workspaceId } : {}) };
   return {
     method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(card.includePair ? { ...body, includePair: true } : body),
+    body: JSON.stringify(card.includePair ? { ...sent, includePair: true } : sent),
   };
 }
 

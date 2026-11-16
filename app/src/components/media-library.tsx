@@ -45,6 +45,7 @@ import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import {
   appendMediaPage,
   buildMediaCreateBody,
@@ -895,7 +896,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
 
     let response: Response;
     try {
-      response = await fetchOrNoAnswer(`/api/media/${target.id}`, { method: "DELETE" });
+      // R31 pages L2: with the workspace the library was drawn for (a DELETE has no body).
+      response = await fetchOrNoAnswer(withWorkspaceId(`/api/media/${target.id}`, workspaceId), { method: "DELETE" });
     } catch {
       toast.error(MEDIA_MESSAGES.deleteLost);
       throw new ConfirmFailureShown("DELETE_FAILED");
@@ -918,7 +920,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       return next;
     });
     toast.success("Media deleted.");
-  }, [deleteTarget, toast]);
+  }, [deleteTarget, toast, workspaceId]);
 
   return (
     <div className="space-y-8">

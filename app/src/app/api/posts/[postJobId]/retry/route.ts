@@ -19,6 +19,7 @@ import { isPostMediaComplete } from "@/server/jobs/postMedia";
 import { reserveRetry, withdrawRetry } from "@/server/usage/usageLog";
 import { Prisma, type Platform } from "@prisma/client";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface RetryRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -129,6 +130,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   if (!rawBody) {
     return invalidJsonBodyResponse();
   }
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(rawBody.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const target = parseRetryBody(rawBody);
   if ("error" in target) {

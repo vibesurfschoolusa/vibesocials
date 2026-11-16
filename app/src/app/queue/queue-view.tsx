@@ -80,14 +80,14 @@ import {
   getQueueCardActions,
   publishConfirmCopy,
   publishNeedsApproval,
+  postActionRefusal,
   publishOutcome,
   queueStatusBadge,
-  queueFailureText,
   queueMayHaveGoneThroughText,
   queueNotSentText,
   sendActionRequest,
-  shouldRefetchAfterError,
   type JobPatch,
+  type PostActionRefusal,
   type QueueViewer,
 } from "@/lib/queueActions";
 import { scheduleDraft } from "@/lib/scheduleDraft";
@@ -252,11 +252,12 @@ export type CancelScope = "one" | "rest";
 export function cancelRequest(
   card: QueueCardPost,
   scope: CancelScope,
+  workspaceId: string | null,
 ): { url: string; series: boolean; init: ReturnType<typeof cardRequest> } {
   if (scope === "rest" && card.seriesId) {
-    return { url: `/api/posts/${card.id}/cancel-series`, series: true, init: cardRequest({}, "POST") };
+    return { url: `/api/posts/${card.id}/cancel-series`, series: true, init: cardRequest({}, "POST", workspaceId) };
   }
-  return { url: `/api/posts/${card.id}/cancel`, series: false, init: cardRequest(card, "POST") };
+  return { url: `/api/posts/${card.id}/cancel`, series: false, init: cardRequest(card, "POST", workspaceId) };
 }
 
 interface QueueCardProps {
@@ -486,12 +487,12 @@ export const EDIT_COPY_YOUR_TEXT = "Copy your text if you want to keep it, then 
 const EDIT_MOVED_ON_FALLBACK = "This post can no longer be edited.";
 
 /**
- * Lead review: the refusal as a sentence, then the copy step. A 404's "Not
- * found" is not a sentence for a person; any text without a closing full
- * stop gets one, so the two never run together.
+ * Lead review: the refusal (postActionRefusal's text) as a sentence, then the
+ * copy step. Any text without a closing full stop gets one, so the two never
+ * run together.
  */
-export function editMovedOnText(status: number, error: string | undefined): string {
-  const said = status === 404 ? "This post no longer exists." : error?.trim() || EDIT_MOVED_ON_FALLBACK;
+export function editMovedOnText(refusal: string | undefined): string {
+  const said = refusal?.trim() || EDIT_MOVED_ON_FALLBACK;
   const sentence = /[.!?]$/.test(said) ? said : `${said}.`;
   return `${sentence} ${EDIT_COPY_YOUR_TEXT}`;
 }
@@ -508,6 +509,7 @@ export function editMovedOnText(status: number, error: string | undefined): stri
 function QueueEditDialog({
   job,
   viewer,
+  workspaceId,
   onClose,
   onSaved,
   onPartialSave,
@@ -516,6 +518,8 @@ function QueueEditDialog({
 }: {
   job: QueueCardPost;
   viewer: QueueViewer;
+  /** R31 pages L2: the workspace the Queue was drawn for, sent with each save. */
+  workspaceId: string | null;
   /** The workspace footer appended at publish time (same data the Create page gets). */
   footerSettings?: CaptionFooterUser;
   onClose: () => void;
@@ -640,7 +644,7 @@ function QueueEditDialog({
         // Plain save: scheduled posts send caption + time, drafts just the caption.
         const answer = await sendActionRequest(
           `/api/posts/${job.id}`,
-          cardRequest(job, "PATCH", {
+          cardRequest(job, "PATCH", workspaceId, {
             baseCaption: trimmed,
             ...(scheduledIso ? { scheduledFor: scheduledIso } : {}),
             ...(overridesEdited ? { perPlatformOverrides: overridesToSend } : {}),
@@ -660,18 +664,19 @@ function QueueEditDialog({
         }
         const { response } = answer;
         if (!response.ok) {
-          const errorData = (await response.json().catch(() => null)) as { error?: string } | null;
+          const errorData = (await response.json().catch(() => null)) as unknown;
           setSaving(false);
-          if (shouldRefetchAfterError(response.status)) {
-            // R30 publishing L1: the post moved on (started publishing, went out). The dialog
-            // stays open with the route's sentence and Save off, so what was typed can be
-            // copied; the list reloads behind it.
+          const refusal = postActionRefusal(response.status, errorData, "Couldn't save your changes.");
+          if (refusal.movedOn) {
+            // R30 publishing L1, R31: the post moved on (or the page is for another workspace).
+            // The dialog stays open with the route's sentence and Save off, so what was typed
+            // can be copied; the list reloads behind it when the rule says so.
             focusAfterPress(saveRef.current, () => movedOnRef.current);
-            setMovedOn(editMovedOnText(response.status, errorData?.error));
-            onStale();
+            setMovedOn(editMovedOnText(refusal.text));
+            if (refusal.reload) onStale();
             return;
           }
-          toast.error(errorData?.error ?? "Couldn't save your changes.");
+          toast.error(refusal.text);
           return;
         }
         const data = await response.json().catch(() => null);
@@ -705,6 +710,7 @@ function QueueEditDialog({
         scheduledForIso: scheduledIso,
         submitsForApproval: publishNeedsApproval(job, viewer),
         perPlatformOverrides: overridesToSend,
+        workspaceId,
       });
       if (result.kind === "failed") {
         // Keep the dialog open with the user's input; the server says why. If
@@ -719,6 +725,14 @@ function QueueEditDialog({
             setPlatformOverrides(overridesToSend);
           }
           onPartialSave({ caption: trimmed, ...overridesPatch }, pairFetch.lastAnswer());
+        }
+        if (result.movedOn) {
+          // R31 publishing L3: the same rule as a scheduled post's save, above.
+          focusAfterPress(saveRef.current, () => movedOnRef.current);
+          setMovedOn(editMovedOnText(result.error));
+          if (result.movedOn.reload) onStale();
+          setSaving(false);
+          return;
         }
         toast.error(result.error);
         // R27 MM4 review: a lost answer may have scheduled it, so the Queue is read again too.
@@ -1217,6 +1231,17 @@ export function QueueView({
   // R28 NN2: the calendar reads the Queue again after a lost answer.
   const reloadSilently = useCallback(() => void load({ silent: true }), [load]);
 
+  // R31 publishing L3-L5, pages L2: every refused post action, by the one rule
+  // (postActionRefusal): the route's sentence, and a quiet reload unless the
+  // page is for another workspace.
+  const showRefusal = useCallback(
+    (refusal: PostActionRefusal) => {
+      toast.error(refusal.text);
+      if (refusal.reload) void load({ silent: true });
+    },
+    [load, toast],
+  );
+
   const handleReload = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -1298,7 +1323,7 @@ export function QueueView({
       try {
         const answer = await sendActionRequest(
           `/api/posts/${job.id}/approval`,
-          cardRequest(job, "POST", { decision, reviewedUpdatedAt: job.updatedAt }),
+          cardRequest(job, "POST", workspaceId, { decision, reviewedUpdatedAt: job.updatedAt }),
         );
         // R27 MM4: whatever comes next can remove the card or its decision row; focus moves on, never to the body.
         focusAfterPress(pressed);
@@ -1315,16 +1340,16 @@ export function QueueView({
         const { response } = answer;
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         if (!response.ok) {
-          toast.error(
-            queueFailureText(
+          // Stale card (already decided, changed since review, publish couldn't
+          // start, gone): re-sync so no dead Approve/Reject buttons remain.
+          showRefusal(
+            postActionRefusal(
+              response.status,
               data,
               decision === "approve" ? "Couldn't approve this post." : "Couldn't reject this post.",
               "Approve",
             ),
           );
-          // Stale card (already decided, changed since review, publish couldn't
-          // start, gone): re-sync so no dead Approve/Reject buttons remain.
-          if (shouldRefetchAfterError(response.status)) void load({ silent: true });
           return;
         }
         const outcome = decisionOutcome(decision, data);
@@ -1336,7 +1361,7 @@ export function QueueView({
         setDeciding(null);
       }
     },
-    [applyAnswer, deciding, load, toast],
+    [applyAnswer, deciding, load, showRefusal, toast, workspaceId],
   );
 
   // Calendar drag-to-reschedule already PATCHed the server; mirror the change
@@ -1352,7 +1377,7 @@ export function QueueView({
   // never left is said by the dialog).
   const confirmCancel = useCallback(async () => {
     if (!cancelTarget) return;
-    const request = cancelRequest(cancelTarget, cancelScope);
+    const request = cancelRequest(cancelTarget, cancelScope, workspaceId);
     const answer = await sendActionRequest(request.url, request.init);
     if (answer.kind === "not_sent") {
       toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
@@ -1368,12 +1393,10 @@ export function QueueView({
       | { error?: string; cancelled?: number; notCancelled?: number }
       | null;
     if (!response.ok) {
-      toast.error(data?.error ?? "Couldn't cancel this post.");
-      if (shouldRefetchAfterError(response.status)) {
-        // R30 publishing L1: the card is stale (it started publishing or went out): re-sync and close.
-        void load({ silent: true });
-        return;
-      }
+      const refusal = postActionRefusal(response.status, data, "Couldn't cancel this post.");
+      showRefusal(refusal);
+      // R30 publishing L1: the card is stale (it started publishing or went out): close.
+      if (refusal.movedOn) return;
       throw new ConfirmFailureShown("CANCEL_FAILED");
     }
     if (!request.series) {
@@ -1389,11 +1412,11 @@ export function QueueView({
       `${cancelled} ${cancelled === 1 ? "post" : "posts"} cancelled.` +
         (left > 0 ? ` ${left} had already started publishing, so ${left === 1 ? "it was" : "they were"} not cancelled.` : ""),
     );
-  }, [applyAnswer, cancelScope, cancelTarget, load, toast]);
+  }, [applyAnswer, cancelScope, cancelTarget, load, showRefusal, toast, workspaceId]);
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
-    const answer = await sendActionRequest(`/api/posts/${deleteTarget.id}`, cardRequest(deleteTarget, "DELETE"));
+    const answer = await sendActionRequest(`/api/posts/${deleteTarget.id}`, cardRequest(deleteTarget, "DELETE", workspaceId));
     if (answer.kind === "not_sent") {
       toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
       throw new ConfirmFailureShown("DELETE_NOT_SENT");
@@ -1406,12 +1429,15 @@ export function QueueView({
     const { response } = answer;
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
-      toast.error(data?.error ?? "Couldn't delete this draft.");
+      const refusal = postActionRefusal(response.status, data, "Couldn't delete this draft.");
+      showRefusal(refusal);
+      // R31 publishing L3: a draft that was scheduled, published or deleted meanwhile: close.
+      if (refusal.movedOn) return;
       throw new ConfirmFailureShown("DELETE_FAILED");
     }
     applyAnswer(deleteTarget, data, { kind: "remove" });
     toast.success(withPairNote("Draft deleted.", data));
-  }, [applyAnswer, deleteTarget, load, toast]);
+  }, [applyAnswer, deleteTarget, load, showRefusal, toast, workspaceId]);
 
   const viewer: QueueViewer = {
     role: workspaceRole,
@@ -1425,7 +1451,10 @@ export function QueueView({
   // submission keeps the card as a pending draft, publishing removes it.
   const confirmPublish = useCallback(async () => {
     if (!publishTarget) return;
-    const answer = await sendActionRequest(`/api/posts/${publishTarget.id}/publish`, cardRequest(publishTarget, "POST"));
+    const answer = await sendActionRequest(
+      `/api/posts/${publishTarget.id}/publish`,
+      cardRequest(publishTarget, "POST", workspaceId),
+    );
     if (answer.kind === "not_sent") {
       toast.error(queueNotSentText(publishKind));
       throw new ConfirmFailureShown("PUBLISH_NOT_SENT");
@@ -1439,19 +1468,17 @@ export function QueueView({
     const { response } = answer;
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
-      toast.error(queueFailureText(data, "Couldn't publish this post.", "Publish"));
-      if (shouldRefetchAfterError(response.status)) {
-        // The card is stale (already awaiting approval, changed, gone, or the
-        // dispatch failed): re-sync and close rather than offer a dead retry.
-        void load({ silent: true });
-        return;
-      }
+      const refusal = postActionRefusal(response.status, data, "Couldn't publish this post.", "Publish");
+      showRefusal(refusal);
+      // The card is stale (already awaiting approval, changed, gone, or the
+      // dispatch failed): close rather than offer a dead retry.
+      if (refusal.movedOn) return;
       throw new ConfirmFailureShown("PUBLISH_FAILED");
     }
     const outcome = publishOutcome(data);
     applyAnswer(publishTarget, data, outcome.kind === "remove" ? { kind: "remove" } : { kind: "update", patch: outcome.patch });
     toast.success(withPairNote(outcome.message, data));
-  }, [applyAnswer, load, publishKind, publishTarget, toast]);
+  }, [applyAnswer, load, publishKind, publishTarget, showRefusal, toast, workspaceId]);
 
   const publishCopy = publishConfirmCopy(publishKind);
   // R3-client-journey M1: on a Feed and Story card the Story goes with it.
@@ -1546,6 +1573,7 @@ export function QueueView({
             onEdit={setEditTarget}
             onRescheduled={applyReschedule}
             onReload={reloadSilently}
+            workspaceId={workspaceId}
           />
         ) : (
           <>
@@ -1556,6 +1584,7 @@ export function QueueView({
                 onEdit={setEditTarget}
                 onRescheduled={applyReschedule}
                 onReload={reloadSilently}
+                workspaceId={workspaceId}
               />
             ) : (
               <div className="space-y-3">
@@ -1598,6 +1627,7 @@ export function QueueView({
           key={editTarget.id}
           job={editTarget}
           viewer={viewer}
+          workspaceId={workspaceId}
           footerSettings={footerSettings}
           onClose={() => setEditTarget(null)}
           onPartialSave={(patch, answer) => applyAnswer(editTarget, answer, { kind: "update", patch })}

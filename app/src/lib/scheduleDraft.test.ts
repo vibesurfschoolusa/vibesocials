@@ -28,11 +28,12 @@ function fakeFetch(steps: Step[]) {
   return { fetchFn, calls };
 }
 
-const PATCH_CALL = { method: "PATCH", url: "/api/posts/job-1", body: { baseCaption: "New caption" } };
+// R31 pages L2: both requests carry the workspace the Queue was drawn for.
+const PATCH_CALL = { method: "PATCH", url: "/api/posts/job-1", body: { baseCaption: "New caption", workspaceId: "ws-1" } };
 const PUBLISH_CALL = {
   method: "POST",
   url: "/api/posts/job-1/publish",
-  body: { scheduledFor: SCHEDULED_AT },
+  body: { scheduledFor: SCHEDULED_AT, workspaceId: "ws-1" },
 };
 
 function run(
@@ -47,6 +48,7 @@ function run(
     originalCaption: "Old caption",
     scheduledForIso: SCHEDULED_AT,
     submitsForApproval: false,
+    workspaceId: "ws-1",
     ...overrides,
   });
   return promise.then((result) => ({ result, calls }));
@@ -81,6 +83,7 @@ describe("scheduleDraft — (b) a failed PATCH never reaches publish", () => {
       reason: "caption_save_failed",
       error: "This post can no longer be edited.",
       captionSaved: false,
+      movedOn: { reload: true },
     });
   });
 
@@ -108,6 +111,7 @@ describe("scheduleDraft — (c)/(d) a failed publish reports the server error an
         reason: "publish_failed",
         error: "This post is waiting for an owner's approval.",
         captionSaved: true,
+        movedOn: { reload: true },
       },
     ],
     [
@@ -119,6 +123,7 @@ describe("scheduleDraft — (c)/(d) a failed publish reports the server error an
         reason: "publish_failed",
         error: "Couldn't start publishing. Please try again.",
         captionSaved: true,
+        movedOn: { reload: true },
       },
     ],
     [
@@ -273,7 +278,7 @@ describe("scheduleDraft — per-platform captions", () => {
       {
         method: "PATCH",
         url: "/api/posts/job-1",
-        body: { baseCaption: "New caption", perPlatformOverrides: { x: "Short for X" } },
+        body: { baseCaption: "New caption", perPlatformOverrides: { x: "Short for X" }, workspaceId: "ws-1" },
       },
       PUBLISH_CALL,
     ]);
@@ -287,7 +292,7 @@ describe("scheduleDraft — per-platform captions", () => {
     expect(calls[0]).toEqual({
       method: "PATCH",
       url: "/api/posts/job-1",
-      body: { baseCaption: "New caption", perPlatformOverrides: { linkedin: "For LinkedIn" } },
+      body: { baseCaption: "New caption", perPlatformOverrides: { linkedin: "For LinkedIn" }, workspaceId: "ws-1" },
     });
     expect(calls).toHaveLength(2);
   });
@@ -297,11 +302,48 @@ describe("scheduleDraft — per-platform captions", () => {
       originalCaption: "New caption",
       perPlatformOverrides: null,
     });
-    expect(calls[0].body).toEqual({ baseCaption: "New caption", perPlatformOverrides: null });
+    expect(calls[0].body).toEqual({ baseCaption: "New caption", perPlatformOverrides: null, workspaceId: "ws-1" });
   });
 
   it("leaves the field out when the per-platform captions were not edited", async () => {
     const { calls } = await run([json(200, { ok: true }), SCHEDULED()]);
-    expect(calls[0].body).toEqual({ baseCaption: "New caption" });
+    expect(calls[0].body).toEqual({ baseCaption: "New caption", workspaceId: "ws-1" });
+  });
+});
+
+// R31 publishing L3-L5: the draft branch of Edit reads a refusal by the same
+// rule as every other post action (queueActions postActionRefusal).
+describe("scheduleDraft — a post that moved on", () => {
+  it("started publishing, on the PATCH: the route's sentence and a reload", async () => {
+    const error = "This post has started publishing, so it can't be edited. Check Activity to see how it goes.";
+    const { result } = await run([json(409, { error, code: "NOT_EDITABLE" })]);
+    expect(result).toEqual({ kind: "failed", reason: "caption_save_failed", error, captionSaved: false, movedOn: { reload: true } });
+  });
+
+  it("deleted: a 404 says it no longer exists, never Not found", async () => {
+    const { result } = await run([json(404, { error: "Not found" })]);
+    expect(result).toMatchObject({ error: "This post no longer exists.", movedOn: { reload: true } });
+  });
+
+  it("scheduled by someone else, on the publish: a reload, the caption reported saved", async () => {
+    const { result } = await run([json(200, { ok: true }), json(409, { error: "Only a draft can be scheduled here.", code: "NOT_A_DRAFT" })]);
+    expect(result).toEqual({
+      kind: "failed",
+      reason: "publish_failed",
+      error: "Only a draft can be scheduled here.",
+      captionSaved: true,
+      movedOn: { reload: true },
+    });
+  });
+
+  it("another workspace: the sentence, and no reload into that workspace", async () => {
+    const error = "You switched workspace in another tab. Reload this page, then try again.";
+    const { result } = await run([json(409, { error, code: "WORKSPACE_CHANGED" })]);
+    expect(result).toMatchObject({ error, movedOn: { reload: false } });
+  });
+
+  it("a draft still editable: a plain refusal (429) is not moved on", async () => {
+    const { result } = await run([json(200, { ok: true }), json(429, { error: "Daily limit reached." })]);
+    expect(result).toEqual({ kind: "failed", reason: "publish_failed", error: "Daily limit reached.", captionSaved: true });
   });
 });

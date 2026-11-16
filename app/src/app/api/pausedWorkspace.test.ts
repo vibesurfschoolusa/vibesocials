@@ -89,6 +89,8 @@ type RouteCase = {
   method: "GET" | "POST" | "PATCH" | "DELETE";
   params?: Record<string, string>;
   body?: unknown;
+  /** Added to the request's url, e.g. "?workspaceId=ws-1" for a DELETE without a body. */
+  query?: string;
 };
 
 const GATED: RouteCase[] = [
@@ -108,10 +110,10 @@ const GATED: RouteCase[] = [
 const ALLOWED: RouteCase[] = [
   { name: "GET /api/posts (read)", load: () => import("./posts/route"), method: "GET" },
   { name: "GET /api/media (read)", load: () => import("./media/route"), method: "GET" },
-  { name: "PATCH /api/posts/[id] (edit a draft's text)", load: () => import("./posts/[postJobId]/route"), method: "PATCH", params: { postJobId: "job-1" }, body: { baseCaption: "New text" } },
-  { name: "DELETE /api/posts/[id]", load: () => import("./posts/[postJobId]/route"), method: "DELETE", params: { postJobId: "job-1" } },
-  { name: "POST /api/posts/[id]/cancel", load: () => import("./posts/[postJobId]/cancel/route"), method: "POST", params: { postJobId: "job-1" } },
-  { name: "DELETE /api/media/[id]", load: () => import("./media/[id]/route"), method: "DELETE", params: { id: "media-1" } },
+  { name: "PATCH /api/posts/[id] (edit a draft's text)", load: () => import("./posts/[postJobId]/route"), method: "PATCH", params: { postJobId: "job-1" }, body: { baseCaption: "New text", workspaceId: "ws-1" } },
+  { name: "DELETE /api/posts/[id]", load: () => import("./posts/[postJobId]/route"), method: "DELETE", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
+  { name: "POST /api/posts/[id]/cancel", load: () => import("./posts/[postJobId]/cancel/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
+  { name: "DELETE /api/media/[id]", load: () => import("./media/[id]/route"), method: "DELETE", params: { id: "media-1" }, query: "?workspaceId=ws-1" },
   { name: "POST /api/settings", load: () => import("./settings/route"), method: "POST", body: { defaultHashtags: "#surf", workspaceId: "ws-1" } },
   { name: "DELETE /api/connections/[platform] (disconnect)", load: () => import("./connections/[platform]/route"), method: "DELETE", params: { platform: "x" }, body: { workspaceId: "ws-1" } },
   { name: "DELETE /api/auth/account (delete the account)", load: () => import("./auth/account/route"), method: "DELETE", body: { confirm: "DELETE" } },
@@ -124,7 +126,7 @@ function paused() {
 async function call(route: RouteCase): Promise<{ status: number; body: unknown } | { threw: unknown }> {
   const mod = await route.load();
   const handler = mod[route.method] as Handler;
-  const request = new Request("http://localhost/api/test", {
+  const request = new Request(`http://localhost/api/test${route.query ?? ""}`, {
     method: route.method,
     headers: { "content-type": "application/json" },
     ...(route.body !== undefined ? { body: JSON.stringify(route.body) } : {}),

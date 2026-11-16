@@ -179,19 +179,25 @@ describe("foldedPairLine", () => {
 describe("cardRequest", () => {
   it("a pair card's request asks for both halves", () => {
     const card: QueueCard = { ...job("feed-1"), includePair: true };
-    expect(cardRequest(card, "POST", { decision: "approve" })).toEqual({
+    expect(cardRequest(card, "POST", "ws-1", { decision: "approve" })).toEqual({
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision: "approve", includePair: true }),
+      body: JSON.stringify({ decision: "approve", workspaceId: "ws-1", includePair: true }),
     });
   });
 
   it("any other card's request is unchanged", () => {
-    expect(cardRequest(job("a"), "DELETE")).toEqual({
+    expect(cardRequest(job("a"), "DELETE", "ws-1")).toEqual({
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({ workspaceId: "ws-1" }),
     });
+  });
+
+  // R31 pages L2: every card request carries the workspace the Queue was drawn for.
+  it("carries the page's workspace id; none yet leaves it out, which the route answers with its reload sentence", () => {
+    expect(JSON.parse(cardRequest(job("a"), "POST", "ws-9").body)).toEqual({ workspaceId: "ws-9" });
+    expect(JSON.parse(cardRequest(job("a"), "POST", null).body)).toEqual({});
   });
 });
 

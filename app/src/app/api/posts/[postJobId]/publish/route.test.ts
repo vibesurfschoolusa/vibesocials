@@ -120,8 +120,12 @@ function memberInApprovalWorkspace() {
 function ctx(postJobId: string) {
   return { params: Promise.resolve({ postJobId }) };
 }
+/** R31 pages L2: every request carries the page's workspace id (the context's "ws-1"). */
+function withWorkspace(body: unknown): unknown {
+  return body !== null && typeof body === "object" && !Array.isArray(body) ? { workspaceId: "ws-1", ...body } : body;
+}
 function req(body: unknown): NextRequest {
-  return { json: async () => body } as unknown as NextRequest;
+  return { json: async () => withWorkspace(body) } as unknown as NextRequest;
 }
 
 beforeEach(() => {
@@ -320,20 +324,22 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(ids).toEqual(["publish-job-1", "publish-job-1"]);
   });
 
-  // The body is optional: publish-now sends none, so an empty / non-JSON /
-  // non-object body (readJsonObject -> null) must mean "no body", never a 4xx/5xx.
+  // R31 pages L2: publish-now's body carries the page's workspace id, so an
+  // empty / non-JSON / non-object body (readJsonObject -> null) is the 400 to
+  // reload (a tab opened before the release), never a 5xx and never a publish.
   it.each([
-    ["an empty body (publish-now sends none)", () => Promise.reject(new SyntaxError("Unexpected end of JSON input"))],
+    ["an empty body", () => Promise.reject(new SyntaxError("Unexpected end of JSON input"))],
     ["null", () => Promise.resolve(null)],
     ["an array", () => Promise.resolve([1])],
     ["a number", () => Promise.resolve(5)],
-  ])("treats %s as no body and publishes now", async (_label, json) => {
+  ])("treats %s as a page to reload and publishes nothing", async (_label, json) => {
     findFirstMock.mockResolvedValue({ status: "draft" });
 
     const res = await POST({ json } as unknown as NextRequest, ctx("job-1"));
 
-    expect(res.status).toBe(202);
-    expect(inngestSendMock).toHaveBeenCalled();
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_WORKSPACE_ID");
+    expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
   it("publishes a SCHEDULED job now too (Queue 'Publish now')", async () => {
@@ -1748,5 +1754,29 @@ describe("POST /api/posts/[postJobId]/publish - a pair, reserved before the clai
 
     expect(res.status).toBe(202);
     expect(releaseMock).toHaveBeenCalledWith({ postJobIds: ["job-1", "story-1"], day: expect.any(Date) }, ["job-1"]);
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("POST /api/posts/[postJobId]/publish: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no post is read", async () => {
+    const res = await POST({ json: async () => ({}) } as unknown as NextRequest, ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no post is read", async () => {
+    const res = await POST(req({ workspaceId: "ws-2" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 });

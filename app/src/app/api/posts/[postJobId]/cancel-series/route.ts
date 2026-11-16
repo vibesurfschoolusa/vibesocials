@@ -7,6 +7,8 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { readJsonObject } from "@/lib/http";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -30,7 +32,7 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
  * scheduler claims at the same instant is not touched. The updates go in one
  * batch; one that matches nothing is counted in `notCancelled`.
  */
-export async function POST(_request: NextRequest, context: PostJobRouteContext) {
+export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
@@ -53,6 +55,9 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
 
   const { postJobId } = await Promise.resolve(context.params);
   const workspaceId = workspaceContext.workspace.id;
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, workspaceId);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const notCancelable = () =>
     NextResponse.json(

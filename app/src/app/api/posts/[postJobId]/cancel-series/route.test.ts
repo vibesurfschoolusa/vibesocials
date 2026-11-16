@@ -37,7 +37,8 @@ vi.mock("@/lib/db", () => {
 import { POST } from "./route";
 
 const ctx = (postJobId: string) => ({ params: Promise.resolve({ postJobId }) });
-const req = {} as NextRequest;
+/** R31 pages L2: every request carries the page's workspace id (the context's "ws-1"). */
+const req = { json: async () => ({ workspaceId: "ws-1" }) } as unknown as NextRequest;
 const THIS_TIME = new Date("2026-11-19T09:00:00Z");
 const SUBMITTED = new Date("2026-11-10T09:00:00Z");
 
@@ -236,5 +237,29 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
         data: { status: "cancelled" },
       },
     ]);
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("POST /api/posts/[postJobId]/cancel-series: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no post is read", async () => {
+    const res = await POST({ json: async () => ({}) } as unknown as NextRequest, ctx("job-2"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no post is read", async () => {
+    const res = await POST({ json: async () => ({ workspaceId: "ws-2" }) } as unknown as NextRequest, ctx("job-2"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 });

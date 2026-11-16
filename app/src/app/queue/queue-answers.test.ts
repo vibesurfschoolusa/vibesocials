@@ -90,26 +90,52 @@ describe("Queue: a lost answer may have gone through", () => {
   });
 });
 
-// R30 publishing L1: a card that started publishing while the page was open
-// still showed Scheduled; Cancel, Edit and the calendar drag got a 409, showed
-// it and left the stale card (and the Cancel dialog) as they were. Each now
-// reloads the list silently and closes, as Publish now and Approve do.
-describe("Queue: a stale card's 409 reloads the list", () => {
-  it("Cancel: the route's sentence, a silent reload, and the dialog closes", () => {
-    const body = view.slice(view.indexOf("const confirmCancel"), view.indexOf("}, [", view.indexOf("const confirmCancel")));
+// R30 publishing L1, R31 publishing L3-L5 and pages L2: one rule for a post
+// action's refusal (queueActions postActionRefusal), on every action: a post
+// that moved on (any 409, a 404, a 400 NOT_SCHEDULED) gets the route's
+// sentence and a quiet reload; another workspace's answer gets its sentence
+// and no reload into that workspace.
+describe("Queue: a refused post action, one rule", () => {
+  const between = (start: string, end: string) => {
+    const at = view.indexOf(start);
+    expect(at, start).toBeGreaterThan(-1);
+    return view.slice(at, view.indexOf(end, at));
+  };
+
+  it("showRefusal says the sentence and reloads only when the rule says so", () => {
+    expect(between("const showRefusal = useCallback(", "}, [")).toMatch(
+      /\(refusal: PostActionRefusal\) => \{\s+toast\.error\(refusal\.text\);\s+if \(refusal\.reload\) void load\(\{ silent: true \}\);/,
+    );
+    expect(view).not.toMatch(/shouldRefetchAfterError/);
+    expect(calendar).not.toMatch(/shouldRefetchAfterError/);
+  });
+
+  it.each([
+    ["const confirmCancel", "Couldn't cancel this post.", "CANCEL_FAILED", ""],
+    ["const confirmDelete", "Couldn't delete this draft.", "DELETE_FAILED", ""],
+    ["const confirmPublish", "Couldn't publish this post.", "PUBLISH_FAILED", ', "Publish"'],
+  ])("%s: a post that moved on closes the dialog with the route's sentence; anything else keeps it open", (name, fallback, code, button) => {
+    const body = between(name, "}, [");
+    const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(body).toMatch(
-      /if \(!response\.ok\) \{\s+toast\.error\(data\?\.error \?\? "Couldn't cancel this post\."\);\s+if \(shouldRefetchAfterError\(response\.status\)\) \{\s+(\/\/[^\n]*\n\s+)*void load\(\{ silent: true \}\);\s+return;\s+\}\s+throw new ConfirmFailureShown\("CANCEL_FAILED"\);/,
+      new RegExp(
+        `if \\(!response\\.ok\\) \\{\\s+const refusal = postActionRefusal\\(response\\.status, data, "${escaped(fallback)}"${escaped(button)}\\);\\s+showRefusal\\(refusal\\);\\s+(\\/\\/[^\\n]*\\n\\s+)*if \\(refusal\\.movedOn\\) return;\\s+throw new ConfirmFailureShown\\("${code}"\\);`,
+      ),
     );
   });
 
-  // Lead review: closing the dialog dropped what was typed. It stays open with
-  // the route's sentence, Save is off, and the list reloads behind it.
-  it("Edit: the dialog stays open with the route's sentence, Save off, and the list reloads behind it", () => {
-    const start = view.indexOf("const errorData = (await response.json()");
-    expect(start).toBeGreaterThan(-1);
-    const failed = view.slice(start, view.indexOf("const outcome = editOutcome(data);", start));
+  it("Approve and Reject: the same rule", () => {
+    expect(between("const handleDecide", "}, [")).toMatch(
+      /showRefusal\(\s*postActionRefusal\(\s*response\.status,\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\),?\s*\);/,
+    );
+  });
+
+  // Lead review (R30): closing the dialog dropped what was typed. It stays open
+  // with the route's sentence, Save is off, and the list reloads behind it.
+  it("Edit, a scheduled post: the dialog stays open with the route's sentence, Save off, and a reload when the rule says so", () => {
+    const failed = between("const errorData = (await response.json()", "const outcome = editOutcome(data);");
     expect(failed).toMatch(
-      /if \(shouldRefetchAfterError\(response\.status\)\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(editMovedOnText\(response\.status, errorData\?\.error\)\);\s+onStale\(\);\s+return;\s+\}/,
+      /const refusal = postActionRefusal\(response\.status, errorData, "Couldn't save your changes\."\);\s+if \(refusal\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(editMovedOnText\(refusal\.text\)\);\s+if \(refusal\.reload\) onStale\(\);\s+return;\s+\}\s+toast\.error\(refusal\.text\);/,
     );
     expect(failed).not.toContain("onClose()");
     expect(view).toMatch(/<Button ref=\{saveRef\} onClick=\{handleSave\} loading=\{saving\} disabled=\{captionOver \|\| movedOn !== null\}>/);
@@ -117,32 +143,39 @@ describe("Queue: a stale card's 409 reloads the list", () => {
     expect(EDIT_COPY_YOUR_TEXT).toBe("Copy your text if you want to keep it, then press Cancel.");
   });
 
-  // Lead review: a 404 read "Not found Copy your text...". Each refusal is a
-  // sentence, and the copy step always follows a full stop.
+  // R31 publishing L3: a draft given a time used to reload only on a lost answer.
+  it("Edit, a draft given a time: the same, keeping the dialog and what was typed", () => {
+    const failed = between('if (result.kind === "failed") {', "toast.success(withPairNote(result.message");
+    expect(failed).toMatch(
+      /if \(result\.movedOn\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(editMovedOnText\(result\.error\)\);\s+if \(result\.movedOn\.reload\) onStale\(\);\s+setSaving\(false\);\s+return;\s+\}/,
+    );
+    expect(failed).not.toContain("onClose()");
+  });
+
   it("Edit: each refusal is worded as a sentence before the copy step", () => {
-    expect(editMovedOnText(404, "Not found")).toBe(
+    expect(editMovedOnText("This post no longer exists.")).toBe(
       "This post no longer exists. Copy your text if you want to keep it, then press Cancel.",
     );
-    expect(
-      editMovedOnText(409, "This post has started publishing, so it can't be edited. Check Activity to see how it goes."),
-    ).toBe(
-      "This post has started publishing, so it can't be edited. Check Activity to see how it goes. Copy your text if you want to keep it, then press Cancel.",
-    );
-    expect(editMovedOnText(409, "This post can no longer be edited")).toBe(
+    expect(editMovedOnText("This post can no longer be edited")).toBe(
       "This post can no longer be edited. Copy your text if you want to keep it, then press Cancel.",
     );
-    expect(editMovedOnText(409, undefined)).toBe(
-      "This post can no longer be edited. Copy your text if you want to keep it, then press Cancel.",
-    );
-    expect(editMovedOnText(503, "  ")).toBe(
+    expect(editMovedOnText("  ")).toBe(
       "This post can no longer be edited. Copy your text if you want to keep it, then press Cancel.",
     );
   });
 
-  it("the calendar drag: the route's sentence and a silent reload", () => {
+  it("the calendar drag: the same rule, reloading through onReload", () => {
     const drop = handler(calendar, "async function handleDrop");
     expect(drop).toMatch(
-      /toast\.error\(data\?\.error \?\? "Couldn't reschedule this post\."\);\s+(\/\/[^\n]*\n\s+)*if \(shouldRefetchAfterError\(response\.status\)\) onReload\(\);\s+return;/,
+      /const refusal = postActionRefusal\(response\.status, data, "Couldn't reschedule this post\."\);\s+toast\.error\(refusal\.text\);\s+(\/\/[^\n]*\n\s+)*if \(refusal\.reload\) onReload\(\);\s+return;/,
     );
+  });
+
+  // R31 pages L2: every request about a card carries the workspace the Queue was drawn for.
+  it("every card request carries the page's workspace id", () => {
+    expect(view).not.toMatch(/cardRequest\((?:job|deleteTarget|publishTarget|card), "[A-Z]+"(?:\)|, \{)/);
+    expect(view.match(/cardRequest\([^)]*workspaceId/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(calendar).toMatch(/cardRequest\(job, "PATCH", workspaceId, \{ scheduledFor: nextIso \}\)/);
+    expect(view).toMatch(/scheduleDraft\(\{[\s\S]*?workspaceId,[\s\S]*?\}\)/);
   });
 });

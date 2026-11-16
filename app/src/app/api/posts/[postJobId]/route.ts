@@ -33,6 +33,7 @@ import {
   type PairHalf,
 } from "./pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { postMovedOnText } from "@/lib/postMovedOn";
 
 interface PostJobRouteContext {
@@ -176,6 +177,9 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   if (!parsedBody) {
     return invalidJsonBodyResponse();
   }
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(parsedBody.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const body = parsedBody as PatchBody;
 
   const data: Prisma.PostJobUpdateInput = {};
@@ -460,6 +464,10 @@ export async function DELETE(request: NextRequest, context: PostJobRouteContext)
 
   const { postJobId } = await Promise.resolve(context.params);
   const workspaceId = workspaceContext.workspace.id;
+  const body = await readJsonObject(request);
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(body?.workspaceId, workspaceId);
+  if (workspaceRefusal) return workspaceRefusal;
 
   // V1 fix round 1: the post's video cover, read first so its file can be
   // queued for deletion once the post is gone.
@@ -472,7 +480,7 @@ export async function DELETE(request: NextRequest, context: PostJobRouteContext)
     ? await readPairHalf(
         workspaceId,
         { id: postJobId, storyOfPostJobId: coverRow.storyOfPostJobId ?? null },
-        wantsPair(await readJsonObject(request)),
+        wantsPair(body),
       )
     : null;
 

@@ -69,11 +69,15 @@ function ctx(postJobId: string) {
   // FIRST job in the workspace instead of the requested one.
   return { params: Promise.resolve({ postJobId }) };
 }
+/** R31 pages L2: every request carries the page's workspace id (the context's "ws-1"). */
+function withWorkspace(body: unknown): unknown {
+  return body !== null && typeof body === "object" && !Array.isArray(body) ? { workspaceId: "ws-1", ...body } : body;
+}
 function req(body: unknown, throwOnJson = false): NextRequest {
   return {
     json: async () => {
       if (throwOnJson) throw new Error("bad json");
-      return body;
+      return withWorkspace(body);
     },
   } as unknown as NextRequest;
 }
@@ -607,12 +611,12 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
 describe("DELETE /api/posts/[postJobId]", () => {
   it("401s when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
-    const res = await DELETE(req(null), ctx("job-1"));
+    const res = await DELETE(req({}), ctx("job-1"));
     expect(res.status).toBe(401);
   });
 
   it("deletes a draft/cancelled job via an atomic owner/status-scoped delete", async () => {
-    const res = await DELETE(req(null), ctx("job-1"));
+    const res = await DELETE(req({}), ctx("job-1"));
     expect(res.status).toBe(200);
     expect(deleteManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } },
@@ -623,7 +627,7 @@ describe("DELETE /api/posts/[postJobId]", () => {
     const COVER = "https://x.public.blob.vercel-storage.com/covers/ws-1/1-a-cover.jpg";
     queueCoverMock.mockReset();
     findFirstMock.mockResolvedValueOnce({ coverImageUrl: COVER });
-    expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
+    expect((await DELETE(req({}), ctx("job-1"))).status).toBe(200);
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1" },
       select: { coverImageUrl: true, storyOfPostJobId: true },
@@ -632,27 +636,27 @@ describe("DELETE /api/posts/[postJobId]", () => {
 
     queueCoverMock.mockReset();
     findFirstMock.mockResolvedValueOnce({ coverImageUrl: null });
-    expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
+    expect((await DELETE(req({}), ctx("job-1"))).status).toBe(200);
     expect(queueCoverMock).not.toHaveBeenCalled();
   });
 
   it("a cover that cannot be queued never fails the delete", async () => {
     findFirstMock.mockResolvedValueOnce({ coverImageUrl: "https://x.public.blob.vercel-storage.com/covers/ws-1/a.jpg" });
     queueCoverMock.mockRejectedValueOnce(new Error("db down"));
-    expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
+    expect((await DELETE(req({}), ctx("job-1"))).status).toBe(200);
   });
 
   it("404s when nothing matched and no such job exists", async () => {
     deleteManyMock.mockResolvedValue({ count: 0 });
     findFirstMock.mockResolvedValue(null);
-    const res = await DELETE(req(null), ctx("job-1"));
+    const res = await DELETE(req({}), ctx("job-1"));
     expect(res.status).toBe(404);
   });
 
   it("cross-workspace isolation: a job in another workspace 404s via the workspace-scoped disambiguation read", async () => {
     deleteManyMock.mockResolvedValue({ count: 0 });
     findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
-    const res = await DELETE(req(null), ctx("foreign-job"));
+    const res = await DELETE(req({}), ctx("foreign-job"));
     expect(res.status).toBe(404);
     expect(deleteManyMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } },
@@ -666,7 +670,7 @@ describe("DELETE /api/posts/[postJobId]", () => {
   it("409s NOT_DELETABLE when the job exists but is in a non-deletable state", async () => {
     deleteManyMock.mockResolvedValue({ count: 0 });
     findFirstMock.mockResolvedValue({ id: "job-1" }); // e.g. scheduled
-    const res = await DELETE(req(null), ctx("job-1"));
+    const res = await DELETE(req({}), ctx("job-1"));
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe("NOT_DELETABLE");
   });
@@ -1145,5 +1149,53 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
 
     await expect(res.json()).resolves.toEqual({ ok: true });
     expect(deleteManyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("PATCH /api/posts/[postJobId]: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no post is read", async () => {
+    const res = await PATCH({ json: async () => ({ baseCaption: "New" }) } as unknown as NextRequest, ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no post is read", async () => {
+    const res = await PATCH(req({ baseCaption: "New", workspaceId: "ws-2" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+});
+
+// R31 pages L2: a write from a page drawn for another workspace, or from a tab
+// opened before the release (no id), acts on nothing.
+describe("DELETE /api/posts/[postJobId]: the page's workspace id", () => {
+  it("an absent id is the 400 to reload the page, and no post is read", async () => {
+    const res = await DELETE({ json: async () => ({}) } as unknown as NextRequest, ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and no post is read", async () => {
+    const res = await DELETE(req({ workspaceId: "ws-2" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 });

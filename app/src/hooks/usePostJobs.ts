@@ -52,6 +52,13 @@ export interface UsePostJobsResult {
    */
   workspaceRole: WorkspaceRole | null;
   /**
+   * R31 pages L2: the workspace these posts belong to, as the first load
+   * reported it (`null` until then). Retry and Send again send it, so a
+   * switch in another tab answers 409 instead of acting on that workspace.
+   * Kept from the first load: a later poll after a switch must not re-point it.
+   */
+  workspaceId: string | null;
+  /**
    * Activity pagination (Task C2) — fetch the next (older) page via the last
    * response's `nextCursor` and APPEND it, de-duplicated by id. A no-op while a
    * page is already loading or when `hasMore` is false. Never flips
@@ -153,6 +160,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   const [error, setError] = useState<string | null>(null);
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
   const [workspaceRole, setWorkspaceRole] = useState<WorkspaceRole | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   // Bumped in the `finally` of every *background* load (see the poll effect
   // below). A failed background poll intentionally never calls `setJobs`, so
   // without this counter the poll effect would have no changed dependency to
@@ -222,6 +230,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       }
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole ?? null);
+      setWorkspaceId((prev) => prev ?? data.workspaceId ?? null);
       setRetryWatch((prev) => settleRetryWatch(prev, data.jobs));
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
@@ -370,6 +379,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     reload: load,
     workspaceMemberCount,
     workspaceRole,
+    workspaceId,
     loadMore,
     loadingMore,
     loadMoreError,

@@ -39,6 +39,7 @@ import {
   type PairHalf,
 } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -127,6 +128,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // A body is optional (publish-now sends none): an empty, invalid or
   // non-object one (null / array / primitive) is treated as "no body".
   const parsedBody = await readJsonObject(request);
+  // R31 pages L2: the page's workspace, so a tab left on another workspace acts on nothing.
+  const workspaceRefusal = renderedWorkspaceRefusal(parsedBody?.workspaceId, workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const body = (parsedBody ?? {}) as PublishBody;
 
   const wantsSchedule = body.scheduledFor != null;

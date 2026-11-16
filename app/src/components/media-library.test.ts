@@ -195,7 +195,8 @@ describe("Media: a lost answer may have gone through", () => {
     expect(mediaDeleteFailureText(409, { error: "It is used by a scheduled post." })).toBe("It is used by a scheduled post.");
     expect(mediaDeleteFailureText(404, null)).toBe(MEDIA_MESSAGES.deleteFailed);
     const remove = source.slice(source.indexOf("const handleConfirmDelete"), source.indexOf("return (", source.indexOf("const handleConfirmDelete")));
-    expect(remove).toMatch(/await fetchOrNoAnswer\(`\/api\/media\/\$\{target\.id\}`, \{ method: "DELETE" \}\)/);
+    // R31 pages L2: with the workspace the library was drawn for (a DELETE has no body).
+    expect(remove).toMatch(/await fetchOrNoAnswer\(withWorkspaceId\(`\/api\/media\/\$\{target\.id\}`, workspaceId\), \{ method: "DELETE" \}\)/);
     expect(remove).toMatch(/toast\.error\(MEDIA_MESSAGES\.deleteLost\)/);
   });
 });
