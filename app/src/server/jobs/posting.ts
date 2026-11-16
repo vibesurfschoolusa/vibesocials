@@ -87,9 +87,10 @@ export interface PostJobSchedulingParams {
    */
   story?: PostStoryJobParams;
   /**
-   * Q1 fix 1: hold a member's Feed and Story pair for approval in this
-   * helper's transaction, so both jobs are held or neither exists (the route
-   * holds a single post after the create, as before). `intent` is `draft`;
+   * Q1 fix 1: hold a member's post for approval in this helper's
+   * transaction: a Feed and Story pair (both jobs are held or neither exists)
+   * and, since R25 L3, a single post too, so it is never left a plain draft
+   * that was not sent for approval. `intent` is `draft`;
    * `scheduledFor` is the member's chosen time, kept for the owner to honour.
    * A series is held through `series.submittedForApprovalAt` instead.
    */

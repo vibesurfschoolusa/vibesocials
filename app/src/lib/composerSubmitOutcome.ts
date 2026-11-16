@@ -42,8 +42,11 @@ export type ComposerSubmitOutcome =
   | { kind: "workspace_changed"; resetForm: false; toast: string }
   | { kind: "error"; resetForm: false; toast: string };
 
+// KK4: true whether or not the route could mark the results failed. If it
+// couldn't, Activity shows the post as publishing until the stuck-job
+// reconciler fails it (about 2 hours); Retry is offered from then on.
 export const COMPOSER_DISPATCH_FAILED_MESSAGE =
-  "Saved, but publishing couldn't start — retry it from Activity.";
+  "Saved, but publishing couldn't start. Check Activity before you try again, and retry it there once it shows as failed.";
 
 const FALLBACK_ERROR = "Failed to create post.";
 

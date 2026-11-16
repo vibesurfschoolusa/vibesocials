@@ -802,6 +802,63 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
       expect(withdrawSendMock).not.toHaveBeenCalled();
     });
 
+    // KK4 follow-up: the post exists once the hand-off fails, so marking its
+    // results failed is best-effort; the answer is still the hand-off one.
+    it("hand-off fails and marking the results fails too: still the 503 with the postJobId, not a 500", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const sendsWritten = { postJobIds: ["job-1"], day: new Date("2026-11-14T15:00:00Z") };
+      createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"], sendsWritten });
+      inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+      failPendingMock.mockRejectedValue(new Error("database blip"));
+
+      const response = await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body).toEqual({
+        code: "DISPATCH_FAILED",
+        error: "Couldn't start publishing. Please try again.",
+        postJobId: "job-1",
+      });
+      // Nothing re-sends the post, so it counts toward no day.
+      expect(withdrawSendMock).toHaveBeenCalledWith(sendsWritten);
+      expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" })).toMatchObject({
+        kind: "dispatch_failed",
+        resetForm: true,
+      });
+    });
+
+    it("a Feed and Story pair: the Story's results are still marked when the feed's marking fails", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      createPostJobOnlyMock.mockResolvedValue({
+        postJobId: "job-1",
+        storyPostJobId: "job-s",
+        mediaItemId: "media-1",
+        resultIds: ["r1"],
+      });
+      inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+      failPendingMock.mockImplementation(async (postJobId: string) => {
+        if (postJobId === "job-1") throw new Error("database blip");
+        return { failedCount: 1, status: "failed" };
+      });
+
+      const response = await POST(
+        jsonRequest({
+          blobUrl: "https://test.public.blob.vercel-storage.com/p.jpg",
+          mimeType: "image/jpeg",
+          baseCaption: "hi",
+          platforms: ["instagram"],
+          instagramMetadata: { placement: "both" },
+        }),
+      );
+
+      expect(response.status).toBe(503);
+      expect(failPendingMock).toHaveBeenCalledWith("job-s", expect.objectContaining({ errorCode: "DISPATCH_FAILED" }));
+      await expect(response.json()).resolves.toMatchObject({ code: "DISPATCH_FAILED", postJobId: "job-1" });
+    });
+
     it("does not touch results when the dispatch succeeds", async () => {
       const response = await POST(
         jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),

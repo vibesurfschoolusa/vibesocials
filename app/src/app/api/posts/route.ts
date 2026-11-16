@@ -1501,8 +1501,20 @@ export async function POST(request: Request) {
           userId: context.user.id,
           workspaceId: context.workspace.id,
         });
-        await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
-        if (storyPostJobId) await failPendingPostJobResults(storyPostJobId, DISPATCH_FAILURE);
+        // KK4: the post exists, so marking its results is best-effort; a throw
+        // here must not become the 500 that invites a second copy. A job left
+        // pending is failed by the stuck-job reconciler (scheduledScanner.ts).
+        for (const id of storyPostJobId ? [postJobId, storyPostJobId] : [postJobId]) {
+          try {
+            await failPendingPostJobResults(id, DISPATCH_FAILURE);
+          } catch (markError: unknown) {
+            logger.error("[POST /api/posts] Couldn't mark the undispatched results failed", {
+              error: markError,
+              postJobId: id,
+              workspaceId: context.workspace.id,
+            });
+          }
+        }
         // Not handed to publishing: the post counts toward no day until it is.
         if (sendsWritten) await withdrawSend(sendsWritten);
         return NextResponse.json(

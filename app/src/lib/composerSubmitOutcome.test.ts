@@ -41,7 +41,7 @@ describe("composerSubmitOutcome", () => {
     ["503 DISPATCH_FAILED", { ok: false, mode: "now", body: DISPATCH_FAILED_BODY }, {
       kind: "dispatch_failed",
       resetForm: true,
-      toast: "Saved, but publishing couldn't start — retry it from Activity.",
+      toast: "Saved, but publishing couldn't start. Check Activity before you try again, and retry it there once it shows as failed.",
     }],
 
     // --- not created: keep the form so the user can fix and resend ---
@@ -57,7 +57,7 @@ describe("composerSubmitOutcome", () => {
 
   it("exports the dispatch-failed copy the banner shows", () => {
     expect(COMPOSER_DISPATCH_FAILED_MESSAGE).toBe(
-      "Saved, but publishing couldn't start — retry it from Activity.",
+      "Saved, but publishing couldn't start. Check Activity before you try again, and retry it there once it shows as failed.",
     );
   });
 });
