@@ -15,6 +15,27 @@ import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 
+/**
+ * R32 lead follow-up: a connect can list up to 1,000 Pages now, so their
+ * Instagram details are read this many at a time, not all at once.
+ */
+const INSTAGRAM_DETAILS_IN_FLIGHT = 5;
+
+/** `fn` over `items` with at most `limit` running at once; results in the items' order. */
+async function mapFewAtATime<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
@@ -148,8 +169,10 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // Each account's username is read for the list; one Graph error leaves
     // that row showing just its Page name.
     if (pagesWithInstagram.length > 1) {
-      const accounts = await Promise.all(
-        pagesWithInstagram.map(async ({ page, igAccountId }) => {
+      const accounts = await mapFewAtATime(
+        pagesWithInstagram,
+        INSTAGRAM_DETAILS_IN_FLIGHT,
+        async ({ page, igAccountId }) => {
           const details = await fetchInstagramAccountDetails(
             igAccountId,
             page.access_token,
@@ -161,7 +184,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
             pageAccessToken: page.access_token,
             username: details?.username ?? null,
           };
-        }),
+        },
       );
       const pendingId = await createPendingConnection({
         workspaceId,

@@ -833,6 +833,40 @@ describe("choosing which account to connect", () => {
       });
     });
 
+    // R32 lead follow-up: up to 1,000 Pages now, so the details are read a few at a time.
+    it("instagram: each account's details are read at most 5 at a time, every one in the list's order", async () => {
+      const pages = Array.from({ length: 12 }, (_, i) => ({
+        id: `page-${i + 1}`,
+        name: `Page ${i + 1}`,
+        access_token: `t-${i + 1}`,
+        instagram_business_account: { id: `ig-${i + 1}` },
+      }));
+      const base = withPagedAccounts(instagramProvider([], {}), [pages]);
+      let inFlight = 0;
+      let most = 0;
+      fetchMock.mockImplementation(async (input: string | URL) => {
+        const url = String(input);
+        const ig = /\/(ig-\d+)\?/.exec(url)?.[1];
+        if (!ig) return base(url);
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        inFlight -= 1;
+        return ig === "ig-7" ? json({ error: { message: "Unsupported get request" } }, 400) : json({ username: `user-${ig}` });
+      });
+
+      const res = await instagramGET(callbackRequest("instagram", signedState()));
+
+      expectChooseRedirect(res);
+      expect(most).toBe(5);
+      const accounts = createdPending().opened.accounts as Array<{ igAccountId: string; username: string | null }>;
+      expect(accounts.map((a) => a.igAccountId)).toEqual(pages.map((p) => p.instagram_business_account.id));
+      // A failed read keeps today's handling: that row shows its Page name only.
+      expect(accounts.map((a) => a.username)).toEqual(
+        pages.map((p) => (p.instagram_business_account.id === "ig-7" ? null : `user-${p.instagram_business_account.id}`)),
+      );
+    });
+
     it("instagram: a second page that fails says the Pages couldn't be read, not that none has Instagram", async () => {
       useProvider(
         withPagedAccounts(instagramProvider([], {}), [[{ id: "page-1", name: "No IG", access_token: "page-token-1" }], []], {

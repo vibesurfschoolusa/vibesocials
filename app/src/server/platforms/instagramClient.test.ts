@@ -2171,6 +2171,45 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     expect(graph.parentRequests()).toHaveLength(0);
   });
 
+  // R32 lead follow-up: nothing is live before media_publish, so a photo's
+  // brief Meta error is retried in-step; the photo's sentence stays the same.
+  it("a photo answered 500 once is retried in-step and the carousel goes out", async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const graph = stubGraph({
+      child: () => (++n === 2 ? json({ error: { message: "m" } }, 500) : json({ id: `child-${n}` })),
+    });
+
+    const promise = withTransientRetries(() => instagramClient.publishVideo(ctx(2, { store: makeStore().store })), {
+      sleep: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS);
+
+    await expect(promise).resolves.toBeTruthy();
+    expect(graph.childRequests()).toHaveLength(4);
+    expect(graph.publishRequests()).toHaveLength(1);
+  });
+
+  it("a photo's failure carries the status as a property: the text is unchanged, a 400 is tried once", async () => {
+    stubGraph({ child: () => json({}, 503) });
+    const down = await failure(instagramClient.publishVideo(ctx(2, { store: makeStore().store })));
+    expect(down).toMatchObject({ code: "INSTAGRAM_CAROUSEL_ITEM_FAILED", status: 503 });
+    expect(down?.message).toBe("Instagram did not accept photo 1 of 2, so nothing was posted. Please retry.");
+
+    const graph = stubGraph({ child: () => json({ error: { message: "m", type: "OAuthException", code: 100 } }, 400) });
+    const refused = await failure(
+      withTransientRetries(() => instagramClient.publishVideo(ctx(2, { store: makeStore().store })), {
+        sleep: async () => {},
+      }),
+    );
+    expect(refused).toMatchObject({ code: "INSTAGRAM_CAROUSEL_ITEM_FAILED", status: 400 });
+    expect(refused?.message).toBe("Instagram did not accept photo 1 of 2, so nothing was posted. Please retry.");
+    expect(publishErrorMessage("instagram", refused!)).toBe(
+      "Instagram did not accept photo 1 of 2, so nothing was posted. Please retry.",
+    );
+    expect(graph.childRequests()).toHaveLength(1);
+  });
+
   it("a throttled photo stays RATE_LIMITED, and a dead token stays the reconnect error", async () => {
     stubGraph({ child: () => json({ error: { message: "m", type: "OAuthException", code: 80002 } }, 400) });
     expect((await failure(instagramClient.publishVideo(ctx(2, { store: makeStore().store }))))?.code).toBe(

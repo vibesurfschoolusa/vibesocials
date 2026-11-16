@@ -990,7 +990,9 @@ async function createCarouselItem(args: {
         "INSTAGRAM_CAROUSEL_ITEM_FAILED",
         `Instagram did not accept photo ${position} of ${count}, so nothing was posted. Please retry.`,
       ),
-      { cause: error },
+      // R32 lead follow-up: the container's status, so the in-step retry
+      // repeats a 5xx (nothing is live before media_publish).
+      { cause: error, status: (error as { status?: unknown }).status },
     );
   }
 }
