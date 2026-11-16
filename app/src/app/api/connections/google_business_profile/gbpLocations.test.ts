@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   refresh: vi.fn(),
   refreshGoogle: vi.fn(),
+  flagRejectedToken: vi.fn(),
+  checkRateLimit: vi.fn(),
 }));
 vi.mock("@/lib/workspace", () => ({ requireOwnerContext: h.requireOwnerContext }));
 vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: h.findFirst, update: h.update } } }));
@@ -22,10 +24,15 @@ vi.mock("@/server/platforms/connectionRefresh", () => ({
   CONNECTION_RECONNECT_REQUIRED_CODE: "RECONNECT_REQUIRED",
 }));
 vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: h.refreshGoogle }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: h.flagRejectedToken,
+}));
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.checkRateLimit }));
 
 import {
-  GBP_SIGN_IN_AGAIN_MESSAGE,
   GBP_ACCOUNTS_REFUSED_MESSAGE,
+  GBP_NO_LISTING_NOTICE,
   GBP_ACCOUNTS_NOT_SENT_MESSAGE,
   GBP_SOME_ACCOUNTS_FAILED_NOTICE,
   GBP_SOME_ACCOUNTS_REFUSED_NOTICE,
@@ -61,7 +68,7 @@ function google(pages: Record<string, Page>) {
 }
 
 const location = (account: number, id: number) => ({ name: `locations/${id}`, title: `Shop ${account}-${id}` });
-const CONNECTION = { id: "conn-1", workspaceId: "ws-1", accessToken: "token", metadata: {} };
+const CONNECTION = { id: "conn-1", workspaceId: "ws-1", accessToken: "token", refreshToken: "refresh", metadata: {} };
 
 function save(locationName: string) {
   return POST(
@@ -76,6 +83,8 @@ function save(locationName: string) {
 beforeEach(() => {
   for (const fn of Object.values(h)) fn.mockReset();
   h.requireOwnerContext.mockResolvedValue({ user: { id: "user-1" }, workspace: { id: "ws-1" }, role: "owner" });
+  h.checkRateLimit.mockResolvedValue({ allowed: true });
+  h.flagRejectedToken.mockResolvedValue("flagged");
   h.findFirst.mockResolvedValue(CONNECTION);
   h.update.mockImplementation(async (args: { data: { metadata: unknown } }) => ({ id: "conn-1", metadata: args.data.metadata }));
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -228,7 +237,8 @@ describe("Google failing is not 'not one this account manages'", () => {
 // list Google Business Profile accounts" and no next step. Both routes now say
 // to reconnect, with a code the form tells apart, as the Reviews routes do.
 describe("a revoked grant: reconnect, from the picker and the save", () => {
-  const RECONNECT_BODY = { error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE };
+  // R25: the owner keeps the in-place sign-in (the Reconnect button's own URL).
+  const RECONNECT_BODY = { error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE, signIn: true };
   const invalidGrant = () =>
     Object.assign(new Error("Google token refresh failed"), {
       code: "GOOGLE_TOKEN_REFRESH_FAILED",
@@ -326,15 +336,41 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
   });
 
-  it.each(routes)("%s: a 401 again after a refresh that works offers the in-place sign-in", async (_label, call) => {
+  // R25 platform-clients L2: Google refused a fresh token, so the row is flagged
+  // (guarded by the token that call sent) and the card shows Reconnect.
+  it.each(routes)("%s: a 401 again after a refresh that works flags the row and says reconnect", async (_label, call) => {
     googleInTurn({ status: 401 }, { status: 401 });
     h.refresh.mockResolvedValue({ ...CONNECTION, accessToken: "fresh" });
 
     const res = await call();
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signIn: true });
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+    expect(h.flagRejectedToken).toHaveBeenCalledTimes(1);
+    expect(h.flagRejectedToken.mock.calls[0][0]).toMatchObject({ id: "conn-1", accessToken: "fresh", refreshToken: "refresh" });
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each(routes)("%s: a 401 after a refresh, with tokens changed meanwhile: nothing flagged, try again", async (_label, call) => {
+    googleInTurn({ status: 401 }, { status: 401 });
+    h.refresh.mockResolvedValue({ ...CONNECTION, accessToken: "fresh" });
+    h.flagRejectedToken.mockResolvedValue("superseded");
+
+    const res = await call();
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({ error: GBP_ACCOUNTS_NOT_SENT_MESSAGE });
+  });
+
+  it.each(routes)("%s: a refresh failure flags through the refresh, not the API rule", async (_label, call) => {
+    googleInTurn({ status: 401 });
+    h.refresh.mockRejectedValue(
+      Object.assign(new Error("Google token refresh failed"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }),
+    );
+
+    await call();
+
+    expect(h.flagRejectedToken).not.toHaveBeenCalled();
   });
 
   it.each(routes)("%s: a 401 with a refresh that works is retried and listed", async (_label, call) => {
@@ -384,31 +420,33 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     body: { error: { code: status, ...(reason ? { details: [{ reason }] } : {}) } },
   });
 
-  // JJ3 lead review: nothing is flagged, so the card shows Switch account (not Reconnect).
-  // JJ3 lead review: never Switch account for a sign-in problem; it deletes the listing's numbers.
-  it.each(routes)("%s: a 403 for a missing scope offers the in-place sign-in, flags nothing and refreshes nothing", async (_label, call) => {
+  // R25 platform-clients L2: a missing scope flags the row (the token as sent) and says reconnect.
+  it.each(routes)("%s: a 403 for a missing scope flags the row and says reconnect, refreshing nothing", async (_label, call) => {
     googleInTurn(googleError(403, "ACCESS_TOKEN_SCOPE_INSUFFICIENT"));
 
     const res = await call();
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signIn: true });
-    expect(GBP_SIGN_IN_AGAIN_MESSAGE).toBe("Google didn't accept the connection. Sign in again with the Google account that manages your listing; its listing numbers are kept.");
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+    expect(h.flagRejectedToken.mock.calls[0][0]).toMatchObject({ id: "conn-1", accessToken: "token", refreshToken: "refresh" });
     expect(h.refresh).not.toHaveBeenCalled();
     expect(h.refreshGoogle).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
   });
 
-  it.each(routes)("%s: a 403 permission refusal says to sign in with the account that manages the listing", async (_label, call) => {
+  // R25 client-journey L1: the in-place sign-in keeps the row, its numbers and
+  // the location (saveConnection.ts), so Switch account is never named.
+  it.each(routes)("%s: a 403 permission refusal offers the in-place sign-in with the account that manages the listing", async (_label, call) => {
     googleInTurn(googleError(403, "PERMISSION_DENIED"));
 
     const res = await call();
 
     expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toEqual({ error: GBP_ACCOUNTS_REFUSED_MESSAGE });
+    await expect(res.json()).resolves.toEqual({ error: GBP_ACCOUNTS_REFUSED_MESSAGE, signIn: true });
     expect(GBP_ACCOUNTS_REFUSED_MESSAGE).toBe(
-      "Google refused access to the Business Profile accounts of this Google account. Press Switch account above and sign in with the Google account that manages your listing; switching clears this listing's saved numbers, and you choose the location again.",
+      "Google refused access to the Business Profile accounts of this Google account. Sign in to Google again with the account that manages your listing.",
     );
+    expect(h.flagRejectedToken).not.toHaveBeenCalled();
     expect(h.refresh).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
   });
@@ -548,5 +586,98 @@ describe("some accounts' locations could not be read", () => {
 
     const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
     expect(lines.map(([, fields]) => (fields as { kind: string }).kind)).toEqual(["access", "tryLater"]);
+  });
+});
+
+function routes2(): Array<[string, () => Promise<Response>]> {
+  return [
+    ["GET .../locations", () => GET()],
+    ["POST .../location", () => save("accounts/1/locations/1")],
+  ];
+}
+
+// R25 new-customer L4 / platform-clients L1: when no account's locations could
+// be read, the answer is the whole-list error, never "some of your accounts".
+describe("nothing could be read", () => {
+  it.each(routes2())("%s: the only account failing says Google didn't answer", async (_label, call) => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 503 },
+    });
+
+    const res = await call();
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
+  });
+
+  it.each(routes2())("%s: the only account refusing access is the access answer, with the in-place sign-in", async (_label, call) => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 403, body: { error: { details: [{ reason: "PERMISSION_DENIED" }] } } },
+    });
+
+    const res = await call();
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: GBP_ACCOUNTS_REFUSED_MESSAGE, signIn: true });
+  });
+
+  it("every account read and none has a location: the no-listing notice, with the in-place sign-in", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: {} },
+    });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ locations: [], notice: GBP_NO_LISTING_NOTICE, signIn: true });
+    expect(GBP_NO_LISTING_NOTICE).toBe(
+      "This Google account has no business listing we can post to. Sign in to Google again with the Google account that manages your listing (an owner or manager in Google Business Profile).",
+    );
+  });
+});
+
+// R25 platform-clients: every Google request has a timeout (fetchWithTimeout).
+it("each Google request is sent with a timeout signal", async () => {
+  const fetchMock = google({
+    [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+    [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
+  });
+
+  await GET();
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  for (const call of fetchMock.mock.calls as unknown as Array<[string, RequestInit]>) {
+    expect(call[1].signal).toBeInstanceOf(AbortSignal);
+  }
+});
+
+// R25 security-billing L1: Google counts quota per project, so each person is limited.
+describe("rate limit", () => {
+  it.each(routes2())("%s: over the limit answers 429 and asks Google nothing", async (_label, call) => {
+    h.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 42 });
+    const fetchMock = google({});
+
+    const res = await call();
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("42");
+    await expect(res.json()).resolves.toEqual({ error: "Too many requests. Please slow down.", retryAfterSeconds: 42 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("each route is limited per person, 60 every 5 minutes", async () => {
+    google({ [`${ACCOUNTS}|`]: { body: { accounts: [] } } });
+    await GET();
+    google({ [`${ACCOUNTS}|`]: { body: { accounts: [] } } });
+    await save("accounts/1/locations/1");
+
+    expect(h.checkRateLimit.mock.calls.map(([options]) => options)).toEqual([
+      { userId: "user-1", route: "google_business_profile/locations", limit: 60, windowMs: 300_000 },
+      { userId: "user-1", route: "google_business_profile/location", limit: 60, windowMs: 300_000 },
+    ]);
   });
 });

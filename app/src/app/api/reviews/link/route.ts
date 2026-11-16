@@ -12,9 +12,10 @@ import {
   refreshAccessToken,
   reviewLinkReason,
   savedNewReviewUri,
+  storeCodeStaleMessage,
   type ReviewsReader,
 } from "@/server/googleReviews";
-import { classifyGoogleFailure, type GoogleFailureKind } from "@/server/googleFailure";
+import { classifyGoogleFailure, flagIfTokenRejected, type GoogleFailureKind } from "@/server/googleFailure";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -87,13 +88,19 @@ export async function GET() {
   const rawLocation = metadataOf(connection.metadata).locationName;
   const locationName = typeof rawLocation === "string" ? rawLocation.trim() : "";
   if (!locationName) return NextResponse.json({ url: null, reason: reason("no_location") });
-  if (connection.needsReconnect) return NextResponse.json({ url: null, reason: reason("needs_reconnect") });
+  // R25: an owner's reconnect answer keeps the in-place sign-in (the Reconnect button's URL).
+  const withSignIn = (body: { url: null; reason: string }) =>
+    context.role === "owner" ? { ...body, signIn: true as const } : body;
+  if (connection.needsReconnect) return NextResponse.json(withSignIn({ url: null, reason: reason("needs_reconnect") }));
 
+  // The row whose token the Google calls send: a token Google refuses is flagged with it.
+  let used: typeof connection | null = null;
   try {
     // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.
-    const accessToken = (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
+    used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
+    const accessToken = used.accessToken;
 
     const url = await fetchNewReviewUri(accessToken, locationName);
     if (!url) return NextResponse.json({ url: null, reason: reason("google_has_none") });
@@ -106,14 +113,12 @@ export async function GET() {
     // line: status, code and reasons, never a message, which could quote a
     // URL); this panel words it. An owner's sign-in-again answer says so with
     // `signIn: true`; the page builds the in-place sign-in from its own
-    // workspace (lib/gbpSignIn.ts). Never Switch account.
-    const kind = classifyGoogleFailure(error, "GET /api/reviews/link");
-    const reason = linkFailureReason(kind, context.role);
-    return NextResponse.json(
-      kind === "signInAgain" && context.role === "owner"
-        ? { url: null, reason, signIn: true }
-        : { url: null, reason },
-    );
+    // workspace (lib/gbpSignIn.ts). Never Switch account. R25 platform-clients
+    // L2: a token Google refused flags the row first, so the card shows Reconnect.
+    const settled = await flagIfTokenRejected(error, used);
+    const kind = classifyGoogleFailure(settled, "GET /api/reviews/link");
+    const body = { url: null, reason: linkFailureReason(kind, context.role) };
+    return NextResponse.json(kind === "reconnect" || kind === "access" ? withSignIn(body) : body);
   }
 }
 
@@ -122,12 +127,12 @@ function linkFailureReason(kind: GoogleFailureKind, role: ReviewsReader): string
   switch (kind) {
     case "reconnect":
       return reviewLinkReason("needs_reconnect", role);
-    case "signInAgain":
-      return reviewLinkReason("sign_in_again", role);
     case "notFound":
       return reviewLinkReason("location_removed", role);
     case "access":
       return googleAccessRefusedMessage("location", role);
+    case "chooseAgain":
+      return storeCodeStaleMessage(role);
     case "tryLater":
       return GOOGLE_NOT_ANSWERING_MESSAGE;
     default:

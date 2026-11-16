@@ -1,4 +1,9 @@
-import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
+import {
+  connectionTokenChangedError,
+  flagRejectedToken,
+  isTerminalRefreshFailure,
+  type TokenSnapshot,
+} from "./platforms/connectionHealth";
 
 /**
  * What kind of failure a Google call ended in (JJ3 lead review). It is the one
@@ -12,30 +17,42 @@ import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
  *
  * - reconnect: the row is flagged (or gone), so the card shows Reconnect. A row
  *   already flagged or gone; no refresh token; a refresh failure that flags the
- *   row (the flag rule itself, isTerminalRefreshFailure).
- * - signInAgain: Google refused the token but nothing is flagged, so the card
- *   still shows Switch account. An API 401 (after any refresh); a 403
- *   ACCESS_TOKEN_SCOPE_INSUFFICIENT (signing in again grants the scope).
+ *   row (the flag rule itself, isTerminalRefreshFailure); an API 401 or a 403
+ *   ACCESS_TOKEN_SCOPE_INSUFFICIENT, which flagIfTokenRejected flags (R25
+ *   platform-clients L2: as every publishing client does on an API 401).
  * - access: a 403 with a permission reason or none. The connected account
- *   does not manage what was asked for; the same account again does not help.
- *   Never flagged.
+ *   does not manage what was asked for. Never flagged: signing in again with
+ *   the account that does keeps the row, its numbers and the location.
  * - notFound: a 404 on the chosen location's own calls (its reviews, its review
- *   link): the location was removed from Google Business Profile. A 404 on any
- *   other call (a review being replied to, say) is "other".
+ *   link): the location was removed from Google Business Profile.
+ * - chooseAgain: a saved store code matches no location, or more than one
+ *   (gbpLocation.ts); retrying never helps, choosing the location again does.
+ * - reviewGone: a 404 on a reply: the review was deleted on Google.
  * - tryLater: Google or our own setup, not the person: a 403 SERVICE_DISABLED,
  *   accessNotConfigured or quota reason, a 429, a 5xx, no answer, our own
  *   timeout, invalid_client, missing OAuth credentials, another refresh holding
  *   the lock.
- * - other: anything else (another 404, a body we could not read, a bug).
+ * - other: anything else (another 404, a body we could not read, tokens that
+ *   changed while the call ran, a bug).
  *
  * `googleReasons` on the error are googleErrorReasons' normalized form
  * (platforms/rateLimited.ts), set where the response is read (googleReviews.ts,
  * gbpLocations.ts).
  */
-export type GoogleFailureKind = "reconnect" | "signInAgain" | "access" | "notFound" | "tryLater" | "other";
+export type GoogleFailureKind =
+  | "reconnect"
+  | "access"
+  | "notFound"
+  | "chooseAgain"
+  | "reviewGone"
+  | "tryLater"
+  | "other";
 
 /** The calls on the chosen location itself, whose 404 means the location is gone (googleReviews.ts). */
 const LOCATION_CALL_CODES: ReadonlySet<string> = new Set(["GBP_REVIEWS_FETCH_FAILED", "GBP_REVIEW_LINK_FETCH_FAILED"]);
+
+const STORE_CODE_CODES: ReadonlySet<string> = new Set(["GBP_STORE_CODE_NOT_FOUND", "GBP_STORE_CODE_NOT_UNIQUE"]);
+const REPLY_CODE = "GBP_REVIEWS_REPLY_FAILED";
 
 const RECONNECT_CODES: ReadonlySet<string> = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE", "GOOGLE_NO_REFRESH_TOKEN"]);
 /**
@@ -77,6 +94,38 @@ function reasonsOf(error: FailureFields): string[] {
 
 const transient = (status: number) => status === 429 || status >= 500;
 
+/**
+ * Did an API call refuse the token itself: a 401 that is not a refresh's own
+ * failure, or a 403 for a missing scope? The one rule for flagging a Google
+ * row from a read (flagIfTokenRejected) and for calling it "reconnect".
+ */
+function isRejectedToken(error: unknown): boolean {
+  const fields = (error !== null && typeof error === "object" ? error : {}) as FailureFields;
+  if (fields.code === REFRESH_FAILED_CODE) return false;
+  if (fields.status === 401) return true;
+  return fields.status === 403 && reasonsOf(fields).some((reason) => SCOPE_REASONS.has(reason));
+}
+
+/** The code a Google row is flagged with when a read's API call refused its token. */
+export const GOOGLE_REJECTED_TOKEN_CODE = "GOOGLE_API_TOKEN_REJECTED";
+
+/**
+ * R25 platform-clients L2: flags the row when an API call refused the token
+ * (isRejectedToken), guarded by the tokens that call sent (`used`), so the
+ * card shows Reconnect and the reconnect email goes out. Returns the failure
+ * to word: the same one, or CONNECTION_TOKEN_CHANGED ("other": try again)
+ * when the stored tokens changed meanwhile and nothing was flagged.
+ */
+export async function flagIfTokenRejected(error: unknown, used: UsedRow | null | undefined): Promise<unknown> {
+  if (!used?.accessToken || !isRejectedToken(error)) return error;
+  const snapshot: TokenSnapshot = { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null };
+  const result = await flagRejectedToken(snapshot, GOOGLE_REJECTED_TOKEN_CODE);
+  return result === "superseded" ? connectionTokenChangedError() : error;
+}
+
+/** The row a Google call read its token from (a SocialConnection, or a TokenSnapshot). */
+type UsedRow = { id: string; accessToken: string | null; refreshToken?: string | null };
+
 /** The kind, without logging (a test seam and the rule itself). */
 export function googleFailureKind(error: unknown): GoogleFailureKind {
   if (error instanceof TypeError && error.message === "fetch failed") return "tryLater"; // undici: no answer
@@ -93,12 +142,15 @@ export function googleFailureKind(error: unknown): GoogleFailureKind {
   }
   if (code && RECONNECT_CODES.has(code)) return "reconnect";
   if (code && TRY_LATER_CODES.has(code)) return "tryLater";
+  if (code && STORE_CODE_CODES.has(code)) return "chooseAgain";
 
-  if (status === 401) return "signInAgain";
-  if (status === 404) return code && LOCATION_CALL_CODES.has(code) ? "notFound" : "other";
+  if (isRejectedToken(error)) return "reconnect";
+  if (status === 404) {
+    if (code === REPLY_CODE) return "reviewGone";
+    return code && LOCATION_CALL_CODES.has(code) ? "notFound" : "other";
+  }
   if (status === 403) {
     const reasons = reasonsOf(fields);
-    if (reasons.some((reason) => SCOPE_REASONS.has(reason))) return "signInAgain";
     if (reasons.some((reason) => SERVICE_REASONS.has(reason))) return "tryLater";
     return "access";
   }

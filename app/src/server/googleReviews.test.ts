@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchMock, resolveMock } = vi.hoisted(() => ({ fetchMock: vi.fn(), resolveMock: vi.fn() }));
 
@@ -21,10 +21,11 @@ import {
   fetchAllReviews,
   fetchNewReviewUri,
   fetchReviews,
-  listGbpLocations,
   reviewLinkReason,
   reviewLocationName,
   reviewsErrorBody,
+  reviewsListedLocation,
+  savedLocationIn,
 } from "./googleReviews";
 import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
 
@@ -294,12 +295,18 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
-  it("reconnect (a flagged row, whose card shows Reconnect): the owner gets the step and the Settings link", () => {
+  // R25 platform-clients L2: an API 401 and a missing scope flag the row too
+  // (flagIfTokenRejected), so they read Reconnect; the owner keeps the in-place sign-in.
+  it("reconnect (a flagged row, whose card shows Reconnect): the owner gets the step, the Settings link and the sign-in", () => {
     for (const error of [
       failing({ code: "RECONNECT_REQUIRED" }),
       failing({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 400, oauthError: "invalid_grant" }),
+      failing({ status: 401 }),
+      failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] }),
     ]) {
-      expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+      const owner = reviewsErrorBody(error, "Fallback.", "owner");
+      expect(owner).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+      expect(JSON.stringify(owner)).not.toContain("/api/auth");
       expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
     }
     expect(GOOGLE_REFUSED_MESSAGE).toBe("Google refused the request. Reconnect Google Business Profile in Settings.");
@@ -308,33 +315,18 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     );
   });
 
-  // JJ3 lead review: Switch account disconnects first and deletes the listing's
-  // numbers, so a sign-in problem is fixed in place: the Reconnect button's own
-  // start URL, which keeps the row, its location and the numbers.
-  it("signInAgain (nothing flagged): a flag for the page, never a URL; a member reads the same facts", () => {
-    for (const error of [failing({ status: 401 }), failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })]) {
-      const owner = reviewsErrorBody(error, "Fallback.", "owner");
-      expect(owner).toEqual({ error: "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.", reconnect: true, signIn: true });
-      expect(JSON.stringify(owner)).not.toContain("/api/auth");
-      expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; its listing numbers are kept." });
-    }
-  });
-
-  it("signInAgain where no location is chosen yet: about the business", () => {
-    const error = failing({ status: 401 });
-    expect(reviewsErrorBody(error, "Fallback.", "owner", { subject: "account" })).toEqual({
-      error: "Google didn't accept the connection. Sign in again with the Google account that manages your business; its listing numbers are kept.",
-      reconnect: true,
-      signIn: true,
-    });
-    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages your business; its listing numbers are kept." });
-  });
-
-  it("a flagged row still reads Reconnect, with no sign-in flag", () => {
-    expect(reviewsErrorBody(failing({ code: "RECONNECT_REQUIRED" }), "Fallback.", "owner")).toEqual({
-      error: GOOGLE_REFUSED_MESSAGE,
+  // R25 platform-clients L3 and pages L5.
+  it("chooseAgain: a stale store code; reviewGone: a review deleted on Google", () => {
+    const stale = failing({ code: "GBP_STORE_CODE_NOT_UNIQUE" });
+    expect(reviewsErrorBody(stale, "Fallback.", "owner")).toEqual({
+      error: "The saved store code no longer matches one Google Business Profile location. Choose the location again in Settings.",
       reconnect: true,
     });
+    expect(reviewsErrorBody(stale, "Fallback.", "member")).toEqual({
+      error: "The saved store code no longer matches one Google Business Profile location. The workspace owner can choose the location again.",
+    });
+    const gone = failing({ status: 404, code: "GBP_REVIEWS_REPLY_FAILED" });
+    expect(reviewsErrorBody(gone, "Fallback.", "member")).toEqual({ error: "This review is no longer on Google. Reload the page." });
   });
 
   // JJ3 lead review: the Reviews page can pick a location that is not the saved one.
@@ -353,24 +345,55 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
     expect(reviewsErrorBody(error, "Fallback.", "member", { location: "picked" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
   });
 
-  // JJ3 lead review: here a different Google account is what is needed, so
-  // Switch account is named, with what switching clears.
-  it("access, about a location (list, reply): Switch account and what it clears, linked to Settings for an owner", () => {
+  // R25 client-journey L1: the in-place sign-in with the account that manages
+  // the location keeps the row, its numbers and the location; Switch account
+  // (which deletes them) is never named.
+  it("access, about a location (list, reply): the in-place sign-in for an owner, the same fact for a member", () => {
     const error = failing({ status: 403, googleReasons: ["forbidden"] });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE, reconnect: true });
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({
+      error: GOOGLE_ACCESS_REFUSED_MESSAGE,
+      reconnect: true,
+      signIn: true,
+    });
     expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE });
-    expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe("Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.");
-    expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe("Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.");
+    expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe(
+      "Google refused access to this location: the connected Google account may no longer manage it. Sign in to Google again with the account that manages this location.",
+    );
+    expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe(
+      "Google refused access to this location: the connected Google account may no longer manage it. The workspace owner can sign in to Google again with the account that manages it.",
+    );
   });
 
   it("access, where no location is chosen yet (locations): about the account", () => {
     const error = failing({ status: 403 });
     expect(reviewsErrorBody(error, "Fallback.", "owner", { subject: "account" })).toEqual({
-      error: "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.",
+      error:
+        "Google refused access to this Business Profile account: the connected Google account may no longer manage your business. Sign in to Google again with the account that manages your business.",
       reconnect: true,
+      signIn: true,
     });
-    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({ error: "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers." });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({
+      error:
+        "Google refused access to this Business Profile account: the connected Google account may no longer manage your business. The workspace owner can sign in to Google again with the account that manages it.",
+    });
     expect(googleAccessRefusedMessage("location", "owner")).toBe(GOOGLE_ACCESS_REFUSED_MESSAGE);
+  });
+
+  it("no answer names Switch account", () => {
+    const errors = [
+      failing({ status: 401 }),
+      failing({ status: 403 }),
+      failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }),
+      failing({ code: "GBP_STORE_CODE_NOT_FOUND" }),
+      failing({ code: "RECONNECT_REQUIRED" }),
+    ];
+    for (const error of errors) {
+      for (const role of ["owner", "member"] as const) {
+        for (const subject of ["location", "account"] as const) {
+          expect(reviewsErrorBody(error, "Fallback.", role, { subject }).error).not.toMatch(/switch/i);
+        }
+      }
+    }
   });
 
   it("tryLater: the same plain sentence for owner and member", () => {
@@ -408,6 +431,7 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
         const error = failing({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status, ...(oauthError ? { oauthError } : {}) });
         const body = reviewsErrorBody(error, "Fallback.", "owner");
         expect(body.reconnect === true, `${status} ${oauthError}`).toBe(isTerminalRefreshFailure(status, oauthError));
+        expect(body.signIn === true, `${status} ${oauthError}`).toBe(isTerminalRefreshFailure(status, oauthError));
       }
     }
   });
@@ -480,52 +504,34 @@ describe("reviewLocationName", () => {
   });
 });
 
-// The listing the Reviews page shows and the reply route checks against.
-describe("listGbpLocations", () => {
-  const originalFetch = global.fetch;
-  afterEach(() => {
-    global.fetch = originalFetch;
+// R25 client-journey M1 / L3: the Reviews routes read the shared listing (gbpLocations.ts).
+describe("reviewsListedLocation and savedLocationIn", () => {
+  const listed = (resourceName: string, storeCode: string | null = null, title: string | null = "Main Street") => ({
+    resourceName,
+    title,
+    storeCode,
   });
 
-  it("lists every account's locations with full resource names, complete when every account answered", async () => {
-    global.fetch = vi.fn(async (url: string | URL) =>
-      String(url).endsWith("/accounts")
-        ? json({ accounts: [{ name: "accounts/1" }] })
-        : json({ locations: [{ name: "locations/9", title: "Main Street", storeCode: "MS" }] }),
-    ) as unknown as typeof fetch;
-
-    await expect(listGbpLocations("tok")).resolves.toEqual({
-      locations: [{ name: "accounts/1/locations/9", locationName: "Main Street", title: "Main Street", storeCode: "MS" }],
-      complete: true,
+  it("words a listed location as the Reviews page reads it", () => {
+    expect(reviewsListedLocation(listed("accounts/1/locations/9", "MS"))).toEqual({
+      name: "accounts/1/locations/9",
+      locationName: "Main Street",
+      title: "Main Street",
+      storeCode: "MS",
+    });
+    expect(reviewsListedLocation(listed("accounts/1/locations/9", null, null))).toEqual({
+      name: "accounts/1/locations/9",
+      locationName: "Unknown Location",
+      title: "Unknown Location",
     });
   });
 
-  it("is incomplete when an account's locations could not be read", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn(async (url: string | URL) =>
-      String(url).endsWith("/accounts") ? json({ accounts: [{ name: "accounts/1" }] }) : json({}, 503),
-    ) as unknown as typeof fetch;
-
-    await expect(listGbpLocations("tok")).resolves.toEqual({ locations: [], complete: false });
-  });
-
-  it("throws with Google's status when the accounts call fails", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn(async () => json({}, 403)) as unknown as typeof fetch;
-
-    await expect(listGbpLocations("tok")).rejects.toMatchObject({ status: 403 });
-  });
-
-  it("carries Google's reasons when the accounts call fails", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn(async () =>
-      json({ error: { details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } }, 403),
-    ) as unknown as typeof fetch;
-
-    await expect(listGbpLocations("tok")).rejects.toMatchObject({
-      status: 403,
-      googleReasons: ["accesstokenscopeinsufficient"],
-    });
+  it("finds the saved location by resource name, or by a store code only one location has", () => {
+    const locations = [listed("accounts/1/locations/1", "A"), listed("accounts/1/locations/2", "B"), listed("accounts/2/locations/3", "B")];
+    expect(savedLocationIn(locations, "accounts/1/locations/2")?.resourceName).toBe("accounts/1/locations/2");
+    expect(savedLocationIn(locations, " A ")?.resourceName).toBe("accounts/1/locations/1");
+    expect(savedLocationIn(locations, "B")).toBeNull();
+    expect(savedLocationIn(locations, "accounts/9/locations/9")).toBeNull();
+    expect(savedLocationIn(locations, null)).toBeNull();
   });
 });
-

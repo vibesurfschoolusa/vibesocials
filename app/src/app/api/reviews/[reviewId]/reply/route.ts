@@ -1,32 +1,44 @@
 import { NextResponse } from "next/server";
+import type { SocialConnection } from "@prisma/client";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
+import { flagIfTokenRejected } from "@/server/googleFailure";
 import {
+  MEMBER_OTHER_LOCATION_MESSAGE,
   googleRefusedBody,
-  listGbpLocations,
   reviewLocationName,
   reviewsErrorBody,
+  reviewsKindBody,
+  savedLocationIn,
+  savedLocationName,
   type ReviewsReader,
 } from "@/server/googleReviews";
+import { googleRouteRateLimit, listGbpLocationsWithToken } from "@/app/api/connections/google_business_profile/gbpLocations";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
 const REPLY_FAILED_MESSAGE = "Couldn't post your reply. Try again in a minute.";
 const REVIEW_NOT_FOUND = { error: "Review not found." };
+const WHERE = "POST /api/reviews/[reviewId]/reply";
 
 /**
  * POST /api/reviews/[reviewId]/reply - Reply to a Google Business Profile
  * review. Any member may reply (Team Workspaces — design §1: "Reply to
  * Google reviews (incl. AI draft)" is member-level).
+ *
+ * R25 client-journey L3: a member answers only the workspace's saved location
+ * (replies are public and never held for approval); an owner, any listed one.
  */
 export async function POST(request: Request) {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
+  // The row whose token the Google calls send: a token Google refuses is flagged with it.
+  let used: SocialConnection | null = null;
   try {
     const context = await getWorkspaceContext();
 
@@ -34,6 +46,10 @@ export async function POST(request: Request) {
       return signedOutResponse();
     }
     role = context.role;
+
+    // R25 security-billing L1: before any Google call; a reply is a public write.
+    const limited = await googleRouteRateLimit(context.user.id, "reviews/reply", 20);
+    if (limited) return limited;
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.
     const blocked = accessBlockResponse(context);
@@ -98,21 +114,33 @@ export async function POST(request: Request) {
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.
     const { refreshAccessToken } = await import("@/server/googleReviews");
-    const accessToken = (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
+    used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
+    const accessToken = used.accessToken;
 
     if (!accessToken) {
       return NextResponse.json(googleRefusedBody(role), { status: 500 });
     }
 
-    // The same listing the Reviews page shows, so any location the person can
-    // open there can be answered (a saved store code plays no part). One extra
-    // Google call per reply. An account that could not be read is a failure to
-    // retry, not a review that does not exist.
-    const { locations, complete } = await listGbpLocations(accessToken);
-    if (!locations.some((location) => location.name === reviewLocation)) {
-      return complete
+    // The same paged listing the Reviews page shows, so any location the
+    // person can open there can be answered. An account that could not be
+    // read is a failure to retry, not a review that does not exist.
+    const listing = await listGbpLocationsWithToken(
+      { id: used.id, accessToken, refreshToken: used.refreshToken ?? null },
+      WHERE,
+    );
+    if (!listing.ok) {
+      return NextResponse.json(reviewsKindBody(listing.kind, REPLY_FAILED_MESSAGE, role), { status: 500 });
+    }
+    if (!listing.locations.some((location) => location.resourceName === reviewLocation)) {
+      return listing.complete
         ? NextResponse.json(REVIEW_NOT_FOUND, { status: 404 })
         : NextResponse.json({ error: REPLY_FAILED_MESSAGE }, { status: 500 });
+    }
+    if (
+      role === "member" &&
+      savedLocationIn(listing.locations, savedLocationName(connection.metadata))?.resourceName !== reviewLocation
+    ) {
+      return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
     }
 
     // Post reply to Google Business Profile API using full review name
@@ -128,10 +156,10 @@ export async function POST(request: Request) {
       reply: result,
     });
   } catch (error: unknown) {
+    // R25 platform-clients L2: a token Google refused flags the row first.
+    const settled = await flagIfTokenRejected(error, used);
     // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
-    const body = reviewsErrorBody(error, REPLY_FAILED_MESSAGE, role, {
-      where: "POST /api/reviews/[reviewId]/reply",
-    });
+    const body = reviewsErrorBody(settled, REPLY_FAILED_MESSAGE, role, { where: WHERE });
     return NextResponse.json(body, { status: 500 });
   }
 }

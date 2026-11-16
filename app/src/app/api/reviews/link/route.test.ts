@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   refreshAccessToken: vi.fn(),
   fetchNewReviewUri: vi.fn(),
   checkRateLimit: vi.fn(),
+  flagRejectedToken: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -23,6 +24,10 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   fetchNewReviewUri: mocks.fetchNewReviewUri,
 }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: mocks.checkRateLimit }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: mocks.flagRejectedToken,
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -47,6 +52,7 @@ function connection(over: Record<string, unknown> = {}) {
     workspaceId: "ws-1",
     platform: "google_business_profile",
     accessToken: "gbp-access",
+    refreshToken: "gbp-refresh",
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     needsReconnect: false,
     metadata: { locationName: LOCATION },
@@ -59,6 +65,7 @@ beforeEach(() => {
   mocks.getWorkspaceContext.mockResolvedValue(context());
   mocks.checkRateLimit.mockResolvedValue({ allowed: true });
   mocks.update.mockResolvedValue({});
+  mocks.flagRejectedToken.mockResolvedValue("flagged");
 });
 
 describe("GET /api/reviews/link", () => {
@@ -214,6 +221,7 @@ describe("GET /api/reviews/link", () => {
     expect(body).toEqual({
       url: null,
       reason: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
+      signIn: true,
     });
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });
@@ -240,17 +248,38 @@ describe("GET /api/reviews/link", () => {
       mocks.findFirst.mockResolvedValue(connection());
     });
 
-    // JJ3 lead review: an API 401 flags nothing; the owner signs in again in
-    // place (the Reconnect button's start URL), which keeps location and numbers.
-    it("a 401 offers the in-place sign-in to an owner", async () => {
+    // R25 platform-clients L2: an API 401 flags the row (the token that call
+    // sent), so the card shows Reconnect; the owner keeps the in-place sign-in.
+    it("a 401 flags the row and says Reconnect, with the in-place sign-in for an owner", async () => {
       mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 401, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
 
       expect(await (await GET()).json()).toEqual({
         url: null,
-        reason:
-          "Google didn't accept the connection. Sign in again with the Google account that manages this location to get your review link; its listing numbers are kept.",
+        reason: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
         signIn: true,
       });
+      expect(mocks.flagRejectedToken).toHaveBeenCalledWith(
+        { id: "conn-1", accessToken: "gbp-access", refreshToken: "gbp-refresh" },
+        "GOOGLE_API_TOKEN_REJECTED",
+      );
+    });
+
+    it("a 5xx flags nothing", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 503, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
+
+      await GET();
+
+      expect(mocks.flagRejectedToken).not.toHaveBeenCalled();
+    });
+
+    // R25 platform-clients L3: retrying never helps; choosing the location again does.
+    it("a saved store code that no longer matches says to choose the location again", async () => {
+      mocks.fetchNewReviewUri.mockRejectedValue(failing({ code: "GBP_STORE_CODE_NOT_FOUND" }));
+
+      expect((await (await GET()).json()).reason).toBe(
+        "The saved store code no longer matches one Google Business Profile location. Choose the location again in Settings.",
+      );
     });
 
     it("a refresh that flags the row says Reconnect, as the card does", async () => {
@@ -271,15 +300,20 @@ describe("GET /api/reviews/link", () => {
       );
     });
 
-    it("a 403 permission refusal says to check the account, and flags nothing", async () => {
+    // R25 client-journey L1: the in-place sign-in keeps the row, its numbers and the location.
+    it("a 403 permission refusal offers the in-place sign-in, and flags nothing", async () => {
       mocks.fetchNewReviewUri.mockRejectedValue(
         failing({ status: 403, code: "GBP_REVIEW_LINK_FETCH_FAILED", googleReasons: [] }),
       );
 
-      expect((await (await GET()).json()).reason).toBe(
-        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.",
-      );
+      expect(await (await GET()).json()).toEqual({
+        url: null,
+        reason:
+          "Google refused access to this location: the connected Google account may no longer manage it. Sign in to Google again with the account that manages this location.",
+        signIn: true,
+      });
       expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.flagRejectedToken).not.toHaveBeenCalled();
     });
 
     it("a 403 for a disabled service says to try later", async () => {
@@ -299,8 +333,7 @@ describe("GET /api/reviews/link", () => {
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 401 }));
       expect(await (await GET()).json()).toEqual({
         url: null,
-        reason:
-          "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; then the review link shows here.",
+        reason: "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
       });
 
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 404, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));
@@ -309,8 +342,15 @@ describe("GET /api/reviews/link", () => {
       );
 
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 403 }));
+      expect(await (await GET()).json()).toEqual({
+        url: null,
+        reason:
+          "Google refused access to this location: the connected Google account may no longer manage it. The workspace owner can sign in to Google again with the account that manages it.",
+      });
+
+      mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ code: "GBP_STORE_CODE_NOT_UNIQUE" }));
       expect((await (await GET()).json()).reason).toBe(
-        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.",
+        "The saved store code no longer matches one Google Business Profile location. The workspace owner can choose the location again.",
       );
     });
 
@@ -359,6 +399,7 @@ describe("GET /api/reviews/link", () => {
 
     expect(body.url).toBeNull();
     expect(body.reason).toMatch(/Reconnect/);
+    expect(body.signIn).toBe(true);
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });
 

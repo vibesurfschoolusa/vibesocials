@@ -202,7 +202,6 @@ const LINK_PROBLEMS: ReviewLinkProblem[] = [
   "not_connected",
   "no_location",
   "needs_reconnect",
-  "sign_in_again",
   "location_removed",
   "google_has_none",
 ];
@@ -216,9 +215,12 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
   "Reviews, Google refused (error card)": (role) => reviewsRefused(role),
   "Reviews, Google refused access to the location (error card)": (role) => reviewsRefused(role, 403),
   "Reviews, Google refused access to the account (error card)": (role) => reviewsRefused(role, 403, "account"),
-  // JJ3 lead review: an unflagged refusal (Switch account) and a removed location.
-  "Reviews, Google refused, row not flagged (error card)": (role) =>
+  // JJ3 lead review: a missing scope (R25: flagged, reads Reconnect) and a removed location.
+  "Reviews, Google refused, missing scope (error card)": (role) =>
     reviewsRefusedBy(role, { status: 403, googleReasons: ["accesstokenscopeinsufficient"] }),
+  // R25 platform-clients L3: a saved store code that no longer matches.
+  "Reviews, store code no longer matches (error card)": (role) =>
+    reviewsRefusedBy(role, { code: "GBP_STORE_CODE_NOT_FOUND" }),
   "Reviews, location removed (error card)": (role) =>
     reviewsRefusedBy(role, { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }),
   "Reviews, Google refused, API 401 (error card)": (role) => reviewsRefusedBy(role, { status: 401 }),

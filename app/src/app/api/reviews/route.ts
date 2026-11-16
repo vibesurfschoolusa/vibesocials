@@ -1,13 +1,25 @@
 import { NextResponse } from "next/server";
+import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
-import { googleRefusedBody, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
+import { flagIfTokenRejected } from "@/server/googleFailure";
+import {
+  MEMBER_OTHER_LOCATION_MESSAGE,
+  googleRefusedBody,
+  reviewsErrorBody,
+  reviewsKindBody,
+  savedLocationIn,
+  savedLocationName,
+  type ReviewsReader,
+} from "@/server/googleReviews";
+import { googleRouteRateLimit, listGbpLocationsWithToken } from "@/app/api/connections/google_business_profile/gbpLocations";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
 const REVIEWS_FAILED_MESSAGE = "Couldn't load your Google reviews. Try again in a minute.";
+const WHERE = "GET /api/reviews";
 
 /**
  * GET /api/reviews?location=... - Fetch Google Business Profile reviews for a
@@ -15,12 +27,18 @@ const REVIEWS_FAILED_MESSAGE = "Couldn't load your Google reviews. Try again in 
  * "Reply to Google reviews" is member-level, and reading is a strict subset).
  * F7: every page Google has, up to REVIEWS_SHOWN_MAX (`truncated` when more);
  * errors are plain sentences (reviewsErrorBody).
+ *
+ * R25 client-journey L3: a member reads only the workspace's saved location
+ * (an agency's Google login manages other clients' listings too); an owner
+ * may read any location the login lists.
  */
 export async function GET(request: Request) {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
   // JJ3 lead review: a removed location is worded by whether it is the saved one.
   let location: "saved" | "picked" = "saved";
+  // The row whose token the Google calls send: a token Google refuses is flagged with it.
+  let used: SocialConnection | null = null;
   try {
     const context = await getWorkspaceContext();
 
@@ -28,6 +46,10 @@ export async function GET(request: Request) {
       return signedOutResponse();
     }
     role = context.role;
+
+    // R25 security-billing L1: before any Google call.
+    const limited = await googleRouteRateLimit(context.user.id, "reviews");
+    if (limited) return limited;
 
     // Get location from query params
     const { searchParams } = new URL(request.url);
@@ -58,16 +80,17 @@ export async function GET(request: Request) {
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.
     const { refreshAccessToken } = await import("@/server/googleReviews");
-    const accessToken = (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
+    used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
+    const accessToken = used.accessToken;
 
     if (!accessToken) {
       return NextResponse.json(googleRefusedBody(role), { status: 500 });
     }
 
     // Get location name from query param or metadata
-    const metadata = (connection.metadata as { locationName?: string } | null) ?? {};
-    const locationName = locationParam || metadata.locationName;
-    if (locationName !== metadata.locationName) location = "picked";
+    const saved = savedLocationName(connection.metadata);
+    const locationName = locationParam || saved;
+    if (locationName !== saved) location = "picked";
 
     if (!locationName) {
       return NextResponse.json(
@@ -79,14 +102,32 @@ export async function GET(request: Request) {
       );
     }
 
+    if (role === "member" && locationName !== saved) {
+      // A store code saved under Advanced is matched through the listing.
+      let allowed = false;
+      if (saved && !saved.startsWith("accounts/")) {
+        const listing = await listGbpLocationsWithToken(
+          { id: used.id, accessToken, refreshToken: used.refreshToken ?? null },
+          WHERE,
+        );
+        if (!listing.ok) {
+          return NextResponse.json(reviewsKindBody(listing.kind, REVIEWS_FAILED_MESSAGE, role), { status: 500 });
+        }
+        allowed = savedLocationIn(listing.locations, saved)?.resourceName === locationName;
+      }
+      if (!allowed) return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
+    }
+
     // Fetch reviews from Google Business Profile API
     const { fetchAllReviews } = await import("@/server/googleReviews");
     const { reviews, truncated } = await fetchAllReviews(accessToken, locationName);
 
     return NextResponse.json({ reviews, truncated });
   } catch (error: unknown) {
+    // R25 platform-clients L2: a token Google refused flags the row first.
+    const settled = await flagIfTokenRejected(error, used);
     // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
-    const body = reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE, role, { where: "GET /api/reviews", location });
+    const body = reviewsErrorBody(settled, REVIEWS_FAILED_MESSAGE, role, { where: WHERE, location });
     return NextResponse.json(body, { status: 500 });
   }
 }

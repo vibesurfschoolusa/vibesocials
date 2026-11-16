@@ -6,7 +6,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform, Prisma } from "@prisma/client";
 
-import { GOOGLE_NO_ANSWER_MESSAGE, listGbpLocations } from "../gbpLocations";
+import { GOOGLE_NO_ANSWER_MESSAGE, googleRouteRateLimit, listGbpLocations } from "../gbpLocations";
 
 export const runtime = "nodejs";
 
@@ -27,7 +27,10 @@ export async function POST(request: Request) {
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
-  const { workspace } = contextOrError;
+  const { user, workspace } = contextOrError;
+
+  const limited = await googleRouteRateLimit(user.id, "google_business_profile/location");
+  if (limited) return limited;
 
   const contentType = request.headers.get("content-type") || "";
 

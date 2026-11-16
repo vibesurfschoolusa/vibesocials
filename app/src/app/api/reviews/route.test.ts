@@ -2,10 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // F7 (R1 M4, M5): GET /api/reviews loads every page and never shows Google's
 // own error text. Google itself is stubbed out (server/googleReviews.ts).
-const { getWorkspaceContextMock, findFirstMock, fetchAllReviewsMock } = vi.hoisted(() => ({
-  getWorkspaceContextMock: vi.fn(),
-  findFirstMock: vi.fn(),
-  fetchAllReviewsMock: vi.fn(),
+const { getWorkspaceContextMock, findFirstMock, fetchAllReviewsMock, checkRateLimitMock, flagRejectedTokenMock, listMock } =
+  vi.hoisted(() => ({
+    getWorkspaceContextMock: vi.fn(),
+    findFirstMock: vi.fn(),
+    fetchAllReviewsMock: vi.fn(),
+    checkRateLimitMock: vi.fn(),
+    flagRejectedTokenMock: vi.fn(),
+    listMock: vi.fn(),
+  }));
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
+vi.mock("@/app/api/connections/google_business_profile/gbpLocations", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/api/connections/google_business_profile/gbpLocations")>()),
+  listGbpLocationsWithToken: listMock,
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
@@ -21,8 +34,7 @@ import {
   GOOGLE_NOT_ANSWERING_MESSAGE,
   GOOGLE_REFUSED_MEMBER_MESSAGE,
   GOOGLE_REFUSED_MESSAGE,
-  GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE,
-  GOOGLE_SIGN_IN_AGAIN_MESSAGE,
+  MEMBER_OTHER_LOCATION_MESSAGE,
   refreshAccessToken,
 } from "@/server/googleReviews";
 
@@ -34,14 +46,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "member" });
+  getWorkspaceContextMock.mockResolvedValue({ user: { id: "u1" }, workspace: { id: "ws-1" }, role: "member" });
   findFirstMock.mockResolvedValue({
     id: "c1",
     accessToken: "tok",
+    refreshToken: "ref",
     expiresAt: null,
     metadata: { locationName: "accounts/1/locations/2" },
   });
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
+  flagRejectedTokenMock.mockResolvedValue("flagged");
 });
+
+const OWNER = { user: { id: "u1" }, workspace: { id: "ws-1" }, role: "owner" };
 
 describe("GET /api/reviews", () => {
   it("returns every review read and whether the list was cut short", async () => {
@@ -57,9 +74,10 @@ describe("GET /api/reviews", () => {
     expect(fetchAllReviewsMock).toHaveBeenCalledWith("tok", "accounts/1/locations/2");
   });
 
-  // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
-  it("offers the in-place sign-in when Google refuses the token (401)", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+  // R25 platform-clients L2: an API 401 flags the row (the token that call
+  // sent), so the card shows Reconnect; the owner keeps the in-place sign-in.
+  it("a 401 flags the row and reads Reconnect, with the in-place sign-in", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed to fetch Google Business Profile reviews (status 401)"), { status: 401 }),
     );
@@ -67,26 +85,61 @@ describe("GET /api/reviews", () => {
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: GOOGLE_SIGN_IN_AGAIN_MESSAGE,
-      reconnect: true,
-      signIn: true,
-    });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "c1", accessToken: "tok", refreshToken: "ref" },
+      "GOOGLE_API_TOKEN_REJECTED",
+    );
   });
 
-  // JJ3 lead review: a 403 is not a dead grant; reconnecting fixes neither case.
-  it("a 403 permission refusal says to check the account, with the Settings link", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+  it.each([429, 503])("a %i flags nothing", async (status) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("Failed"), { status }));
+
+    await get();
+
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  // R25 client-journey L1: the in-place sign-in keeps the row, its numbers and the location.
+  it("a 403 permission refusal offers the in-place sign-in with the account that manages the location", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed (status 403)"), { status: 403, googleReasons: ["forbidden"] }),
     );
 
-    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE, reconnect: true });
+    await expect((await get()).json()).resolves.toEqual({
+      error: GOOGLE_ACCESS_REFUSED_MESSAGE,
+      reconnect: true,
+      signIn: true,
+    });
+    expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe(
+      "Google refused access to this location: the connected Google account may no longer manage it. Sign in to Google again with the account that manages this location.",
+    );
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  // R25 platform-clients L3: retrying never helps; choosing the location again does.
+  it("a saved store code that no longer matches says to choose the location again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("not found"), { code: "GBP_STORE_CODE_NOT_FOUND" }));
+
+    await expect((await get()).json()).resolves.toEqual({
+      error: "The saved store code no longer matches one Google Business Profile location. Choose the location again in Settings.",
+      reconnect: true,
+    });
+
+    getWorkspaceContextMock.mockResolvedValue({ ...OWNER, role: "member" });
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("not unique"), { code: "GBP_STORE_CODE_NOT_UNIQUE" }));
+    await expect((await get()).json()).resolves.toEqual({
+      error: "The saved store code no longer matches one Google Business Profile location. The workspace owner can choose the location again.",
+    });
   });
 
   it("a 403 for a disabled service says to try later", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     fetchAllReviewsMock.mockRejectedValue(
       Object.assign(new Error("Failed (status 403)"), { status: 403, googleReasons: ["servicedisabled"] }),
     );
@@ -105,25 +158,81 @@ describe("GET /api/reviews", () => {
   });
 
   it("asks for a reconnect when the connection holds no token", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     findFirstMock.mockResolvedValue({ id: "c1", accessToken: null, expiresAt: null, metadata: {} });
 
     const body = (await (await get()).json()) as { error: string; reconnect?: boolean };
 
-    expect(body).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    expect(body).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+  });
+
+  // R25 security-billing L1: Google counts quota per project, so each person is limited.
+  it("over the limit: 429, and Google is not asked", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 12 });
+
+    const response = await get();
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({ error: "Too many requests. Please slow down.", retryAfterSeconds: 12 });
+    expect(checkRateLimitMock).toHaveBeenCalledWith({ userId: "u1", route: "reviews", limit: 60, windowMs: 300_000 });
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(fetchAllReviewsMock).not.toHaveBeenCalled();
+  });
+});
+
+// R25 client-journey L3: with an agency's Google login, a member sees only the
+// workspace's own saved location; the owner may read any listed one.
+describe("GET /api/reviews and another location", () => {
+  const other = () => GET(new Request("http://localhost/api/reviews?location=accounts%2F1%2Flocations%2F7"));
+
+  beforeEach(() => fetchAllReviewsMock.mockResolvedValue({ reviews: [], truncated: false }));
+
+  it("a member asking for another location is refused, and Google is not asked", async () => {
+    const response = await other();
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: MEMBER_OTHER_LOCATION_MESSAGE });
+    expect(MEMBER_OTHER_LOCATION_MESSAGE).toMatch(/workspace owner/);
+    expect(fetchAllReviewsMock).not.toHaveBeenCalled();
+  });
+
+  it("the owner reads it", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+
+    const response = await other();
+
+    expect(response.status).toBe(200);
+    expect(fetchAllReviewsMock).toHaveBeenCalledWith("tok", "accounts/1/locations/7");
+  });
+
+  it("a member reads the saved location, also when it was saved as a store code", async () => {
+    findFirstMock.mockResolvedValue({ id: "c1", accessToken: "tok", expiresAt: null, metadata: { locationName: "FTL-01" } });
+    listMock.mockResolvedValue({
+      ok: true,
+      locations: [
+        { resourceName: "accounts/1/locations/2", title: "Main", storeCode: null, address: null, accountName: "A" },
+        { resourceName: "accounts/1/locations/7", title: "Beach", storeCode: "FTL-01", address: null, accountName: "A" },
+      ],
+      complete: true,
+      unread: { access: false, failed: false },
+      refusedOnly: false,
+    });
+
+    expect((await other()).status).toBe(200);
+    expect((await get()).status).toBe(403);
   });
 });
 
 // R12 L1: only an owner can reconnect, so a member reads who can, without the
 // reconnect flag that makes the page link to Settings.
 describe("GET /api/reviews for a member", () => {
-  it("Google refuses the token: who can sign in again, no Settings link", async () => {
+  it("Google refuses the token: who can reconnect, no Settings link", async () => {
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("401"), { status: 401 }));
 
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
   });
 
   // JJ3 lead review: each kind, for a member, and one log line per failure.
@@ -134,7 +243,7 @@ describe("GET /api/reviews for a member", () => {
 
     await expect((await get()).json()).resolves.toEqual({
       error:
-        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.",
+        "Google refused access to this location: the connected Google account may no longer manage it. The workspace owner can sign in to Google again with the account that manages it.",
     });
     const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
     expect(lines).toHaveLength(1);
@@ -155,11 +264,11 @@ describe("GET /api/reviews for a member", () => {
 
     await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one." });
 
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).", reconnect: true });
   });
 
-  it("a 404 on a location picked on the page, not the saved one: pick another above", async () => {
+  it("a 404 on a location the owner picked on the page, not the saved one: pick another above", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     findFirstMock.mockResolvedValue({
       id: "c1",
@@ -169,8 +278,7 @@ describe("GET /api/reviews for a member", () => {
     });
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
 
-    await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
   });
 
@@ -236,7 +344,7 @@ describe("GET /api/reviews and a token about to expire", () => {
   });
 
   it("a refresh Google refuses after expiry keeps today's reconnect text", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     expiringIn(-MINUTE);
     vi.mocked(refreshAccessToken).mockRejectedValue(
       Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
@@ -249,7 +357,7 @@ describe("GET /api/reviews and a token about to expire", () => {
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
     expect(fetchAllReviewsMock).not.toHaveBeenCalled();
   });
 });
@@ -258,7 +366,7 @@ describe("GET /api/reviews and a token about to expire", () => {
 // gets the reconnect text at once, as the link route does, and Google is not asked.
 describe("GET /api/reviews for a connection flagged for reconnect", () => {
   it("answers with the reconnect text and asks Google nothing", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     findFirstMock.mockResolvedValue({
       id: "c1",
       accessToken: "tok",
@@ -270,7 +378,7 @@ describe("GET /api/reviews for a connection flagged for reconnect", () => {
     const response = await get();
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
     expect(refreshAccessToken).not.toHaveBeenCalled();
     expect(fetchAllReviewsMock).not.toHaveBeenCalled();
   });

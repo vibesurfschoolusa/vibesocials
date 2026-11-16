@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const h = vi.hoisted(() => ({ flagRejectedToken: vi.fn() }));
+vi.mock("./platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./platforms/connectionHealth")>()),
+  flagRejectedToken: h.flagRejectedToken,
+}));
+
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
-import { classifyGoogleFailure, googleFailureKind } from "./googleFailure";
+import { classifyGoogleFailure, flagIfTokenRejected, googleFailureKind } from "./googleFailure";
 
 /**
  * JJ3 lead review: Google failures were turned into text in three places
@@ -17,13 +23,26 @@ const refresh = (status: number | undefined, oauthError?: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("googleFailureKind", () => {
-  // JJ3 lead review: "reconnect" is a flagged row (the card shows Reconnect);
-  // an unflagged one still shows Connected and Switch account: "signInAgain".
+  // R25 platform-clients L2: an API 401 and a missing scope flag the row
+  // (flagIfTokenRejected), so the card shows Reconnect: the kind is reconnect.
   it.each([
-    ["an API 401 (the stored token no longer works; nothing flagged)", failure({ status: 401 })],
-    ["a 403 for a missing scope (signing in again grants it)", failure({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })],
-  ])("signInAgain: %s", (_label, error) => {
-    expect(googleFailureKind(error)).toBe("signInAgain");
+    ["an API 401 (the token no longer works)", failure({ status: 401 })],
+    ["a 403 for a missing scope", failure({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })],
+  ])("reconnect: %s", (_label, error) => {
+    expect(googleFailureKind(error)).toBe("reconnect");
+  });
+
+  // R25 platform-clients L3: retrying never helps; choosing the location again does.
+  it.each([
+    ["a store code no location has any more", failure({ code: "GBP_STORE_CODE_NOT_FOUND" })],
+    ["a store code more than one location has", failure({ code: "GBP_STORE_CODE_NOT_UNIQUE" })],
+  ])("chooseAgain: %s", (_label, error) => {
+    expect(googleFailureKind(error)).toBe("chooseAgain");
+  });
+
+  // R25 pages L5: the review was deleted on Google.
+  it("reviewGone: a 404 on a reply", () => {
+    expect(googleFailureKind(failure({ status: 404, code: "GBP_REVIEWS_REPLY_FAILED" }))).toBe("reviewGone");
   });
 
   // JJ3 lead review: the chosen location was removed from Google Business Profile.
@@ -76,7 +95,7 @@ describe("googleFailureKind", () => {
 
   it.each([
     ["a 404 with no call named", failure({ status: 404 })],
-    ["a 404 on a reply (the review, not the location)", failure({ status: 404, code: "GBP_REVIEWS_REPLY_FAILED" })],
+    ["a token that changed meanwhile (nothing flagged)", failure({ code: "CONNECTION_TOKEN_CHANGED" })],
     ["a refresh 403 (not flagged)", refresh(403, "unauthorized_client")],
     ["a JSON parse error", new SyntaxError("Unexpected token < in JSON at position 0")],
     ["a programming TypeError", new TypeError("Cannot read properties of undefined")],
@@ -130,5 +149,43 @@ describe("classifyGoogleFailure: one log line per failure", () => {
       code: "GOOGLE_TOKEN_REFRESH_FAILED",
       oauthError: "invalid_grant",
     });
+  });
+});
+
+// R25 platform-clients L2: a token Google's API refused flags the row, guarded
+// by the tokens that call sent, so the card shows Reconnect.
+describe("flagIfTokenRejected", () => {
+  const USED = { id: "conn-1", accessToken: "tok", refreshToken: "ref" };
+
+  it.each([
+    ["an API 401", failure({ status: 401, code: "GBP_REVIEWS_FETCH_FAILED" })],
+    ["a 403 for a missing scope", failure({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })],
+  ])("flags the row on %s and hands the failure back", async (_label, error) => {
+    h.flagRejectedToken.mockResolvedValue("flagged");
+
+    await expect(flagIfTokenRejected(error, USED)).resolves.toBe(error);
+    expect(h.flagRejectedToken).toHaveBeenCalledWith(USED, "GOOGLE_API_TOKEN_REJECTED");
+  });
+
+  it.each([
+    ["a 503", failure({ status: 503 })],
+    ["a 429", failure({ status: 429 })],
+    ["a 403 permission refusal", failure({ status: 403, googleReasons: ["permissiondenied"] })],
+    ["a refresh refused (flagged by the refresh itself)", refresh(401)],
+    ["no answer", new TypeError("fetch failed")],
+  ])("flags nothing on %s", async (_label, error) => {
+    h.flagRejectedToken.mockReset();
+
+    await expect(flagIfTokenRejected(error, USED)).resolves.toBe(error);
+    expect(h.flagRejectedToken).not.toHaveBeenCalled();
+  });
+
+  it("tokens that changed meanwhile: nothing flagged, and the failure is one to retry", async () => {
+    h.flagRejectedToken.mockResolvedValue("superseded");
+
+    const settled = await flagIfTokenRejected(failure({ status: 401 }), USED);
+
+    expect(settled).toMatchObject({ code: "CONNECTION_TOKEN_CHANGED" });
+    expect(googleFailureKind(settled)).toBe("other");
   });
 });

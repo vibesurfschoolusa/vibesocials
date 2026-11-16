@@ -14,7 +14,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 // The locations the connected Google account lists (shared with GET .../locations).
-vi.mock("../gbpLocations", () => ({ listGbpLocations: listMock }));
+vi.mock("../gbpLocations", () => ({ listGbpLocations: listMock, googleRouteRateLimit: async () => null }));
 
 import { POST } from "./route";
 

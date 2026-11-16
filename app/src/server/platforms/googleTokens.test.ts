@@ -312,7 +312,7 @@ describe("refreshGoogleToken — failure classification", () => {
     expect(updateMock.mock.calls.length > 0).toBe(shown === "reconnect");
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual(
       shown === "reconnect"
-        ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true }
+        ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true }
         : { error: GOOGLE_NOT_ANSWERING_MESSAGE },
     );
   });
@@ -641,6 +641,6 @@ describe("refreshGoogleTokenEarly with the real refresh and invalid_grant", () =
     );
     const { GOOGLE_REFUSED_MESSAGE, reviewsErrorBody } = await import("@/server/googleReviews");
     expect(error).toMatchObject({ code: "GOOGLE_TOKEN_REFRESH_FAILED", oauthError: "invalid_grant" });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
   });
 });

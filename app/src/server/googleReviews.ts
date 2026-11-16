@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
-import { classifyGoogleFailure } from "./googleFailure";
+import { classifyGoogleFailure, type GoogleFailureKind } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { readGoogleErrorReasons } from "./platforms/rateLimited";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
@@ -210,18 +210,34 @@ export type ReviewsReader = "owner" | "member";
 
 /**
  * A refusal, for whoever reads it. Only an owner's carries `reconnect: true`
- * (the page then links to Settings): a member's Settings is read-only.
+ * (the page then links to Settings): a member's Settings is read-only. R25: an
+ * owner's also carries `signIn: true`, the in-place sign-in, which is the
+ * Reconnect button's own URL (lib/gbpSignIn.ts).
  */
-export function googleRefusedBody(role: ReviewsReader): { error: string; reconnect?: true } {
-  return role === "member" ? { error: GOOGLE_REFUSED_MEMBER_MESSAGE } : { error: GOOGLE_REFUSED_MESSAGE, reconnect: true };
+export function googleRefusedBody(role: ReviewsReader): ReviewsErrorBody {
+  return role === "member"
+    ? { error: GOOGLE_REFUSED_MEMBER_MESSAGE }
+    : { error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true };
 }
+
+/**
+ * R25 client-journey L3: with an agency's Google login, a member serves only
+ * the workspace's own saved location (403). Owners may read any listed one.
+ */
+export const MEMBER_OTHER_LOCATION_MESSAGE =
+  "Members read and answer the reviews of this workspace's own Google location only. The workspace owner chooses that location.";
+/** A member, and no saved location this login lists: who can choose one. */
+export const MEMBER_NO_LOCATION_NOTICE =
+  "The workspace owner hasn't chosen this workspace's Google location yet. Its reviews show here once they have.";
+/** A member, and the saved location is not one this login lists (a complete list). */
+export const MEMBER_SAVED_NOT_LISTED_NOTICE =
+  "This workspace's saved Google location isn't one the connected Google account manages. The workspace owner can choose the location again.";
 
 /** Why GET /api/reviews/link has no link for the "Get more reviews" panel. */
 export type ReviewLinkProblem =
   | "not_connected"
   | "no_location"
   | "needs_reconnect"
-  | "sign_in_again"
   | "location_removed"
   | "google_has_none";
 
@@ -239,13 +255,7 @@ const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, strin
     owner: "Reconnect Google Business Profile in Settings, Connections to get your review link.",
     member: "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
   },
-  // JJ3 lead review: Google refused, nothing flagged: the in-place sign-in (lib/gbpSignIn.ts).
-  sign_in_again: {
-    owner:
-      "Google didn't accept the connection. Sign in again with the Google account that manages this location to get your review link; its listing numbers are kept.",
-    member:
-      "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; then the review link shows here.",
-  },
+
   location_removed: {
     owner: "This location is no longer in Google Business Profile. Choose another location in Settings.",
     member: "This location is no longer in Google Business Profile. The workspace owner can choose another location.",
@@ -269,33 +279,26 @@ export function reviewLinkReason(problem: ReviewLinkProblem, role: ReviewsReader
  *
  * access: the connected Google account no longer manages what was asked for.
  * The sentence is about the location being read, or about the Business Profile
- * account where no location is chosen yet (GET /api/reviews/locations). Here a
- * different Google account is what's needed, so Switch account is named,
- * together with what switching clears: it disconnects first, which deletes the
- * listing's saved numbers and the chosen location.
+ * account where no location is chosen yet (GET /api/reviews/locations). R25
+ * client-journey L1: the owner's step is the in-place sign-in (`signIn: true`)
+ * with the account that does manage it, which keeps the row, its numbers and
+ * the location (saveConnection.ts); never Switch account, which deletes them.
  */
 export const GOOGLE_ACCESS_REFUSED_MESSAGE =
-  "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.";
+  "Google refused access to this location: the connected Google account may no longer manage it. Sign in to Google again with the account that manages this location.";
 export const GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE =
-  "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.";
+  "Google refused access to this location: the connected Google account may no longer manage it. The workspace owner can sign in to Google again with the account that manages it.";
 const GOOGLE_ACCOUNT_REFUSED_MESSAGE =
-  "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.";
+  "Google refused access to this Business Profile account: the connected Google account may no longer manage your business. Sign in to Google again with the account that manages your business.";
 const GOOGLE_ACCOUNT_REFUSED_MEMBER_MESSAGE =
-  "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.";
-/**
- * signInAgain: Google stopped accepting a connection that is not flagged. The
- * fix is the in-place sign-in (lib/gbpSignIn.ts), never Switch account. The
- * sign-in keeps the listing's numbers; it keeps the location only when the
- * account signed in to can read it, so the step names that account.
- */
-export const GOOGLE_SIGN_IN_AGAIN_MESSAGE =
-  "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.";
-export const GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE =
-  "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; its listing numbers are kept.";
-const GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MESSAGE =
-  "Google didn't accept the connection. Sign in again with the Google account that manages your business; its listing numbers are kept.";
-const GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MEMBER_MESSAGE =
-  "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages your business; its listing numbers are kept.";
+  "Google refused access to this Business Profile account: the connected Google account may no longer manage your business. The workspace owner can sign in to Google again with the account that manages it.";
+/** chooseAgain (R25 platform-clients L3): retrying never helps; choosing the location again does. */
+const STORE_CODE_STALE_MESSAGE =
+  "The saved store code no longer matches one Google Business Profile location. Choose the location again in Settings.";
+const STORE_CODE_STALE_MEMBER_MESSAGE =
+  "The saved store code no longer matches one Google Business Profile location. The workspace owner can choose the location again.";
+/** reviewGone (R25 pages L5): the review was deleted on Google, so no reply can be posted. */
+const REVIEW_GONE_MESSAGE = "This review is no longer on Google. Reload the page.";
 /** notFound, for a location picked on the Reviews page (not saved): the page's own picker. */
 const LOCATION_GONE_PICKED_MESSAGE =
   "This location is no longer in Google Business Profile. Pick another location above.";
@@ -330,49 +333,63 @@ export interface ReviewsErrorBody {
   signIn?: true;
 }
 
+/** The chooseAgain sentence, for whoever reads it (the Reviews routes and the link panel). */
+export function storeCodeStaleMessage(role: ReviewsReader): string {
+  return role === "member" ? STORE_CODE_STALE_MEMBER_MESSAGE : STORE_CODE_STALE_MESSAGE;
+}
+
 /** An owner's answer carries `reconnect: true`: the page links to Settings, where the step is. */
 function ownerStep(role: ReviewsReader, owner: string, member: string): ReviewsErrorBody {
   return role === "member" ? { error: member } : { error: owner, reconnect: true };
 }
 
+type ReviewsErrorOptions = { where?: string; subject?: AccessSubject; location?: "saved" | "picked" };
+
 /**
  * The error body the Reviews routes answer with (F7, R1 M5): the kind of the
  * failure (classifyGoogleFailure, which writes its one classification line),
- * worded for the page. `reconnect: true` (the page then links to the Google
- * Business Profile card in Settings) goes only to an owner. `fallback` is the
- * route's own sentence for anything else: an error's own text is never shown.
- *
- * An owner's sign-in-again answer carries `signIn: true` (never a URL).
- * `location` says whether a removed location was the saved one ("saved", the
- * default) or one picked on the Reviews page ("picked", not saved).
+ * worded for the page (reviewsKindBody).
  */
 export function reviewsErrorBody(
   error: unknown,
   fallback: string,
   role: ReviewsReader,
-  options: { where?: string; subject?: AccessSubject; location?: "saved" | "picked" } = {},
+  options: ReviewsErrorOptions = {},
 ): ReviewsErrorBody {
-  const kind = classifyGoogleFailure(error, options.where ?? "Reviews");
+  return reviewsKindBody(classifyGoogleFailure(error, options.where ?? "Reviews"), fallback, role, options);
+}
+
+/**
+ * A kind of Google failure, worded for the Reviews page. `reconnect: true`
+ * (the page then links to the Google Business Profile card in Settings) goes
+ * only to an owner, and so does `signIn: true` (the in-place sign-in, never a
+ * URL), on the reconnect and access answers. `fallback` is the route's own
+ * sentence for anything else: an error's own text is never shown. `location`
+ * says whether a removed location was the saved one ("saved", the default) or
+ * one picked on the Reviews page ("picked", not saved).
+ */
+export function reviewsKindBody(
+  kind: GoogleFailureKind,
+  fallback: string,
+  role: ReviewsReader,
+  options: ReviewsErrorOptions = {},
+): ReviewsErrorBody {
   switch (kind) {
     case "reconnect":
       return googleRefusedBody(role);
-    case "signInAgain": {
-      const account = options.subject === "account";
-      const body = ownerStep(
-        role,
-        account ? GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MESSAGE : GOOGLE_SIGN_IN_AGAIN_MESSAGE,
-        account ? GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MEMBER_MESSAGE : GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE,
-      );
-      return role === "owner" ? { ...body, signIn: true } : body;
-    }
     case "access": {
       const subject = options.subject ?? "location";
-      return ownerStep(role, googleAccessRefusedMessage(subject, "owner"), googleAccessRefusedMessage(subject, "member"));
+      const body = ownerStep(role, googleAccessRefusedMessage(subject, "owner"), googleAccessRefusedMessage(subject, "member"));
+      return role === "owner" ? { ...body, signIn: true } : body;
     }
     case "notFound":
       return options.location === "picked"
         ? { error: LOCATION_GONE_PICKED_MESSAGE }
         : ownerStep(role, LOCATION_GONE_SAVED_MESSAGE, LOCATION_GONE_SAVED_MEMBER_MESSAGE);
+    case "chooseAgain":
+      return ownerStep(role, storeCodeStaleMessage("owner"), storeCodeStaleMessage("member"));
+    case "reviewGone":
+      return { error: REVIEW_GONE_MESSAGE };
     case "tryLater":
       return { error: GOOGLE_NOT_ANSWERING_MESSAGE };
     default:
@@ -393,7 +410,7 @@ export function reviewLocationName(name: string): string | null {
   return match.slice(2).every((segment) => segment !== "." && segment !== "..") ? match[1] : null;
 }
 
-/** A location as GET /api/reviews/locations lists it. */
+/** A location as GET /api/reviews/locations lists it (from the shared listing, gbpLocations.ts). */
 export interface GbpListedLocation {
   /** Full resource name: accounts/.../locations/... */
   name: string;
@@ -402,89 +419,43 @@ export interface GbpListedLocation {
   storeCode?: string;
 }
 
-const ACCOUNT_MANAGEMENT_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
-const BUSINESS_INFO_BASE = "https://mybusinessbusinessinformation.googleapis.com/v1";
+/** The fields of a listed location the Reviews routes read (gbpLocations.ts ListedGbpLocation). */
+interface ListedLocationFields {
+  resourceName: string;
+  title: string | null;
+  storeCode: string | null;
+}
+
+/** A listed location in the shape the Reviews page reads. */
+export function reviewsListedLocation(location: ListedLocationFields): GbpListedLocation {
+  const title = location.title || "Unknown Location";
+  return {
+    name: location.resourceName,
+    locationName: title,
+    title,
+    ...(location.storeCode ? { storeCode: location.storeCode } : {}),
+  };
+}
 
 /**
- * Every location the connection's Google account can manage, as the Reviews
- * page lists them; the reply route checks a review's location against the same
- * list (F7). Throws, with Google's `status`, when the accounts call fails. An
- * account whose locations could not be read is logged and left out, and
- * `complete` is false, so a caller can tell "not listed" from "not read".
+ * The saved location's entry in a listing (Settings saves a resource name, or
+ * a store code typed under Advanced), or null. A store code more than one
+ * location has names none of them.
  */
-export async function listGbpLocations(
-  accessToken: string
-): Promise<{ locations: GbpListedLocation[]; complete: boolean }> {
-  const accountsResponse = await fetch(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+export function savedLocationIn<T extends ListedLocationFields>(locations: T[], saved: string | null | undefined): T | null {
+  const name = typeof saved === "string" ? saved.trim() : "";
+  if (!name) return null;
+  const byName = locations.find((location) => location.resourceName === name);
+  if (byName) return byName;
+  const byCode = locations.filter((location) => location.storeCode === name);
+  return byCode.length === 1 ? byCode[0] : null;
+}
 
-  if (!accountsResponse.ok) {
-    const googleReasons = await readGoogleErrorReasons(accountsResponse);
-    const errorText = await accountsResponse.text();
-    console.error("[GBP Locations] Failed to fetch accounts:", {
-      status: accountsResponse.status,
-      statusText: accountsResponse.statusText,
-      body: errorText.substring(0, 500),
-    });
-    // The status decides what the page says (reviewsErrorBody).
-    throw Object.assign(new Error("Failed to fetch Google Business Profile accounts"), {
-      status: accountsResponse.status,
-      googleReasons,
-    });
-  }
-
-  const accountsData = await accountsResponse.json();
-  const accounts: Array<{ name?: string }> = accountsData.accounts || [];
-  const allLocations: GbpListedLocation[] = [];
-  let complete = true;
-
-  for (const account of accounts) {
-    const accountName = account.name;
-    if (!accountName) continue;
-
-    // Use the business information API with readMask to get location details
-    const url = new URL(`${BUSINESS_INFO_BASE}/${accountName}/locations`);
-    url.searchParams.set("readMask", "name,storeCode,title");
-
-    const locationsResponse = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (locationsResponse.ok) {
-      const locationsData = await locationsResponse.json();
-      const locations = locationsData.locations || [];
-
-      for (const location of locations) {
-        // Ensure we have the full resource name (accounts/.../locations/...)
-        // The API might return just "locations/..." so we need to construct the full path
-        let fullName = location.name;
-        if (fullName && fullName.startsWith("locations/") && !fullName.includes("accounts/")) {
-          fullName = `${accountName}/${fullName}`;
-        }
-
-        allLocations.push({
-          name: fullName, // Full resource name: accounts/.../locations/...
-          locationName: location.locationName || location.title || "Unknown Location",
-          title: location.title || location.locationName || "Unknown Location",
-          storeCode: location.storeCode,
-        });
-      }
-    } else {
-      complete = false;
-      console.error("[GBP Locations] Failed to fetch locations for account", {
-        accountName,
-        status: locationsResponse.status,
-      });
-    }
-  }
-
-  console.log("[GBP Locations] Found locations:", allLocations.length);
-  return { locations: allLocations, complete };
+/** The saved location as Settings stored it in the connection's metadata, or null. */
+export function savedLocationName(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const { locationName } = metadata as Record<string, unknown>;
+  return typeof locationName === "string" && locationName.trim() !== "" ? locationName.trim() : null;
 }
 
 /** The location id of `accounts/{a}/locations/{l}` or `locations/{l}`, or null. */

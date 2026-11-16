@@ -1,28 +1,47 @@
 import { NextResponse } from "next/server";
+import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
+import { flagIfTokenRejected } from "@/server/googleFailure";
 import {
+  MEMBER_NO_LOCATION_NOTICE,
+  MEMBER_SAVED_NOT_LISTED_NOTICE,
   googleRefusedBody,
-  listGbpLocations,
   refreshAccessToken,
   reviewsErrorBody,
+  reviewsKindBody,
+  reviewsListedLocation,
+  savedLocationIn,
+  savedLocationName,
   type ReviewsReader,
 } from "@/server/googleReviews";
+import {
+  googleRouteRateLimit,
+  listGbpLocationsWithToken,
+  unreadAccountsNotice,
+} from "@/app/api/connections/google_business_profile/gbpLocations";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
 
 const LOCATIONS_FAILED_MESSAGE = "Couldn't load your Google locations. Try again in a minute.";
+const WHERE = "GET /api/reviews/locations";
 
 /**
  * GET /api/reviews/locations - Fetch all Google Business Profile locations
  * for the active workspace. Any member may read (Team Workspaces — same
  * member-level access as the rest of the reviews surface).
+ *
+ * R25: the one paged listing the Settings picker uses (gbpLocations.ts), with
+ * the same `notice` about accounts that could not be read. A member is served
+ * only the workspace's saved location (client-journey L3); an owner, every one.
  */
 export async function GET() {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
+  // The row whose token the Google calls send: a token Google refuses is flagged with it.
+  let used: SocialConnection | null = null;
   try {
     const context = await getWorkspaceContext();
 
@@ -30,6 +49,10 @@ export async function GET() {
       return signedOutResponse();
     }
     role = context.role;
+
+    // R25 security-billing L1: before any Google call.
+    const limited = await googleRouteRateLimit(context.user.id, "reviews/locations");
+    if (limited) return limited;
 
     // Get the workspace's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
@@ -48,7 +71,6 @@ export async function GET() {
       return NextResponse.json({ locations: [], connected: false });
     }
 
-
     // A connection Google has revoked reads "Reconnect" at once, as the link
     // route does, instead of after the stored token runs out.
     if (connection.needsReconnect) {
@@ -59,20 +81,43 @@ export async function GET() {
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.
     // The shared refresh saves the new token itself.
-    const accessToken = (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
+    used = await refreshGoogleTokenEarly(connection, refreshAccessToken);
+    if (!used.accessToken) {
+      return NextResponse.json(googleRefusedBody(role), { status: 500 });
+    }
 
-    // The listing the reply route checks a review's location against (googleReviews.ts).
-    const { locations } = await listGbpLocations(accessToken!);
+    // The listing the reply route checks a review's location against.
+    const listing = await listGbpLocationsWithToken(
+      { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null },
+      WHERE,
+    );
+    // No location is chosen here yet: an access refusal is about the account.
+    if (!listing.ok) {
+      return NextResponse.json(reviewsKindBody(listing.kind, LOCATIONS_FAILED_MESSAGE, role, { subject: "account" }), {
+        status: 500,
+      });
+    }
 
-    return NextResponse.json({
-      locations,
-      connected: true,
-    });
+    const notice = unreadAccountsNotice(listing.unread, "reviews");
+    if (role === "owner") {
+      const locations = listing.locations.map(reviewsListedLocation);
+      return NextResponse.json(notice ? { locations, connected: true, notice } : { locations, connected: true });
+    }
+
+    const savedName = savedLocationName(connection.metadata);
+    const saved = savedLocationIn(listing.locations, savedName);
+    if (saved) return NextResponse.json({ locations: [reviewsListedLocation(saved)], connected: true });
+    // Not found: maybe on an account that could not be read; else not chosen, or not this login's.
+    const memberNotice =
+      !listing.complete && notice ? notice : savedName ? MEMBER_SAVED_NOT_LISTED_NOTICE : MEMBER_NO_LOCATION_NOTICE;
+    return NextResponse.json({ locations: [], connected: true, notice: memberNotice });
   } catch (error: unknown) {
+    // R25 platform-clients L2: a token Google refused flags the row first.
+    const settled = await flagIfTokenRejected(error, used);
     // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
     // No location is chosen here yet: an access refusal is about the account.
-    const body = reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE, role, {
-      where: "GET /api/reviews/locations",
+    const body = reviewsErrorBody(settled, LOCATIONS_FAILED_MESSAGE, role, {
+      where: WHERE,
       subject: "account",
     });
     return NextResponse.json(body, { status: 500 });

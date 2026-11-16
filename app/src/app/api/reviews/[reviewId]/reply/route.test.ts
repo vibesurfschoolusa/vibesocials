@@ -1,11 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // F7 (R1-security L5): the reply route sent body.reviewName to Google unchecked.
-const { getWorkspaceContextMock, findFirstMock, replyToReviewMock, listGbpLocationsMock } = vi.hoisted(() => ({
-  getWorkspaceContextMock: vi.fn(),
-  findFirstMock: vi.fn(),
-  replyToReviewMock: vi.fn(),
-  listGbpLocationsMock: vi.fn(),
+const { getWorkspaceContextMock, findFirstMock, replyToReviewMock, listGbpLocationsMock, checkRateLimitMock, flagRejectedTokenMock } =
+  vi.hoisted(() => ({
+    getWorkspaceContextMock: vi.fn(),
+    findFirstMock: vi.fn(),
+    replyToReviewMock: vi.fn(),
+    listGbpLocationsMock: vi.fn(),
+    checkRateLimitMock: vi.fn(),
+    flagRejectedTokenMock: vi.fn(),
+  }));
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
+// The one paged listing the Reviews page and the Settings picker share (R25 M1).
+vi.mock("@/app/api/connections/google_business_profile/gbpLocations", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/api/connections/google_business_profile/gbpLocations")>()),
+  listGbpLocationsWithToken: listGbpLocationsMock,
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
@@ -14,11 +27,15 @@ vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: findFirstM
 vi.mock("@/server/googleReviews", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/googleReviews")>()),
   replyToReview: replyToReviewMock,
-  listGbpLocations: listGbpLocationsMock,
   refreshAccessToken: vi.fn(),
 }));
 
-import { GOOGLE_REFUSED_MESSAGE, refreshAccessToken } from "@/server/googleReviews";
+import {
+  GOOGLE_REFUSED_MEMBER_MESSAGE,
+  GOOGLE_REFUSED_MESSAGE,
+  MEMBER_OTHER_LOCATION_MESSAGE,
+  refreshAccessToken,
+} from "@/server/googleReviews";
 
 import { POST } from "./route";
 
@@ -36,22 +53,35 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "member" });
+  getWorkspaceContextMock.mockResolvedValue({ user: { id: "u1" }, workspace: { id: "ws-1" }, role: "member" });
   findFirstMock.mockResolvedValue({
     id: "c1",
     accessToken: "tok",
+    refreshToken: "ref",
     expiresAt: null,
     metadata: { locationName: "accounts/1/locations/2" },
   });
   replyToReviewMock.mockResolvedValue({ comment: "Thanks", updateTime: "2026-11-14T00:00:00Z" });
-  listGbpLocationsMock.mockResolvedValue({
-    locations: [
-      { name: "accounts/1/locations/2", locationName: "Main", title: "Main" },
-      { name: "accounts/1/locations/5", locationName: "Beach", title: "Beach" },
-    ],
-    complete: true,
-  });
+  listGbpLocationsMock.mockResolvedValue(listing([listed("accounts/1/locations/2", "FTL-01"), listed("accounts/1/locations/5")]));
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
+  flagRejectedTokenMock.mockResolvedValue("flagged");
 });
+
+const OWNER = { user: { id: "u1" }, workspace: { id: "ws-1" }, role: "owner" };
+
+function listed(resourceName: string, storeCode: string | null = null) {
+  return { resourceName, title: "Shop", storeCode, address: null, accountName: "A" };
+}
+
+function listing(locations: ReturnType<typeof listed>[], complete = true) {
+  return {
+    ok: true,
+    locations,
+    complete,
+    unread: { access: false, failed: !complete },
+    refusedOnly: false,
+  };
+}
 
 describe("POST /api/reviews/[reviewId]/reply", () => {
   it("posts a reply to a review's resource name", async () => {
@@ -72,14 +102,52 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
-  // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
-  it("offers the in-place sign-in when Google refuses the reply", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+  // R25 platform-clients L2: an API 401 flags the row, so the card shows Reconnect.
+  it("a 401 on the reply flags the row and reads Reconnect, with the in-place sign-in", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.", reconnect: true, signIn: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "c1", accessToken: "tok", refreshToken: "ref" },
+      "GOOGLE_API_TOKEN_REJECTED",
+    );
+  });
+
+  // R25 pages L5: a review deleted on Google never takes a reply.
+  it("a 404 on the reply says the review is gone", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    replyToReviewMock.mockRejectedValue(
+      Object.assign(new Error("Failed (status 404)"), { status: 404, code: "GBP_REVIEWS_REPLY_FAILED" }),
+    );
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    await expect(response.json()).resolves.toEqual({ error: "This review is no longer on Google. Reload the page." });
+  });
+
+  // R25 security-billing L1: replies are limited per person, 20 every 5 minutes.
+  it("over the limit: 429, and Google is not asked", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5 });
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(429);
+    expect(checkRateLimitMock).toHaveBeenCalledWith({ userId: "u1", route: "reviews/reply", limit: 20, windowMs: 300_000 });
+    expect(listGbpLocationsMock).not.toHaveBeenCalled();
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  // R25 client-journey M1: the check uses the one paged listing, with the token as sent.
+  it("checks the location against the shared paged listing", async () => {
+    await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(listGbpLocationsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "c1", accessToken: "tok", refreshToken: "ref" }),
+      "POST /api/reviews/[reviewId]/reply",
+    );
   });
 
   it("gives a plain sentence for any other failure", async () => {
@@ -100,12 +168,32 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   // Coordinator (b): the review's location must be one this connection's Google account lists.
-  it("replies on any location the account lists, not only the one saved in Settings", async () => {
+  it("an owner replies on any location the account lists, not only the one saved in Settings", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/5/reviews/r9" });
 
     expect(response.status).toBe(200);
-    expect(listGbpLocationsMock).toHaveBeenCalledWith("tok");
     expect(replyToReviewMock).toHaveBeenCalledWith("tok", "accounts/1/locations/5/reviews/r9", "Thanks");
+  });
+
+  // R25 client-journey L3: a member answers only the workspace's own saved location.
+  it("a member replying on another listed location is refused, and nothing is sent", async () => {
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/5/reviews/r9" });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: MEMBER_OTHER_LOCATION_MESSAGE });
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  it("the saved location on Google's second page is found and answered", async () => {
+    listGbpLocationsMock.mockResolvedValue(
+      listing([...Array.from({ length: 100 }, (_, i) => listed(`accounts/1/locations/${100 + i}`)), listed("accounts/1/locations/2")]),
+    );
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(200);
   });
 
   it("works when Settings saved a store code instead of a resource name", async () => {
@@ -132,7 +220,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   it("gives a plain error and sends no reply when the listing fails", async () => {
-    listGbpLocationsMock.mockRejectedValue(Object.assign(new Error("Failed (status 503)"), { status: 503 }));
+    listGbpLocationsMock.mockResolvedValue({ ok: false, kind: "tryLater" });
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
@@ -142,7 +230,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   it("gives a plain error, not a 404, when an account's locations could not be read", async () => {
-    listGbpLocationsMock.mockResolvedValue({ locations: [], complete: false });
+    listGbpLocationsMock.mockResolvedValue(listing([listed("accounts/1/locations/5")], false));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
@@ -151,25 +239,25 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
-  it("offers the in-place sign-in when Google refuses the listing", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
-    listGbpLocationsMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
+  it("says Reconnect when Google refused the token while listing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    listGbpLocationsMock.mockResolvedValue({ ok: false, kind: "reconnect" });
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.", reconnect: true, signIn: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 });
 
 // R12 L1: a member may reply, but only an owner can reconnect.
 describe("POST /api/reviews/[reviewId]/reply for a member", () => {
-  it("Google refuses the token: who can sign in again, no Settings link", async () => {
+  it("Google refuses the token: who can reconnect, no Settings link", async () => {
     replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; its listing numbers are kept." });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
   });
 });
 
@@ -250,7 +338,7 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
     await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(refreshAccessToken).toHaveBeenCalledTimes(1);
-    expect(listGbpLocationsMock.mock.calls[0][0]).toBe("fresh");
+    expect(listGbpLocationsMock.mock.calls[0][0].accessToken).toBe("fresh");
   });
 
   it("leaves a token with 10 minutes left alone", async () => {
@@ -259,7 +347,7 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
     await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(refreshAccessToken).not.toHaveBeenCalled();
-    expect(listGbpLocationsMock.mock.calls[0][0]).toBe("tok");
+    expect(listGbpLocationsMock.mock.calls[0][0].accessToken).toBe("tok");
   });
 
   it("a failed refresh with 4 minutes left serves the request with the stored token", async () => {
@@ -274,11 +362,11 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(response.status).toBe(200);
-    expect(listGbpLocationsMock.mock.calls[0][0]).toBe("tok");
+    expect(listGbpLocationsMock.mock.calls[0][0].accessToken).toBe("tok");
   });
 
   it("a refresh Google refuses after expiry keeps today's reconnect text", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     expiringIn(-MINUTE);
     vi.mocked(refreshAccessToken).mockRejectedValue(
       Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
@@ -291,7 +379,7 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
     expect(listGbpLocationsMock).not.toHaveBeenCalled();
   });
 });
@@ -300,7 +388,7 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
 // gets the reconnect text at once, as the link route does, and Google is not asked.
 describe("POST /api/reviews/[reviewId]/reply for a connection flagged for reconnect", () => {
   it("answers with the reconnect text and asks Google nothing", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
     findFirstMock.mockResolvedValue({
       id: "c1",
       accessToken: "tok",
@@ -312,7 +400,7 @@ describe("POST /api/reviews/[reviewId]/reply for a connection flagged for reconn
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
     expect(refreshAccessToken).not.toHaveBeenCalled();
     expect(listGbpLocationsMock).not.toHaveBeenCalled();
   });

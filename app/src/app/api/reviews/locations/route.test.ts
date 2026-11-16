@@ -5,14 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // `new PrismaClient()` requiring DATABASE_URL), `@/lib/workspace` and
 // `@/server/googleReviews` at module scope, so all three must be mocked
 // before route.ts is imported below.
-const { findFirstMock, updateMock, getWorkspaceContextMock, refreshAccessTokenMock } = vi.hoisted(
-  () => ({
+const { findFirstMock, updateMock, getWorkspaceContextMock, refreshAccessTokenMock, checkRateLimitMock, flagRejectedTokenMock } =
+  vi.hoisted(() => ({
     findFirstMock: vi.fn(),
     updateMock: vi.fn(),
     getWorkspaceContextMock: vi.fn(),
     refreshAccessTokenMock: vi.fn(),
-  })
-);
+    checkRateLimitMock: vi.fn(),
+    flagRejectedTokenMock: vi.fn(),
+  }));
+
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -43,6 +50,7 @@ const CONNECTION = {
   workspaceId: "ws-1",
   platform: "google_business_profile",
   accessToken: "token-abc",
+  refreshToken: "refresh-abc",
   expiresAt: null,
 };
 
@@ -51,6 +59,8 @@ const originalFetch = global.fetch;
 beforeEach(() => {
   vi.clearAllMocks();
   getWorkspaceContextMock.mockResolvedValue(CONTEXT);
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
+  flagRejectedTokenMock.mockResolvedValue("flagged");
 });
 
 afterEach(() => {
@@ -139,56 +149,50 @@ describe("GET /api/reviews/locations", () => {
     expect(body.error).toBeTruthy();
   });
 
-  // F7 (R1 M5): what the page shows is a plain sentence, with a reconnect step
-  // when Google refused.
-  // JJ3 lead review: a 403 is not a dead grant (googleForbiddenMessage).
-  // JJ3 lead review: an API 401 flags nothing; the card shows Switch account.
-  it.each([401])("offers the in-place sign-in when Google answers %i", async (status) => {
+  // R25 platform-clients L2: an API 401 flags the row (the token that call
+  // sent), so the card shows Reconnect; the owner keeps the in-place sign-in.
+  it("a 401 flags the row and reads Reconnect, with the in-place sign-in", async () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status,
-      statusText: "Refused",
-      text: async () => "{}",
-    }) as unknown as typeof fetch;
+    global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
 
     const body = await (await GET()).json();
 
     expect(body).toEqual({
-      error: "Google didn't accept the connection. Sign in again with the Google account that manages your business; its listing numbers are kept.",
+      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
       reconnect: true,
       signIn: true,
     });
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "conn-1", accessToken: "token-abc", refreshToken: "refresh-abc" },
+      "GOOGLE_API_TOKEN_REJECTED",
+    );
   });
 
-  // JJ3 lead review: no location is chosen here yet, so the sentence is about the account.
-  it("a 403 says to check that the account still manages the business, with the Settings link", async () => {
+  // R25 client-journey L1: the in-place sign-in keeps the row, its numbers and the location.
+  it("a 403 offers the in-place sign-in with the account that manages the business", async () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 403 })) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
       error:
-        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile. If another Google account manages it, press Switch account on the Google Business Profile card in Settings: switching clears this listing's saved numbers, and you choose the location again.",
+        "Google refused access to this Business Profile account: the connected Google account may no longer manage your business. Sign in to Google again with the account that manages your business.",
       reconnect: true,
+      signIn: true,
     });
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 
   // R12 L1: a member reads who can reconnect, and the page gets no Settings link.
-  it("a member: who can sign in again when Google refuses the token", async () => {
+  it("a member: who can reconnect when Google refuses the token", async () => {
     getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 401,
-      statusText: "Refused",
-      text: async () => "{}",
-    }) as unknown as typeof fetch;
+    global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
-      error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages your business; its listing numbers are kept.",
+      error: "Google refused the request. The workspace owner can reconnect Google Business Profile.",
     });
   });
 
@@ -283,6 +287,7 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     expect(await response.json()).toEqual({
       error: "Google refused the request. Reconnect Google Business Profile in Settings.",
       reconnect: true,
+      signIn: true,
     });
     expect(global.fetch).not.toHaveBeenCalled();
   });
@@ -301,8 +306,164 @@ describe("GET /api/reviews/locations for a connection flagged for reconnect", ()
     expect(await response.json()).toEqual({
       error: "Google refused the request. Reconnect Google Business Profile in Settings.",
       reconnect: true,
+      signIn: true,
     });
     expect(refreshAccessTokenMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+const ACCOUNTS = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts";
+const INFO = "https://mybusinessbusinessinformation.googleapis.com/v1";
+type Page = { status?: number; body?: Record<string, unknown> };
+
+/** Google, as a map from "<path>|<pageToken or ''>" to the page it answers. */
+function google(pages: Record<string, Page>) {
+  const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    const page = pages[`${url.origin}${url.pathname}|${url.searchParams.get("pageToken") ?? ""}`];
+    if (!page) throw new Error(`unexpected request ${url.toString()}`);
+    return Response.json(page.body ?? {}, { status: page.status ?? 200 });
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+const shop = (id: number) => ({ name: `locations/${id}`, title: `Shop ${id}` });
+
+// R25 client-journey M1: the Reviews list is the same paged listing as the
+// Settings picker: every page of accounts and of locations, 100 a page.
+describe("GET /api/reviews/locations lists every page", () => {
+  function twoPagesEach() {
+    return google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }], nextPageToken: "a2" } },
+      [`${ACCOUNTS}|a2`]: { body: { accounts: [{ name: "accounts/2" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [shop(1)] } },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [shop(2)], nextPageToken: "l2" } },
+      [`${INFO}/accounts/2/locations|l2`]: { body: { locations: [shop(3)] } },
+    });
+  }
+
+  it("two pages of accounts and two of locations: all listed, 100 locations a page", async () => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    const fetchMock = twoPagesEach();
+
+    const body = await (await GET()).json();
+
+    expect(body).toEqual({
+      connected: true,
+      locations: [
+        { name: "accounts/1/locations/1", locationName: "Shop 1", title: "Shop 1" },
+        { name: "accounts/2/locations/2", locationName: "Shop 2", title: "Shop 2" },
+        { name: "accounts/2/locations/3", locationName: "Shop 3", title: "Shop 3" },
+      ],
+    });
+    const locationCalls = fetchMock.mock.calls
+      .map(([u]) => new URL(String(u)))
+      .filter((u) => u.pathname.endsWith("/locations"));
+    expect(locationCalls.map((u) => u.searchParams.get("pageSize"))).toEqual(["100", "100", "100"]);
+    for (const call of fetchMock.mock.calls as unknown as Array<[string, RequestInit]>) {
+      expect(call[1].signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  // R25 client-journey L3: a member sees only the workspace's saved location.
+  it("a member sees only the saved location, found on the second page", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
+    findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/2/locations/3" } });
+    twoPagesEach();
+
+    const body = await (await GET()).json();
+
+    expect(body).toEqual({
+      connected: true,
+      locations: [{ name: "accounts/2/locations/3", locationName: "Shop 3", title: "Shop 3" }],
+    });
+  });
+
+  it("the owner sees every location, whatever is saved", async () => {
+    findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/2/locations/3" } });
+    twoPagesEach();
+
+    expect((await (await GET()).json()).locations).toHaveLength(3);
+  });
+
+  it("a member with no saved location sees none, and is told who chooses it", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
+    findFirstMock.mockResolvedValue(CONNECTION);
+    twoPagesEach();
+
+    const body = await (await GET()).json();
+
+    expect(body.locations).toEqual([]);
+    expect(body.notice).toBe(
+      "The workspace owner hasn't chosen this workspace's Google location yet. Its reviews show here once they have.",
+    );
+  });
+});
+
+// R25 platform-clients L1 / new-customer L4: an account whose locations could
+// not be read is said, never "doesn't have any locations yet".
+describe("GET /api/reviews/locations when accounts could not be read", () => {
+  it("one account of two failing: the rest are listed, with the notice", async () => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 503 },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [shop(2)] } },
+    });
+
+    const body = await (await GET()).json();
+
+    expect(body.locations).toHaveLength(1);
+    expect(body.notice).toBe(
+      "Google didn't send the locations of some of your Business Profile accounts. Reload this page in a minute to see them all.",
+    );
+  });
+
+  it("the only account failing: the whole-list error, not an empty list", async () => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 503 },
+    });
+
+    const response = await GET();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
+    });
+  });
+
+  it("the only account refusing access: the access answer, with the in-place sign-in", async () => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 403 },
+    });
+
+    const body = await (await GET()).json();
+
+    expect(body).toMatchObject({ reconnect: true, signIn: true });
+    expect(body.error).toMatch(/^Google refused access to this Business Profile account/);
+  });
+});
+
+// R25 security-billing L1: Google counts quota per project, so each person is limited.
+describe("GET /api/reviews/locations rate limit", () => {
+  it("over the limit: 429, and Google is not asked", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 9 });
+    global.fetch = vi.fn() as unknown as typeof fetch;
+
+    const response = await GET();
+
+    expect(response.status).toBe(429);
+    expect(checkRateLimitMock).toHaveBeenCalledWith({ userId: "user-1", route: "reviews/locations", limit: 60, windowMs: 300_000 });
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 });
