@@ -99,7 +99,7 @@ const GATED: RouteCase[] = [
   { name: "POST /api/posts/[id]/approval", load: () => import("./posts/[postJobId]/approval/route"), method: "POST", params: { postJobId: "job-1" }, body: { decision: "approve", workspaceId: "ws-1" } },
   { name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
   { name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" }, query: "?workspaceId=ws-1" },
-  { name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: {} },
+  { name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { name: "POST /api/reviews/draft-response", load: () => import("./reviews/draft-response/route"), method: "POST", body: {} },
@@ -216,6 +216,8 @@ describe("a page drawn for another workspace, while the cookie's workspace is pa
     { name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" }, query: "?workspaceId=ws-2" },
     { name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: { workspaceId: "ws-2" } },
     { name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: { workspaceId: "ws-2" } },
+    // R32 security L1: a finished upload from a Media page drawn for another workspace.
+    { name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: { workspaceId: "ws-2" } },
   ];
 
   it.each(OTHER)("$name answers 409 WORKSPACE_CHANGED, not the pause", async (route) => {

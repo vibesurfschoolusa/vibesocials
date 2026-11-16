@@ -130,10 +130,6 @@ export async function POST(request: Request) {
     return signedOutResponse();
   }
 
-  // Pause (2026-11-10): a paused workspace cannot create or move work.
-  const blocked = accessBlockResponse(context);
-  if (blocked) return blocked;
-
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     return NextResponse.json(
@@ -157,6 +153,12 @@ export async function POST(request: Request) {
   // is a 400); the media library sends it (buildMediaCreateBody).
   const workspaceRefusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
   if (workspaceRefusal) return workspaceRefusal;
+
+  // Pause (2026-11-10): a paused workspace cannot create or move work. R32
+  // security L1: after the page's workspace check, so a page drawn for another
+  // workspace is told to reload, never given this workspace's pause or plan.
+  const blocked = accessBlockResponse(context);
+  if (blocked) return blocked;
 
   const rawBlobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
   if (!rawBlobUrl.trim()) {
