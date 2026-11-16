@@ -97,12 +97,12 @@ describe("POST /api/reviews/draft-response", () => {
     expect(memberFindManyMock).not.toHaveBeenCalled();
   });
 
-  it("refuses a request without the page's workspaceId (400 MISSING_WORKSPACE_ID), no provider call", async () => {
+  // A page open from before the release sends no id: it drafts as today until reloaded.
+  it("without the page's workspaceId (an old page): drafts as today", async () => {
     const response = await post({ ...validBody, workspaceId: undefined });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("drafts a response on the happy path", async () => {

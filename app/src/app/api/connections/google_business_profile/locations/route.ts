@@ -29,7 +29,8 @@ export async function GET(request: Request) {
   const { user, workspace } = contextOrError;
 
   const sent = new URL(request.url).searchParams.get("workspaceId");
-  const refusal = renderedWorkspaceRefusal(sent ?? undefined, workspace.id);
+  // No id is a page open from before the id was sent: it lists as before, until reloaded.
+  const refusal = sent === null ? null : renderedWorkspaceRefusal(sent, workspace.id);
   if (refusal) return refusal;
 
   const limited = await googleRouteRateLimit(user.id, "google_business_profile/locations");

@@ -50,7 +50,9 @@ export async function POST(request: Request) {
     }
     // R27 security-billing L1: the workspace the page was rendered for, never
     // the cookie alone (its brand voice and AI quota). Before any limiter or AI call.
-    const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+    // No id is a page open from before the id was sent: as before, until reloaded.
+    const refusal =
+      body.workspaceId === undefined ? null : renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
     if (refusal) return refusal;
     const { starRating } = body;
 

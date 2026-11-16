@@ -758,14 +758,17 @@ describe("the picker's GET: the page's workspace", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("no id: 400 MISSING_WORKSPACE_ID, nothing asked of Google", async () => {
-    const fetchMock = google({});
+  // A Settings page open from before the release sends no id: it lists as today until reloaded.
+  it("no id (an old page): listed as today", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
+    });
 
     const res = await list(null);
 
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect((await res.json()).locations).toHaveLength(1);
   });
 
   it("the active workspace's id: listed as before", async () => {

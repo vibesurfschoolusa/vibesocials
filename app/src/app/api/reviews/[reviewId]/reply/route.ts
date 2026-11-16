@@ -62,7 +62,9 @@ export async function POST(request: Request) {
     // R27 security-billing L1: the workspace the page was rendered for, never
     // the cookie alone: a stale tab would post publicly through another
     // workspace's connection. Before any Google call.
-    const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+    // No id is a page open from before the id was sent: as before, until reloaded.
+    const refusal =
+      body.workspaceId === undefined ? null : renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
     if (refusal) return refusal;
     const { comment, reviewName } = body;
 

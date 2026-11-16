@@ -104,12 +104,12 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 
-  it("refuses a request without the page's workspaceId (400 MISSING_WORKSPACE_ID), nothing sent", async () => {
+  // A page open from before the release sends no id: it replies as today until reloaded.
+  it("without the page's workspaceId (an old page): replies as today", async () => {
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1", workspaceId: undefined });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
-    expect(replyToReviewMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(replyToReviewMock).toHaveBeenCalledWith("tok", "accounts/1/locations/2/reviews/r1", "Thanks");
   });
 
   it.each([
