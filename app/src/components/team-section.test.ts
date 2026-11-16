@@ -136,7 +136,7 @@ describe("Create invite link when the answer is lost", () => {
 
   it("says it may have gone through and where to check", () => {
     expect(INVITE_MAYBE_MADE_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so a new invite link may have been made, which turns the old one off. Reload this page and check Invite link before you send a link.",
+      "Vibe Socials' answer didn't reach you, so a new invite link may have been made, which turns the old one off. If your connection dropped, reconnect first. Reload this page and check Invite link before you send a link.",
     );
     expect(INVITE_MAYBE_MADE_MESSAGE).not.toMatch(/nothing changed/i);
   });

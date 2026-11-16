@@ -235,7 +235,7 @@ describe("AccountMenu: Create workspace when the answer is lost", () => {
 
   it("says it may have been made and to check the workspace list", () => {
     expect(WORKSPACE_MAYBE_MADE_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so the workspace may have been made. Open this menu again and check the workspace list before you create it again.",
+      "Vibe Socials' answer didn't reach you, so the workspace may have been made. If your connection dropped, reconnect first. Open this menu again and check the workspace list before you create it again.",
     );
   });
 

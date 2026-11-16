@@ -31,7 +31,7 @@ describe("Create's submit failure", () => {
   ] as const)("post request offline: %s (%s, held %s) -> check %s", async (_name, mode, holdsForApproval, page) => {
     const error = await sendPostRequest("{}", offline).catch((err: unknown) => err);
     expect(submitErrorText(error, { mode, holdsForApproval })).toBe(
-      `Vibe Socials' answer didn't reach you, so the post may have been saved. Check ${page} to see whether it was before you try again.`,
+      `Vibe Socials' answer didn't reach you, so the post may have been saved. If your connection dropped, reconnect first. Check ${page} to see whether it was before you try again.`,
     );
   });
 
@@ -58,7 +58,7 @@ describe("Create's submit failure", () => {
     const fetchImpl = (async () => make()) as unknown as typeof fetch;
     const error = await sendPostRequest("{}", fetchImpl).catch((err: unknown) => err);
     expect(submitErrorText(error, NOW)).toBe(
-      "Vibe Socials' answer didn't reach you, so the post may have been saved. Check Activity to see whether it was before you try again.",
+      "Vibe Socials' answer didn't reach you, so the post may have been saved. If your connection dropped, reconnect first. Check Activity to see whether it was before you try again.",
     );
   });
 

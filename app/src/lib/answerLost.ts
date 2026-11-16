@@ -7,5 +7,6 @@
  * `mayHave`: a lower-case clause without a full stop. `next`: whole sentences.
  */
 export function answerLostText(mayHave: string, next: string): string {
-  return `Vibe Socials' answer didn't reach you, so ${mayHave}. ${next}`;
+  // Lead review: true offline and for a 5xx alike, and an offline person learns to reconnect.
+  return `Vibe Socials' answer didn't reach you, so ${mayHave}. If your connection dropped, reconnect first. ${next}`;
 }

@@ -14,7 +14,7 @@ describe("answerLostText", () => {
   // Lead review: true offline and for an unreadable 5xx, where the connection may be fine.
   it("says the answer didn't arrive, what may have happened, and the next step", () => {
     expect(answerLostText("the workspace may have been made", "Reload this page.")).toBe(
-      "Vibe Socials' answer didn't reach you, so the workspace may have been made. Reload this page.",
+      "Vibe Socials' answer didn't reach you, so the workspace may have been made. If your connection dropped, reconnect first. Reload this page.",
     );
   });
 
