@@ -68,7 +68,7 @@ import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import type { PostingSlot } from "@/lib/postingSlots";
-import { explainUploadFailure } from "@/lib/uploadFailure";
+import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
 import { BulkPostRow, captionFailedText, captionLocked } from "./bulk-post-row";
 import { MediaPickerDialog } from "./media-picker-dialog";
@@ -406,7 +406,7 @@ export function BulkPostsForm({
       let settled = false;
       const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
-        handleUploadUrl: "/api/upload",
+        handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(prepared),
         onUploadProgress: (event) => {
           if (!settled) updateRow(id, { progress: event.percentage });
@@ -481,7 +481,7 @@ export function BulkPostsForm({
       const response = await fetchOrNoAnswer("/api/posts/auto-caption", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(autoCaptionRequestBody(rowsRef.current, id, blob, frames)),
+        body: JSON.stringify(autoCaptionRequestBody(rowsRef.current, id, blob, frames, workspaceId)),
       });
       const data = (await response.json().catch(() => null)) as
         | { caption?: unknown; error?: unknown; code?: unknown }
@@ -520,7 +520,7 @@ export function BulkPostsForm({
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row?.blob) return;
     updateRow(id, { altTextAsked: true, altTextWriting: true });
-    const text = await describePhotoOnce(row.blob);
+    const text = await describePhotoOnce(row.blob, workspaceId);
     // Never replace what the user typed meanwhile.
     updateRow(id, (current) => ({ altTextWriting: false, altText: current.altText.trim() ? current.altText : text }));
   }
@@ -532,7 +532,7 @@ export function BulkPostsForm({
     if (!row?.blob || row.altTextWriting) return;
     updateRow(id, { altTextWriting: true, altTextError: null });
     try {
-      const text = await requestPhotoDescription(row.blob);
+      const text = await requestPhotoDescription(row.blob, workspaceId);
       updateRow(id, { altTextWriting: false, altText: text });
     } catch (error: unknown) {
       updateRow(id, {
@@ -546,7 +546,7 @@ export function BulkPostsForm({
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row || row.improving || !row.caption.trim()) return;
     updateRow(id, { improving: true, improveError: null, sendError: null });
-    const result = await requestImprovedCaption(row.caption);
+    const result = await requestImprovedCaption(row.caption, workspaceId);
     updateRow(
       id,
       result.ok ? { improving: false, caption: result.caption } : { improving: false, improveError: result.error },
@@ -570,7 +570,7 @@ export function BulkPostsForm({
       if (!file) return { image: null, error: null };
       const blob = await upload(coverBlobPathname(workspaceId), file, {
         access: "public",
-        handleUploadUrl: "/api/upload",
+        handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(file),
       });
       return { image: { url: blob.url, mimeType: file.type, sizeBytes: file.size }, error: null };

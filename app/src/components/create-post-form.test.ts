@@ -1448,3 +1448,16 @@ describe("a refused press shows its reason where the person is", () => {
     expect(control).toContain("pageError: uploadError,");
   });
 });
+
+// R31 (lead follow-up): Create's AI requests carry the workspace the page was
+// drawn for (its uploads go through uploadRouteUrl, checked in uploadFailure.test.ts).
+describe("Create's AI requests carry the page's workspace id", () => {
+  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+
+  it("Caption from media, Improve caption and Write it for me", () => {
+    expect(source).toMatch(/requestCaption\(\s*"\/api\/posts\/auto-caption",\s*\{\s*workspaceId,/);
+    expect(source).toMatch(/requestCaption\(\s*"\/api\/posts\/enhance-caption",\s*\{ workspaceId, caption: uploadCaption \}/);
+    expect(source).not.toMatch(/requestPhotoDescription\(blob\)/);
+    expect(source.match(/requestPhotoDescription\([^)]*, workspaceId\)/g)?.length).toBeGreaterThanOrEqual(1);
+  });
+});

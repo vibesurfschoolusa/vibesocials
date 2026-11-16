@@ -775,6 +775,7 @@ function QueueEditDialog({
           onChange={setPlatformOverrides}
           footer={footerSettings}
           disabled={saving}
+          workspaceId={workspaceId}
         />
         <div className="space-y-1.5">
           <Label htmlFor="queue-edit-time">{model.scheduleLabel}</Label>

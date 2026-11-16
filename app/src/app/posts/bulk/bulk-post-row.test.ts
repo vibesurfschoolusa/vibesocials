@@ -67,3 +67,12 @@ describe("Add many: a caption refused because the session ended", () => {
     expect(captionFailedText(401, undefined)).toBe("You were signed out. Sign in again.");
   });
 });
+
+// R31 (lead follow-up): a caption refused for another workspace says the shared sentence.
+describe("captionFailedText: a page for another workspace", () => {
+  it("says the shared sentence for the workspace codes", async () => {
+    const { captionFailedText } = await import("./bulk-post-row");
+    expect(captionFailedText(409, "WORKSPACE_CHANGED")).toBe("You switched workspace in another tab. Reload this page, then try again.");
+    expect(captionFailedText(400, "MISSING_WORKSPACE_ID")).toBe("This page is out of date. Reload it, then try again.");
+  });
+});

@@ -7,7 +7,7 @@ import { upload } from '@vercel/blob/client';
 import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { sendPostRequest, submitErrorText } from "@/lib/postSubmitFailure";
-import { explainUploadFailure } from "@/lib/uploadFailure";
+import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
 import {
@@ -1376,7 +1376,7 @@ function CreatePostFormInner({
 
     const promise = upload(uploadKey, file, {
       access: "public",
-      handleUploadUrl: "/api/upload",
+      handleUploadUrl: uploadRouteUrl(workspaceId),
       clientPayload: uploadSizePayload(file),
       // Progress feedback only; does not change upload semantics. Guarded so a
       // stale in-flight upload for a swapped-out file never moves the bar.
@@ -1455,6 +1455,7 @@ function CreatePostFormInner({
       const result = await requestCaption(
         "/api/posts/auto-caption",
         {
+          workspaceId,
           blobUrl: blob.url,
           mimeType: blob.mimeType,
           ...(frames.length > 0 ? { frames } : {}),
@@ -1610,7 +1611,7 @@ function CreatePostFormInner({
       // Under this workspace's covers/ folder: the posts route takes no other.
       const blob = await upload(coverBlobPathname(workspaceId), file, {
         access: "public",
-        handleUploadUrl: "/api/upload",
+        handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(file),
       });
       return { image: { url: blob.url, mimeType: file.type, sizeBytes: file.size }, error: null };
@@ -1628,7 +1629,7 @@ function CreatePostFormInner({
     try {
       const newBlob = await upload(generateBlobKey(file), file, {
         access: "public",
-        handleUploadUrl: "/api/upload",
+        handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(file),
         onUploadProgress: (event) => {
           if (!settled) onProgress(event.percentage);
@@ -1646,7 +1647,7 @@ function CreatePostFormInner({
   // wherever it is now: still the single photo (returned, for the field), moved
   // into the set by "Add photos" (written onto its place there), or gone (dropped).
   async function describeSinglePhoto(blob: UploadedBlobInfo, photo: object): Promise<string | null> {
-    const text = await requestPhotoDescription(blob);
+    const text = await requestPhotoDescription(blob, workspaceId);
     const target = whereDescriptionGoes(photo, { single: singlePhotoRef.current, set: photoSetRef.current });
     if (target?.to === "set") {
       changePhotoSet((prev) => patchPhoto(prev, target.key, { altText: text }));
@@ -2297,7 +2298,7 @@ function CreatePostFormInner({
       // a sentence that the caption is unchanged, or the route's own text.
       const result = await requestCaption(
         "/api/posts/enhance-caption",
-        { caption: uploadCaption },
+        { workspaceId, caption: uploadCaption },
         "enhancedCaption",
       );
       if (!result.ok) {
@@ -2625,6 +2626,7 @@ function CreatePostFormInner({
                   onRemoveAll={removeAllPhotos}
                   removeAllClearsCaption={removeAllClearsTheCaption}
                   onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
+                  workspaceId={workspaceId}
                 />
               )}
               <PreparingPhotosStatus photos={photoSet} />
@@ -2767,6 +2769,7 @@ function CreatePostFormInner({
           overrides={platformOverrides}
           onChange={setPlatformOverrides}
           footer={footerSettings}
+          workspaceId={workspaceId}
         />
 
         {tiktokSelected && activeMimeType && (

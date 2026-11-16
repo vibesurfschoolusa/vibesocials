@@ -39,6 +39,8 @@ export interface PlatformCaptionEditorProps {
   /** The footer the app appends, so counters and "Adapt" leave room for it. */
   footer?: CaptionFooterUser | null;
   disabled?: boolean;
+  /** R31: the workspace the page was drawn for, sent with Adapt (null: none yet, left out). */
+  workspaceId: string | null;
 }
 
 function captionCountText(count: number): string {
@@ -61,6 +63,7 @@ export function PlatformCaptionEditor({
   onChange,
   footer,
   disabled = false,
+  workspaceId,
 }: PlatformCaptionEditorProps) {
   const toast = useToast();
   const [adapting, setAdapting] = useState<Platform | null>(null);
@@ -87,6 +90,7 @@ export function PlatformCaptionEditor({
           caption: source,
           platform,
           ...(maxLength !== undefined ? { maxLength } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
         }),
       });
       const data = (await response.json().catch(() => null)) as

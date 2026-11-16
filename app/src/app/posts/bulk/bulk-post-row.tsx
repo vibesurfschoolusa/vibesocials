@@ -1,5 +1,6 @@
 "use client";
 
+import { pageWorkspaceRefusalText } from "@/lib/workspaceChanged";
 import { useRef } from "react";
 import type { Platform } from "@prisma/client";
 import { Film, Image as ImageIcon } from "lucide-react";
@@ -86,6 +87,9 @@ export function captionFailedText(status: number | null, code: unknown): string 
   // R21 publishing-flow L1: the session ended (another tab, a new password);
   // asking again fails until the person signs in.
   if (status === 401) return SIGNED_OUT_ERROR;
+  // R31: a page for another workspace, or from before the release.
+  const workspaceText = pageWorkspaceRefusalText(code);
+  if (workspaceText) return workspaceText;
   if (status === 504) {
     return "No caption was written: the AI service took too long. Write one yourself, or ask again.";
   }

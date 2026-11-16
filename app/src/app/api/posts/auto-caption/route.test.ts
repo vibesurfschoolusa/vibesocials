@@ -38,7 +38,8 @@ function post(body: Record<string, unknown>): Promise<Response> {
     new Request("http://localhost/api/posts/auto-caption", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      // R31: the page's workspace id (the context's "ws-1") unless the test sends its own.
+      body: JSON.stringify({ workspaceId: "ws-1", ...body }),
     }),
   );
 }
@@ -1020,5 +1021,39 @@ Keep the caption short (1-2 sentences, max ~150 characters).`;
     expect(response.status).toBe(200);
     expect(postJobFindManyMock).not.toHaveBeenCalled();
     expect(sentPrompt()).not.toContain("Catch the");
+  });
+});
+
+// R31 (lead follow-up): the AI caption routes check the page's workspace id, so a
+// tab left on another workspace spends nothing and reads no brand voice there.
+describe("POST /api/posts/auto-caption: the page's workspace id", () => {
+  function raw(payload: Record<string, unknown>): Promise<Response> {
+    return POST(
+      new Request("http://localhost/api/posts/auto-caption", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    );
+  }
+
+  it("an absent id is the 400 to reload the page, and the AI is not asked", async () => {
+    const res = await raw({ blobUrl: BLOB_URL, mimeType: "image/jpeg" });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("another workspace's id is the 409 WORKSPACE_CHANGED, and the AI is not asked", async () => {
+    const res = await raw({ ...{ blobUrl: BLOB_URL, mimeType: "image/jpeg" }, workspaceId: "ws-2" });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

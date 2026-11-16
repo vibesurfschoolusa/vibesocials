@@ -189,3 +189,33 @@ describe("explainUploadFailure", () => {
     });
   });
 });
+
+// R31 (lead follow-up): every upload asks for its token with the workspace the
+// page was drawn for, so a tab left on another workspace gets no token there.
+describe("uploadRouteUrl", () => {
+  it("is the upload route with the page's workspace id", async () => {
+    const { uploadRouteUrl } = await import("./uploadFailure");
+    expect(uploadRouteUrl("ws-1")).toBe("/api/upload?workspaceId=ws-1");
+    expect(uploadRouteUrl("a b")).toBe("/api/upload?workspaceId=a%20b");
+  });
+
+  it("is the only handleUploadUrl in the app", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const path = await import("node:path");
+    const root = path.join(__dirname, "..");
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = path.join(dir, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) files.push(full);
+      }
+    };
+    walk(root);
+    const uses = files.flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/handleUploadUrl:\s*([^,\n]+)/g)].map((m) => `${path.relative(root, file)}: ${m[1].trim()}`),
+    );
+    expect(uses.length).toBeGreaterThanOrEqual(6);
+    expect(uses.filter((use) => !/: uploadRouteUrl\(workspaceId\)$/.test(use))).toEqual([]);
+  });
+});

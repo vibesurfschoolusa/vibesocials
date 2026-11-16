@@ -26,6 +26,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -98,6 +99,10 @@ export async function POST(request: Request) {
     if (!parsedBody) {
       return invalidJsonBodyResponse();
     }
+    // R31: the page's workspace, whose AI allowance, brand voice and recent
+    // captions this uses; a tab left on another workspace uses none of them.
+    const workspaceRefusal = renderedWorkspaceRefusal(parsedBody.workspaceId, context.workspace.id);
+    if (workspaceRefusal) return workspaceRefusal;
     // Fields are validated below (typeof checks); `Partial` keeps that honest.
     const body = parsedBody as Partial<AutoCaptionRequestBody>;
 

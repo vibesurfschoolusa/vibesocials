@@ -8,6 +8,7 @@
  */
 
 import { SIGNED_OUT_ERROR } from "./signedOutMessage";
+import { withWorkspaceId } from "./workspaceChanged";
 
 /**
  * An upload failure explained in a sentence the user can act on (refused,
@@ -99,4 +100,13 @@ async function signedOutText(response: Response): Promise<string> {
     // Fall through to the shared sentence.
   }
   return SIGNED_OUT_ERROR;
+}
+
+/**
+ * R31: the upload route for `upload()`'s handleUploadUrl, with the workspace
+ * the page was drawn for, so a tab left on another workspace gets no token
+ * there (the route remembers why, and explainUploadFailure says it).
+ */
+export function uploadRouteUrl(workspaceId: string): string {
+  return withWorkspaceId("/api/upload", workspaceId);
 }

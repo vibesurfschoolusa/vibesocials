@@ -65,7 +65,7 @@ const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
 
 function tokenRequest(): Request {
-  return new Request("http://localhost/api/upload", {
+  return new Request("http://localhost/api/upload?workspaceId=ws-1", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -133,7 +133,7 @@ describe("POST /api/upload — the logos/ prefix is reserved", () => {
   it("refuses a token for a pathname under logos/ with a plain 400", async () => {
     for (const pathname of ["logos/0123456789abcdef0123456789abcdef.png", "/logos/x.png", "LOGOS/x.png"]) {
       const res = await POST(
-        new Request("http://localhost/api/upload", {
+        new Request("http://localhost/api/upload?workspaceId=ws-1", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -153,7 +153,7 @@ describe("POST /api/upload — the logos/ prefix is reserved", () => {
 describe("POST /api/upload — the covers/ folder is the workspace's own", () => {
   const tokenFor = (pathname: string) =>
     POST(
-      new Request("http://localhost/api/upload", {
+      new Request("http://localhost/api/upload?workspaceId=ws-1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -182,7 +182,7 @@ describe("POST /api/upload — the covers/ folder is the workspace's own", () =>
 describe("POST /api/upload — only the app's key shapes", () => {
   const tokenFor = (payload: unknown) =>
     POST(
-      new Request("http://localhost/api/upload", {
+      new Request("http://localhost/api/upload?workspaceId=ws-1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "blob.generate-client-token", payload }),
@@ -238,7 +238,7 @@ describe("POST /api/upload — only the app's key shapes", () => {
 describe("POST /api/upload — declared size and the day's bytes", () => {
   const tokenWith = (clientPayload: unknown, pathname = SIGNED_IN_KEY) =>
     POST(
-      new Request("http://localhost/api/upload", {
+      new Request("http://localhost/api/upload?workspaceId=ws-1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -360,7 +360,7 @@ describe("POST /api/upload — declared size and the day's bytes", () => {
   it("counts nothing for the storage's upload-completed callback", async () => {
     handleUploadMock.mockResolvedValue({ type: "blob.upload-completed", response: "ok" });
     const res = await POST(
-      new Request("http://localhost/api/upload", {
+      new Request("http://localhost/api/upload?workspaceId=ws-1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "blob.upload-completed", payload: { blob: {}, tokenPayload: "{}" } }),
@@ -378,7 +378,7 @@ describe("a refused upload's sentence reaches the person", () => {
   const BLOB_CLIENT_ERROR = new Error("Vercel Blob: Failed to  retrieve the client token");
   const tokenWith = (payload: unknown) =>
     POST(
-      new Request("http://localhost/api/upload", {
+      new Request("http://localhost/api/upload?workspaceId=ws-1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "blob.generate-client-token", payload }),
@@ -550,6 +550,49 @@ describe("GET /api/upload — why an upload was refused", () => {
       storageFull: true,
       error: FULL,
       code: "WORKSPACE_STORAGE_FULL",
+    });
+  });
+});
+
+// R31 (lead follow-up): a token is signed only for the workspace the page was
+// drawn for (`?workspaceId=` on handleUploadUrl). upload() drops a refused
+// token's body, so the reason is remembered for the page's question (GET).
+describe("POST /api/upload: the page's workspace id", () => {
+  const tokenAt = (query: string) =>
+    POST(
+      new Request(`http://localhost/api/upload${query}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "blob.generate-client-token",
+          payload: { pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false },
+        }),
+      }),
+    );
+
+  it("an absent id: the 400 to reload, no token, and GET says the same sentence", async () => {
+    const res = await tokenAt("");
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_WORKSPACE_ID");
+    expect(handleUploadMock).not.toHaveBeenCalled();
+    expect(consumeDayBytesMock).not.toHaveBeenCalled();
+    await expect((await GET()).json()).resolves.toMatchObject({
+      refused: true,
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
+  });
+
+  it("another workspace's id: the 409, no token, and GET says the shared sentence", async () => {
+    const res = await tokenAt("?workspaceId=ws-2");
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("WORKSPACE_CHANGED");
+    expect(handleUploadMock).not.toHaveBeenCalled();
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
+    await expect((await GET()).json()).resolves.toMatchObject({
+      refused: true,
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+      code: "WORKSPACE_CHANGED",
     });
   });
 });

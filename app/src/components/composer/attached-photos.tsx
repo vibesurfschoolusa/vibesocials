@@ -88,6 +88,8 @@ const PHOTO_DESCRIPTION_EMPTY_MESSAGE = "The AI didn't write a description. Try 
  */
 export async function requestPhotoDescription(
   blob: UploadedBlob,
+  /** R31: the workspace the page was drawn for (null: none yet, left out). */
+  workspaceId: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
   let response: Response;
@@ -97,7 +99,12 @@ export async function requestPhotoDescription(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blobUrl: blob.url, mimeType: blob.mimeType, purpose: "altText" }),
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          mimeType: blob.mimeType,
+          purpose: "altText",
+          ...(workspaceId ? { workspaceId } : {}),
+        }),
       },
       fetchImpl,
     );
@@ -330,6 +337,8 @@ export interface AttachedPhotosProps {
   removeAllClearsCaption: boolean;
   /** 07d: the photo's description changed (typed, or written by the AI). */
   onDescribe(key: string, text: string): void;
+  /** R31: the workspace the page was drawn for, sent with "Write it for me". */
+  workspaceId: string | null;
 }
 
 export function AttachedPhotos({
@@ -340,6 +349,7 @@ export function AttachedPhotos({
   onRemoveAll,
   removeAllClearsCaption: clearsCaption,
   onDescribe,
+  workspaceId,
 }: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -368,7 +378,7 @@ export function AttachedPhotos({
               label={`Photo ${index + 1}: describe this photo (alt text)`}
               value={photo.altText ?? ""}
               onChange={(text) => onDescribe(photo.key, text)}
-              onWrite={photo.blob ? () => requestPhotoDescription(photo.blob as UploadedBlob) : null}
+              onWrite={photo.blob ? () => requestPhotoDescription(photo.blob as UploadedBlob, workspaceId) : null}
             />
           </li>
         ))}

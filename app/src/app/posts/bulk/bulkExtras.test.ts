@@ -128,28 +128,28 @@ describe("Add many: the body for one row", () => {
 describe("Add many: Improve", () => {
   it("sends the caption to enhance-caption exactly as Create does and returns the answer", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ enhancedCaption: "Better" }), { status: 200 }));
-    const result = await requestImprovedCaption("Sunny day", fetchImpl as unknown as typeof fetch);
+    const result = await requestImprovedCaption("Sunny day", "ws-1", fetchImpl as unknown as typeof fetch);
     expect(result).toEqual({ ok: true, caption: "Better" });
     expect(fetchImpl).toHaveBeenCalledWith("/api/posts/enhance-caption", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ caption: "Sunny day" }),
+      body: JSON.stringify({ caption: "Sunny day", workspaceId: "ws-1" }),
     });
   });
 
   it("a refusal, an empty answer or no answer: not ok, with the plain line", async () => {
     const refused = vi.fn(async () => Response.json({ error: "Server text" }, { status: 500 }));
-    expect(await requestImprovedCaption("x", refused as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
+    expect(await requestImprovedCaption("x", "ws-1", refused as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
     const empty = vi.fn(async () => new Response(JSON.stringify({ enhancedCaption: "  " }), { status: 200 }));
-    expect(await requestImprovedCaption("x", empty as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
+    expect(await requestImprovedCaption("x", "ws-1", empty as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
     const thrown = vi.fn(async () => {
       throw new Error("offline");
     });
     // Lead review 3 (R28 NN2): no answer: the AI may have run; the improved caption isn't shown.
-    expect(await requestImprovedCaption("x", thrown as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
+    expect(await requestImprovedCaption("x", "ws-1", thrown as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
     // R29 OO1: a gateway's page is no answer too: the AI may have run.
     const gateway = vi.fn(async () => new Response("<html>504</html>", { status: 504, headers: { "content-type": "text/html" } }));
-    expect(await requestImprovedCaption("x", gateway as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
+    expect(await requestImprovedCaption("x", "ws-1", gateway as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
     expect(BULK_IMPROVE_LOST_TEXT).toBe(
       "Vibe Socials' answer didn't reach you, so the improved caption isn't shown. If your connection dropped, reconnect first. The caption is as it was; try again, or edit it yourself.",
     );
@@ -181,22 +181,22 @@ describe("Add many: alt text auto-fill", () => {
 
   it("asks the AI the way Create's Write it for me does and fills an empty field", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ altText: "A surfer" }), { status: 200 }));
-    const text = await describePhotoOnce(BLOB, fetchImpl as unknown as typeof fetch);
+    const text = await describePhotoOnce(BLOB, "ws-1", fetchImpl as unknown as typeof fetch);
     expect(text).toBe("A surfer");
     expect(fetchImpl).toHaveBeenCalledWith("/api/posts/auto-caption", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blobUrl: BLOB.url, mimeType: BLOB.mimeType, purpose: "altText" }),
+      body: JSON.stringify({ blobUrl: BLOB.url, mimeType: BLOB.mimeType, purpose: "altText", workspaceId: "ws-1" }),
     });
   });
 
   it("a failure gives an empty description, without throwing", async () => {
     const refused = vi.fn(async () => new Response(JSON.stringify({ error: "nope" }), { status: 429 }));
-    expect(await describePhotoOnce(BLOB, refused as unknown as typeof fetch)).toBe("");
+    expect(await describePhotoOnce(BLOB, "ws-1", refused as unknown as typeof fetch)).toBe("");
     const thrown = vi.fn(async () => {
       throw new Error("offline");
     });
-    expect(await describePhotoOnce(BLOB, thrown as unknown as typeof fetch)).toBe("");
+    expect(await describePhotoOnce(BLOB, "ws-1", thrown as unknown as typeof fetch)).toBe("");
   });
 });
 
@@ -276,19 +276,20 @@ describe("Add many: avoidCaptions in the caption request", () => {
       { id: "r1", caption: "Fresh caption for row one" },
       { id: "r2", caption: "" },
     ];
-    const body = autoCaptionRequestBody(rows, "r2", { url: VIDEO_BLOB.url, mimeType: VIDEO_BLOB.mimeType }, ["data:image/jpeg;base64,AA"]);
+    const body = autoCaptionRequestBody(rows, "r2", { url: VIDEO_BLOB.url, mimeType: VIDEO_BLOB.mimeType }, ["data:image/jpeg;base64,AA"], "ws-1");
     expect(body).toEqual({
       blobUrl: VIDEO_BLOB.url,
       mimeType: VIDEO_BLOB.mimeType,
       bulk: true,
       frames: ["data:image/jpeg;base64,AA"],
       avoidCaptions: ["Fresh caption for row one"],
+      workspaceId: "ws-1",
     });
   });
 
   it("the first row, with nothing written yet, sends today's body", () => {
-    const body = autoCaptionRequestBody([{ id: "r1", caption: "" }, { id: "r2", caption: "" }], "r1", BLOB, []);
-    expect(body).toEqual({ blobUrl: BLOB.url, mimeType: BLOB.mimeType, bulk: true });
+    const body = autoCaptionRequestBody([{ id: "r1", caption: "" }, { id: "r2", caption: "" }], "r1", BLOB, [], "ws-1");
+    expect(body).toEqual({ blobUrl: BLOB.url, mimeType: BLOB.mimeType, bulk: true, workspaceId: "ws-1" });
   });
 });
 
@@ -324,7 +325,7 @@ describe("Add many: why Improve failed", () => {
       [400, { error: "too long", code: "AI_INPUT_TOO_LONG" }, improveFailedText(400, "AI_INPUT_TOO_LONG")],
       [500, { error: "Server text" }, BULK_IMPROVE_FAILED_TEXT],
     ] as const) {
-      const result = await requestImprovedCaption("Keep me", answer(status, body));
+      const result = await requestImprovedCaption("Keep me", "ws-1", answer(status, body));
       // Not ok: the form keeps the caption it has (it only replaces on ok).
       expect(result).toEqual({ ok: false, error: expected });
     }
@@ -547,5 +548,18 @@ describe("signed out, and cover upload failures", () => {
   it("any other failure: the cover sentence", async () => {
     const fetchImpl = answer(200, {});
     await expect(coverUploadFailedText(new Error("network down"), fetchImpl)).resolves.toBe(BULK_COVER_FAILED_TEXT);
+  });
+});
+
+// R31 (lead follow-up): another workspace's answer says the shared sentence;
+// the row's caption is left as typed (Improve changes nothing on a refusal).
+describe("Add many: a page for another workspace", () => {
+  it("Improve says the shared sentence", async () => {
+    const refused = vi.fn(async () => Response.json({ error: "You switched workspace in another tab. Reload this page, then try again.", code: "WORKSPACE_CHANGED" }, { status: 409 }));
+    expect(await requestImprovedCaption("Keep me", "ws-1", refused as unknown as typeof fetch)).toEqual({
+      ok: false,
+      error: "You switched workspace in another tab. Reload this page, then try again.",
+    });
+    expect(improveFailedText(400, "MISSING_WORKSPACE_ID")).toBe("This page is out of date. Reload it, then try again.");
   });
 });

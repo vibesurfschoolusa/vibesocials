@@ -95,8 +95,8 @@ const GATED: RouteCase[] = [
   { file: "posts/[postJobId]/retry/route.ts", name: "POST /api/posts/[id]/retry", load: () => import("./posts/[postJobId]/retry/route"), method: "POST", params: { postJobId: "job-1" }, body: {} },
   { file: "upload/route.ts", name: "POST /api/upload (upload token)", load: () => import("./upload/route"), method: "POST", body: { type: "blob.generate-client-token" } },
   { file: "media/route.ts", name: "POST /api/media (register an upload)", load: () => import("./media/route"), method: "POST", body: { workspaceId: "ws-1" } },
-  { file: "posts/auto-caption/route.ts", name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: {} },
-  { file: "posts/enhance-caption/route.ts", name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: {} },
+  { file: "posts/auto-caption/route.ts", name: "POST /api/posts/auto-caption", load: () => import("./posts/auto-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
+  { file: "posts/enhance-caption/route.ts", name: "POST /api/posts/enhance-caption", load: () => import("./posts/enhance-caption/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { file: "reviews/draft-response/route.ts", name: "POST /api/reviews/draft-response", load: () => import("./reviews/draft-response/route"), method: "POST", body: { workspaceId: "ws-1" } },
   { file: "reviews/[reviewId]/reply/route.ts", name: "POST /api/reviews/[id]/reply", load: () => import("./reviews/[reviewId]/reply/route"), method: "POST", params: { reviewId: "r-1" }, body: { workspaceId: "ws-1", comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/3" } },
 ];

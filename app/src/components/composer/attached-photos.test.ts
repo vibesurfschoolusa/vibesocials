@@ -294,6 +294,7 @@ describe("AttachedPhotos", () => {
   const render = (photos: AttachedPhoto[]) =>
     renderToStaticMarkup(
       createElement(AttachedPhotos, {
+        workspaceId: "ws-1",
         photos,
         onRemove: noop,
         onMove: noop,
@@ -485,11 +486,12 @@ describe("requestPhotoDescription", () => {
   it("asks the AI caption route for the photo's description and gives it back", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ altText: "A dog on a beach." }), { status: 200 }));
 
-    await expect(requestPhotoDescription(blob, fetchImpl)).resolves.toBe("A dog on a beach.");
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).resolves.toBe("A dog on a beach.");
+    // R31: with the workspace the page was drawn for.
     expect(fetchImpl).toHaveBeenCalledWith("/api/posts/auto-caption", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blobUrl: blob.url, mimeType: "image/jpeg", purpose: "altText" }),
+      body: JSON.stringify({ blobUrl: blob.url, mimeType: "image/jpeg", purpose: "altText", workspaceId: "ws-1" }),
     });
   });
 
@@ -501,7 +503,7 @@ describe("requestPhotoDescription", () => {
         }),
     );
 
-    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow(
       "Your workspace has reached today's AI limit. Try again tomorrow.",
     );
   });
@@ -514,7 +516,7 @@ describe("requestPhotoDescription", () => {
       const fetchImpl = vi.fn(async () => {
         throw new TypeError(message);
       });
-      await expect(requestPhotoDescription(blob, fetchImpl as unknown as typeof fetch)).rejects.toThrow(
+      await expect(requestPhotoDescription(blob, "ws-1", fetchImpl as unknown as typeof fetch)).rejects.toThrow(
         PHOTO_DESCRIPTION_OFFLINE_MESSAGE,
       );
     }
@@ -526,7 +528,7 @@ describe("requestPhotoDescription", () => {
 
   it("a JSON error with no text: a plain sentence", async () => {
     const fetchImpl = vi.fn(async () => Response.json({}, { status: 500 }));
-    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
     expect(PHOTO_DESCRIPTION_FAILED_MESSAGE).toBe(
       "Something went wrong on our side, so no description was written. Please try again in a minute.",
     );
@@ -535,17 +537,17 @@ describe("requestPhotoDescription", () => {
   // R29 OO1: a gateway's page is no answer: the AI may have run, its answer isn't shown.
   it("an error answer that is not JSON (a gateway's page): the lost-answer sentence", async () => {
     const fetchImpl = vi.fn(async () => new Response("<html>Bad gateway</html>", { status: 502 }));
-    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_OFFLINE_MESSAGE);
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_OFFLINE_MESSAGE);
   });
 
   it("a success answer that is not JSON: the plain sentence", async () => {
     const fetchImpl = vi.fn(async () => new Response("not json", { status: 200 }));
-    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
   });
 
   it("a blank description: the empty sentence", async () => {
     const fetchImpl = vi.fn(async () => Response.json({ altText: "   " }));
-    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow(
       "The AI didn't write a description. Try again or write it yourself.",
     );
   });
@@ -553,7 +555,7 @@ describe("requestPhotoDescription", () => {
   it("rejects with a plain sentence when the answer has no description", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
 
-    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow(
       "The AI didn't write a description. Try again or write it yourself.",
     );
   });
@@ -590,6 +592,7 @@ describe("AttachedPhotos - descriptions", () => {
   it("gives every photo its own description field, numbered like its tile", () => {
     const html = renderToStaticMarkup(
       createElement(AttachedPhotos, {
+        workspaceId: "ws-1",
         photos: [photo("a", { altText: "A dog." }), photo("b")],
         onRemove: noop,
         onMove: noop,
@@ -678,5 +681,13 @@ describe("AddPhotosButton", () => {
   it("rings the label when its input has keyboard focus", () => {
     const html = renderToStaticMarkup(createElement(AddPhotosButton, { onPick: () => {} }));
     expect(html).toMatch(/<label class="[^"]*has-\[:focus-visible\]:ring-2 has-\[:focus-visible\]:ring-ring has-\[:focus-visible\]:ring-offset-2[^"]*"/);
+  });
+});
+
+describe("requestPhotoDescription: another workspace", () => {
+  it("rejects with the shared sentence, and the typed description is the field's to keep", async () => {
+    const blob = { url: "https://b.public.blob.vercel-storage.com/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 1 };
+    const fetchImpl = vi.fn(async () => Response.json({ error: "You switched workspace in another tab. Reload this page, then try again.", code: "WORKSPACE_CHANGED" }, { status: 409 }));
+    await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow("You switched workspace in another tab. Reload this page, then try again.");
   });
 });

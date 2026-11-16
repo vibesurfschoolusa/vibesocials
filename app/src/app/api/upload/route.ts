@@ -11,6 +11,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { MISSING_WORKSPACE_ID_CODE, renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
 import {
@@ -127,6 +128,19 @@ export async function POST(request: Request): Promise<NextResponse> {
   // over its storage limit. Checked before the file exists, so one upload can
   // take it over the limit; that is accepted.
   if (body.type === "blob.generate-client-token") {
+    // R31: a token only for the workspace the page was drawn for (the pages
+    // put `?workspaceId=` on handleUploadUrl), so a tab left on another
+    // workspace neither counts nor stores a file there. Remembered, as upload()
+    // drops this answer's body and the page asks GET why.
+    const workspaceRefusal = renderedWorkspaceRefusal(
+      new URL(request.url).searchParams.get("workspaceId") ?? undefined,
+      context.workspace.id,
+    );
+    if (workspaceRefusal) {
+      const { code } = (await workspaceRefusal.clone().json()) as { code?: unknown };
+      await recordUploadRefusal(user.id, code === MISSING_WORKSPACE_ID_CODE ? "workspace-missing" : "workspace-changed");
+      return NextResponse.json(await workspaceRefusal.json(), { status: workspaceRefusal.status });
+    }
     // logos/ holds the server's own workspace logos (lib/workspaceLogo.ts):
     // no client token may write there.
     const payload = body.payload as { pathname?: unknown; clientPayload?: unknown } | null | undefined;

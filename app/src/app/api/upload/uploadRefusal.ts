@@ -1,6 +1,12 @@
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { prisma } from "@/lib/db";
 import { COVER_IMAGE_RULE } from "@/lib/videoCover";
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  MISSING_WORKSPACE_ID_MESSAGE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 
 /**
  * Why a person's last upload token was refused, kept for 10 minutes.
@@ -19,7 +25,14 @@ export const UPLOAD_REFUSAL_MEMORY_MS = 10 * 60 * 1000;
 export const UPLOAD_PAGE_OUT_OF_DATE_MESSAGE = UPLOAD_PATH_REFUSED_MESSAGE;
 export const UPLOAD_DAY_LIMIT_MESSAGE = "You've uploaded 20 GB today. Uploads start again at midnight UTC.";
 
-export type UploadRefusalReason = "out-of-date" | "day-limit" | "empty" | "too-large" | "cover-too-large";
+export type UploadRefusalReason =
+  | "out-of-date"
+  | "day-limit"
+  | "empty"
+  | "too-large"
+  | "cover-too-large"
+  | "workspace-changed"
+  | "workspace-missing";
 
 const REASONS: Record<UploadRefusalReason, { number: number; error: string; code: string }> = {
   "out-of-date": { number: 1, error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE, code: "UPLOAD_PAGE_OUT_OF_DATE" },
@@ -27,6 +40,9 @@ const REASONS: Record<UploadRefusalReason, { number: number; error: string; code
   empty: { number: 3, error: "This file is empty.", code: "UPLOAD_FILE_EMPTY" },
   "too-large": { number: 4, error: "File is too large (max 512 MB).", code: "UPLOAD_FILE_TOO_LARGE" },
   "cover-too-large": { number: 5, error: COVER_IMAGE_RULE, code: "UPLOAD_COVER_TOO_LARGE" },
+  // R31: the page is for another workspace, or from before the release.
+  "workspace-changed": { number: 6, error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE },
+  "workspace-missing": { number: 7, error: MISSING_WORKSPACE_ID_MESSAGE, code: MISSING_WORKSPACE_ID_CODE },
 };
 
 function refusalKey(userId: string): string {

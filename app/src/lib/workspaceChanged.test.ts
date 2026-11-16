@@ -63,3 +63,16 @@ describe("withWorkspaceId", () => {
     expect(withWorkspaceId("/x", "a b&c")).toBe("/x?workspaceId=a%20b%26c");
   });
 });
+
+// R31 (lead follow-up): the pages that word a refusal by its code say the
+// shared sentence for another workspace, or for a page from before the release.
+describe("pageWorkspaceRefusalText", () => {
+  it("names the two sentences by code, and nothing for any other code", async () => {
+    const { pageWorkspaceRefusalText } = await import("./workspaceChanged");
+    expect(pageWorkspaceRefusalText("WORKSPACE_CHANGED")).toBe("You switched workspace in another tab. Reload this page, then try again.");
+    expect(pageWorkspaceRefusalText("MISSING_WORKSPACE_ID")).toBe("This page is out of date. Reload it, then try again.");
+    expect(pageWorkspaceRefusalText("INVALID_WORKSPACE_ID")).toBe("This page is out of date. Reload it, then try again.");
+    expect(pageWorkspaceRefusalText("AI_WORKSPACE_DAILY_LIMIT")).toBeNull();
+    expect(pageWorkspaceRefusalText(undefined)).toBeNull();
+  });
+});

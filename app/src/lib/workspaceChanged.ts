@@ -52,6 +52,17 @@ export function renderedWorkspaceRefusal(sent: unknown, activeWorkspaceId: strin
   return null;
 }
 
+/**
+ * R31: the shared sentence for a refusal code of renderedWorkspaceRefusal, for
+ * the pages that word a refusal by its code rather than showing the route's
+ * text; null for any other code.
+ */
+export function pageWorkspaceRefusalText(code: unknown): string | null {
+  if (code === WORKSPACE_CHANGED_CODE) return WORKSPACE_CHANGED_SAVE_MESSAGE;
+  if (code === MISSING_WORKSPACE_ID_CODE || code === INVALID_WORKSPACE_ID_CODE) return MISSING_WORKSPACE_ID_MESSAGE;
+  return null;
+}
+
 /** `path` with `workspaceId` added to its query, for the OAuth start links. */
 export function withWorkspaceId(path: string, workspaceId: string): string {
   return `${path}${path.includes("?") ? "&" : "?"}workspaceId=${encodeURIComponent(workspaceId)}`;

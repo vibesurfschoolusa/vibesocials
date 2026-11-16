@@ -33,12 +33,6 @@ export const WORKSPACE_CHECK_EXCEPTIONS: Record<string, string> = {
   "me/time-zone/route.ts": "the signed-in person's own time zone",
   "workspaces/route.ts": "creates a new workspace for the signed-in person; no page's workspace is acted on",
   "workspaces/switch/route.ts": "the switch itself: it names the workspace to move the cookie to",
-  "upload/route.ts":
-    "signs a one-time storage token only; the file becomes workspace data through POST /api/media or POST /api/posts, which check the id (Vercel Blob's upload() fixes this route's body)",
-  "posts/auto-caption/route.ts":
-    "writes a caption suggestion back to the page only; nothing is stored in the workspace (Create's callers do not send the id yet: see the R31 QQ1 report)",
-  "posts/enhance-caption/route.ts":
-    "writes a caption suggestion back to the page only; nothing is stored in the workspace (Create's callers do not send the id yet: see the R31 QQ1 report)",
 };
 
 function routeFiles(dir: string): string[] {

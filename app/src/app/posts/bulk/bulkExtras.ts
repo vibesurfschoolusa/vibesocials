@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { pageWorkspaceRefusalText } from "@/lib/workspaceChanged";
 import { requestPhotoDescription, withPhotoDescriptions } from "@/components/composer/attached-photos";
 import {
   buildReusePostBody,
@@ -60,6 +61,9 @@ export async function coverUploadFailedText(error: unknown, fetchImpl: typeof fe
  */
 export function improveFailedText(status: number | null, code: unknown): string {
   if (status === 401) return SIGNED_OUT_ERROR;
+  // R31: a page for another workspace, or from before the release.
+  const workspaceText = pageWorkspaceRefusalText(code);
+  if (workspaceText) return workspaceText;
   if (status === 429 && code === "AI_WORKSPACE_DAILY_LIMIT") {
     return "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.";
   }
@@ -81,12 +85,18 @@ export type BulkImproveResult = { ok: true; caption: string } | { ok: false; err
 /** "Improve": the caption sent to POST /api/posts/enhance-caption exactly as Create sends it. */
 export async function requestImprovedCaption(
   caption: string,
+  /** R31: the workspace the page was drawn for (null: none yet, left out). */
+  workspaceId: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<BulkImproveResult> {
   try {
     const response = await fetchOrNoAnswer(
       "/api/posts/enhance-caption",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ caption }) },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caption, ...(workspaceId ? { workspaceId } : {}) }),
+      },
       fetchImpl,
     );
     const data = (await response.json().catch(() => null)) as
@@ -158,9 +168,13 @@ export async function captionThenDescribe(
  * The photo's description from the AI, as Create's "Write it for me" asks for
  * it. Optional, so a failure is an empty description and nothing to show.
  */
-export async function describePhotoOnce(blob: UploadedBlob, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function describePhotoOnce(
+  blob: UploadedBlob,
+  workspaceId: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
   try {
-    return await requestPhotoDescription(blob, fetchImpl);
+    return await requestPhotoDescription(blob, workspaceId, fetchImpl);
   } catch (error: unknown) {
     console.error("[Add many] Photo description failed", error);
     return "";
@@ -191,7 +205,9 @@ export function autoCaptionRequestBody(
   id: string,
   blob: { url: string; mimeType: string },
   frames: readonly string[],
-): { blobUrl: string; mimeType: string; bulk: true; frames?: string[]; avoidCaptions?: string[] } {
+  /** R31: the workspace the page was drawn for (null: none yet, left out). */
+  workspaceId: string | null,
+): { blobUrl: string; mimeType: string; bulk: true; frames?: string[]; avoidCaptions?: string[]; workspaceId?: string } {
   const avoidCaptions = siblingCaptions(rows, id);
   return {
     blobUrl: blob.url,
@@ -199,6 +215,7 @@ export function autoCaptionRequestBody(
     bulk: true,
     ...(frames.length > 0 ? { frames: [...frames] } : {}),
     ...(avoidCaptions.length > 0 ? { avoidCaptions } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
   };
 }
 

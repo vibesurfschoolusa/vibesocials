@@ -26,6 +26,7 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,10 @@ export async function POST(request: Request) {
     if (!body) {
       return invalidJsonBodyResponse();
     }
+    // R31: the page's workspace, whose AI allowance, brand voice and recent
+    // captions this uses; a tab left on another workspace uses none of them.
+    const workspaceRefusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+    if (workspaceRefusal) return workspaceRefusal;
     const { caption, platform, maxLength } = body;
 
     // 2026-11-01 scale audit (W6): cap the prompt text BEFORE any limiter
