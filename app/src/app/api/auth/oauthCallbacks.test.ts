@@ -1249,6 +1249,31 @@ describe("youtube OAuth callback: the upload permission", () => {
     expectNoConnectionWrites();
   });
 
+  // R28 platform-clients L3: "View your YouTube account" unticked; the channel
+  // call would answer 403 and read as a generic failure.
+  it("granted without youtube.readonly: saves nothing, no channel call, redirects with youtube_readonly_not_allowed", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) =>
+      youtubeProvider("https://www.googleapis.com/auth/youtube.upload")(String(input)),
+    );
+
+    const res = await youtubeGET(callbackRequest("youtube", signedState()));
+
+    const loc = location(res);
+    expect(loc.pathname).toBe("/settings");
+    expect(loc.searchParams.get("error")).toBe("youtube_readonly_not_allowed");
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("youtube/v3/channels"))).toBe(false);
+    expectNoConnectionWrites();
+  });
+
+  it("granted with neither: the upload permission is named first", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) => youtubeProvider("openid")(String(input)));
+
+    const res = await youtubeGET(callbackRequest("youtube", signedState()));
+
+    expect(location(res).searchParams.get("error")).toBe("youtube_upload_not_allowed");
+    expectNoConnectionWrites();
+  });
+
   it("granted with youtube.upload: connects as before and keeps the scopes", async () => {
     fetchMock.mockImplementation(async (input: string | URL) =>
       youtubeProvider(

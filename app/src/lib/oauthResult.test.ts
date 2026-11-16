@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeOAuthResult } from "./oauthResult";
+import { describeOAuthResult, shownControl, type ShownControl } from "./oauthResult";
 
 describe("describeOAuthResult", () => {
   it("returns null when neither param is present", () => {
@@ -438,5 +438,72 @@ describe("describeOAuthResult — session binding and connect-failure codes", ()
         message: `${label} couldn't be connected. Please try again.`,
       });
     }
+  });
+});
+
+// R28 (new-customer L6, platform-clients L2 and L3, pages L4): a refused
+// Google permission names the control the page shows for that platform.
+describe("describeOAuthResult — a missing Google permission names the control on the page", () => {
+  const youtubeUpload = (shown: ShownControl) =>
+    describeOAuthResult({ error: "youtube_upload_not_allowed", success: null }, { shown: () => shown })?.message;
+
+  it("YouTube upload, no connection: Connect", () => {
+    expect(youtubeUpload("connect")).toBe(
+      "YouTube wasn't connected: the permission to upload videos wasn't allowed. Click Connect again and, on Google's screen, allow \"Manage your YouTube videos\".",
+    );
+  });
+
+  it("YouTube upload, a row showing Reconnect: Reconnect, never Connect", () => {
+    expect(youtubeUpload("reconnect")).toBe(
+      "YouTube wasn't reconnected: the permission to upload videos wasn't allowed. Click Reconnect and, on Google's screen, allow \"Manage your YouTube videos\".",
+    );
+  });
+
+  it("YouTube upload, a working row: nothing changed, no control named", () => {
+    const message = youtubeUpload("connected");
+    expect(message).toBe("Nothing changed: the permission to upload videos wasn't allowed, and YouTube stays connected as before.");
+  });
+
+  it("YouTube without View your YouTube account: its own sentence, for each control", () => {
+    const readonly = (shown: ShownControl) =>
+      describeOAuthResult({ error: "youtube_readonly_not_allowed", success: null }, { shown: () => shown });
+    expect(readonly("connect")).toEqual({
+      variant: "danger",
+      platform: "youtube",
+      message:
+        "YouTube wasn't connected: the permission to see your YouTube account wasn't allowed. Click Connect again and, on Google's screen, allow \"View your YouTube account\".",
+    });
+    expect(readonly("reconnect")?.message).toMatch(/Click Reconnect and, on Google's screen, allow "View your YouTube account"\.$/);
+    expect(describeOAuthResult({ error: "youtube_readonly_not_allowed", success: null })?.message).toMatch(/Click Connect again/);
+  });
+
+  it("the shown control is asked for the platform the code names", () => {
+    const asked: string[] = [];
+    describeOAuthResult(
+      { error: "google_business_profile_permission_missing", success: null },
+      { shown: (platform) => (asked.push(platform), "connected") },
+    );
+    expect(asked).toEqual(["google_business_profile"]);
+  });
+
+  it("Business Profile: Reconnect when the card shows it, Connect with no connection, the sign-in link otherwise", () => {
+    const gbp = (shown: ShownControl) =>
+      describeOAuthResult({ error: "google_business_profile_permission_missing", success: null }, { shown: () => shown })?.message;
+    const lead = "Google didn't give Vibe Socials access to your Business Profile, so nothing changed.";
+    const allow = "on Google's screen, allow access to your Business Profile.";
+    expect(gbp("reconnect")).toBe(`${lead} Click Reconnect on the Google Business Profile card and, ${allow}`);
+    expect(gbp("connect")).toBe(`${lead} Click Connect on the Google Business Profile card and, ${allow}`);
+    expect(gbp("connected")).toBe(`${lead} Sign in to Google again from the Google Business Profile card and, ${allow}`);
+  });
+});
+
+describe("shownControl", () => {
+  it("none: connect; flagged or ending soon: reconnect; working: connected", () => {
+    expect(shownControl(undefined)).toBe("connect");
+    expect(shownControl(null)).toBe("connect");
+    expect(shownControl({ needsReconnect: true })).toBe("reconnect");
+    expect(shownControl({ needsReconnect: false, reconnectSoon: true })).toBe("reconnect");
+    expect(shownControl({ needsReconnect: false })).toBe("connected");
+    expect(shownControl({ needsReconnect: false, reconnectSoon: false })).toBe("connected");
   });
 });

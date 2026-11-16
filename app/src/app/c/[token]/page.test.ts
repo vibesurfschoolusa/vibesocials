@@ -141,6 +141,20 @@ describe("the connect link page", () => {
     expect(html).not.toContain(code);
   });
 
+  // R28 new-customer L6: the sentence names the button the row shows.
+  it("a missing Google permission: Reconnect for a row that shows it, Connect with no row", async () => {
+    h.findLink.mockResolvedValue({ ...LINK, platforms: ["youtube", "google_business_profile"] });
+    h.listConnections.mockResolvedValue([
+      { platform: "youtube", accountIdentifier: "chan-1", username: "My Channel", locationName: null, needsReconnect: true },
+    ]);
+    expect(await render({ error: "youtube_upload_not_allowed" })).toContain(
+      "YouTube wasn&#x27;t reconnected: the permission to upload videos wasn&#x27;t allowed. Press Reconnect and",
+    );
+    expect(await render({ error: "google_business_profile_permission_missing" })).toContain(
+      "so nothing changed. Press Connect and, on Google&#x27;s screen, allow access to the Business Profile.",
+    );
+  });
+
   // R6 M1: an account that can't be renewed and ends within the warning lead.
   it("a connection in its warning window still says Connected, and offers Reconnect", async () => {
     h.listConnections.mockResolvedValue([

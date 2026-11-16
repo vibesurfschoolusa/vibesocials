@@ -9,6 +9,7 @@ import {
   isConnectLinkTokenShape,
   parseConnectLinkPlatforms,
 } from "./connectLink";
+import type { ShownControl } from "./oauthResult";
 
 const ALL_ENV = {
   TIKTOK_CLIENT_KEY: "k",
@@ -135,6 +136,30 @@ describe("the sentence the visitor reads after a flow", () => {
     });
   });
 
+  // R28 (new-customer L6, platform-clients L2 and L3, pages L4): the control the row shows.
+  it("a missing Google permission names the control the row shows", () => {
+    const withShown = (error: string, shown: ShownControl) =>
+      describeConnectLinkResult(new URLSearchParams({ error }), { shown: () => shown })?.message;
+    expect(withShown("youtube_upload_not_allowed", "reconnect")).toBe(
+      "YouTube wasn't reconnected: the permission to upload videos wasn't allowed. Press Reconnect and, on Google's screen, allow \"Manage your YouTube videos\".",
+    );
+    expect(withShown("youtube_upload_not_allowed", "connect")).toMatch(/Press Connect again/);
+    expect(withShown("youtube_readonly_not_allowed", "connect")).toBe(
+      "YouTube wasn't connected: the permission to see your YouTube account wasn't allowed. Press Connect again and, on Google's screen, allow \"View your YouTube account\".",
+    );
+    expect(withShown("youtube_readonly_not_allowed", "reconnect")).toMatch(/Press Reconnect and/);
+    expect(withShown("google_business_profile_permission_missing", "connect")).toBe(
+      "Google didn't give Vibe Socials access to the Business Profile, so nothing changed. Press Connect and, on Google's screen, allow access to the Business Profile.",
+    );
+    expect(withShown("google_business_profile_permission_missing", "reconnect")).toMatch(/Press Reconnect and/);
+    // A working row shows no button on this page: no control is named.
+    for (const error of ["youtube_upload_not_allowed", "youtube_readonly_not_allowed", "google_business_profile_permission_missing"]) {
+      const message = withShown(error, "connected") ?? "";
+      expect(message, error).toMatch(/stays connected as before\.$/);
+      expect(message, error).not.toMatch(/Press|Click|Settings/);
+    }
+  });
+
   it("a place already taken", () => {
     expect(describe_({ error: "facebook_page_already_connected" })?.message).toBe(
       "Facebook Page is already connected. Ask the person who sent you this link if it should be changed.",
@@ -148,6 +173,7 @@ describe("the sentence the visitor reads after a flow", () => {
       linkedin_no_admin_pages: /Super admin/,
       pinterest_no_boards: /board/,
       youtube_upload_not_allowed: /Manage your YouTube videos/,
+      youtube_readonly_not_allowed: /View your YouTube account/,
       google_business_profile_permission_missing: /allow access/,
     };
     for (const [error, pattern] of Object.entries(causes)) {

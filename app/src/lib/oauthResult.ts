@@ -37,14 +37,86 @@ export interface OAuthResult {
   platform: Platform | null;
 }
 
-export function describeOAuthResult(params: {
-  error: string | null;
-  success: string | null;
-}): OAuthResult | null {
+/**
+ * R28 (new-customer L6, platform-clients L2): the control a page shows for a
+ * platform, so a sentence names only that one. `connect`: no connection, the
+ * row shows Connect. `reconnect`: flagged or ending soon, the row shows
+ * Reconnect. `connected`: it works, and the row shows neither.
+ */
+export type ShownControl = "connect" | "reconnect" | "connected";
+
+/** The one rule for {@link ShownControl}, from the platform's connection (none when undefined or null). */
+export function shownControl(
+  connection: { needsReconnect: boolean; reconnectSoon?: boolean } | null | undefined,
+): ShownControl {
+  if (!connection) return "connect";
+  return connection.needsReconnect || connection.reconnectSoon ? "reconnect" : "connected";
+}
+
+/** What the callback refused, and the permission to allow on Google's screen. */
+const GOOGLE_PERMISSIONS = {
+  youtube_upload_not_allowed: { reason: "the permission to upload videos wasn't allowed", allow: "Manage your YouTube videos" },
+  // R28 platform-clients L3: channels.list (the channel's name) needs it.
+  youtube_readonly_not_allowed: {
+    reason: "the permission to see your YouTube account wasn't allowed",
+    allow: "View your YouTube account",
+  },
+} as const;
+
+export type GooglePermissionCode = keyof typeof GOOGLE_PERMISSIONS | "google_business_profile_permission_missing";
+
+export function isGooglePermissionCode(code: string): code is GooglePermissionCode {
+  return Object.hasOwn(GOOGLE_PERMISSIONS, code) || code === "google_business_profile_permission_missing";
+}
+
+/**
+ * The sentence after Google's screen came back without a permission: nothing
+ * was saved, so a working connection stays as it was. Settings says "Click",
+ * the connect link page (`link`) "Press" and "the Business Profile"; Settings'
+ * working Business Profile card has its own sign-in link, the link page none.
+ */
+export function googlePermissionMessage(code: GooglePermissionCode, shown: ShownControl, page: "settings" | "link"): string {
+  const press = page === "settings" ? "Click" : "Press";
+  if (code === "google_business_profile_permission_missing") {
+    const whose = page === "settings" ? "your" : "the";
+    const lead = `Google didn't give Vibe Socials access to ${whose} Business Profile, so nothing changed.`;
+    const allow = `on Google's screen, allow access to ${whose} Business Profile.`;
+    const card = page === "settings" ? " on the Google Business Profile card" : "";
+    if (shown === "reconnect") return `${lead} ${press} Reconnect${card} and, ${allow}`;
+    if (shown === "connect") return `${lead} ${press} Connect${card} and, ${allow}`;
+    return page === "settings"
+      ? `${lead} Sign in to Google again from the Google Business Profile card and, ${allow}`
+      : `${lead} The Business Profile stays connected as before.`;
+  }
+  const { reason, allow } = GOOGLE_PERMISSIONS[code];
+  if (shown === "connected") return `Nothing changed: ${reason}, and YouTube stays connected as before.`;
+  return shown === "reconnect"
+    ? `YouTube wasn't reconnected: ${reason}. ${press} Reconnect and, on Google's screen, allow "${allow}".`
+    : `YouTube wasn't connected: ${reason}. ${press} Connect again and, on Google's screen, allow "${allow}".`;
+}
+
+/**
+ * `shown`: the control the page shows for the platform the code names
+ * (R28). Without it, a missing permission reads as before this rule:
+ * YouTube's Connect, the Business Profile card's sign-in link.
+ */
+export function describeOAuthResult(
+  params: {
+    error: string | null;
+    success: string | null;
+  },
+  options: { shown?: (platform: Platform) => ShownControl } = {},
+): OAuthResult | null {
   // `||`, not `??`: describeCode skips an empty error, so this must too.
   const code = params.error || params.success;
+  const platform = code ? platformFromCode(code) : null;
+  if (params.error && isGooglePermissionCode(params.error) && platform) {
+    const fallback: ShownControl = platform === "youtube" ? "connect" : "connected";
+    const shown = options.shown ? options.shown(platform) : fallback;
+    return { variant: "danger", message: googlePermissionMessage(params.error, shown, "settings"), platform };
+  }
   const described = describeCode(params);
-  return described && code ? { ...described, platform: platformFromCode(code) } : null;
+  return described && code ? { ...described, platform } : null;
 }
 
 function describeCode(params: {
@@ -87,24 +159,9 @@ function describeCode(params: {
     if (Object.hasOwn(NOTHING_TO_POST_TO, error)) {
       return { variant: "danger", message: NOTHING_TO_POST_TO[error] };
     }
-    // R27 platform-clients L3: the upload permission was unticked on Google's
-    // screen (app/api/auth/youtube/callback/route.ts); nothing was saved.
-    // R27 lead review: the in-place sign-in came back without the Business
-    // Profile permission (server/connections/saveConnection.ts); nothing changed.
-    if (error === "google_business_profile_permission_missing") {
-      return {
-        variant: "danger",
-        message:
-          "Google didn't give Vibe Socials access to your Business Profile, so nothing changed. Sign in to Google again from the Google Business Profile card and, on Google's screen, allow access to your Business Profile.",
-      };
-    }
-    if (error === "youtube_upload_not_allowed") {
-      return {
-        variant: "danger",
-        message:
-          "YouTube wasn't connected: the permission to upload videos wasn't allowed. Click Connect again and, on Google's screen, allow \"Manage your YouTube videos\".",
-      };
-    }
+    // R27 platform-clients L3, R27 lead review and R28: a missing Google
+    // permission is worded by googlePermissionMessage (describeOAuthResult).
+
     // Pinterest: a Pin always goes on a board, and GET /boards listed none
     // (app/api/auth/pinterest/callback/route.ts). Secret boards are not listed:
     // the app does not ask for boards:read_secret.

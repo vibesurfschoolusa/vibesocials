@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { describeOAuthResult } from "@/lib/oauthResult";
+import { describeOAuthResult, googlePermissionMessage, isGooglePermissionCode, type ShownControl } from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 
 /**
@@ -159,12 +159,6 @@ const VISITOR_CAUSES: Record<string, string | (() => string)> = {
     "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page, then press Connect again.",
   [LINKEDIN_NO_PAGE_CODE]: () => describeOAuthResult({ error: LINKEDIN_NO_PAGE_CODE, success: null })!.message,
   pinterest_no_boards: () => describeOAuthResult({ error: "pinterest_no_boards", success: null })!.message,
-  // R27 lead review: a reconnect on /c (the row shows Reconnect) without the permission.
-  google_business_profile_permission_missing:
-    "Google didn't give Vibe Socials access to the Business Profile, so nothing changed. Press Reconnect and, on Google's screen, allow access to the Business Profile.",
-  // R27 platform-clients L3: Settings' sentence says "Click"; the visitor's page says "Press".
-  youtube_upload_not_allowed:
-    "YouTube wasn't connected: the permission to upload videos wasn't allowed. Press Connect again and, on Google's screen, allow \"Manage your YouTube videos\".",
 };
 
 export type ConnectLinkResult = { variant: "success" | "danger"; message: string };
@@ -180,7 +174,7 @@ export type ConnectLinkResult = { variant: "success" | "danger"; message: string
  */
 export function describeConnectLinkResult(
   query: URLSearchParams,
-  { locationKept = false }: { locationKept?: boolean } = {},
+  { locationKept = false, shown }: { locationKept?: boolean; shown?: (platform: Platform) => ShownControl } = {},
 ): ConnectLinkResult | null {
   const error = query.get("error");
   const success = query.get("success");
@@ -198,6 +192,12 @@ export function describeConnectLinkResult(
     }
     if (platform && error === alreadyConnectedCode(platform)) {
       return { variant: "danger", message: `${label} is already connected. Ask the person who sent you this link if it should be changed.` };
+    }
+    // R28 new-customer L6: a missing Google permission names the row's own button.
+    if (platform && isGooglePermissionCode(error)) {
+      // Without `shown`, as before this rule: YouTube's Connect, the Business Profile's Reconnect.
+      const fallback: ShownControl = platform === "youtube" ? "connect" : "reconnect";
+      return { variant: "danger", message: googlePermissionMessage(error, shown ? shown(platform) : fallback, "link") };
     }
     const cause = VISITOR_CAUSES[error];
     if (cause) {

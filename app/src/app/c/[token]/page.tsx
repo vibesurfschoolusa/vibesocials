@@ -24,6 +24,7 @@ import {
   linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
+import { shownControl } from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { utcDisplayDateTime } from "@/lib/usageLimits";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
@@ -129,7 +130,11 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
       ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
-        : describeConnectLinkResult(outcome, { locationKept: Boolean(working?.locationName) });
+        : describeConnectLinkResult(outcome, {
+            locationKept: Boolean(working?.locationName),
+            // R28 new-customer L6: the sentence names the button the row shows.
+            shown: (platform) => shownControl(byPlatform.get(platform)),
+          });
   const sameEndOn = sameEnd?.expiresAt && working ? { platform: working.platform, expiresAt: sameEnd.expiresAt } : null;
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;

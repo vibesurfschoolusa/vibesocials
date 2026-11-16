@@ -5,7 +5,7 @@ import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
-import { YOUTUBE_UPLOAD_SCOPE } from "@/lib/oauthScopes";
+import { YOUTUBE_SCOPES, YOUTUBE_UPLOAD_SCOPE } from "@/lib/oauthScopes";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { withConnectLink } from "@/server/connectLink/callback";
 
@@ -113,9 +113,17 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // Google's screen grants no upload, and every post would fail. Nothing is
     // saved; the page says to allow it. A token answer without `scope` (Google
     // always sends it) is taken as before.
-    if (tokenJson.scope !== undefined && !tokenJson.scope.split(" ").includes(YOUTUBE_UPLOAD_SCOPE)) {
+    const granted = tokenJson.scope?.split(" ");
+    if (granted && !granted.includes(YOUTUBE_UPLOAD_SCOPE)) {
       console.warn("[YouTube OAuth] Connected without the upload permission; nothing saved");
       return NextResponse.redirect(new URL(`/settings?error=youtube_upload_not_allowed`, request.url));
+    }
+    // R28 platform-clients L3: "View your YouTube account" (youtube.readonly)
+    // unticked: the channel call below would answer 403 and read as a
+    // generic failure, and the same choice would fail the same way again.
+    if (granted && !YOUTUBE_SCOPES.every((scope) => granted.includes(scope))) {
+      console.warn("[YouTube OAuth] Connected without the view permission; nothing saved");
+      return NextResponse.redirect(new URL(`/settings?error=youtube_readonly_not_allowed`, request.url));
     }
 
     // Get channel info to use as accountIdentifier
