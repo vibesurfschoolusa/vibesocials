@@ -311,19 +311,27 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
   // JJ3 lead review: Switch account disconnects first and deletes the listing's
   // numbers, so a sign-in problem is fixed in place: the Reconnect button's own
   // start URL, which keeps the row, its location and the numbers.
-  it("signInAgain (nothing flagged): the owner gets the in-place sign-in, a member the same facts", () => {
+  it("signInAgain (nothing flagged): a flag for the page, never a URL; a member reads the same facts", () => {
     for (const error of [failing({ status: 401 }), failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })]) {
-      expect(reviewsErrorBody(error, "Fallback.", "owner", { workspaceId: "ws-1" })).toEqual({
-        error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.",
-        reconnect: true,
-        signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
-      });
-      expect(reviewsErrorBody(error, "Fallback.", "member", { workspaceId: "ws-1" })).toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept." });
+      const owner = reviewsErrorBody(error, "Fallback.", "owner");
+      expect(owner).toEqual({ error: "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.", reconnect: true, signIn: true });
+      expect(JSON.stringify(owner)).not.toContain("/api/auth");
+      expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; its listing numbers are kept." });
     }
   });
 
-  it("a flagged row still reads Reconnect, with no sign-in URL of its own", () => {
-    expect(reviewsErrorBody(failing({ code: "RECONNECT_REQUIRED" }), "Fallback.", "owner", { workspaceId: "ws-1" })).toEqual({
+  it("signInAgain where no location is chosen yet: about the business", () => {
+    const error = failing({ status: 401 });
+    expect(reviewsErrorBody(error, "Fallback.", "owner", { subject: "account" })).toEqual({
+      error: "Google didn't accept the connection. Sign in again with the Google account that manages your business; its listing numbers are kept.",
+      reconnect: true,
+      signIn: true,
+    });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages your business; its listing numbers are kept." });
+  });
+
+  it("a flagged row still reads Reconnect, with no sign-in flag", () => {
+    expect(reviewsErrorBody(failing({ code: "RECONNECT_REQUIRED" }), "Fallback.", "owner")).toEqual({
       error: GOOGLE_REFUSED_MESSAGE,
       reconnect: true,
     });

@@ -17,7 +17,7 @@ const STATUS = /<p role="status" class="sr-only">Loading reviews…<\/p>/;
 // R13-pages L1: the page is named in every state, and loading is announced.
 describe("ReviewsView states", () => {
   it("loading (the first render): the h1 and a hidden Loading reviews status", () => {
-    const html = renderToStaticMarkup(createElement(ReviewsView, { savedLocation: null, isMember: false }));
+    const html = renderToStaticMarkup(createElement(ReviewsView, { savedLocation: null, isMember: false, workspaceId: "ws-1" }));
     expect(html).toMatch(H1);
     expect(html).toMatch(STATUS);
   });
@@ -33,6 +33,7 @@ describe("ReviewsView states", () => {
         error: { message: "Google asked to reconnect.", settingsLink: false },
         isMember: true,
         onRetry: () => {},
+        workspaceId: "ws-1",
       }),
     );
     expect(html).toMatch(H1);

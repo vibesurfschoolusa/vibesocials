@@ -176,7 +176,12 @@ export function ConnectionsSection({
 
           return (
             // JJ3 lead review: owner links from Google failures land on this card (lib/gbpSignIn.ts).
-            <Card key={key} id={isGoogleBusinessProfile ? GBP_CARD_ID : undefined} className="p-4 sm:p-5">
+            <Card
+              key={key}
+              id={isGoogleBusinessProfile ? GBP_CARD_ID : undefined}
+              // The same scroll margin as Settings' other anchors (settings/page.tsx), clear of the header.
+              className={isGoogleBusinessProfile ? "scroll-mt-32 p-4 sm:p-5 lg:scroll-mt-20" : "p-4 sm:p-5"}
+            >
               {/* R7 review 1: stacked below xl (name on top, the state and
                   buttons below, wrapping), so the name column never
                   collapses; side by side from xl, the name keeping 12rem. */}

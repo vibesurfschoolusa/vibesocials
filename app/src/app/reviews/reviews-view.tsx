@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { readApiError, shownError, type ShownError } from "@/components/reviews/api-error";
+import { readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -69,10 +69,13 @@ export function ReviewsLoadFailedPage({
   error,
   isMember,
   onRetry,
+  workspaceId,
 }: {
   error: ShownError;
   isMember: boolean;
   onRetry: () => void;
+  /** The workspace this page was drawn for: the in-place sign-in names it (lib/gbpSignIn.ts). */
+  workspaceId: string;
 }) {
   return (
     <div className={APP_PAGE_CLASS}>
@@ -81,7 +84,7 @@ export function ReviewsLoadFailedPage({
         title="Couldn't load reviews"
         message={error.message}
         settingsLink={error.settingsLink}
-        signInUrl={error.signInUrl}
+        signInUrl={signInHref(error, workspaceId)}
         isMember={isMember}
         onRetry={onRetry}
       />
@@ -96,7 +99,16 @@ export function ReviewsLoadFailedPage({
  * `isMember` (from the page's workspace context): a member is told who can
  * connect or reconnect Google, never sent to Settings (R12 L1).
  */
-export function ReviewsView({ savedLocation, isMember }: { savedLocation: string | null; isMember: boolean }) {
+export function ReviewsView({
+  savedLocation,
+  isMember,
+  workspaceId,
+}: {
+  savedLocation: string | null;
+  isMember: boolean;
+  /** JJ3 lead review: the workspace the page was drawn for, for the in-place Google sign-in. */
+  workspaceId: string;
+}) {
   const toast = useToast();
 
   const [reviews, setReviews] = useState<GoogleReview[]>([]);
@@ -370,7 +382,14 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   }
 
   if (locationsError) {
-    return <ReviewsLoadFailedPage error={locationsError} isMember={isMember} onRetry={loadLocations} />;
+    return (
+      <ReviewsLoadFailedPage
+        error={locationsError}
+        isMember={isMember}
+        onRetry={loadLocations}
+        workspaceId={workspaceId}
+      />
+    );
   }
 
   return (
@@ -448,7 +467,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
           title="Couldn't load reviews"
           message={reviewsError.message}
           settingsLink={reviewsError.settingsLink}
-          signInUrl={reviewsError.signInUrl}
+          signInUrl={signInHref(reviewsError, workspaceId)}
           isMember={isMember}
           onRetry={loadReviews}
         />
@@ -492,7 +511,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       {/* 2026-11-10: the review link, QR code, print card and message. Only once
           Google is connected: before that the page offers the connect step.
           N2: below the list, since people come here to answer reviews. */}
-      {gbpConnected && <ReviewLinkPanel />}
+      {gbpConnected && <ReviewLinkPanel workspaceId={workspaceId} />}
 
       <ConfirmDialog
         open={confirmTarget !== null}

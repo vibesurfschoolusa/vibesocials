@@ -28,6 +28,11 @@ export default async function ReviewsPage() {
   // so the previous workspace's selection and reviews never carry over.
   // R12 L1: only an owner can connect or reconnect Google; the role is the server's.
   return (
-    <ReviewsView key={context.workspace.id} savedLocation={savedLocation} isMember={context.role === "member"} />
+    <ReviewsView
+      key={context.workspace.id}
+      savedLocation={savedLocation}
+      isMember={context.role === "member"}
+      workspaceId={context.workspace.id}
+    />
   );
 }

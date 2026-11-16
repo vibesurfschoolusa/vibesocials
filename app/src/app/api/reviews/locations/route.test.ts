@@ -156,9 +156,9 @@ describe("GET /api/reviews/locations", () => {
     const body = await (await GET()).json();
 
     expect(body).toEqual({
-      error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.",
+      error: "Google didn't accept the connection. Sign in again with the Google account that manages your business; its listing numbers are kept.",
       reconnect: true,
-      signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
+      signIn: true,
     });
   });
 
@@ -188,7 +188,7 @@ describe("GET /api/reviews/locations", () => {
     }) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
-      error: "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept.",
+      error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages your business; its listing numbers are kept.",
     });
   });
 

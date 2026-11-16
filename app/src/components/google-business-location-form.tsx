@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
-import { safeGbpSignInUrl } from "@/lib/gbpSignIn";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
 import { SignInAgainLink } from "./gbp-sign-in-link";
 
@@ -53,14 +53,16 @@ export const LOCATION_RECONNECT_CODE = "RECONNECT_REQUIRED";
  * Reconnect state shows without a manual reload.
  */
 export function locationFailure(
-  data: { error?: string; code?: string; signInUrl?: unknown } | null,
+  data: { error?: string; code?: string; signIn?: unknown } | null,
   fallback: string,
+  workspaceId: string,
 ): { message: string; reconnect: boolean; signInUrl: string | null } {
   return {
     message: data?.error ?? fallback,
     reconnect: data?.code === LOCATION_RECONNECT_CODE,
-    // JJ3 lead review: the in-place Google sign-in, only when it is that start URL.
-    signInUrl: safeGbpSignInUrl(data?.signInUrl),
+    // JJ3 lead review: the route only says to sign in again; the link names the
+    // workspace this form was drawn for (lib/gbpSignIn.ts), never one from the answer.
+    signInUrl: data?.signIn === true ? gbpSignInUrl(workspaceId) : null,
   };
 }
 
@@ -102,11 +104,11 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       });
 
       const data = (await response.json().catch(() => null)) as
-        | { error?: string; code?: string; signInUrl?: unknown }
+        | { error?: string; code?: string; signIn?: unknown }
         | null;
 
       if (!response.ok) {
-        const failure = locationFailure(data, LOCATION_MESSAGES.saveFailed);
+        const failure = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
         toast.error(failure.message);
         setSignInUrl(failure.signInUrl);
         setSaving(false);
@@ -144,12 +146,12 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
       const data = (await response.json().catch(() => null)) as
-        | { locations?: RemoteLocation[]; error?: string; code?: string; notice?: string; signInUrl?: unknown }
+        | { locations?: RemoteLocation[]; error?: string; code?: string; notice?: string; signIn?: unknown }
         | null;
 
       if (!response.ok) {
         setLocations(null);
-        const failure = locationFailure(data, LOCATION_MESSAGES.loadFailed);
+        const failure = locationFailure(data, LOCATION_MESSAGES.loadFailed, workspaceId);
         toast.error(failure.message);
         setSignInUrl(failure.signInUrl);
         setLoadingLocations(false);
@@ -186,7 +188,8 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       {signInUrl ? (
         <div className="flex flex-col items-start gap-2">
           <p className="text-sm text-muted-foreground">
-            Google didn&apos;t accept the connection. Your location and listing numbers are kept.
+            Google didn&apos;t accept the connection. Sign in again with the Google account that manages your
+            listing; its listing numbers are kept.
           </p>
           <SignInAgainLink href={signInUrl} />
         </div>

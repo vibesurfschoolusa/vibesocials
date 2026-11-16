@@ -79,7 +79,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.", reconnect: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
+    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.", reconnect: true, signIn: true });
   });
 
   it("gives a plain sentence for any other failure", async () => {
@@ -157,7 +157,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.", reconnect: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
+    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.", reconnect: true, signIn: true });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 });
@@ -169,7 +169,7 @@ describe("POST /api/reviews/[reviewId]/reply for a member", () => {
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
-    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept." });
+    await expect(response.json()).resolves.toEqual({ error: "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; its listing numbers are kept." });
   });
 });
 

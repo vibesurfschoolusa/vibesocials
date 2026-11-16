@@ -48,7 +48,7 @@ describe("ReviewsView layout", () => {
 // R12 L1: the view words its states for who reads it (the page's isMember, from the server).
 describe("ReviewsView and a member", () => {
   it("hands the role to the empty state and to both error cards", () => {
-    expect(source).toContain("export function ReviewsView({ savedLocation, isMember }");
+    expect(source).toMatch(/export function ReviewsView\(\{\s*savedLocation,\s*isMember,\s*workspaceId,\s*\}/);
     expect(source).toContain("<ReviewsEmptyState");
     expect(source).toContain("isMember={isMember}");
     expect(source.split("<ErrorState").length - 1).toBe(2);

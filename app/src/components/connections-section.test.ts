@@ -216,5 +216,8 @@ describe("ConnectionsSection: the Google Business Profile card's anchor", () => 
     expect(html.split('id="google-business-profile"').length - 1).toBe(1);
     const card = html.slice(html.indexOf('id="google-business-profile"'));
     expect(card).toContain("Google Business Profile");
+    // The same scroll margin as Settings' other anchors (settings/page.tsx), clear of the header.
+    const tag = html.match(/<div[^>]*id="google-business-profile"[^>]*>/)![0];
+    expect(tag).toMatch(/class="[^"]*\bscroll-mt-32\b[^"]*\blg:scroll-mt-20\b/);
   });
 });

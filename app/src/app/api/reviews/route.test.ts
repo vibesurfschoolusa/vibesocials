@@ -70,7 +70,7 @@ describe("GET /api/reviews", () => {
     await expect(response.json()).resolves.toEqual({
       error: GOOGLE_SIGN_IN_AGAIN_MESSAGE,
       reconnect: true,
-      signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
+      signIn: true,
     });
   });
 

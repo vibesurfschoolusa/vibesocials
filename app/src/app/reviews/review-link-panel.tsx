@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { SignInAgainLink } from "@/components/gbp-sign-in-link";
-import { safeGbpSignInUrl } from "@/lib/gbpSignIn";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,7 +20,7 @@ export function reviewRequestMessage(link: string): string {
 export type ReviewLinkState =
   | { status: "loading" }
   | { status: "ready"; url: string }
-  | { status: "none"; reason: string; signInUrl?: string };
+  | { status: "none"; reason: string; signIn?: true };
 
 const LOAD_FAILED = "Couldn't load your review link. Reload this page to try again.";
 
@@ -29,7 +29,7 @@ const LOAD_FAILED = "Couldn't load your review link. Reload this page to try aga
  * its QR code, a printable card and a message to send a customer. The link
  * comes from GET /api/reviews/link, which asks Google only while none is saved.
  */
-export function ReviewLinkPanel() {
+export function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<ReviewLinkState>({ status: "loading" });
 
   useEffect(() => {
@@ -38,16 +38,16 @@ export function ReviewLinkPanel() {
       try {
         const response = await fetch("/api/reviews/link");
         const body = (await response.json().catch(() => null)) as
-          | { url?: unknown; reason?: unknown; signInUrl?: unknown }
+          | { url?: unknown; reason?: unknown; signIn?: unknown }
           | null;
         if (cancelled) return;
         if (response.ok && typeof body?.url === "string") {
           setState({ status: "ready", url: body.url });
         } else {
           const reason = typeof body?.reason === "string" ? body.reason : LOAD_FAILED;
-          // JJ3 lead review: an owner's in-place Google sign-in, only when it is that start URL.
-          const signInUrl = safeGbpSignInUrl(body?.signInUrl);
-          setState(signInUrl ? { status: "none", reason, signInUrl } : { status: "none", reason });
+          // JJ3 lead review: the route only says an owner should sign in again;
+          // the link is built from this page's workspace (lib/gbpSignIn.ts).
+          setState(body?.signIn === true ? { status: "none", reason, signIn: true } : { status: "none", reason });
         }
       } catch {
         if (!cancelled) setState({ status: "none", reason: LOAD_FAILED });
@@ -58,11 +58,11 @@ export function ReviewLinkPanel() {
     };
   }, []);
 
-  return <ReviewLinkPanelView state={state} />;
+  return <ReviewLinkPanelView state={state} workspaceId={workspaceId} />;
 }
 
 /** The panel for a given state; separate so it renders in tests without a fetch. */
-export function ReviewLinkPanelView({ state }: { state: ReviewLinkState }) {
+export function ReviewLinkPanelView({ state, workspaceId }: { state: ReviewLinkState; workspaceId: string }) {
   const toast = useToast();
 
   const copy = async (text: string, what: string) => {
@@ -84,9 +84,9 @@ export function ReviewLinkPanelView({ state }: { state: ReviewLinkState }) {
       ) : state.status === "none" ? (
         <>
           <p className="mt-2 text-sm text-muted-foreground">{state.reason}</p>
-          {state.signInUrl ? (
+          {state.signIn ? (
             <div className="mt-3">
-              <SignInAgainLink href={state.signInUrl} />
+              <SignInAgainLink href={gbpSignInUrl(workspaceId)} />
             </div>
           ) : null}
         </>

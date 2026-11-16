@@ -1,4 +1,4 @@
-import { safeGbpSignInUrl } from "@/lib/gbpSignIn";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
 /**
  * F7 (R1 M5): what the Reviews page shows when a call fails. The routes answer
@@ -10,8 +10,8 @@ export class ReviewsApiError extends Error {
   constructor(
     message: string,
     readonly settingsLink: boolean,
-    /** JJ3 lead review: an owner's in-place Google sign-in (lib/gbpSignIn.ts), when the route gave one. */
-    readonly signInUrl?: string,
+    /** JJ3 lead review: the route asks an owner for the in-place Google sign-in (lib/gbpSignIn.ts). */
+    readonly signIn = false,
   ) {
     super(message);
     this.name = "ReviewsApiError";
@@ -21,22 +21,31 @@ export class ReviewsApiError extends Error {
 /** The error a failed response stands for: its own sentence, else `fallback`. */
 export async function readApiError(response: Response, fallback: string): Promise<ReviewsApiError> {
   const body = (await response.json().catch(() => null)) as
-    | { error?: unknown; reconnect?: unknown; signInUrl?: unknown }
+    | { error?: unknown; reconnect?: unknown; signIn?: unknown }
     | null;
   const message = typeof body?.error === "string" && body.error.trim() !== "" ? body.error : fallback;
-  return new ReviewsApiError(message, body?.reconnect === true, safeGbpSignInUrl(body?.signInUrl) ?? undefined);
+  // Only the flag is read: a URL in an answer is never followed.
+  return new ReviewsApiError(message, body?.reconnect === true, body?.signIn === true);
 }
 
 /** The sentence to show for anything caught: a route's sentence, never a parse or network error's text. */
 export interface ShownError {
   message: string;
   settingsLink: boolean;
-  signInUrl?: string;
+  signIn?: true;
 }
 
 export function shownError(error: unknown, fallback: string): ShownError {
   if (!(error instanceof ReviewsApiError)) return { message: fallback, settingsLink: false };
-  return error.signInUrl
-    ? { message: error.message, settingsLink: error.settingsLink, signInUrl: error.signInUrl }
+  return error.signIn
+    ? { message: error.message, settingsLink: error.settingsLink, signIn: true }
     : { message: error.message, settingsLink: error.settingsLink };
+}
+
+/**
+ * The in-place Google sign-in for an error that asks for one, built from the
+ * workspace the page was drawn for (JJ3 lead review), else undefined.
+ */
+export function signInHref(shown: ShownError, workspaceId: string): string | undefined {
+  return shown.signIn ? gbpSignInUrl(workspaceId) : undefined;
 }

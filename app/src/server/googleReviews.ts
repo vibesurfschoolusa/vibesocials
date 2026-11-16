@@ -3,8 +3,6 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
-import { gbpSignInUrl } from "@/lib/gbpSignIn";
-
 import { classifyGoogleFailure } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { readGoogleErrorReasons } from "./platforms/rateLimited";
@@ -244,8 +242,9 @@ const REVIEW_LINK_REASONS: Record<ReviewLinkProblem, Record<ReviewsReader, strin
   // JJ3 lead review: Google refused, nothing flagged: the in-place sign-in (lib/gbpSignIn.ts).
   sign_in_again: {
     owner:
-      "Google didn't accept the connection. Sign in to Google again to get your review link; your location and listing numbers are kept.",
-    member: "Google didn't accept the connection. The workspace owner can sign in to Google again; then the review link shows here.",
+      "Google didn't accept the connection. Sign in again with the Google account that manages this location to get your review link; its listing numbers are kept.",
+    member:
+      "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; then the review link shows here.",
   },
   location_removed: {
     owner: "This location is no longer in Google Business Profile. Choose another location in Settings.",
@@ -285,12 +284,18 @@ const GOOGLE_ACCOUNT_REFUSED_MEMBER_MESSAGE =
   "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile, or switch to the account that does; switching clears this listing's saved numbers.";
 /**
  * signInAgain: Google stopped accepting a connection that is not flagged. The
- * fix is the in-place sign-in (lib/gbpSignIn.ts), never Switch account.
+ * fix is the in-place sign-in (lib/gbpSignIn.ts), never Switch account. The
+ * sign-in keeps the listing's numbers; it keeps the location only when the
+ * account signed in to can read it, so the step names that account.
  */
 export const GOOGLE_SIGN_IN_AGAIN_MESSAGE =
-  "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.";
+  "Google didn't accept the connection. Sign in again with the Google account that manages this location; its listing numbers are kept.";
 export const GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE =
-  "Google didn't accept the connection. The workspace owner can sign in to Google again; your location and listing numbers are kept.";
+  "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; its listing numbers are kept.";
+const GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MESSAGE =
+  "Google didn't accept the connection. Sign in again with the Google account that manages your business; its listing numbers are kept.";
+const GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MEMBER_MESSAGE =
+  "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages your business; its listing numbers are kept.";
 /** notFound, for a location picked on the Reviews page (not saved): the page's own picker. */
 const LOCATION_GONE_PICKED_MESSAGE =
   "This location is no longer in Google Business Profile. Pick another location above.";
@@ -314,11 +319,15 @@ export function googleAccessRefusedMessage(subject: AccessSubject, role: Reviews
   return role === "member" ? GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE : GOOGLE_ACCESS_REFUSED_MESSAGE;
 }
 
-/** A Reviews route's error answer. `signInUrl`: an owner's in-place sign-in (lib/gbpSignIn.ts). */
+/**
+ * A Reviews route's error answer. `signIn`: an owner's answer asks for the
+ * in-place sign-in; the page builds its URL from its own workspace
+ * (lib/gbpSignIn.ts), so no URL is ever sent.
+ */
 export interface ReviewsErrorBody {
   error: string;
   reconnect?: true;
-  signInUrl?: string;
+  signIn?: true;
 }
 
 /** An owner's answer carries `reconnect: true`: the page links to Settings, where the step is. */
@@ -333,7 +342,7 @@ function ownerStep(role: ReviewsReader, owner: string, member: string): ReviewsE
  * Business Profile card in Settings) goes only to an owner. `fallback` is the
  * route's own sentence for anything else: an error's own text is never shown.
  *
- * `workspaceId` gives an owner's sign-in-again answer its in-place sign-in URL.
+ * An owner's sign-in-again answer carries `signIn: true` (never a URL).
  * `location` says whether a removed location was the saved one ("saved", the
  * default) or one picked on the Reviews page ("picked", not saved).
  */
@@ -341,15 +350,20 @@ export function reviewsErrorBody(
   error: unknown,
   fallback: string,
   role: ReviewsReader,
-  options: { where?: string; subject?: AccessSubject; workspaceId?: string; location?: "saved" | "picked" } = {},
+  options: { where?: string; subject?: AccessSubject; location?: "saved" | "picked" } = {},
 ): ReviewsErrorBody {
   const kind = classifyGoogleFailure(error, options.where ?? "Reviews");
   switch (kind) {
     case "reconnect":
       return googleRefusedBody(role);
     case "signInAgain": {
-      const body = ownerStep(role, GOOGLE_SIGN_IN_AGAIN_MESSAGE, GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE);
-      return role === "owner" && options.workspaceId ? { ...body, signInUrl: gbpSignInUrl(options.workspaceId) } : body;
+      const account = options.subject === "account";
+      const body = ownerStep(
+        role,
+        account ? GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MESSAGE : GOOGLE_SIGN_IN_AGAIN_MESSAGE,
+        account ? GOOGLE_SIGN_IN_AGAIN_ACCOUNT_MEMBER_MESSAGE : GOOGLE_SIGN_IN_AGAIN_MEMBER_MESSAGE,
+      );
+      return role === "owner" ? { ...body, signIn: true } : body;
     }
     case "access": {
       const subject = options.subject ?? "location";

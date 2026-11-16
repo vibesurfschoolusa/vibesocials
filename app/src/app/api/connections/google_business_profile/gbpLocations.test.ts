@@ -333,7 +333,7 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     const res = await call();
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
+    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signIn: true });
     expect(h.update).not.toHaveBeenCalled();
   });
 
@@ -392,8 +392,8 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     const res = await call();
 
     expect(res.status).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
-    expect(GBP_SIGN_IN_AGAIN_MESSAGE).toBe("Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.");
+    await expect(res.json()).resolves.toEqual({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signIn: true });
+    expect(GBP_SIGN_IN_AGAIN_MESSAGE).toBe("Google didn't accept the connection. Sign in again with the Google account that manages your listing; its listing numbers are kept.");
     expect(h.refresh).not.toHaveBeenCalled();
     expect(h.refreshGoogle).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();

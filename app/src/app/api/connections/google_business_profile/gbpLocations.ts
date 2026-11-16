@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
 import { classifyGoogleFailure, type GoogleFailureKind } from "@/server/googleFailure";
-import { gbpSignInUrl } from "@/lib/gbpSignIn";
 import { readGoogleErrorReasons } from "@/server/platforms/rateLimited";
 import {
   CONNECTION_RECONNECT_REQUIRED_CODE,
@@ -33,11 +32,12 @@ export const GBP_MAX_PAGES = 50;
 export const GOOGLE_NO_ANSWER_MESSAGE = "Google didn't answer. Try again in a minute.";
 /**
  * signInAgain: Google refused the token, but the row is not flagged. The fix is
- * the in-place sign-in (lib/gbpSignIn.ts, the answer's `signInUrl`), never
- * Switch account, which deletes the listing's numbers (JJ3 lead review).
+ * the in-place sign-in (lib/gbpSignIn.ts; the answer says `signIn: true` and
+ * the form builds the link from its own workspace), never Switch account,
+ * which deletes the listing's numbers (JJ3 lead review).
  */
 export const GBP_SIGN_IN_AGAIN_MESSAGE =
-  "Google didn't accept the connection. Sign in to Google again; your location and listing numbers are kept.";
+  "Google didn't accept the connection. Sign in again with the Google account that manages your listing; its listing numbers are kept.";
 /** access: this Google login may not read its Business Profile accounts. */
 export const GBP_ACCOUNTS_REFUSED_MESSAGE =
   "Google refused access to the Business Profile accounts of this Google account. Press Switch account above and sign in with the Google account that manages your listing; switching clears this listing's saved numbers, and you choose the location again.";
@@ -101,7 +101,7 @@ export function unreadAccountsNotice(unread: UnreadAccounts): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
-function refused(body: { error: string; code?: string; signInUrl?: string }, init: { status: number }): GbpLocationList {
+function refused(body: { error: string; code?: string; signIn?: true }, init: { status: number }): GbpLocationList {
   return { ok: false, response: NextResponse.json(body, init) };
 }
 
@@ -109,12 +109,12 @@ const reconnectRefusal = (): GbpLocationList =>
   refused({ error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE }, { status: 409 });
 
 /** The accounts list failed: the answer for each kind. */
-function accountsRefusal(kind: GoogleFailureKind, workspaceId: string): GbpLocationList {
+function accountsRefusal(kind: GoogleFailureKind): GbpLocationList {
   switch (kind) {
     case "reconnect":
       return reconnectRefusal();
     case "signInAgain":
-      return refused({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signInUrl: gbpSignInUrl(workspaceId) }, { status: 409 });
+      return refused({ error: GBP_SIGN_IN_AGAIN_MESSAGE, signIn: true }, { status: 409 });
     case "access":
       return refused({ error: GBP_ACCOUNTS_REFUSED_MESSAGE }, { status: 403 });
     case "tryLater":
@@ -257,7 +257,7 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
     // A 401 after a failed refresh is sorted by what the refresh said.
     // Each failure is logged once, by kind (classifyGoogleFailure).
     const kindOf = (failure: unknown) => classifyGoogleFailure(refreshFailure ?? failure, "GBP location picker");
-    if (!accounts.ok) return accountsRefusal(kindOf(accounts.failure), connection.workspaceId);
+    if (!accounts.ok) return accountsRefusal(kindOf(accounts.failure));
 
     let complete = accounts.complete;
     const unread: UnreadAccounts = { access: false, failed: false };
@@ -280,7 +280,7 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
       if (!locations.ok) {
         const kind = kindOf(locations.failure);
         // The token itself was refused: the whole list ends with that step.
-        if (kind === "reconnect" || kind === "signInAgain") return accountsRefusal(kind, connection.workspaceId);
+        if (kind === "reconnect" || kind === "signInAgain") return accountsRefusal(kind);
         // Skipped, and said so (unreadAccountsNotice), with why.
         if (kind === "access") {
           unread.access = true;

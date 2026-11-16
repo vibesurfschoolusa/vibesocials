@@ -9,8 +9,8 @@ import { qrSvg } from "@/lib/qrSvg";
 import { ReviewLinkPanelView, reviewRequestMessage } from "./review-link-panel";
 
 const LINK = "https://g.page/r/abc/review";
-const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"]) =>
-  renderToStaticMarkup(createElement(ReviewLinkPanelView, { state }));
+const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"], workspaceId = "ws-A") =>
+  renderToStaticMarkup(createElement(ReviewLinkPanelView, { state, workspaceId }));
 
 describe("reviewRequestMessage", () => {
   // R5 pages L5: any business sends it, so it names no activity.
@@ -44,10 +44,10 @@ describe("ReviewLinkPanelView", () => {
     expect(html).not.toContain("Print card");
   });
 
-  // JJ3 lead review: an owner's in-place Google sign-in, from the route.
-  it("offers Sign in to Google again when the route gives the start URL", () => {
-    const html = render({ status: "none", reason: "Google didn't accept the connection.", signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
-    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again<\/a>/);
+  // JJ3 lead review: an owner's in-place Google sign-in, for the page's own workspace.
+  it("offers Sign in to Google again for the page's workspace when the route says so", () => {
+    const html = render({ status: "none", reason: "Google didn't accept the connection.", signIn: true }, "ws-A");
+    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a>/);
     expect(render({ status: "none", reason: "Something else." })).not.toContain("/api/auth/");
   });
 

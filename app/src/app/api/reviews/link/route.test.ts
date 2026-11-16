@@ -248,8 +248,8 @@ describe("GET /api/reviews/link", () => {
       expect(await (await GET()).json()).toEqual({
         url: null,
         reason:
-          "Google didn't accept the connection. Sign in to Google again to get your review link; your location and listing numbers are kept.",
-        signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1",
+          "Google didn't accept the connection. Sign in again with the Google account that manages this location to get your review link; its listing numbers are kept.",
+        signIn: true,
       });
     });
 
@@ -300,7 +300,7 @@ describe("GET /api/reviews/link", () => {
       expect(await (await GET()).json()).toEqual({
         url: null,
         reason:
-          "Google didn't accept the connection. The workspace owner can sign in to Google again; then the review link shows here.",
+          "Google didn't accept the connection. The workspace owner can sign in again with the Google account that manages this location; then the review link shows here.",
       });
 
       mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 404, code: "GBP_REVIEW_LINK_FETCH_FAILED" }));

@@ -61,6 +61,7 @@ import { ConnectionsSection } from "@/components/connections-section";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
 import { ReconnectStep } from "@/components/activity/post-job-card";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
+import { signInHref } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { WorkspaceStatusAlert } from "@/components/shell/workspace-paused-banner";
@@ -92,7 +93,9 @@ const OWNER_STEPS: RegExp[] = [
   /(?:^|[.>]\s*)Check that the connected Google account still manages\b/,
   // JJ3 lead review: the card's own control, the in-place sign-in, the location step.
   /\bpress Switch account\b/i,
-  /(?:^|[.>;]\s*)Sign in to Google again\b/,
+  // Mid-sentence too, but never a member's "The workspace owner can sign in again ...".
+  /(?<!can )\bsign in again with the Google account\b/i,
+  /(?<!can )\bsign in to Google again\b/i,
   /\bchoose another location in Settings\b/i,
   /href="\/settings#(connections|plan|posting-times|connect-link|team|google-business-profile)"/,
   /href="\/api\/auth\//,
@@ -182,13 +185,13 @@ function reviewsRefused(role: Role, status = 401, subject: "location" | "account
 }
 
 function reviewsRefusedBy(role: Role, error: object, subject: "location" | "account" = "location"): string {
-  const body = reviewsErrorBody(error, "Couldn't load your Google reviews.", role, { subject, workspaceId: "ws-1" });
+  const body = reviewsErrorBody(error, "Couldn't load your Google reviews.", role, { subject });
   return render(
     createElement(ErrorState, {
       title: "Couldn't load reviews",
       message: body.error,
       settingsLink: body.reconnect === true,
-      signInUrl: body.signInUrl,
+      signInUrl: signInHref({ message: body.error, settingsLink: body.reconnect === true, signIn: body.signIn }, "ws-1"),
       isMember: role === "member",
       onRetry: () => {},
     }),
