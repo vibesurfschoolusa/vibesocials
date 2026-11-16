@@ -1,13 +1,17 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   EMPTY_REPLY_BOXES,
   RESTORED_STATUS,
   ReplyForm,
   focusBoxAfterDraft,
+  focusPlace,
   replyUndoStatus,
+  settleDraftFocus,
+  startDraftHere,
+  undoReply,
   draftingAfterEnd,
   draftingAfterStart,
   openAfterDraft,
@@ -277,14 +281,103 @@ describe("ReplyForm: focus and status after Undo and a draft", () => {
     expect(replyUndoStatus(false, false)).toBe("");
   });
 
-  it("a draft from this form's Draft button: focus returns to the box when it lands", () => {
-    expect(focusBoxAfterDraft(true, true)).toBe(false); // still drafting
-    expect(focusBoxAfterDraft(false, true)).toBe(true);
+  it("a draft from this form's Draft button: the box takes focus when it lands, if focus is still here or dropped", () => {
+    expect(focusBoxAfterDraft(true, true, "this form")).toBe(false); // still drafting
+    expect(focusBoxAfterDraft(false, true, "this form")).toBe(true);
+    // The disabled Draft button drops focus to the page body.
+    expect(focusBoxAfterDraft(false, true, "body")).toBe(true);
+  });
+
+  it("lead review: focus the person moved elsewhere (another card's Draft) stays there", () => {
+    expect(focusBoxAfterDraft(false, true, "elsewhere")).toBe(false);
   });
 
   it("a draft from the card's Draft button, or for another review, never moves focus", () => {
-    expect(focusBoxAfterDraft(false, false)).toBe(false);
-    expect(focusBoxAfterDraft(true, false)).toBe(false);
+    for (const place of ["this form", "body", "elsewhere"] as const) {
+      expect(focusBoxAfterDraft(false, false, place)).toBe(false);
+      expect(focusBoxAfterDraft(true, false, place)).toBe(false);
+    }
+  });
+});
+
+describe("ReplyForm: where focus is", () => {
+  const body = { contains: () => true };
+  const form = { contains: (node: unknown) => node === inside };
+  const inside = { contains: () => false };
+  const other = { contains: () => false };
+
+  it("nothing focused, or the page body: body", () => {
+    expect(focusPlace(null, form, body)).toBe("body");
+    expect(focusPlace(body, form, body)).toBe("body");
+  });
+
+  it("an element inside this form: this form", () => {
+    expect(focusPlace(inside, form, body)).toBe("this form");
+  });
+
+  it("anything else: elsewhere", () => {
+    expect(focusPlace(other, form, body)).toBe("elsewhere");
+    expect(focusPlace(other, null, body)).toBe("elsewhere");
+  });
+});
+
+// Lead review follow-up: the handlers and the effect's decision, as far as a
+// test without a DOM can drive them.
+describe("ReplyForm: the Undo, Draft and draft-landed wiring", () => {
+  it("Undo restores the text, says it is back and focuses the box, in that order", () => {
+    const calls: string[] = [];
+    undoReply({
+      onUndoDraft: () => calls.push("undo"),
+      setRestored: (value) => calls.push(`restored:${value}`),
+      focusBox: () => calls.push("focus"),
+    });
+    expect(calls).toEqual(["undo", "restored:true", "focus"]);
+  });
+
+  it("Undo then reads 'Your text is back.' in the status line", () => {
+    expect(replyUndoStatus(false, true)).toBe("Your text is back.");
+  });
+
+  it("this form's Draft button marks the draft as this form's and clears 'Your text is back.'", () => {
+    const draftedHere = { current: false };
+    const calls: string[] = [];
+    startDraftHere({
+      draftedHere,
+      setRestored: (value) => calls.push(`restored:${value}`),
+      onDraftAI: () => calls.push("draft"),
+    });
+    expect(draftedHere.current).toBe(true);
+    expect(calls).toEqual(["restored:false", "draft"]);
+  });
+
+  function landed(draftedHere: { current: boolean }, place: "this form" | "body" | "elsewhere", drafting = false) {
+    const focusBox = vi.fn();
+    settleDraftFocus({ drafting, draftedHere, where: () => place, focusBox });
+    return focusBox;
+  }
+
+  it("this form's draft lands with focus dropped to the body: the box takes focus, once", () => {
+    const draftedHere = { current: true };
+    expect(landed(draftedHere, "body")).toHaveBeenCalledTimes(1);
+    expect(draftedHere.current).toBe(false);
+    expect(landed(draftedHere, "body")).not.toHaveBeenCalled();
+  });
+
+  it("this form's draft lands while focus is on another card: focus stays, and the mark is cleared", () => {
+    const draftedHere = { current: true };
+    expect(landed(draftedHere, "elsewhere")).not.toHaveBeenCalled();
+    expect(draftedHere.current).toBe(false);
+  });
+
+  it("while the draft is still being written nothing happens and the mark stays", () => {
+    const draftedHere = { current: true };
+    expect(landed(draftedHere, "body", true)).not.toHaveBeenCalled();
+    expect(draftedHere.current).toBe(true);
+  });
+
+  it("a draft from the card (no mark): never moves focus", () => {
+    expect(landed({ current: false }, "body")).not.toHaveBeenCalled();
+    expect(landed({ current: false }, "this form")).not.toHaveBeenCalled();
   });
 
   it("the box keeps its id, for the label", () => {

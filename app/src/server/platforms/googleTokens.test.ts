@@ -293,9 +293,11 @@ describe("refreshGoogleToken — failure classification", () => {
 
   // F7: the OAuth code rides on the thrown error, so the Reviews page can tell
   // the person's dead grant (reconnect) from our own client's setup (not available).
+  // JJ3 lead review: a refresh that flags the row (400 unauthorized_client
+  // included) reads as reconnect, so the page and Settings agree.
   it.each([
     ["400 invalid_grant", 400, "invalid_grant", "reconnect"],
-    ["400 unauthorized_client", 400, "unauthorized_client", "unavailable"],
+    ["400 unauthorized_client", 400, "unauthorized_client", "reconnect"],
     ["401 invalid_client", 401, "invalid_client", "unavailable"],
   ] as const)("%s: carries oauthError, and the Reviews page reads it", async (_l, status, oauthError, shown) => {
     failWith(status, { error: oauthError });
@@ -306,6 +308,8 @@ describe("refreshGoogleToken — failure classification", () => {
     const error = await refreshError();
 
     expect(error).toMatchObject({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status, oauthError });
+    // Flagged exactly when it reads as reconnect.
+    expect(updateMock.mock.calls.length > 0).toBe(shown === "reconnect");
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual(
       shown === "reconnect"
         ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true }

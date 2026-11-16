@@ -23,6 +23,7 @@ import {
   reviewLocationName,
   reviewsErrorBody,
 } from "./googleReviews";
+import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -420,15 +421,41 @@ describe("reviewsErrorBody: token refresh failures", () => {
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
   });
 
+  // JJ3 lead review: the answer follows the rule that flags the row
+  // (connectionHealth.ts isTerminalRefreshFailure), so a flagged row never
+  // reads "not available" while Settings shows Reconnect.
+  it.each([
+    ["unauthorized_client (400)", refresh(400, "unauthorized_client")],
+    ["a 401 with no OAuth code", refresh(401)],
+    ["invalid_grant with no status", Object.assign(new Error("Failed"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", oauthError: "invalid_grant" })],
+  ])("asks for a reconnect for %s, as the row is flagged", (_label, error) => {
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+  });
+
+  it.each([
+    ["a 503", refresh(503)],
+    ["a 429", refresh(429)],
+    ["a 403 unauthorized_client (not flagged)", refresh(403, "unauthorized_client")],
+  ])("gives the route's own sentence for %s, never a reconnect", (_label, error) => {
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: "Fallback." });
+  });
+
   it.each([
     ["invalid_client (401)", refresh(401, "invalid_client")],
     ["invalid_client (400)", refresh(400, "invalid_client")],
-    ["unauthorized_client", refresh(400, "unauthorized_client")],
-    ["a 401 with no OAuth code", refresh(401)],
     ["missing OAuth credentials", Object.assign(new Error("Missing"), { code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" })],
   ])("gives the not-available sentence for %s, never a reconnect", (_label, error) => {
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: REVIEWS_UNAVAILABLE_MESSAGE });
     expect(REVIEWS_UNAVAILABLE_MESSAGE).toBe("Google Reviews are not available right now. Try again later.");
+  });
+
+  it("asks for a reconnect exactly when the refresh flags the row (isTerminalRefreshFailure)", () => {
+    for (const status of [200, 400, 401, 403, 404, 429, 500, 503]) {
+      for (const oauthError of [undefined, "invalid_grant", "unauthorized_client", "invalid_client", "invalid_request"]) {
+        const body = reviewsErrorBody(refresh(status, oauthError), "Fallback.", "owner");
+        expect(body.reconnect === true, `${status} ${oauthError}`).toBe(isTerminalRefreshFailure(status, oauthError));
+      }
+    }
   });
 
   it("a 400 whose OAuth code was not passed on still reads as a refused grant (the common case)", () => {

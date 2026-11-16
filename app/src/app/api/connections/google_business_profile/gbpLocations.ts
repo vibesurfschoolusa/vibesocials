@@ -96,7 +96,8 @@ interface GbpLocation {
 // connection also lands in the catch -> null, like any other failure.
 //
 // R24 platform-clients L1: a failure also says whether the grant is dead, by
-// the rule the Reviews routes use (reviewsErrorBody asks for a reconnect).
+// the rule the Reviews routes use (reviewsErrorBody asks for a reconnect),
+// which follows the rule that flags the row (isTerminalRefreshFailure).
 async function refreshAccessToken(
   connection: SocialConnection,
 ): Promise<{ renewed: SocialConnection | null; grantDead: boolean }> {

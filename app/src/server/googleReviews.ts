@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
 import { refreshGoogleToken } from "./platforms/googleTokens";
@@ -235,21 +236,22 @@ export const REVIEWS_UNAVAILABLE_MESSAGE = "Google Reviews are not available rig
 
 const RECONNECT_CODES = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE", "GOOGLE_NO_REFRESH_TOKEN"]);
 const REFRESH_FAILED_CODE = "GOOGLE_TOKEN_REFRESH_FAILED";
-/** Refresh answers about the app's own OAuth client: reconnecting cannot fix them. */
-const APP_SETUP_OAUTH_ERRORS = new Set(["invalid_client", "unauthorized_client"]);
 
 /**
  * The error body the reviews routes answer with (F7, R1 M5). A reconnect is
  * asked for, with `reconnect: true` so the page links to Settings, only when
  * the person's Google grant is the problem: a 401/403 from a Google API call,
- * a connection already flagged or gone, no refresh token, or a refresh Google
- * refused with invalid_grant. A failure of the app's own setup (missing OAuth
- * credentials, invalid_client, unauthorized_client, or a refresh 401, which is
- * how Google answers a bad client) says Reviews are not available. Anything
- * else is the route's plain `fallback`: an error's own text is never shown.
+ * a connection already flagged or gone, no refresh token, or a refresh failure
+ * that flags the row. JJ3 lead review: that last one is decided by the rule
+ * that flags it (connectionHealth.ts isTerminalRefreshFailure: a 400 or 401,
+ * or invalid_grant, but never invalid_client, 429 or 5xx), so a flagged row
+ * never reads "not available" here while Settings shows Reconnect. A failure of
+ * the app's own setup (missing OAuth credentials, invalid_client) says Reviews
+ * are not available. Anything else is the route's plain `fallback`: an error's
+ * own text is never shown.
  *
  * `oauthError` is the token endpoint's OAuth code when the thrown error carries
- * it. A refresh 400 without one reads as a refused grant, the common case.
+ * it. The GBP location picker uses this too (gbpLocations.ts).
  * `role` is the route's workspace context's: a member reads who can reconnect
  * (googleRefusedBody).
  */
@@ -268,12 +270,10 @@ export function reviewsErrorBody(
 
   if (code === "GOOGLE_MISSING_OAUTH_CREDENTIALS") return unavailable;
   if (code === REFRESH_FAILED_CODE) {
-    if (typeof oauthError === "string") {
-      if (oauthError === "invalid_grant") return refused;
-      if (APP_SETUP_OAUTH_ERRORS.has(oauthError)) return unavailable;
-    }
-    if (status === 401) return unavailable;
-    if (status === 400) return refused;
+    const oauth = typeof oauthError === "string" ? oauthError : undefined;
+    if (oauth === "invalid_client") return unavailable;
+    // No status passed on: only the OAuth code can say the grant is dead.
+    if (isTerminalRefreshFailure(typeof status === "number" ? status : 0, oauth)) return refused;
     return { error: fallback };
   }
   if (status === 401 || status === 403) return refused;

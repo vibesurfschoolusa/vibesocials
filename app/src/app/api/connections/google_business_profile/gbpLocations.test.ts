@@ -282,6 +282,34 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     expect(h.update).not.toHaveBeenCalled();
   });
 
+  // JJ3 lead review: the same rule that flags the row decides the answer.
+  it.each(
+    routes.flatMap(([label, call]) => [
+      [`${label}, unauthorized_client (400)`, call, { status: 400, oauthError: "unauthorized_client" }],
+      [`${label}, a token 401 without invalid_client`, call, { status: 401 }],
+    ] as Array<[string, () => Promise<Response>, Record<string, unknown>]>),
+  )("%s: a refresh the row is flagged for says reconnect", async (_label, call, failure) => {
+    googleInTurn({ status: 401 });
+    h.refresh.mockRejectedValue(
+      Object.assign(new Error("Google token refresh failed"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", ...failure }),
+    );
+
+    const res = await call();
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+  });
+
+  it.each(routes)("%s: a refresh that gets no answer keeps today's answer", async (_label, call) => {
+    googleInTurn({ status: 401 });
+    h.refresh.mockRejectedValue(new TypeError("fetch failed"));
+
+    const res = await call();
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({ error: "Failed to list Google Business Profile accounts" });
+  });
+
   it.each(routes)("%s: a 401 on a row flagged meanwhile says reconnect", async (_label, call) => {
     googleInTurn({ status: 401 });
     h.refresh.mockRejectedValue(Object.assign(new Error("Reconnect"), { code: "RECONNECT_REQUIRED" }));

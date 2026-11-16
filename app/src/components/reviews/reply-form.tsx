@@ -19,13 +19,61 @@ export function replyUndoStatus(canUndo: boolean, restored: boolean): string {
   return restored ? RESTORED_STATUS : "";
 }
 
+/** Where keyboard focus is, seen from one reply form. */
+export type FocusPlace = "this form" | "body" | "elsewhere";
+
 /**
  * Whether the box takes focus now (R24 pages L2): only once a draft asked for
- * with this form's own Draft button is no longer being written. A draft started
- * from the card, or another review's, leaves focus where it is.
+ * with this form's own Draft button is no longer being written, and only while
+ * focus is still in this form or was dropped to the page body (the Draft
+ * button is disabled while it writes). Focus the person moved elsewhere, say to
+ * another card's Draft button, stays there. A draft started from the card, or
+ * another review's, leaves focus where it is.
  */
-export function focusBoxAfterDraft(drafting: boolean, draftedHere: boolean): boolean {
-  return draftedHere && !drafting;
+export function focusBoxAfterDraft(drafting: boolean, draftedHere: boolean, focusAt: FocusPlace): boolean {
+  return draftedHere && !drafting && focusAt !== "elsewhere";
+}
+
+/** `active` is document.activeElement; null or the body itself means focus was dropped. */
+export function focusPlace<N>(active: N | null, form: { contains(node: N): boolean } | null, body: N | null): FocusPlace {
+  if (!active || active === body) return "body";
+  if (form?.contains(active)) return "this form";
+  return "elsewhere";
+}
+
+/** The effect run when `drafting` changes: the mark is used once the draft ends. */
+export function settleDraftFocus(args: {
+  drafting: boolean;
+  draftedHere: { current: boolean };
+  where: () => FocusPlace;
+  focusBox: () => void;
+}): void {
+  if (args.drafting || !args.draftedHere.current) return;
+  const focus = focusBoxAfterDraft(args.drafting, args.draftedHere.current, args.where());
+  args.draftedHere.current = false;
+  if (focus) args.focusBox();
+}
+
+/** This form's Draft button: marks the draft as asked for here. */
+export function startDraftHere(args: {
+  draftedHere: { current: boolean };
+  setRestored: (restored: boolean) => void;
+  onDraftAI: () => void;
+}): void {
+  args.draftedHere.current = true;
+  args.setRestored(false);
+  args.onDraftAI();
+}
+
+/** Undo: its button leaves with this click, so focus goes to the restored text. */
+export function undoReply(args: {
+  onUndoDraft?: () => void;
+  setRestored: (restored: boolean) => void;
+  focusBox: () => void;
+}): void {
+  args.onUndoDraft?.();
+  args.setRestored(true);
+  args.focusBox();
 }
 
 /**
@@ -127,30 +175,25 @@ export function ReplyForm({
     .filter(Boolean)
     .join(" ");
   const canUndo = onUndoDraft !== undefined && !generatingAI;
+  const formRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   // Set when this form's Draft button is pressed; read when that draft ends.
   const draftedHere = useRef(false);
   const [restored, setRestored] = useState(false);
 
   useEffect(() => {
-    if (!focusBoxAfterDraft(generatingAI, draftedHere.current)) return;
-    draftedHere.current = false;
-    boxRef.current?.focus();
+    settleDraftFocus({
+      drafting: generatingAI,
+      draftedHere,
+      where: () => focusPlace(document.activeElement, formRef.current, document.body),
+      focusBox: () => boxRef.current?.focus(),
+    });
   }, [generatingAI]);
 
-  const draftHere = () => {
-    draftedHere.current = true;
-    setRestored(false);
-    onDraftAI();
-  };
-  const undo = () => {
-    onUndoDraft?.();
-    setRestored(true);
-    // The Undo button leaves with this click; focus goes to the restored text.
-    boxRef.current?.focus();
-  };
+  const draftHere = () => startDraftHere({ draftedHere, setRestored, onDraftAI });
+  const undo = () => undoReply({ onUndoDraft, setRestored, focusBox: () => boxRef.current?.focus() });
   return (
-    <div className="space-y-3">
+    <div ref={formRef} className="space-y-3">
       <div className="flex items-center justify-between">
         <Label htmlFor="review-reply">Your reply</Label>
         <Button
