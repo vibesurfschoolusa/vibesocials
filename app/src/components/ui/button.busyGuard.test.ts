@@ -14,18 +14,6 @@ import { describe, expect, it } from "vitest";
  */
 const SRC = fileURLToPath(new URL("../..", import.meta.url));
 
-// LL2/LL3: remove after rebase. Those briefs fix these call sites in parallel
-// (google-business-location-form's dropdown too, which is a select, not a
-// Button, so this guard never listed it).
-const ALLOWED = new Set<string>([
-  "app/posts/bulk/bulk-posts-form.tsx loading={sendingMode === \"schedule\"}", // LL2/LL3: remove after rebase
-  "app/posts/bulk/bulk-posts-form.tsx loading={sendingMode === \"draft\"}", // LL2/LL3: remove after rebase
-  "components/composer/attached-photos.tsx loading={writing}", // LL2/LL3: remove after rebase
-  "components/composer/platform-caption-editor.tsx loading={adapting === platform}", // LL2/LL3: remove after rebase
-  "components/create-post-form.tsx loading={autoCaptionLoading}", // LL2/LL3: remove after rebase
-  "components/create-post-form.tsx loading={enhancingCaption}", // LL2/LL3: remove after rebase
-]);
-
 function tsxFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -77,13 +65,45 @@ function flagsIn(expression: string): Set<string> {
   );
 }
 
-/** The busy flags a Button passes in both `loading` and `disabled`. */
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * `disabled` with the terms that are false whenever `loading` is true taken
+ * out: for `loading={flag}`, `!flag`; for `loading={flag === value}`,
+ * `flag !== value` and `flag === <another literal>`, and any parenthesised
+ * `&&` group holding one of those. What is left can't stop this button while
+ * it loads; another button's action can still disable it (LL3's pattern).
+ */
+function disabledWhileLoading(flag: string, value: string | null, disabled: string): string {
+  const name = escape(flag);
+  const falseTerms = value
+    ? [
+        new RegExp(`${name}\\s*!==\\s*${escape(value)}(?![\\w$])`, "g"),
+        ...(/^["']/.test(value)
+          ? [new RegExp(`${name}\\s*===\\s*(?!${escape(value)})("[^"]*"|'[^']*')`, "g")]
+          : []),
+      ]
+    : [new RegExp(`!${name}(?![\\w$.])`, "g")];
+  const isFalse = (text: string) => falseTerms.some((term) => new RegExp(term.source).test(text));
+  let left = disabled.replace(/\([^()]*\)/g, (group) => (group.includes("&&") && isFalse(group) ? "" : group));
+  for (const term of falseTerms) left = left.replace(term, "");
+  return left;
+}
+
+/** The busy flags a Button passes in both `loading` and `disabled` (true while loading). */
 export function sharedBusyFlags(tag: string): string[] {
   const loading = propExpression(tag, "loading");
   const disabled = propExpression(tag, "disabled");
   if (loading === null || disabled === null) return [];
-  const inDisabled = flagsIn(disabled);
-  return [...flagsIn(loading)].filter((flag) => inDisabled.has(flag));
+  const compared = /^\s*([A-Za-z_$][\w$.]*)\s*===\s*(.+?)\s*$/.exec(loading);
+  const plain = /^\s*([A-Za-z_$][\w$.]*)\s*$/.exec(loading);
+  if (!compared && !plain) {
+    const inDisabled = flagsIn(disabled);
+    return [...flagsIn(loading)].filter((flag) => inDisabled.has(flag));
+  }
+  const flag = (compared ?? plain)![1];
+  const left = disabledWhileLoading(flag, compared ? compared[2] : null, disabled);
+  return flagsIn(left).has(flag) ? [flag] : [];
 }
 
 function offences(): string[] {
@@ -110,12 +130,27 @@ describe("Button busy guard", () => {
     expect(sharedBusyFlags(`<Button disabled={busy}>`)).toEqual([]);
   });
 
-  it("no Button in src passes its busy flag in disabled", () => {
-    expect(offences().filter((offence) => !ALLOWED.has(offence))).toEqual([]);
+  // After the rebase: LL3 disables a button only while ANOTHER action runs,
+  // which is false whenever this one is loading, so it keeps focus.
+  it("allows a disabled that is false whenever this button is loading", () => {
+    expect(
+      sharedBusyFlags(`<Button disabled={busy || mode === "draft" || none} loading={mode === "schedule"}>`),
+    ).toEqual([]);
+    expect(
+      sharedBusyFlags(`<Button loading={adapting === platform} disabled={disabled || (adapting !== null && adapting !== platform)}>`),
+    ).toEqual([]);
+    expect(sharedBusyFlags(`<Button loading={saving} disabled={!saving && !ready}>`)).toEqual([]);
   });
 
-  it("every allowed site still offends, so the list empties as they are fixed", () => {
-    const found = new Set(offences());
-    expect([...ALLOWED].filter((offence) => !found.has(offence))).toEqual([]);
+  it("still finds one that is true while loading", () => {
+    expect(sharedBusyFlags(`<Button loading={mode === "schedule"} disabled={mode !== null}>`)).toEqual(["mode"]);
+    expect(sharedBusyFlags(`<Button loading={mode === "schedule"} disabled={mode === "schedule"}>`)).toEqual(["mode"]);
+    expect(
+      sharedBusyFlags(`<Button loading={adapting === platform} disabled={adapting !== null || adapting !== platform}>`),
+    ).toEqual(["adapting"]);
+  });
+
+  it("no Button in src passes its busy flag in disabled", () => {
+    expect(offences()).toEqual([]);
   });
 });

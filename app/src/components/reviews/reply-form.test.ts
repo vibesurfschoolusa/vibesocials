@@ -375,7 +375,8 @@ describe("the Draft button while it writes (form and card)", () => {
 
   it("idle: neither attribute", () => {
     const tag = draftButton(false);
-    expect(tag).not.toContain("aria-disabled");
+    // The attribute, not the class: buttonVariants styles aria-disabled buttons.
+    expect(tag).not.toMatch(/\saria-disabled=/);
     expect(tag).not.toContain("aria-busy");
   });
 
