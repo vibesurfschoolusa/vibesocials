@@ -1,7 +1,7 @@
 import type { PostJobStatus } from "@prisma/client";
 
 /** What the press would have done, as the sentence's verb. */
-export type MovedOnVerb = "cancelled" | "edited" | "published" | "approved or rejected" | "deleted";
+export type MovedOnVerb = "cancelled" | "edited" | "published" | "scheduled" | "approved or rejected" | "deleted";
 
 /** R31 publishing L4: a post that is gone (deleted, or not in this workspace), never a bare "Not found". */
 export const POST_GONE_TEXT = "This post no longer exists.";

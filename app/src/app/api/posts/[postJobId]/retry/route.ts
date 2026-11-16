@@ -19,6 +19,7 @@ import { isPostMediaComplete } from "@/server/jobs/postMedia";
 import { reserveRetry, withdrawRetry } from "@/server/usage/usageLog";
 import { Prisma, type Platform } from "@prisma/client";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { POST_GONE_TEXT } from "@/lib/postMovedOn";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface RetryRouteContext {
@@ -159,7 +160,8 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   });
 
   if (!postJob) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // R31 publishing L4: a sentence, never a bare "Not found".
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
 
   // The blob must still exist to re-fetch and re-publish (Phase 1 soft-delete

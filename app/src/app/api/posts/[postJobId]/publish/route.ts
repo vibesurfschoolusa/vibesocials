@@ -1,4 +1,5 @@
 import { sendAgainTooOld, TOO_OLD_TO_SEND_ERROR } from "@/lib/sendAgain";
+import type { PostJobStatus } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -39,6 +40,7 @@ import {
   type PairHalf,
 } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
@@ -167,8 +169,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!job) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // R31 publishing L4: a sentence, never a bare "Not found".
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
+
+  // R31 publishing L2: a post that moved on says what happened (postMovedOnText);
+  // `fallback` stays for a post still in a state the action fits.
+  const movedOn = (status: PostJobStatus | null | undefined, verb: "published" | "scheduled", fallback: string, code: string) =>
+    NextResponse.json({ error: postMovedOnText(status, verb) ?? fallback, code }, { status: 409 });
+  // After a lost claim: the post read again, for the sentence only.
+  const statusNow = async () =>
+    (await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } }))?.status;
 
   const approvalActionOf = (row: Parameters<typeof publishApprovalAction>[0]["job"]) =>
     publishApprovalAction({
@@ -282,10 +293,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Path 1 — schedule a draft for later (a scheduled job reschedules via PATCH).
   if (wantsSchedule) {
     if (job.status !== "draft") {
-      return NextResponse.json(
-        { error: "Only a draft can be scheduled here.", code: "NOT_A_DRAFT" },
-        { status: 409 },
-      );
+      return movedOn(job.status, "scheduled", "Only a draft can be scheduled here.", "NOT_A_DRAFT");
     }
 
     const validation = validateScheduledFor(body.scheduledFor, new Date());
@@ -339,10 +347,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     });
 
     if (!result.ok) {
-      return NextResponse.json(
-        { error: "This draft is no longer available to schedule.", code: "NOT_A_DRAFT" },
-        { status: 409 },
-      );
+      return movedOn(await statusNow(), "scheduled", "This draft is no longer available to schedule.", "NOT_A_DRAFT");
     }
 
     return NextResponse.json(
@@ -361,10 +366,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // published again (a failed one with results is retried instead).
   const unsent = job.status === "failed" && job._count?.results === 0;
   if (!MUTABLE_POST_JOB_STATUSES.includes(job.status) && !unsent) {
-    return NextResponse.json(
-      { error: "Only a draft or scheduled post can be published.", code: "NOT_PUBLISHABLE" },
-      { status: 409 },
-    );
+    return movedOn(job.status, "published", "Only a draft or scheduled post can be published.", "NOT_PUBLISHABLE");
   }
   // A post from weeks ago would publish stale content today (lib/sendAgain.ts).
   if (unsent && sendAgainTooOld(job, Date.now())) {
@@ -491,10 +493,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!result.ok) {
     // Nothing was claimed: the reservation goes.
     await releaseReservation(reservation.reserved);
-    return NextResponse.json(
-      { error: "This post is no longer available to publish.", code: "NOT_PUBLISHABLE" },
-      { status: 409 },
-    );
+    return movedOn(await statusNow(), "published", "This post is no longer available to publish.", "NOT_PUBLISHABLE");
   }
 
   // Materialize results from current connections + hand the publish events

@@ -201,7 +201,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     const res = await POST(req({}), ctx("foreign-job"));
 
     expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toEqual({ error: "Not found" });
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1" },
       select: {
@@ -1778,5 +1778,54 @@ describe("POST /api/posts/[postJobId]/publish: the page's workspace id", () => {
       code: "WORKSPACE_CHANGED",
     });
     expect(findFirstMock).not.toHaveBeenCalled();
+  });
+});
+
+// R31 publishing L2 and L4: Publish now (and scheduling a draft) on a post that
+// moved on says what happened, through postMovedOnText.
+describe("POST /api/posts/[postJobId]/publish: a post that moved on", () => {
+  it.each([
+    ["in_progress", "This post has started publishing, so it can't be published. Check Activity to see how it goes."],
+    ["completed", "This post has already gone out, so it can't be published. Check Activity to see it."],
+    ["cancelled", "This post was cancelled, so it can't be published."],
+  ])("publish now, %s: the sentence", async (status, error) => {
+    findFirstMock.mockResolvedValue({ status });
+    const res = await POST(req({}), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error, code: "NOT_PUBLISHABLE" });
+  });
+
+  it("publish now, failed with results: never says it was sent", async () => {
+    findFirstMock.mockResolvedValue({ status: "failed", _count: { results: 2 } });
+    const res = await POST(req({}), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("This post failed, so it can't be published. Check Activity for what to do next.");
+  });
+
+  it("publish now, lost the claim: the post's state read again for the sentence", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ status: "scheduled" })).mockResolvedValueOnce({ status: "in_progress" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req({}), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "This post has started publishing, so it can't be published. Check Activity to see how it goes.",
+      code: "NOT_PUBLISHABLE",
+    });
+  });
+
+  it("scheduling a draft that started publishing meanwhile: the sentence", async () => {
+    findFirstMock.mockResolvedValue({ status: "in_progress" });
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "This post has started publishing, so it can't be scheduled. Check Activity to see how it goes.",
+      code: "NOT_A_DRAFT",
+    });
+  });
+
+  it("scheduling a draft someone already scheduled keeps its own sentence", async () => {
+    findFirstMock.mockResolvedValue({ status: "scheduled" });
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+    expect((await res.json()).error).toBe("Only a draft can be scheduled here.");
   });
 });

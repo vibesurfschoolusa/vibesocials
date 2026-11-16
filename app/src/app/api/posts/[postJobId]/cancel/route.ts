@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { postMovedOnText } from "@/lib/postMovedOn";
+import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 
@@ -95,7 +95,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!job) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // R31 publishing L4: a sentence, never a bare "Not found".
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
 
   if (!MUTABLE_POST_JOB_STATUSES.includes(job.status)) {

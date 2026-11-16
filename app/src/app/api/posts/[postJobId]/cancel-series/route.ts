@@ -1,9 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { PostJobStatus } from "@prisma/client";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 import { signedOutResponse } from "@/lib/signedOutResponse";
@@ -59,10 +61,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceRefusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, workspaceId);
   if (workspaceRefusal) return workspaceRefusal;
 
-  const notCancelable = () =>
+  // R31 publishing L1: what happened to this post (postMovedOnText), and that
+  // the later posts of the series were not touched, so nobody thinks they went.
+  const notCancelable = (status: PostJobStatus | null | undefined) =>
     NextResponse.json(
       {
-        error: "Only scheduled or draft posts can be cancelled.",
+        error: `${postMovedOnText(status, "cancelled") ?? "This post can no longer be cancelled."} The later posts in this series were left as they are: cancel them on their own cards.`,
         code: "NOT_CANCELABLE",
       },
       { status: 409 },
@@ -74,11 +78,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!job) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
 
   if (!MUTABLE_POST_JOB_STATUSES.includes(job.status)) {
-    return notCancelable();
+    return notCancelable(job.status);
   }
 
   if (!job.seriesId) {
@@ -120,7 +124,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return count;
   });
   if (cancelled === 0) {
-    return notCancelable();
+    // Lost every race (the scanner claimed them): read this post again, for the sentence only.
+    const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
+    return notCancelable(now?.status);
   }
 
   return NextResponse.json(

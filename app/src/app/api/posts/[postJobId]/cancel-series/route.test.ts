@@ -263,3 +263,42 @@ describe("POST /api/posts/[postJobId]/cancel-series: the page's workspace id", (
     expect(findFirstMock).not.toHaveBeenCalled();
   });
 });
+
+// R31 publishing L1: "this and all later posts" on a post that moved on said
+// "Only scheduled or draft posts can be cancelled." and nothing about the
+// later posts. It now says what happened and that the later posts were left.
+describe("POST /api/posts/[postJobId]/cancel-series: a post that moved on", () => {
+  it.each([
+    ["in_progress", "This post has started publishing, so it can't be cancelled. Check Activity to see how it goes."],
+    ["completed", "This post has already gone out, so it can't be cancelled. Check Activity to see it."],
+    ["failed", "This post failed, so it can't be cancelled. Check Activity for what to do next."],
+    ["cancelled", "This post was already cancelled."],
+  ])("%s: the sentence, and the later posts are said to be left as they are", async (status, said) => {
+    findFirstMock.mockResolvedValue(row("job-2", { status }));
+    const res = await POST(req, ctx("job-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: `${said} The later posts in this series were left as they are: cancel them on their own cards.`,
+      code: "NOT_CANCELABLE",
+    });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("lost the race for every post: the post's state read again, and the same sentence", async () => {
+    findFirstMock.mockResolvedValueOnce(row("job-2")).mockResolvedValueOnce({ status: "in_progress" });
+    findManyMock.mockResolvedValue([row("job-2")]);
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await POST(req, ctx("job-2"));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(
+      "This post has started publishing, so it can't be cancelled. Check Activity to see how it goes. The later posts in this series were left as they are: cancel them on their own cards.",
+    );
+  });
+
+  it("deleted: 404 with the sentence, never a bare Not found", async () => {
+    findFirstMock.mockResolvedValue(null);
+    const res = await POST(req, ctx("job-2"));
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
+  });
+});

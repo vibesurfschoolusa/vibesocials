@@ -37,6 +37,7 @@ import {
   type SendNowReservation,
 } from "../pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface PostJobRouteContext {
@@ -187,7 +188,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!job) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // R31 publishing L4: a sentence, never a bare "Not found".
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
 
   const state = deriveApprovalState(job);
@@ -206,7 +208,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!canDecideApproval({ role: workspaceContext.role, state }) || !isAwaitingApprovalDecision(job)) {
     return NextResponse.json(
       {
-        error: "This post isn't awaiting approval.",
+        // R31: a post that moved on (started, went out, cancelled) says so.
+        error: postMovedOnText(job.status, "approved or rejected") ?? "This post isn't awaiting approval.",
         code: "NOT_PENDING_APPROVAL",
       },
       { status: 409 },
@@ -324,7 +327,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
     return NextResponse.json(
       {
-        error: "This post is no longer awaiting approval.",
+        error: postMovedOnText(current?.status ?? null, "approved or rejected") ?? "This post is no longer awaiting approval.",
         code: "NOT_PENDING_APPROVAL",
       },
       { status: 409 },

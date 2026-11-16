@@ -34,7 +34,7 @@ import {
 } from "./pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
-import { postMovedOnText } from "@/lib/postMovedOn";
+import { POST_GONE_TEXT, POST_NOW_DRAFT_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -119,7 +119,7 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!postJob) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
 
   const results = await prisma.postJobResult.findMany({
@@ -252,7 +252,8 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   });
 
   if (!existing) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // R31 publishing L4: a sentence, never a bare "Not found".
+    return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
   }
 
   if (!MUTABLE_POST_JOB_STATUSES.includes(existing.status)) {
@@ -267,7 +268,9 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     if (existing.status !== "scheduled") {
       return NextResponse.json(
         {
-          error: "Publish a draft to schedule it — a draft has no scheduled time to edit.",
+          // R31 publishing L5: a Queue left open still shows it as Scheduled (the
+          // client asked for a change, or a member's edit sent it back for approval).
+          error: POST_NOW_DRAFT_TEXT,
           code: "NOT_SCHEDULED",
         },
         { status: 400 },
@@ -503,14 +506,17 @@ export async function DELETE(request: NextRequest, context: PostJobRouteContext)
   if (!result.ok) {
     const existing = await prisma.postJob.findFirst({
       where: { id: postJobId, workspaceId },
-      select: { id: true },
+      select: { status: true },
     });
     if (!existing) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json({ error: POST_GONE_TEXT }, { status: 404 });
     }
+    // R31 publishing L3: a draft that was scheduled, or started publishing, meanwhile says so.
     return NextResponse.json(
       {
-        error: "Only draft or cancelled posts can be deleted. Cancel a scheduled post first.",
+        error:
+          postMovedOnText(existing.status, "deleted") ??
+          "Only draft or cancelled posts can be deleted. Cancel a scheduled post first.",
         code: "NOT_DELETABLE",
       },
       { status: 409 },

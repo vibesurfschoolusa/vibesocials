@@ -204,7 +204,7 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     const res = await POST(req({ retryAllFailed: true }), ctx("foreign-job"));
 
     expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toEqual({ error: "Not found" });
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
   });
 
   it("returns 409 MEDIA_UNAVAILABLE when the media blob was soft-deleted", async () => {

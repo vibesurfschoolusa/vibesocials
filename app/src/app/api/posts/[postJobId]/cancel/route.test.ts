@@ -208,7 +208,7 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
     const res = await POST(req, ctx("foreign-job"));
 
     expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toEqual({ error: "Not found" });
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1" },
       select: { id: true, status: true, submittedForApprovalAt: true, approvedAt: true, storyOfPostJobId: true },

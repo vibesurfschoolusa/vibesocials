@@ -1467,3 +1467,29 @@ describe("POST /api/posts/[postJobId]/approval: the page's workspace id", () => 
     expect(findFirstMock).not.toHaveBeenCalled();
   });
 });
+
+// R31 publishing L4: Approve on a post that is gone or moved on.
+describe("POST /api/posts/[postJobId]/approval: a post that moved on", () => {
+  it("deleted: 404 with the sentence, never a bare Not found", async () => {
+    findFirstMock.mockResolvedValue(null);
+    const res = await POST(req({ decision: "approve", reviewedUpdatedAt: new Date().toISOString() }), ctx("job-1"));
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
+  });
+
+  it("cancelled meanwhile: says so", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ status: "cancelled", submittedForApprovalAt: null }));
+    const res = await POST(req({ decision: "approve", reviewedUpdatedAt: new Date().toISOString() }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "This post was cancelled, so it can't be approved or rejected.",
+      code: "NOT_PENDING_APPROVAL",
+    });
+  });
+
+  it("a draft never submitted keeps its own sentence", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ submittedForApprovalAt: null }));
+    const res = await POST(req({ decision: "approve", reviewedUpdatedAt: new Date().toISOString() }), ctx("job-1"));
+    expect((await res.json()).error).toBe("This post isn't awaiting approval.");
+  });
+});

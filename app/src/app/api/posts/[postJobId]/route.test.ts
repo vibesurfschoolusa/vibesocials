@@ -169,7 +169,7 @@ describe("GET /api/posts/[postJobId]", () => {
     findFirstMock.mockResolvedValue(null);
     const res = await GET(req(null), ctx("foreign-job"));
     expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toEqual({ error: "Not found" });
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
   });
 });
 
@@ -663,7 +663,7 @@ describe("DELETE /api/posts/[postJobId]", () => {
     });
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1" },
-      select: { id: true },
+      select: { status: true },
     });
   });
 
@@ -1197,5 +1197,51 @@ describe("DELETE /api/posts/[postJobId]: the page's workspace id", () => {
       code: "WORKSPACE_CHANGED",
     });
     expect(findFirstMock).not.toHaveBeenCalled();
+  });
+});
+
+// R31 publishing L4 and L5: Edit, the drag and Delete on a post that moved on.
+describe("PATCH and DELETE /api/posts/[postJobId]: a post that moved on", () => {
+  it("PATCH, deleted: 404 with the sentence", async () => {
+    findFirstMock.mockResolvedValue(null);
+    const res = await PATCH(req({ baseCaption: "New" }), ctx("job-1"));
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
+  });
+
+  it("PATCH with a time, on a post that became a draft: the 400 NOT_SCHEDULED says it is a draft now", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    const res = await PATCH(req({ scheduledFor: new Date(Date.now() + 3_600_000).toISOString() }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "This post is now a draft (a change was asked for, or it is waiting for approval).",
+      code: "NOT_SCHEDULED",
+    });
+  });
+
+  it("PATCH, a draft still editable: unchanged (its caption saves)", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    const res = await PATCH(req({ baseCaption: "New" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    ["scheduled", "This post is scheduled now, so it can't be deleted. Cancel it first, then delete it."],
+    ["in_progress", "This post has started publishing, so it can't be deleted. Check Activity to see how it goes."],
+    ["completed", "This post has already gone out, so it can't be deleted. Check Activity to see it."],
+  ])("DELETE, %s meanwhile: the sentence", async (status, error) => {
+    deleteManyMock.mockResolvedValue({ count: 0 });
+    findFirstMock.mockResolvedValue({ status });
+    const res = await DELETE(req({}), ctx("job-1"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error, code: "NOT_DELETABLE" });
+  });
+
+  it("DELETE, deleted already: 404 with the sentence", async () => {
+    deleteManyMock.mockResolvedValue({ count: 0 });
+    findFirstMock.mockResolvedValue(null);
+    const res = await DELETE(req({}), ctx("job-1"));
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
   });
 });
