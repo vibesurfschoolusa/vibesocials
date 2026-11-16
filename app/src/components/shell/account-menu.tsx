@@ -310,229 +310,233 @@ export function AccountMenu() {
 
   // While the session loads, the optimistic app frame keeps the button; once
   // read, a session that names nobody gets no menu.
-  if (!account && status !== "loading") return null;
+  const signedOut = !account && status !== "loading";
 
+  // R30 PP2: the loading line sits outside the panel and the signed-out check,
+  // so it is on the page from the first render; only its text changes.
   return (
-    <div ref={containerRef} className="relative">
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        // On a phone the label is hidden and the initials are decorative, so this names the button.
-        aria-label={`Account menu for ${accountLabel(name, email)}${workspaceLine ? `, workspace ${workspaceLine}` : ""}`}
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-card px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-      >
-        {/* The person's initials in the logo's colours: the brand's gradient as a ring around its navy. */}
-        <span
-          aria-hidden
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[conic-gradient(from_200deg,#448be5,#06d6e8,#0bce96,#f46955,#f33574,#ab42b7,#448be5)] p-[2px]"
-        >
-          <span className="flex h-full w-full items-center justify-center rounded-full bg-[#111e2b] text-[0.6875rem] font-semibold tracking-wide text-white">
-            {initials}
-          </span>
-        </span>
-        <span className="hidden min-w-0 flex-col items-start text-left leading-tight sm:flex">
-          <span className="max-w-[11rem] truncate font-medium text-foreground">{accountLabel(name, email)}</span>
-          {/* Only with several workspaces (one per client): which one you are posting in. */}
-          {workspaceLine ? (
-            <span className="max-w-[11rem] truncate text-xs text-muted-foreground">{workspaceLine}</span>
-          ) : null}
-        </span>
-        <ChevronDown
-          aria-hidden
-          className={cn(
-            "h-4 w-4 text-muted-foreground transition-transform",
-            open && "rotate-180",
-          )}
-        />
-      </button>
-
-      {open ? (
-        <div
-          id={panelId}
-          role="group"
-          aria-label="Account"
-          className="absolute right-0 z-50 mt-2 w-72 rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card p-1.5 text-card-foreground shadow-lg"
-        >
-          <div className="px-2 py-2">
-            <p className="text-xs text-muted-foreground">Signed in as</p>
-            <p className="truncate text-sm font-medium text-foreground">
-              {name || email || "Your account"}
-            </p>
-            {name && email ? <p className="truncate text-xs text-muted-foreground">{email}</p> : null}
-          </div>
-
-          <div className="my-1 h-px bg-border" />
-
-          <div className="px-2 py-2">
-            <p className="text-xs text-muted-foreground">Workspace</p>
-            {workspacesLoading ? (
-              <>
-                <p role="status" className="sr-only">Loading workspaces…</p>
-                <Skeleton className="mt-1.5 h-5 w-32" />
-              </>
-            ) : activeWorkspace ? (
-              <p className="truncate text-sm font-medium text-foreground">
-                {activeWorkspace.name}
-              </p>
-            ) : null}
-
-            {!workspacesLoading && workspaces && workspaces.length > 1 ? (
-              <Link
-                href="/workspaces"
-                onClick={() => setOpen(false)}
-                className="mt-2 flex items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <LayoutGrid aria-hidden className="h-4 w-4 text-muted-foreground" />
-                All workspaces
-              </Link>
-            ) : null}
-
-            {!workspacesLoading && workspaces && workspaces.length > 1 ? (
-              <div
-                role="group"
-                aria-label="Switch workspace"
-                className="mt-2 flex flex-col gap-0.5"
-              >
-                {workspaces.map((workspace) => (
-                  <button
-                    key={workspace.id}
-                    type="button"
-                    aria-pressed={workspace.isActive}
-                    aria-disabled={switchingId !== null || undefined}
-                    onClick={() => handleSwitch(workspace)}
-                    className={cn(
-                      "flex items-center justify-between gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-disabled:opacity-60",
-                      workspace.isActive ? "text-foreground" : "text-muted-foreground",
-                    )}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {workspace.role === "owner" ? "Owner" : "Member"}
-                    </span>
-                    {workspace.isActive ? (
-                      <Check aria-hidden className="h-4 w-4 shrink-0 text-primary" />
-                    ) : (
-                      <span aria-hidden className="h-4 w-4 shrink-0" />
-                    )}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {!workspacesLoading ? (
-              creatingWorkspace ? (
-                <form onSubmit={handleCreateWorkspace} className="mt-2 flex flex-col gap-2">
-                  <Input
-                    autoFocus
-                    aria-label="New workspace name"
-                    placeholder="Client or business name"
-                    maxLength={60}
-                    value={newWorkspaceName}
-                    onChange={(event) => setNewWorkspaceName(event.target.value)}
-                    readOnly={createBusy}
-                  />
-                  {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-disabled={createBusy || undefined}
-                      onClick={() => {
-                        if (createBusy) return;
-                        focusNewWorkspaceButton.current = true;
-                        setCreatingWorkspace(false);
-                        setNewWorkspaceName("");
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button type="submit" size="sm" loading={createBusy} disabled={!newWorkspaceName.trim()}>
-                      {createBusy ? "Creating…" : "Create"}
-                    </Button>
-                  </div>
-                </form>
-              ) : (
-                <button
-                  ref={(node) => focusWhenPending(node, focusNewWorkspaceButton)}
-                  type="button"
-                  onClick={() => setCreatingWorkspace(true)}
-                  disabled={switchingId !== null}
-                  className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-                >
-                  <Plus aria-hidden className="h-4 w-4" />
-                  New workspace
-                </button>
-              )
-            ) : null}
-          </div>
-
-          <div className="my-1 h-px bg-border" />
-          <div className="flex items-center justify-between gap-2 px-2 py-2">
-            <span className="text-sm text-muted-foreground">Theme</span>
-            <ThemeToggle />
-          </div>
-          <div className="my-1 h-px bg-border" />
-          <Link
-            href="/help"
-            onClick={() => setOpen(false)}
-            className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <CircleHelp aria-hidden className="h-4 w-4 text-muted-foreground" />
-            Help
-          </Link>
-          {/* S1: for everyone signed in; the email names the workspace and carries its id. */}
-          <a
-            href={contactUsHref(activeWorkspace)}
-            onClick={() => setOpen(false)}
-            className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Mail aria-hidden className="h-4 w-4 text-muted-foreground" />
-            Contact us
-          </a>
-          {operatorLink ? (
-            <Link
-              href={operatorLink.href}
-              onClick={() => setOpen(false)}
-              className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Shield aria-hidden className="h-4 w-4 text-muted-foreground" />
-              {operatorLink.label}
-            </Link>
-          ) : null}
-          {installApp.available ? (
-            <button
-              type="button"
-              onClick={() => {
-                // R27 MM3: the instructions dialog returns focus to what had it when it opened.
-                buttonRef.current?.focus();
-                setOpen(false);
-                installApp.install();
-              }}
-              className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Download aria-hidden className="h-4 w-4 text-muted-foreground" />
-              Install app
-            </button>
-          ) : null}
+    <>
+      <p role="status" className="sr-only">{!signedOut && open && workspacesLoading ? "Loading workspaces…" : ""}</p>
+      {signedOut ? null : (
+        <div ref={containerRef} className="relative">
           <button
+            ref={buttonRef}
             type="button"
-            onClick={() => void signOutFromMenu(signOut, () => setOpen(false), toast.error)}
-            className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setOpen((value) => !value)}
+            // On a phone the label is hidden and the initials are decorative, so this names the button.
+            aria-label={`Account menu for ${accountLabel(name, email)}${workspaceLine ? `, workspace ${workspaceLine}` : ""}`}
+            aria-expanded={open}
+            aria-controls={open ? panelId : undefined}
+            className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-card px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
-            <LogOut aria-hidden className="h-4 w-4 text-muted-foreground" />
-            Sign out
+            {/* The person's initials in the logo's colours: the brand's gradient as a ring around its navy. */}
+            <span
+              aria-hidden
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[conic-gradient(from_200deg,#448be5,#06d6e8,#0bce96,#f46955,#f33574,#ab42b7,#448be5)] p-[2px]"
+            >
+              <span className="flex h-full w-full items-center justify-center rounded-full bg-[#111e2b] text-[0.6875rem] font-semibold tracking-wide text-white">
+                {initials}
+              </span>
+            </span>
+            <span className="hidden min-w-0 flex-col items-start text-left leading-tight sm:flex">
+              <span className="max-w-[11rem] truncate font-medium text-foreground">{accountLabel(name, email)}</span>
+              {/* Only with several workspaces (one per client): which one you are posting in. */}
+              {workspaceLine ? (
+                <span className="max-w-[11rem] truncate text-xs text-muted-foreground">{workspaceLine}</span>
+              ) : null}
+            </span>
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform",
+                open && "rotate-180",
+              )}
+            />
           </button>
-        </div>
-      ) : null}
 
-      <InstallInstructionsDialog
-        open={installApp.instructionsOpen}
-        onOpenChange={installApp.setInstructionsOpen}
-      />
-    </div>
+          {open ? (
+            <div
+              id={panelId}
+              role="group"
+              aria-label="Account"
+              className="absolute right-0 z-50 mt-2 w-72 rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card p-1.5 text-card-foreground shadow-lg"
+            >
+              <div className="px-2 py-2">
+                <p className="text-xs text-muted-foreground">Signed in as</p>
+                <p className="truncate text-sm font-medium text-foreground">
+                  {name || email || "Your account"}
+                </p>
+                {name && email ? <p className="truncate text-xs text-muted-foreground">{email}</p> : null}
+              </div>
+
+              <div className="my-1 h-px bg-border" />
+
+              <div className="px-2 py-2">
+                <p className="text-xs text-muted-foreground">Workspace</p>
+                {workspacesLoading ? (
+                  <Skeleton className="mt-1.5 h-5 w-32" />
+                ) : activeWorkspace ? (
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {activeWorkspace.name}
+                  </p>
+                ) : null}
+
+                {!workspacesLoading && workspaces && workspaces.length > 1 ? (
+                  <Link
+                    href="/workspaces"
+                    onClick={() => setOpen(false)}
+                    className="mt-2 flex items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <LayoutGrid aria-hidden className="h-4 w-4 text-muted-foreground" />
+                    All workspaces
+                  </Link>
+                ) : null}
+
+                {!workspacesLoading && workspaces && workspaces.length > 1 ? (
+                  <div
+                    role="group"
+                    aria-label="Switch workspace"
+                    className="mt-2 flex flex-col gap-0.5"
+                  >
+                    {workspaces.map((workspace) => (
+                      <button
+                        key={workspace.id}
+                        type="button"
+                        aria-pressed={workspace.isActive}
+                        aria-disabled={switchingId !== null || undefined}
+                        onClick={() => handleSwitch(workspace)}
+                        className={cn(
+                          "flex items-center justify-between gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-disabled:opacity-60",
+                          workspace.isActive ? "text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {workspace.role === "owner" ? "Owner" : "Member"}
+                        </span>
+                        {workspace.isActive ? (
+                          <Check aria-hidden className="h-4 w-4 shrink-0 text-primary" />
+                        ) : (
+                          <span aria-hidden className="h-4 w-4 shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {!workspacesLoading ? (
+                  creatingWorkspace ? (
+                    <form onSubmit={handleCreateWorkspace} className="mt-2 flex flex-col gap-2">
+                      <Input
+                        autoFocus
+                        aria-label="New workspace name"
+                        placeholder="Client or business name"
+                        maxLength={60}
+                        value={newWorkspaceName}
+                        onChange={(event) => setNewWorkspaceName(event.target.value)}
+                        readOnly={createBusy}
+                      />
+                      {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-disabled={createBusy || undefined}
+                          onClick={() => {
+                            if (createBusy) return;
+                            focusNewWorkspaceButton.current = true;
+                            setCreatingWorkspace(false);
+                            setNewWorkspaceName("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button type="submit" size="sm" loading={createBusy} disabled={!newWorkspaceName.trim()}>
+                          {createBusy ? "Creating…" : "Create"}
+                        </Button>
+                      </div>
+                    </form>
+                  ) : (
+                    <button
+                      ref={(node) => focusWhenPending(node, focusNewWorkspaceButton)}
+                      type="button"
+                      onClick={() => setCreatingWorkspace(true)}
+                      disabled={switchingId !== null}
+                      className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                    >
+                      <Plus aria-hidden className="h-4 w-4" />
+                      New workspace
+                    </button>
+                  )
+                ) : null}
+              </div>
+
+              <div className="my-1 h-px bg-border" />
+              <div className="flex items-center justify-between gap-2 px-2 py-2">
+                <span className="text-sm text-muted-foreground">Theme</span>
+                <ThemeToggle />
+              </div>
+              <div className="my-1 h-px bg-border" />
+              <Link
+                href="/help"
+                onClick={() => setOpen(false)}
+                className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <CircleHelp aria-hidden className="h-4 w-4 text-muted-foreground" />
+                Help
+              </Link>
+              {/* S1: for everyone signed in; the email names the workspace and carries its id. */}
+              <a
+                href={contactUsHref(activeWorkspace)}
+                onClick={() => setOpen(false)}
+                className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Mail aria-hidden className="h-4 w-4 text-muted-foreground" />
+                Contact us
+              </a>
+              {operatorLink ? (
+                <Link
+                  href={operatorLink.href}
+                  onClick={() => setOpen(false)}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Shield aria-hidden className="h-4 w-4 text-muted-foreground" />
+                  {operatorLink.label}
+                </Link>
+              ) : null}
+              {installApp.available ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // R27 MM3: the instructions dialog returns focus to what had it when it opened.
+                    buttonRef.current?.focus();
+                    setOpen(false);
+                    installApp.install();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Download aria-hidden className="h-4 w-4 text-muted-foreground" />
+                  Install app
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void signOutFromMenu(signOut, () => setOpen(false), toast.error)}
+                className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <LogOut aria-hidden className="h-4 w-4 text-muted-foreground" />
+                Sign out
+              </button>
+            </div>
+          ) : null}
+
+          <InstallInstructionsDialog
+            open={installApp.instructionsOpen}
+            onOpenChange={installApp.setInstructionsOpen}
+          />
+        </div>
+      )}
+    </>
   );
 }

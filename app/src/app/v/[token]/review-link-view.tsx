@@ -8,8 +8,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import {
+  REVIEW_ALREADY_APPROVED_MESSAGE,
   REVIEW_LIST_MAX,
   REVIEW_DECISION_MAYBE_SAVED_MESSAGE,
+  REVIEW_POST_CHANGED_MESSAGE,
   REVIEW_NOTE_MAX,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
@@ -20,6 +22,21 @@ import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
 /** R29 client-journey L2: Send again found the same change request already standing. */
 export const REVIEW_CHANGE_ALREADY_SAVED_MESSAGE = "Your change request was already saved. The list was loaded again.";
+
+/**
+ * R30 client-journey L3: the notice once the reload has answered. Its claim
+ * about the list stands only when the reload worked; otherwise the refresh
+ * alert above it says what to do.
+ */
+const NOT_RELOADED: Record<string, string> = {
+  [REVIEW_CHANGE_ALREADY_SAVED_MESSAGE]: "Your change request was already saved.",
+  [REVIEW_ALREADY_APPROVED_MESSAGE]: "This post was already approved.",
+  [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page.",
+};
+
+export function staleNotice(message: string, reloaded: boolean): string {
+  return reloaded ? message : (NOT_RELOADED[message] ?? message);
+}
 
 /** The route's `already`: this request wrote nothing, as an earlier one had. */
 export function alreadyStood(data: unknown): boolean {
@@ -312,7 +329,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  /** True when the list was read again. */
+  const load = useCallback(async (): Promise<boolean> => {
     // R13-pages L2: Try again shows Loading (no posts yet) instead of the same failure.
     setError(null);
     try {
@@ -324,12 +342,14 @@ export function ReviewLinkView({ token }: { token: string }) {
         | null;
       if (!response.ok || !data?.posts) {
         setError(data?.error ?? "");
-        return;
+        return false;
       }
       setPosts(data.posts);
       setMore(data.more === true);
+      return true;
     } catch {
       setError("");
+      return false;
     }
   }, [token]);
 
@@ -346,63 +366,60 @@ export function ReviewLinkView({ token }: { token: string }) {
 
   const stale = useCallback(
     (message: string) => {
-      setNotice(message);
-      void load();
+      void load().then((reloaded) => setNotice(staleNotice(message, reloaded)));
     },
     [load],
   );
 
-  if (error !== null && posts === null) {
-    return (
-      <div className="space-y-3">
-        <p role="alert" className="text-sm">
-          {error || LOAD_FAILED_MESSAGE}
-        </p>
-        <Button type="button" variant="outline" size="md" onClick={() => void load()}>
-          Try again
-        </Button>
-      </div>
-    );
-  }
-  if (posts === null) {
-    return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading the posts…
-      </p>
-    );
-  }
+  // R30 PP2: one return, so both status lines are on the page from the first
+  // render and only their text changes.
   return (
-    <div className="space-y-4">
-      {error !== null ? (
-        // A failed reload while the list is on screen: say so, and how to recover.
-        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3">
-          <p className="text-sm">{error || REFRESH_FAILED_MESSAGE}</p>
+    <div>
+      <p role="status" className="text-sm text-muted-foreground empty:sr-only">
+        {posts === null && error === null ? "Loading the posts…" : ""}
+      </p>
+      {error !== null && posts === null ? (
+        <div className="space-y-3">
+          <p role="alert" className="text-sm">
+            {error || LOAD_FAILED_MESSAGE}
+          </p>
           <Button type="button" variant="outline" size="md" onClick={() => void load()}>
-            Reload the list
+            Try again
           </Button>
         </div>
       ) : null}
-      {/* R29 client-journey L5: on the list from its first render; only the text changes. */}
-      <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
-        {notice}
-      </p>
-      {posts.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
-      ) : (
-        <ul className="space-y-4">
-          {posts.map((post) => (
-            // Keyed on the id only, so a card keeps its sentence across a reload.
-            <ReviewPostCard
-              key={post.id}
-              post={post}
-              token={token}
-              onDecided={(change) => patch(post.id, change)}
-              onStale={stale}
-            />
-          ))}
-        </ul>
-      )}
-      <ReviewListMore more={more} />
+      <div className="space-y-4">
+        {posts !== null && error !== null ? (
+          // A failed reload while the list is on screen: say so, and how to recover.
+          <div role="alert" className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3">
+            <p className="text-sm">{error || REFRESH_FAILED_MESSAGE}</p>
+            <Button type="button" variant="outline" size="md" onClick={() => void load()}>
+              Reload the list
+            </Button>
+          </div>
+        ) : null}
+        {/* R29 client-journey L5: on the list from its first render; only the text changes. */}
+        <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
+          {notice}
+        </p>
+        {posts === null ? null : posts.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
+        ) : (
+          <ul className="space-y-4">
+            {posts.map((post) => (
+              // Keyed on the id only, so a card keeps its sentence across a reload.
+              <ReviewPostCard
+                key={post.id}
+                post={post}
+                token={token}
+                onDecided={(change) => patch(post.id, change)}
+                onStale={stale}
+              />
+            ))}
+          </ul>
+        )}
+        <ReviewListMore more={more} />
+      </div>
     </div>
   );
 }

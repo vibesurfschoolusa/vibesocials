@@ -50,40 +50,37 @@ export function ForgotPasswordForm() {
 
   // R28 NN2 (pages L6): on the page from the first render, so the
   // confirmation that replaces the form is announced; only its text changes.
-  const statusLine = (
-    <div role="status" className="empty:sr-only">
-      {submitted ? (
-        <Alert variant="success" role={undefined}>
-          If an account exists for that address, we sent a reset link.
-        </Alert>
-      ) : null}
-    </div>
-  );
-
-  if (submitted) return <>{statusLine}</>;
-
+  // R30 PP2: one return, so the line can't be left out of a branch.
   return (
     <>
-      {statusLine}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
+      <div role="status" className="empty:sr-only">
+        {submitted ? (
+          <Alert variant="success" role={undefined}>
+            If an account exists for that address, we sent a reset link.
+          </Alert>
+        ) : null}
+      </div>
+      {submitted ? null : (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
 
-        {error ? <Alert variant="danger">{error}</Alert> : null}
+          {error ? <Alert variant="danger">{error}</Alert> : null}
 
-        <Button type="submit" loading={loading} className="w-full">
-          Send reset link
-        </Button>
-      </form>
+          <Button type="submit" loading={loading} className="w-full">
+            Send reset link
+          </Button>
+        </form>
+      )}
     </>
   );
 }

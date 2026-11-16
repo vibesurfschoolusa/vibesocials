@@ -58,89 +58,93 @@ export function PublishHealthCard() {
     };
   }, []);
 
-  if (loading) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Publish health</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p role="status" className="sr-only">
-            Loading publish health…
-          </p>
-          <div className="space-y-2" aria-hidden>
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-4 w-full" />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  // Shown only once this workspace has finished at least one publish (the rate is then a number).
+  const shown =
+    !loading && data && data.overall.attempted > 0 && data.overall.successRate !== null
+      ? { ...data, overall: { ...data.overall, successRate: data.overall.successRate } }
+      : null;
 
-  if (!data || data.overall.attempted === 0 || data.overall.successRate === null) {
-    return null;
-  }
-
+  // R30 PP2: the loading line is outside the views, on the page from the
+  // first render; only its text changes.
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Publish health</CardTitle>
-        <CardDescription>
-          {data.overall.succeeded} of {data.overall.attempted}{" "}
-          {data.overall.attempted === 1 ? "publish" : "publishes"} landed in the last{" "}
-          {data.windowDays} days
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          <div className="flex items-baseline gap-2">
-            <span
-              className={cn(
-                "text-2xl font-semibold tabular-nums tracking-tight",
-                rateTone(data.overall.successRate),
-              )}
-            >
-              {data.overall.successRate}%
-            </span>
-            <span className="text-xs text-muted-foreground">overall success</span>
-          </div>
-
-          {/* Name and counts share a row; the bar spans the full width beneath.
-              Keeping all three on one line collapsed the bar to nothing in the
-              dashboard's narrow sidebar. */}
-          <dl className="space-y-3">
-            {data.platforms.map((platform) => (
-              <div key={platform.platform} className="space-y-1">
-                <div className="flex items-baseline justify-between gap-2">
-                  <dt className="min-w-0 truncate text-sm text-foreground">
-                    {platformLabel(platform.platform)}
-                  </dt>
-                  <dd className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {platform.succeeded}/{platform.attempted} · {platform.successRate}%
-                  </dd>
-                </div>
-                <div
-                  className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-                  role="img"
-                  aria-label={`${platformLabel(platform.platform)}: ${platform.succeeded} of ${platform.attempted} succeeded`}
+    <>
+      <p role="status" className="sr-only">
+        {loading ? "Loading publish health…" : ""}
+      </p>
+      {loading ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Publish health</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2" aria-hidden>
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-4 w-full" />
+            </div>
+          </CardContent>
+        </Card>
+      ) : shown ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Publish health</CardTitle>
+            <CardDescription>
+              {shown.overall.succeeded} of {shown.overall.attempted}{" "}
+              {shown.overall.attempted === 1 ? "publish" : "publishes"} landed in the last{" "}
+              {shown.windowDays} days
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="flex items-baseline gap-2">
+                <span
+                  className={cn(
+                    "text-2xl font-semibold tabular-nums tracking-tight",
+                    rateTone(shown.overall.successRate),
+                  )}
                 >
-                  <div
-                    className={cn(
-                      "h-full rounded-full",
-                      platform.successRate >= 95
-                        ? "bg-success"
-                        : platform.successRate >= 75
-                          ? "bg-warning"
-                          : "bg-destructive",
-                    )}
-                    style={{ width: `${platform.successRate}%` }}
-                  />
-                </div>
+                  {shown.overall.successRate}%
+                </span>
+                <span className="text-xs text-muted-foreground">overall success</span>
               </div>
-            ))}
-          </dl>
-        </div>
-      </CardContent>
-    </Card>
+
+              {/* Name and counts share a row; the bar spans the full width beneath.
+                  Keeping all three on one line collapsed the bar to nothing in the
+                  dashboard's narrow sidebar. */}
+              <dl className="space-y-3">
+                {shown.platforms.map((platform) => (
+                  <div key={platform.platform} className="space-y-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <dt className="min-w-0 truncate text-sm text-foreground">
+                        {platformLabel(platform.platform)}
+                      </dt>
+                      <dd className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {platform.succeeded}/{platform.attempted} · {platform.successRate}%
+                      </dd>
+                    </div>
+                    <div
+                      className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                      role="img"
+                      aria-label={`${platformLabel(platform.platform)}: ${platform.succeeded} of ${platform.attempted} succeeded`}
+                    >
+                      <div
+                        className={cn(
+                          "h-full rounded-full",
+                          platform.successRate >= 95
+                            ? "bg-success"
+                            : platform.successRate >= 75
+                              ? "bg-warning"
+                              : "bg-destructive",
+                        )}
+                        style={{ width: `${platform.successRate}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+    </>
   );
 }

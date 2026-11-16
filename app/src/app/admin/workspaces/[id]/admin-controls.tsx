@@ -95,11 +95,7 @@ export function AdminLimitsForm({ workspaceId, fields }: { workspaceId: string; 
         <Button type="submit" loading={busy}>
           Save limits
         </Button>
-        {message ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {message}
-          </p>
-        ) : null}
+        <p role="status" className="text-sm text-muted-foreground empty:sr-only">{message}</p>
       </div>
     </form>
   );
@@ -133,43 +129,44 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
     router.refresh();
   }
 
-  if (paused) {
-    return (
-      <div className="flex flex-col gap-2">
-        <p className="text-sm text-muted-foreground">
-          Resuming lets it upload, create, schedule and publish again. Posts failed while it was paused stay failed
-          until someone retries them. The owners are emailed.
-        </p>
-        <div className="flex items-center gap-3">
-          <Button type="button" onClick={() => act("resume")} loading={busy}>
-            Resume workspace
-          </Button>
-          {message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
-        </div>
-      </div>
-    );
-  }
-
+  // R30 PP2: one status line for both states, on the page from the first render, so a
+  // message set as the page flips between paused and not is still read.
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor="pause-reason">Reason (the workspace&apos;s members read this)</Label>
-      <Textarea
-        id="pause-reason"
-        maxLength={300}
-        rows={2}
-        value={reason}
-        onChange={(event) => setReason(event.target.value.replace(/[\r\n]+/g, " "))}
-        disabled={busy}
-      />
-      <p className="text-sm text-muted-foreground">
-        Scheduled posts that come due while paused are marked failed and can be retried after you resume.
-      </p>
-      <div className="flex items-center gap-3">
-        <Button type="button" variant="destructive" onClick={() => act("pause")} loading={busy}>
-          Pause workspace
-        </Button>
-        {message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
-      </div>
+      {paused ? (
+        <>
+          <p className="text-sm text-muted-foreground">
+            Resuming lets it upload, create, schedule and publish again. Posts failed while it was paused stay failed
+            until someone retries them. The owners are emailed.
+          </p>
+          <div>
+            <Button type="button" onClick={() => act("resume")} loading={busy}>
+              Resume workspace
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <Label htmlFor="pause-reason">Reason (the workspace&apos;s members read this)</Label>
+          <Textarea
+            id="pause-reason"
+            maxLength={300}
+            rows={2}
+            value={reason}
+            onChange={(event) => setReason(event.target.value.replace(/[\r\n]+/g, " "))}
+            disabled={busy}
+          />
+          <p className="text-sm text-muted-foreground">
+            Scheduled posts that come due while paused are marked failed and can be retried after you resume.
+          </p>
+          <div>
+            <Button type="button" variant="destructive" onClick={() => act("pause")} loading={busy}>
+              Pause workspace
+            </Button>
+          </div>
+        </>
+      )}
+      <p role="status" className="text-sm text-muted-foreground empty:sr-only">{message}</p>
     </div>
   );
 }
@@ -249,11 +246,7 @@ export function AdminBillingControls({
           The trial runs to the end of that day, UTC. Both trial controls end any exemption.
         </p>
       </div>
-      {message ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          {message}
-        </p>
-      ) : null}
+      <p role="status" className="text-sm text-muted-foreground empty:sr-only">{message}</p>
     </div>
   );
 }

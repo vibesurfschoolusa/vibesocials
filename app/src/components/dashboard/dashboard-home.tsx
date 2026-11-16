@@ -64,18 +64,23 @@ export function DashboardHome({ availablePlatforms, setup, notice }: DashboardPr
     router.refresh();
   }, [confirmedSignedOut, router]);
 
-  if (!signedIn) {
-    // R15-pages L2: the server HTML for a signed-in "/" is this branch, so the
-    // page's heading and its loading line are here too.
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <h1 className="sr-only">Dashboard</h1>
-        <p role="status" className="sr-only">Loading your dashboard…</p>
-        <Spinner size="lg" className="text-muted-foreground" />
-      </div>
-    );
-  }
-  return <Dashboard availablePlatforms={availablePlatforms} setup={setup} notice={notice} />;
+  // R15-pages L2: the server HTML for a signed-in "/" is the not-signed-in
+  // branch, so the page's heading and its loading line are there too.
+  // R30 PP2: the loading line is outside the branches, on the page from the
+  // first render; only its text changes.
+  return (
+    <>
+      <p role="status" className="sr-only">{signedIn ? "" : "Loading your dashboard…"}</p>
+      {signedIn ? (
+        <Dashboard availablePlatforms={availablePlatforms} setup={setup} notice={notice} />
+      ) : (
+        <div className="flex min-h-screen items-center justify-center bg-background">
+          <h1 className="sr-only">Dashboard</h1>
+          <Spinner size="lg" className="text-muted-foreground" />
+        </div>
+      )}
+    </>
+  );
 }
 
 function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {

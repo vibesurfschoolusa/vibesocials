@@ -107,9 +107,10 @@ function ActivityViewInner() {
       </div>
 
       <div className="mt-6">
+        {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
+        <p role="status" className="sr-only">{loading ? "Loading activity…" : ""}</p>
         {loading ? (
           <>
-            <p role="status" className="sr-only">Loading activity…</p>
             <div className="space-y-3" aria-hidden>
               {Array.from({ length: 5 }).map((_, index) => (
                 <Skeleton key={index} className="h-28 w-full" />
@@ -165,12 +166,12 @@ function ActivityViewInner() {
                 <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
                   Load more
                 </Button>
-                {/* R26 LL3: why the last Load more failed; the next press retries. */}
-                <p role="status" className="text-center text-sm text-destructive">{loadMoreError}</p>
               </div>
             ) : null}
           </>
         )}
+        {/* R26 LL3: why the last Load more failed; the next press retries. */}
+        <p role="status" className="mt-2 text-center text-sm text-destructive empty:sr-only">{loadMoreError}</p>
       </div>
     </div>
   );

@@ -67,12 +67,6 @@ export function DeadLinkCard({ afterSubmit }: { afterSubmit: boolean }) {
 export function ResetPasswordForm() {
   const [token, setToken] = useState<string | null>(null);
   const [tokenReady, setTokenReady] = useState(false);
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
   // R15-new-customer L2: the server said the link is dead (used or expired).
   const [linkDead, setLinkDead] = useState(false);
 
@@ -82,6 +76,37 @@ export function ResetPasswordForm() {
     setToken(fromHash.length > 0 ? fromHash : null);
     setTokenReady(true);
   }, []);
+
+  // Before the effect resolves the fragment, show a neutral loading state so
+  // the prerendered HTML never flashes the "invalid link" card.
+  if (!tokenReady) {
+    return (
+      <CardShell title="Reset your password">
+        <div className="flex justify-center py-4">
+          <Spinner label="Loading" />
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (!token || linkDead) return <DeadLinkCard afterSubmit={linkDead} />;
+
+  return <ResetPasswordCard token={token} onLinkDead={() => setLinkDead(true)} />;
+}
+
+/**
+ * The form, then "Password updated" in the same card. R28 NN2 (pages L6): the
+ * status region is in the card from the form's first render, so the success
+ * that replaces the form is announced; only its text changes. R30 PP2: one
+ * return, so the region can't be left out of a branch.
+ */
+function ResetPasswordCard({ token, onLinkDead }: { token: string; onLinkDead: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -98,107 +123,85 @@ export function ResetPasswordForm() {
     }
 
     setLoading(true);
-    const outcome = await submitReset(fetch, token ?? "", password);
+    const outcome = await submitReset(fetch, token, password);
     // Before "Log in" shows, so it opens the form, not the signed-in notice.
     await signOutAfterReset(outcome, signOut);
     setLoading(false);
     if (outcome.kind === "done") setDone(true);
-    else if (outcome.kind === "invalid_link") setLinkDead(true);
+    else if (outcome.kind === "invalid_link") onLinkDead();
     else setError(outcome.message);
   }
 
-  // R28 NN2 (pages L6): in the card from the form's first render, so the
-  // success that replaces the form is announced; only its text changes.
-  const statusLine = (
-    <div role="status" className="empty:sr-only">
+  return (
+    <CardShell
+      title={done ? "Password updated" : "Choose a new password"}
+      description={done ? "Your password has been reset." : "Enter a new password for your account."}
+    >
+      <div role="status" className="empty:sr-only">
+        {done ? (
+          <Alert variant="success" role={undefined} className="mb-4">
+            You can now log in with your new password.
+          </Alert>
+        ) : null}
+      </div>
       {done ? (
-        <Alert variant="success" role={undefined} className="mb-4">
-          You can now log in with your new password.
-        </Alert>
-      ) : null}
-    </div>
-  );
-
-  // Before the effect resolves the fragment, show a neutral loading state so
-  // the prerendered HTML never flashes the "invalid link" card.
-  if (!tokenReady) {
-    return (
-      <CardShell title="Reset your password">
-        <div className="flex justify-center py-4">
-          <Spinner label="Loading" />
-        </div>
-      </CardShell>
-    );
-  }
-
-  if (!token || linkDead) return <DeadLinkCard afterSubmit={linkDead} />;
-
-  if (done) {
-    return (
-      <CardShell title="Password updated" description="Your password has been reset.">
-        {statusLine}
         <Link
           href="/login"
           className="inline-block font-semibold text-primary outline-none hover:underline focus-visible:underline"
         >
           Log in
         </Link>
-      </CardShell>
-    );
-  }
-
-  return (
-    <CardShell title="Choose a new password" description="Enter a new password for your account.">
-      {statusLine}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="password">New password</Label>
-          <div className="relative">
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="password">New password</Label>
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                required
+                minLength={8}
+                className="pl-3 pr-10"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showPassword ? (
+                  <EyeOff aria-hidden className="h-4 w-4" />
+                ) : (
+                  <Eye aria-hidden className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">At least 8 characters.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="confirm">Confirm new password</Label>
             <Input
-              id="password"
+              id="confirm"
               type={showPassword ? "text" : "password"}
               autoComplete="new-password"
               required
               minLength={8}
-              className="pl-3 pr-10"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
             />
-            <button
-              type="button"
-              onClick={() => setShowPassword((value) => !value)}
-              aria-label={showPassword ? "Hide password" : "Show password"}
-              aria-pressed={showPassword}
-              className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {showPassword ? (
-                <EyeOff aria-hidden className="h-4 w-4" />
-              ) : (
-                <Eye aria-hidden className="h-4 w-4" />
-              )}
-            </button>
           </div>
-          <p className="text-xs text-muted-foreground">At least 8 characters.</p>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="confirm">Confirm new password</Label>
-          <Input
-            id="confirm"
-            type={showPassword ? "text" : "password"}
-            autoComplete="new-password"
-            required
-            minLength={8}
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-          />
-        </div>
 
-        {error ? <Alert variant="danger">{error}</Alert> : null}
+          {error ? <Alert variant="danger">{error}</Alert> : null}
 
-        <Button type="submit" loading={loading} className="w-full">
-          Reset password
-        </Button>
-      </form>
+          <Button type="submit" loading={loading} className="w-full">
+            Reset password
+          </Button>
+        </form>
+      )}
     </CardShell>
   );
 }

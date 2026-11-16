@@ -255,55 +255,65 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
   }
 
   // R14-pages L3: the page's h1 and a spoken status while the preview loads.
-  if (!load) {
+  // R30 PP2: the status line is on the page from the first render (Try again
+  // empties it and fills it again), so it sits outside the branches below.
+  return (
+    <>
+      <p role="status" className="sr-only">
+        {load ? "" : "Loading the invite…"}
+      </p>
+      {joinBody()}
+    </>
+  );
+
+  function joinBody() {
+    if (!load) {
+      return (
+        <div className="mx-auto max-w-md px-4 py-16">
+          <h1 className="mb-4 text-center text-lg font-semibold text-foreground">Join a workspace</h1>
+          <Skeleton className="h-56 w-full" />
+        </div>
+      );
+    }
+
+    if (signedOut || load.kind === "signedOut") {
+      return <JoinSignedOut token={token} />;
+    }
+
+    if (load.kind === "unreachable") {
+      return (
+        <JoinUnreachable
+          onRetry={() => {
+            setLoad(null);
+            setAttempt((value) => value + 1);
+          }}
+        />
+      );
+    }
+
+    if (!preview) {
+      return <JoinDeadLink message={load.kind === "invalid" ? load.message : undefined} />;
+    }
+
+    if (preview.alreadyMember) {
+      return <JoinAlreadyMember workspaceId={preview.workspaceId} workspaceName={preview.workspaceName} />;
+    }
+
     return (
       <div className="mx-auto max-w-md px-4 py-16">
-        <h1 className="mb-4 text-center text-lg font-semibold text-foreground">Join a workspace</h1>
-        <p role="status" className="sr-only">
-          Loading the invite…
-        </p>
-        <Skeleton className="h-56 w-full" />
+        <Card className="flex flex-col items-center gap-3 p-6 text-center">
+          <h1 className="text-lg font-semibold text-foreground">Join {preview.workspaceName}?</h1>
+          <p className="text-sm text-muted-foreground">{joinPromise(requiresApproval)}</p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Button onClick={handleJoin} loading={joining}>
+              {joining ? "Joining…" : "Join workspace"}
+            </Button>
+            <Link href="/" className={buttonVariants({ variant: "outline" })}>
+              Cancel
+            </Link>
+          </div>
+        </Card>
       </div>
     );
   }
-
-  if (signedOut || load.kind === "signedOut") {
-    return <JoinSignedOut token={token} />;
-  }
-
-  if (load.kind === "unreachable") {
-    return (
-      <JoinUnreachable
-        onRetry={() => {
-          setLoad(null);
-          setAttempt((value) => value + 1);
-        }}
-      />
-    );
-  }
-
-  if (!preview) {
-    return <JoinDeadLink message={load.kind === "invalid" ? load.message : undefined} />;
-  }
-
-  if (preview.alreadyMember) {
-    return <JoinAlreadyMember workspaceId={preview.workspaceId} workspaceName={preview.workspaceName} />;
-  }
-
-  return (
-    <div className="mx-auto max-w-md px-4 py-16">
-      <Card className="flex flex-col items-center gap-3 p-6 text-center">
-        <h1 className="text-lg font-semibold text-foreground">Join {preview.workspaceName}?</h1>
-        <p className="text-sm text-muted-foreground">{joinPromise(requiresApproval)}</p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <Button onClick={handleJoin} loading={joining}>
-            {joining ? "Joining…" : "Join workspace"}
-          </Button>
-          <Link href="/" className={buttonVariants({ variant: "outline" })}>
-            Cancel
-          </Link>
-        </div>
-      </Card>
-    </div>
-  );
 }

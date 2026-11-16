@@ -175,6 +175,20 @@ export function LibraryFileStatus({ loading }: { loading: boolean }) {
   );
 }
 
+/**
+ * R30 PP2: the line for a press on an untouched form. The form is one of the
+ * composer's four views, so the region sits with LibraryFileStatus as the
+ * first children of every view and stays mounted; the copy by the button is
+ * for the eye only.
+ */
+export function UntouchedSubmitStatus({ message }: { message: string | null }) {
+  return (
+    <p role="status" className="sr-only">
+      {message ?? ""}
+    </p>
+  );
+}
+
 export function hasNoFile(state: {
   reuseLoading: boolean;
   hasReuseItem: boolean;
@@ -2240,6 +2254,7 @@ function CreatePostFormInner({
   // Review of R29 pages L6: the first child of every view below, so React
   // keeps this one region mounted while the views change around it.
   const libraryStatus = <LibraryFileStatus loading={libraryStatusReady && reuseLoading} />;
+  const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage} />;
 
   // `composerGate` (computed above the hooks that need it). The `loading`
   // branch exists because rendering the full form during the first fetch let
@@ -2253,6 +2268,7 @@ function CreatePostFormInner({
     return (
       <>
         {libraryStatus}
+        {untouchedStatus}
         <CreatePostFormSkeleton status="Loading your connections…" />
       </>
     );
@@ -2266,6 +2282,7 @@ function CreatePostFormInner({
     return (
       <>
       {libraryStatus}
+      {untouchedStatus}
       <Card className="p-6">
         <Alert variant="danger" title="Couldn't load your connections">
           <div className="flex flex-col items-start gap-3">
@@ -2302,6 +2319,7 @@ function CreatePostFormInner({
     return (
       <>
         {libraryStatus}
+        {untouchedStatus}
         <NothingConnectedState isMember={isMember} />
       </>
     );
@@ -2347,6 +2365,7 @@ function CreatePostFormInner({
   return (
     <>
     {libraryStatus}
+    {untouchedStatus}
     <Card className="p-6">
       <form id="create-post-form" onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && dispatchFailed && (
@@ -2906,8 +2925,8 @@ function CreatePostFormInner({
               {control.label}
             </Button>
             </span>
-            {/* R27 pages L9: on the page from the first render, so the text is announced. */}
-            <p className="text-sm text-muted-foreground empty:sr-only" role="status">
+            {/* R27 pages L9, R30 PP2: screen readers hear untouchedStatus, on the page from the first render. */}
+            <p className="text-sm text-muted-foreground empty:sr-only" aria-hidden>
               {untouchedMessage}
             </p>
             {tiktokBlock ? (

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { REVIEW_DECISION_MAYBE_SAVED_MESSAGE } from "@/lib/reviewLink";
+import { REVIEW_ALREADY_APPROVED_MESSAGE, REVIEW_DECISION_MAYBE_SAVED_MESSAGE, REVIEW_POST_CHANGED_MESSAGE } from "@/lib/reviewLink";
 
 import {
   REVIEW_CHANGE_ALREADY_SAVED_MESSAGE,
@@ -13,6 +13,7 @@ import {
   ReviewPostCard,
   alreadyStood,
   changeNoteHint,
+  staleNotice,
 } from "./review-link-view";
 
 type ReviewPostDTO = ReviewCardDTO;
@@ -202,5 +203,28 @@ describe("ReviewPostCard: a change request that already stood", () => {
     expect(alreadyStood({ ok: true, state: "change_requested", note: "x", already: true })).toBe(true);
     expect(alreadyStood({ ok: true, state: "change_requested", note: "x" })).toBe(false);
     expect(alreadyStood(null)).toBe(false);
+  });
+});
+
+// R30 client-journey L3: "The list was loaded again" showed before the reload,
+// even when it then failed. The notice is set only once load() has answered,
+// and a failed reload words it without claiming the list was loaded again.
+describe("ReviewLinkView: the notice after a reload", () => {
+  it("keeps the reload claim only when the reload worked", () => {
+    expect(staleNotice(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE, true)).toBe(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE);
+    expect(staleNotice(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE, false)).toBe("Your change request was already saved.");
+    expect(staleNotice(REVIEW_ALREADY_APPROVED_MESSAGE, true)).toBe(REVIEW_ALREADY_APPROVED_MESSAGE);
+    expect(staleNotice(REVIEW_ALREADY_APPROVED_MESSAGE, false)).toBe("This post was already approved.");
+    expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, true)).toBe(REVIEW_POST_CHANGED_MESSAGE);
+    expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, false)).toBe("This post was changed after you opened this page.");
+  });
+
+  it("is set from load()'s answer, not before it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    const stale = source.slice(source.indexOf("const stale = useCallback("), source.indexOf("[load],", source.indexOf("const stale = useCallback(")));
+    expect(stale).toMatch(/void load\(\)\.then\(\(reloaded\) => setNotice\(staleNotice\(message, reloaded\)\)\)/);
+    expect(stale).not.toMatch(/setNotice\(message\)/);
   });
 });

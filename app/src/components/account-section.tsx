@@ -190,22 +190,18 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
     }
   }
 
-  const status = (
-    <div role="status" className="empty:sr-only">
-      {sentTo ? (
-        <Alert variant="success" role={undefined}>
-          {emailChangeSentMessage(sentTo, email)}
-        </Alert>
-      ) : null}
-    </div>
-  );
-
-  if (sentTo) return <>{status}</>;
-
-  if (!open) {
-    return (
-      <>
-        {status}
+  // R30 PP2: one return, so the status line is on the page from the first
+  // render in every state and only its text changes.
+  return (
+    <>
+      <div role="status" className="empty:sr-only">
+        {sentTo ? (
+          <Alert variant="success" role={undefined}>
+            {emailChangeSentMessage(sentTo, email)}
+          </Alert>
+        ) : null}
+      </div>
+      {sentTo ? null : !open ? (
         <div>
           <Button
             ref={changeEmailRef}
@@ -220,59 +216,54 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
             Change email
           </Button>
         </div>
-      </>
-    );
-  }
-
-  return (
-    <>
-      {status}
-      <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="new-email">New email</Label>
-          <Input
-            ref={newEmailRef}
-            id="new-email"
-            type="email"
-            autoComplete="email"
-            required
-            value={newEmail}
-            onChange={(event) => setNewEmail(event.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            We send a link to this address. The change is made when you open it, and every device is signed out.
-          </p>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="change-email-password">Current password</Label>
-          <Input
-            id="change-email-password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={currentPassword}
-            onChange={(event) => setCurrentPassword(event.target.value)}
-          />
-        </div>
-        {error ? <FormError message={error} /> : null}
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
-            Send confirmation link
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={(event) => {
-              focusAfterPress(event.currentTarget, () => changeEmailRef.current);
-              setOpen(false);
-            }}
-            disabled={busy}
-          >
-            Cancel
-          </Button>
-        </div>
-      </form>
+      ) : (
+        <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="new-email">New email</Label>
+            <Input
+              ref={newEmailRef}
+              id="new-email"
+              type="email"
+              autoComplete="email"
+              required
+              value={newEmail}
+              onChange={(event) => setNewEmail(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              We send a link to this address. The change is made when you open it, and every device is signed out.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="change-email-password">Current password</Label>
+            <Input
+              id="change-email-password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </div>
+          {error ? <FormError message={error} /> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
+              Send confirmation link
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={(event) => {
+                focusAfterPress(event.currentTarget, () => changeEmailRef.current);
+                setOpen(false);
+              }}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
     </>
   );
 }
@@ -373,57 +364,54 @@ function ChangePasswordForm() {
     }
   }
 
-  const status = (
-    <div role="status" className="empty:sr-only">
-      {changed ? (
-        <Alert variant="success" role={undefined}>
-          {PASSWORD_CHANGED}
-        </Alert>
-      ) : null}
-    </div>
-  );
-
-  if (changed) return <>{status}</>;
-
+  // R30 PP2: one return, so the status line can't be left out of a branch.
   return (
     <>
-      {status}
-      <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="current-password">Current password</Label>
-          <Input
-            id="current-password"
-            type="password"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={(event) => setCurrentPassword(event.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="new-password">New password</Label>
-          <Input
-            id="new-password"
-            type="password"
-            autoComplete="new-password"
-            minLength={8}
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">At least 8 characters.</p>
-        </div>
-        {error ? <FormError message={error} /> : null}
-        <div>
-          <Button
-            type="submit"
-            size="sm"
-            variant="outline"
-            loading={busy}
-            disabled={!currentPassword || !newPassword}
-          >
-            Change password
-          </Button>
-        </div>
-      </form>
+      <div role="status" className="empty:sr-only">
+        {changed ? (
+          <Alert variant="success" role={undefined}>
+            {PASSWORD_CHANGED}
+          </Alert>
+        ) : null}
+      </div>
+      {changed ? null : (
+        <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="current-password">Current password</Label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="new-password">New password</Label>
+            <Input
+              id="new-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">At least 8 characters.</p>
+          </div>
+          {error ? <FormError message={error} /> : null}
+          <div>
+            <Button
+              type="submit"
+              size="sm"
+              variant="outline"
+              loading={busy}
+              disabled={!currentPassword || !newPassword}
+            >
+              Change password
+            </Button>
+          </div>
+        </form>
+      )}
     </>
   );
 }

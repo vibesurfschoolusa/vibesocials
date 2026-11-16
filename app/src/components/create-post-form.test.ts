@@ -22,6 +22,7 @@ import {
   captionsAfterReuseDismissed,
   CreatePostFormSkeleton,
   LibraryFileStatus,
+  UntouchedSubmitStatus,
   NothingConnectedState,
   composerPageState,
   composerPageView,
@@ -1207,8 +1208,16 @@ describe("Create at phone width and its status line", () => {
     expect(row).toMatch(/<div className="flex flex-wrap items-center gap-2">/);
   });
 
+  // R30 PP2: the form is one of the composer's four views, so its region sits
+  // with the library line as the first children of every view (UntouchedSubmitStatus);
+  // the visible copy by the button is hidden from screen readers.
   it("the line by the button for an untouched form is a region from the first render", () => {
-    expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" role="status">\s*\{untouchedMessage\}\s*<\/p>/);
+    expect(renderToStaticMarkup(createElement(UntouchedSubmitStatus, { message: null }))).toBe('<p role="status" class="sr-only"></p>');
+    expect(renderToStaticMarkup(createElement(UntouchedSubmitStatus, { message: "Add a file" }))).toBe(
+      '<p role="status" class="sr-only">Add a file</p>',
+    );
+    expect(source).toContain("const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage} />;");
+    expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" aria-hidden>\s*\{untouchedMessage\}\s*<\/p>/);
     expect(source).not.toContain("{untouchedMessage ? (");
   });
 });
@@ -1224,7 +1233,7 @@ describe("Create: connections Retry and the status line", () => {
   });
 
   it("the empty status line takes no room in the row", () => {
-    expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" role="status">\s*\{untouchedMessage\}/);
+    expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" aria-hidden>\s*\{untouchedMessage\}/);
   });
 });
 
@@ -1282,10 +1291,10 @@ describe("LibraryFileStatus", () => {
   const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
 
   it("is the first child of every view, so it is on the page from the first render", () => {
-    expect(raw).toMatch(/if \(composerGate === "loading"\) \{[^}]*?return \( <> \{libraryStatus\} <CreatePostFormSkeleton /);
-    expect(raw).toContain('if (composerGate === "error") { return ( <> {libraryStatus} <Card className="p-6">');
-    expect(raw).toContain('if (composerGate === "connect") { return ( <> {libraryStatus} <NothingConnectedState');
-    expect(raw).toContain('return ( <> {libraryStatus} <Card className="p-6"> <form id="create-post-form"');
+    expect(raw).toMatch(/if \(composerGate === "loading"\) \{[^}]*?return \( <> \{libraryStatus\} \{untouchedStatus\} <CreatePostFormSkeleton /);
+    expect(raw).toContain('if (composerGate === "error") { return ( <> {libraryStatus} {untouchedStatus} <Card className="p-6">');
+    expect(raw).toContain('if (composerGate === "connect") { return ( <> {libraryStatus} {untouchedStatus} <NothingConnectedState');
+    expect(raw).toContain('return ( <> {libraryStatus} {untouchedStatus} <Card className="p-6"> <form id="create-post-form"');
     expect(raw).not.toContain("<LibraryFileStatus loading={reuseLoading} />");
     expect(raw.match(/<LibraryFileStatus /g)).toHaveLength(1);
   });

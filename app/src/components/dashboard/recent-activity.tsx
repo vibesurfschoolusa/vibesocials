@@ -68,9 +68,10 @@ export function RecentActivity({
         ) : null}
       </div>
 
+      {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
+      <p role="status" className="sr-only">{loading ? "Loading recent posts…" : ""}</p>
       {loading ? (
         <>
-          <p role="status" className="sr-only">Loading recent posts…</p>
           <div className="space-y-3" aria-hidden>
             {Array.from({ length: 3 }).map((_, index) => (
               <Skeleton key={index} className="h-24 w-full" />

@@ -120,8 +120,11 @@ describe("AccountMenu: who it is for", () => {
     );
   }
 
+  // R30 PP2: only the menu's empty status line stays, so it is on the page from the first render.
   it("a cached session with no user: no menu", async () => {
-    expect(await menu({ status: "authenticated", data: { expires: "1970-01-01T00:00:00.000Z" } })).toBe("");
+    expect(await menu({ status: "authenticated", data: { expires: "1970-01-01T00:00:00.000Z" } })).toBe(
+      '<p role="status" class="sr-only"></p>',
+    );
   });
 
   it("signed in: the menu names the person", async () => {

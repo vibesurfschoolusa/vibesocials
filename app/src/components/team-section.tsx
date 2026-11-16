@@ -610,9 +610,10 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
 
       <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
         <h4 className="text-sm font-medium text-foreground">Members</h4>
+        {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
+        <p role="status" className="sr-only">{rosterLoading ? "Loading members…" : ""}</p>
         {rosterLoading ? (
           <>
-            <p role="status" className="sr-only">Loading members…</p>
             <div className="flex flex-col gap-2" aria-hidden>
               <Skeleton className="h-8 w-full" />
               <Skeleton className="h-8 w-full" />
@@ -1082,11 +1083,9 @@ function OwnerView({
           accounts.
         </p>
 
+        <p role="status" className="sr-only">{inviteLoading ? "Loading invite link…" : ""}</p>
         {inviteLoading ? (
-          <>
-            <p role="status" className="sr-only">Loading invite link…</p>
-            <Skeleton className="mt-1 h-9 w-full max-w-sm" />
-          </>
+          <Skeleton className="mt-1 h-9 w-full max-w-sm" />
         ) : invite ? (
           <div className="mt-2 flex flex-col gap-2">
             {freshUrl ? (
@@ -1132,9 +1131,9 @@ function OwnerView({
       {/* Members */}
       <div className="flex flex-col gap-2 border-t border-border pt-6">
         <h3 className="text-sm font-medium text-foreground">Members</h3>
+        <p role="status" className="sr-only">{membersLoading ? "Loading members…" : ""}</p>
         {membersLoading ? (
           <>
-            <p role="status" className="sr-only">Loading members…</p>
             <div className="flex flex-col gap-2" aria-hidden>
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />

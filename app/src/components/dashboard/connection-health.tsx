@@ -70,9 +70,10 @@ export function ConnectionHealth({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
+        <p role="status" className="sr-only">{loading ? "Loading connection health…" : ""}</p>
         {loading ? (
           <>
-            <p role="status" className="sr-only">Loading connection health…</p>
             <div className="space-y-2" aria-hidden>
               {Array.from({ length: 5 }).map((_, index) => (
                 <Skeleton key={index} className="h-7 w-full" />

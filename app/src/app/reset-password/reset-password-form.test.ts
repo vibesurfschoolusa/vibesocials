@@ -31,14 +31,11 @@ describe("DeadLinkCard", () => {
 describe("Reset password success line", () => {
   const source = readFileSync(join(__dirname, "reset-password-form.tsx"), "utf8");
 
-  it("the form and the done card both start with the same status region", () => {
-    const form = source.slice(source.indexOf('<CardShell title="Choose a new password"'));
-    expect(form).toMatch(/^<CardShell title="Choose a new password"[^>]*>\s+\{statusLine\}\s+<form/);
-    const done = source.slice(source.indexOf("if (done) {"), source.indexOf('<CardShell title="Choose a new password"'));
-    expect(done).toMatch(/<CardShell[^>]*>\s+\{statusLine\}/);
-    const region = source.slice(source.indexOf("const statusLine = ("), source.indexOf("if (!tokenReady)"));
-    expect(region).toContain('<div role="status" className="empty:sr-only">');
-    expect(region).toMatch(/done \? \(\s+<Alert variant="success" role=\{undefined\}[^>]*>\s+You can now log in with your new password\./);
+  // R30 PP2: one card with one return; statusLines.guard.test.ts keeps the region out of any branch.
+  it("the card starts with the status region, and the success sits inside it", () => {
+    const card = source.slice(source.indexOf("function ResetPasswordCard("));
+    expect(card.match(/\breturn \(/g)).toHaveLength(1);
+    expect(card).toMatch(/<CardShell[\s\S]*?>\s+<div role="status" className="empty:sr-only">\s+\{done \? \(\s+<Alert variant="success" role=\{undefined\}[^>]*>\s+You can now log in with your new password\./);
   });
 
   it("sends through fetchOrNoAnswer", () => {

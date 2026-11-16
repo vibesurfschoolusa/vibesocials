@@ -1474,9 +1474,10 @@ export function QueueView({
       ) : null}
 
       <div className="mt-8">
+        {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
+        <p role="status" className="sr-only">{loading ? "Loading queue…" : ""}</p>
         {loading ? (
           <>
-            <p role="status" className="sr-only">Loading queue…</p>
             <div className="space-y-3" aria-hidden>
               {Array.from({ length: 4 }).map((_, index) => (
                 <Skeleton key={index} className="h-28 w-full" />
@@ -1547,11 +1548,11 @@ export function QueueView({
                 <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
                   Load more
                 </Button>
-                <p role="status" className="text-center text-sm text-destructive">{loadMoreError}</p>
               </div>
             ) : null}
           </>
         )}
+        <p role="status" className="mt-2 text-center text-sm text-destructive empty:sr-only">{loadMoreError}</p>
       </div>
 
       {editTarget ? (

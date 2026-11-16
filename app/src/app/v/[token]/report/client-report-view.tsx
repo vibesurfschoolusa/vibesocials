@@ -49,28 +49,34 @@ export function ClientReportView({ token, month }: { token: string; month: strin
     void load();
   }, [load]);
 
-  if (error !== null) {
-    return (
-      <div className="space-y-3">
-        <ReportPendingTitle />
-        <p role="alert" className="text-sm">
-          {error || LOAD_FAILED_MESSAGE}
-        </p>
-        <Button type="button" variant="outline" size="sm" data-report-noprint onClick={() => void load()}>
-          Try again
-        </Button>
-      </div>
-    );
-  }
-  if (report === null) {
-    return (
-      <div className="space-y-3">
-        <ReportPendingTitle />
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading the report…
-        </p>
-      </div>
-    );
-  }
-  return <MonthlyReportView report={report} logoPrintOnly />;
+  // R30 PP2: the loading line is on the page from the first render (Try again
+  // empties the error and so fills it again); the visible copy is hidden from
+  // screen readers, which hear the region.
+  return (
+    <>
+      <p role="status" className="sr-only">
+        {error === null && report === null ? "Loading the report…" : ""}
+      </p>
+      {error !== null ? (
+        <div className="space-y-3">
+          <ReportPendingTitle />
+          <p role="alert" className="text-sm">
+            {error || LOAD_FAILED_MESSAGE}
+          </p>
+          <Button type="button" variant="outline" size="sm" data-report-noprint onClick={() => void load()}>
+            Try again
+          </Button>
+        </div>
+      ) : report === null ? (
+        <div className="space-y-3">
+          <ReportPendingTitle />
+          <p aria-hidden className="text-sm text-muted-foreground">
+            Loading the report…
+          </p>
+        </div>
+      ) : (
+        <MonthlyReportView report={report} logoPrintOnly />
+      )}
+    </>
+  );
 }

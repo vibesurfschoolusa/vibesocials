@@ -651,11 +651,12 @@ export function PostJobCard({
           <Button size="sm" variant="outline" loading={sendingAgain} onClick={() => void sendAgain()}>
             Send again
           </Button>
-          <p role="status" className="mt-1.5 text-xs text-muted-foreground empty:sr-only">
-            {sendAgainNote}
-          </p>
         </div>
       ) : null}
+      {/* R30 PP2: outside the block above, so the note is on the card from the first render. */}
+      <p role="status" className="mt-1.5 text-xs text-muted-foreground empty:sr-only">
+        {sendAgainNote}
+      </p>
 
       {results.some((r) => postUrl(r)) ? (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">

@@ -883,11 +883,10 @@ export function BulkPostsForm({
             </label>
             <p className="text-xs text-muted-foreground">or drag them here</p>
           </div>
-          {dropNote ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              {dropNote}
-            </p>
-          ) : null}
+          {/* R30 pages A1: status lines are on the page from the first render; only their text changes. */}
+          <p role="status" className="text-sm text-muted-foreground empty:sr-only">
+            {dropNote}
+          </p>
           <div>
             <Button
               type="button"
@@ -923,16 +922,12 @@ export function BulkPostsForm({
             </Alert>
           ) : null}
           {tooMany ? <Alert variant="warning">{BULK_TOO_MANY_FILES_MESSAGE}</Alert> : null}
-          {uploadingIndex >= 0 ? (
-            <p className="text-sm text-muted-foreground" aria-live="polite">
-              Uploading {uploadingIndex + 1} of {rows.length}
-            </p>
-          ) : null}
-          {captionProgress && aiCaptions ? (
-            <p className="text-sm text-muted-foreground" aria-live="polite">
-              {captionProgress}
-            </p>
-          ) : null}
+          <p className="text-sm text-muted-foreground empty:sr-only" aria-live="polite">
+            {uploadingIndex >= 0 ? `Uploading ${uploadingIndex + 1} of ${rows.length}` : ""}
+          </p>
+          <p className="text-sm text-muted-foreground empty:sr-only" aria-live="polite">
+            {captionProgress && aiCaptions ? captionProgress : ""}
+          </p>
         </div>
 
         <BatchSettingsFieldset locked={sendingMode !== null}>

@@ -87,51 +87,54 @@ export function NeedsYou({ hasGoogleListing: googleOnMount }: { hasGoogleListing
     summary: failed ? "failed" : summary ? "loaded" : "loading",
     reviews: !hasGoogleListing ? "not_asked" : reviewsSettled ? "settled" : "pending",
   });
-  if (view === "nothing") return null;
-
-  if (view === "skeleton" || !summary) {
-    return (
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-5 w-32" aria-hidden />
-        </CardHeader>
-        <CardContent className="space-y-2" aria-hidden>
-          <Skeleton className="h-7 w-full" />
-          <Skeleton className="h-7 w-3/4" />
-        </CardContent>
-        <p role="status" className="sr-only">Loading what needs you…</p>
-      </Card>
-    );
-  }
-
+  const loadingShown = view !== "nothing" && (view === "skeleton" || !summary);
   // Only owners get a number for approvals; the server sends null to a member.
-  const role = summary.awaitingYourApproval === null ? "member" : "owner";
-  const card = needsYouRows(summary, reviews, role);
+  const card =
+    view === "nothing" || loadingShown || !summary
+      ? null
+      : needsYouRows(summary, reviews, summary.awaitingYourApproval === null ? "member" : "owner");
 
+  // R30 PP2: the loading line is outside the views, on the page from the
+  // first render; only its text changes.
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{card.title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <ul className="-mx-2 space-y-1">
-          {card.rows.map((row) => {
-            const Icon = ICONS[row.kind];
-            return (
-              <li key={row.kind}>
-                <Link
-                  href={row.href}
-                  className="flex items-center gap-3 rounded-md px-2 py-2 text-sm text-foreground hover:bg-muted"
-                >
-                  <Icon aria-hidden className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">{row.text}</span>
-                  <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-muted-foreground" />
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </CardContent>
-    </Card>
+    <>
+      <p role="status" className="sr-only">{loadingShown ? "Loading what needs you…" : ""}</p>
+      {loadingShown ? (
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-32" aria-hidden />
+          </CardHeader>
+          <CardContent className="space-y-2" aria-hidden>
+            <Skeleton className="h-7 w-full" />
+            <Skeleton className="h-7 w-3/4" />
+          </CardContent>
+        </Card>
+      ) : card ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{card.title}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="-mx-2 space-y-1">
+              {card.rows.map((row) => {
+                const Icon = ICONS[row.kind];
+                return (
+                  <li key={row.kind}>
+                    <Link
+                      href={row.href}
+                      className="flex items-center gap-3 rounded-md px-2 py-2 text-sm text-foreground hover:bg-muted"
+                    >
+                      <Icon aria-hidden className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">{row.text}</span>
+                      <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
+    </>
   );
 }

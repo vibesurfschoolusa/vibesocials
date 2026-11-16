@@ -995,9 +995,10 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
           Your media
         </h2>
 
+        {/* R30 PP2: status lines stay on the page from the first render; only their text changes. */}
+        <p role="status" className="sr-only">{loading ? "Loading media library…" : ""}</p>
         {loading ? (
           <>
-            <p role="status" className="sr-only">Loading media library…</p>
             <div
               className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
               aria-hidden
