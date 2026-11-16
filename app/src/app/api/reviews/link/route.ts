@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
+import { googleTokenExpiresSoon } from "@/server/platforms/googleTokens";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -82,7 +83,9 @@ export async function GET() {
 
   try {
     let accessToken = connection.accessToken;
-    if (connection.expiresAt && new Date(connection.expiresAt) <= new Date()) {
+    // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
+    // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
+    if (googleTokenExpiresSoon(connection)) {
       accessToken = (await refreshAccessToken(connection)).accessToken;
     }
 

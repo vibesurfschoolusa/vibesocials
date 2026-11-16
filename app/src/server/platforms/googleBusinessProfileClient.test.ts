@@ -1116,6 +1116,32 @@ describe("googleBusinessProfileClient.publishText - a post without a photo", () 
     expect((await failure(googleBusinessProfileClient.publishText!(textCtx())))?.code).toBe("GBP_POST_REJECTED");
   });
 
+  // R23 platform-clients L2: Google's 400 on a text-only post names what to
+  // check (no photo clause); code and status stay, so retrying is unchanged.
+  it("a 400 says to check the caption, the button link and any event or offer details", async () => {
+    stubMediaCreate(() => new Response(JSON.stringify({ error: { status: "INVALID_ARGUMENT" } }), { status: 400 }));
+
+    const error = (await failure(googleBusinessProfileClient.publishText!(textCtx()))) as
+      | (Error & { code?: string; status?: number })
+      | undefined;
+
+    expect(error?.code).toBe("GBP_CREATE_POST_FAILED");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe(
+      "Google did not accept this post, so nothing was posted. Check the caption, the button link and any event or offer details.",
+    );
+    expect(error?.message).not.toMatch(/photo/i);
+  });
+
+  it("a 403 on a text-only post keeps the plain failure", async () => {
+    stubMediaCreate(() => new Response("denied", { status: 403 }));
+
+    const error = await failure(googleBusinessProfileClient.publishText!(textCtx()));
+
+    expect(error?.code).toBe("GBP_CREATE_POST_FAILED");
+    expect(error?.message).not.toContain("Check the caption");
+  });
+
   it("a text post does not go to the gallery", () => {
     expect(buildLocalPostBody("hi", null)).toEqual({ languageCode: "en-US", topicType: "STANDARD", summary: "hi" });
   });

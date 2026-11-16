@@ -288,6 +288,39 @@ describe("collectReviewAlertConnections", () => {
 });
 
 describe("checkReviewConnections", () => {
+  // The token check reads the real clock (googleTokenExpiresSoon), so the clock
+  // stands at the run's NOW unless a test moves it.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+  });
+
+  // R23 client-journey L1: a token in its last 5 minutes is refreshed first.
+  it("refreshes a token with 4 minutes left, and leaves one with 10 minutes alone", async () => {
+    const soon = row({ id: "soon", expiresAt: new Date(NOW.getTime() + 4 * 60_000) });
+    const later = row({ id: "later", expiresAt: new Date(NOW.getTime() + 10 * 60_000) });
+    useRows([soon, later]);
+    refreshMock.mockResolvedValue({ ...soon, accessToken: "gbp-access-2" });
+
+    await checkReviewConnections(["soon", "later"], NOW);
+
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock.mock.calls[0][0].id).toBe("soon");
+    expect(fetchReviewsMock.mock.calls.map((call) => call[0])).toEqual(["gbp-access-2", "gbp-access"]);
+  });
+
+  it("judges the token by the clock, not the run's collect-time now", async () => {
+    // Fine at collect time (10 minutes left), 4 minutes left when the check reaches it.
+    const expiring = row({ expiresAt: new Date(NOW.getTime() + 10 * 60_000) });
+    useRows([expiring]);
+    refreshMock.mockResolvedValue({ ...expiring, accessToken: "gbp-access-2" });
+    vi.setSystemTime(new Date(NOW.getTime() + 6 * 60_000));
+
+    await checkReviewConnections(["conn-1"], NOW);
+
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(fetchReviewsMock.mock.calls[0][0]).toBe("gbp-access-2");
+  });
+
   it("returns ids and counts only, no review text, and leaves the marker for the send step", async () => {
     useRows([row()]);
     fetchReviewsMock.mockResolvedValue([
@@ -558,6 +591,24 @@ describe("sendReviewAlerts", () => {
     await sendWithTimers([alert()]);
 
     expect(fetchReviewsMock.mock.calls[0][0]).toBe("gbp-access-2");
+  });
+
+  // R23 client-journey L1: the send step runs after the check, so a token that
+  // was fine at collect time can be in its last minutes by now.
+  it("refreshes before the second read a token that expires during the run", async () => {
+    const expiring = row({ expiresAt: new Date(NOW.getTime() + 10 * 60_000) });
+    useRows([expiring]);
+    refreshMock.mockResolvedValue({ ...expiring, accessToken: "gbp-access-2" });
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+
+    vi.useFakeTimers({ now: new Date(NOW.getTime() + 7 * 60_000) });
+    const pending = sendReviewAlerts([alert()], NOW);
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(fetchReviewsMock.mock.calls[0][0]).toBe("gbp-access-2");
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("Loved the lesson");
   });
 
   it(`reads no listing again once ${REVIEW_ALERT_FETCH_BUDGET_MS / 1000} seconds have passed; the email goes without excerpts`, async () => {

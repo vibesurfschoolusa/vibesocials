@@ -25,6 +25,29 @@ import { budgetedTimeout } from "./publishBudget";
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 
 /**
+ * How early a Google access token is refreshed. R22/R23 (platform-clients L1,
+ * client-journey L1): a token in its last minutes can die between the check and
+ * Google's answer (a long review listing, a slow download), and the 401 then reads
+ * "Reconnect" though the connection is fine.
+ */
+export const GOOGLE_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
+/**
+ * True when the stored token expires within GOOGLE_TOKEN_EXPIRY_BUFFER_MS of the
+ * real clock (never a time read earlier in a job run), or before `mustLastUntil`
+ * (epoch ms) when that is later. No stored expiry means nothing to judge: false.
+ * The caller refreshes through refreshConnectionToken (lock and single flight).
+ */
+export function googleTokenExpiresSoon(
+  connection: { expiresAt: Date | null },
+  mustLastUntil?: number,
+): boolean {
+  if (!connection.expiresAt) return false;
+  const until = Math.max(Date.now() + GOOGLE_TOKEN_EXPIRY_BUFFER_MS, mustLastUntil ?? 0);
+  return new Date(connection.expiresAt).getTime() <= until;
+}
+
+/**
  * Refresh the Google OAuth access token for a connection and persist the new
  * access token + expiry. Returns the updated {@link SocialConnection}.
  *

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { googleTokenExpiresSoon } from "@/server/platforms/googleTokens";
 import { listGbpLocations, refreshAccessToken, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -41,11 +42,11 @@ export async function GET() {
       return NextResponse.json({ locations: [], connected: false });
     }
 
-    // Check if token is expired and refresh if needed
-    const now = new Date();
     let accessToken = connection.accessToken;
 
-    if (connection.expiresAt && new Date(connection.expiresAt) <= now) {
+    // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
+    // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
+    if (googleTokenExpiresSoon(connection)) {
       console.log("[GBP Locations] Access token expired, refreshing...");
       const refreshedConnection = await refreshAccessToken(connection);
       await prisma.socialConnection.update({

@@ -10,7 +10,7 @@ import { truncateGraphemes } from "@/lib/truncate";
 
 import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
-import { refreshGoogleToken } from "./googleTokens";
+import { googleTokenExpiresSoon, refreshGoogleToken } from "./googleTokens";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
@@ -42,16 +42,15 @@ import type {
 // may also be its caption, button or event/offer details, so the text names
 // them last.
 // R22 platform-clients L1: a token within 5 minutes of expiry is refreshed
-// first, as LinkedIn, TikTok and Pinterest do, so a slow store-code lookup
-// never sends a dead one (a 401 would read "Reconnect").
-const GOOGLE_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
-
-function tokenExpiresSoon(connection: SocialConnection): boolean {
-  return connection.expiresAt !== null && connection.expiresAt.getTime() - Date.now() <= GOOGLE_TOKEN_EXPIRY_BUFFER_MS;
-}
+// first (googleTokenExpiresSoon), so a slow store-code lookup never sends a
+// dead one (a 401 would read "Reconnect").
 
 const GBP_PHOTO_REFUSED_TEXT =
   "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption, the button link and any event or offer details.";
+// R23 platform-clients L2: a text-only post has no photo to check, so its 400
+// names the rest of what was sent.
+const GBP_TEXT_REFUSED_TEXT =
+  "Google did not accept this post, so nothing was posted. Check the caption, the button link and any event or offer details.";
 const GBP_VIDEO_REFUSED_TEXT =
   "Google could not add this video to your Business Profile, so nothing was posted. Google takes videos up to 30 seconds long and 75 MB, at 720p or higher.";
 
@@ -66,7 +65,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     // The refresh runs under the per-connection lock (2026-11-01 scale audit,
     // jobs, token refresh), so a concurrent publish or the health sweep never
     // refreshes the same connection at once.
-    if (tokenExpiresSoon(socialConnection)) {
+    if (googleTokenExpiresSoon(socialConnection)) {
       console.log("[GBP] Access token expired or about to, refreshing...");
       socialConnection = await refreshConnectionToken(
         socialConnection,
@@ -197,7 +196,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     const { deadline } = ctx;
 
     // As publishVideo: refresh under the per-connection lock when expired or about to.
-    if (tokenExpiresSoon(socialConnection)) {
+    if (googleTokenExpiresSoon(socialConnection)) {
       console.log("[GBP] Access token expired or about to, refreshing...");
       socialConnection = await refreshConnectionToken(
         socialConnection,
@@ -237,9 +236,13 @@ export const googleBusinessProfileClient: PlatformClient = {
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
 
+    // As the photo post: a 400 names what to check; code and status are kept.
     await assertOk(createRes, {
       code: "GBP_CREATE_POST_FAILED",
       prefix: "Failed to create the Google Business Profile post",
+    }).catch((error: Error & { status?: number }) => {
+      if (error.status === 400) error.message = GBP_TEXT_REFUSED_TEXT;
+      throw error;
     });
 
     const created = await readCommitBody<{ name?: unknown; state?: unknown } | null>(

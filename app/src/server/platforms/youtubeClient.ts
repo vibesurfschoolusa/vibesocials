@@ -18,7 +18,7 @@ import {
   requireCommitId,
 } from "./commitCall";
 import { refreshConnectionToken } from "./connectionRefresh";
-import { refreshGoogleToken } from "./googleTokens";
+import { googleTokenExpiresSoon, refreshGoogleToken } from "./googleTokens";
 import {
   blobInterruptionDetails,
   isBlobStreamInterrupted,
@@ -54,9 +54,6 @@ interface YouTubeVideoResource {
 
 /** YouTube's hard limit on a video title. */
 const YOUTUBE_TITLE_MAX_GRAPHEMES = 100;
-
-/** A token within 5 minutes of expiry is refreshed first, as LinkedIn, TikTok and Pinterest do. */
-const GOOGLE_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 /**
  * Per-request timeouts, each further clamped to the time left in the step by
@@ -995,10 +992,10 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
   // lasts, so a token that expires before the deadline is refreshed first: one that
   // died mid-step would fail the upload with a 401 on a chunk.
   // R22 platform-clients L1: as LinkedIn, TikTok and Pinterest, a token in its
-  // last 5 minutes is refreshed too, so a slow download never sends a dead one.
-  const soon = Date.now() + GOOGLE_TOKEN_EXPIRY_BUFFER_MS;
-  const tokenMustLastUntil = resumable && deadline !== undefined ? Math.max(deadline, soon) : soon;
-  if (socialConnection.expiresAt && socialConnection.expiresAt < new Date(tokenMustLastUntil)) {
+  // last 5 minutes is refreshed too, so a slow download never sends a dead one
+  // (the shared googleTokenExpiresSoon, as every Google reader uses).
+  const tokenMustLastUntil = resumable && deadline !== undefined ? deadline : undefined;
+  if (googleTokenExpiresSoon(socialConnection, tokenMustLastUntil)) {
     console.log("[YouTube] Access token expired, refreshing...");
     socialConnection = await refreshConnectionToken(
       socialConnection,

@@ -7,6 +7,7 @@ import { logger } from "@/lib/logger";
 import { planIncludes } from "@/lib/planFeatures";
 import { utcDayKey } from "@/lib/usageLimits";
 import { fetchReviews, refreshAccessToken, type GoogleReview } from "@/server/googleReviews";
+import { googleTokenExpiresSoon } from "@/server/platforms/googleTokens";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import {
   buildNewReviewsEmail,
@@ -235,9 +236,26 @@ export interface ReviewCheckResult {
   left: number;
 }
 
-/** A usable access token: the stored one, or a refreshed one (saved by the shared refresh path). */
+/**
+ * A usable access token: the stored one, or a refreshed one (saved by the shared
+ * refresh path), judged against `now`. Kept for listingMetrics.ts, which passes
+ * its run's time; the review check and send steps use reviewAccessToken.
+ */
 export async function accessTokenOf(connection: SocialConnection, now: Date): Promise<string> {
   if (connection.expiresAt && new Date(connection.expiresAt).getTime() <= now.getTime()) {
+    return (await refreshAccessToken(connection)).accessToken;
+  }
+  return connection.accessToken;
+}
+
+/**
+ * accessTokenOf for the review steps. R23 client-journey L1: judged by
+ * googleTokenExpiresSoon (5 minutes early, real clock), not the run's
+ * collect-time `now`: the check step runs for up to REVIEW_CHECK_BUDGET_MS and
+ * the send step after it, so a token fine at collect time can die mid-run.
+ */
+async function reviewAccessToken(connection: SocialConnection): Promise<string> {
+  if (googleTokenExpiresSoon(connection)) {
     return (await refreshAccessToken(connection)).accessToken;
   }
   return connection.accessToken;
@@ -285,7 +303,7 @@ export async function checkReviewConnections(
 
     result.checked++;
     try {
-      const accessToken = await accessTokenOf(connection, now);
+      const accessToken = await reviewAccessToken(connection);
       const reviews = await fetchReviews(accessToken, locationName, { newestFirst: true });
       const found = findNewReviews(reviews, seenThroughFor(metadata, locationName), now);
 
@@ -348,10 +366,9 @@ function summarize(review: GoogleReview): NewReviewSummary {
 async function loadExcerpts(
   connection: SocialConnection,
   alert: ReviewAlert,
-  now: Date,
 ): Promise<NewReviewSummary[] | null> {
   try {
-    const accessToken = await accessTokenOf(connection, now);
+    const accessToken = await reviewAccessToken(connection);
     const reviews = await fetchReviews(accessToken, alert.locationName, {
       newestFirst: true,
       timeoutMs: REVIEW_ALERT_FETCH_TIMEOUT_MS,
@@ -438,7 +455,7 @@ export async function sendReviewAlerts(
 
     if (recipients.length > 0) {
       const excerpts =
-        clock() - startedAt <= REVIEW_ALERT_FETCH_BUDGET_MS ? await loadExcerpts(connection, alert, now) : null;
+        clock() - startedAt <= REVIEW_ALERT_FETCH_BUDGET_MS ? await loadExcerpts(connection, alert) : null;
       const email = buildNewReviewsEmail({
         workspaceId: alert.workspaceId,
         locationTitle: nonEmptyString(metadataOf(connection).locationTitle) ?? connection.workspace.name,

@@ -154,6 +154,42 @@ describe("GET /api/reviews/link", () => {
     expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access-2", LOCATION);
   });
 
+  // R23 client-journey L1: a token in its last 5 minutes is refreshed first.
+  it("refreshes a token with 4 minutes left before asking Google", async () => {
+    const expiring = connection({ expiresAt: new Date(Date.now() + 4 * 60 * 1000) });
+    mocks.findFirst.mockResolvedValue(expiring);
+    mocks.refreshAccessToken.mockResolvedValue({ ...expiring, accessToken: "gbp-access-2" });
+    mocks.fetchNewReviewUri.mockResolvedValue(LINK);
+    mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
+
+    await GET();
+
+    expect(mocks.refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access-2", LOCATION);
+  });
+
+  it("leaves a token with 10 minutes left alone", async () => {
+    mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() + 10 * 60 * 1000) }));
+    mocks.fetchNewReviewUri.mockResolvedValue(LINK);
+    mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
+
+    await GET();
+
+    expect(mocks.refreshAccessToken).not.toHaveBeenCalled();
+    expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access", LOCATION);
+  });
+
+  it("a failed refresh of a token with 4 minutes left keeps today's reasons", async () => {
+    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+    mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() + 4 * 60 * 1000) }));
+    mocks.refreshAccessToken.mockRejectedValueOnce(Object.assign(new Error("dead"), { code: "RECONNECT_REQUIRED" }));
+    expect((await (await GET()).json()).reason).toMatch(/Reconnect/);
+
+    mocks.refreshAccessToken.mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }));
+    expect((await (await GET()).json()).reason).toMatch(/try again/);
+    expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
+  });
+
   it("says why there is no link: not connected", async () => {
     mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(null);

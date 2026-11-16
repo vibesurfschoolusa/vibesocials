@@ -18,7 +18,7 @@ vi.mock("@/server/googleReviews", async (importOriginal) => ({
   refreshAccessToken: vi.fn(),
 }));
 
-import { GOOGLE_REFUSED_MEMBER_MESSAGE, GOOGLE_REFUSED_MESSAGE } from "@/server/googleReviews";
+import { GOOGLE_REFUSED_MEMBER_MESSAGE, GOOGLE_REFUSED_MESSAGE, refreshAccessToken } from "@/server/googleReviews";
 
 import { POST } from "./route";
 
@@ -218,5 +218,55 @@ describe("POST /api/reviews/[reviewId]/reply and Google's length limit", () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: "Couldn't post your reply. Try again in a minute." });
+  });
+});
+
+// R23 client-journey L1: a Google token in its last 5 minutes is refreshed
+// first (googleTokenExpiresSoon), so a long listing never runs past expiry.
+describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () => {
+  const MINUTE = 60 * 1000;
+  const expiringIn = (ms: number) =>
+    findFirstMock.mockResolvedValue({
+      id: "c1",
+      accessToken: "tok",
+      expiresAt: new Date(Date.now() + ms),
+      metadata: { locationName: "accounts/1/locations/2" },
+    });
+
+  it("refreshes a token with 4 minutes left before asking Google", async () => {
+    expiringIn(4 * MINUTE);
+    vi.mocked(refreshAccessToken).mockResolvedValue({ accessToken: "fresh" } as never);
+
+    await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(listGbpLocationsMock.mock.calls[0][0]).toBe("fresh");
+  });
+
+  it("leaves a token with 10 minutes left alone", async () => {
+    expiringIn(10 * MINUTE);
+
+    await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+    expect(listGbpLocationsMock.mock.calls[0][0]).toBe("tok");
+  });
+
+  it("a refresh Google refuses keeps today's reconnect text", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    expiringIn(4 * MINUTE);
+    vi.mocked(refreshAccessToken).mockRejectedValue(
+      Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
+        code: "GOOGLE_TOKEN_REFRESH_FAILED",
+        status: 400,
+        oauthError: "invalid_grant",
+      }),
+    );
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+    expect(listGbpLocationsMock).not.toHaveBeenCalled();
   });
 });

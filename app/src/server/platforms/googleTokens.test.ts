@@ -1,7 +1,11 @@
 import type { SocialConnection } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { refreshGoogleToken } from "@/server/platforms/googleTokens";
+import {
+  GOOGLE_TOKEN_EXPIRY_BUFFER_MS,
+  googleTokenExpiresSoon,
+  refreshGoogleToken,
+} from "@/server/platforms/googleTokens";
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest; refreshGoogleToken
@@ -495,5 +499,41 @@ describe("refreshGoogleToken — step deadline", () => {
     expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+// R23 client-journey L1 = platform-clients L1: every Google reader (Reviews
+// routes, the review alerts job, the publish clients) refreshes a token in its
+// last 5 minutes, judged against the real clock.
+describe("googleTokenExpiresSoon", () => {
+  const MINUTE = 60 * 1000;
+
+  it("is 5 minutes", () => {
+    expect(GOOGLE_TOKEN_EXPIRY_BUFFER_MS).toBe(5 * MINUTE);
+  });
+
+  it("is true with 4 minutes left, and for an expired token", () => {
+    expect(googleTokenExpiresSoon({ expiresAt: new Date(Date.now() + 4 * MINUTE) })).toBe(true);
+    expect(googleTokenExpiresSoon({ expiresAt: new Date(Date.now() - MINUTE) })).toBe(true);
+  });
+
+  it("is false with 10 minutes left, and with no stored expiry", () => {
+    expect(googleTokenExpiresSoon({ expiresAt: new Date(Date.now() + 10 * MINUTE) })).toBe(false);
+    expect(googleTokenExpiresSoon({ expiresAt: null })).toBe(false);
+  });
+
+  it("uses the clock now, not a time the caller read earlier", () => {
+    vi.useFakeTimers({ now: new Date("2026-11-10T13:00:00Z"), toFake: ["Date"] });
+    const expiresAt = new Date("2026-11-10T13:20:00Z");
+    expect(googleTokenExpiresSoon({ expiresAt })).toBe(false);
+    vi.setSystemTime(new Date("2026-11-10T13:16:00Z"));
+    expect(googleTokenExpiresSoon({ expiresAt })).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("with mustLastUntil, is true when the token ends before that time", () => {
+    const expiresAt = new Date(Date.now() + 10 * MINUTE);
+    expect(googleTokenExpiresSoon({ expiresAt }, Date.now() + 20 * MINUTE)).toBe(true);
+    expect(googleTokenExpiresSoon({ expiresAt }, Date.now() + 2 * MINUTE)).toBe(false);
   });
 });

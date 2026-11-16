@@ -191,3 +191,64 @@ describe("GET /api/reviews/locations", () => {
     expect(body).toEqual({ error: "Couldn't load your Google locations. Try again in a minute." });
   });
 });
+
+// R23 client-journey L1: a Google token in its last 5 minutes is refreshed
+// first (googleTokenExpiresSoon), so the account listing never runs past expiry.
+describe("GET /api/reviews/locations and a token about to expire", () => {
+  const MINUTE = 60 * 1000;
+  const noAccounts = () =>
+    (global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accounts: [] }),
+    }) as unknown as typeof fetch);
+  const expiringIn = (ms: number) =>
+    findFirstMock.mockResolvedValue({ ...CONNECTION, expiresAt: new Date(Date.now() + ms) });
+
+  it("refreshes a token with 4 minutes left before asking Google", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expiringIn(4 * MINUTE);
+    refreshAccessTokenMock.mockResolvedValue({ ...CONNECTION, accessToken: "fresh", expiresAt: new Date() });
+    noAccounts();
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1);
+    const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer fresh");
+  });
+
+  it("leaves a token with 10 minutes left alone", async () => {
+    expiringIn(10 * MINUTE);
+    noAccounts();
+
+    await GET();
+
+    expect(refreshAccessTokenMock).not.toHaveBeenCalled();
+    const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer token-abc");
+  });
+
+  it("a refresh Google refuses keeps today's reconnect text", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expiringIn(4 * MINUTE);
+    refreshAccessTokenMock.mockRejectedValue(
+      Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
+        code: "GOOGLE_TOKEN_REFRESH_FAILED",
+        status: 400,
+        oauthError: "invalid_grant",
+      }),
+    );
+    noAccounts();
+
+    const response = await GET();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      reconnect: true,
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});

@@ -3,6 +3,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
+import { googleTokenExpiresSoon } from "@/server/platforms/googleTokens";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import {
   googleRefusedBody,
@@ -87,9 +88,10 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if token needs refresh
     let accessToken = connection.accessToken;
-    if (connection.expiresAt && connection.expiresAt < new Date()) {
+    // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
+    // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
+    if (googleTokenExpiresSoon(connection)) {
       console.log("[Reviews] Access token expired, refreshing...");
       const { refreshAccessToken } = await import("@/server/googleReviews");
       const updated = await refreshAccessToken(connection);
