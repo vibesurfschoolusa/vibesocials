@@ -347,7 +347,7 @@ export async function syncListingMetrics(
 
     result.checked++;
     try {
-      const accessToken = await accessTokenOf(connection, now);
+      const accessToken = await accessTokenOf(connection);
       const newest = await prisma.locationMetricDaily.findFirst({
         where: { workspaceId: connection.workspaceId, locationName },
         orderBy: { day: "desc" },

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   connectionFindMany: vi.fn(),
@@ -331,6 +331,15 @@ describe("saveListingMetricsCheckedAt", () => {
 });
 
 describe("syncListingMetrics", () => {
+  // The token check reads the real clock (googleTokenExpiresSoon), so the clock
+  // stands at the run's NOW unless a test moves it.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("upserts one row per day keyed by workspace, location and day", async () => {
     useRows([conn()]);
     fetchMock.mockResolvedValue(okResponse(answer({ CALL_CLICKS: [["2026-11-08", "2"], ["2026-11-09", "3"]] })));
@@ -462,6 +471,32 @@ describe("syncListingMetrics", () => {
 
     expect(refreshMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer fresh");
+  });
+
+  // R23 client-journey L1: a token in its last 5 minutes is refreshed first,
+  // judged by the clock, not the run's collect-time now.
+  it("refreshes a token with 4 minutes left, and leaves one with 10 minutes alone", async () => {
+    useRows([conn({ id: "soon", expiresAt: new Date(NOW.getTime() + 4 * 60_000) })]);
+    refreshMock.mockResolvedValue({ accessToken: "fresh" });
+    await syncListingMetrics(NOW, () => 0);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer fresh");
+
+    refreshMock.mockClear();
+    fetchMock.mockClear();
+    useRows([conn({ id: "later", expiresAt: new Date(NOW.getTime() + 10 * 60_000) })]);
+    await syncListingMetrics(NOW, () => 0);
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a token that was fine at collect time but is about to expire by now", async () => {
+    useRows([conn({ expiresAt: new Date(NOW.getTime() + 10 * 60_000) })]);
+    refreshMock.mockResolvedValue({ accessToken: "fresh" });
+    vi.setSystemTime(new Date(NOW.getTime() + 6 * 60_000));
+
+    await syncListingMetrics(NOW, () => 0);
+
+    expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 
   it("goes never-checked first, then oldest-checked first", async () => {
