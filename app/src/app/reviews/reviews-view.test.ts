@@ -26,7 +26,7 @@ import {
   draftFailureMessage,
   LocationsNotice,
   locationsSignIn,
-  REPLY_OFFLINE_MESSAGE,
+  REPLY_ANSWER_LOST_MESSAGE,
   replyFailureShown,
   ReviewsView,
 } from "./reviews-view";
@@ -154,6 +154,11 @@ describe("ReviewsView when a reply form closes", () => {
     expect(source.split("setReplyingTo(").length - 1).toBe(2);
     expect(source).toContain("setReplyingTo((open) => openAfterDraft(open, review.reviewId))");
   });
+
+  // R28 client-journey L2: a form left open on A kept B's Draft from opening its box.
+  it("a new location closes the open form", () => {
+    expect(source).toMatch(/const chooseLocation = \(location: string\) => \{\s*setSelectedLocation\(location\);\s*openReply\(null\);\s*\};/);
+  });
 });
 
 // R25 (KK1): a member's 403 for another location says its sentence with no Retry,
@@ -237,12 +242,14 @@ describe("ReviewsView when a draft lands while another review is open", () => {
 // form's status line is thrown as ConfirmFailureShown, so the confirm dialog
 // adds no second message. Final failures still close it (canRetry).
 describe("ReviewsView when a reply fails", () => {
-  it("no answer: the offline sentence, and the dialog stays open for a retry", () => {
+  // R28 pages L1: the answer can be lost after Google took the reply.
+  it("no answer: may have been posted (the shared lead-in), where to look, and the dialog stays open", () => {
     const shown = replyFailureShown(new NoAnswerError(new TypeError("Failed to fetch")));
-    expect(shown.message).toBe(REPLY_OFFLINE_MESSAGE);
-    expect(REPLY_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so your reply wasn't posted. Check your connection and try again.",
+    expect(shown.message).toBe(REPLY_ANSWER_LOST_MESSAGE);
+    expect(REPLY_ANSWER_LOST_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so your reply may have been posted. If your connection dropped, reconnect first. Reload this page and look under Replied before you send it again.",
     );
+    expect(REPLY_ANSWER_LOST_MESSAGE).not.toMatch(/wasn't posted/);
     expect(canRetry(shown)).toBe(true);
   });
 
@@ -485,9 +492,9 @@ describe("ReviewsView tab counts", () => {
 // selected location (which drives the list request) never changes.
 describe("ReviewsView locks the picker after a workspace refusal", () => {
   it("passes the lock, and changes the location only through the picker", () => {
-    expect(source).toMatch(/<LocationPicker\s+locations=\{locations\}\s+selectedLocation=\{selectedLocation\}\s+onChange=\{setSelectedLocation\}\s+locked=\{refused\.locked\}/);
-    // The initial pick, and a refused list putting back the location on screen.
-    expect(source.split("setSelectedLocation(").length - 1).toBe(2);
+    expect(source).toMatch(/<LocationPicker\s+locations=\{locations\}\s+selectedLocation=\{selectedLocation\}\s+onChange=\{chooseLocation\}\s+locked=\{refused\.locked\}/);
+    // The initial pick, a refused list putting back the location on screen, and the picker's (chooseLocation).
+    expect(source.split("setSelectedLocation(").length - 1).toBe(3);
   });
 });
 

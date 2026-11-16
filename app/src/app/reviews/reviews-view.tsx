@@ -9,6 +9,7 @@ import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { answerLostText } from "@/lib/answerLost";
 import { cn } from "@/lib/cn";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
@@ -61,8 +62,11 @@ import { ReviewLinkPanel } from "./review-link-panel";
 // F7 (R1 M5): plain sentences for a failure the route did not explain.
 const LOCATIONS_FAILED = "Couldn't load your Google locations. Try again in a minute.";
 const REPLY_FAILED = "Couldn't post your reply. Try again in a minute.";
-export const REPLY_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so your reply wasn't posted. Check your connection and try again.";
+/** R28 pages L1: the answer can be lost after Google took the reply, so it may be posted. */
+export const REPLY_ANSWER_LOST_MESSAGE = answerLostText(
+  "your reply may have been posted",
+  "Reload this page and look under Replied before you send it again.",
+);
 
 /**
  * KK3: what a failed reply says, in its toast and its form's status line. A
@@ -70,7 +74,7 @@ export const REPLY_OFFLINE_MESSAGE =
  * the route's sentence or REPLY_FAILED (api-error shownError).
  */
 export function replyFailureShown(error: unknown): ShownError {
-  return isNoAnswer(error) ? { message: REPLY_OFFLINE_MESSAGE, settingsLink: false } : shownError(error, REPLY_FAILED);
+  return isNoAnswer(error) ? { message: REPLY_ANSWER_LOST_MESSAGE, settingsLink: false } : shownError(error, REPLY_FAILED);
 }
 const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
 export const DRAFT_OFFLINE_MESSAGE =
@@ -233,6 +237,13 @@ export function ReviewsView({
   const openReply = (next: string | null) => {
     setReplyingTo(next);
     setReplyRefusal((prev) => replyRefusalWhileOpen(prev, next));
+  };
+
+  // R28 client-journey L2: a form left open on another location's review is
+  // hidden but still "open", so a Draft here would not open its own box.
+  const chooseLocation = (location: string) => {
+    setSelectedLocation(location);
+    openReply(null);
   };
 
   const loadLocations = useCallback(async () => {
@@ -560,7 +571,7 @@ export function ReviewsView({
         <LocationPicker
           locations={locations}
           selectedLocation={selectedLocation}
-          onChange={setSelectedLocation}
+          onChange={chooseLocation}
           locked={refused.locked}
         />
       )}
