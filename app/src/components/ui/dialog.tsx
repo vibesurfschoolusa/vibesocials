@@ -44,7 +44,15 @@ function unlockBodyScroll() {
   }
 }
 
+/** Out of reach for focus or out of sight: a closed drawer, an aria-hidden layer. */
+function isHiddenElement(element: Element): boolean {
+  return (
+    element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true" || element.hasAttribute("inert")
+  );
+}
+
 function headingsIn(element: Element): HTMLElement[] {
+  if (isHiddenElement(element)) return [];
   if (/^H[1-6]$/.test(element.tagName)) return [element as HTMLElement];
   return Array.from(element.children).flatMap(headingsIn);
 }
@@ -60,10 +68,22 @@ function isFocusable(element: Element): boolean {
 }
 
 function firstFocusableIn(element: Element): HTMLElement | null {
+  if (isHiddenElement(element)) return null;
   if (isFocusable(element)) return element as HTMLElement;
   for (const child of Array.from(element.children)) {
     const found = firstFocusableIn(child);
     if (found) return found;
+  }
+  return null;
+}
+
+function isMainLandmark(element: Element): boolean {
+  return element.tagName === "MAIN" || element.getAttribute("role") === "main";
+}
+
+function nearestAncestor(start: Element | null, matches: (element: Element) => boolean): Element | null {
+  for (let at = start?.parentElement ?? null; at; at = at.parentElement) {
+    if (matches(at)) return at;
   }
   return null;
 }
@@ -82,8 +102,12 @@ export function focusFallbacks(trigger: HTMLElement | null): HTMLElement[] {
   const add = (element: HTMLElement | null | undefined) => {
     if (element && element !== trigger && !found.includes(element)) found.push(element);
   };
+  // Lead review: past the page content a "next row" was a toast's button or
+  // the mobile drawer. The walk ends at the trigger's main landmark, or its
+  // nearest section where there is none.
+  const limit = nearestAncestor(trigger, isMainLandmark) ?? nearestAncestor(trigger, (el) => el.tagName === "SECTION");
   let child: Element | null = trigger;
-  while (child?.parentElement) {
+  while (child?.parentElement && child !== limit) {
     const siblings = Array.from(child.parentElement.children);
     const at = siblings.indexOf(child);
     add(siblings.slice(at + 1).map(firstFocusableIn).find(Boolean));

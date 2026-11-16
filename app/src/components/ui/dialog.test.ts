@@ -444,3 +444,61 @@ describe("Dialog focus when its trigger is gone", () => {
     expect(dialog).not.toContain("previouslyFocused.current?.focus();");
   });
 });
+
+/**
+ * Lead review: the walk climbed past the page content, so at the body level a
+ * "next row" could be a toast's button or the mobile drawer. It stops at the
+ * trigger's <main> (or its nearest section when there is none), and skips
+ * anything hidden, aria-hidden or inert.
+ */
+describe("Dialog focus fallbacks stay in the page content", () => {
+  function shell(extra: { inMain?: Fake[]; besideMain?: Fake[] } = {}) {
+    const remove = el("BUTTON");
+    const row = el("DIV", [remove]);
+    const heading = el("H1");
+    const list = el("DIV", [row]);
+    const main = el("MAIN", [heading, list, ...(extra.inMain ?? [])]);
+    el("HTML", [el("BODY", [el("NAV", [el("A", [], { href: "/" })]), main, ...(extra.besideMain ?? [])])]);
+    return { remove, row, heading, list };
+  }
+
+  it("a toast region beside main is never chosen; the heading is", () => {
+    const toastButton = el("BUTTON");
+    const { remove, row, heading } = shell({ besideMain: [el("SECTION", [toastButton], { "aria-label": "Notifications" })] });
+    const fallbacks = focusFallbacks(asElement(remove));
+    expect(fallbacks).not.toContain(toastButton);
+    expect(fallbacks).toEqual([heading]);
+    detach(row);
+    restoreFocus(asElement(remove), fallbacks);
+    expect(toastButton.focus).not.toHaveBeenCalled();
+    expect(heading.focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("a hidden, aria-hidden or inert control is never chosen; the next row still is", () => {
+    const drawerLink = el("A", [], { href: "/queue" });
+    const hiddenButton = el("BUTTON");
+    const inertButton = el("BUTTON");
+    const next = el("BUTTON");
+    const remove = el("BUTTON");
+    const heading = el("H2");
+    const list = el("UL", [
+      el("LI", [remove]),
+      el("LI", [el("DIV", [drawerLink], { "aria-hidden": "true" })]),
+      el("LI", [hiddenButton], { hidden: "" }),
+      el("LI", [inertButton], { inert: "" }),
+      el("LI", [next]),
+    ]);
+    el("HTML", [el("BODY", [el("MAIN", [heading, list])])]);
+    const fallbacks = focusFallbacks(asElement(remove));
+    expect(fallbacks).toEqual([next, heading]);
+  });
+
+  it("with no main, the walk stops at the trigger's nearest section", () => {
+    const outside = el("BUTTON");
+    const remove = el("BUTTON");
+    const next = el("BUTTON");
+    const heading = el("H2");
+    el("HTML", [el("BODY", [el("SECTION", [heading, el("DIV", [el("P", [remove]), el("P", [next])])]), el("DIV", [outside])])]);
+    expect(focusFallbacks(asElement(remove))).toEqual([next, heading]);
+  });
+});
