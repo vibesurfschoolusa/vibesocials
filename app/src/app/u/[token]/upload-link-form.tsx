@@ -266,6 +266,8 @@ export function UploadLinkForm({ token }: { token: string }) {
     focusAfterPress(pressed, () => nameRef.current);
     setFiles([]);
     setFailureKinds({});
+    // R30 client-journey L4: the old "left out" note goes with the old files.
+    setDropNote(null);
     setPhase("picking");
   }
 

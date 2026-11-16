@@ -282,3 +282,15 @@ describe("UploadLinkForm: one focus watch per change", () => {
     expect(source).toMatch(/<Input\s+ref=\{nameRef\}\s+id="upload-link-name"/);
   });
 });
+
+// R30 client-journey L4: Send more kept the old "left out" note over the empty form.
+describe("UploadLinkForm: Send more", () => {
+  it("clears the left-out note with the files", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
+    const body = source.slice(source.indexOf("function startOver("), source.indexOf('setPhase("picking");', source.indexOf("function startOver(")));
+    expect(body).toContain("setFiles([]);");
+    expect(body).toContain("setDropNote(null);");
+  });
+});
