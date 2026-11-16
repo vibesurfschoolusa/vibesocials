@@ -37,3 +37,45 @@ export function createAnnouncer<T>(
     });
   };
 }
+
+/** What readableText reads: a DOM node, or a test's stand-in for one. */
+export interface TextNodeLike {
+  nodeType: number;
+  nodeValue: string | null;
+  tagName?: string;
+  childNodes: ArrayLike<TextNodeLike>;
+  getAttribute?: (name: string) => string | null;
+}
+
+const BLOCK_TAGS = new Set(["P", "DIV", "LI", "UL", "OL", "H1", "H2", "H3", "H4", "H5", "H6", "SECTION", "BLOCKQUOTE"]);
+
+/**
+ * R30 lead review: an element's text as a sentence a screen reader can read.
+ * textContent ran an Alert's title and body together ("Post scheduledWe'll
+ * publish..."); each block's text is its own part, and parts are joined with
+ * a full stop unless one already ends a sentence. Hidden parts (aria-hidden)
+ * are left out.
+ */
+export function readableText(node: TextNodeLike): string {
+  const parts: string[] = [];
+  let current = "";
+  const flush = () => {
+    const text = current.replace(/\s+/g, " ").trim();
+    if (text) parts.push(text);
+    current = "";
+  };
+  const walk = (n: TextNodeLike) => {
+    if (n.nodeType === 3) {
+      current += n.nodeValue ?? "";
+      return;
+    }
+    if (n.nodeType !== 1 || n.getAttribute?.("aria-hidden") === "true") return;
+    const block = BLOCK_TAGS.has((n.tagName ?? "").toUpperCase());
+    if (block) flush();
+    for (let i = 0; i < n.childNodes.length; i += 1) walk(n.childNodes[i]);
+    if (block) flush();
+  };
+  walk(node);
+  flush();
+  return parts.reduce((text, part) => (text === "" ? part : /[.!?:]$/.test(text) ? `${text} ${part}` : `${text}. ${part}`), "");
+}

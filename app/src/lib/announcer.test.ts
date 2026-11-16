@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createAnnouncer, shouldAnnounce } from "./announcer";
+import { createAnnouncer, readableText, shouldAnnounce, type TextNodeLike } from "./announcer";
 
 /**
  * R30 PP2 (lead): an info or success Alert, or a labelled Spinner, rendered
@@ -77,6 +77,35 @@ describe("createAnnouncer", () => {
   });
 });
 
+// R30 lead review: textContent ran an Alert's title and body together.
+describe("readableText", () => {
+  const text = (value: string): TextNodeLike => ({ nodeType: 3, nodeValue: value, childNodes: [] });
+  const el = (tagName: string, children: TextNodeLike[], attrs: Record<string, string> = {}): TextNodeLike => ({
+    nodeType: 1,
+    nodeValue: null,
+    tagName,
+    childNodes: children,
+    getAttribute: (name) => attrs[name] ?? null,
+  });
+
+  it("a title and a body: joined with a full stop", () => {
+    const alert = el("DIV", [
+      el("SPAN", [el("svg", [], { "aria-hidden": "true" })]),
+      el("DIV", [el("P", [text("Post scheduled")]), el("DIV", [text("We'll publish it at 9:00.")])]),
+    ]);
+    expect(readableText(alert)).toBe("Post scheduled. We'll publish it at 9:00.");
+  });
+
+  it("a part that already ends a sentence is joined with a space; inline parts stay together", () => {
+    const alert = el("DIV", [el("P", [text("Saved!")]), el("DIV", [text("Open "), el("A", [text("Activity")]), text(" to see it.")])]);
+    expect(readableText(alert)).toBe("Saved! Open Activity to see it.");
+  });
+
+  it("hidden parts are left out", () => {
+    expect(readableText(el("DIV", [el("SPAN", [text("✓")], { "aria-hidden": "true" }), text("Done.")]))).toBe("Done.");
+  });
+});
+
 describe("the announcer's wiring", () => {
   const src = path.join(__dirname, "..");
   const read = (file: string) => readFileSync(path.join(src, file), "utf8");
@@ -99,7 +128,7 @@ describe("the announcer's wiring", () => {
     const alert = read("components/ui/alert.tsx");
     expect(alert).not.toMatch(/role: "status"/);
     expect(alert.match(/role: "alert",/g)).toHaveLength(2);
-    expect(alert).toMatch(/useAnnounceOnShow\(\(\) => own\.current\?\.textContent \?\? "", meta\.role === null && !\("role" in props\)\)/);
+    expect(alert).toMatch(/useAnnounceOnShow\(\(\) => \(own\.current \? readableText\(own\.current\) : ""\), meta\.role === null && !\("role" in props\)\)/);
   });
 
   it("a labelled Spinner is an image with a name and announces its label", () => {

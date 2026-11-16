@@ -4,6 +4,7 @@ import { forwardRef, useImperativeHandle, useRef, type ComponentPropsWithoutRef,
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from "lucide-react";
 
 import { useAnnounceOnShow } from "@/components/ui/announcer";
+import { readableText } from "@/lib/announcer";
 import { cn } from "@/lib/cn";
 
 export type AlertVariant = "info" | "success" | "warning" | "danger";
@@ -63,7 +64,8 @@ export const Alert = forwardRef<HTMLDivElement, AlertProps>(function Alert(
   const DefaultIcon = meta.Icon;
   const own = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => own.current as HTMLDivElement);
-  useAnnounceOnShow(() => own.current?.textContent ?? "", meta.role === null && !("role" in props));
+  // R30 lead review: title and body read as two sentences, not run together.
+  useAnnounceOnShow(() => (own.current ? readableText(own.current) : ""), meta.role === null && !("role" in props));
 
   return (
     <div
