@@ -625,8 +625,9 @@ function OwnerView({
   const [savedName, setSavedName] = useState(workspaceName);
   const [savingName, setSavingName] = useState(false);
 
-  const handleSaveName = useCallback(async (event?: MouseEvent<HTMLElement>) => {
-    const pressed = event?.currentTarget ?? null;
+  const saveNameRef = useRef<HTMLButtonElement>(null);
+
+  const handleSaveName = useCallback(async () => {
     if (!workspaceNameSavable(name, savedName)) return;
     const trimmed = workspaceNameToSave(name);
     setSavingName(true);
@@ -644,7 +645,7 @@ function OwnerView({
       // The field shows the name as stored, so Save goes quiet until it changes.
       const stored = typeof data?.name === "string" ? data.name : trimmed;
       // R27 MM3: Save is disabled once the name is stored; focus moves on (the name field).
-      focusAfterPress(pressed);
+      focusAfterPress(saveNameRef.current);
       setSavedName(stored);
       setName(stored);
       toast.success("Workspace renamed.");
@@ -995,6 +996,7 @@ function OwnerView({
             className="sm:max-w-sm"
           />
           <Button
+            ref={saveNameRef}
             size="sm"
             variant="outline"
             className="shrink-0 sm:w-auto"

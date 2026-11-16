@@ -124,8 +124,8 @@ describe("Team card focus after a press", () => {
 
   it("the rename Save: once saved it is disabled, and focus moves on, not to the page", () => {
     const save = body("const handleSaveName = useCallback");
-    expect(save).toMatch(/const pressed = event\?\.currentTarget \?\? null;/);
-    expect(save).toMatch(/focusAfterPress\(pressed\);\s+setSavedName\(stored\);/);
+    expect(save).toMatch(/focusAfterPress\(saveNameRef\.current\);\s+setSavedName\(stored\);/);
+    expect(source).toMatch(/<Button\s+ref=\{saveNameRef\}/);
   });
 });
 
