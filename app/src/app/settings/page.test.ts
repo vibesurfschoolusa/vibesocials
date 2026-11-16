@@ -748,3 +748,46 @@ describe("SettingsPage — the same-end row", () => {
     ).toEqual({});
   });
 });
+
+// R28 new-customer L6: a missing Google permission names the control the row shows.
+describe("SettingsPage — a missing Google permission", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  const render = async (error: string) =>
+    renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({ error }) })) as ReactElement);
+
+  it("a flagged YouTube row: Reconnect, never Connect", async () => {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "youtube", accountIdentifier: "chan-1", metadata: { username: "Surf Co channel" }, needsReconnect: true, expiresAt: null, refreshToken: "sealed" },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = await render("youtube_upload_not_allowed");
+
+    expect(html).toContain("YouTube wasn&#x27;t reconnected: the permission to upload videos wasn&#x27;t allowed. Click Reconnect and");
+    expect(html).not.toContain("Click Connect again");
+  });
+
+  it("no YouTube row: Connect", async () => {
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    expect(await render("youtube_readonly_not_allowed")).toContain(
+      "YouTube wasn&#x27;t connected: the permission to see your YouTube account wasn&#x27;t allowed. Click Connect again and",
+    );
+  });
+
+  it("a flagged Business Profile card: Reconnect on the card, not the hidden sign-in link", async () => {
+    findConnectionsMock.mockResolvedValue([
+      { platform: "google_business_profile", accountIdentifier: "google_business_profile", metadata: { locationName: "accounts/1/locations/2" }, needsReconnect: true, expiresAt: null, refreshToken: "sealed" },
+    ]);
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+
+    const html = await render("google_business_profile_permission_missing");
+
+    expect(html).toContain("Click Reconnect on the Google Business Profile card and");
+    expect(html).not.toContain("Sign in to Google again from the Google Business Profile card");
+  });
+});

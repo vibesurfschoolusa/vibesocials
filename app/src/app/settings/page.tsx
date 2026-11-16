@@ -35,7 +35,7 @@ import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
-import { describeOAuthResult, type OAuthResult } from "@/lib/oauthResult";
+import { describeOAuthResult, shownControl, type OAuthResult } from "@/lib/oauthResult";
 import {
   LOCATION_CLEARED_PARAM,
   accountCheckFailedMessage,
@@ -93,10 +93,6 @@ export default async function SettingsPage({
   }
 
   const params = await searchParams;
-  let oauthResult: OAuthResult | null = describeOAuthResult({
-    error: params.error ?? null,
-    success: params.success ?? null,
-  });
 
   // SEC-1: project only browser-safe fields so passwordHash/email never reach
   // the client component payload. See lib/userSettings.ts.
@@ -134,6 +130,17 @@ export default async function SettingsPage({
   });
 
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
+  // R28 new-customer L6: a missing Google permission names the control the
+  // platform's row shows (Connect, Reconnect, or none for a working one).
+  let oauthResult: OAuthResult | null = describeOAuthResult(
+    { error: params.error ?? null, success: params.success ?? null },
+    {
+      shown: (platform) => {
+        const row = rows.find((r) => r.platform === platform);
+        return shownControl(row && { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row, new Date()) });
+      },
+    },
+  );
 
   // R6 review low 1: a reconnect came back with another account and nothing
   // changed; the sentence names only the connected one, from this workspace
