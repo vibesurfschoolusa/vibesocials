@@ -79,6 +79,40 @@ export function restoreFocus(trigger: HTMLElement | null, fallbacks: HTMLElement
   heading.focus();
 }
 
+/**
+ * Lead follow-up: a caller can remove the trigger after the dialog closed
+ * (Queue's series cancel reads the list again), when focus was already given
+ * back to it. So look again on the next frame and after these delays, and only
+ * if the trigger is gone and focus fell to the page body.
+ */
+export const FOCUS_RECHECK_MS = [1000, 3000];
+
+interface FocusSchedule {
+  frame(run: () => void): void;
+  later(run: () => void, ms: number): void;
+}
+
+const browserSchedule: FocusSchedule = {
+  frame: (run) => window.requestAnimationFrame(run),
+  later: (run, ms) => window.setTimeout(run, ms),
+};
+
+export function watchFocusAfterClose(
+  trigger: HTMLElement | null,
+  fallbacks: HTMLElement[],
+  schedule: FocusSchedule = browserSchedule,
+  doc: Pick<Document, "activeElement" | "body"> = document,
+): void {
+  if (!trigger) return;
+  const check = () => {
+    if (trigger.isConnected) return;
+    if (doc.activeElement && doc.activeElement !== doc.body) return;
+    restoreFocus(trigger, fallbacks);
+  };
+  schedule.frame(check);
+  for (const ms of FOCUS_RECHECK_MS) schedule.later(check, ms);
+}
+
 interface DialogContextValue {
   titleId: string;
   descriptionId: string;
@@ -150,6 +184,7 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
     return () => {
       unlockBodyScroll();
       restoreFocus(previouslyFocused.current, fallbacks.current);
+      watchFocusAfterClose(previouslyFocused.current, fallbacks.current);
     };
   }, [open]);
 

@@ -10,8 +10,10 @@ import {
   CONFIRM_UNREACHABLE_MESSAGE,
   ConfirmFailureShown,
   confirmFailureText,
+  FOCUS_RECHECK_MS,
   focusFallbacks,
   restoreFocus,
+  watchFocusAfterClose,
 } from "./dialog";
 
 /**
@@ -319,10 +321,60 @@ describe("Dialog focus when its trigger is gone", () => {
     expect(() => restoreFocus(null, [])).not.toThrow();
   });
 
+  // Lead follow-up: a caller that reloads after close (Queue's series cancel)
+  // removes the trigger later, when focus was already given back to it.
+  function scheduler() {
+    const frames: (() => void)[] = [];
+    const timers: { ms: number; run: () => void }[] = [];
+    return {
+      frames,
+      timers,
+      schedule: { frame: (run: () => void) => frames.push(run), later: (run: () => void, ms: number) => timers.push({ ms, run }) },
+    };
+  }
+
+  it("checks again on the next frame and after short timeouts", () => {
+    const { remove } = teamPage();
+    const { frames, timers, schedule } = scheduler();
+    watchFocusAfterClose(asElement(remove), [], schedule, { activeElement: null, body: null } as unknown as Document);
+    expect(frames).toHaveLength(1);
+    expect(timers.map((timer) => timer.ms)).toEqual(FOCUS_RECHECK_MS);
+    expect(FOCUS_RECHECK_MS.length).toBeGreaterThan(0);
+  });
+
+  it("the trigger was removed after close and focus fell to the body: the heading gets it", () => {
+    const { remove, row, members } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    const body = el("BODY");
+    const doc = { activeElement: body, body } as unknown as Document;
+    const { frames, timers, schedule } = scheduler();
+    watchFocusAfterClose(asElement(remove), fallbacks, schedule, doc);
+    frames[0]();
+    expect(members.focus).not.toHaveBeenCalled(); // the trigger is still there
+    detach(row);
+    timers[0].run();
+    expect(members.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("focus the person moved elsewhere is left alone, and a kept trigger is never replaced", () => {
+    const { remove, row, members } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    const body = el("BODY");
+    const elsewhere = el("INPUT");
+    const doc = { activeElement: elsewhere, body } as unknown as Document;
+    const { frames, timers, schedule } = scheduler();
+    watchFocusAfterClose(asElement(remove), fallbacks, schedule, doc);
+    detach(row);
+    frames[0]();
+    for (const timer of timers) timer.run();
+    expect(members.focus).not.toHaveBeenCalled();
+  });
+
   it("Dialog records the fallbacks at open and restores through them on close", () => {
     const dialog = source.slice(source.indexOf("export function Dialog("), source.indexOf("export const DialogHeader"));
     expect(dialog).toContain("fallbacks.current = focusFallbacks(previouslyFocused.current);");
     expect(dialog).toContain("restoreFocus(previouslyFocused.current, fallbacks.current);");
+    expect(dialog).toContain("watchFocusAfterClose(previouslyFocused.current, fallbacks.current);");
     expect(dialog).not.toContain("previouslyFocused.current?.focus();");
   });
 });
