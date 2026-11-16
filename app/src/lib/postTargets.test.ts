@@ -419,8 +419,8 @@ describe("several photos: every file each platform receives", () => {
     ["last", [jpg, jpg, webp], 3],
   ] as const)("a WebP %s: LinkedIn and Facebook greyed out with the photo named", (_where, types, n) => {
     expect(reasons(types)).toEqual({
-      linkedin: `photo ${n} is WebP; JPG, PNG or GIF only`,
-      facebook_page: `photo ${n} is WebP; JPG, PNG or GIF only`,
+      linkedin: `photo ${n} is WebP; JPG or PNG only`,
+      facebook_page: `photo ${n} is WebP; JPG or PNG only`,
       instagram: null,
       x: null,
       google_business_profile: n === 1 ? "photo 1 is WebP; JPG or PNG only" : null,
@@ -438,7 +438,7 @@ describe("several photos: every file each platform receives", () => {
 
   it("the route's check refuses LinkedIn for a WebP in the middle, naming the photo", () => {
     expect(() => assertPostTargetsValid(["linkedin", "instagram"], [jpg, webp, jpg], null)).toThrow(
-      "These platforms can't publish these photos: LinkedIn (photo 2 is WebP; JPG, PNG or GIF only). Remove them from platforms or choose different media.",
+      "These platforms can't publish these photos: LinkedIn (photo 2 is WebP; JPG or PNG only). Remove them from platforms or choose different media.",
     );
     let thrown: unknown;
     try {

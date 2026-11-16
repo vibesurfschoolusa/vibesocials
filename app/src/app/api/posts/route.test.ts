@@ -2175,7 +2175,7 @@ describe("POST /api/posts - the media list (several photos, 07a)", () => {
     await expect(response.json()).resolves.toMatchObject({
       code: "PLATFORM_MEDIA_MISMATCH",
       platforms: ["linkedin"],
-      error: `These platforms can't publish these photos: LinkedIn (photo ${n} is WebP; JPG, PNG or GIF only). Remove them from platforms or choose different media.`,
+      error: `These platforms can't publish these photos: LinkedIn (photo ${n} is WebP; JPG or PNG only). Remove them from platforms or choose different media.`,
     });
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });

@@ -34,6 +34,7 @@ import {
   notSentBanner,
   noFileSubmitError,
   photosFailureLosesFile,
+  photoSetTypeKeyOf,
   scheduleWhenText,
   platformListAlert,
   pressCountsAsTry,
@@ -47,6 +48,31 @@ import {
   UNTOUCHED_SUBMIT_MESSAGE,
   untouchedSubmitMessage,
 } from "./create-post-form";
+
+// R22 new-customer L1: a photo still being prepared holds the picked file (a
+// Windows HEIC reads "", a big WebP is re-encoded), so it is not judged yet.
+describe("photoSetTypeKeyOf", () => {
+  const photo = (type: string, status: "preparing" | "waiting" | "uploaded") => ({
+    file: new File(["x"], "p", { type }),
+    status,
+  });
+
+  it("leaves out photos still being prepared", () => {
+    expect(
+      photoSetTypeKeyOf([photo("image/jpeg", "uploaded"), photo("", "preparing"), photo("image/webp", "preparing")]),
+    ).toBe("image/jpeg");
+  });
+
+  it("is empty while every photo is being prepared", () => {
+    expect(photoSetTypeKeyOf([photo("", "preparing")])).toBe("");
+  });
+
+  it("judges each prepared photo, in order", () => {
+    expect(photoSetTypeKeyOf([photo("image/png", "waiting"), photo("image/webp", "uploaded")])).toBe(
+      "image/png image/webp",
+    );
+  });
+});
 
 // Posts without a photo (2026-11-10): the Create page's pure helpers.
 describe("hasNoFile", () => {
@@ -234,6 +260,10 @@ describe("no Location field on Create", () => {
     expect(source).not.toContain("Pick a place from the list");
     expect(source).not.toMatch(/\buploadLocation\b/);
     expect(source).not.toContain("showLocation");
+  });
+
+  it("builds the photo types from photoSetTypeKeyOf", () => {
+    expect(source).toContain("const photoSetTypeKey = photoSetTypeKeyOf(photoSet);");
   });
 
   it("sends no location in a post's body", () => {
@@ -955,7 +985,7 @@ describe("composerPageView: several photos", () => {
   ] as const)("a WebP %s: LinkedIn is greyed out naming the photo", (_where, types, n) => {
     const v = view(types);
     expect(v.choices.find((c) => c.platform === "linkedin")?.disabledReason).toBe(
-      `photo ${n} is WebP; JPG, PNG or GIF only`,
+      `photo ${n} is WebP; JPG or PNG only`,
     );
     expect(v.selected).toEqual(n === 1 ? ["instagram"] : ["instagram", "google_business_profile"]);
   });

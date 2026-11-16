@@ -289,13 +289,22 @@ describe("platformFilesReason: every file a platform receives", () => {
     ["middle", [jpg, webp, jpg], 2],
     ["last", [jpg, jpg, webp], 3],
   ])("a WebP %s: LinkedIn and Facebook refuse it and name the photo", (_where, types, n) => {
-    expect(platformFilesReason("linkedin", types)).toBe(`photo ${n} is WebP; JPG, PNG or GIF only`);
-    expect(platformFilesReason("facebook_page", types)).toBe(`photo ${n} is WebP; JPG, PNG or GIF only`);
+    expect(platformFilesReason("linkedin", types)).toBe(`photo ${n} is WebP; JPG or PNG only`);
+    expect(platformFilesReason("facebook_page", types)).toBe(`photo ${n} is WebP; JPG or PNG only`);
     expect(platformFilesReason("instagram", types)).toBeNull();
     expect(platformFilesReason("x", types)).toBeNull();
     expect(platformFilesReason("pinterest", types)).toBeNull();
     // Google takes the first photo only, so only a WebP first is refused.
     expect(platformFilesReason("google_business_profile", types)).toBe(n === 1 ? "photo 1 is WebP; JPG or PNG only" : null);
+  });
+
+  // R22 pages L1: a several-photo post takes JPEG, PNG and WebP only (no GIF),
+  // so the reason names the formats both rules allow.
+  it("a single WebP keeps the single-file text; in a set, JPG or PNG only", () => {
+    expect(platformFilesReason("facebook_page", [webp])).toBe("JPG, PNG or GIF only");
+    expect(platformFilesReason("linkedin", webp)).toBe("JPG, PNG or GIF only");
+    expect(platformFilesReason("facebook_page", [jpg, webp])).toBe("photo 2 is WebP; JPG or PNG only");
+    expect(platformFilesReason("linkedin", [jpg, webp])).toBe("photo 2 is WebP; JPG or PNG only");
   });
 
   it("Google and Pinterest are judged on the first file only", () => {

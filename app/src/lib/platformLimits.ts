@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { X_MAX_PHOTOS } from "./postMedia";
+import { MULTI_PHOTO_MIME_TYPES, X_MAX_PHOTOS } from "./postMedia";
 
 /**
  * Roadmap Phase 7 (spec §7.1) — single source of truth for each platform's
@@ -260,11 +260,22 @@ function formatName(mimeType: string): string {
 }
 
 /**
+ * The formats a several-photo post can hold on `platform`: the set's types
+ * (no GIF, MULTI_PHOTO_MIME_TYPES) that the platform takes. "JPG or PNG only"
+ * for Facebook and LinkedIn, so the reason never offers a GIF the picker refuses.
+ */
+export function photoSetFormatsReason(platform: Platform): string {
+  const names = MULTI_PHOTO_MIME_TYPES.filter((type) => platformAcceptsMedia(platform, type)).map(formatName);
+  const last = names.pop();
+  return `${names.length > 0 ? `${names.join(", ")} or ` : ""}${last} only`;
+}
+
+/**
  * Why `platform` can't publish this post's files, judged on every file it
  * receives ({@link filesSentTo}), or `null` when it can. One file: the same
  * answer as {@link unsupportedMediaReason}. Several: a refused format names
- * the file ("photo 2 is WebP; JPG, PNG or GIF only"), so the order of the
- * photos never changes the answer.
+ * the file and the formats a several-photo post can hold there ("photo 2 is
+ * WebP; JPG or PNG only"), so the order of the photos never changes the answer.
  */
 export function platformFilesReason(platform: Platform, types: MediaTypes): string | null {
   const list = mediaTypeList(types);
@@ -275,8 +286,10 @@ export function platformFilesReason(platform: Platform, types: MediaTypes): stri
     const reason = unsupportedMediaReason(platform, mimeType);
     if (reason === null) continue;
     if (PLATFORM_REFUSED_FORMATS[platform]?.[mimeType] === undefined) return reason;
-    const noun = mediaKindOf(mimeType) === "image" ? "photo" : "file";
-    return `${noun} ${index + 1} is ${formatName(mimeType)}; ${reason}`;
+    if (mediaKindOf(mimeType) === "image") {
+      return `photo ${index + 1} is ${formatName(mimeType)}; ${photoSetFormatsReason(platform)}`;
+    }
+    return `file ${index + 1} is ${formatName(mimeType)}; ${reason}`;
   }
   return null;
 }

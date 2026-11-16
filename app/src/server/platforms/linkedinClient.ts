@@ -3,7 +3,7 @@ import type { MediaItem, SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
-import { mediaKindOf, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
+import { mediaKindOf, photoSetFormatsReason, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
@@ -1807,17 +1807,19 @@ async function publishMultipart(args: {
 /**
  * Every file of a post with several photos must be an image LinkedIn takes (the MultiImage API:
  * "Only supports images", "JPG, GIF, and PNG formats"). The create route sends only JPEG, PNG and
- * WebP here; a WebP is refused with the reason the composer gives a single one
- * (PLATFORM_REFUSED_FORMATS). Thrown before any request.
+ * WebP here; a WebP is refused with the reason the composer gives one among several photos
+ * (photoSetFormatsReason). Thrown before any request.
  */
 function assertMultiImageMedia(items: readonly MediaItem[]): void {
   for (const [index, item] of items.entries()) {
-    const reason =
-      mediaKindOf(item.mimeType) === "image" ? unsupportedMediaReason("linkedin", item.mimeType) : "images only";
-    if (reason !== null) {
+    const isImage = mediaKindOf(item.mimeType) === "image";
+    const refused = isImage ? unsupportedMediaReason("linkedin", item.mimeType) !== null : true;
+    if (refused) {
+      // A scheduled post made before the composer refused this (#179) fails the
+      // same way on every retry, so the text ends with the step that helps.
       throw linkedinCodedError(
         "LINKEDIN_UNSUPPORTED_MEDIA",
-        `LinkedIn can't post file ${index + 1} of ${items.length} in a post with several photos: ${reason}. Nothing was posted.`,
+        `LinkedIn can't post file ${index + 1} of ${items.length} in a post with several photos: ${isImage ? photoSetFormatsReason("linkedin") : "images only"}. Nothing was posted. Remove LinkedIn from this post, or create it again with JPG or PNG photos.`,
       );
     }
   }

@@ -540,6 +540,18 @@ export function photosFailureLosesFile(input: { attachedBefore: number }): boole
   return input.attachedBefore === 0;
 }
 
+/**
+ * The attached photos' types, in order, as one key, leaving out photos still
+ * "preparing": those hold the picked file (a Windows HEIC reads "", a big WebP
+ * is re-encoded), and sending waits for them anyway (R22 new-customer L1).
+ */
+export function photoSetTypeKeyOf(photos: readonly { file: { type: string }; status: string }[]): string {
+  return photos
+    .filter((photo) => photo.status !== "preparing")
+    .map((photo) => photo.file.type)
+    .join(" ");
+}
+
 /** The first press while the notice is fresh stops there, before any dialog. */
 export function fileLostBlocksSubmit(state: FileLostNotice): boolean {
   return state === "fresh";
@@ -954,7 +966,7 @@ function CreatePostFormInner({
   const [triedSend, setTriedSend] = useState(false);
   // Every photo is judged for each platform, not the first alone (R21 M1).
   // Joined into a key so the list only changes when a type or the order does.
-  const photoSetTypeKey = photoSet.map((photo) => photo.file.type).join(" ");
+  const photoSetTypeKey = photoSetTypeKeyOf(photoSet);
   const photoSetTypes = useMemo(() => (photoSetTypeKey ? photoSetTypeKey.split(" ") : []), [photoSetTypeKey]);
   const pageView = useMemo(
     () =>

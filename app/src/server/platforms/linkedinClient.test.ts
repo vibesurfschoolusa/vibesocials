@@ -4272,8 +4272,8 @@ describe("linkedinClient — several photos in one post", () => {
   it.each([
     ["a video", "video/mp4", "images only"],
     ["a file that is no image", "application/pdf", "images only"],
-    // The same reason the composer gives a single WebP (PLATFORM_REFUSED_FORMATS).
-    ["a WebP", "image/webp", "JPG, PNG or GIF only"],
+    // The same reason the composer gives a WebP among several photos (R22 pages L1).
+    ["a WebP", "image/webp", "JPG or PNG only"],
   ])("%s among several photos: refused before any request", async (_label, mimeType, reason) => {
     const li = stub();
 
@@ -4281,7 +4281,8 @@ describe("linkedinClient — several photos in one post", () => {
 
     expect(error?.code).toBe("LINKEDIN_UNSUPPORTED_MEDIA");
     expect(error?.message).toBe(
-      `LinkedIn can't post file 2 of 3 in a post with several photos: ${reason}. Nothing was posted.`,
+      // R22 platform-clients L2: Retry fails the same way, so the text names the step.
+      `LinkedIn can't post file 2 of 3 in a post with several photos: ${reason}. Nothing was posted. Remove LinkedIn from this post, or create it again with JPG or PNG photos.`,
     );
     expect(li.fetchMock).not.toHaveBeenCalled();
   });
