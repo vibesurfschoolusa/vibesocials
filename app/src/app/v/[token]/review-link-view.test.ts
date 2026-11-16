@@ -221,9 +221,7 @@ describe("ReviewLinkView: the notice after a reload", () => {
     expect(staleNotice(REVIEW_ALREADY_APPROVED_MESSAGE, true)).toBe(REVIEW_ALREADY_APPROVED_MESSAGE);
     expect(staleNotice(REVIEW_ALREADY_APPROVED_MESSAGE, false)).toBe("This post was already approved.");
     expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, true)).toBe(REVIEW_POST_CHANGED_MESSAGE);
-    expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, false)).toBe(
-      "This post was changed after you opened this page. Reload the page to see the new version.",
-    );
+    expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, false)).toBe("This post was changed after you opened this page.");
   });
 
   it("is set from load()'s answer, not before it", async () => {
@@ -252,8 +250,19 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
 
   it("the reload failed: the card says to reload the page, not to look at a new version", async () => {
     const text = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async () => false);
-    expect(text).toBe("This post was changed after you opened this page. Reload the page to see the new version.");
+    expect(text).toBe("This post may have changed. Reload the page to see it.");
     expect(text).not.toContain("Have a look");
+  });
+
+  // Coordinator (R31 review): the refresh alert above the list already says to
+  // reload; the notice does not say it again, and the card says it once.
+  it("the reload failed: the reload step is on the card once and not in the notice above the list", async () => {
+    const card = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async () => false);
+    const notice = staleNotice(REVIEW_POST_CHANGED_MESSAGE, false);
+    expect(notice).not.toMatch(/reload/i);
+    expect(notice).not.toContain("Have a look");
+    expect(`${notice} ${card}`.match(/Reload the page to see it/g)).toHaveLength(1);
+    expect(card).not.toBe(notice);
   });
 
   it("any other refusal is the route's sentence, with no reload", async () => {

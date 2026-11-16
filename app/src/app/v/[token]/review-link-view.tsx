@@ -32,9 +32,15 @@ export const REVIEW_CHANGE_ALREADY_SAVED_MESSAGE = "Your change request was alre
 const NOT_RELOADED: Record<string, string> = {
   [REVIEW_CHANGE_ALREADY_SAVED_MESSAGE]: "Your change request was already saved.",
   [REVIEW_ALREADY_APPROVED_MESSAGE]: "This post was already approved.",
-  // R31 client-journey L1: the old version is still on screen, so the step is a reload.
-  [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page. Reload the page to see the new version.",
+  [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page.",
 };
+
+/**
+ * R31 client-journey L1: the card's sentence when the reload failed. The old
+ * version is still on the card, so the step is a reload; the notice above the
+ * list leaves that step to the refresh alert, so it is said once.
+ */
+const CARD_CHANGED_NOT_RELOADED = "This post may have changed. Reload the page to see it.";
 
 export function staleNotice(message: string, reloaded: boolean): string {
   return reloaded ? message : (NOT_RELOADED[message] ?? message);
@@ -43,14 +49,14 @@ export function staleNotice(message: string, reloaded: boolean): string {
 /**
  * The card's sentence for a refused decision. A post changed since the page
  * loaded reloads the list first, and the sentence follows that reload's
- * result, as the notice above the list does (R31 client-journey L1).
+ * result (R31 client-journey L1).
  */
 export async function cardRefusal(
   outcome: { kind: string; message: string },
   onStale: (message: string) => Promise<boolean>,
 ): Promise<string> {
   if (outcome.kind !== "changed") return outcome.message;
-  return staleNotice(outcome.message, await onStale(outcome.message));
+  return (await onStale(outcome.message)) ? outcome.message : CARD_CHANGED_NOT_RELOADED;
 }
 
 /** The route's `already`: this request wrote nothing, as an earlier one had. */
