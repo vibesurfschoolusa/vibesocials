@@ -148,7 +148,7 @@ export function DraftAIButton({
       onClick={draftClick(drafting, onDraft)}
       aria-disabled={drafting || undefined}
       aria-busy={drafting || undefined}
-      className={drafting ? "cursor-progress opacity-50" : undefined}
+      className={drafting ? "aria-disabled:cursor-progress opacity-50" : undefined}
     >
       {drafting ? <Spinner size="sm" /> : <Sparkles aria-hidden className={icon} />}
       {drafting ? "Generating…" : "Draft AI response"}

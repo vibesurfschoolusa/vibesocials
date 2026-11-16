@@ -373,6 +373,14 @@ describe("the Draft button while it writes (form and card)", () => {
     expect(tag).toContain('aria-busy="true"');
   });
 
+  // Lead review: the base aria-disabled:cursor-not-allowed (button.tsx) must
+  // not replace this button's progress cursor while it writes.
+  it("while it writes: the progress cursor, not the not-allowed one", () => {
+    const tag = draftButton(true);
+    expect(tag).toContain("aria-disabled:cursor-progress");
+    expect(tag).not.toContain("cursor-not-allowed");
+  });
+
   it("idle: neither attribute", () => {
     const tag = draftButton(false);
     // The attribute, not the class: buttonVariants styles aria-disabled buttons.
