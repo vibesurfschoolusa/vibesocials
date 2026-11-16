@@ -103,6 +103,16 @@ describe("ReviewsView when a card draft lands", () => {
   });
 });
 
+// JJ3 lead review: a reply failing with the sign-in-again kind shows the link in that form.
+describe("ReviewsView when a reply needs the owner to sign in again", () => {
+  it("notes it on failure, clears it on typing, sending again and closing, and hands the form the link", () => {
+    expect(source).toContain("replySignInAfterFailure(prev, review.reviewId, shown, isMember)");
+    expect(source.split("replySignInCleared(prev, review.reviewId)").length - 1).toBeGreaterThanOrEqual(3);
+    expect(source).toContain("replySignInUrl={replySignInHref(replySignIn, review.reviewId, workspaceId)}");
+    expect(source).toContain("toast.error(shown.message)");
+  });
+});
+
 // Lead review (R23): the open box is judged when the draft lands, not when it was asked for.
 describe("ReviewsView when a draft lands while another review is open", () => {
   it("picks the open box from the current state through openAfterDraft", () => {

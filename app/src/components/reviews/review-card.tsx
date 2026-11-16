@@ -34,6 +34,8 @@ interface ReviewCardProps {
   onDraftAI: () => void;
   /** Given while an AI draft's replaced text can be restored. */
   onUndoDraft?: () => void;
+  /** JJ3 lead review: the in-place Google sign-in for this review's form, after a refused reply. */
+  replySignInUrl?: string;
 }
 
 /**
@@ -53,6 +55,7 @@ export function ReviewCard({
   onSubmitReply,
   onDraftAI,
   onUndoDraft,
+  replySignInUrl,
 }: ReviewCardProps) {
   return (
     <Card className={cn("p-6", needsReply && "border-warning/30 bg-warning/5")}>
@@ -130,6 +133,7 @@ export function ReviewCard({
                   onCancel={onCloseReply}
                   onDraftAI={onDraftAI}
                   onUndoDraft={onUndoDraft}
+                  signInUrl={replySignInUrl}
                   submitting={isSubmitting}
                   generatingAI={isGeneratingAI}
                 />

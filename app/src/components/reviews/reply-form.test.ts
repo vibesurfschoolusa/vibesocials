@@ -12,6 +12,9 @@ import {
   ReplyForm,
   focusBoxAfterDraft,
   focusPlace,
+  replySignInAfterFailure,
+  replySignInCleared,
+  replySignInHref,
   replyUndoStatus,
   settleDraftFocus,
   startDraftHere,
@@ -459,5 +462,55 @@ describe("ReplyForm: the Undo, Draft and draft-landed wiring", () => {
 
   it("the box keeps its id, for the label", () => {
     expect(textarea(render("Hi"))).toContain('id="review-reply"');
+  });
+});
+
+// JJ3 lead review: a reply that fails because Google wants the owner to sign
+// in again gets the in-place sign-in link in the reply form itself, next to
+// its status line, until the person types, sends again or closes the form.
+describe("a reply that fails with the sign-in-again kind", () => {
+  const signIn = { message: "Google didn't accept the connection.", settingsLink: true, signIn: true as const };
+  const other = { message: "Couldn't post your reply. Try again in a minute.", settingsLink: false };
+
+  it("on an owner's page: the link shows for that review, with the page's workspace id", () => {
+    const open = replySignInAfterFailure(null, "r1", signIn, false);
+    expect(open).toBe("r1");
+    expect(replySignInHref(open, "r1", "ws-A")).toBe("/api/auth/google_business_profile/start?workspaceId=ws-A");
+    expect(replySignInHref(open, "r2", "ws-A")).toBeUndefined();
+  });
+
+  it("on a member's page: none", () => {
+    expect(replySignInAfterFailure(null, "r1", signIn, true)).toBeNull();
+  });
+
+  it("another kind of failure: none, and an earlier link for that review goes", () => {
+    expect(replySignInAfterFailure(null, "r1", other, false)).toBeNull();
+    expect(replySignInAfterFailure("r1", "r1", other, false)).toBeNull();
+    expect(replySignInAfterFailure("r2", "r1", other, false)).toBe("r2");
+  });
+
+  it("clears when the person types, sends again or closes the form (that review only)", () => {
+    expect(replySignInCleared("r1", "r1")).toBeNull();
+    expect(replySignInCleared("r2", "r1")).toBe("r2");
+    expect(replySignInCleared(null, "r1")).toBeNull();
+  });
+
+  it("the form shows it inside a status region, so it is announced", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReplyForm, {
+        value: "Thanks",
+        onChange: () => {},
+        onSubmit: () => {},
+        onCancel: () => {},
+        onDraftAI: () => {},
+        submitting: false,
+        generatingAI: false,
+        signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-A",
+      }),
+    );
+    expect(html).toMatch(
+      /<div[^>]*role="status"[^>]*><a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a><\/div>/,
+    );
+    expect(render("Thanks")).not.toContain("/api/auth/");
   });
 });

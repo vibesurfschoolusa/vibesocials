@@ -1,10 +1,13 @@
 import { Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { SignInAgainLink } from "@/components/gbp-sign-in-link";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
+import type { ShownError } from "./api-error";
 import { REPLY_TOO_LONG_MESSAGE, replyCounter, replyTooLong } from "@/lib/reviewReplyLength";
 
 const DRAFTING_STATUS = "Writing a draft. You can edit it here as soon as it is ready.";
@@ -42,6 +45,32 @@ export function focusBoxAfterDraft(drafting: boolean, draftedHere: boolean, focu
  */
 export function focusPlace<N>(active: N | null, form: { contains(node: N): boolean } | null): FocusPlace {
   return active && form?.contains(active) ? "this form" : "elsewhere";
+}
+
+/**
+ * JJ3 lead review: the review whose reply failed because Google wants the
+ * owner to sign in again (the route's `signIn`), or null. Its form shows the
+ * in-place sign-in link; a member's page never gets one, and any other failure
+ * of that review clears it.
+ */
+export function replySignInAfterFailure(
+  current: string | null,
+  reviewId: string,
+  shown: ShownError,
+  isMember: boolean,
+): string | null {
+  if (shown.signIn && !isMember) return reviewId;
+  return current === reviewId ? null : current;
+}
+
+/** Typing, sending again or closing that review's form clears its link. */
+export function replySignInCleared(current: string | null, reviewId: string): string | null {
+  return current === reviewId ? null : current;
+}
+
+/** The link for a review's form, from the page's own workspace (lib/gbpSignIn.ts), else undefined. */
+export function replySignInHref(current: string | null, reviewId: string, workspaceId: string): string | undefined {
+  return current === reviewId ? gbpSignInUrl(workspaceId) : undefined;
 }
 
 /** The card's Draft button, by review id: the page checks focus against it as a draft lands. */
@@ -216,6 +245,8 @@ interface ReplyFormProps {
   onUndoDraft?: () => void;
   submitting: boolean;
   generatingAI: boolean;
+  /** JJ3 lead review: the in-place Google sign-in, after a reply Google refused (replySignInHref). */
+  signInUrl?: string;
 }
 
 /**
@@ -231,6 +262,7 @@ export function ReplyForm({
   onUndoDraft,
   submitting,
   generatingAI,
+  signInUrl,
 }: ReplyFormProps) {
   // R17 L1: Google takes at most 4096 bytes; an AI draft can be longer.
   const counter = replyCounter(value);
@@ -295,6 +327,10 @@ export function ReplyForm({
             Undo
           </Button>
         ) : null}
+      </div>
+      {/* A live region that stays on the page, so the link is announced when it appears. */}
+      <div role="status" className="empty:sr-only">
+        {signInUrl ? <SignInAgainLink href={signInUrl} /> : null}
       </div>
       {counter ? (
         <div id="review-reply-length" className={tooLong ? "space-y-1 text-xs text-destructive" : "text-xs text-muted-foreground"}>

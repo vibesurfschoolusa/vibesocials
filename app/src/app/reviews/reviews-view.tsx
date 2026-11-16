@@ -22,6 +22,9 @@ import {
   EMPTY_REPLY_BOXES,
   focusBoxAfterCardDraft,
   openAfterDraft,
+  replySignInAfterFailure,
+  replySignInCleared,
+  replySignInHref,
   replyBoxAfterDraft,
   replyBoxAfterPost,
   replyBoxAfterTyping,
@@ -138,6 +141,8 @@ export function ReviewsView({
   // the heading). The success toast already announces the reply.
   const [pendingFocus, setPendingFocus] = useState<{ reviewId: string | null } | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  // JJ3 lead review: the review whose reply Google refused until the owner signs in again.
+  const [replySignIn, setReplySignIn] = useState<string | null>(null);
   // JJ3 lead review: where focus was as a draft landed, decided once its box is
   // open (focusBoxAfterCardDraft): the card's Draft button leaves with it.
   const [boxFocusAfterDraft, setBoxFocusAfterDraft] = useState<{ reviewId: string; activeId: string } | null>(null);
@@ -256,6 +261,7 @@ export function ReviewsView({
 
     try {
       setSubmitting(review.reviewId);
+      setReplySignIn((prev) => replySignInCleared(prev, review.reviewId));
 
       const response = await fetch(`/api/reviews/${review.reviewId}/reply`, {
         method: "POST",
@@ -300,7 +306,9 @@ export function ReviewsView({
       });
     } catch (err: unknown) {
       console.error("Error posting reply:", err);
-      toast.error(shownError(err, REPLY_FAILED).message);
+      const shown = shownError(err, REPLY_FAILED);
+      toast.error(shown.message);
+      setReplySignIn((prev) => replySignInAfterFailure(prev, review.reviewId, shown, isMember));
       throw err;
     } finally {
       setSubmitting(null);
@@ -360,8 +368,15 @@ export function ReviewsView({
       isGeneratingAI={generatingAI.has(review.reviewId)}
       replyValue={replyText[review.reviewId] || ""}
       onOpenReply={() => setReplyingTo(review.reviewId)}
-      onCloseReply={() => setReplyingTo(null)}
-      onChangeReply={(value) => setReplyBoxes((prev) => replyBoxAfterTyping(prev, review.reviewId, value))}
+      onCloseReply={() => {
+        setReplyingTo(null);
+        setReplySignIn((prev) => replySignInCleared(prev, review.reviewId));
+      }}
+      onChangeReply={(value) => {
+        setReplyBoxes((prev) => replyBoxAfterTyping(prev, review.reviewId, value));
+        setReplySignIn((prev) => replySignInCleared(prev, review.reviewId));
+      }}
+      replySignInUrl={replySignInHref(replySignIn, review.reviewId, workspaceId)}
       onUndoDraft={
         replyBoxes.undo[review.reviewId] !== undefined
           ? () => setReplyBoxes((prev) => replyBoxAfterUndo(prev, review.reviewId))
