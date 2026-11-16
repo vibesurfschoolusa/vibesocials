@@ -3,20 +3,31 @@ import { describe, expect, it, vi } from "vitest";
 const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn(async () => null) }));
 vi.mock("next-auth/react", () => ({ getSession: getSessionMock, signOut: vi.fn() }));
 
+import { signInReachable } from "@/lib/signInChecked";
+
 import {
   GOOGLE_NOT_SENT_MESSAGE,
   LOGIN_FAILED_MESSAGE,
   LOGIN_NOT_SENT_MESSAGE,
+  LOGIN_UNFINISHED_MESSAGE,
   LOGIN_UNREACHABLE_MESSAGE,
+  REGISTER_SIGN_IN_LOST_MESSAGE,
   REGISTER_SIGN_IN_UNFINISHED_MESSAGE,
-  signInReachable,
+  signInAfterRegister,
   signInWithPassword as signInWithPasswordUnder,
 } from "./signInWithPassword";
 
-/** next-auth's providers list, as /api/auth/providers answers it. */
-const providersAnswer = vi.fn(async () => Response.json({ credentials: { id: "credentials" } }));
+/** next-auth's providers list, csrf token and session, as a working server answers them. */
+function serverAnswers(session: () => Response = () => Response.json({ user: { email: "a@example.test" } })) {
+  return vi.fn(async (input: string) => {
+    if (input === "/api/auth/providers") return Response.json({ credentials: { id: "credentials" } });
+    if (input === "/api/auth/csrf") return Response.json({ csrfToken: "token-1" });
+    return session();
+  }) as unknown as typeof fetch;
+}
+const providersAnswer = serverAnswers();
 const signInWithPassword = (signIn: Parameters<typeof signInWithPasswordUnder>[0], email: string, password: string) =>
-  signInWithPasswordUnder(signIn, email, password, providersAnswer as unknown as typeof fetch);
+  signInWithPasswordUnder(signIn, email, password, providersAnswer);
 
 // F7 (R1 L7): a sign-in call that never answers (offline, the server down)
 // left the spinner on for ever.
@@ -85,8 +96,8 @@ describe("signInWithPassword", () => {
 // with the typed email and password gone. The page reads it first itself.
 describe("signInReachable", () => {
   it("is true when the providers list comes back", async () => {
-    const fetchImpl = vi.fn(async () => Response.json({ credentials: { id: "credentials" } }));
-    await expect(signInReachable(fetchImpl as unknown as typeof fetch)).resolves.toBe(true);
+    const fetchImpl = serverAnswers();
+    await expect(signInReachable(fetchImpl)).resolves.toBe(true);
     expect(fetchImpl).toHaveBeenCalledWith("/api/auth/providers", { cache: "no-store" });
   });
 
@@ -133,28 +144,84 @@ describe("signInWithPassword when sign-in can't be reached", () => {
   });
 });
 
-describe("the Google button and Register read it before signIn", () => {
+// R31 new-customer L4: next-auth's own csrf read failed: a 200 whose url says csrf=true, nobody signed in.
+describe("signInWithPassword counts a sign-in only when it happened", () => {
+  it("an answer whose url says csrf=true, or a session naming nobody: the page's sentence, not success", async () => {
+    const csrf = vi.fn(async () => ({ ok: true, error: null, status: 200, url: "http://localhost/login?csrf=true" }));
+    await expect(signInWithPassword(csrf, "a@example.test", "x")).resolves.toEqual({ ok: false, error: LOGIN_UNFINISHED_MESSAGE });
+    const nobody = serverAnswers(() => Response.json({}));
+    await expect(signInWithPasswordUnder(vi.fn(async () => ({ ok: true })), "a@example.test", "x", nobody)).resolves.toEqual({
+      ok: false,
+      error: LOGIN_UNFINISHED_MESSAGE,
+    });
+    expect(LOGIN_UNFINISHED_MESSAGE).toBe("Signing you in didn't finish, so you aren't signed in. Press Sign in again.");
+  });
+});
+
+// R31 new-customer L1, L4: Register's automatic sign-in.
+describe("signInAfterRegister", () => {
+  const run = (signIn: Parameters<typeof signInAfterRegister>[0], fetchImpl: typeof fetch = serverAnswers()) =>
+    signInAfterRegister(signIn, "a@example.test", "secret12", fetchImpl);
+
+  it("signed in: ok", async () => {
+    await expect(run(vi.fn(async () => ({ ok: true })))).resolves.toEqual({ ok: true });
+  });
+
+  it("refused (the email had an account with another password): to Log in", async () => {
+    await expect(run(vi.fn(async () => ({ ok: false, error: "CredentialsSignin" })))).resolves.toEqual({ ok: false, toLogin: true });
+  });
+
+  it("a throw: stays with the lost-answer sentence, never to Log in", async () => {
+    const thrown = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(run(thrown)).resolves.toEqual({ ok: false, error: REGISTER_SIGN_IN_LOST_MESSAGE });
+    expect(REGISTER_SIGN_IN_LOST_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so you may be signed in. If your connection dropped, reconnect first. Reload the page to see, or log in with your email and password.",
+    );
+  });
+
+  it("not sent, or unfinished (csrf=true): stays and says to log in", async () => {
+    const offline = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+    await expect(run(vi.fn(async () => ({ ok: true })), offline)).resolves.toEqual({
+      ok: false,
+      error: REGISTER_SIGN_IN_UNFINISHED_MESSAGE,
+    });
+    const csrf = vi.fn(async () => ({ ok: true, error: null, url: "http://localhost/register?csrf=true" }));
+    await expect(run(csrf)).resolves.toEqual({ ok: false, error: REGISTER_SIGN_IN_UNFINISHED_MESSAGE });
+  });
+});
+
+describe("every sign-in entry point goes through signInChecked", () => {
   const read = async (path: string) => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     return readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
   };
 
-  it("Continue with Google: unreachable shows the page's sentence and doesn't call signIn", async () => {
+  it("Continue with Google: a failed press shows GOOGLE_NOT_SENT_MESSAGE, never only stops the spinner", async () => {
     const source = await read("../../components/google-sign-in-button.tsx");
-    expect(source).toMatch(
-      /if \(!\(await signInReachable\(\)\)\) \{\s+setError\(GOOGLE_NOT_SENT_MESSAGE\);\s+setLoading\(false\);\s+return;\s+\}\s+(?:\/\/[^\n]*\s+)*signIn\("google"/,
-    );
+    expect(source).toContain("googleSignInChecked(signIn, callbackUrl)");
+    expect(source).toMatch(/if \(!result\.ok\) \{\s+setError\(GOOGLE_NOT_SENT_MESSAGE\);\s+setLoading\(false\);/);
+    expect(source).not.toMatch(/signIn\("google"/);
     expect(source).toMatch(/<p role="alert"[^>]*>\s*\{error\}/);
   });
 
-  it("Register's automatic sign-in: unreachable keeps the form and says to log in", async () => {
+  it("Register: through signInAfterRegister; Log in only on a refusal; no bare signIn call", async () => {
     const source = await read("../register/register-form.tsx");
-    expect(source).toMatch(
-      /if \(!\(await signInReachable\(\)\)\) \{\s+setError\(REGISTER_SIGN_IN_UNFINISHED_MESSAGE\);\s+setLoading\(false\);\s+return;\s+\}/,
-    );
-    const reachable = source.indexOf("await signInReachable()");
-    expect(reachable).toBeGreaterThan(source.indexOf('fetchOrNoAnswer("/api/auth/register"'));
-    expect(reachable).toBeLessThan(source.indexOf('signIn("credentials"'));
+    expect(source).toContain("await signInAfterRegister(signIn, email, password)");
+    expect(source).not.toMatch(/signIn\("credentials"/);
+    expect(source).toMatch(/if \("toLogin" in outcome\) \{\s+router\.push\(`\/login\?registered=1/);
+    expect(source.match(/router\.push\(/g)).toHaveLength(2);
+    const register = source.indexOf('fetchOrNoAnswer("/api/auth/register"');
+    expect(register).toBeGreaterThan(0);
+    expect(source.indexOf("signInAfterRegister(signIn")).toBeGreaterThan(register);
+  });
+
+  it("Log in: through signInWithPassword, which uses credentialsSignInChecked", async () => {
+    expect(await read("./page.tsx")).toContain("await signInWithPassword(signIn, email, password)");
+    expect(await read("./signInWithPassword.ts")).toContain("credentialsSignInChecked(signIn, email, password, fetchImpl)");
   });
 });

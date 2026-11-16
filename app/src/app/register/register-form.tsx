@@ -16,11 +16,10 @@ import { GoogleSignInButton } from "@/components/google-sign-in-button";
 import { useFreshSignedInAccount } from "@/components/signed-in-swap";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
-import { beforeSignIn } from "@/lib/staleSignOut";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 import { FormHeading, SignedInNotice, showSignedInNotice } from "../login/signed-in-notice";
-import { REGISTER_SIGN_IN_UNFINISHED_MESSAGE, signInReachable } from "../login/signInWithPassword";
+import { signInAfterRegister } from "../login/signInWithPassword";
 
 /**
  * What the page says under the button, as plain strings from the server page:
@@ -96,32 +95,23 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
       return;
     }
 
-    // The account exists now (201 above) regardless of what happens next, so
-    // auto-sign-in runs in its own try/catch: a network blip here must not
-    // land in the block above and show the misleading "no account was
-    // created" — it should just fall through to the friendly login
-    // handoff below, same as the "signed in but not ok" case.
-    // R30: unreachable, signIn would leave for /api/auth/error instead of
-    // throwing; the form stays with what was typed and says to log in.
-    if (!(await signInReachable())) {
-      setError(REGISTER_SIGN_IN_UNFINISHED_MESSAGE);
-      setLoading(false);
+    // The account exists now (201 above) whatever happens next. R31 (L1, L4):
+    // signInAfterRegister counts the sign-in only when it happened; only a
+    // refusal goes to Log in (usually the email already had an account with
+    // another password: the 201 is the same either way, and the login page
+    // says both). Anything else keeps the form, with what was typed, and its
+    // sentence: a page change offline would be the browser's error page.
+    const outcome = await signInAfterRegister(signIn, email, password);
+    if (outcome.ok) {
+      router.push(callbackUrl);
       return;
     }
-    try {
-      // EE1 review: waits for a stale sign-out this page already sent, so it can't clear the new cookie.
-      const result = await beforeSignIn(() => signIn("credentials", { redirect: false, email, password }));
-      if (result?.ok) {
-        router.push(callbackUrl);
-        return;
-      }
-    } catch {
-      // fall through to the handoff below
+    if ("toLogin" in outcome) {
+      router.push(`/login?registered=1&callbackUrl=${encodeURIComponent(callbackUrl)}`);
+      return;
     }
-    // Sign-in failed: usually the email already had an account with another
-    // password (the 201 above is the same either way). The login page says
-    // both possibilities without claiming an account was created.
-    router.push(`/login?registered=1&callbackUrl=${encodeURIComponent(callbackUrl)}`);
+    setError(outcome.error);
+    setLoading(false);
   }
 
   return (

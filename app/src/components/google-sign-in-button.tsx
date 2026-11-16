@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { getProviders, signIn } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
-import { GOOGLE_NOT_SENT_MESSAGE, signInReachable } from "@/app/login/signInWithPassword";
+import { GOOGLE_NOT_SENT_MESSAGE } from "@/app/login/signInWithPassword";
+import { googleSignInChecked } from "@/lib/signInChecked";
 
 /**
  * "Continue with Google" for the login/register cards. Renders NOTHING unless
@@ -61,16 +62,14 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
         onClick={async () => {
           setLoading(true);
           setError(null);
-          // R30: unreachable, signIn would leave for /api/auth/error instead of throwing.
-          if (!(await signInReachable())) {
+          // R30, R31: unreachable, or the redirect request failed: nothing
+          // reached Google, so the page says so instead of only stopping the
+          // spinner. On success the page leaves for Google.
+          const result = await googleSignInChecked(signIn, callbackUrl);
+          if (!result.ok) {
             setError(GOOGLE_NOT_SENT_MESSAGE);
             setLoading(false);
-            return;
           }
-          // Full-page redirect to Google; NextAuth lands back on callbackUrl.
-          // If the pre-redirect fetch fails (offline, CSRF endpoint down) the
-          // promise rejects with no navigation — unstick the button.
-          signIn("google", { callbackUrl }).catch(() => setLoading(false));
         }}
       >
         <GoogleMark />
