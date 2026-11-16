@@ -1,7 +1,7 @@
 import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { planIncludes } from "@/lib/planFeatures";
+import { planOffers } from "@/lib/planFeatures";
 import { personLabel } from "@/lib/usageLimits";
 import { clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
 import { sendEmail } from "@/server/notifications/email";
@@ -223,7 +223,9 @@ export async function noticeOwnersOfFormerOwner(input: {
         select: { id: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() },
       }),
     ]);
-    clientLinksIncluded = planIncludes(workspace ?? {}, "clientLinks");
+    // R23 security L1: the plan itself, its ended state aside, so an ended
+    // trial or Growth plan gets the block's email, not "the plan doesn't include them".
+    clientLinksIncluded = planOffers(workspace ?? {}, "clientLinks");
     workspaceBlocked = clientLinkCreateRefusal(workspace ?? {});
     let connectLink: FormerOwnerConnectLink = null;
     if (connect?.createdById === formerOwnerId) {

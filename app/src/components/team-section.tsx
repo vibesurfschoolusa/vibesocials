@@ -150,6 +150,7 @@ function listOf(items: string[]): string {
 
 /** GET /api/workspaces/client-links: which client links are on, and whether the plan includes them. */
 export interface ClientLinksState {
+  /** The plan itself has client links, its ended state aside (R23 security L1). */
   included: boolean;
   on: { upload: boolean; review: boolean; connect: boolean };
   /** The connect link is on, but its maker is no longer an owner: it works for nobody. */
@@ -250,6 +251,16 @@ export function clientLinksButtonShown(state: ClientLinksState | null): boolean 
  */
 export function clientLinksTurnOffShown(state: ClientLinksState | null): boolean {
   return !!state && (!!state.workspaceBlocked || !state.included) && (state.on.upload || state.on.review || state.on.connect);
+}
+
+/**
+ * The toast after Turn off. R23 new-customer L1: while blocked on a plan with
+ * client links the plan is not the reason they were paused, so it doesn't
+ * name it.
+ */
+export function clientLinksTurnedOffMessage(state: ClientLinksState | null): string {
+  const tail = state?.workspaceBlocked && state.included ? "even once the workspace is active again" : "even if the plan changes";
+  return `Client links are off. Nobody can use the old ones, ${tail}.`;
 }
 
 /** The links' state, or null when it can't be read (no button then). */
@@ -867,8 +878,8 @@ function OwnerView({
     setClientLinks((prev) =>
       prev ? { ...prev, on: { upload: false, review: false, connect: false }, connectStopped: false } : prev,
     );
-    toast.success("Client links are off. Nobody can use the old ones, even if the plan changes.");
-  }, [toast, workspaceId]);
+    toast.success(clientLinksTurnedOffMessage(clientLinks));
+  }, [clientLinks, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Verbatim
   // MemberView.handleLeave — an owner may leave once another owner remains (the

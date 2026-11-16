@@ -6,6 +6,7 @@ import {
   PLAN_FEATURE_MESSAGES,
   PLAN_FEATURES,
   planIncludes,
+  planOffers,
   type PlanFeature,
 } from "./planFeatures";
 import { planFeatureResponse } from "./planFeatureResponse";
@@ -62,6 +63,30 @@ describe("planIncludes", () => {
   it("with billing off, includes every feature even for a row read without its billing columns", () => {
     for (const feature of PLAN_FEATURES) expect(planIncludes({}, feature, OFF, NOW)).toBe(true);
   });
+});
+
+// R23 security L1: which reason a person is given. An ended trial or Growth
+// plan is one with the feature that has ended, not one without it.
+describe("planOffers", () => {
+  const starterEnded: BillingFields = { plan: "starter", planStatus: "canceled", currentPeriodEnd: EARLIER };
+  const table: Array<[string, BillingFields, boolean]> = [
+    ["exemptByFlag", WORKSPACES.exemptByFlag, true],
+    ["exemptByAge", WORKSPACES.exemptByAge, true],
+    ["trial", WORKSPACES.trial, true],
+    ["starter", WORKSPACES.starter, false],
+    ["growth", WORKSPACES.growth, true],
+    ["pro", WORKSPACES.pro, true],
+    ["trialEnded", WORKSPACES.trialEnded, true],
+    ["planEnded (growth)", WORKSPACES.planEnded, true],
+    ["starterEnded", starterEnded, false],
+    ["unknownPlan", WORKSPACES.unknownPlan, false],
+  ];
+  for (const [name, workspace, on] of table) {
+    it(`${name}: ${on ? "offers" : "doesn't offer"} client links with billing on; offers them with billing off`, () => {
+      expect(planOffers(workspace, "clientLinks", ON)).toBe(on);
+      expect(planOffers(workspace, "clientLinks", OFF)).toBe(true);
+    });
+  }
 });
 
 describe("planFeatureResponse", () => {

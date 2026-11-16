@@ -345,6 +345,46 @@ describe("GET /api/workspaces/client-links", () => {
     await expect((await get()).json()).resolves.toMatchObject({ included: false });
   });
 
+  // R23 security L1 / client-journey L2: `included` is whether the plan itself
+  // has client links, its ended state aside, so the Team card gives an ended
+  // trial or Growth plan the block's wording, and only Starter the plan's.
+  describe("with billing on, an ended trial or plan", () => {
+    const ended = (fields: Record<string, unknown>) =>
+      m.requireOwnerContext.mockResolvedValue({
+        ...OWNER_CONTEXT,
+        workspace: { ...OWNER_CONTEXT.workspace, billingExempt: false, ...fields },
+      });
+    const PAST = () => new Date(Date.now() - 86_400_000);
+    const AGAIN = "Choose Growth or Pro in Settings and your client links work again, or contact";
+
+    it("an ended trial: included, with the block's sentence", async () => {
+      vi.stubEnv("BILLING_ENABLED", "true");
+      ended({ plan: null, trialEndsAt: PAST() });
+      await expect((await get()).json()).resolves.toMatchObject({
+        included: true,
+        workspaceBlocked: `Client links don't work right now. Your free trial has ended. ${AGAIN} ${SUPPORT_EMAIL}.`,
+      });
+    });
+
+    it("an ended Growth plan: included, with the block's sentence", async () => {
+      vi.stubEnv("BILLING_ENABLED", "true");
+      ended({ plan: "growth", planStatus: "canceled", currentPeriodEnd: PAST() });
+      await expect((await get()).json()).resolves.toMatchObject({
+        included: true,
+        workspaceBlocked: `Client links don't work right now. Your plan has ended. ${AGAIN} ${SUPPORT_EMAIL}.`,
+      });
+    });
+
+    it("an ended Starter plan: not included, and the sentence says Starter has none", async () => {
+      vi.stubEnv("BILLING_ENABLED", "true");
+      ended({ plan: "starter", planStatus: "canceled", currentPeriodEnd: PAST() });
+      await expect((await get()).json()).resolves.toMatchObject({
+        included: false,
+        workspaceBlocked: `Client links don't work right now. Your Starter plan has ended, and Starter doesn't include client links. ${AGAIN} ${SUPPORT_EMAIL}.`,
+      });
+    });
+  });
+
   it("answers the gate's response for a member, and another workspace's id with 409", async () => {
     m.requireOwnerContext.mockResolvedValue(NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }));
     expect((await get()).status).toBe(403);

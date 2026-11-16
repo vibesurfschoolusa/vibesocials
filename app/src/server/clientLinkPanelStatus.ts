@@ -1,4 +1,5 @@
-import { pausedByPlan } from "@/lib/planFeatures";
+import { pausedByPlan, planOffers } from "@/lib/planFeatures";
+import { isPlanKey, PLANS } from "@/lib/plans";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { PLAN_ENDED_CODE, workspaceBlock, type WorkspaceStatusFields } from "@/lib/workspaceStatus";
 
@@ -22,12 +23,19 @@ export function clientLinkPanelStatus(
 /**
  * The block in a link panel's words. A pause keeps its own sentence; an ended
  * trial or plan says what brings the links back, not the shared "to keep
- * posting" (GG2 review).
+ * posting" (GG2 review). R23 pages L1: only Growth and Pro have client links,
+ * so it names them, and an ended plan without them (Starter) says so rather
+ * than suggest renewing it brings them back.
  */
 function blockSentence(workspace: WorkspaceStatusFields, block: { code: string; message: string }): string {
   if (block.code !== PLAN_ENDED_CODE) return block.message;
-  const ended = workspace.plan ? "Your plan has ended." : "Your free trial has ended.";
-  return `${ended} Choose a plan in Settings and your client links work again, or contact ${SUPPORT_EMAIL}.`;
+  const again = `Choose Growth or Pro in Settings and your client links work again, or contact ${SUPPORT_EMAIL}.`;
+  if (!workspace.plan) return `Your free trial has ended. ${again}`;
+  if (planOffers(workspace, "clientLinks")) return `Your plan has ended. ${again}`;
+  const ended = isPlanKey(workspace.plan)
+    ? `Your ${PLANS[workspace.plan].name} plan has ended, and ${PLANS[workspace.plan].name} doesn't include client links.`
+    : "Your plan has ended, and it doesn't include client links.";
+  return `${ended} ${again}`;
 }
 
 /**

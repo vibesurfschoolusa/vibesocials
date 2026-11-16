@@ -94,7 +94,7 @@ describe.each(ROUTES)("the %s link's owner GET", (_name, route, url) => {
     const body = await get(route, url);
     // GG2 review: the panel says what brings the links back, not "to keep posting".
     expect(body.workspaceBlocked).toBe(
-      `Client links don't work right now. Your free trial has ended. Choose a plan in Settings and your client links work again, or contact ${SUPPORT_EMAIL}.`,
+      `Client links don't work right now. Your free trial has ended. Choose Growth or Pro in Settings and your client links work again, or contact ${SUPPORT_EMAIL}.`,
     );
     expect(body.workspaceBlocked).not.toContain(TRIAL_ENDED_MESSAGE);
   });

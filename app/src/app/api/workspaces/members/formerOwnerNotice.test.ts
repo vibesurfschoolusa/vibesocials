@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   uploadFindFirst: vi.fn(),
@@ -417,5 +417,58 @@ describe("buildFormerOwnerEmail: while the workspace is blocked", () => {
     m.workspaceFindUnique.mockResolvedValue({ id: "ws-1", pausedAt: null, pausedReason: null });
     await noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() });
     expect(m.sendEmail.mock.calls[0][0].subject).toBe("Make new client links for Surf Co");
+  });
+});
+
+// R23 security L1 / client-journey L2: with billing on, an ended trial or
+// Growth plan has client links that work again once a plan with them is
+// chosen, so it gets the block's email; only an ended Starter plan, which has
+// none, gets the plan's.
+describe("noticeOwnersOfFormerOwner: an ended trial or plan", () => {
+  const PAST = () => new Date(Date.now() - 86_400_000);
+  const notice = () =>
+    noticeOwnersOfFormerOwner({ workspaceId: "ws-1", workspaceName: "Surf Co", formerOwnerId: "user-2", at: new Date() });
+
+  beforeEach(() => vi.stubEnv("BILLING_ENABLED", "true"));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("an ended trial: the block's email, with the trial sentence", async () => {
+    m.workspaceFindUnique.mockResolvedValue({ id: "ws-1", billingExempt: false, plan: null, trialEndsAt: PAST() });
+    await notice();
+    const sent = m.sendEmail.mock.calls[0][0];
+    expect(sent.text).toContain("Your free trial has ended. Choose Growth or Pro in Settings and your client links work again");
+    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is active again.");
+    expect(sent.text).not.toContain("plan doesn't include client links");
+  });
+
+  it("an ended Growth plan: the block's email, never that the plan lacks client links", async () => {
+    m.workspaceFindUnique.mockResolvedValue({
+      id: "ws-1",
+      billingExempt: false,
+      plan: "growth",
+      planStatus: "canceled",
+      currentPeriodEnd: PAST(),
+    });
+    await notice();
+    const sent = m.sendEmail.mock.calls[0][0];
+    expect(sent.subject).toBe("Turn off client links for Surf Co");
+    expect(sent.text).toContain("Your plan has ended. Choose Growth or Pro in Settings and your client links work again");
+    expect(sent.text).toContain("The copies Sam kept will work again once the workspace is active again.");
+    expect(sent.text).not.toContain("plan doesn't include client links");
+  });
+
+  it("an ended Starter plan: the plan's email", async () => {
+    m.workspaceFindUnique.mockResolvedValue({
+      id: "ws-1",
+      billingExempt: false,
+      plan: "starter",
+      planStatus: "canceled",
+      currentPeriodEnd: PAST(),
+    });
+    await notice();
+    const sent = m.sendEmail.mock.calls[0][0];
+    expect(sent.subject).toBe("Turn off client links for Surf Co");
+    expect(sent.text).toContain("paused, because this workspace's plan doesn't include client links");
+    expect(sent.text).not.toContain("work again once the workspace is active again");
   });
 });

@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
 import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
-import { PLAN_FEATURE_CODE, planIncludes } from "@/lib/planFeatures";
+import { PLAN_FEATURE_CODE, planIncludes, planOffers } from "@/lib/planFeatures";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { reviewLinkUrl } from "@/lib/reviewLink";
 import { sealSecret } from "@/lib/tokenCrypto";
@@ -41,6 +41,10 @@ import { clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
  * billing on an ended trial or plan) every client link answers "not active",
  * so the GET adds the panels' `workspaceBlocked` sentence, the Team card
  * offers only Turn off, and the POST refuses with that sentence.
+ * R23 security L1: `included` is whether the plan itself has client links,
+ * its ended state aside (planOffers), so the card gives an ended trial or
+ * Growth plan the block's wording and only a plan without them (Starter) the
+ * plan's. The POST still follows planIncludes.
  *
  * DELETE { workspaceId } (R7-pages L3 / client-journey L2): "Turn off client
  * links". On a plan without client links they are paused, not off, and a
@@ -72,7 +76,7 @@ export async function GET(request: Request) {
   const connectStopped = connect !== null && !(await isWorkspaceOwner(connect.createdById, workspace.id));
   const workspaceBlocked = clientLinkCreateRefusal(workspace);
   return NextResponse.json({
-    included: planIncludes(workspace, "clientLinks"),
+    included: planOffers(workspace, "clientLinks"),
     on: { upload: upload !== null, review: review !== null, connect: connect !== null },
     connectStopped,
     ...(workspaceBlocked ? { workspaceBlocked } : {}),

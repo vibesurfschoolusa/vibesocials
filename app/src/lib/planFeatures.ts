@@ -40,6 +40,24 @@ export function planIncludes(
   return typeof workspace.plan === "string" && FEATURE_PLANS.includes(workspace.plan);
 }
 
+/**
+ * R23 security L1: whether the workspace's plan has the feature, its ended
+ * state aside. An ended trial or Growth plan is one with the feature that has
+ * ended (choosing Growth or Pro brings it back); an ended Starter plan never
+ * had it. Only for which reason a person is told; access is planIncludes.
+ */
+export function planOffers(
+  workspace: BillingFields,
+  // Every feature follows the same rule today; the name keeps each call site explicit.
+  _feature: PlanFeature,
+  env: BillingEnv = process.env,
+): boolean {
+  if (!billingEnabled(env)) return true;
+  // Exempt by its flag; or no plan: exempt for predating billing, a trial, or an ended trial.
+  if (workspace.billingExempt || !workspace.plan) return true;
+  return FEATURE_PLANS.includes(workspace.plan);
+}
+
 export const PLAN_FEATURE_CODE = "PLAN_FEATURE";
 
 // Q1: "See", not "Choose": true for an owner without a plan (who chooses) and one on Starter (who switches).

@@ -34,6 +34,7 @@ import {
   watchClientLinks,
   ClientLinksPanel,
   clientLinksReplacedMessage,
+  clientLinksTurnedOffMessage,
   demotedMessage,
   demotionOutcome,
   TeamSection,
@@ -338,6 +339,61 @@ describe("while the workspace is blocked", () => {
   it("active, and a plan without client links: as before", () => {
     expect(demotedMessage({ ...ON, on: { upload: false, review: true, connect: false } })).toContain("Press Make new client links");
     expect(demotedMessage({ ...ON, included: false })).toBe("Role updated.");
+  });
+});
+
+// R23 security L1 / client-journey L2: with billing on, the GET answers an
+// ended trial or Growth plan as included (the plan has client links; it has
+// ended), and an ended Starter plan as not. The card and the toast follow.
+describe("an ended trial or plan, as the GET answers it", () => {
+  const AGAIN = "Choose Growth or Pro in Settings and your client links work again, or contact help@example.com.";
+  const states = {
+    trial: { ...ON, workspaceBlocked: `Client links don't work right now. Your free trial has ended. ${AGAIN}` },
+    growth: { ...ON, workspaceBlocked: `Client links don't work right now. Your plan has ended. ${AGAIN}` },
+    starter: {
+      ...ON,
+      included: false,
+      workspaceBlocked: `Client links don't work right now. Your Starter plan has ended, and Starter doesn't include client links. ${AGAIN}`,
+    },
+  };
+  const both = { upload: true, review: true, connect: false };
+
+  for (const name of ["trial", "growth"] as const) {
+    it(`an ended ${name}: the card and the demotion toast give the block's sentence`, () => {
+      const state = states[name];
+      const html = panel(state);
+      expect(html).toContain(state.workspaceBlocked.replace(/'/g, "&#x27;"));
+      expect(html).toContain("will work again once the workspace is active again");
+      expect(html).not.toContain("plan doesn&#x27;t include them");
+      expect(demotedMessage({ ...state, on: both })).toBe(
+        `Role updated. They could copy the client upload and review links. ${state.workspaceBlocked} The copies they kept will work again once the workspace is active again. Press Turn off client links below to stop that.`,
+      );
+    });
+  }
+
+  it("an ended Starter plan: the card gives the plan's wording, the toast only the role", () => {
+    const html = panel(states.starter);
+    expect(html).toContain("because this workspace&#x27;s plan doesn&#x27;t include them");
+    expect(html).not.toContain("work again once the workspace is active again");
+    expect(demotedMessage({ ...states.starter, on: both })).toBe("Role updated.");
+  });
+});
+
+// R23 new-customer L1 / client-journey L5: while blocked, the plan isn't the reason.
+describe("the Turn off toast", () => {
+  const BLOCKED_SENTENCE = "Client links don't work right now. This workspace is paused. Contact help@example.com.";
+
+  it("while blocked on a plan with client links: the copies stay off even once the workspace is active again", () => {
+    expect(clientLinksTurnedOffMessage({ ...ON, workspaceBlocked: BLOCKED_SENTENCE })).toBe(
+      "Client links are off. Nobody can use the old ones, even once the workspace is active again.",
+    );
+  });
+
+  it("otherwise: today's text", () => {
+    const TODAY = "Client links are off. Nobody can use the old ones, even if the plan changes.";
+    expect(clientLinksTurnedOffMessage({ ...ON, included: false })).toBe(TODAY);
+    expect(clientLinksTurnedOffMessage({ ...ON, included: false, workspaceBlocked: BLOCKED_SENTENCE })).toBe(TODAY);
+    expect(clientLinksTurnedOffMessage(null)).toBe(TODAY);
   });
 });
 
