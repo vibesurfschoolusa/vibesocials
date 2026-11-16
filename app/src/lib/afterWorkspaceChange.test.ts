@@ -104,6 +104,7 @@ const KEPT_PARAMS = [
   "page", // page number
   "callbackUrl", // sign-in return address
   "registered", // sign-in page only, signed out
+  "csrf", // sign-in page only, signed out; the login page drops it itself once shown
   "shared", // a file shared to the app waits in this browser, for any workspace
 ];
 
