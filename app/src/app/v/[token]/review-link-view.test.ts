@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { DECISION_MAYBE_SAVED_MESSAGE, REVIEW_MORE_SENTENCE, ReviewListMore, ReviewPostCard, changeNoteHint } from "./review-link-view";
+import { REVIEW_DECISION_MAYBE_SAVED_MESSAGE } from "@/lib/reviewLink";
+
+import { REVIEW_MORE_SENTENCE, ReviewListMore, ReviewPostCard, changeNoteHint } from "./review-link-view";
 
 type ReviewPostDTO = ReviewCardDTO;
 
@@ -149,13 +151,13 @@ describe("ReviewPostCard: a decision that got no answer", () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
-    expect(DECISION_MAYBE_SAVED_MESSAGE).toBe(
-      "The answer was lost, so your choice may have been saved. Reload the page to see.",
-    );
+    // One sentence for both cases, from lib/reviewLink (its tests check the words).
+    expect(REVIEW_DECISION_MAYBE_SAVED_MESSAGE).toMatch(/may have been saved/);
+    expect(source).not.toMatch(/const DECISION_MAYBE_SAVED_MESSAGE/);
     const decide = source.slice(source.indexOf("async function decide("), source.indexOf("return (", source.indexOf("async function decide(")));
     expect(decide).toMatch(/await fetchOrNoAnswer\(/);
     expect(decide).not.toMatch(/await fetch\(/);
-    expect(decide).toMatch(/isNoAnswer\(error\) \? DECISION_MAYBE_SAVED_MESSAGE : /);
+    expect(decide).toMatch(/isNoAnswer\(error\) \? REVIEW_DECISION_MAYBE_SAVED_MESSAGE : /);
     expect(decide).not.toContain("Couldn't save that. Check your connection");
   });
 });

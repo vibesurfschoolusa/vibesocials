@@ -143,6 +143,13 @@ export interface ReviewPostDTO {
 export const REVIEW_ANSWER_UNREADABLE_MESSAGE =
   "Couldn't tell whether that was saved. Reload the page to see.";
 
+/**
+ * R27 MM3: no answer, or a 5xx the page cannot read (a gateway's page, a
+ * timeout), can come after the decision was saved. The /v page says this for both.
+ */
+export const REVIEW_DECISION_MAYBE_SAVED_MESSAGE =
+  "The answer was lost, so your choice may have been saved. Reload the page to see.";
+
 /** A refused decision with no sentence of its own. */
 const REVIEW_DECISION_FAILED_MESSAGE = "Couldn't save that. Try again.";
 
@@ -174,7 +181,9 @@ export function reviewDecisionOutcome(status: number, data: unknown): ReviewDeci
     }
     return { kind: "refused", message: REVIEW_ANSWER_UNREADABLE_MESSAGE };
   }
-  const message = typeof body.error === "string" && body.error ? body.error : REVIEW_DECISION_FAILED_MESSAGE;
+  const routeSentence = typeof body.error === "string" && body.error ? body.error : null;
+  if (!routeSentence && status >= 500) return { kind: "refused", message: REVIEW_DECISION_MAYBE_SAVED_MESSAGE };
+  const message = routeSentence ?? REVIEW_DECISION_FAILED_MESSAGE;
   if (status === 409 && message === REVIEW_POST_CHANGED_MESSAGE) return { kind: "changed", message };
   return { kind: "refused", message };
 }

@@ -10,6 +10,7 @@ import {
   REVIEW_POST_LOCKED_MESSAGE,
   REVIEW_ANSWER_UNREADABLE_MESSAGE,
   REVIEW_ALREADY_APPROVED_MESSAGE,
+  REVIEW_DECISION_MAYBE_SAVED_MESSAGE,
   isReviewLinkTokenShape,
   reviewDecisionOutcome,
   parseReviewDecision,
@@ -155,9 +156,25 @@ describe("reviewDecisionOutcome", () => {
 
   it("always gives a refused decision a sentence", () => {
     expect(reviewDecisionOutcome(429, { error: "Too many." })).toEqual({ kind: "refused", message: "Too many." });
-    expect(reviewDecisionOutcome(500, null)).toEqual({
+    expect(reviewDecisionOutcome(400, null)).toEqual({
       kind: "refused",
       message: "Couldn't save that. Try again.",
+    });
+  });
+
+  // R27 MM3 lead follow-up: a 5xx the page cannot read (a gateway's page, a
+  // timeout) may come after the decision was saved, as no answer at all can.
+  it("an unreadable 5xx may have been saved: reload to see; the route's own 5xx sentence stays", () => {
+    expect(REVIEW_DECISION_MAYBE_SAVED_MESSAGE).toBe(
+      "The answer was lost, so your choice may have been saved. Reload the page to see.",
+    );
+    for (const data of [null, {}, { error: "" }, "<html>Bad gateway</html>"]) {
+      expect(reviewDecisionOutcome(502, data)).toEqual({ kind: "refused", message: REVIEW_DECISION_MAYBE_SAVED_MESSAGE });
+    }
+    expect(reviewDecisionOutcome(500, null)).toEqual({ kind: "refused", message: REVIEW_DECISION_MAYBE_SAVED_MESSAGE });
+    expect(reviewDecisionOutcome(503, { error: "The review link is busy. Try again in a minute." })).toEqual({
+      kind: "refused",
+      message: "The review link is busy. Try again in a minute.",
     });
   });
 

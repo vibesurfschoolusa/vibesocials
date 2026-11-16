@@ -9,6 +9,7 @@ import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import {
   REVIEW_LIST_MAX,
+  REVIEW_DECISION_MAYBE_SAVED_MESSAGE,
   REVIEW_NOTE_MAX,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
@@ -19,10 +20,6 @@ import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
 /** Shown when the first load failed. */
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
-
-/** R27 MM3 lead follow-up: with no answer the decision may have been saved. */
-export const DECISION_MAYBE_SAVED_MESSAGE =
-  "The answer was lost, so your choice may have been saved. Reload the page to see.";
 
 /** R7-client-journey L5: under the list when it holds the first 100 of more. */
 export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} scheduled posts; more appear as these go out.`;
@@ -149,7 +146,7 @@ export function ReviewPostCard({
       setError(outcome.message);
       if (outcome.kind === "changed") onStale(outcome.message);
     } catch (error) {
-      setError(isNoAnswer(error) ? DECISION_MAYBE_SAVED_MESSAGE : "Couldn't save that. Reload the page and try again.");
+      setError(isNoAnswer(error) ? REVIEW_DECISION_MAYBE_SAVED_MESSAGE : "Couldn't save that. Reload the page and try again.");
     } finally {
       setBusy(false);
     }
