@@ -12,6 +12,7 @@ import {
   ReviewListMore,
   ReviewPostCard,
   alreadyStood,
+  cardRefusal,
   changeNoteHint,
   staleNotice,
 } from "./review-link-view";
@@ -36,7 +37,7 @@ function post(over: Partial<ReviewPostDTO> = {}): ReviewPostDTO {
 
 function render(p: ReviewPostDTO): string {
   return renderToStaticMarkup(
-    createElement("ul", null, createElement(ReviewPostCard, { post: p, token: "t", onDecided: () => {}, onStale: () => {} })),
+    createElement("ul", null, createElement(ReviewPostCard, { post: p, token: "t", onDecided: () => {}, onStale: async () => true })),
   );
 }
 
@@ -220,7 +221,9 @@ describe("ReviewLinkView: the notice after a reload", () => {
     expect(staleNotice(REVIEW_ALREADY_APPROVED_MESSAGE, true)).toBe(REVIEW_ALREADY_APPROVED_MESSAGE);
     expect(staleNotice(REVIEW_ALREADY_APPROVED_MESSAGE, false)).toBe("This post was already approved.");
     expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, true)).toBe(REVIEW_POST_CHANGED_MESSAGE);
-    expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, false)).toBe("This post was changed after you opened this page.");
+    expect(staleNotice(REVIEW_POST_CHANGED_MESSAGE, false)).toBe(
+      "This post was changed after you opened this page. Reload the page to see the new version.",
+    );
   });
 
   it("is set from load()'s answer, not before it", async () => {
@@ -228,7 +231,47 @@ describe("ReviewLinkView: the notice after a reload", () => {
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     const stale = source.slice(source.indexOf("const stale = useCallback("), source.indexOf("[load],", source.indexOf("const stale = useCallback(")));
-    expect(stale).toMatch(/void load\(\)\.then\(\(reloaded\) => setNotice\(staleNotice\(message, reloaded\)\)\)/);
+    expect(stale).toMatch(/load\(\)\.then\(\(reloaded\) => \{\s*setNotice\(staleNotice\(message, reloaded\)\);\s*return reloaded;\s*\}\)/);
     expect(stale).not.toMatch(/setNotice\(message\)/);
+  });
+});
+
+// R31 client-journey L1: on a "changed" 409 the card said "Have a look at the
+// new version" even when the reload failed and the old caption stayed. The
+// card's sentence waits for the reload and follows its result (staleNotice).
+describe("ReviewPostCard: a post changed since the page loaded", () => {
+  it("reloaded: the card says to look at the new version", async () => {
+    const asked: string[] = [];
+    const text = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async (message) => {
+      asked.push(message);
+      return true;
+    });
+    expect(asked).toEqual([REVIEW_POST_CHANGED_MESSAGE]);
+    expect(text).toBe(REVIEW_POST_CHANGED_MESSAGE);
+  });
+
+  it("the reload failed: the card says to reload the page, not to look at a new version", async () => {
+    const text = await cardRefusal({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, async () => false);
+    expect(text).toBe("This post was changed after you opened this page. Reload the page to see the new version.");
+    expect(text).not.toContain("Have a look");
+  });
+
+  it("any other refusal is the route's sentence, with no reload", async () => {
+    let reloads = 0;
+    const text = await cardRefusal({ kind: "refused", message: "This link has been turned off." }, async () => {
+      reloads += 1;
+      return true;
+    });
+    expect(text).toBe("This link has been turned off.");
+    expect(reloads).toBe(0);
+  });
+
+  it("decide shows the card's sentence from cardRefusal", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    const decide = source.slice(source.indexOf("async function decide("), source.indexOf("return (", source.indexOf("async function decide(")));
+    expect(decide).toContain("setError(await cardRefusal(outcome, onStale));");
+    expect(decide).not.toContain("setError(outcome.message);");
   });
 });

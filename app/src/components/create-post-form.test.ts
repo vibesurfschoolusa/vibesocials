@@ -38,6 +38,10 @@ import {
   nextFileLostNotice,
   nextPreparingPick,
   nextPickJudgment,
+  CHOOSE_FILE_MESSAGE,
+  LIBRARY_FILE_WAIT_MESSAGE,
+  revealRefusal,
+  uploadErrorAfterLibraryLoad,
   notSentBanner,
   noFileSubmitError,
   photosFailureLosesFile,
@@ -1348,5 +1352,87 @@ describe("captionsAfterReuseLoaded", () => {
     expect(body).toMatch(/setUploadCaption\(\(current\) => captionsAfterReuseLoaded\(item, current, null\)\.caption\)/);
     expect(body).toMatch(/setPlatformOverrides\(\(current\) => captionsAfterReuseLoaded\(item, "", current\)\.overrides\)/);
     expect(body).not.toContain('setUploadCaption(item.baseCaption ?? "")');
+  });
+});
+
+// R31 publishing L7: a file still loading from Media is a file on its way. The
+// press waits for it, and its arrival takes away a "choose a file" line that a
+// press made while it loaded.
+describe("a file still loading from Media", () => {
+  const notBlocked = { preparingFile: false, preparingPhotos: false, photosNotReady: false };
+
+  it("blocks the press with its own wait sentence", () => {
+    expect(LIBRARY_FILE_WAIT_MESSAGE).toBe(
+      "Wait until the file from your library has loaded, then press the button again.",
+    );
+    expect(fileSubmitBlock({ ...notBlocked, reuseLoading: true })).toBe(LIBRARY_FILE_WAIT_MESSAGE);
+    expect(fileSubmitBlock({ ...notBlocked, reuseLoading: false })).toBeNull();
+  });
+
+  it("the file loaded: a choose-a-file or wait line goes; any other line stays", () => {
+    expect(uploadErrorAfterLibraryLoad(CHOOSE_FILE_MESSAGE, "loaded")).toBeNull();
+    expect(uploadErrorAfterLibraryLoad(LIBRARY_FILE_WAIT_MESSAGE, "loaded")).toBeNull();
+    expect(uploadErrorAfterLibraryLoad("Please enter a caption for this post.", "loaded")).toBe(
+      "Please enter a caption for this post.",
+    );
+    expect(uploadErrorAfterLibraryLoad(null, "loaded")).toBeNull();
+  });
+
+  it("the load failed: the wait line goes (nothing is coming); choose a file stays true", () => {
+    expect(uploadErrorAfterLibraryLoad(LIBRARY_FILE_WAIT_MESSAGE, "failed")).toBeNull();
+    expect(uploadErrorAfterLibraryLoad(CHOOSE_FILE_MESSAGE, "failed")).toBe(CHOOSE_FILE_MESSAGE);
+  });
+
+  it("the form passes reuseLoading to both blocks and clears the line when the load ends", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
+    expect(submit).toMatch(/preparingFile \|\| sharedPendingNow \|\| reuseLoading\s*\?\s*fileSubmitBlock\(\{[^}]*reuseLoading,/);
+    const control = raw.slice(raw.indexOf("const control = submitControl({"), raw.indexOf("return (", raw.indexOf("const control = submitControl({")));
+    expect(control).toMatch(/fileBlock: fileSubmitBlock\(\{[^}]*reuseLoading,/);
+    const load = raw.slice(raw.indexOf("if (!reuseMediaItemId) return;"), raw.indexOf("}, [reuseMediaItemId, toast]);"));
+    expect(load.match(/setUploadError\(\(current\) => uploadErrorAfterLibraryLoad\(current, "failed"\)\)/g)).toHaveLength(2);
+    expect(load.match(/setUploadError\(\(current\) => uploadErrorAfterLibraryLoad\(current, "loaded"\)\)/g)).toHaveLength(1);
+    expect(submit).toContain("setUploadError(CHOOSE_FILE_MESSAGE)");
+  });
+});
+
+// R31 pages A1: a refused press said why only at the top of the form, far from
+// the button pressed. The line is scrolled into view and takes focus, on every
+// refused press (the same sentence twice too), and the phone bar shows it.
+describe("a refused press shows its reason where the person is", () => {
+  const fakeElement = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      el: {
+        scrollIntoView: (options: ScrollIntoViewOptions) => calls.push(`scroll ${options.block} ${options.behavior}`),
+        focus: (options: FocusOptions) => calls.push(`focus ${options.preventScroll}`),
+      },
+    };
+  };
+
+  it("revealRefusal scrolls the line into view, then focuses it without a second jump", () => {
+    const smooth = fakeElement();
+    revealRefusal(smooth.el, false);
+    expect(smooth.calls).toEqual(["scroll nearest smooth", "focus true"]);
+    const reduced = fakeElement();
+    revealRefusal(reduced.el, true);
+    expect(reduced.calls).toEqual(["scroll nearest auto", "focus true"]);
+    expect(() => revealRefusal(null, false)).not.toThrow();
+  });
+
+  it("every press past the first checks is counted, and the count brings the line on the page into view", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
+    // Counted with the clear, before any refusal, so the same sentence twice is shown twice.
+    expect(submit).toMatch(/setUploadError\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*if \(first\.stop === "wait"\)/);
+    expect(raw).toMatch(/if \(pressCount === 0\) return;[\s\S]{0,200}revealRefusal\(uploadErrorRef\.current, reduce\);\s*\}, \[pressCount\]\);/);
+    expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger">\{uploadError\}<\/Alert>/);
+  });
+
+  it("the phone bar's reason is the form's line", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const control = raw.slice(raw.indexOf("const control = submitControl({"), raw.indexOf("return (", raw.indexOf("const control = submitControl({")));
+    expect(control).toContain("pageError: uploadError,");
   });
 });

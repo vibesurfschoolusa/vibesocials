@@ -43,7 +43,9 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // The first load's failure, at the top; Load more's, under its button (R31 pages L1).
   const [error, setError] = useState<string | null>(null);
+  const [moreError, setMoreError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const fetchPage = useCallback(async (cursor: string | null, failed: string): Promise<Page | string> => {
@@ -75,6 +77,7 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
         setNextCursor(result.nextCursor);
         setError(null);
       }
+      setMoreError(null);
       setSelected(new Set());
       setLoading(false);
     });
@@ -86,10 +89,10 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
-    setError(null);
+    setMoreError(null);
     setLoadingMore(true);
     const result = await fetchPage(nextCursor, LOAD_MORE_FAILED_MESSAGE);
-    if (typeof result === "string") setError(result);
+    if (typeof result === "string") setMoreError(result);
     else {
       setItems((current) => appendMediaPage(current, result.items));
       setNextCursor(result.nextCursor);
@@ -186,10 +189,11 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
           </ul>
         )}
         {nextCursor !== null && !loading ? (
-          <div className="mt-4 flex justify-center">
+          <div className="mt-4 flex flex-col items-center gap-2 text-center">
             <Button variant="outline" size="sm" loading={loadingMore} onClick={() => void loadMore()}>
               Load more
             </Button>
+            {moreError ? <p role="alert" className="text-sm text-destructive">{moreError}</p> : null}
           </div>
         ) : null}
       </DialogBody>

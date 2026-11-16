@@ -436,10 +436,13 @@ export function submitControl(input: {
   fileBlock: string | null;
   untouchedMessage: string | null;
   platformAlert: string | null;
+  /** R31 pages A1: the form's error line (a refused press), shown by the bar's button too. */
+  pageError: string | null;
 }): SubmitControlView {
   const counter = captionCounter(input.caption);
   const reason =
     input.untouchedMessage ??
+    input.pageError ??
     input.platformAlert ??
     (counter.over ? `Caption is too long: ${counter.label} characters.` : null) ??
     (input.tiktokBlock ? `TikTok: ${input.tiktokBlock}` : null) ??
@@ -680,18 +683,53 @@ export function nextPickJudgment(
   return current?.selection === event.selection ? null : current;
 }
 
+/** R31 publishing L7: a file from Media (?mediaItemId) is still loading. */
+export const LIBRARY_FILE_WAIT_MESSAGE =
+  "Wait until the file from your library has loaded, then press the button again.";
+/** A press with a file expected and none attached. */
+export const CHOOSE_FILE_MESSAGE = "Please choose a file to upload.";
+
 /** Why the file side of the form cannot be sent yet, or null. The submit buttons are disabled while it is set. */
 export function fileSubmitBlock(state: {
   preparingFile: boolean;
   preparingPhotos: boolean;
   photosNotReady: boolean;
   sharedFilePending?: boolean;
+  /** A file from Media is still loading: a file on its way, as a shared one. */
+  reuseLoading?: boolean;
 }): string | null {
   if (state.sharedFilePending) return "Wait until the shared file has arrived, then press the button again.";
+  if (state.reuseLoading) return LIBRARY_FILE_WAIT_MESSAGE;
   if (state.preparingFile) return "Wait until the file is ready, then press the button again.";
   if (state.preparingPhotos) return "Wait until the photos are ready, then press the button again.";
   if (state.photosNotReady) return "Wait until every photo has uploaded, or remove the ones that failed.";
   return null;
+}
+
+/**
+ * The form's error line once the file from Media has loaded or failed: a line
+ * about that file still coming, or (once it came) about no file, is no longer
+ * true; any other line stays until the next press.
+ */
+export function uploadErrorAfterLibraryLoad(current: string | null, outcome: "loaded" | "failed"): string | null {
+  if (current === LIBRARY_FILE_WAIT_MESSAGE) return null;
+  if (outcome === "loaded" && current === CHOOSE_FILE_MESSAGE) return null;
+  return current;
+}
+
+/**
+ * R31 pages A1: a refused press says why at the top of the form, which can be a
+ * long scroll from the button pressed (the phone's bar, or the form's own at
+ * the bottom). The line is brought into view and takes focus, so it is seen
+ * and read; the focus does not scroll again over the scroll already started.
+ */
+export function revealRefusal(
+  element: { scrollIntoView(options: ScrollIntoViewOptions): void; focus(options: FocusOptions): void } | null,
+  reduceMotion: boolean,
+): void {
+  if (!element) return;
+  element.scrollIntoView({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
+  element.focus({ preventScroll: true });
 }
 
 /**
@@ -861,6 +899,10 @@ function CreatePostFormInner({
   const captionOver = captionCounter(uploadCaption).over;
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Counts presses that got past the first checks, so a refusal with the same
+  // sentence as the last one is brought into view again.
+  const [pressCount, setPressCount] = useState(0);
+  const uploadErrorRef = useRef<HTMLDivElement>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   // Whether the post just submitted included TikTok: its processing notice
   // (TikTok guideline 5d) must still show after the form resets.
@@ -1213,6 +1255,7 @@ function CreatePostFormInner({
             data?.error ?? "Couldn't load that media item. Upload a new file instead.",
           );
           setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "library-failed" }));
+          setUploadError((current) => uploadErrorAfterLibraryLoad(current, "failed"));
           setReuseLoading(false);
           return;
         }
@@ -1225,11 +1268,14 @@ function CreatePostFormInner({
         // R30 new-customer L1: what was typed while the item loaded stays.
         setUploadCaption((current) => captionsAfterReuseLoaded(item, current, null).caption);
         setPlatformOverrides((current) => captionsAfterReuseLoaded(item, "", current).overrides);
+        // R31 publishing L7: a press while it loaded may have left a line about the file.
+        setUploadError((current) => uploadErrorAfterLibraryLoad(current, "loaded"));
         setReuseLoading(false);
       } catch {
         if (cancelled) return;
         toast.error("Couldn't load that media item. Upload a new file instead.");
         setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "library-failed" }));
+        setUploadError((current) => uploadErrorAfterLibraryLoad(current, "failed"));
         setReuseLoading(false);
       }
     })();
@@ -1277,6 +1323,14 @@ function CreatePostFormInner({
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     successRef.current?.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
   }, [showSuccess]);
+
+  // R31 pages A1: a press the form refused brings its line into view
+  // (revealRefusal). The line is on the page only when the press set one.
+  useEffect(() => {
+    if (pressCount === 0) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    revealRefusal(uploadErrorRef.current, reduce);
+  }, [pressCount]);
 
   // Roadmap Phase 2 — leave reuse mode and fall back to the normal upload
   // flow. The `?mediaItemId` query param stays in the URL (harmless; the
@@ -2093,10 +2147,11 @@ function CreatePostFormInner({
       pageState,
       fileLost: fileLostShown ? fileLost : "none",
       fileBlock:
-        preparingFile || sharedPendingNow
+        preparingFile || sharedPendingNow || reuseLoading
           ? fileSubmitBlock({
               preparingFile,
               sharedFilePending: sharedPendingNow,
+              reuseLoading,
               preparingPhotos: false,
               photosNotReady: false,
             })
@@ -2113,6 +2168,7 @@ function CreatePostFormInner({
     }
     setUploadError(null);
     setShowSuccess(false);
+    setPressCount((count) => count + 1);
 
     if (first.stop === "wait") {
       setUploadError(first.message);
@@ -2137,7 +2193,7 @@ function CreatePostFormInner({
         return;
       }
     } else if (!reuseItem && !uploadFile && photoSet.length === 0) {
-      setUploadError("Please choose a file to upload.");
+      setUploadError(CHOOSE_FILE_MESSAGE);
       return;
     }
 
@@ -2371,11 +2427,13 @@ function CreatePostFormInner({
     fileBlock: fileSubmitBlock({
       preparingFile,
       sharedFilePending: sharedPendingNow,
+      reuseLoading,
       preparingPhotos,
       photosNotReady: photoSet.length > 0 && !photoSetReady(photoSet),
     }),
     untouchedMessage,
     platformAlert,
+    pageError: uploadError,
   });
 
   return (
@@ -2457,7 +2515,7 @@ function CreatePostFormInner({
           </div>
         )}
 
-        {uploadError && <Alert variant="danger">{uploadError}</Alert>}
+        {uploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger">{uploadError}</Alert>}
 
         <div className="space-y-1.5">
           {reuseItem ? (

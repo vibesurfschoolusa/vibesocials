@@ -18,13 +18,13 @@ describe("Media picker with nothing in Media", () => {
 });
 
 // R29 publishing L4: a Load more that works after one that failed takes the
-// old alert away; it is cleared as Load more starts.
+// old alert away; it is cleared as Load more starts (R31: its own line).
 describe("Media picker Load more", () => {
   const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
 
   it("clears the error before it loads the next page", () => {
     expect(source).toContain(
-      "if (!nextCursor || loadingMore) return; setError(null); setLoadingMore(true); const result = await fetchPage(nextCursor, LOAD_MORE_FAILED_MESSAGE);",
+      "if (!nextCursor || loadingMore) return; setMoreError(null); setLoadingMore(true); const result = await fetchPage(nextCursor, LOAD_MORE_FAILED_MESSAGE);",
     );
   });
 
@@ -40,5 +40,32 @@ describe("Media picker Load more", () => {
   it("the ticks stay when Load more fails", () => {
     const more = source.slice(source.indexOf("async function loadMore()"), source.indexOf("setLoadingMore(false);"));
     expect(more).not.toContain("setSelected(");
+  });
+});
+
+// R31 pages L1: Load more sits at the bottom of a long, scrolled grid; its
+// failure was shown at the top, out of sight. It is shown under the button;
+// the top line is the first load's only.
+describe("Media picker: a failed Load more is shown by the button", () => {
+  const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("Load more keeps its own error, cleared as it starts", () => {
+    const more = source.slice(source.indexOf("async function loadMore()"), source.indexOf("const atLimit"));
+    expect(more).toContain("setMoreError(null); setLoadingMore(true);");
+    expect(more).toContain('if (typeof result === "string") setMoreError(result);');
+    expect(more).not.toContain("setError(");
+  });
+
+  it("the line is under the Load more button; the top line shows only the first load's failure", () => {
+    const button = source.indexOf("Load more </Button>");
+    expect(button).toBeGreaterThan(-1);
+    const after = source.slice(button, source.indexOf("</DialogBody>"));
+    expect(after).toContain('{moreError ? <p role="alert" className="text-sm text-destructive">{moreError}</p> : null}');
+    expect(source).toContain('{error ? <Alert variant="danger">{error}</Alert> : null}');
+  });
+
+  it("a new opening starts without an old Load more error", () => {
+    const opening = source.slice(source.indexOf("if (!open) return;"), source.indexOf("}, [open, fetchPage]);"));
+    expect(opening).toContain("setMoreError(null);");
   });
 });

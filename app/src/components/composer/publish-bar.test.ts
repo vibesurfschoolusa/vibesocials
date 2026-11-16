@@ -23,6 +23,7 @@ const base = {
   fileBlock: null,
   untouchedMessage: null,
   platformAlert: null,
+  pageError: null,
 };
 
 const render = (
@@ -311,5 +312,24 @@ describe("the page's scroll padding keeps focused controls clear of the bar", ()
   it("is set on the root, where the variable is written, and removed on unmount as the variable is", () => {
     expect(bar).toContain('root.setProperty("scroll-padding-bottom", PUBLISH_BAR_SCROLL_PADDING);');
     expect(bar).toMatch(/root\.removeProperty\(PUBLISH_BAR_OFFSET_VAR\);\s*root\.removeProperty\("scroll-padding-bottom"\);/);
+  });
+});
+
+// R31 pages A1: a press the form refused said why only at the top of the form;
+// the bar now carries the same line, without disabling the button.
+describe("submitControl: the form's refusal line", () => {
+  const control = (fields: Partial<Parameters<typeof submitControl>[0]>) =>
+    submitControl({ ...base, buttonLabel: "Schedule post", ...fields });
+  const refusal = "Please choose a valid date and time to schedule this post.";
+
+  it("is the bar's reason and does not disable the button", () => {
+    expect(control({ pageError: refusal }).reason).toBe(refusal);
+    expect(control({ pageError: refusal }).disabled).toBe(false);
+    expect(render(control({ pageError: refusal }))).toContain(refusal);
+  });
+
+  it("the untouched sentence still comes first; the refusal comes before standing reasons", () => {
+    expect(control({ pageError: refusal, untouchedMessage: UNTOUCHED_SUBMIT_MESSAGE }).reason).toBe(UNTOUCHED_SUBMIT_MESSAGE);
+    expect(control({ pageError: refusal, platformAlert: "Select at least one platform." }).reason).toBe(refusal);
   });
 });

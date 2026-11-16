@@ -32,11 +32,25 @@ export const REVIEW_CHANGE_ALREADY_SAVED_MESSAGE = "Your change request was alre
 const NOT_RELOADED: Record<string, string> = {
   [REVIEW_CHANGE_ALREADY_SAVED_MESSAGE]: "Your change request was already saved.",
   [REVIEW_ALREADY_APPROVED_MESSAGE]: "This post was already approved.",
-  [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page.",
+  // R31 client-journey L1: the old version is still on screen, so the step is a reload.
+  [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page. Reload the page to see the new version.",
 };
 
 export function staleNotice(message: string, reloaded: boolean): string {
   return reloaded ? message : (NOT_RELOADED[message] ?? message);
+}
+
+/**
+ * The card's sentence for a refused decision. A post changed since the page
+ * loaded reloads the list first, and the sentence follows that reload's
+ * result, as the notice above the list does (R31 client-journey L1).
+ */
+export async function cardRefusal(
+  outcome: { kind: string; message: string },
+  onStale: (message: string) => Promise<boolean>,
+): Promise<string> {
+  if (outcome.kind !== "changed") return outcome.message;
+  return staleNotice(outcome.message, await onStale(outcome.message));
 }
 
 /** The route's `already`: this request wrote nothing, as an earlier one had. */
@@ -124,8 +138,8 @@ export function ReviewPostCard({
   token: string;
   /** Saved: update this card from the answer (state, new version, stored note). */
   onDecided: (patch: Partial<ReviewPostDTO>) => void;
-  /** The post changed since the page loaded: show why above the list and reload it. */
-  onStale: (message: string) => void;
+  /** The post changed since the page loaded: show why above the list and reload it; true when it reloaded. */
+  onStale: (message: string) => Promise<boolean>;
 }) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
@@ -176,8 +190,7 @@ export function ReviewPostCard({
         return;
       }
       // A refused decision always says why on its own card.
-      setError(outcome.message);
-      if (outcome.kind === "changed") onStale(outcome.message);
+      setError(await cardRefusal(outcome, onStale));
     } catch (error) {
       setError(isNoAnswer(error) ? REVIEW_DECISION_MAYBE_SAVED_MESSAGE : "Couldn't save that. Reload the page and try again.");
     } finally {
@@ -368,9 +381,11 @@ export function ReviewLinkView({ token }: { token: string }) {
   }, []);
 
   const stale = useCallback(
-    (message: string) => {
-      void load().then((reloaded) => setNotice(staleNotice(message, reloaded)));
-    },
+    (message: string) =>
+      load().then((reloaded) => {
+        setNotice(staleNotice(message, reloaded));
+        return reloaded;
+      }),
     [load],
   );
 
