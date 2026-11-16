@@ -160,6 +160,13 @@ export interface ClientLinksState {
    * or plan), so no client link works and none can be made; the panel's sentence.
    */
   workspaceBlocked?: string;
+  /** II1 review: what blocks it; an ended trial or plan comes back only on Growth or Pro. */
+  workspaceBlockedBy?: "pause" | "plan";
+}
+
+/** When a blocked workspace's kept copies work again, in the block's words (a pause when not said). */
+function copiesWorkAgainWhen(state: ClientLinksState): string {
+  return state.workspaceBlockedBy === "plan" ? "once the workspace is on Growth or Pro again" : "once the workspace is active again";
 }
 
 /**
@@ -234,7 +241,7 @@ function blockedDemotedMessage(links: ClientLinksState, blocked: string): string
     "Role updated.",
     one ? `They could copy the client ${held[0]} link.` : `They could copy the client ${listOf(held)} links.`,
     blocked,
-    one ? "The copy they kept will work again once the workspace is active again." : "The copies they kept will work again once the workspace is active again.",
+    `${one ? "The copy they kept" : "The copies they kept"} will work again ${copiesWorkAgainWhen(links)}.`,
     "Press Turn off client links below to stop that.",
   ].join(" ");
 }
@@ -376,8 +383,8 @@ export function ClientLinksPanel({
         <h3 className="text-sm font-medium text-foreground">Client links</h3>
         {blocked ? (
           <p className="text-sm text-muted-foreground">
-            {blocked} Copies kept by someone who stopped being an owner will work again once the workspace is active again. Turning
-            them off stops that.
+            {blocked} Copies kept by someone who stopped being an owner will work again{" "}
+            {state ? copiesWorkAgainWhen(state) : "once the workspace is active again"}. Turning them off stops that.
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">

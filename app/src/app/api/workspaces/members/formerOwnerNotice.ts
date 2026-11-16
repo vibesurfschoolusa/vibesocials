@@ -3,7 +3,12 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planOffers } from "@/lib/planFeatures";
 import { personLabel } from "@/lib/usageLimits";
-import { clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
+import {
+  clientLinkBlockKind,
+  clientLinkCreateRefusal,
+  copiesWorkAgainWhen,
+  type ClientLinkBlockKind,
+} from "@/server/clientLinkPanelStatus";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
 
@@ -72,6 +77,8 @@ export function buildFormerOwnerEmail(input: {
   clientLinksIncluded?: boolean;
   /** The link panels' sentence while the workspace is blocked; it wins over the plan. */
   workspaceBlocked?: string | null;
+  /** What blocks it (a pause when not given): says when the kept copies work again. */
+  workspaceBlockedBy?: ClientLinkBlockKind | null;
   /** How many invite links the person made were turned off as they left or were demoted. */
   joinLinksRevoked?: number;
   /** The person was made a member rather than leaving. */
@@ -159,6 +166,7 @@ function pausedLinksEmail(input: {
   href: string;
   invites: string | null;
   blocked?: string;
+  workspaceBlockedBy?: ClientLinkBlockKind | null;
 }): { subject: string; html: string; text: string } {
   const { workspaceName, formerOwnerName } = input;
   const paused = [
@@ -172,7 +180,7 @@ function pausedLinksEmail(input: {
   const lines = input.blocked
     ? [
         `${had} ${input.blocked}`,
-        `${one ? "The copy" : "The copies"} ${formerOwnerName} kept will work again once the workspace is active again. ${turnOff}`,
+        `${one ? "The copy" : "The copies"} ${formerOwnerName} kept will work again ${copiesWorkAgainWhen(input.workspaceBlockedBy)}. ${turnOff}`,
       ]
     : [
         `${had} ${one ? "It is" : "They are"} paused, because this workspace's plan doesn't include client links.`,
@@ -210,6 +218,7 @@ export async function noticeOwnersOfFormerOwner(input: {
   let links: { uploadLink: boolean; reviewLink: boolean; connectLink: FormerOwnerConnectLink };
   let clientLinksIncluded: boolean;
   let workspaceBlocked: string | null;
+  let workspaceBlockedBy: ClientLinkBlockKind | null;
   try {
     const [upload, review, connect, workspace] = await Promise.all([
       prisma.workspaceUploadLink.findFirst({ where: { workspaceId, revokedAt: null }, select: { id: true } }),
@@ -227,6 +236,7 @@ export async function noticeOwnersOfFormerOwner(input: {
     // trial or Growth plan gets the block's email, not "the plan doesn't include them".
     clientLinksIncluded = planOffers(workspace ?? {}, "clientLinks");
     workspaceBlocked = clientLinkCreateRefusal(workspace ?? {});
+    workspaceBlockedBy = clientLinkBlockKind(workspace ?? {});
     let connectLink: FormerOwnerConnectLink = null;
     if (connect?.createdById === formerOwnerId) {
       connectLink = "stopped";
@@ -268,6 +278,7 @@ export async function noticeOwnersOfFormerOwner(input: {
       ...links,
       clientLinksIncluded,
       workspaceBlocked,
+      workspaceBlockedBy,
       joinLinksRevoked: input.joinLinksRevoked ?? 0,
       demoted: input.demoted ?? false,
       deletedAccount: input.deletedAccount ?? false,

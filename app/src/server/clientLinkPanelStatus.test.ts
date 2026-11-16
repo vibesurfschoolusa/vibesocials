@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { TRIAL_ENDED_MESSAGE, workspaceBlock } from "@/lib/workspaceStatus";
 
-import { clientLinkPanelStatus } from "./clientLinkPanelStatus";
+import { clientLinkBlockKind, clientLinkPanelStatus } from "./clientLinkPanelStatus";
 
 /**
  * R21 client-journey L1: what the owner link panels are told follows the rule
@@ -65,6 +65,15 @@ describe("clientLinkPanelStatus", () => {
   it("an active workspace: nothing, as today", () => {
     vi.stubEnv("BILLING_ENABLED", "");
     expect(clientLinkPanelStatus({ pausedAt: null }, NOW)).toEqual({});
+  });
+
+  // II1 review: what brings the copies back follows the block's kind.
+  it("clientLinkBlockKind: a pause, an ended trial or plan, or none", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(clientLinkBlockKind({ pausedAt: NOW, trialEndsAt: new Date(NOW.getTime() - DAY) }, NOW)).toBe("pause");
+    expect(clientLinkBlockKind({ trialEndsAt: new Date(NOW.getTime() - DAY) }, NOW)).toBe("plan");
+    expect(clientLinkBlockKind({ plan: "growth", planStatus: "canceled" }, NOW)).toBe("plan");
+    expect(clientLinkBlockKind({ plan: "growth", planStatus: "active" }, NOW)).toBeNull();
   });
 
   it("blocked exactly when workspaceBlock says so", () => {

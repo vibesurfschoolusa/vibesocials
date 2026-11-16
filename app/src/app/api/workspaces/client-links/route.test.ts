@@ -331,9 +331,11 @@ describe("GET /api/workspaces/client-links", () => {
       included: true,
       on: { upload: true, review: true, connect: false },
       workspaceBlocked: `Client links don't work right now. This workspace is paused. Contact ${SUPPORT_EMAIL}.`,
+      workspaceBlockedBy: "pause",
     });
     m.requireOwnerContext.mockResolvedValue(OWNER_CONTEXT);
     expect(await (await get()).json()).not.toHaveProperty("workspaceBlocked");
+    expect(await (await get()).json()).not.toHaveProperty("workspaceBlockedBy");
   });
 
   it("with billing on, a plan without client links answers included: false", async () => {
@@ -363,6 +365,7 @@ describe("GET /api/workspaces/client-links", () => {
       await expect((await get()).json()).resolves.toMatchObject({
         included: true,
         workspaceBlocked: `Client links don't work right now. Your free trial has ended. ${AGAIN} ${SUPPORT_EMAIL}.`,
+        workspaceBlockedBy: "plan",
       });
     });
 
@@ -372,6 +375,7 @@ describe("GET /api/workspaces/client-links", () => {
       await expect((await get()).json()).resolves.toMatchObject({
         included: true,
         workspaceBlocked: `Client links don't work right now. Your plan has ended. ${AGAIN} ${SUPPORT_EMAIL}.`,
+        workspaceBlockedBy: "plan",
       });
     });
 

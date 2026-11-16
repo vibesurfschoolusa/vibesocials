@@ -12,7 +12,7 @@ import { sealSecret } from "@/lib/tokenCrypto";
 import { uploadLinkUrl } from "@/lib/uploadLink";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
-import { clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
+import { clientLinkBlockKind, clientLinkCreateRefusal } from "@/server/clientLinkPanelStatus";
 
 /**
  * POST /api/workspaces/client-links { workspaceId }
@@ -79,7 +79,8 @@ export async function GET(request: Request) {
     included: planOffers(workspace, "clientLinks"),
     on: { upload: upload !== null, review: review !== null, connect: connect !== null },
     connectStopped,
-    ...(workspaceBlocked ? { workspaceBlocked } : {}),
+    // II1 review: the kind, so the card says when the kept copies work again.
+    ...(workspaceBlocked ? { workspaceBlocked, workspaceBlockedBy: clientLinkBlockKind(workspace) ?? "pause" } : {}),
   });
 }
 

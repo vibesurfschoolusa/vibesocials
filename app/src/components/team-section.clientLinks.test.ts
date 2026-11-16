@@ -292,7 +292,7 @@ describe("Turn off client links", () => {
 // client link answers "not active", and new ones can't be made.
 describe("while the workspace is blocked", () => {
   const BLOCKED_SENTENCE = "Client links don't work right now. This workspace is paused. Contact help@example.com.";
-  const BLOCKED = { ...ON, workspaceBlocked: BLOCKED_SENTENCE };
+  const BLOCKED = { ...ON, workspaceBlocked: BLOCKED_SENTENCE, workspaceBlockedBy: "pause" as const };
 
   it("offers Turn off client links only, with the panel's sentence", () => {
     expect(clientLinksButtonShown(BLOCKED)).toBe(false);
@@ -348,25 +348,32 @@ describe("while the workspace is blocked", () => {
 describe("an ended trial or plan, as the GET answers it", () => {
   const AGAIN = "Choose Growth or Pro in Settings and your client links work again, or contact help@example.com.";
   const states = {
-    trial: { ...ON, workspaceBlocked: `Client links don't work right now. Your free trial has ended. ${AGAIN}` },
-    growth: { ...ON, workspaceBlocked: `Client links don't work right now. Your plan has ended. ${AGAIN}` },
+    trial: { ...ON, workspaceBlocked: `Client links don't work right now. Your free trial has ended. ${AGAIN}`, workspaceBlockedBy: "plan" as const },
+    growth: { ...ON, workspaceBlocked: `Client links don't work right now. Your plan has ended. ${AGAIN}`, workspaceBlockedBy: "plan" as const },
     starter: {
       ...ON,
       included: false,
       workspaceBlocked: `Client links don't work right now. Your Starter plan has ended, and Starter doesn't include client links. ${AGAIN}`,
+      workspaceBlockedBy: "plan" as const,
     },
   };
   const both = { upload: true, review: true, connect: false };
 
   for (const name of ["trial", "growth"] as const) {
-    it(`an ended ${name}: the card and the demotion toast give the block's sentence`, () => {
+    // II1 review: "once the workspace is active again" was untrue after picking Starter.
+    it(`an ended ${name}: the card and the demotion toast give the block's sentence, and the copies work again on Growth or Pro`, () => {
       const state = states[name];
       const html = panel(state);
-      expect(html).toContain(state.workspaceBlocked.replace(/'/g, "&#x27;"));
-      expect(html).toContain("will work again once the workspace is active again");
+      expect(html).toContain(
+        `${state.workspaceBlocked.replace(/'/g, "&#x27;")} Copies kept by someone who stopped being an owner will work again once the workspace is on Growth or Pro again. Turning them off stops that.`,
+      );
+      expect(html).not.toContain("active again");
       expect(html).not.toContain("plan doesn&#x27;t include them");
       expect(demotedMessage({ ...state, on: both })).toBe(
-        `Role updated. They could copy the client upload and review links. ${state.workspaceBlocked} The copies they kept will work again once the workspace is active again. Press Turn off client links below to stop that.`,
+        `Role updated. They could copy the client upload and review links. ${state.workspaceBlocked} The copies they kept will work again once the workspace is on Growth or Pro again. Press Turn off client links below to stop that.`,
+      );
+      expect(demotedMessage({ ...state, on: { upload: false, review: true, connect: false } })).toContain(
+        "The copy they kept will work again once the workspace is on Growth or Pro again.",
       );
     });
   }

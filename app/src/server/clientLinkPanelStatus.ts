@@ -39,6 +39,25 @@ function blockSentence(workspace: WorkspaceStatusFields, block: { code: string; 
 }
 
 /**
+ * What blocks the client links: a pause ends when the workspace is active
+ * again, an ended trial or plan only on Growth or Pro (II1 review: picking
+ * Starter makes the workspace active but leaves the links off). Null when
+ * nothing blocks them.
+ */
+export type ClientLinkBlockKind = "pause" | "plan";
+
+export function clientLinkBlockKind(workspace: WorkspaceStatusFields, now: Date = new Date()): ClientLinkBlockKind | null {
+  const block = workspaceBlock(workspace, now, "owner");
+  if (!block) return null;
+  return block.code === PLAN_ENDED_CODE ? "plan" : "pause";
+}
+
+/** When a blocked workspace's kept copies work again, in the kind's words. */
+export function copiesWorkAgainWhen(kind: ClientLinkBlockKind | null | undefined): string {
+  return kind === "plan" ? "once the workspace is on Growth or Pro again" : "once the workspace is active again";
+}
+
+/**
  * GG2 review: the three link POSTs refuse while the workspace is blocked, with
  * the panel's sentence, so a hand-sent request can't make a link that answers
  * "not active" until the block ends. Null when a link may be made.
