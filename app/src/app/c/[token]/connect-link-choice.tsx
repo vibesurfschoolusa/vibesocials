@@ -51,6 +51,28 @@ export function chooseFailure(status: number, data: ChoiceAnswer): { gone: boole
   return { gone: false, message: maySaved ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE };
 }
 
+/** R30: Cancel's DELETE didn't answer that it cancelled; the choice may still be waiting. */
+export const CANCEL_FAILED_MESSAGE =
+  "Couldn't cancel the choice. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.";
+
+/**
+ * R30 client-journey L2: where Cancel goes, from the DELETE answer. Only a
+ * cancel that worked says "You cancelled". A 404 means the choice is gone
+ * (used, maybe by a press whose answer was lost, or expired): the page with
+ * the success code when its platform is now connected, else with none, so the
+ * rows say what is connected. Any other answer: the choice may still wait.
+ */
+export function cancelOutcome(
+  status: number,
+  data: ChoiceAnswer,
+  platform: string,
+  page: string,
+): { go: string } | { error: string } {
+  if (status >= 200 && status < 300) return { go: `${page}?error=${encodeURIComponent(`${platform}_cancelled`)}` };
+  if (status === 404) return { go: data?.connected === true ? `${page}?${connectedSuccessQuery(platform, false)}` : page };
+  return { error: CANCEL_FAILED_MESSAGE };
+}
+
 export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {
   const router = useRouter();
   const [state, setState] = useState<ConnectLinkChoiceState>({ status: "loading" });
@@ -102,6 +124,8 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
       if (failure.gone) {
         focusAfterPress(pressed, () => goneRef.current);
         setState({ status: "gone", message: failure.message });
+        // R30 client-journey L1: the choice was used, so the rows below are out of date.
+        router.refresh();
       } else setError(failure.message);
     } catch (caught) {
       setError(isNoAnswer(caught) ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE);
@@ -111,12 +135,21 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
 
   async function cancel(platform: string) {
     setBusy("cancel");
+    setError(null);
+    let outcome: { go: string } | { error: string };
     try {
-      await fetchOrNoAnswer(base, { method: "DELETE" });
+      const response = await fetchOrNoAnswer(choiceAddress(base, platform), { method: "DELETE" });
+      const data = (await response.json().catch(() => null)) as ChoiceAnswer;
+      outcome = cancelOutcome(response.status, data, platform, page);
     } catch {
-      // The choice expires by itself in 15 minutes.
+      outcome = { error: CANCEL_FAILED_MESSAGE };
     }
-    router.push(`${page}?error=${encodeURIComponent(`${platform}_cancelled`)}`);
+    if ("go" in outcome) {
+      router.push(outcome.go);
+      return;
+    }
+    setError(outcome.error);
+    setBusy(null);
   }
 
   return (

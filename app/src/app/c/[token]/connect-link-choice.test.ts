@@ -8,7 +8,9 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 import {
   CHOICE_MAYBE_CONNECTED_MESSAGE,
+  CANCEL_FAILED_MESSAGE,
   ConnectLinkChoiceView,
+  cancelOutcome,
   chooseFailure,
   loadOutcome,
   type ConnectLinkChoiceViewProps,
@@ -145,5 +147,52 @@ describe("the account choice: focus when it is gone after a press", () => {
     expect(source).toMatch(/if \(failure\.gone\) \{\s+focusAfterPress\(pressed, \(\) => goneRef\.current\);\s+setState\(\{ status: "gone", message: failure\.message \}\);/);
     expect(source).toMatch(/onClick=\{\(event\) => onChoose\(candidate\.id, event\.currentTarget\)\}/);
     expect(source).toMatch(/<p ref=\{goneRef\} role="alert" tabIndex=\{-1\}/);
+  });
+});
+
+// R30 client-journey L1 and L2: after a lost Connect answer the choice may
+// already be used, so a gone answer reloads the rows, and Cancel says "You
+// cancelled" only when the DELETE cancelled it.
+describe("the account choice after a lost Connect answer (R30)", () => {
+  const source = async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    return readFileSync(fileURLToPath(new URL("./connect-link-choice.tsx", import.meta.url)), "utf8");
+  };
+
+  it("a gone Connect answer reads the page again, so the rows match the sentence", async () => {
+    expect(await source()).toMatch(
+      /if \(failure\.gone\) \{\s+focusAfterPress\(pressed, \(\) => goneRef\.current\);\s+setState\(\{ status: "gone", message: failure\.message \}\);\s+(?:\/\/[^\n]*\s+)?router\.refresh\(\);/,
+    );
+  });
+
+  it("Cancel: a cancelled choice says so", () => {
+    expect(cancelOutcome(200, { ok: true }, "instagram", "/c/t")).toEqual({ go: "/c/t?error=instagram_cancelled" });
+  });
+
+  it("Cancel: a choice already used, with its platform now connected, goes to the page with the success code", () => {
+    expect(cancelOutcome(404, { error: "Instagram is connected. There is nothing more to choose here.", connected: true }, "instagram", "/c/t")).toEqual({
+      go: "/c/t?success=instagram_connected",
+    });
+  });
+
+  it("Cancel: a choice that has ended otherwise goes to the page with no code", () => {
+    expect(cancelOutcome(404, { error: "This choice has ended: it expired, or an account was already chosen." }, "instagram", "/c/t")).toEqual({
+      go: "/c/t",
+    });
+    expect(cancelOutcome(404, null, "instagram", "/c/t")).toEqual({ go: "/c/t" });
+  });
+
+  it("Cancel: any other answer stays and says it wasn't cancelled", () => {
+    for (const status of [500, 502, 429]) {
+      expect(cancelOutcome(status, null, "instagram", "/c/t")).toEqual({ error: CANCEL_FAILED_MESSAGE });
+    }
+    expect(CANCEL_FAILED_MESSAGE).not.toMatch(/cancelled/);
+  });
+
+  it("Cancel reads the DELETE answer, asking with the platform so a used choice can say it is connected", async () => {
+    const text = await source();
+    expect(text).toMatch(/fetchOrNoAnswer\(choiceAddress\(base, platform\), \{ method: "DELETE" \}\)/);
+    expect(text).toMatch(/cancelOutcome\(response\.status, data, platform, page\)/);
   });
 });
