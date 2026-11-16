@@ -24,9 +24,12 @@ import { describe, expect, it } from "vitest";
  *
  * Known limits: an element kept in a variable or returned by a helper that
  * the caller renders conditionally is not followed; a component imported
- * from another file and rendered conditionally is not followed; the shared
- * Alert (info and success are role="status") and Spinner (role="status" when
- * labelled) are components, so their callers are not checked here.
+ * from another file and rendered conditionally is not followed.
+ *
+ * The shared Alert (info, success) and a labelled Spinner may be rendered
+ * conditionally: they have no role="status" of their own and announce their
+ * text through the page's one announcer (components/ui/announcer.tsx,
+ * lib/announcer.test.ts). The checks below keep it that way.
  */
 
 const SRC = __dirname;
@@ -218,5 +221,17 @@ describe("status lines are on the page from the first render (R30 PP2)", () => {
     expect(probe(`function A({m}) { return <p role="status" className="empty:sr-only">{m}</p>; }`)).toBeNull();
     expect(probe(`function A({m}) { return <p role="alert">{m}</p>; }`)).toBeUndefined();
     expect(probe(`function A({m}) { return <p aria-live="off">{m}</p>; }`)).toBeUndefined();
+    // R30 PP2 (lead): these announce through the announcer, so they may come and go.
+    expect(probe(`function A({m}) { return <div>{m && <Alert variant="success">{m}</Alert>}</div>; }`)).toBeUndefined();
+    expect(probe(`function A({m}) { return <div>{m ? <Spinner label="Loading" /> : null}</div>; }`)).toBeUndefined();
+  });
+
+  it("Alert and Spinner carry no role=\"status\" of their own, and announce instead", () => {
+    const alert = readFileSync(path.join(SRC, "components/ui/alert.tsx"), "utf8");
+    const spinner = readFileSync(path.join(SRC, "components/ui/spinner.tsx"), "utf8");
+    for (const source of [alert, spinner]) {
+      expect(source).not.toContain('"status"');
+      expect(source).toContain("useAnnounceOnShow(");
+    }
   });
 });

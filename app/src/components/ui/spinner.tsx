@@ -1,6 +1,9 @@
+"use client";
+
 import { Loader2 } from "lucide-react";
 import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
+import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { cn } from "@/lib/cn";
 
 type SpinnerSize = "sm" | "md" | "lg";
@@ -13,8 +16,9 @@ const SIZE_CLASSES: Record<SpinnerSize, string> = {
 
 export interface SpinnerProps extends Omit<ComponentPropsWithoutRef<"svg">, "children"> {
   size?: SpinnerSize;
-  /** Accessible label. When set, the spinner exposes a live status region;
-   *  otherwise it is decorative (`aria-hidden`) — e.g. inside a button. */
+  /** Accessible label. When set, the spinner is a named image and announces
+   *  the label through the page's announcer (R30 PP2); otherwise it is
+   *  decorative (`aria-hidden`) — e.g. inside a button. */
   label?: string;
 }
 
@@ -26,10 +30,11 @@ export const Spinner = forwardRef<SVGSVGElement, SpinnerProps>(function Spinner(
   { size = "md", label, className, ...props },
   ref
 ) {
+  useAnnounceOnShow(() => label ?? "", Boolean(label));
   return (
     <Loader2
       ref={ref}
-      role={label ? "status" : undefined}
+      role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
       className={cn("animate-spin text-current", SIZE_CLASSES[size], className)}

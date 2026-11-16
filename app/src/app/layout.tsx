@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
 import { AppSessionProvider } from "@/components/session-provider";
+import { AnnouncerProvider } from "@/components/ui/announcer";
 import { AppShell } from "@/components/shell/app-shell";
 import { pricingShellProps } from "@/components/shell/nav";
 
@@ -55,10 +56,13 @@ export default function RootLayout({
       >
         <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
         <ServiceWorkerRegistration />
-        <AppSessionProvider>
-          {/* 23: no prop at all until payments are configured. */}
-          <AppShell {...pricingShellProps()}>{children}</AppShell>
-        </AppSessionProvider>
+        {/* R30 PP2: the page's one announcer, around the shell and the /c, /u and /v pages. */}
+        <AnnouncerProvider>
+          <AppSessionProvider>
+            {/* 23: no prop at all until payments are configured. */}
+            <AppShell {...pricingShellProps()}>{children}</AppShell>
+          </AppSessionProvider>
+        </AnnouncerProvider>
       </body>
     </html>
   );
