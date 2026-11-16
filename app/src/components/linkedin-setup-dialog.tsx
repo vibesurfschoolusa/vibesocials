@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Alert } from "@/components/ui/alert";
@@ -33,6 +33,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const [vanityName, setVanityName] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Closing clears the trigger query param (?linkedin_setup=true) so the dialog
   // stays closed. Blocked while a redirect is in flight.
@@ -43,7 +44,9 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
 
   const handleConnect = () => {
     if (!vanityName.trim()) {
+      // R31 pages L4: read out, with the person taken to the field to fill.
       setFieldError("Enter your LinkedIn company page URL or vanity name.");
+      inputRef.current?.focus();
       return;
     }
     setFieldError(null);
@@ -107,6 +110,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="vanity-name">LinkedIn company page URL</Label>
           <Input
+            ref={inputRef}
             id="vanity-name"
             value={vanityName}
             onChange={(e) => {
@@ -119,7 +123,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
             aria-describedby={fieldError ? "vanity-name-error" : "vanity-name-hint"}
           />
           {fieldError ? (
-            <span id="vanity-name-error" className="text-xs text-destructive">
+            <span id="vanity-name-error" role="alert" className="text-xs text-destructive">
               {fieldError}
             </span>
           ) : (

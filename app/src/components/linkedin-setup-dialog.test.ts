@@ -54,3 +54,17 @@ describe("LinkedInSetupDialog: the wrong-account step", () => {
     expect(source).not.toContain("click Connect again");
   });
 });
+
+// R31 pages L4: the empty-field error was a plain span and focus stayed on the button.
+describe("LinkedInSetupDialog: the empty-field error", () => {
+  it("is announced (role=\"alert\") and focus moves to the input", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./linkedin-setup-dialog.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/<span id="vanity-name-error" role="alert"/);
+    expect(source).toMatch(
+      /setFieldError\("Enter your LinkedIn company page URL or vanity name\."\);\s+inputRef\.current\?\.focus\(\);\s+return;/,
+    );
+    expect(source).toMatch(/<Input\s+ref=\{inputRef\}\s+id="vanity-name"/);
+  });
+});
