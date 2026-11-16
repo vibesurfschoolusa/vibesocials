@@ -6,12 +6,14 @@ const {
   connectionDeleteManyMock,
   metricDeleteManyMock,
   listingMetricDeleteManyMock,
+  pendingDeleteManyMock,
   transactionMock,
 } = vi.hoisted(() => ({
   requireOwnerContextMock: vi.fn(),
   connectionDeleteManyMock: vi.fn(),
   metricDeleteManyMock: vi.fn(),
   listingMetricDeleteManyMock: vi.fn(),
+  pendingDeleteManyMock: vi.fn(),
   transactionMock: vi.fn(),
 }));
 
@@ -20,6 +22,7 @@ vi.mock("@/lib/db", () => ({
     socialConnection: { deleteMany: connectionDeleteManyMock },
     postMetric: { deleteMany: metricDeleteManyMock },
     locationMetricDaily: { deleteMany: listingMetricDeleteManyMock },
+    pendingConnection: { deleteMany: pendingDeleteManyMock },
     $transaction: transactionMock,
   },
 }));
@@ -51,6 +54,7 @@ function nothingDeleted() {
   expect(connectionDeleteManyMock).not.toHaveBeenCalled();
   expect(metricDeleteManyMock).not.toHaveBeenCalled();
   expect(listingMetricDeleteManyMock).not.toHaveBeenCalled();
+  expect(pendingDeleteManyMock).not.toHaveBeenCalled();
   expect(transactionMock).not.toHaveBeenCalled();
 }
 
@@ -62,10 +66,23 @@ beforeEach(() => {
   connectionDeleteManyMock.mockReturnValue(Promise.resolve({ count: 1 }));
   metricDeleteManyMock.mockReturnValue(Promise.resolve({ count: 4 }));
   listingMetricDeleteManyMock.mockReturnValue(Promise.resolve({ count: 30 }));
+  pendingDeleteManyMock.mockReturnValue(Promise.resolve({ count: 0 }));
   transactionMock.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
 });
 
 describe("DELETE /api/connections/[platform]", () => {
+  // R31 security-billing L1: an unfinished account choice holds sealed tokens
+  // for every account it offered; the privacy page says Disconnect deletes them.
+  it("deletes this workspace's waiting account choices for that platform only, in the same transaction", async () => {
+    const response = await disconnect("facebook_page");
+
+    expect(response.status).toBe(200);
+    expect(pendingDeleteManyMock).toHaveBeenCalledTimes(1);
+    expect(pendingDeleteManyMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", platform: "facebook_page" } });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock.mock.calls[0][0]).toContain(pendingDeleteManyMock.mock.results[0].value);
+  });
+
   it("is owner-only", async () => {
     requireOwnerContextMock.mockResolvedValue(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
 
@@ -100,7 +117,7 @@ describe("DELETE /api/connections/[platform]", () => {
       expect(metricDeleteManyMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", platform } });
       expect(listingMetricDeleteManyMock).not.toHaveBeenCalled();
       expect(transactionMock).toHaveBeenCalledTimes(1);
-      expect(transactionMock.mock.calls[0][0]).toHaveLength(2);
+      expect(transactionMock.mock.calls[0][0]).toHaveLength(3);
     },
   );
 
@@ -118,7 +135,7 @@ describe("DELETE /api/connections/[platform]", () => {
     });
     expect(listingMetricDeleteManyMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1" } });
     expect(transactionMock).toHaveBeenCalledTimes(1);
-    expect(transactionMock.mock.calls[0][0]).toHaveLength(3);
+    expect(transactionMock.mock.calls[0][0]).toHaveLength(4);
   });
 
   // F3 (R1 security H1): the active workspace is one cookie for every tab.

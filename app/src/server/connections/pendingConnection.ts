@@ -192,6 +192,24 @@ export async function deletePendingConnection(id: string): Promise<void> {
   await prisma.pendingConnection.deleteMany({ where: { id } });
 }
 
+/**
+ * R31 security-billing L1: every waiting choice whose 15 minutes have
+ * passed, of any user and workspace. An unfinished choice holds sealed tokens
+ * for every account it offered and nothing else ever deletes it. Runs in the
+ * daily sweep's one step; never throws, so the sweep's other work goes on.
+ */
+export async function clearPassedPendingConnections(now: Date): Promise<number> {
+  try {
+    const { count } = await prisma.pendingConnection.deleteMany({ where: { expiresAt: { lte: now } } });
+    return count;
+  } catch (error) {
+    logger.warn("[PendingConnection] clearing passed choices failed", {
+      error: error instanceof Error ? error.name : "unknown",
+    });
+    return 0;
+  }
+}
+
 /** The accounts to choose from: ids and names only, never tokens. */
 export function listPendingCandidates(payload: PendingConnectionPayload): PendingCandidate[] {
   switch (payload.platform) {

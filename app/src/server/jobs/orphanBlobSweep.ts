@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { clearPassedUndoWindows } from "@/server/auth/undoWindow";
+import { clearPassedPendingConnections } from "@/server/connections/pendingConnection";
 import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
 import { pruneUsageEvents } from "@/server/usage/usageLog";
 
@@ -259,12 +260,14 @@ export const orphanBlobSweep = inngest.createFunction(
     // so they cost no new function and no new execution. R6-pages L6, R7-pages
     // L1: so do the email-change rows no longer needed (passed undo windows,
     // expired links), which the privacy page says go within a day after the
-    // 72 hours.
+    // 72 hours. R31 security-billing L1: and account choices whose 15 minutes
+    // passed (their sealed tokens).
     const summary = await step.run("sweep", async () => {
       const now = new Date();
       const usageEventsPruned = await pruneUsageEvents(now);
       const undoWindowsCleared = await clearPassedUndoWindows(prisma, now);
-      return { ...(await sweepOrphanBlobs()), usageEventsPruned, undoWindowsCleared };
+      const pendingConnectionsCleared = await clearPassedPendingConnections(now);
+      return { ...(await sweepOrphanBlobs()), usageEventsPruned, undoWindowsCleared, pendingConnectionsCleared };
     });
     logger.info("[Inngest] Unregistered uploads swept", summary);
     return summary;

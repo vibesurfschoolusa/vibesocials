@@ -122,6 +122,10 @@ export async function DELETE(request: NextRequest, context: PlatformRouteContext
     const [result] = await prisma.$transaction([
       prisma.socialConnection.deleteMany({ where: { workspaceId: workspace.id, platform } }),
       prisma.postMetric.deleteMany({ where: { workspaceId: workspace.id, platform } }),
+      // R31 security-billing L1: an unfinished account choice holds sealed
+      // tokens for every account it offered, so it goes too (privacy page:
+      // platform tokens are deleted on disconnect).
+      prisma.pendingConnection.deleteMany({ where: { workspaceId: workspace.id, platform } }),
       ...(platform === Platform.google_business_profile
         ? [prisma.locationMetricDaily.deleteMany({ where: { workspaceId: workspace.id } })]
         : []),
