@@ -7,13 +7,14 @@ import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { asStorageReadFailure, hasInternalDetail } from "@/lib/publishFailureText";
+import { STORAGE_READ_CODES, asStorageReadFailure, hasInternalDetail } from "@/lib/publishFailureText";
 import { X_MAX_PHOTOS } from "@/lib/postMedia";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted } from "@/lib/xWeightedLength";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
+import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import {
   blobInterruptionDetails,
   isBlobStreamInterrupted,
@@ -1576,7 +1577,45 @@ async function publishPhotos(args: {
   return postTweet({ oauth, token, tweetText: computeTweetText(caption), mediaIds, deadline });
 }
 
+/** The code a row is flagged with when X refuses its token (an API 401). */
+const X_RECONNECT_CODE = "X_RECONNECT_REQUIRED";
+
+/**
+ * R25 platform-clients L2: X answered an API call with 401 (the person removed
+ * Vibe Socials in their X settings, say). The row is flagged, guarded by the
+ * tokens this publish sent (X's OAuth 1.0a tokens never change mid-publish),
+ * so Settings shows Reconnect, as for Facebook, Instagram, LinkedIn, TikTok and
+ * Pinterest; if the stored tokens changed meanwhile nothing is flagged and the
+ * retryable CONNECTION_TOKEN_CHANGED is thrown. A 401 from our own storage
+ * (STORAGE_READ_CODES) says nothing about X and flags nothing.
+ */
+async function flagRejectedXToken<T>(connection: SocialConnection, publish: () => Promise<T>): Promise<T> {
+  try {
+    return await publish();
+  } catch (error) {
+    const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
+    const fromStorage = typeof code === "string" && STORAGE_READ_CODES.has(code);
+    if (status !== 401 || fromStorage || !connection.accessToken) throw error;
+    const snapshot = { id: connection.id, accessToken: connection.accessToken, refreshToken: connection.refreshToken };
+    if ((await flagRejectedToken(snapshot, X_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
+    throw Object.assign(new Error("X no longer accepts this connection. Reconnect X in Settings."), {
+      code: X_RECONNECT_CODE,
+      cause: error,
+    });
+  }
+}
+
 export const xClient: PlatformClient = {
+  publishVideo: (ctx) => flagRejectedXToken(ctx.socialConnection, () => xPublishing.publishVideo(ctx)),
+  publishText: (ctx) => flagRejectedXToken(ctx.socialConnection, () => xPublishing.publishText(ctx)),
+
+  async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
+    return refreshAccessToken(connection);
+  },
+};
+
+/** The publish calls themselves; xClient flags a token X refuses around them. */
+const xPublishing = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     const { socialConnection, mediaItem, caption, deadline } = ctx;
 
@@ -1731,9 +1770,5 @@ export const xClient: PlatformClient = {
       deadline,
       refuseDuplicate: true,
     });
-  },
-
-  async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshAccessToken(connection);
   },
 };

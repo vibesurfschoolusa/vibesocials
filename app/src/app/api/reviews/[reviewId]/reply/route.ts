@@ -47,13 +47,14 @@ export async function POST(request: Request) {
     }
     role = context.role;
 
-    // R25 security-billing L1: before any Google call; a reply is a public write.
-    const limited = await googleRouteRateLimit(context.user.id, "reviews/reply", 20);
-    if (limited) return limited;
-
     // Pause (2026-11-10): a paused workspace cannot create or move work.
     const blocked = accessBlockResponse(context);
     if (blocked) return blocked;
+
+    // R25 security-billing L1: before any Google call (after the pause check,
+    // which reads and writes nothing); a reply is a public write.
+    const limited = await googleRouteRateLimit(context.user.id, "reviews/reply", 20);
+    if (limited) return limited;
 
     const body = await readJsonObject(request);
     if (!body) {

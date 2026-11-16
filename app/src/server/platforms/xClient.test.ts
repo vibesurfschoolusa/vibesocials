@@ -1,6 +1,12 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { flagRejectedTokenMock } = vi.hoisted(() => ({ flagRejectedTokenMock: vi.fn() }));
+vi.mock("./connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
+
 import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
@@ -3058,5 +3064,109 @@ describe("xClient.publishText - only X's duplicate-content wording is the duplic
     stubV2(() => json({ detail: "You are not allowed to create a Tweet with Duplicate Content." }, 403));
     const error = (await xClient.publishText!(textCtx()).catch((e: unknown) => e)) as { code?: string };
     expect(error.code).toBe("X_DUPLICATE_POST");
+  });
+});
+
+// R25 platform-clients L2: X answering 401 to an API call (the person removed
+// Vibe Socials in their X settings) flags the row, guarded by the tokens that
+// call sent, so Settings shows Reconnect and the reconnect email goes out.
+describe("xClient: a token X refuses flags the row", () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const CONNECTION = {
+    id: "conn-x",
+    platform: "x",
+    accessToken: "access-token",
+    refreshToken: "access-token-secret",
+  } as unknown as SocialConnection;
+  const SNAPSHOT = { id: "conn-x", accessToken: "access-token", refreshToken: "access-token-secret" };
+  const textCtx = () => ({
+    user: { id: "user-1" } as unknown as User,
+    socialConnection: CONNECTION,
+    caption: "Lessons cancelled today",
+    baseCaption: "Lessons cancelled today",
+  });
+  const photoCtx = () => {
+    const mediaItem = {
+      id: "m1",
+      mimeType: "image/jpeg",
+      sizeBytes: 3,
+      storageLocation: "https://blob.example/photo.jpg",
+      originalFilename: "photo.jpg",
+    } as unknown as MediaItem;
+    return { ...textCtx(), mediaItem, mediaItems: [mediaItem] } as unknown as PublishContext;
+  };
+
+  function stubX(answers: { v1?: () => Response; v2?: () => Response; upload?: () => Response; blob?: () => Response }) {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("https://blob.example/")) return (answers.blob ?? (() => new Response(new Uint8Array([1, 2, 3]))))();
+      if (url.includes("media/upload.json")) return (answers.upload ?? (() => json({ media_id_string: "m-1" })))();
+      if (url.includes("statuses/update.json")) return (answers.v1 ?? (() => json({ id_str: "tweet-1" })))();
+      if (url.includes("/2/tweets")) return (answers.v2 ?? (() => json({ data: { id: "tweet-2" } }, 201)))();
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const failureOf = (promise: Promise<unknown>) => promise.then(() => null, (e: unknown) => e as Error & { code?: string });
+
+  beforeEach(() => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("a 401 on the post flags the row and reads Reconnect", async () => {
+    stubX({ v1: () => json({}, 401), v2: () => json({}, 401) });
+
+    const error = await failureOf(xClient.publishText!(textCtx()));
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "X_RECONNECT_REQUIRED");
+    expect(error?.code).toBe("X_RECONNECT_REQUIRED");
+    expect(publishErrorMessage("x", error!)).toMatch(/^Reconnect X in Settings/);
+  });
+
+  it("a 401 on the photo upload flags the row", async () => {
+    stubX({ upload: () => json({}, 401) });
+
+    const error = await failureOf(xClient.publishVideo(photoCtx()));
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "X_RECONNECT_REQUIRED");
+    expect(error?.code).toBe("X_RECONNECT_REQUIRED");
+  });
+
+  it("tokens that changed meanwhile: nothing flagged, a retryable failure", async () => {
+    flagRejectedTokenMock.mockResolvedValue("superseded");
+    stubX({ v1: () => json({}, 401), v2: () => json({}, 401) });
+
+    const error = await failureOf(xClient.publishText!(textCtx()));
+
+    expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+  });
+
+  it.each([
+    ["a 429 on the post", { v1: () => json({}, 403), v2: () => json({}, 429) }],
+    ["a 5xx on the photo upload", { upload: () => json({}, 503) }],
+    ["a 401 from our own storage", { blob: () => new Response("no", { status: 401 }) }],
+  ] as const)("%s flags nothing", async (label, answers) => {
+    stubX(answers);
+
+    const error = await failureOf(
+      label.includes("post") ? xClient.publishText!(textCtx()) : xClient.publishVideo(photoCtx()),
+    );
+
+    expect(error).not.toBeNull();
+    expect(error?.code).not.toBe("X_RECONNECT_REQUIRED");
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 });

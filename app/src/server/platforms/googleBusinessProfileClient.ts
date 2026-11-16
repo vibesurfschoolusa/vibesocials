@@ -8,6 +8,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { trackedGoogleButtonUrl } from "@/lib/trackingTags";
 import { truncateGraphemes } from "@/lib/truncate";
 
+import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken, refreshGoogleTokenEarly } from "./googleTokens";
@@ -53,6 +54,25 @@ const GBP_TEXT_REFUSED_TEXT =
   "Google did not accept this post, so nothing was posted. Check the caption, the button link and any event or offer details.";
 const GBP_VIDEO_REFUSED_TEXT =
   "Google could not add this video to your Business Profile, so nothing was posted. Google takes videos up to 30 seconds long and 75 MB, at 720p or higher.";
+
+/** The code a row is flagged with when Google refuses its token on a post (an API 401). */
+const GBP_RECONNECT_CODE = "GBP_RECONNECT_REQUIRED";
+
+/**
+ * R25 platform-clients L2: Google answered the post with 401. The row is
+ * flagged, guarded by the tokens this call sent (after any refresh), so
+ * Settings shows Reconnect, as for the other platforms; if the stored tokens
+ * changed meanwhile nothing is flagged and the retryable
+ * CONNECTION_TOKEN_CHANGED is thrown. Nothing was posted.
+ */
+async function throwGbpReconnect(connection: SocialConnection): Promise<never> {
+  const snapshot = { id: connection.id, accessToken: connection.accessToken ?? "", refreshToken: connection.refreshToken };
+  if ((await flagRejectedToken(snapshot, GBP_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
+  throw Object.assign(
+    new Error("Google no longer accepts this connection. Reconnect Google Business Profile in Settings."),
+    { code: GBP_RECONNECT_CODE },
+  );
+}
 
 export const googleBusinessProfileClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
@@ -141,6 +161,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     // per API, 10 edits/min per profile) with HTTP 429 -> RATE_LIMITED.
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
+    if (createRes.status === 401) await throwGbpReconnect(socialConnection);
 
     // A 400 (INVALID_ARGUMENT) is Google refusing what was sent: say what it
     // accepts. Code and status are kept, so retrying stays exactly as before.
@@ -225,6 +246,7 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
+    if (createRes.status === 401) await throwGbpReconnect(socialConnection);
 
     // As the photo post: a 400 names what to check; code and status are kept.
     await assertOk(createRes, {

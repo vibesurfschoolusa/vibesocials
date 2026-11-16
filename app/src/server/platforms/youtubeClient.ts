@@ -2,7 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { asStorageReadFailure } from "@/lib/publishFailureText";
+import { STORAGE_READ_CODES, asStorageReadFailure } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { fitTitle, truncateUnits } from "@/lib/truncate";
 import {
@@ -17,6 +17,7 @@ import {
   readCommitBody,
   requireCommitId,
 } from "./commitCall";
+import { connectionTokenChangedError, flagRejectedToken, type TokenSnapshot } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken, refreshGoogleTokenEarly } from "./googleTokens";
 import {
@@ -944,10 +945,32 @@ async function setYouTubeCover(
   }
 }
 
+/** The code a row is flagged with when YouTube refuses its token (an API 401). */
+const YOUTUBE_RECONNECT_CODE = "YOUTUBE_RECONNECT_REQUIRED";
+
+/**
+ * R25 platform-clients L2: YouTube answered an API call with 401. The row is
+ * flagged, guarded by the tokens that call sent (`used.row`, after any
+ * refresh), so Settings shows Reconnect, as for the other platforms; if the
+ * stored tokens changed meanwhile nothing is flagged and the retryable
+ * CONNECTION_TOKEN_CHANGED is thrown. A 401 from our own storage
+ * (STORAGE_READ_CODES) says nothing about YouTube and flags nothing.
+ */
+async function flagRejectedYouTubeToken(error: unknown, row: TokenSnapshot | undefined): Promise<never> {
+  const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
+  const fromStorage = typeof code === "string" && STORAGE_READ_CODES.has(code);
+  if (status !== 401 || fromStorage || !row) throw error;
+  if ((await flagRejectedToken(row, YOUTUBE_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
+  throw Object.assign(new Error("YouTube no longer accepts this connection. Reconnect YouTube in Settings."), {
+    code: YOUTUBE_RECONNECT_CODE,
+    cause: error,
+  });
+}
+
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    const used: { accessToken?: string } = {};
-    const result = await uploadYouTubeVideo(ctx, used);
+    const used: UsedToken = {};
+    const result = await uploadYouTubeVideo(ctx, used).catch((error: unknown) => flagRejectedYouTubeToken(error, used.row));
     // Only once the video exists: a continuation or a failure has no video yet.
     if (!ctx.cover || typeof result.externalPostId !== "string" || !used.accessToken) return result;
     const note = await setYouTubeCover(ctx, result.externalPostId, used.accessToken);
@@ -962,8 +985,11 @@ export const youtubeClient: PlatformClient = {
   },
 };
 
-/** The upload itself; `used.accessToken` is the token it sent, for the cover call after it. */
-async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: string }): Promise<PublishResult> {
+/** The token an upload sent: for the cover call after it, and the row to flag if YouTube refuses it. */
+type UsedToken = { accessToken?: string; row?: TokenSnapshot };
+
+/** The upload itself; `used` is the token it sent. */
+async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise<PublishResult> {
   let { socialConnection } = ctx;
   const { mediaItem, deadline } = ctx;
 
@@ -1010,6 +1036,7 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
     throw error;
   }
   used.accessToken = accessToken;
+  used.row = { id: socialConnection.id, accessToken, refreshToken: socialConnection.refreshToken };
 
   // YouTube only supports videos
   if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("video/")) {

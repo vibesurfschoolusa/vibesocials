@@ -634,7 +634,7 @@ describe("nothing could be read", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ locations: [], notice: GBP_NO_LISTING_NOTICE, signIn: true });
     expect(GBP_NO_LISTING_NOTICE).toBe(
-      "This Google account has no business listing we can post to. Sign in to Google again with the Google account that manages your listing (an owner or manager in Google Business Profile).",
+      "Google found no locations for this Google account. If your business has a listing, sign in to Google again with the account that manages it. If it doesn't have one yet, create or verify it in Google Business Profile first.",
     );
   });
 });

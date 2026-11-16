@@ -49,6 +49,12 @@ vi.mock("@/server/platforms/connectionRefresh", () => ({
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
+const { flagRejectedTokenMock } = vi.hoisted(() => ({ flagRejectedTokenMock: vi.fn() }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
+
 const NOW = Date.parse("2026-11-01T12:00:00Z");
 
 function makeContext(): PublishContext {
@@ -1176,5 +1182,48 @@ describe("googleBusinessProfileClient: no location chosen", () => {
     expect(error?.code).toBe("GBP_NO_LOCATION_NAME");
     expect(error?.message).toBe("Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// R25 platform-clients L2: Google answering 401 to the post flags the row,
+// guarded by the token that call sent, so Settings shows Reconnect.
+describe("googleBusinessProfileClient: a token Google refuses flags the row", () => {
+  const SNAPSHOT = { id: "conn-gbp", accessToken: "access-token", refreshToken: "refresh-token" };
+  const textCtx = () => {
+    const { mediaItem: _m, ...ctx } = makeContext();
+    void _m;
+    return ctx as unknown as Parameters<NonNullable<typeof googleBusinessProfileClient.publishText>>[0];
+  };
+
+  beforeEach(() => {
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+  });
+
+  it.each([
+    ["a photo post", () => googleBusinessProfileClient.publishVideo(makeContext())],
+    ["a text post", () => googleBusinessProfileClient.publishText!(textCtx())],
+  ])("a 401 on %s flags the row and reads Reconnect", async (_label, publish) => {
+    stubMediaCreate(() => new Response("{}", { status: 401 }));
+
+    const error = await failure(publish());
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GBP_RECONNECT_REQUIRED");
+    expect(error?.code).toBe("GBP_RECONNECT_REQUIRED");
+    expect(publishErrorMessage("google_business_profile", error!)).toMatch(/^Reconnect Google Business Profile in Settings/);
+  });
+
+  it("tokens that changed meanwhile: nothing flagged, a retryable failure", async () => {
+    flagRejectedTokenMock.mockResolvedValue("superseded");
+    stubMediaCreate(() => new Response("{}", { status: 401 }));
+
+    expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe("CONNECTION_TOKEN_CHANGED");
+  });
+
+  it.each([429, 503])("a %i flags nothing", async (status) => {
+    stubMediaCreate(() => new Response("{}", { status }));
+
+    expect(await failure(googleBusinessProfileClient.publishVideo(makeContext()))).not.toBeNull();
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 });

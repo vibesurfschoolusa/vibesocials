@@ -49,6 +49,12 @@ vi.mock("./connectionRefresh", () => ({
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
+const { flagRejectedTokenMock } = vi.hoisted(() => ({ flagRejectedTokenMock: vi.fn() }));
+vi.mock("./connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
+
 // 2026-11-01 audit (Task 4 item 1): the YouTube title is the POST's own base
 // caption (no footer) — the job's snapshot first, the shared MediaItem's only
 // as a legacy fallback — so a reused video gets the title typed for THIS post.
@@ -1793,9 +1799,9 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
     it("still fails the upload for a status query that is rejected for good (a 4xx), or a rate limit still defers", async () => {
       const a = fakeStore();
       stubUpload({ session: [reply(503), reply(401, "{}")] });
+      // R25 platform-clients L2: a 401 is the token refused, so the row is flagged.
       expect(await failure(bigCtx(a.store, { deadline: NOW + STEP }))).toMatchObject({
-        code: "YOUTUBE_UPLOAD_FAILED",
-        status: 401,
+        code: "YOUTUBE_RECONNECT_REQUIRED",
       });
       vi.unstubAllGlobals();
       vi.setSystemTime(NOW);
@@ -2407,5 +2413,59 @@ describe("youtubeClient.publishVideo — a video storage can't give back", () =>
     expect(publishErrorMessage("youtube", error)).toBe(sentence);
     expect(sentenceForRecipient(publishErrorMessage("youtube", error), "youtube", "member")).toBe(sentence);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// R25 platform-clients L2: YouTube answering 401 to an API call flags the row,
+// guarded by the token that call sent, so Settings shows Reconnect.
+describe("youtubeClient: a token YouTube refuses flags the row", () => {
+  const failure = () => youtubeClient.publishVideo(ytCtx()).then(() => null, (e: unknown) => e as Error & { code?: string });
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("a 401 on the upload flags the row and reads Reconnect", async () => {
+    stubYouTube(() => new Response("{}", { status: 401 }));
+
+    const error = await failure();
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "conn-yt", accessToken: "access-token", refreshToken: "refresh-token" },
+      "YOUTUBE_RECONNECT_REQUIRED",
+    );
+    expect(error?.code).toBe("YOUTUBE_RECONNECT_REQUIRED");
+    expect(publishErrorMessage("youtube", error!)).toMatch(/^Reconnect YouTube in Settings/);
+  });
+
+  it("tokens that changed meanwhile: nothing flagged, a retryable failure", async () => {
+    flagRejectedTokenMock.mockResolvedValue("superseded");
+    stubYouTube(() => new Response("{}", { status: 401 }));
+
+    expect((await failure())?.code).toBe("CONNECTION_TOKEN_CHANGED");
+  });
+
+  it.each([429, 503])("a %i flags nothing", async (status) => {
+    stubYouTube(() => new Response("{}", { status }));
+
+    const error = await failure();
+
+    expect(error).not.toBeNull();
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("a 401 from our own storage flags nothing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response("no", { status: 401 })),
+    );
+
+    expect((await failure())?.code).toBe("YOUTUBE_FETCH_MEDIA_FAILED");
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 });

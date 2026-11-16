@@ -65,9 +65,14 @@ export const GOOGLE_NO_ANSWER_MESSAGE = "Google didn't answer. Try again in a mi
  */
 export const GBP_ACCOUNTS_REFUSED_MESSAGE =
   "Google refused access to the Business Profile accounts of this Google account. Sign in to Google again with the account that manages your listing.";
-/** Every account was read and none has a location (sent as `notice`, with `signIn: true`). */
+/**
+ * Every account was read and none has a location (sent as `notice`, with
+ * `signIn: true`). Both causes are said: another account manages the listing,
+ * or the business has none yet (signing in again cannot fix that). The picker
+ * is owner-only, so there is no member wording.
+ */
 export const GBP_NO_LISTING_NOTICE =
-  "This Google account has no business listing we can post to. Sign in to Google again with the Google account that manages your listing (an owner or manager in Google Business Profile).";
+  "Google found no locations for this Google account. If your business has a listing, sign in to Google again with the account that manages it. If it doesn't have one yet, create or verify it in Google Business Profile first.";
 /** other: the accounts list did not come back, for no reason we can name. */
 export const GBP_ACCOUNTS_NOT_SENT_MESSAGE =
   "Google didn't send your Business Profile accounts. Press Fetch locations from Google again in a minute.";
