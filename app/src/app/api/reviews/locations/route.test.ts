@@ -270,3 +270,22 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+// Lead review (R23): a connection Google has revoked (flagged needsReconnect)
+// gets the reconnect text at once, as the link route does, and Google is not asked.
+describe("GET /api/reviews/locations for a connection flagged for reconnect", () => {
+  it("answers with the reconnect text and asks Google nothing", async () => {
+    global.fetch = vi.fn() as unknown as typeof fetch;
+    findFirstMock.mockResolvedValue({ ...CONNECTION, expiresAt: new Date(Date.now() + 4 * 60 * 1000), needsReconnect: true });
+
+    const response = await GET();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      reconnect: true,
+    });
+    expect(refreshAccessTokenMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});

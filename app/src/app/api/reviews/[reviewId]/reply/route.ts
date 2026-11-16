@@ -88,6 +88,12 @@ export async function POST(request: Request) {
       );
     }
 
+    // A connection Google has revoked reads "Reconnect" at once, as the link
+    // route does, instead of after the stored token runs out.
+    if (connection.needsReconnect) {
+      return NextResponse.json(googleRefusedBody(role), { status: 500 });
+    }
+
     // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.

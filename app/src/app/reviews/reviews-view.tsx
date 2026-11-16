@@ -20,6 +20,7 @@ import {
   draftingAfterEnd,
   draftingAfterStart,
   EMPTY_REPLY_BOXES,
+  openAfterDraft,
   replyBoxAfterDraft,
   replyBoxAfterPost,
   replyBoxAfterTyping,
@@ -308,10 +309,9 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       // Typed text it replaces is kept for Undo (reply-form.tsx).
       setReplyBoxes((prev) => replyBoxAfterDraft(prev, review.reviewId, draftResponse));
 
-      // Open the reply box if not already open
-      if (replyingTo !== review.reviewId) {
-        setReplyingTo(review.reviewId);
-      }
+      // Opens this review's box only when none is open, judged now, not when
+      // Draft was pressed: a box the person opened meanwhile stays theirs.
+      setReplyingTo((open) => openAfterDraft(open, review.reviewId));
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
       toast.error(shownError(err, DRAFT_FAILED).message);

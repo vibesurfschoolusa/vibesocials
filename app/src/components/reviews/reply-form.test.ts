@@ -7,6 +7,7 @@ import {
   ReplyForm,
   draftingAfterEnd,
   draftingAfterStart,
+  openAfterDraft,
   replyBoxAfterDraft,
   replyBoxAfterPost,
   replyBoxAfterTyping,
@@ -226,5 +227,29 @@ describe("the reviews being drafted", () => {
     draftingAfterStart(before, "r2");
     draftingAfterEnd(before, "r1");
     expect([...before]).toEqual(["r1"]);
+  });
+});
+
+// Lead review (R23): a draft that lands while another review's box is open
+// stays with its own review; the open box, its text and its focus are left alone.
+describe("which box is open after a draft lands", () => {
+  it("opens the drafted review's box when none is open", () => {
+    expect(openAfterDraft(null, "A")).toBe("A");
+  });
+
+  it("keeps its own box open", () => {
+    expect(openAfterDraft("A", "A")).toBe("A");
+  });
+
+  it("leaves another review's open box open", () => {
+    expect(openAfterDraft("B", "A")).toBe("B");
+  });
+
+  it("A's draft and its Undo wait with A while B keeps its text", () => {
+    let boxes = replyBoxAfterTyping(EMPTY_REPLY_BOXES, "A", "My words for A");
+    boxes = replyBoxAfterTyping(boxes, "B", "Typing for B");
+    boxes = replyBoxAfterDraft(boxes, "A", "Draft for A");
+    expect(boxes.text).toEqual({ A: "Draft for A", B: "Typing for B" });
+    expect(boxes.undo).toEqual({ A: "My words for A" });
   });
 });

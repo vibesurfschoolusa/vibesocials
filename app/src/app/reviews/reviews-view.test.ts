@@ -92,3 +92,11 @@ describe("ReviewsView and several drafts at once", () => {
     expect(source).not.toContain("setGeneratingAI(null)");
   });
 });
+
+// Lead review (R23): the open box is judged when the draft lands, not when it was asked for.
+describe("ReviewsView when a draft lands while another review is open", () => {
+  it("picks the open box from the current state through openAfterDraft", () => {
+    expect(source).toContain("setReplyingTo((open) => openAfterDraft(open, review.reviewId))");
+    expect(source).not.toContain("if (replyingTo !== review.reviewId)");
+  });
+});

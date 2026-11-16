@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
-import { listGbpLocations, refreshAccessToken, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
+import {
+  googleRefusedBody,
+  listGbpLocations,
+  refreshAccessToken,
+  reviewsErrorBody,
+  type ReviewsReader,
+} from "@/server/googleReviews";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +48,12 @@ export async function GET() {
       return NextResponse.json({ locations: [], connected: false });
     }
 
+
+    // A connection Google has revoked reads "Reconnect" at once, as the link
+    // route does, instead of after the stored token runs out.
+    if (connection.needsReconnect) {
+      return NextResponse.json(googleRefusedBody(role), { status: 500 });
+    }
 
     // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").

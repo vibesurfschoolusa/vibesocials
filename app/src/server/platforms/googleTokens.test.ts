@@ -593,3 +593,50 @@ describe("refreshGoogleTokenEarly", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
+
+// Lead review (R23): the stored-token fallback must not hide a dead grant. The
+// real refreshGoogleToken still flags the row, and once the stored token has
+// expired the caller gets the reconnect outcome.
+describe("refreshGoogleTokenEarly with the real refresh and invalid_grant", () => {
+  const MINUTE = 60 * 1000;
+  const T0 = new Date("2026-11-10T13:00:00.000Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: T0, toFake: ["Date"] });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    vi.spyOn(logger, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })),
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("4 minutes left: serves the stored token and still writes needsReconnect and refreshFailedAt; after expiry: reconnect", async () => {
+    const connection = makeConnection({ expiresAt: new Date(T0.getTime() + 4 * MINUTE) });
+
+    await expect(refreshGoogleTokenEarly(connection, (c) => refreshGoogleToken(c))).resolves.toBe(connection);
+
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const { data } = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data.needsReconnect).toBe(true);
+    expect(data.refreshFailedAt).toBeInstanceOf(Date);
+    expect(data).not.toHaveProperty("accessToken");
+    expect(data).not.toHaveProperty("refreshToken");
+
+    // The stored token runs out: the same call now fails with the reconnect outcome.
+    vi.setSystemTime(new Date(T0.getTime() + 5 * MINUTE));
+    const error = await refreshGoogleTokenEarly(connection, (c) => refreshGoogleToken(c)).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const { GOOGLE_REFUSED_MESSAGE, reviewsErrorBody } = await import("@/server/googleReviews");
+    expect(error).toMatchObject({ code: "GOOGLE_TOKEN_REFRESH_FAILED", oauthError: "invalid_grant" });
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+  });
+});

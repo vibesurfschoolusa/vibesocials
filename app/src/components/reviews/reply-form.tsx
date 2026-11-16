@@ -61,6 +61,15 @@ export function draftingAfterEnd(drafting: ReadonlySet<string>, id: string): Rea
   return rest;
 }
 
+/**
+ * The review whose box is open once `drafted`'s draft lands: its own when no box
+ * is open; otherwise the open one stays, with its text and focus, and the draft
+ * (with its Undo) waits in its own box until that review is opened again.
+ */
+export function openAfterDraft(open: string | null, drafted: string): string | null {
+  return open ?? drafted;
+}
+
 export function replyBoxAfterPost(boxes: ReplyBoxes, id: string): ReplyBoxes {
   return { text: { ...boxes.text, [id]: "" }, undo: withoutUndo(boxes.undo, id) };
 }
