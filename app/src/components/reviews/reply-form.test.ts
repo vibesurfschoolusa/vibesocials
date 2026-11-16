@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_REPLY_BOXES,
   ReplyForm,
+  draftingAfterEnd,
+  draftingAfterStart,
   replyBoxAfterDraft,
   replyBoxAfterPost,
   replyBoxAfterTyping,
@@ -165,5 +167,64 @@ describe("ReplyForm: Undo after a draft replaces typed text", () => {
     const html = renderWith(undefined);
     expect(html).not.toContain(UNDO_STATUS);
     expect(html).not.toMatch(/>Undo</);
+  });
+});
+
+// Lead review follow-up: both live regions stay on the page and only their
+// text changes, so screen readers announce the change.
+describe("ReplyForm: the two status lines are always there", () => {
+  function statuses(generatingAI: boolean, onUndoDraft?: () => void): string[] {
+    const html = renderToStaticMarkup(
+      createElement(ReplyForm, {
+        value: "Draft",
+        onChange: () => {},
+        onSubmit: () => {},
+        onCancel: () => {},
+        onDraftAI: () => {},
+        onUndoDraft,
+        submitting: false,
+        generatingAI,
+      }),
+    );
+    return [...html.matchAll(/<p[^>]*role="status"[^>]*>([^<]*)<\/p>/g)].map((m) => m[1]);
+  }
+
+  it("idle: two empty status lines", () => {
+    expect(statuses(false)).toEqual(["", ""]);
+  });
+
+  it("drafting: the first says so, the second is empty", () => {
+    expect(statuses(true, () => {})).toEqual([
+      "Writing a draft. You can edit it here as soon as it is ready.",
+      "",
+    ]);
+  });
+
+  it("after a draft replaced text: the second offers Undo", () => {
+    expect(statuses(false, () => {})).toEqual(["", "Draft written. Undo to get your text back."]);
+  });
+});
+
+// Lead review follow-up: several drafts can run at once; each box stays locked
+// until its own draft lands or fails.
+describe("the reviews being drafted", () => {
+  it("a second draft keeps the first locked, and each ends on its own", () => {
+    let drafting = draftingAfterStart(new Set<string>(), "r1");
+    drafting = draftingAfterStart(drafting, "r2");
+    expect([...drafting].sort()).toEqual(["r1", "r2"]);
+
+    drafting = draftingAfterEnd(drafting, "r2");
+    expect(drafting.has("r1")).toBe(true);
+    expect(drafting.has("r2")).toBe(false);
+
+    drafting = draftingAfterEnd(drafting, "r1");
+    expect(drafting.size).toBe(0);
+  });
+
+  it("never changes the set it was given", () => {
+    const before = new Set(["r1"]);
+    draftingAfterStart(before, "r2");
+    draftingAfterEnd(before, "r1");
+    expect([...before]).toEqual(["r1"]);
   });
 });

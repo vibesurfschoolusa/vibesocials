@@ -81,3 +81,14 @@ describe("ReviewsView and the AI draft's Undo", () => {
     expect(source).toMatch(/onUndoDraft=\{\s*replyBoxes\.undo\[review\.reviewId\] !== undefined/);
   });
 });
+
+// Lead review follow-up: one locked box per running draft.
+describe("ReviewsView and several drafts at once", () => {
+  it("tracks the reviews being drafted as a set", () => {
+    expect(source).toContain("useState<ReadonlySet<string>>(new Set())");
+    expect(source).toContain("draftingAfterStart(");
+    expect(source).toContain("draftingAfterEnd(");
+    expect(source).toContain("isGeneratingAI={generatingAI.has(review.reviewId)}");
+    expect(source).not.toContain("setGeneratingAI(null)");
+  });
+});

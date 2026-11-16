@@ -17,6 +17,8 @@ import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import {
+  draftingAfterEnd,
+  draftingAfterStart,
   EMPTY_REPLY_BOXES,
   replyBoxAfterDraft,
   replyBoxAfterPost,
@@ -113,7 +115,8 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   const [replyBoxes, setReplyBoxes] = useState<ReplyBoxes>(EMPTY_REPLY_BOXES);
   const replyText = replyBoxes.text;
   const [submitting, setSubmitting] = useState<string | null>(null);
-  const [generatingAI, setGeneratingAI] = useState<string | null>(null);
+  // The reviews whose AI draft is being written; each box locks until its own lands.
+  const [generatingAI, setGeneratingAI] = useState<ReadonlySet<string>>(new Set());
   const [tab, setTab] = useState<"needs_reply" | "replied">("needs_reply");
   const [confirmTarget, setConfirmTarget] = useState<GoogleReview | null>(null);
   // After a reply posts: where keyboard focus goes (a review id, or null for
@@ -279,7 +282,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
 
   const handleDraftAI = async (review: GoogleReview) => {
     try {
-      setGeneratingAI(review.reviewId);
+      setGeneratingAI((prev) => draftingAfterStart(prev, review.reviewId));
 
       const response = await fetch("/api/reviews/draft-response", {
         method: "POST",
@@ -313,7 +316,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       console.error("Error generating AI response:", err);
       toast.error(shownError(err, DRAFT_FAILED).message);
     } finally {
-      setGeneratingAI(null);
+      setGeneratingAI((prev) => draftingAfterEnd(prev, review.reviewId));
     }
   };
 
@@ -327,7 +330,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       needsReply={needsReply}
       isReplyOpen={replyingTo === review.reviewId}
       isSubmitting={submitting === review.reviewId}
-      isGeneratingAI={generatingAI === review.reviewId}
+      isGeneratingAI={generatingAI.has(review.reviewId)}
       replyValue={replyText[review.reviewId] || ""}
       onOpenReply={() => setReplyingTo(review.reviewId)}
       onCloseReply={() => setReplyingTo(null)}

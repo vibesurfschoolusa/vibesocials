@@ -50,6 +50,17 @@ export function replyBoxAfterUndo(boxes: ReplyBoxes, id: string): ReplyBoxes {
   return { text: { ...boxes.text, [id]: kept }, undo: withoutUndo(boxes.undo, id) };
 }
 
+/** The reviews whose AI draft is being written: each box stays locked until its own lands or fails. */
+export function draftingAfterStart(drafting: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  return new Set(drafting).add(id);
+}
+
+export function draftingAfterEnd(drafting: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  const rest = new Set(drafting);
+  rest.delete(id);
+  return rest;
+}
+
 export function replyBoxAfterPost(boxes: ReplyBoxes, id: string): ReplyBoxes {
   return { text: { ...boxes.text, [id]: "" }, undo: withoutUndo(boxes.undo, id) };
 }
@@ -86,6 +97,7 @@ export function ReplyForm({
   const describedBy = [generatingAI ? "review-reply-drafting" : "", counter ? "review-reply-length" : ""]
     .filter(Boolean)
     .join(" ");
+  const canUndo = onUndoDraft !== undefined && !generatingAI;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -115,21 +127,22 @@ export function ReplyForm({
         readOnly={generatingAI}
         aria-busy={generatingAI || undefined}
       />
-      {generatingAI ? (
-        <p id="review-reply-drafting" role="status" className="text-xs text-muted-foreground">
-          {DRAFTING_STATUS}
+      {/* Both live regions stay on the page and only their text changes, so
+          screen readers announce it (a region added with its text is often missed).
+          Empty, they are sr-only: still in the tree, taking no space. */}
+      <p id="review-reply-drafting" role="status" className="text-xs text-muted-foreground empty:sr-only">
+        {generatingAI ? DRAFTING_STATUS : ""}
+      </p>
+      <div className={canUndo ? "flex flex-wrap items-center gap-3" : "contents"}>
+        <p role="status" className="text-xs text-muted-foreground empty:sr-only">
+          {canUndo ? UNDO_STATUS : ""}
         </p>
-      ) : null}
-      {onUndoDraft && !generatingAI ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <p role="status" className="text-xs text-muted-foreground">
-            {UNDO_STATUS}
-          </p>
+        {canUndo ? (
           <Button type="button" variant="outline" size="sm" onClick={onUndoDraft} disabled={submitting}>
             Undo
           </Button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       {counter ? (
         <div id="review-reply-length" className={tooLong ? "space-y-1 text-xs text-destructive" : "text-xs text-muted-foreground"}>
           <p>{counter}</p>
