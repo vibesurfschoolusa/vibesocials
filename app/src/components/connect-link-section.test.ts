@@ -182,3 +182,18 @@ describe("changeConnectLink", () => {
     expect(announce).not.toHaveBeenCalled();
   });
 });
+
+// R27 MM3 (pages L1): "Create link" is replaced by the new link, so focus fell
+// to the page. It goes to the new link's Copy button (lib/focusAfter).
+describe("Client connect link: focus after Create link", () => {
+  it("the press hands focus to the new Copy button", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./connect-link-section.tsx", import.meta.url)), "utf8");
+    const create = source.slice(source.indexOf("async function onCreate("), source.indexOf("async function onCopy("));
+    expect(create).toMatch(/const pressed = event\?\.currentTarget \?\? null;/);
+    expect(create).toMatch(/await makeLink\(selected\);\s+(\/\/[^\n]*\n\s+)?focusAfterPress\(pressed, \(\) => copyRef\.current\);/);
+    expect(source).toMatch(/<Button ref=\{copyRef\} type="button" variant="outline" onClick=\{onCopy\}>/);
+    expect(source).toMatch(/copyRef=\{copyRef\}/);
+  });
+});

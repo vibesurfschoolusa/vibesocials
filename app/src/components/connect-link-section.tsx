@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode, type Ref } from "react";
 import { Copy } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { announceClientLinksReplaced } from "@/components/client-links-refresh";
 import { formatDisplayDate } from "@/lib/displayDate";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
 /**
@@ -61,8 +62,10 @@ export interface ConnectLinkViewProps {
   selected: Platform[];
   busy: boolean;
   onToggle: (platform: Platform) => void;
-  onCreate: () => void;
+  onCreate: (event?: MouseEvent<HTMLButtonElement>) => void;
   onCopy: () => void;
+  /** The new link's Copy button, which takes focus after Create link. */
+  copyRef?: Ref<HTMLButtonElement>;
   onReplace: () => void;
   onTurnOff: () => void;
   /** The confirm dialog, rendered inside the card. */
@@ -83,6 +86,7 @@ export function ConnectLinkSectionView({
   onCopy,
   onReplace,
   onTurnOff,
+  copyRef,
   dialog = null,
   pausedByPlan = false,
   workspaceBlocked = null,
@@ -112,7 +116,7 @@ export function ConnectLinkSectionView({
                   aria-label="Client connect link"
                   onFocus={(event) => event.currentTarget.select()}
                 />
-                <Button type="button" variant="outline" onClick={onCopy}>
+                <Button ref={copyRef} type="button" variant="outline" onClick={onCopy}>
                   <Copy className="h-4 w-4" aria-hidden />
                   Copy
                 </Button>
@@ -186,6 +190,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [selected, setSelected] = useState<Platform[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
+  const copyRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,10 +267,13 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     toast.success("The link is off. It no longer works.");
   }, [send, toast, workspaceId]);
 
-  async function onCreate() {
+  async function onCreate(event?: MouseEvent<HTMLButtonElement>) {
+    const pressed = event?.currentTarget ?? null;
     setBusy(true);
     try {
       await makeLink(selected);
+      // R27 MM3: Create link is replaced by the new link; focus goes to its Copy button.
+      focusAfterPress(pressed, () => copyRef.current);
     } catch {
       // Already shown as a toast.
     } finally {
@@ -293,6 +301,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       onToggle={onToggle}
       onCreate={onCreate}
       onCopy={onCopy}
+      copyRef={copyRef}
       onReplace={() => setConfirm("replace")}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}

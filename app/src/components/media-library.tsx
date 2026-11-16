@@ -2,8 +2,8 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import type { DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DragEvent, MouseEvent, Ref } from "react";
 import { upload } from "@vercel/blob/client";
 import {
   Copy,
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/card";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { ConfirmDialog, ConfirmFailureShown, confirmFailureText } from "@/components/ui/dialog";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -378,6 +379,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [link, setLink] = useState<UploadLinkDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
+  const copyRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -446,10 +448,13 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
     toast.success("The link is off. It no longer works.");
   }, [toast, workspaceId]);
 
-  async function handleCreate() {
+  async function handleCreate(event?: MouseEvent<HTMLButtonElement>) {
+    const pressed = event?.currentTarget ?? null;
     setBusy(true);
     try {
       await makeLink();
+      // R27 MM3: Create link is replaced by the new link; focus goes to its Copy button.
+      focusAfterPress(pressed, () => copyRef.current);
     } catch (error) {
       const text = confirmFailureText(error);
       if (text) toast.error(text);
@@ -483,6 +488,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       busy={busy}
       onCreate={handleCreate}
       onCopy={copyUrl}
+      copyRef={copyRef}
       onReplace={() => setConfirm("replace")}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
@@ -511,8 +517,10 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
 export interface UploadLinkPanelViewProps {
   link: UploadLinkDto | null;
   busy: boolean;
-  onCreate: () => void;
+  onCreate: (event?: MouseEvent<HTMLButtonElement>) => void;
   onCopy: () => void;
+  /** The new link's Copy button, which takes focus after Create link. */
+  copyRef?: Ref<HTMLButtonElement>;
   onReplace: () => void;
   onTurnOff: () => void;
   /** The confirm dialog, rendered inside the card. */
@@ -531,6 +539,7 @@ export function UploadLinkPanelView({
   onCopy,
   onReplace,
   onTurnOff,
+  copyRef,
   dialog = null,
   pausedByPlan = false,
   workspaceBlocked = null,
@@ -570,7 +579,7 @@ export function UploadLinkPanelView({
                   aria-label="Client upload link"
                   onFocus={(event) => event.currentTarget.select()}
                 />
-                <Button type="button" variant="outline" onClick={onCopy}>
+                <Button ref={copyRef} type="button" variant="outline" onClick={onCopy}>
                   <Copy className="h-4 w-4" aria-hidden />
                   Copy
                 </Button>

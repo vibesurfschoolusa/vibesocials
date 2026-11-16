@@ -132,3 +132,16 @@ describe("the media library's error sentences", () => {
     expect(MEDIA_MESSAGES.uploadNetwork).toBe("Couldn't upload the file. Check your connection and try again.");
   });
 });
+
+// R27 MM3 (pages L1): the upload link's "Create link" is replaced by the new
+// link, so focus fell to the page. It goes to the new Copy button.
+describe("Client upload link: focus after Create link", () => {
+  it("the press hands focus to the new Copy button", () => {
+    const source = readFileSync(fileURLToPath(new URL("./media-library.tsx", import.meta.url)), "utf8");
+    const create = source.slice(source.indexOf("async function handleCreate("), source.indexOf("async function copyUrl("));
+    expect(create).toMatch(/const pressed = event\?\.currentTarget \?\? null;/);
+    expect(create).toMatch(/await makeLink\(\);\s+(\/\/[^\n]*\n\s+)?focusAfterPress\(pressed, \(\) => copyRef\.current\);/);
+    expect(source).toMatch(/<Button ref=\{copyRef\} type="button" variant="outline" onClick=\{onCopy\}>/);
+    expect(source).toMatch(/copyRef=\{copyRef\}/);
+  });
+});

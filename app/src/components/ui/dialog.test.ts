@@ -184,7 +184,7 @@ describe("ConfirmDialog callers", () => {
   for (const path of ["../../app/queue/queue-view.tsx", "../media-library.tsx"]) {
     it(`${path}: Create link says a failure through the same texts`, () => {
       const caller = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
-      const body = caller.slice(caller.indexOf("async function handleCreate()"), caller.indexOf("async function copyUrl()"));
+      const body = caller.slice(caller.indexOf("async function handleCreate("), caller.indexOf("async function copyUrl()"));
       expect(body).toMatch(/catch \(error\) \{\s+const text = confirmFailureText\(error\);\s+if \(text\) toast\.error\(text\);/);
     });
   }
