@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/cn";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { addPickedFiles, fileKind, splitDroppedFiles, type PickedFile } from "@/lib/clientPage";
 import { UPLOAD_LINK_TEXT_MAX } from "@/lib/uploadLink";
 
@@ -64,7 +65,9 @@ function nothingSentText(failures: ClientFileFailure[]): string {
 /**
  * What arrived, once every file was tried. R5-pages L9: when none arrived it is
  * an alert, so a screen reader hears it, where before the page said nothing.
- * `failures` are the failed files' kinds and sentences.
+ * `failures` are the failed files' kinds and sentences. R27 MM3: both regions
+ * are rendered empty before the files are sent, so the result is announced
+ * when it is written into them.
  */
 export function UploadSummary({
   sentCount,
@@ -75,24 +78,29 @@ export function UploadSummary({
   failures: ClientFileFailure[];
   total: number;
 }) {
-  if (sentCount === 0 && failures.length > 0) {
-    return (
-      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
-        <p className="text-lg font-semibold">Nothing was sent</p>
-        <p className="mt-1 text-sm">{nothingSentText(failures)}</p>
-      </div>
-    );
-  }
-  if (sentCount === 0) return null;
   return (
-    <div role="status" className="rounded-lg border border-border bg-muted p-4">
-      <p className="text-lg font-semibold">Sent</p>
-      <p className="mt-1 text-sm">
-        {sentCount === total
-          ? `${sentCount} ${sentCount === 1 ? "file" : "files"} arrived. Thank you.`
-          : `${sentCount} of ${total} files arrived. The others are marked below.`}
-      </p>
-    </div>
+    <>
+      <div role="alert">
+        {sentCount === 0 && failures.length > 0 ? (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+            <p className="text-lg font-semibold">Nothing was sent</p>
+            <p className="mt-1 text-sm">{nothingSentText(failures)}</p>
+          </div>
+        ) : null}
+      </div>
+      <div role="status">
+        {sentCount > 0 ? (
+          <div className="rounded-lg border border-border bg-muted p-4">
+            <p className="text-lg font-semibold">Sent</p>
+            <p className="mt-1 text-sm">
+              {sentCount === total
+                ? `${sentCount} ${sentCount === 1 ? "file" : "files"} arrived. Thank you.`
+                : `${sentCount} of ${total} files arrived. The others are marked below.`}
+            </p>
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }
 
@@ -105,6 +113,8 @@ export function UploadLinkForm({ token }: { token: string }) {
   const [dropNote, setDropNote] = useState<string | null>(null);
   // Why each failed file failed, by file key (PickedFile carries the sentence only).
   const [failureKinds, setFailureKinds] = useState<Record<string, ClientFileFailure["kind"]>>({});
+  const sendRef = useRef<HTMLButtonElement>(null);
+  const summaryRef = useRef<HTMLDivElement>(null);
 
   function update(key: string, change: Partial<PickedFile>) {
     setFiles((prev) => prev.map((item) => (item.key === key ? { ...item, ...change } : item)));
@@ -113,6 +123,8 @@ export function UploadLinkForm({ token }: { token: string }) {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (files.length === 0 || phase === "sending") return;
+    // R27 MM3: "Try the files that didn't send" goes when sending starts; focus goes to Send.
+    focusAfterPress((event.nativeEvent as SubmitEvent).submitter, () => sendRef.current);
     setPhase("sending");
     for (const item of files) {
       if (item.status === "sent") continue;
@@ -132,6 +144,8 @@ export function UploadLinkForm({ token }: { token: string }) {
         update(item.key, { status: "failed", error: failure.message });
       }
     }
+    // Send is replaced by the result: focus goes to the summary, which says it.
+    focusAfterPress(sendRef.current, () => summaryRef.current);
     setPhase("done");
   }
 
@@ -155,17 +169,22 @@ export function UploadLinkForm({ token }: { token: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {phase === "done" ? (
+      {/* Empty until the files were tried, and then without the form's gap under it. */}
+      <div ref={summaryRef} tabIndex={-1} className={cn("outline-none", phase !== "done" && "mb-0")}>
         <UploadSummary
-          sentCount={sentCount}
-          failures={files.flatMap((item) =>
-            item.status === "failed"
-              ? [{ kind: failureKinds[item.key] ?? "network", message: item.error ?? NETWORK_MESSAGE }]
-              : [],
-          )}
+          sentCount={phase === "done" ? sentCount : 0}
+          failures={
+            phase === "done"
+              ? files.flatMap((item) =>
+                  item.status === "failed"
+                    ? [{ kind: failureKinds[item.key] ?? "network", message: item.error ?? NETWORK_MESSAGE }]
+                    : [],
+                )
+              : []
+          }
           total={files.length}
         />
-      ) : null}
+      </div>
 
       {phase !== "done" ? (
         <>
@@ -271,6 +290,7 @@ export function UploadLinkForm({ token }: { token: string }) {
         </div>
       ) : (
         <Button
+          ref={sendRef}
           type="submit"
           size="lg"
           className="w-full"

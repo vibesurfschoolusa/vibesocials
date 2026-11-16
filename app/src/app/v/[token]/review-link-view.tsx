@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { focusAfterPress } from "@/lib/focusAfter";
 import {
   REVIEW_LIST_MAX,
   REVIEW_NOTE_MAX,
@@ -102,14 +103,18 @@ export function ReviewPostCard({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const stateRef = useRef<HTMLParagraphElement>(null);
+  const sendRef = useRef<HTMLButtonElement>(null);
   const state = stateText(post);
   // Whole characters, as the server counts them (an emoji is one, not two).
   const noteLength = Array.from(note.trim()).length;
   const noteTooShort = noteLength === 0;
   const noteTooLong = noteLength > REVIEW_NOTE_MAX;
 
+  /** `pressed`: the button the decision came from, which the answer disables or removes. */
   async function decide(
     body: { decision: "approve"; version: string } | { decision: "change"; note: string },
+    pressed: HTMLElement | null,
   ) {
     setBusy(true);
     setError(null);
@@ -124,6 +129,7 @@ export function ReviewPostCard({
       );
       const outcome = reviewDecisionOutcome(response.status, await response.json().catch(() => null));
       if (outcome.kind === "saved") {
+        focusAfterPress(pressed, () => stateRef.current);
         setAsking(false);
         onDecided(outcome.patch);
         return;
@@ -176,18 +182,22 @@ export function ReviewPostCard({
           </ul>
         ) : null}
 
-        {state ? (
-          <p
-            className={
-              post.state === "approved"
-                ? "inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-400"
-                : "inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-3 py-1 text-sm font-medium text-amber-700 dark:text-amber-400"
-            }
-          >
-            <span aria-hidden>{post.state === "approved" ? "✓" : "✎"}</span>
-            {state}
-          </p>
-        ) : null}
+        {/* R27 MM3: on the page from the first render, so a decision's new state is announced. */}
+        <div role="status">
+          {state ? (
+            <p
+              ref={stateRef}
+              className={
+                post.state === "approved"
+                  ? "inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-400"
+                  : "inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-3 py-1 text-sm font-medium text-amber-700 dark:text-amber-400"
+              }
+            >
+              <span aria-hidden>{post.state === "approved" ? "✓" : "✎"}</span>
+              {state}
+            </p>
+          ) : null}
+        </div>
         {post.state === "change_requested" && post.note ? (
           <p className="whitespace-pre-wrap break-words rounded-[var(--radius)] bg-muted/60 p-3 text-sm">
             {post.note}
@@ -201,7 +211,7 @@ export function ReviewPostCard({
               onSubmit={(event) => {
                 event.preventDefault();
                 if (noteTooShort || noteTooLong) return;
-                void decide({ decision: "change", note });
+                void decide({ decision: "change", note }, sendRef.current);
               }}
             >
               <Label htmlFor={`note-${post.id}`}>What would you like changed?</Label>
@@ -218,7 +228,7 @@ export function ReviewPostCard({
                 {noteLength}/{REVIEW_NOTE_MAX}. {changeNoteHint(post)}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={noteTooShort || noteTooLong}>
+                <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={noteTooShort || noteTooLong}>
                   Send
                 </Button>
                 <Button type="button" size="lg" className="w-full sm:w-auto" variant="ghost" disabled={busy} onClick={() => setAsking(false)}>
@@ -234,7 +244,7 @@ export function ReviewPostCard({
                 className="w-full sm:w-auto"
                 loading={busy}
                 disabled={post.state === "approved"}
-                onClick={() => void decide({ decision: "approve", version: post.version })}
+                onClick={(event) => void decide({ decision: "approve", version: post.version }, event.currentTarget)}
               >
                 Looks good
               </Button>

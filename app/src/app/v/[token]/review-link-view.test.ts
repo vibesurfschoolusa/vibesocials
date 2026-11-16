@@ -102,3 +102,33 @@ describe("ReviewListMore", () => {
     expect(renderToStaticMarkup(createElement(ReviewListMore, { more: false }))).toBe("");
   });
 });
+
+// R27 MM3 (pages L5): "Looks good" disables itself once approved and the
+// change request's Send goes with its form, so focus fell to the page and the
+// new state was not announced. The state line is a live region from the first
+// render, and focus goes to it (lib/focusAfter).
+describe("ReviewPostCard: the answer to a decision", () => {
+  const statusRegion = /<div role="status"[^>]*>(.*?)<\/div>/;
+
+  it("has an empty status region before any decision", () => {
+    const match = render(post()).match(statusRegion);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe("");
+  });
+
+  it("shows the state inside that region", () => {
+    expect(render(post({ state: "approved" })).match(statusRegion)![1]).toContain("You approved this");
+    expect(render(post({ state: "change_requested", note: "x" })).match(statusRegion)![1]).toContain("Change requested");
+  });
+
+  it("a saved decision hands focus to the state line", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/if \(outcome\.kind === "saved"\) \{\s+focusAfterPress\(pressed, \(\) => stateRef\.current\);\s+setAsking\(false\);/);
+    expect(source).toMatch(/onClick=\{\(event\) => void decide\(\{ decision: "approve", version: post\.version \}, event\.currentTarget\)\}/);
+    expect(source).toMatch(/void decide\(\{ decision: "change", note \}, sendRef\.current\);/);
+    expect(source).toMatch(/<Button ref=\{sendRef\} type="submit"/);
+    expect(source).toMatch(/<p\s+ref=\{stateRef\}/);
+  });
+});

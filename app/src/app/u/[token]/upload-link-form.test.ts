@@ -82,3 +82,30 @@ describe("failureOf, what a failed file says", () => {
     });
   });
 });
+
+// R27 MM3 (pages L5): the summary appeared already filled, which a screen
+// reader may not announce, and Send was replaced under the focus. Both live
+// regions are on the page from the first render; when sending ends, focus goes
+// to the summary (lib/focusAfter).
+describe("UploadSummary before anything was sent", () => {
+  it("renders both live regions, empty", () => {
+    const html = render(0, [], 0);
+    expect(html).toMatch(/<div role="alert"><\/div>/);
+    expect(html).toMatch(/<div role="status"><\/div>/);
+  });
+
+  it("puts each result in its own region", () => {
+    expect(render(2, [])).toMatch(/<div role="alert"><\/div><div role="status">.*2 files arrived/);
+    expect(render(0, [network])).toMatch(/<div role="alert">.*Nothing was sent.*<\/div><div role="status"><\/div>/);
+  });
+
+  it("the form renders the summary from the first render and moves focus to it when sending ends", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
+    expect(source).not.toMatch(/phase === "done" \? \(\s+<UploadSummary/);
+    expect(source).toMatch(/<div ref=\{summaryRef\} tabIndex=\{-1\}[^>]*>\s+<UploadSummary/);
+    expect(source).toMatch(/focusAfterPress\(\(event\.nativeEvent as SubmitEvent\)\.submitter, \(\) => sendRef\.current\);/);
+    expect(source).toMatch(/focusAfterPress\(sendRef\.current, \(\) => summaryRef\.current\);\s+setPhase\("done"\);/);
+  });
+});
