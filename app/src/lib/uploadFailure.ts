@@ -35,36 +35,43 @@ export const UPLOAD_REFUSED_MESSAGE =
 export const UPLOAD_OFFLINE_MESSAGE =
   "We couldn't reach Vibe Socials, so the file wasn't uploaded. Check your connection and try again.";
 
+/**
+ * The upload's request dropped but our own question was answered: the file
+ * storage host is what failed (blocked by a school or office filter, or down).
+ */
+export const UPLOAD_STORAGE_UNREACHABLE_MESSAGE =
+  "The file couldn't be uploaded. Vibe Socials answered, but its file storage couldn't be reached from this network. Try again, or try another connection.";
+
 // What the blob client throws when the token route answers non-2xx (its own
 // text has a double space in one spelling).
 const TOKEN_REFUSED = /failed to\s+retrieve the client token/i;
 
-// What it throws when a part's request drops; also its answer to a real
-// outage, so it means "offline" only when our own question fails too.
+// What it throws when a part's request drops, and on a real outage.
 const BLOB_SERVICE_UNAVAILABLE = /blob service is currently not available/i;
 
 /**
  * The storage sentence when that is why the upload failed; for any other
- * refused token, UPLOAD_REFUSED_MESSAGE; for a request that never left,
- * UPLOAD_OFFLINE_MESSAGE; else the original error.
+ * refused token, UPLOAD_REFUSED_MESSAGE; for a dropped request,
+ * UPLOAD_OFFLINE_MESSAGE when our own question fails too, else
+ * UPLOAD_STORAGE_UNREACHABLE_MESSAGE; else the original error.
  */
 export async function explainUploadFailure(
   error: unknown,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Error> {
   const original = error instanceof Error ? error : new Error(String(error));
-  // fetch throws a TypeError only when no answer came (the browser's own text).
-  const otherwise = TOKEN_REFUSED.test(original.message)
-    ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE)
-    : original instanceof TypeError
-      ? new UploadRefusedError(UPLOAD_OFFLINE_MESSAGE)
-      : original;
+  // A request that got no answer: fetch's TypeError (the browser's own text),
+  // or the blob client's "not available". One rule for both, decided by
+  // whether our own question below is answered.
+  const dropped = original instanceof TypeError || BLOB_SERVICE_UNAVAILABLE.test(original.message);
+  const refused = TOKEN_REFUSED.test(original.message) ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE) : null;
   let response: Response;
   try {
     response = await fetchImpl("/api/upload", { method: "GET" });
   } catch {
-    return BLOB_SERVICE_UNAVAILABLE.test(original.message) ? new UploadRefusedError(UPLOAD_OFFLINE_MESSAGE) : otherwise;
+    return refused ?? (dropped ? new UploadRefusedError(UPLOAD_OFFLINE_MESSAGE) : original);
   }
+  const otherwise = refused ?? (dropped ? new UploadRefusedError(UPLOAD_STORAGE_UNREACHABLE_MESSAGE) : original);
   try {
     // R20 new-customer L2: the session ended (another tab, a new password).
     // That is why the upload failed, whatever the blob client threw; the

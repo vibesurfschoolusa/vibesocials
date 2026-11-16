@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, UPLOAD_REFUSED_MESSAGE, UploadRefusedError } from "./uploadFailure";
+import {
+  explainUploadFailure,
+  UPLOAD_OFFLINE_MESSAGE,
+  UPLOAD_REFUSED_MESSAGE,
+  UPLOAD_STORAGE_UNREACHABLE_MESSAGE,
+  UploadRefusedError,
+} from "./uploadFailure";
 
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
@@ -143,20 +149,38 @@ describe("explainUploadFailure", () => {
       },
     );
 
-    it("the browser's text with the question answered and nothing to say: still our sentence", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
-      expect((await explainUploadFailure(new TypeError("Load failed"), fetchMock)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
+    // Lead review: one rule for both kinds of dropped request. "Couldn't reach
+    // Vibe Socials" only when our own question fails too; answered, the file
+    // storage host is what this network could not reach (a school or office
+    // filter), or it was down: either way "try again, or another connection".
+    const UNAVAILABLE = "Vercel Blob: The blob service is currently not available. Please try again.";
+    const answeredStatuses = [
+      ["answered with nothing to say", jsonResponse({ storageFull: false })],
+      ["answered 500", jsonResponse({ error: "x" }, false, 500)],
+    ] as const;
+
+    it.each(answeredStatuses)("the browser's TypeError, our question %s: the storage sentence", async (_name, answer) => {
+      const explained = await explainUploadFailure(new TypeError("Load failed"), vi.fn().mockResolvedValue(answer));
+      expect(explained).toBeInstanceOf(UploadRefusedError);
+      expect(explained.message).toBe(UPLOAD_STORAGE_UNREACHABLE_MESSAGE);
+      expect(UPLOAD_STORAGE_UNREACHABLE_MESSAGE).toBe(
+        "The file couldn't be uploaded. Vibe Socials answered, but its file storage couldn't be reached from this network. Try again, or try another connection.",
+      );
     });
 
     it("the blob service unavailable while we cannot be reached: our sentence", async () => {
-      const unavailable = new Error("Vercel Blob: The blob service is currently not available. Please try again.");
-      expect((await explainUploadFailure(unavailable, offline)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
+      expect((await explainUploadFailure(new Error(UNAVAILABLE), offline)).message).toBe(UPLOAD_OFFLINE_MESSAGE);
     });
 
-    it("the blob service unavailable while we answer: kept (the connection is not the cause)", async () => {
-      const unavailable = new Error("Vercel Blob: The blob service is currently not available. Please try again.");
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
-      await expect(explainUploadFailure(unavailable, fetchMock)).resolves.toBe(unavailable);
+    it.each(answeredStatuses)("the blob service unavailable, our question %s: the storage sentence", async (_name, answer) => {
+      const explained = await explainUploadFailure(new Error(UNAVAILABLE), vi.fn().mockResolvedValue(answer));
+      expect(explained).toBeInstanceOf(UploadRefusedError);
+      expect(explained.message).toBe(UPLOAD_STORAGE_UNREACHABLE_MESSAGE);
+    });
+
+    it("signed out still wins over a dropped request", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "You were signed out. Sign in again." }, false, 401));
+      expect((await explainUploadFailure(new TypeError("Failed to fetch"), fetchMock)).message).toBe("You were signed out. Sign in again.");
     });
 
     it("a reason the route gives still wins", async () => {
