@@ -167,7 +167,7 @@ describe("the account choice after a lost Connect answer (R30)", () => {
   });
 
   it("Cancel: a cancelled choice says so", () => {
-    expect(cancelOutcome(200, { ok: true }, "instagram", "/c/t")).toEqual({ go: "/c/t?error=instagram_cancelled" });
+    expect(cancelOutcome(200, null, "instagram", "/c/t")).toEqual({ go: "/c/t?error=instagram_cancelled" });
   });
 
   it("Cancel: a choice already used, with its platform now connected, goes to the page with the success code", () => {
