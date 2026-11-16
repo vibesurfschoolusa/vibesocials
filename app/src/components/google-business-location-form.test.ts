@@ -237,7 +237,7 @@ describe("Google location form: the dropdown after a save", () => {
       "Posting to Joe's Pizza. Load your locations again to choose another.",
     );
     expect(savedLocationLine(null, "STORE-1")).toBe(
-      "Posting to the location you saved (STORE-1). Load your locations from Google to choose by name.",
+      "Posting to the location you saved (STORE-1). Press Fetch locations from Google to choose it by name.",
     );
     expect(savedLocationLine(null, null)).toBe("Load your locations from Google and choose the one to post to.");
     expect(savedLocationLine(null, "  ")).toBe("Load your locations from Google and choose the one to post to.");
@@ -262,10 +262,22 @@ describe("Google location form: the dropdown while saving", () => {
   it("one status line by the dropdown: Saving…, then the failure, else nothing", () => {
     expect(PICK_SAVING_STATUS).toBe("Saving…");
     const failure = { message: "The location wasn't saved. Please try again in a minute.", signInUrl: null };
-    expect(pickStatusText(true, null)).toBe("Saving…");
-    expect(pickStatusText(true, failure)).toBe("Saving…");
-    expect(pickStatusText(false, failure)).toBe(failure.message);
-    expect(pickStatusText(false, null)).toBe("");
+    expect(pickStatusText("pick", null)).toBe("Saving…");
+    expect(pickStatusText("pick", failure)).toBe("Saving…");
+    expect(pickStatusText(null, failure)).toBe(failure.message);
+    expect(pickStatusText(null, null)).toBe("");
+  });
+
+  // LL2 second review: an Advanced save says Saving… on its own button, not by
+  // the dropdown (which may not be shown).
+  it("an Advanced save says nothing by the dropdown", () => {
+    expect(pickStatusText("field", null)).toBe("");
+    expect(formSource).toContain("const pickStatus = pickStatusText(savingFrom, pickFailure);");
+    expect(formSource).toContain("const saving = savingFrom !== null;");
+    const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
+    expect(save).toContain("setSavingFrom(from);");
+    expect(save.match(/setSavingFrom\(null\);/g)).toHaveLength(3);
+    expect(formSource).not.toContain("setSaving(");
   });
 
   it("the region is drawn from the first render, outside the dropdown's own block", () => {
@@ -280,6 +292,14 @@ describe("Google location form: the dropdown while saving", () => {
     const region = formSource.slice(regionAt, formSource.indexOf("</div>", regionAt));
     expect(region).toContain('<p className="text-sm text-muted-foreground">{pickStatus}</p>');
     expect(region).toContain("{!saving && pickFailure?.signInUrl ? <SignInAgainLink href={pickFailure.signInUrl} /> : null}");
-    expect(formSource).toContain("const pickStatus = pickStatusText(saving, pickFailure);");
+    expect(formSource).toContain("const pickStatus = pickStatusText(savingFrom, pickFailure);");
+  });
+});
+
+// LL2 second review: the saved line names the button by its real label.
+describe("Google location form: the saved line names the real button", () => {
+  it("says Fetch locations from Google, the button's own label", () => {
+    expect(formSource).toContain('"Fetch locations from Google"}');
+    expect(savedLocationLine(null, "STORE-1")).toContain("Fetch locations from Google");
   });
 });

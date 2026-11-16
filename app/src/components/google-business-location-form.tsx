@@ -98,9 +98,14 @@ export function locationsLoadedStatus(
 /** LL2 lead review: said by the dropdown while a save runs, so a change that springs back has a reason. */
 export const PICK_SAVING_STATUS = "Saving…";
 
-/** The one sentence of the dropdown's status region: Saving… while a save runs, then a pick's failure, else nothing. */
-export function pickStatusText(saving: boolean, failure: PickerStatus | null): string {
-  if (saving) return PICK_SAVING_STATUS;
+/**
+ * The one sentence of the dropdown's status region: Saving… while a pick's save
+ * runs, then a pick's failure, else nothing. An Advanced save says Saving… on
+ * its own button, so nothing here (the dropdown may not even be shown).
+ */
+export function pickStatusText(savingFrom: SavePlace | null, failure: PickerStatus | null): string {
+  if (savingFrom === "pick") return PICK_SAVING_STATUS;
+  if (savingFrom === "field") return "";
   return failure?.message ?? "";
 }
 
@@ -133,7 +138,7 @@ export function pickAfterSave(name: string, from: SavePlace, ok: boolean): strin
 export function savedLocationLine(title: string | null, name: string | null): string {
   if (title) return `Posting to ${title}. Load your locations again to choose another.`;
   const saved = name?.trim();
-  if (saved) return `Posting to the location you saved (${saved}). Load your locations from Google to choose by name.`;
+  if (saved) return `Posting to the location you saved (${saved}). Press Fetch locations from Google to choose it by name.`;
   return "Load your locations from Google and choose the one to post to.";
 }
 
@@ -155,7 +160,9 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [savedName, setSavedName] = useState(initialLocationName ?? null);
   // R26 new-customer L1: the dropdown's value, controlled so a failed save can empty it.
   const [picked, setPicked] = useState("");
-  const [saving, setSaving] = useState(false);
+  // Which control's save is running (null: none), so "Saving…" shows only by that control.
+  const [savingFrom, setSavingFrom] = useState<SavePlace | null>(null);
+  const saving = savingFrom !== null;
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
   // R25 pages L4: the last fetch's failure and what the loaded list says, by
@@ -166,7 +173,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [listNote, setListNote] = useState<PickerStatus | null>(null);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const pickFailure = saveFailureAt(saveFailure, "pick");
-  const pickStatus = pickStatusText(saving, pickFailure);
+  const pickStatus = pickStatusText(savingFrom, pickFailure);
   const fieldFailure = saveFailureAt(saveFailure, "field");
 
   // Saves a location: picked from Google's list (with its name, saved at once)
@@ -174,7 +181,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   // picking from the list only filled the Advanced field, so a new user's
   // choice was silently never saved.
   async function saveLocation(name: string, title: string | null, from: SavePlace) {
-    setSaving(true);
+    setSavingFrom(from);
     setSaveFailure(null);
 
     try {
@@ -194,7 +201,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
         setSaveFailure({ from, status: { message: failed.message, signInUrl: failed.signInUrl } });
         setPicked(pickAfterSave(name, from, false));
-        setSaving(false);
+        setSavingFrom(null);
         if (failed.reconnect) router.refresh();
         return;
       }
@@ -205,13 +212,13 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       toast.success(
         title ? `Saved. Posts will go to ${title} on Google Maps.` : "Saved. Future posts will use this Maps location.",
       );
-      setSaving(false);
+      setSavingFrom(null);
       // Settings' "Connected as" label is server-rendered from the saved name.
       router.refresh();
     } catch {
       setSaveFailure({ from, status: { message: LOCATION_MESSAGES.saveOffline, signInUrl: null } });
       setPicked(pickAfterSave(name, from, false));
-      setSaving(false);
+      setSavingFrom(null);
     }
   }
 

@@ -23,6 +23,15 @@ export const INSTALLED_APP_HINT = "(you'll leave this page: copy anything you ty
 const noSubscribe = () => () => {};
 
 /**
+ * Whether this page runs as the installed app (lib/installedApp), for links
+ * that open a new tab only outside it. False on the server and in the first
+ * render; the installed app is known only in the browser.
+ */
+export function useInstalledApp(): boolean {
+  return useSyncExternalStore(noSubscribe, () => isInstalledApp(window), () => false);
+}
+
+/**
  * JJ3 lead review: the in-place Google sign-in (lib/gbpSignIn.ts), the
  * Reconnect button's own start. A plain anchor: /api/auth/* is a redirect
  * handler, not a Next.js page. Shown only to an owner; the routes give a
@@ -36,7 +45,7 @@ const noSubscribe = () => () => {};
  * new-tab link; the installed app is known only in the browser.
  */
 export function SignInAgainLink({ href, size = "sm" }: { href: string; size?: "sm" | "md" }) {
-  const installed = useSyncExternalStore(noSubscribe, () => isInstalledApp(window), () => false);
+  const installed = useInstalledApp();
   return <SignInAgainLinkView href={href} size={size} installed={installed} />;
 }
 

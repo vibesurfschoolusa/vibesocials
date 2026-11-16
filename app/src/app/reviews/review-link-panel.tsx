@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import { NewTabHint, SignInAgainLink } from "@/components/gbp-sign-in-link";
+import { NewTabHint, SignInAgainLink, useInstalledApp } from "@/components/gbp-sign-in-link";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -72,6 +72,32 @@ export function ReviewLinkPanel({
   );
 }
 
+/**
+ * "Print card" follows the sign-in link's rule (LL2 second review): in the
+ * installed app a new tab opens the browser, where iOS has no session and the
+ * card sends to Log in, so there it opens in the same view (the card page has
+ * the app's own navigation back); in a browser tab it opens a new one and says so.
+ */
+export function PrintCardLinkView({ installed }: { installed: boolean }) {
+  const className = buttonVariants({ variant: "outline", size: "sm" });
+  if (installed) {
+    return (
+      <Link href="/reviews/print-card" className={className}>
+        Print card
+      </Link>
+    );
+  }
+  return (
+    <Link href="/reviews/print-card" target="_blank" rel="noopener noreferrer" className={className}>
+      Print card <NewTabHint />
+    </Link>
+  );
+}
+
+function PrintCardLink() {
+  return <PrintCardLinkView installed={useInstalledApp()} />;
+}
+
 /** The panel for a given state; separate so it renders in tests without a fetch. */
 export function ReviewLinkPanelView({
   state,
@@ -137,14 +163,7 @@ export function ReviewLinkPanelView({
                 <Button type="button" variant="outline" size="sm" onClick={() => copy(state.url, "Link")}>
                   Copy link
                 </Button>
-                <Link
-                  href="/reviews/print-card"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={buttonVariants({ variant: "outline", size: "sm" })}
-                >
-                  Print card <NewTabHint />
-                </Link>
+                <PrintCardLink />
               </div>
             </div>
             <div className="flex flex-col gap-1.5">

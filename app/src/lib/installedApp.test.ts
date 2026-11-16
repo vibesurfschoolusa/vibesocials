@@ -28,6 +28,14 @@ describe("isInstalledApp", () => {
     expect(isInstalledApp(win(false, true, false))).toBe(true);
   });
 
+  // LL2 second review: only iOS keeps a separate cookie store; the comment says so.
+  it("its comment says only iOS keeps separate cookies, and why the rule covers every platform", () => {
+    const source = readFileSync(path.join(__dirname, "installedApp.ts"), "utf8");
+    expect(source).not.toContain("The installed app\n * keeps its own cookies");
+    expect(source).toContain("iOS");
+    expect(source).toContain("one consistent rule");
+  });
+
   it("imports nothing", () => {
     const source = readFileSync(path.join(__dirname, "installedApp.ts"), "utf8");
     expect(source).not.toMatch(/^import /m);

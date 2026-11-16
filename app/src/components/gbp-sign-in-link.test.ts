@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -85,5 +87,14 @@ describe("NewTabHint", () => {
     const hint = renderToStaticMarkup(createElement(NewTabHint));
     expect(hint).toMatch(/^<span class="[^"]*">\(opens in a new tab\)<\/span>$/);
     expect(renderToStaticMarkup(createElement(SignInAgainLink, { href: HREF }))).toContain(hint);
+  });
+});
+
+// LL2 second review: one hook for the installed app, shared with Print card.
+describe("useInstalledApp", () => {
+  it("is the hook the sign-in link uses", () => {
+    const source = readFileSync(path.join(__dirname, "gbp-sign-in-link.tsx"), "utf8");
+    expect(source).toMatch(/export function useInstalledApp\(\): boolean/);
+    expect(source).toContain("const installed = useInstalledApp();");
   });
 });

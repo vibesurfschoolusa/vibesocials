@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -6,7 +8,7 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: () => {}, 
 
 import { qrSvg } from "@/lib/qrSvg";
 
-import { ReviewLinkPanelView, reviewRequestMessage } from "./review-link-panel";
+import { PrintCardLinkView, ReviewLinkPanelView, reviewRequestMessage } from "./review-link-panel";
 
 const LINK = "https://g.page/r/abc/review";
 const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"], workspaceId = "ws-A", isMember = false) =>
@@ -90,5 +92,28 @@ describe("ReviewLinkPanelView", () => {
 
     expect(html).toContain("Get more reviews");
     expect(html).not.toContain("<svg");
+  });
+});
+
+// LL2 second review: in the iOS installed app a new tab opens the browser,
+// signed out, and the print card sends it to Log in. Print card follows the
+// sign-in link's rule: the same view in the installed app, a new tab otherwise.
+describe("Print card and the installed app", () => {
+  it("in a browser tab: a new tab, with the visible hint", () => {
+    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: false }));
+    expect(html).toMatch(/<a [^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*href="\/reviews\/print-card">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
+  });
+
+  it("in the installed app: the same view, and no new-tab hint", () => {
+    const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: true }));
+    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card">Print card<\/a>/);
+    expect(html).not.toContain("target=");
+    expect(html).not.toContain("new tab");
+  });
+
+  it("the panel decides with the shared installed-app hook", () => {
+    const source = readFileSync(path.join(__dirname, "review-link-panel.tsx"), "utf8");
+    expect(source).toContain("<PrintCardLinkView installed={useInstalledApp()} />");
+    expect(source).toContain("<PrintCardLink />");
   });
 });
