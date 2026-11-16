@@ -30,6 +30,7 @@ import {
   SEND_AGAIN_NO_ANSWER,
   SEND_AGAIN_NOT_SENT,
   SEND_AGAIN_STALE_NOTE,
+  sendAgainKey,
 } from "./post-job-card";
 
 const cardSource = readFileSync(fileURLToPath(new URL("./post-job-card.tsx", import.meta.url)), "utf8");
@@ -364,6 +365,34 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       const press = createSendAgain("job-9", fetcher, () => false);
       await expect(press()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NOT_SENT });
       expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    // R28 lead review: prepare and the marking both failed, so the re-read finds
+    // the post publishing and the press stays used. When the stuck-job sweep
+    // later fails it with no results, the card's next render shows it unsent,
+    // and Send again works again: the press follows the post, not just its id.
+    it("in progress, then later unsent: Send again works on the later render", async () => {
+      const inProgress = job({ id: "job-9", status: "in_progress", results: [], updatedAt: "2026-11-14T12:00:00.000Z" });
+      const unsent = job({ id: "job-9", status: "failed", results: [], updatedAt: "2026-11-14T14:05:00.000Z" });
+      const body = dispatchBody(false);
+      const first = createSendAgain(
+        "job-9",
+        vi
+          .fn()
+          .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+          .mockResolvedValueOnce(response(200, { postJob: { id: "job-9", status: "in_progress" }, results: [] })),
+        () => true,
+      );
+      await expect(first()).resolves.toMatchObject({ ok: false, refetch: true });
+      await expect(first()).resolves.toBeNull();
+
+      expect(sendAgainKey(unsent)).not.toBe(sendAgainKey(inProgress));
+      expect(sendAgainKey({ ...inProgress })).toBe(sendAgainKey(inProgress));
+      expect(cardSource).toMatch(/useMemo\(\(\) => createSendAgain\(job\.id\), \[job\.id, pressKey\]\)/);
+      expect(cardSource).toMatch(/const pressKey = sendAgainKey\(job\);/);
+
+      const later = createSendAgain("job-9", vi.fn().mockResolvedValueOnce(response(202, { ok: true })), () => true);
+      await expect(later()).resolves.toEqual({ ok: true });
     });
 
     it("the card reads the list again when the outcome asks", () => {

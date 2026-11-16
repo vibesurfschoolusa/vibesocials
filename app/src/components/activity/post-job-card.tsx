@@ -281,6 +281,11 @@ async function readStillUnsent(response: Response): Promise<"unsent" | "changed"
   }
 }
 
+/** What a Send again press belongs to: this post in this state (its status and last write). */
+export function sendAgainKey(job: Pick<PostJobDTO, "id" | "status" | "updatedAt">): string {
+  return `${job.id}:${job.status}:${job.updatedAt}`;
+}
+
 /** A failed post the server took again reads In progress until fresh data arrives. */
 export function displayedJobStatus(status: PostJobStatus, sentAgain: boolean): PostJobStatus {
   return sentAgain && status === "failed" ? "in_progress" : status;
@@ -350,7 +355,12 @@ export function PostJobCard({
   const [sendingAgain, setSendingAgain] = useState(false);
   const [sentAgain, setSentAgain] = useState(false);
   const [sendAgainNote, setSendAgainNote] = useState("");
-  const pressSendAgain = useMemo(() => createSendAgain(job.id), [job.id]);
+  // R28 lead review: a fresh press whenever the post itself changed (its status
+  // or last write), so a post the stuck-job sweep later fails unsent gets a
+  // working Send again; an unchanged post keeps a used press used.
+  const pressKey = sendAgainKey(job);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pressKey is the dependency on purpose
+  const pressSendAgain = useMemo(() => createSendAgain(job.id), [job.id, pressKey]);
 
   const [prevJob, setPrevJob] = useState(job);
   if (job !== prevJob) {
