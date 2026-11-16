@@ -202,7 +202,6 @@ import {
   recordRetry,
   recordSend,
   reserveRetry,
-  retryRefusal,
   sendRecorded,
   reserveFreeRuns,
   withdrawRetry,
@@ -465,7 +464,9 @@ describe("the per-person number", () => {
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-new", workspace: {}, day: NOW, mode: "now" }))?.code).toBe(
       "OWNER_DAILY_POST_LIMIT",
     );
-    expect((await retryRefusal({ workspaceId: "ws-new", postJobId: "older", now: NOW }))?.code).toBe("OWNER_DAILY_POST_LIMIT");
+    expect((await reserveRetry({ workspaceId: "ws-new", postJobId: "older", requestId: "r1", now: NOW }))?.code).toBe(
+      "OWNER_DAILY_POST_LIMIT",
+    );
     // The heir's count has the same 15: the runs happened while they were an owner too.
     workspace("ws-heir", {}, [owner("heir")]);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-heir", workspace: {}, day: NOW, mode: "now" }))?.code).toBe(
@@ -711,23 +712,21 @@ describe("retries", () => {
 
   it("4 failed platforms retried together are one run", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW })).resolves.toBeNull();
-    await recordRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r1", at: NOW });
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r1", now: NOW })).resolves.toBeNull();
     expect(store.events).toHaveLength(1);
   });
 
   it("the 4th retry run of a post in a day is refused with the sentence, whatever the platforms", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
     for (const requestId of ["r1", "r2", "r3"]) {
-      await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW })).resolves.toBeNull();
-      await recordRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, at: NOW });
+      await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW })).resolves.toBeNull();
     }
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW })).resolves.toEqual({
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW })).resolves.toEqual({
       code: "POST_RETRY_LIMIT",
       error: "This post has been retried 3 times today, the most for one day. Try again tomorrow.",
     });
     // Another post is not affected.
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-b", now: NOW })).resolves.toBeNull();
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-b", requestId: "s1", now: NOW })).resolves.toBeNull();
   });
 
   // R8-publishing L3 with R8-pages L6: the sentence points to Retry all failed
@@ -742,16 +741,16 @@ describe("retries", () => {
       "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.";
     const WITHOUT = "This post has been retried 3 times today, the most for one day. Try again tomorrow.";
     store.results["post-a"] = [failed("x"), failed("youtube"), { platform: "linkedin", status: "success", errorCode: null }];
-    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(WITH_POINTER);
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(WITH_POINTER);
     // X may already be live: Retry all would cover only YouTube, so the card has no such button.
     store.results["post-a"] = [failed("x", "PUBLISH_UNCONFIRMED"), failed("youtube")];
     expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(WITHOUT);
     store.results["post-a"] = [failed("x"), failed("youtube")];
     store.deadPlatforms = ["x"];
-    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(WITHOUT);
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(WITHOUT);
     store.results["post-a"] = [failed("youtube")];
     store.deadPlatforms = [];
-    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.error).toBe(WITHOUT);
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.error).toBe(WITHOUT);
   });
 
   it("retries recorded per platform before this change count once per request", async () => {
@@ -760,9 +759,10 @@ describe("retries", () => {
       store.events.push({ kind: "retry", workspaceId: "ws-1", platform, sourceId: `retry:post-a:${platform}:old-1`, at: NOW });
     }
     await recordRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r2", at: NOW });
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW })).resolves.toBeNull();
-    await recordRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r3", at: NOW });
-    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW }))?.code).toBe("POST_RETRY_LIMIT");
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r3", now: NOW })).resolves.toBeNull();
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW }))?.code).toBe(
+      "POST_RETRY_LIMIT",
+    );
   });
 
   it("the guard counts per UTC day: yesterday's retries leave today's three", async () => {
@@ -770,19 +770,19 @@ describe("retries", () => {
     for (const requestId of ["r1", "r2", "r3"]) {
       await recordRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, at: DAY_1 });
     }
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "post-a", now: NOW })).resolves.toBeNull();
+    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW })).resolves.toBeNull();
   });
 
   it("a retry run is refused by the per-person number and the pools like a post", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
     for (let p = 1; p <= 15; p += 1) await due("ws-1", `p-${p}`);
-    expect((await retryRefusal({ workspaceId: "ws-1", postJobId: "p-1", now: NOW }))?.error).toBe(
+    expect((await reserveRetry({ workspaceId: "ws-1", postJobId: "p-1", requestId: "r1", now: NOW }))?.error).toBe(
       "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.",
     );
     workspace("ws-2", {}, [owner("owner-2")]);
     for (let p = 1; p <= 3; p += 1) await due("ws-2", `q-${p}`);
     await sentElsewhere(2, NOW);
-    expect((await retryRefusal({ workspaceId: "ws-2", postJobId: "q-1", now: NOW }))?.error).toBe(
+    expect((await reserveRetry({ workspaceId: "ws-2", postJobId: "q-1", requestId: "r1", now: NOW }))?.error).toBe(
       "Vibe Socials has reached its daily limit of posts for the whole service, and retries count toward it. Retry tomorrow.",
     );
   });
@@ -794,10 +794,11 @@ describe("retries", () => {
     for (let p = 1; p <= 15; p += 1) await due("ws-free", `f-${p}`);
     await sentElsewhere(20, NOW);
     for (const requestId of ["r1", "r2", "r3"]) {
-      await expect(retryRefusal({ workspaceId: "ws-paid", postJobId: "p", now: NOW })).resolves.toBeNull();
-      await recordRetry({ workspaceId: "ws-paid", postJobId: "p", requestId, at: NOW });
+      await expect(reserveRetry({ workspaceId: "ws-paid", postJobId: "p", requestId, now: NOW })).resolves.toBeNull();
     }
-    expect((await retryRefusal({ workspaceId: "ws-paid", postJobId: "p", now: NOW }))?.code).toBe("POST_RETRY_LIMIT");
+    expect((await reserveRetry({ workspaceId: "ws-paid", postJobId: "p", requestId: "r4", now: NOW }))?.code).toBe(
+      "POST_RETRY_LIMIT",
+    );
   });
 
   it("never refuses the operator's retries", async () => {
@@ -805,7 +806,7 @@ describe("retries", () => {
     for (const requestId of ["r1", "r2", "r3", "r4"]) {
       await recordRetry({ workspaceId: "ws-ops", postJobId: "p", requestId, at: NOW });
     }
-    await expect(retryRefusal({ workspaceId: "ws-ops", postJobId: "p", now: NOW })).resolves.toBeNull();
+    await expect(reserveRetry({ workspaceId: "ws-ops", postJobId: "p", requestId: "r5", now: NOW })).resolves.toBeNull();
   });
 
   it("a retry whose hand-over failed is taken back, and only that one", async () => {
@@ -828,7 +829,6 @@ describe("a read error, and the operator is who the list says once verified", ()
       code: "LIMIT_CHECK_FAILED",
       error: "We couldn't check today's limits. Try again in a minute.",
     });
-    await expect(retryRefusal({ workspaceId: "ws-1", postJobId: "a", now: NOW })).resolves.toBeNull();
     store.down = false;
     expect(store.events).toHaveLength(0);
   });
@@ -875,6 +875,65 @@ describe("withdrawing a send that was not handed to publishing", () => {
     vi.spyOn(prisma.workspaceMember, "findMany").mockRejectedValueOnce(new Error("blip"));
     await expect(recordSend({ workspaceId: "ws-1", postJobIds: ["a"], at: NOW })).resolves.toEqual(["a"]);
     expect(sendsOf("a")[0]).toMatchObject({ pool: null, ownerIds: [] });
+  });
+});
+
+// R22-security L2: a grandfathered workspace draws from no pool, but while
+// billing is off its owners' per-person number applies, to a retry as to Post now.
+describe("a retry and the owner's daily number", () => {
+  const OWNER_RETRY =
+    "This workspace's owner has reached the limit of 15 posts a day across the workspaces they own, and retries count toward it. Retry tomorrow, or schedule the post again for another day.";
+  const retry = (workspaceId: string, postJobId: string, requestId: string) =>
+    reserveRetry({ workspaceId, postJobId, requestId, now: NOW });
+
+  it("billing off, grandfathered, owner at 15: Post now and Retry are both refused, and nothing is written", async () => {
+    workspace("ws-old", { billingExempt: true }, [owner("owner-1")]);
+    for (let p = 1; p <= 15; p += 1) await due("ws-old", `p-${p}`);
+    const postNow = await crossWorkspacePostRefusal({ workspaceId: "ws-old", workspace: { billingExempt: true }, day: NOW, mode: "now" });
+    expect(postNow?.code).toBe("OWNER_DAILY_POST_LIMIT");
+    const before = store.events.length;
+    store.locks = [];
+    await expect(retry("ws-old", "p-1", "r1")).resolves.toEqual({ code: "OWNER_DAILY_POST_LIMIT", error: OWNER_RETRY });
+    expect(store.events).toHaveLength(before);
+    // No pool counts it, so the service-wide lock is not taken.
+    expect(store.locks.map((lock) => lock.key)).toEqual(["p-1"]);
+  });
+
+  it("billing off, grandfathered, under the number: the retry goes and counts toward the owner", async () => {
+    workspace("ws-old", { billingExempt: true }, [owner("owner-1")]);
+    for (let p = 1; p <= 14; p += 1) await due("ws-old", `p-${p}`);
+    await expect(retry("ws-old", "p-1", "r1")).resolves.toBeNull();
+    expect(sendsOf("p-1").find((event) => event.sourceId === "send:p-1:retry:r1")).toMatchObject({
+      pool: "none",
+      ownerIds: ["owner-1"],
+    });
+    await expect(retry("ws-old", "p-2", "r2")).resolves.toEqual({ code: "OWNER_DAILY_POST_LIMIT", error: OWNER_RETRY });
+  });
+
+  it("billing on, a paid plan with its owner at 15 elsewhere: the retry goes, without the service-wide lock", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    workspace("ws-paid", PAID, [owner("owner-1")]);
+    workspace("ws-free", { trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, [owner("owner-1")]);
+    for (let p = 1; p <= 15; p += 1) await due("ws-free", `f-${p}`);
+    store.locks = [];
+    await expect(retry("ws-paid", "p", "r1")).resolves.toBeNull();
+    expect(store.locks.map((lock) => lock.key)).toEqual(["p"]);
+  });
+
+  it("billing on, grandfathered, owner at 15 elsewhere: the retry goes", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    workspace("ws-old", { billingExempt: true }, [owner("owner-1")]);
+    workspace("ws-free", { trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, [owner("owner-1")]);
+    for (let p = 1; p <= 15; p += 1) await due("ws-free", `f-${p}`);
+    await expect(retry("ws-old", "p", "r1")).resolves.toBeNull();
+  });
+
+  it("a free workspace at 15: refused as before, under the post's lock and then the service-wide lock", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    for (let p = 1; p <= 15; p += 1) await due("ws-1", `p-${p}`);
+    store.locks = [];
+    await expect(retry("ws-1", "p-1", "r1")).resolves.toEqual({ code: "OWNER_DAILY_POST_LIMIT", error: OWNER_RETRY });
+    expect(store.locks.map((lock) => lock.key)).toEqual(["p-1", "service"]);
   });
 });
 
@@ -978,7 +1037,9 @@ describe("one ceiling over every free run of the day", () => {
     // A real customer's first run of the day, Post now or a retry: refused too, with the service sentence.
     workspace("ws-customer", {}, [owner("customer")]);
     expect((await crossWorkspacePostRefusal({ workspaceId: "ws-customer", workspace: {}, day: NOW, mode: "now" }))?.error).toBe(SERVICE_NOW);
-    expect((await retryRefusal({ workspaceId: "ws-customer", postJobId: "c-1", now: NOW }))?.code).toBe("SERVICE_DAILY_POST_LIMIT");
+    expect((await reserveRetry({ workspaceId: "ws-customer", postJobId: "c-1", requestId: "r1", now: NOW }))?.code).toBe(
+      "SERVICE_DAILY_POST_LIMIT",
+    );
     expect(freeRuns()).toBe(30);
   });
 
@@ -1028,7 +1089,7 @@ describe("one ceiling over every free run of the day", () => {
       await expect(due("ws-ops", `ops-${p}`)).resolves.toBeNull();
     }
     await expect(crossWorkspacePostRefusal({ workspaceId: "ws-paid", workspace: PAID, day: NOW, mode: "now" })).resolves.toBeNull();
-    await expect(retryRefusal({ workspaceId: "ws-ops", postJobId: "ops-1", now: NOW })).resolves.toBeNull();
+    await expect(reserveRetry({ workspaceId: "ws-ops", postJobId: "ops-1", requestId: "r1", now: NOW })).resolves.toBeNull();
     expect(freeRuns()).toBe(30);
   });
 
@@ -1063,7 +1124,7 @@ describe("one ceiling over every free run of the day", () => {
       await expect(due("ws-d", "d-2")).resolves.toBe(FULL_AT_SEND);
       await expect(due("ws-a", "a-4")).resolves.toBe(FULL_AT_SEND);
       await crossWorkspacePostRefusal({ workspaceId: "ws-b", workspace: {}, day: NOW, mode: "now" });
-      await retryRefusal({ workspaceId: "ws-c", postJobId: "c-1", now: NOW });
+      await reserveRetry({ workspaceId: "ws-c", postJobId: "c-1", requestId: "r1", now: NOW });
 
       expect(sendEmailMock).toHaveBeenCalledTimes(1);
       const [message] = sendEmailMock.mock.calls[0];

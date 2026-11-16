@@ -1054,41 +1054,6 @@ async function retryLimitRefusal(workspaceId: string, postJobId: string): Promis
   return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY, covered), code: POST_RETRY_LIMIT_CODE };
 }
 
-/**
- * R7-security L1: why this retry may not run, or null. A retry request is one
- * run, however many platforms it includes (Retry all failed is one). Each post
- * may have RETRIES_PER_POST_PER_DAY a UTC day, in every workspace but the
- * operator's: it only stops a post that keeps failing, so it applies to
- * paying ones too. Then the run counts toward the owners' per-person numbers
- * and the pool like a post, which paying workspaces are never refused by.
- * Fails open, like the post checks.
- */
-export async function retryRefusal(input: {
-  workspaceId: string;
-  postJobId: string;
-  now: Date;
-  viewerUserId?: string;
-}): Promise<LimitRefusal | null> {
-  const { workspaceId, postJobId, now } = input;
-  try {
-    const who = await runAttribution(workspaceId, now);
-    if (who.operator) return null;
-    if ((await retryRunsToday(workspaceId, postJobId, now)) >= RETRIES_PER_POST_PER_DAY) {
-      return await retryLimitRefusal(workspaceId, postJobId);
-    }
-    const verdict = await refusalFor(
-      who,
-      { workspace: who.fields, day: now, mode: "retry", viewerUserId: input.viewerUserId },
-      now,
-    );
-    if (verdict?.ceiling) await alertCeiling(now);
-    return verdict ? { error: verdict.error, code: verdict.code } : null;
-  } catch (error) {
-    logger.error("[usage] Retry limit check failed; allowing", { error, workspaceId, postJobId });
-    return null;
-  }
-}
-
 /** How long a retry request may wait for the post's lock, and hold it. */
 const RETRY_LOCK_TIMEOUT_MS = 10_000;
 
@@ -1100,7 +1065,9 @@ const RETRY_LOCK_TIMEOUT_MS = 10_000;
  *    reads the 3-times sentence. Every workspace but the operator's.
  * 2. For a free workspace, the service-wide lock, always after the post's
  *    (so two locks are never taken in the other order), and the per-person
- *    number, the pools and the ceiling, counted on the transaction.
+ *    number, the pools and the ceiling, counted on the transaction. Any
+ *    other workspace the per-person number applies to (a grandfathered one
+ *    while billing is off) meets that number alone, without the lock.
  * 3. The run is written on the transaction.
  * Every read and write goes through the transaction's own connection.
  * Null: the run is recorded, and the caller takes it back with withdrawRetry
@@ -1130,8 +1097,11 @@ export async function reserveRetry(input: {
         }
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${postJobId}))`;
         if ((await retryRunsToday(workspaceId, postJobId, now, tx)) >= RETRIES_PER_POST_PER_DAY) return "guard";
-        if (free) {
-          await takeFreeRunsLock(tx);
+        // R22-security L2: a grandfathered workspace draws from no pool, but
+        // while billing is off its owners' per-person number still applies,
+        // as it does to Post now. Only a free run takes the service-wide lock.
+        if (free || personalPostLimitApplies(who.fields, process.env, now)) {
+          if (free) await takeFreeRunsLock(tx);
           const verdict = await refusalFor(
             who,
             { workspace: who.fields, day: now, mode: "retry", viewerUserId: input.viewerUserId },
