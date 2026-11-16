@@ -415,7 +415,8 @@ async function ensureLocationName(
 
   // resolveGbpLocationName handles both a full "accounts/..." resource name
   // (returned as-is) and a Store code from Advanced settings (resolved via the
-  // account/location listing).
-  const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline);
+  // account/location listing). R25: a 401 there flags the row with the tokens sent.
+  const used = { id: socialConnection.id, accessToken, refreshToken: socialConnection.refreshToken };
+  const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline, used);
   return { locationName };
 }

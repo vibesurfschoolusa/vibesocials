@@ -2,14 +2,9 @@ import { NextResponse } from "next/server";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { checkRateLimit } from "@/lib/rateLimit";
-import {
-  classifyGoogleFailure,
-  flagIfTokenRejected,
-  googleFailureKind,
-  type GoogleFailureKind,
-} from "@/server/googleFailure";
+import type { GoogleFailureKind } from "@/server/googleFailure";
 import type { TokenSnapshot } from "@/server/platforms/connectionHealth";
-import { readGoogleErrorReasons } from "@/server/platforms/rateLimited";
+import { readGbpLocations, type GbpListing, type UnreadAccounts } from "@/server/platforms/gbpLocation";
 import {
   CONNECTION_RECONNECT_REQUIRED_CODE,
   refreshConnectionToken,
@@ -23,17 +18,12 @@ import type { SocialConnection } from "@prisma/client";
  * accepts (F3), and since R25 (client-journey M1) the Reviews page's list and
  * the reply route's location check too. One paged reader (readGbpLocations)
  * serves all of them, so a login with more than one page of accounts or
- * locations is listed, and checked, in full everywhere.
+ * locations is listed, and checked, in full everywhere. The reader lives in
+ * platforms/gbpLocation.ts, beside the store-code lookup that reads it too.
  */
 
-/** Locations asked for per page (the Business Information API allows 100). */
-const LOCATIONS_PAGE_SIZE = 100;
-
-/** Pages read of any one list before giving up: 5,000 locations for one account. */
-export const GBP_MAX_PAGES = 50;
-
-const ACCOUNT_MANAGEMENT_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
-const BUSINESS_INFO_BASE = "https://mybusinessbusinessinformation.googleapis.com/v1";
+export { GBP_MAX_PAGES } from "@/server/platforms/gbpLocation";
+export type { GbpListing, ListedGbpLocation, UnreadAccounts } from "@/server/platforms/gbpLocation";
 
 /** R25 security-billing L1: every Google route's window; Google counts quota per Cloud project. */
 const GOOGLE_ROUTE_WINDOW_MS = 5 * 60 * 1000;
@@ -95,45 +85,8 @@ export const GBP_SOME_ACCOUNTS_FAILED_REVIEWS_NOTICE =
 export const GBP_RECONNECT_MESSAGE = "Reconnect Google Business Profile in Settings, then try again.";
 export const GBP_RECONNECT_CODE = CONNECTION_RECONNECT_REQUIRED_CODE;
 
-export interface ListedGbpLocation {
-  /** "accounts/{accountId}/locations/{locationId}". */
-  resourceName: string;
-  title: string | null;
-  storeCode: string | null;
-  address: string | null;
-  accountName: string | null;
-}
-
-/**
- * `complete` is false when an account's locations could not all be read (it
- * failed, or ran past GBP_MAX_PAGES): the list still shows what was read, but
- * the location save must not treat a missing location as "not listed".
- * `unread` says why accounts were skipped: some refused access, some failed
- * (Google, or a kind with no fix here), or both (JJ3 lead review: both are said).
- * `refusedOnly` is true when access refusals are the only reason the list is
- * not complete: a location missing from it is then not one this login manages.
- *
- * Not ok: the whole list failed, with its kind (already logged): the accounts
- * call failed, the token itself was refused (the row is flagged), or no
- * account's locations could be read at all (R25 new-customer L4).
- */
-export type GbpListing =
-  | {
-      ok: true;
-      locations: ListedGbpLocation[];
-      complete: boolean;
-      unread: UnreadAccounts;
-      refusedOnly: boolean;
-    }
-  | { ok: false; kind: GoogleFailureKind };
-
 /** The picker's listing: a failure is already its answer. */
 export type GbpLocationList = Extract<GbpListing, { ok: true }> | { ok: false; response: NextResponse };
-
-export interface UnreadAccounts {
-  access: boolean;
-  failed: boolean;
-}
 
 /**
  * The line about skipped accounts, each reason with its own step; null when
@@ -172,24 +125,6 @@ function pickerRefusal(kind: GoogleFailureKind): GbpLocationList {
   }
 }
 
-interface GbpAccount {
-  name?: string | null; // "accounts/{accountId}"
-  accountName?: string | null;
-}
-
-interface GbpLocation {
-  name?: string | null; // "locations/{locationId}" or similar
-  title?: string | null;
-  storeCode?: string | null;
-  storefrontAddress?: {
-    addressLines?: string[];
-    locality?: string | null;
-    administrativeArea?: string | null;
-    regionCode?: string | null;
-    postalCode?: string | null;
-  } | null;
-}
-
 // Migrated to the shared `refreshGoogleToken` helper
 // (src/server/platforms/googleTokens.ts) per Phase 4 / HLT-2, following the
 // "wrap-don't-swap" rule the original NOTE required. The helper THROWS on
@@ -212,162 +147,9 @@ async function refreshAccessToken(
   }
 }
 
-/** `failure` carries status and Google's reasons (or is what was thrown, when nothing answered). */
-type PageResult<T> =
-  | { ok: true; items: T[]; complete: boolean }
-  | { ok: false; failure: unknown };
-
-/**
- * Every page of one Google list (`key` names its array), following
- * nextPageToken until there is none. A token seen before ends the list (its
- * pages were already read), and GBP_MAX_PAGES ends it as not complete. A
- * failed page fails the list; `status` is null when nothing answered.
- */
-async function readAllPages<T>(
-  first: URL,
-  key: string,
-  get: (url: URL) => Promise<Response>,
-): Promise<PageResult<T>> {
-  const items: T[] = [];
-  const seen = new Set<string>();
-  let pageToken: string | null = null;
-  for (let page = 0; page < GBP_MAX_PAGES; page += 1) {
-    const url = new URL(first);
-    if (pageToken) url.searchParams.set("pageToken", pageToken);
-    let json: Record<string, unknown> | null;
-    try {
-      const response = await get(url);
-      if (!response.ok) {
-        const googleReasons = await readGoogleErrorReasons(response);
-        return {
-          ok: false,
-          failure: Object.assign(new Error("Google list failed"), { status: response.status, googleReasons }),
-        };
-      }
-      json = (await response.json()) as Record<string, unknown> | null;
-    } catch (error) {
-      return { ok: false, failure: error };
-    }
-    const pageItems = json?.[key];
-    if (Array.isArray(pageItems)) items.push(...(pageItems as T[]));
-    const next = json?.nextPageToken;
-    if (typeof next !== "string" || !next || seen.has(next)) {
-      return { ok: true, items, complete: true };
-    }
-    seen.add(next);
-    pageToken = next;
-  }
-  return { ok: true, items, complete: false };
-}
-
 /** One Google GET with the bearer token, under the shared request timeout. */
 function googleGet(url: URL, accessToken: string): Promise<Response> {
   return fetchWithTimeout(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
-}
-
-/** A location's entry in the list, from its account and Google's location. */
-function listedLocation(accountName: string, accountLabel: string, loc: GbpLocation & { name: string }): ListedGbpLocation {
-  // loc.name is typically "locations/{locationId}" for the Business Information API.
-  const locationId = loc.name.startsWith("locations/") ? loc.name.slice("locations/".length) : loc.name;
-  const [, accountId] = accountName.split("/");
-  const resourceName = accountId ? `accounts/${accountId}/locations/${locationId}` : `${accountName}/${locationId}`;
-
-  const addr = loc.storefrontAddress ?? undefined;
-  const addressParts: string[] = [];
-  if (addr?.addressLines && addr.addressLines.length > 0) addressParts.push(addr.addressLines.join(" "));
-  if (addr?.locality) addressParts.push(addr.locality);
-  if (addr?.administrativeArea) addressParts.push(addr.administrativeArea);
-  if (addr?.regionCode) addressParts.push(addr.regionCode);
-  if (addr?.postalCode) addressParts.push(addr.postalCode);
-
-  return {
-    resourceName,
-    title: loc.title ?? null,
-    storeCode: loc.storeCode ?? null,
-    address: addressParts.join(", ") || null,
-    accountName: accountLabel,
-  };
-}
-
-interface ReadOptions {
-  /** Where the list is read, for the one log line per failure (classifyGoogleFailure). */
-  where: string;
-  get: (url: URL) => Promise<Response>;
-  /** The tokens the latest request sent: a token Google refused is flagged with them. */
-  used: () => TokenSnapshot;
-  /** The failure to sort: the picker sorts a 401 after a failed refresh by what the refresh said. */
-  effective?: (failure: unknown) => unknown;
-}
-
-/**
- * The one paged listing: every account the login sees, and every location of
- * each, via the Business Information API. Each failure is logged once, by
- * kind. A token Google refused (googleFailure.ts) is flagged through
- * flagIfTokenRejected, so the card shows Reconnect (R25 platform-clients L2).
- */
-export async function readGbpLocations(options: ReadOptions): Promise<GbpListing> {
-  const { where, get, used } = options;
-  const effective = options.effective ?? ((failure: unknown) => failure);
-  const wholeListFailed = async (failure: unknown): Promise<GbpListing> => {
-    const settled = await flagIfTokenRejected(effective(failure), used());
-    return { ok: false, kind: classifyGoogleFailure(settled, where) };
-  };
-
-  // 1. Every account the login has access to.
-  const accounts = await readAllPages<GbpAccount>(new URL(`${ACCOUNT_MANAGEMENT_BASE}/accounts`), "accounts", get);
-  if (!accounts.ok) return wholeListFailed(accounts.failure);
-
-  let complete = accounts.complete;
-  const unread: UnreadAccounts = { access: false, failed: false };
-  // Not complete for a reason other than an account refusing access.
-  let partlyUnread = !accounts.complete;
-  let accountsRead = 0;
-  let accountsNamed = 0;
-  const allLocations: ListedGbpLocation[] = [];
-
-  // 2. Every location of each account.
-  for (const account of accounts.items) {
-    const accountName = account.name ?? undefined; // "accounts/{accountId}"
-    if (!accountName) continue;
-    accountsNamed += 1;
-
-    const url = new URL(`${BUSINESS_INFO_BASE}/${accountName}/locations`);
-    url.searchParams.set("readMask", "name,title,storeCode,storefrontAddress");
-    url.searchParams.set("pageSize", String(LOCATIONS_PAGE_SIZE));
-
-    const locations = await readAllPages<GbpLocation>(url, "locations", get);
-    if (!locations.ok) {
-      // The token itself was refused: the whole list ends with that step.
-      if (googleFailureKind(effective(locations.failure)) === "reconnect") return wholeListFailed(locations.failure);
-      // Skipped, and said so (unreadAccountsNotice), with why.
-      if (classifyGoogleFailure(effective(locations.failure), where) === "access") {
-        unread.access = true;
-      } else {
-        unread.failed = true;
-        partlyUnread = true;
-      }
-      complete = false;
-      continue;
-    }
-    accountsRead += 1;
-    if (!locations.complete) {
-      complete = false;
-      partlyUnread = true;
-    }
-
-    const accountLabel = account.accountName ?? accountName;
-    for (const loc of locations.items) {
-      if (loc.name) allLocations.push(listedLocation(accountName, accountLabel, { ...loc, name: loc.name }));
-    }
-  }
-
-  // R25 new-customer L4: nothing could be read, so this is the whole list's
-  // failure (each skipped account was logged above), not "some of your accounts".
-  if (accountsNamed > 0 && accountsRead === 0) {
-    return { ok: false, kind: unread.failed ? "tryLater" : "access" };
-  }
-
-  return { ok: true, locations: allLocations, complete, unread, refusedOnly: !complete && !partlyUnread };
 }
 
 /**

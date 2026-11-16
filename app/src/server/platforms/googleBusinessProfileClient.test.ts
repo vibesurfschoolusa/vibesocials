@@ -1213,6 +1213,19 @@ describe("googleBusinessProfileClient: a token Google refuses flags the row", ()
     expect(publishErrorMessage("google_business_profile", error!)).toMatch(/^Reconnect Google Business Profile in Settings/);
   });
 
+  // R25 (lead follow-up): the store-code lookup's 401 flags the row too.
+  it("a 401 while the saved store code is looked up flags the row and reads Reconnect", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    const ctx = makeContext();
+    (ctx.socialConnection as { metadata: unknown }).metadata = { locationName: "STORE-1" };
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(ctx));
+
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(SNAPSHOT, "GOOGLE_API_TOKEN_REJECTED");
+    expect(publishErrorMessage("google_business_profile", error!)).toMatch(/^Reconnect Google Business Profile in Settings/);
+  });
+
   it("tokens that changed meanwhile: nothing flagged, a retryable failure", async () => {
     flagRejectedTokenMock.mockResolvedValue("superseded");
     stubMediaCreate(() => new Response("{}", { status: 401 }));
