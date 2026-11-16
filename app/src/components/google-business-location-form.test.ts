@@ -14,6 +14,7 @@ import {
   LOCATION_RECONNECT_CODE,
   PICK_SAVING_STATUS,
   PickerStatusLine,
+  pickStatusText,
   locationFailure,
   locationsLoadedStatus,
   pickAfterSave,
@@ -166,7 +167,7 @@ describe("Google location form: where its sentences show", () => {
   // not show the top of the form), in its own status region the control names.
   it("a save failure shows by the control that saved, which it describes", () => {
     expect(formSource).toMatch(/<Select[^>]*id="gbp-location-select"[^>]*aria-describedby="gbp-pick-status"/);
-    expect(formSource).toMatch(/<div id="gbp-pick-status" role="status"[^>]*empty:sr-only/);
+    expect(formSource).toContain('<div id="gbp-pick-status" role="status" className={pickStatus ? "flex flex-col items-start gap-2" : "sr-only"}>');
     expect(formSource).toMatch(/<Input\s+id="gbp-location"[^>]*aria-describedby="gbp-save-status"/);
     expect(formSource).toMatch(/<div id="gbp-save-status" role="status"[^>]*empty:sr-only/);
     expect(formSource.indexOf('id="gbp-save-status"')).toBeGreaterThan(formSource.indexOf('"Save location"'));
@@ -256,10 +257,29 @@ describe("Google location form: the dropdown while saving", () => {
     expect(select).toContain('className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"');
   });
 
-  it("says Saving… in the status region by the dropdown, then the failure if any", () => {
+  // LL2 after rebase: one region, on the page from the first render, whose one
+  // text node changes (Saving…, the failure, or nothing), so it is heard once per change.
+  it("one status line by the dropdown: Saving…, then the failure, else nothing", () => {
     expect(PICK_SAVING_STATUS).toBe("Saving…");
-    const region = formSource.slice(formSource.indexOf('<div id="gbp-pick-status"'), formSource.indexOf("</div>", formSource.indexOf('<div id="gbp-pick-status"')));
-    expect(region).toContain('{saving ? <p className="text-sm text-muted-foreground">{PICK_SAVING_STATUS}</p> : null}');
-    expect(region).toContain("{!saving && pickFailure ? <PickerStatusLine status={pickFailure} /> : null}");
+    const failure = { message: "The location wasn't saved. Please try again in a minute.", signInUrl: null };
+    expect(pickStatusText(true, null)).toBe("Saving…");
+    expect(pickStatusText(true, failure)).toBe("Saving…");
+    expect(pickStatusText(false, failure)).toBe(failure.message);
+    expect(pickStatusText(false, null)).toBe("");
+  });
+
+  it("the region is drawn from the first render, outside the dropdown's own block", () => {
+    const blockAt = formSource.indexOf("{locations && locations.length > 0 ? (");
+    const block = formSource.slice(blockAt, formSource.indexOf(") : null}", blockAt));
+    expect(block).toContain("</Select>");
+    // The dropdown names the region (aria-describedby); the region itself is outside.
+    expect(block).toContain('aria-describedby="gbp-pick-status"');
+    expect(block).not.toContain('<div id="gbp-pick-status"');
+    const regionAt = formSource.indexOf('<div id="gbp-pick-status"');
+    expect(regionAt).toBeGreaterThan(formSource.indexOf("</Select>"));
+    const region = formSource.slice(regionAt, formSource.indexOf("</div>", regionAt));
+    expect(region).toContain('<p className="text-sm text-muted-foreground">{pickStatus}</p>');
+    expect(region).toContain("{!saving && pickFailure?.signInUrl ? <SignInAgainLink href={pickFailure.signInUrl} /> : null}");
+    expect(formSource).toContain("const pickStatus = pickStatusText(saving, pickFailure);");
   });
 });

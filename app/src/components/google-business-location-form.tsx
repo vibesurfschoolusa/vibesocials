@@ -98,6 +98,12 @@ export function locationsLoadedStatus(
 /** LL2 lead review: said by the dropdown while a save runs, so a change that springs back has a reason. */
 export const PICK_SAVING_STATUS = "Saving…";
 
+/** The one sentence of the dropdown's status region: Saving… while a save runs, then a pick's failure, else nothing. */
+export function pickStatusText(saving: boolean, failure: PickerStatus | null): string {
+  if (saving) return PICK_SAVING_STATUS;
+  return failure?.message ?? "";
+}
+
 /** Lead review: which control a save came from, so its failure shows by that control. */
 export type SavePlace = "pick" | "field";
 
@@ -160,6 +166,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [listNote, setListNote] = useState<PickerStatus | null>(null);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const pickFailure = saveFailureAt(saveFailure, "pick");
+  const pickStatus = pickStatusText(saving, pickFailure);
   const fieldFailure = saveFailureAt(saveFailure, "field");
 
   // Saves a location: picked from Google's list (with its name, saved at once)
@@ -321,12 +328,15 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
                 );
               })}
             </Select>
-            <div id="gbp-pick-status" role="status" className="empty:sr-only">
-              {saving ? <p className="text-sm text-muted-foreground">{PICK_SAVING_STATUS}</p> : null}
-              {!saving && pickFailure ? <PickerStatusLine status={pickFailure} /> : null}
-            </div>
           </div>
         ) : null}
+        {/* One live region by the dropdown, on the page from the first render; its
+            one sentence changes (Saving…, the failure, or nothing), so a screen
+            reader hears each change once. */}
+        <div id="gbp-pick-status" role="status" className={pickStatus ? "flex flex-col items-start gap-2" : "sr-only"}>
+          <p className="text-sm text-muted-foreground">{pickStatus}</p>
+          {!saving && pickFailure?.signInUrl ? <SignInAgainLink href={pickFailure.signInUrl} /> : null}
+        </div>
       </div>
 
       {/* Secondary/advanced: paste a resource name or store code directly. */}

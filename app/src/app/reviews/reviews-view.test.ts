@@ -4,7 +4,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  GBP_NO_LISTING_NOTICE,
+  listingNotice,
+  unreadAccountsNotice,
+} from "@/app/api/connections/google_business_profile/gbpLocations";
 import { canRetry, ReviewsApiError } from "@/components/reviews/api-error";
+import { gbpSignInUrl } from "@/lib/gbpSignIn";
+import {
+  MEMBER_NO_LOCATION_NOTICE,
+  MEMBER_SAVED_NOT_LISTED_NOTICE,
+  savedCodeSharedNotice,
+} from "@/server/googleReviews";
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
@@ -329,5 +340,52 @@ describe("ReviewsView when a draft fails", () => {
     const draft = source.slice(at("const handleDraftAI"), at("const needsReplyReviews"));
     expect(draft).toContain('await fetchOrNoAnswer("/api/reviews/draft-response", {');
     expect(draft).toContain("toast.error(draftFailureMessage(err));");
+  });
+});
+
+// LL2 after LL1 (main 101feca): the page against the locations route's real
+// answers, built from the route's own helpers and sentences.
+describe("ReviewsView and the locations route's real empty answers", () => {
+  const noUnread = { access: false, failed: false };
+  const unescape = (html: string) => html.replace(/&#x27;/g, "'");
+
+  it("owner, Google lists nothing: the sign-in notice and the link for the page's workspace", () => {
+    const answer = { locations: [], connected: true, ...listingNotice({ locations: [], unread: noUnread }, "reviews") };
+    expect(answer).toEqual({ locations: [], connected: true, notice: GBP_NO_LISTING_NOTICE, signIn: true });
+    expect(locationsSignIn(answer, false)).toBe(true);
+    const html = unescape(
+      renderToStaticMarkup(createElement(LocationsNotice, { notice: GBP_NO_LISTING_NOTICE, signInUrl: gbpSignInUrl("ws-A") })),
+    );
+    expect(html).toContain(`<p class="text-sm text-muted-foreground">${GBP_NO_LISTING_NOTICE}</p>`);
+    expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"/);
+  });
+
+  it("owner, accounts left unread: their notice, and no sign-in the route didn't ask for", () => {
+    const answer = {
+      locations: [],
+      connected: true,
+      ...listingNotice({ locations: [], unread: { access: true, failed: false } }, "reviews"),
+    };
+    expect(typeof answer.notice).toBe("string");
+    expect(locationsSignIn(answer, false)).toBe(false);
+  });
+
+  it("member: each of the route's notices shows alone, with no sign-in", () => {
+    const memberNotices = [
+      MEMBER_NO_LOCATION_NOTICE,
+      MEMBER_SAVED_NOT_LISTED_NOTICE,
+      savedCodeSharedNotice("member"),
+      unreadAccountsNotice({ access: true, failed: false }, "reviews", "member"),
+    ];
+    for (const text of memberNotices) {
+      expect(typeof text).toBe("string");
+      const answer = { locations: [], connected: true, notice: text };
+      expect(locationsSignIn(answer, true)).toBe(false);
+      // Even an owner's flag never gives a member the link.
+      expect(locationsSignIn({ ...answer, signIn: true }, true)).toBe(false);
+      const html = unescape(renderToStaticMarkup(createElement(LocationsNotice, { notice: text, signInUrl: null })));
+      expect(html).toContain(text as string);
+      expect(html).not.toContain("<a ");
+    }
   });
 });
