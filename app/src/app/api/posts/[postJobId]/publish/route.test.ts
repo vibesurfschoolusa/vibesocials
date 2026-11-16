@@ -1592,6 +1592,37 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     );
   });
 
+  // R29 publishing L2: the feed post got its results, then the Story's prepare
+  // threw; the Story is failed with none, so its card offers Send again only.
+  it("a failed start: the Story left without results is told to press Send again", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("pool timeout");
+      return {
+        ok: true,
+        event: { postJobId: id, userId: "user-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+      };
+    });
+    resultCountMock.mockResolvedValueOnce(2).mockResolvedValueOnce(0);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-1",
+      resultsMarked: true,
+      otherHalf: {
+        id: "story-1",
+        kind: "story",
+        changed: true,
+        note: "Its Story was not sent: press Send again on its card in Activity.",
+      },
+    });
+  });
+
   it("without includePair publish now is exactly as before: one claim, one event, no pair read", async () => {
     findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null }));
 

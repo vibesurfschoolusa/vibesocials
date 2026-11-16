@@ -22,6 +22,7 @@ import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import {
   applyToPair,
   dispatchNow,
+  failedStartAnswer,
   isLiveHalf,
   notSentNote,
   pairLimitArgs,
@@ -343,7 +344,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // R23-client-journey L4: it says what happened to the email, so the Queue
   // claims "the author has been notified" only when Resend accepted it. The
   // send is awaited before the answer already, so this costs no extra time.
-  const tellSubmitter = async (notSent?: string, startUnconfirmed = false, withoutResults = false): Promise<AuthorEmail> => {
+  const tellSubmitter = async (
+    notSent?: string,
+    startUnconfirmed = false,
+    withoutResults = false,
+    otherHalfNote?: string,
+  ): Promise<AuthorEmail> => {
     try {
       // R7-client-journey L1: only a submitter who is still a member hears about
       // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
@@ -373,6 +379,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
           ...(notSent ? { notSent } : {}),
           ...(startUnconfirmed ? { startUnconfirmed: true, ...(withoutResults ? { withoutResults: true } : {}) } : {}),
+          ...(otherHalfNote ? { otherHalfNote } : {}),
         });
         const sent = await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
         return sent ? "sent" : "failed";
@@ -416,10 +423,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       // R26 LL3 follow-up: as the toast, a post that couldn't be marked
       // failed shows as publishing for a while, so no "send it again" yet.
       // R28 publishing L2: a post left without results offers Send again, not Retry.
-      const withoutResults = dispatch.withoutResults.has(postJobId);
-      await (dispatch.resultsMarked
-        ? tellSubmitter(withoutResults ? NOT_SENT_SEND_FAILED_NO_RESULTS : NOT_SENT_SEND_FAILED)
-        : tellSubmitter(undefined, true, withoutResults));
+      // R29 publishing L1 + L2: this post's own state, and the other half's
+      // note (by its own state) in the answer and the email.
+      const failed = failedStartAnswer(postJobId, pair, dispatch);
+      const withoutResults = failed.body.withoutResults === true;
+      await (failed.body.resultsMarked
+        ? tellSubmitter(withoutResults ? NOT_SENT_SEND_FAILED_NO_RESULTS : NOT_SENT_SEND_FAILED, false, false, failed.halfNote)
+        : tellSubmitter(undefined, true, withoutResults, failed.halfNote));
       return NextResponse.json(
         // R26 LL3: as Create's 503, so the Queue can say where to retry it and
         // whether it shows as publishing first.
@@ -427,8 +437,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           code: DISPATCH_FAILURE.errorCode,
           error: DISPATCH_FAILURE.errorMessage,
           postJobId,
-          resultsMarked: dispatch.resultsMarked,
-          ...(withoutResults ? { withoutResults: true } : {}),
+          ...failed.body,
         },
         { status: 503 },
       );

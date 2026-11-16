@@ -146,6 +146,35 @@ type PublishMode = "now" | "schedule" | "draft";
  * Posts without a photo (2026-11-10): the page is writing a text post when no
  * file is attached and no library item is still loading (`?mediaItemId=`).
  */
+/**
+ * R29 publishing L3: "Use a different file instead" drops the reused item's
+ * own captions, but a caption the person changed or added stays, as a new
+ * pick and Remove all keep the text.
+ */
+export function captionsAfterReuseDismissed(
+  item: { baseCaption: string | null; perPlatformOverrides: unknown },
+  caption: string,
+  overrides: PlatformOverrides | null,
+): { caption: string; overrides: PlatformOverrides | null } {
+  const own = (item.perPlatformOverrides ?? {}) as Partial<Record<Platform, unknown>>;
+  const kept = Object.fromEntries(
+    Object.entries(overrides ?? {}).filter(([platform, text]) => text !== own[platform as Platform]),
+  ) as PlatformOverrides;
+  return {
+    caption: caption === (item.baseCaption ?? "") ? "" : caption,
+    overrides: Object.keys(kept).length > 0 ? kept : null,
+  };
+}
+
+/** R29 pages L6: on the page from the first render; only its text changes. */
+export function LibraryFileStatus({ loading }: { loading: boolean }) {
+  return (
+    <p role="status" className="sr-only">
+      {loading ? "Loading the file from your library…" : ""}
+    </p>
+  );
+}
+
 export function hasNoFile(state: {
   reuseLoading: boolean;
   hasReuseItem: boolean;
@@ -1216,13 +1245,17 @@ function CreatePostFormInner({
   // fetch effect above only re-runs if that param's VALUE changes), but
   // clearing `reuseItem` is what actually drives the UI back to the file
   // input.
+  // R29 publishing L3: only captions still the item's own are cleared.
   const handleDismissReuse = useCallback(() => {
+    const kept = reuseItem
+      ? captionsAfterReuseDismissed(reuseItem, uploadCaption, platformOverrides)
+      : { caption: uploadCaption, overrides: platformOverrides };
     setReuseItem(null);
     setSingleAltText("");
     singlePhotoRef.current = null;
-    setPlatformOverrides(null);
-    setUploadCaption("");
-  }, []);
+    setPlatformOverrides(kept.overrides);
+    setUploadCaption(kept.caption);
+  }, [reuseItem, uploadCaption, platformOverrides]);
 
   // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
   // for the SAME file (by reference) reuse the in-flight or already-resolved
@@ -2366,6 +2399,7 @@ function CreatePostFormInner({
         {uploadError && <Alert variant="danger">{uploadError}</Alert>}
 
         <div className="space-y-1.5">
+          <LibraryFileStatus loading={reuseLoading} />
           {reuseItem ? (
             // Roadmap Phase 2 — reuse mode: preview the already-persisted
             // MediaItem from its storageLocation and skip the upload UI

@@ -446,12 +446,45 @@ describe("approved, publishing not confirmed as stopped, and the post has no res
     withoutResults: true,
   });
 
-  it("names Send again, never Retry (HTML and plain text)", () => {
+  // R29 publishing L1: with no results it is still in_progress, so the
+  // scanner's requeue sends it again by itself.
+  it("says it is tried again on its own, and Send again only if that fails too (never Retry)", () => {
     const text = htmlToPlainText(email.html);
     expect(text).toContain(
-      "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Once it does, press Send again on it there.",
+      "Approved, but publishing didn't start as it should. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity: press Send again on it there.",
     );
+    expect(text).not.toMatch(/two hours/);
     expect(text).not.toMatch(/retry/i);
     expect(email.subject).toBe("Your post in Acme was approved, but publishing may not have started");
+  });
+});
+
+// R29 publishing L2: a Feed and Story card whose start failed: the other half's own state.
+describe("approved, publishing couldn't start, with the other half's note", () => {
+  const base = {
+    approved: true,
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    timeZone: null,
+    caption: "x",
+    scheduledFor: null,
+    appBaseUrl: "https://vibesocials.wtf",
+    otherHalfNote: "Its Story was not sent: press Send again on its card in Activity.",
+  } as const;
+
+  it("follows the not-sent sentence", () => {
+    const text = htmlToPlainText(buildApprovalDecisionEmail({ ...base, notSent: "publishing couldn't start. Open the post in Activity and retry it there." }).html);
+    expect(text).toContain("Its Story was not sent: press Send again on its card in Activity.");
+  });
+
+  it("follows the start-unconfirmed sentence", () => {
+    const html = buildApprovalDecisionEmail({ ...base, startUnconfirmed: true }).html;
+    expect(html).toContain("<p>Its Story was not sent: press Send again on its card in Activity.</p>");
+  });
+
+  it("is left out of a plain approval", () => {
+    const { otherHalfNote: _unused, ...plain } = base;
+    void _unused;
+    expect(buildApprovalDecisionEmail(plain).html).not.toContain("Send again");
   });
 });

@@ -52,6 +52,7 @@ import { prisma } from "@/lib/db";
 import {
   applyToPair,
   dispatchNow,
+  failedStartAnswer,
   notSentNote,
   partialSendMessage,
   PAIR_HALF_SELECT,
@@ -582,6 +583,7 @@ describe("partialSendMessage and notSentNote - worded for the viewer's role", ()
     limitRefusals: new Map(),
     sendFailed: false,
     resultsMarked: true,
+    unmarked: new Set<string>(),
     withoutResults: new Set<string>(),
   });
   const reconnect = new Map([["story-1", { errorMessage: "Reconnect Facebook Page in Settings, then retry.", platform: "facebook_page" as const }]]);
@@ -638,5 +640,101 @@ describe("partialSendMessage and notSentNote - worded for the viewer's role", ()
     expect(resultFindFirstMock).toHaveBeenCalledWith(
       expect.objectContaining({ select: { errorMessage: true, platform: true } }),
     );
+  });
+});
+
+// R29 publishing L1 + L2: each claimed post's own state after a failed start.
+describe("dispatchNow - which posts were left unmarked", () => {
+  const ok = (id: string) => ({
+    ok: true,
+    event: { postJobId: id, userId: "u", workspaceId: "ws", mediaItemId: null, baseCaption: "c", perPlatformOverrides: null },
+  });
+  beforeEach(() => {
+    prepareMock.mockReset();
+    sendMock.mockReset();
+    sendMock.mockResolvedValue({ ids: [] });
+    failPendingMock.mockReset();
+    failPendingMock.mockResolvedValue({ failedCount: 0, unconfirmedCount: 0, status: "failed" });
+    withdrawSendMock.mockReset();
+    withdrawSendMock.mockResolvedValue(undefined);
+    resultCountMock.mockReset();
+    resultCountMock.mockResolvedValue(0);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("prepare throws and only the Story's marking fails: only the Story is unmarked", async () => {
+    prepareMock.mockRejectedValue(new Error("pool timeout"));
+    failPendingMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("db blip");
+      return { failedCount: 0, unconfirmedCount: 0, status: "failed" };
+    });
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+    expect([...result.unmarked]).toEqual(["story-1"]);
+    expect(result.resultsMarked).toBe(false);
+  });
+
+  it("the hand-over fails and one marking fails: that one is unmarked", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+    failPendingMock.mockImplementation(async (id: string) => {
+      if (id === "feed-1") throw new Error("db blip");
+      return { failedCount: 1, unconfirmedCount: 0, status: "failed" };
+    });
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+    expect([...result.unmarked]).toEqual(["feed-1"]);
+  });
+
+  it("all marked: none unmarked", async () => {
+    prepareMock.mockRejectedValue(new Error("pool timeout"));
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+    expect(result.unmarked.size).toBe(0);
+  });
+});
+
+describe("failedStartAnswer", () => {
+  const dispatch = (over: { unmarked?: string[]; withoutResults?: string[]; notSent?: string[] } = {}) => ({
+    sent: new Set<string>(),
+    notSent: new Set(over.notSent ?? []),
+    reasons: new Map(),
+    whyNotSent: new Map(),
+    limitRefusals: new Map(),
+    sendFailed: true,
+    resultsMarked: (over.unmarked ?? []).length === 0,
+    unmarked: new Set(over.unmarked ?? []),
+    withoutResults: new Set(over.withoutResults ?? []),
+  });
+  const story = { id: "story-1", kind: "story" as const, changed: true, note: "Its Story is publishing too." };
+
+  it("a post alone: its own state, no otherHalf", () => {
+    expect(failedStartAnswer("feed-1", null, dispatch({ unmarked: ["feed-1"], withoutResults: ["feed-1"] }))).toEqual({
+      body: { resultsMarked: false, withoutResults: true },
+    });
+    expect(failedStartAnswer("feed-1", null, dispatch())).toEqual({ body: { resultsMarked: true } });
+  });
+
+  it("the feed post has results, the Story has none: the Story is told to press Send again", () => {
+    const answer = failedStartAnswer("feed-1", story, dispatch({ withoutResults: ["story-1"] }));
+    expect(answer.body).toEqual({
+      resultsMarked: true,
+      otherHalf: { ...story, note: "Its Story was not sent: press Send again on its card in Activity." },
+    });
+    expect(answer.halfNote).toBe("Its Story was not sent: press Send again on its card in Activity.");
+  });
+
+  it("pressed on the Story, the feed post left without results and unmarked: tried again on its own", () => {
+    const feed = { id: "feed-1", kind: "feed" as const, changed: true, note: "Its feed post is publishing too." };
+    const answer = failedStartAnswer("story-1", feed, dispatch({ withoutResults: ["feed-1"], unmarked: ["feed-1"] }));
+    expect(answer.body.resultsMarked).toBe(true);
+    expect(answer.body.otherHalf?.note).toBe(
+      "Its feed post didn't start either. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card.",
+    );
+  });
+
+  it("a half left alone, or one with no connected platform, keeps its note", () => {
+    const leftAlone = { ...story, changed: false, note: "Its Story is already publishing, so it was not published." };
+    expect(failedStartAnswer("feed-1", leftAlone, dispatch()).body.otherHalf).toEqual(leftAlone);
+    expect(failedStartAnswer("feed-1", leftAlone, dispatch()).halfNote).toBeUndefined();
+    const notSent = { ...story, note: "Its Story was not sent: none of its platforms is connected." };
+    expect(failedStartAnswer("feed-1", notSent, dispatch({ notSent: ["story-1"] })).body.otherHalf).toEqual(notSent);
   });
 });

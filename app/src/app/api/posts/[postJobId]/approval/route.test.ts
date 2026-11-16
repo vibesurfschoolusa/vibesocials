@@ -890,7 +890,8 @@ describe("POST /api/posts/[postJobId]/approval — the start failed before any r
     consoleSpy.mockRestore();
   });
 
-  it("not marked either: the email's two-hours sentence ends with Send again", async () => {
+  // R29 publishing L1: still in_progress with no results, so the requeue sends it by itself.
+  it("not marked either: the email says it is tried again on its own, then Send again", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
     prepareDispatchMock.mockRejectedValue(new Error("pool timeout"));
@@ -902,8 +903,9 @@ describe("POST /api/posts/[postJobId]/approval — the start failed before any r
     await expect(res.json()).resolves.toMatchObject({ resultsMarked: false, withoutResults: true });
     const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
     expect(text).toContain(
-      "before it shows as failed. Once it does, press Send again on it there.",
+      "Approved, but publishing didn't start as it should. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity: press Send again on it there.",
     );
+    expect(text).not.toMatch(/two hours/);
     expect(text).not.toMatch(/retry/i);
     consoleSpy.mockRestore();
   });
@@ -1202,6 +1204,40 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     // Nothing happened to the Story, so the email does not name it.
     expect(sendEmailMock.mock.calls[0][0].html).not.toContain("Its Story");
+  });
+
+  // R29 publishing L2: approved to publish now; the feed post got its results,
+  // the Story's prepare threw, so the Story has none and offers Send again only.
+  it("a failed start: the answer and the member's email tell the Story to press Send again", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("pool timeout");
+      return {
+        ok: true,
+        event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+      };
+    });
+    resultCountMock.mockResolvedValueOnce(2).mockResolvedValueOnce(0);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-1",
+      resultsMarked: true,
+      otherHalf: {
+        id: "story-1",
+        kind: "story",
+        changed: true,
+        note: "Its Story was not sent: press Send again on its card in Activity.",
+      },
+    });
+    const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
+    expect(text).toContain("Approved, but nothing was sent: publishing couldn't start. Open the post in Activity and retry it there.");
+    expect(text).toContain("Its Story was not sent: press Send again on its card in Activity.");
   });
 
   it("without includePair an approval takes this post alone, exactly as for any post", async () => {

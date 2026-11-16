@@ -14,3 +14,15 @@ describe("Media picker with nothing in Media", () => {
     expect(source).not.toContain("Upload files here");
   });
 });
+
+// R29 publishing L4: a Load more that works after one that failed takes the
+// old alert away; it is cleared as Load more starts.
+describe("Media picker Load more", () => {
+  const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("clears the error before it loads the next page", () => {
+    expect(source).toContain(
+      "if (!nextCursor || loadingMore) return; setError(null); setLoadingMore(true); const result = await fetchPage(nextCursor);",
+    );
+  });
+});

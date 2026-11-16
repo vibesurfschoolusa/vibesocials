@@ -6,6 +6,7 @@ import {
   COMPOSER_DISPATCH_UNMARKED_MESSAGE,
   composerSubmitOutcome,
   dispatchFailedText,
+  otherHalfStartText,
   type ComposerSubmitOutcome,
 } from "./composerSubmitOutcome";
 import { WORKSPACE_CHANGED_MESSAGE } from "./workspaceChanged";
@@ -224,14 +225,89 @@ describe("dispatchFailedText for Send again", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: true, withoutResults: true }, "Send again")).toBe(
       "Publishing couldn't start, so nothing was sent. Press Send again to try once more.",
     );
+  });
+
+  // R29 publishing L1: no results and not marked failed: the post is still
+  // in_progress with none, so the scanner's requeue sends it again by itself.
+  it("left without results and not marked: it is tried again on its own within about 20 minutes", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Send again")).toBe(
-      "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then press Send again.",
+      "Publishing didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed on this card, with Send again.",
     );
   });
 
   it("not marked: it can show as publishing for about two hours, then retry it there", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false }, "Send again")).toBe(
       "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.",
+    );
+  });
+});
+
+// R29 publishing L1: Publish now and Approve, for a post left in_progress with
+// no results (the requeue sends it again); with results, the two-hours text.
+describe("dispatchFailedText - no results and not marked", () => {
+  it("Publish and Approve: tried again on its own; Send again only if that fails too", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Publish")).toBe(
+      "The post was saved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card. Don't press Publish again.",
+    );
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Approve")).toBe(
+      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card. Don't press Approve again.",
+    );
+  });
+
+  it("no results but marked: still press Send again", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: true, withoutResults: true }, "Publish")).toBe(
+      "Saved, but publishing couldn't start — press Send again on its card in Activity.",
+    );
+  });
+
+  it("results not marked: the two-hours text, unchanged", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false }, "Publish")).toMatch(/about two hours/);
+  });
+});
+
+// R29 publishing L2: a Feed and Story card's 503 says what became of the other half.
+describe("dispatchFailedText - the other half's note", () => {
+  it("is added after the pressed post's sentence", () => {
+    expect(
+      dispatchFailedText(
+        {
+          code: "DISPATCH_FAILED",
+          resultsMarked: true,
+          otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was not sent: press Send again on its card in Activity." },
+        },
+        "Approve",
+      ),
+    ).toBe(
+      "Approved, but publishing couldn't start — retry it from Activity. Its Story was not sent: press Send again on its card in Activity.",
+    );
+  });
+
+  it("an answer without one is as before", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: true, otherHalf: { note: 3 } }, "Publish")).toBe(
+      "Saved, but publishing couldn't start — retry it from Activity.",
+    );
+  });
+});
+
+describe("otherHalfStartText", () => {
+  it.each([
+    [{ resultsMarked: true, withoutResults: true }, "Its Story was not sent: press Send again on its card in Activity."],
+    [
+      { resultsMarked: false, withoutResults: true },
+      "Its Story didn't start either. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card.",
+    ],
+    [{ resultsMarked: true, withoutResults: false }, "Its Story couldn't start either: retry it on its card in Activity."],
+    [
+      { resultsMarked: false, withoutResults: false },
+      "Its Story didn't start either. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.",
+    ],
+  ])("%o", (start, text) => {
+    expect(otherHalfStartText("Story", start)).toBe(text);
+  });
+
+  it("names the feed post when the Story was pressed", () => {
+    expect(otherHalfStartText("feed post", { resultsMarked: true, withoutResults: true })).toBe(
+      "Its feed post was not sent: press Send again on its card in Activity.",
     );
   });
 });

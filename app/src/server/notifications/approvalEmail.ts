@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries, platformLabel } from "@/lib/platforms";
+import { RETRIED_ON_ITS_OWN_TEXT } from "@/lib/composerSubmitOutcome";
 import { truncateGraphemes } from "@/lib/truncate";
 import { emailDate, emailDateTime } from "@/server/notifications/emailTime";
 import { workspaceLink } from "@/server/notifications/links";
@@ -153,8 +154,12 @@ export function buildApprovalRequestedEmail(params: {
 const START_UNCONFIRMED_LEAD =
   "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed.";
 const START_UNCONFIRMED_TEXT = `${START_UNCONFIRMED_LEAD} Don't retry it until it shows as failed; then retry it there.`;
-/** R28 publishing L2: a post with no results is failed with none, so its card offers Send again. */
-const START_UNCONFIRMED_NO_RESULTS_TEXT = `${START_UNCONFIRMED_LEAD} Once it does, press Send again on it there.`;
+/**
+ * R28 publishing L2 + R29 publishing L1: a post with no results is still
+ * in_progress with none, so the scanner's requeue sends it again by itself;
+ * failed after that, its card offers Send again.
+ */
+const START_UNCONFIRMED_NO_RESULTS_TEXT = `Approved, but publishing didn't start as it should. ${RETRIED_ON_ITS_OWN_TEXT} in Activity: press Send again on it there.`;
 
 /** Sent to the submitting member once an owner approves or rejects. */
 export function buildApprovalDecisionEmail(params: {
@@ -186,6 +191,8 @@ export function buildApprovalDecisionEmail(params: {
    * so once it shows as failed its card offers Send again, not Retry.
    */
   withoutResults?: boolean;
+  /** R29 publishing L2: a Feed and Story card whose start failed: what became of the other half. */
+  otherHalfNote?: string;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const storyLine = decidedStoryLine(params.approved, params.alsoAsStory);
@@ -235,6 +242,7 @@ export function buildApprovalDecisionEmail(params: {
       captionBlock(params.caption),
       outcome,
       storyLine,
+      params.otherHalfNote ? `<p>${escapeHtml(params.otherHalfNote)}</p>` : "",
       cta,
       `<p>— Vibe Socials</p>`,
     ]

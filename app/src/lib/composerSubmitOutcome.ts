@@ -47,20 +47,53 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
   "Saved, but publishing couldn't start — retry it from Activity.";
 
 /**
+ * R29 publishing L1: a post left `in_progress` with no results (prepare threw
+ * before writing any, and failing it threw too) is put back by the scanner's
+ * requeue after 6 minutes and sent on that scan, every 10 minutes: about 6-16
+ * minutes. Only if that send fails too does its card show it failed.
+ */
+export const RETRIED_ON_ITS_OWN_TEXT =
+  "It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed";
+
+/**
  * KK4: the 503 says `resultsMarked: false` when the route couldn't mark the
  * results failed. Activity then shows the post as publishing until the
  * stuck-job reconciler fails it: it takes jobs untouched for 2 hours, on a scan
  * every 10 minutes, later when a batch is waiting. Retry is offered from then on.
+ * A post with no results at all is sent again by itself (RETRIED_ON_ITS_OWN_TEXT).
  */
 function dispatchUnmarkedText(button: DispatchFailedButton, withoutResults: boolean): string {
   // R27 publishing-flow L1: Send again is pressed on the Activity card itself,
   // and that card has no Send again while the post shows as publishing.
   if (button === "Send again") {
-    return `Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then ${withoutResults ? "press Send again" : "retry it there"}.`;
+    return withoutResults
+      ? `Publishing didn't start. ${RETRIED_ON_ITS_OWN_TEXT} on this card, with Send again.`
+      : "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.";
   }
   const done = button === "Approve" ? "approved" : "saved";
-  const then = withoutResults ? "press Send again on its card" : "retry it there";
-  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then ${then}. Don't press ${button} again.`;
+  if (withoutResults) {
+    return `The post was ${done} but didn't start. ${RETRIED_ON_ITS_OWN_TEXT} in Activity, with Send again on its card. Don't press ${button} again.`;
+  }
+  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
+}
+
+/** How a claimed post stands after a failed start (the 503's `resultsMarked` and `withoutResults`). */
+export type FailedStart = { resultsMarked: boolean; withoutResults: boolean };
+
+/**
+ * R29 publishing L2: the sentence for the other half of a Feed and Story card
+ * whose start failed too, by its own state (its card offers Send again only
+ * when it has no results).
+ */
+export function otherHalfStartText(name: "Story" | "feed post", start: FailedStart): string {
+  if (start.withoutResults) {
+    return start.resultsMarked
+      ? `Its ${name} was not sent: press Send again on its card in Activity.`
+      : `Its ${name} didn't start either. ${RETRIED_ON_ITS_OWN_TEXT} in Activity, with Send again on its card.`;
+  }
+  return start.resultsMarked
+    ? `Its ${name} couldn't start either: retry it on its card in Activity.`
+    : `Its ${name} didn't start either. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.`;
 }
 
 export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post", false);
@@ -77,6 +110,13 @@ export type DispatchFailedButton = "Post" | "Publish" | "Approve" | "Send again"
  * the list is read again the card shows the failed platforms' Retry buttons.
  */
 export function dispatchFailedText(body: unknown, button: DispatchFailedButton = "Post"): string {
+  // R29 publishing L2: a Feed and Story card's answer says what became of the other half.
+  const note = field(field(body, "otherHalf"), "note");
+  const own = ownDispatchFailedText(body, button);
+  return typeof note === "string" && note ? `${own} ${note}` : own;
+}
+
+function ownDispatchFailedText(body: unknown, button: DispatchFailedButton): string {
   // R28 publishing L2: `withoutResults` (dispatchNow) when the start failed
   // before the post had any results: its card offers Send again, not Retry.
   const withoutResults = field(body, "withoutResults") === true;

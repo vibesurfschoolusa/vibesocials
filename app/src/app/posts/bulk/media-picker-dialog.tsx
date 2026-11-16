@@ -81,6 +81,7 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
+    setError(null);
     setLoadingMore(true);
     const result = await fetchPage(nextCursor);
     if (typeof result === "string") setError(result);

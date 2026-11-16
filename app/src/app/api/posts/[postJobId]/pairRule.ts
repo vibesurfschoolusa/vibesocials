@@ -2,6 +2,7 @@ import type { Platform, PostJobStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
+import { otherHalfStartText, type FailedStart } from "@/lib/composerSubmitOutcome";
 import { logger } from "@/lib/logger";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
@@ -118,7 +119,7 @@ function movedOnPhrase(status: PostJobStatus): string | null {
   }
 }
 
-function halfName(kind: PairHalf["kind"]): string {
+function halfName(kind: PairHalf["kind"]): "Story" | "feed post" {
   return kind === "story" ? "Story" : "feed post";
 }
 
@@ -169,6 +170,32 @@ export function notSentNote(kind: PairHalf["kind"], role: ViewerRole = "owner"):
   return `Its ${halfName(kind)} was not sent: ${noPlatformConnected(role)}`;
 }
 
+/**
+ * R29 publishing L1 + L2: the 503 fields after a failed start. `resultsMarked`
+ * and `withoutResults` are the pressed post's own; a claimed other half (one
+ * that had a platform to go to) gets its note by its own state, also returned
+ * as `halfNote` for the member's email. A half left alone keeps its note.
+ */
+export function failedStartAnswer(
+  postJobId: string,
+  pair: PairReport | null,
+  dispatch: DispatchResult,
+): {
+  body: { resultsMarked: boolean; withoutResults?: true; otherHalf?: PairReport };
+  halfNote?: string;
+} {
+  const start = failedStartOf(dispatch, postJobId);
+  const own = { resultsMarked: start.resultsMarked, ...(start.withoutResults ? { withoutResults: true as const } : {}) };
+  if (!pair) return { body: own };
+  if (!pair.changed || dispatch.notSent.has(pair.id)) return { body: { ...own, otherHalf: pair } };
+  const halfNote = otherHalfStartText(halfName(pair.kind), failedStartOf(dispatch, pair.id));
+  return { body: { ...own, otherHalf: { ...pair, note: halfNote } }, halfNote };
+}
+
+function failedStartOf(dispatch: DispatchResult, id: string): FailedStart {
+  return { resultsMarked: !dispatch.unmarked.has(id), withoutResults: dispatch.withoutResults.has(id) };
+}
+
 /** What `dispatchNow` did with each claimed post. */
 export type DispatchResult = {
   /** Handed to Inngest. */
@@ -191,6 +218,8 @@ export type DispatchResult = {
    * the stuck-job reconciler fails it (as the create route's 503 says).
    */
   resultsMarked: boolean;
+  /** R29 publishing L1 + L2: the claimed posts whose marking threw (each half's own state). */
+  unmarked: Set<string>;
   /**
    * R28 publishing L2: claimed posts the failed start left with no results at
    * all (prepare threw before it wrote them). Such a post reads "not sent" in
@@ -274,6 +303,7 @@ export async function dispatchNow(
     limitRefusals: new Map(),
     sendFailed: false,
     resultsMarked: true,
+    unmarked: new Set(),
     withoutResults: new Set(),
   };
   const prepared: string[] = [];
@@ -291,6 +321,7 @@ export async function dispatchNow(
       } catch (failError) {
         logger.error(`[${log.route}] Couldn't fail a claimed post (the stuck-job sweep will)`, { error: failError, postJobId: id });
         result.resultsMarked = false;
+        result.unmarked.add(id);
       }
     }
     for (const written of sendsWritten) await withdrawSend(written);
@@ -349,6 +380,7 @@ export async function dispatchNow(
       } catch (markError) {
         logger.error(`[${log.route}] Couldn't mark the undispatched results failed`, { error: markError, postJobId: id });
         result.resultsMarked = false;
+        result.unmarked.add(id);
       }
     }
     // Not handed to publishing: a send already there from earlier that day was

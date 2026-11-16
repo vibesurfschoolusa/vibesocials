@@ -25,6 +25,7 @@ import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/schedulin
 import {
   applyToPair,
   dispatchNow,
+  failedStartAnswer,
   isLiveHalf,
   notSentNote,
   pairLimitArgs,
@@ -522,9 +523,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         code: DISPATCH_FAILURE.errorCode,
         error: DISPATCH_FAILURE.errorMessage,
         postJobId,
-        resultsMarked: dispatch.resultsMarked,
         // R28 publishing L2: no results, so Activity offers Send again, not Retry.
-        ...(dispatch.withoutResults.has(postJobId) ? { withoutResults: true } : {}),
+        // R29 publishing L1 + L2: this post's own state, and the other half's in its note.
+        ...failedStartAnswer(postJobId, pair, dispatch).body,
       },
       { status: 503 },
     );

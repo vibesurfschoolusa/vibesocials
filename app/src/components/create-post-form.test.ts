@@ -19,7 +19,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildTextPostBody,
+  captionsAfterReuseDismissed,
   CreatePostFormSkeleton,
+  LibraryFileStatus,
   NothingConnectedState,
   composerPageState,
   composerPageView,
@@ -1223,5 +1225,58 @@ describe("Create: connections Retry and the status line", () => {
 
   it("the empty status line takes no room in the row", () => {
     expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" role="status">\s*\{untouchedMessage\}/);
+  });
+});
+
+// R29 publishing L3: "Use a different file instead" clears only the captions
+// still the reused item's own; what the person typed stays.
+describe("captionsAfterReuseDismissed", () => {
+  const item = { baseCaption: "Sunset surf", perPlatformOverrides: { x: "Sunset surf on X", instagram: "IG sunset" } };
+
+  it("untouched: both are cleared", () => {
+    expect(captionsAfterReuseDismissed(item, "Sunset surf", { x: "Sunset surf on X", instagram: "IG sunset" })).toEqual({
+      caption: "",
+      overrides: null,
+    });
+  });
+
+  it("the caption rewritten and an X caption changed: both stay; the untouched Instagram one goes", () => {
+    expect(captionsAfterReuseDismissed(item, "My own words", { x: "My X words", instagram: "IG sunset" })).toEqual({
+      caption: "My own words",
+      overrides: { x: "My X words" },
+    });
+  });
+
+  it("a platform caption added that the item didn't have stays", () => {
+    expect(
+      captionsAfterReuseDismissed({ baseCaption: null, perPlatformOverrides: null }, "", { facebook_page: "New FB text" }),
+    ).toEqual({ caption: "", overrides: { facebook_page: "New FB text" } });
+  });
+
+  it("the handler uses it", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const start = raw.indexOf("const handleDismissReuse = useCallback(");
+    const body = raw.slice(start, raw.indexOf("}, [", start));
+    expect(body).toContain("captionsAfterReuseDismissed(");
+    expect(body).not.toContain('setUploadCaption("")');
+    expect(body).not.toContain("setPlatformOverrides(null)");
+  });
+});
+
+// R29 pages L6: while a file from Media loads, a status line says so, on the
+// page from the first render (its text changes, the region stays).
+describe("LibraryFileStatus", () => {
+  it("says the file is loading, and is empty otherwise", () => {
+    expect(renderToStaticMarkup(createElement(LibraryFileStatus, { loading: true }))).toBe(
+      '<p role="status" class="sr-only">Loading the file from your library…</p>',
+    );
+    expect(renderToStaticMarkup(createElement(LibraryFileStatus, { loading: false }))).toBe(
+      '<p role="status" class="sr-only"></p>',
+    );
+  });
+
+  it("is rendered outside the media branches, so it is there before the skeleton shows", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+    expect(raw).toContain('<LibraryFileStatus loading={reuseLoading} /> {reuseItem ? (');
   });
 });
