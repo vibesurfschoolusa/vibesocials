@@ -9,8 +9,8 @@ import { qrSvg } from "@/lib/qrSvg";
 import { ReviewLinkPanelView, reviewRequestMessage } from "./review-link-panel";
 
 const LINK = "https://g.page/r/abc/review";
-const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"], workspaceId = "ws-A") =>
-  renderToStaticMarkup(createElement(ReviewLinkPanelView, { state, workspaceId }));
+const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"], workspaceId = "ws-A", isMember = false) =>
+  renderToStaticMarkup(createElement(ReviewLinkPanelView, { state, workspaceId, isMember }));
 
 describe("reviewRequestMessage", () => {
   // R5 pages L5: any business sends it, so it names no activity.
@@ -49,6 +49,13 @@ describe("ReviewLinkPanelView", () => {
     const html = render({ status: "none", reason: "Google didn't accept the connection.", signIn: true }, "ws-A");
     expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-A"[^>]*>Sign in to Google again<\/a>/);
     expect(render({ status: "none", reason: "Something else." })).not.toContain("/api/auth/");
+  });
+
+  // JJ3 lead review: the page's own member flag decides, as the error card does.
+  it("never shows the sign-in link on a member's page, even if an answer asks", () => {
+    const html = render({ status: "none", reason: "Google didn't accept the connection.", signIn: true }, "ws-A", true);
+    expect(html).not.toContain("/api/auth/");
+    expect(html).toContain("Google didn&#x27;t accept the connection.");
   });
 
   it("shows a placeholder while loading", () => {

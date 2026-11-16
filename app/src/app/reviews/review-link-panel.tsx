@@ -29,7 +29,7 @@ const LOAD_FAILED = "Couldn't load your review link. Reload this page to try aga
  * its QR code, a printable card and a message to send a customer. The link
  * comes from GET /api/reviews/link, which asks Google only while none is saved.
  */
-export function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
+export function ReviewLinkPanel({ workspaceId, isMember }: { workspaceId: string; isMember: boolean }) {
   const [state, setState] = useState<ReviewLinkState>({ status: "loading" });
 
   useEffect(() => {
@@ -58,11 +58,20 @@ export function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
     };
   }, []);
 
-  return <ReviewLinkPanelView state={state} workspaceId={workspaceId} />;
+  return <ReviewLinkPanelView state={state} workspaceId={workspaceId} isMember={isMember} />;
 }
 
 /** The panel for a given state; separate so it renders in tests without a fetch. */
-export function ReviewLinkPanelView({ state, workspaceId }: { state: ReviewLinkState; workspaceId: string }) {
+export function ReviewLinkPanelView({
+  state,
+  workspaceId,
+  isMember,
+}: {
+  state: ReviewLinkState;
+  workspaceId: string;
+  /** The page's own role: a member never gets the sign-in link (as error-state.tsx). */
+  isMember: boolean;
+}) {
   const toast = useToast();
 
   const copy = async (text: string, what: string) => {
@@ -84,7 +93,7 @@ export function ReviewLinkPanelView({ state, workspaceId }: { state: ReviewLinkS
       ) : state.status === "none" ? (
         <>
           <p className="mt-2 text-sm text-muted-foreground">{state.reason}</p>
-          {state.signIn ? (
+          {state.signIn && !isMember ? (
             <div className="mt-3">
               <SignInAgainLink href={gbpSignInUrl(workspaceId)} />
             </div>
