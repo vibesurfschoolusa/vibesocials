@@ -22,7 +22,7 @@ vi.mock("@/app/api/connections/google_business_profile/gbpLocations", async (imp
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
-const { accessBlockMock } = vi.hoisted(() => ({ accessBlockMock: vi.fn((_context: unknown): Response | null => null) }));
+const { accessBlockMock } = vi.hoisted(() => ({ accessBlockMock: vi.fn<(context: unknown) => Response | null>(() => null) }));
 vi.mock("@/lib/workspaceStatus", () => ({ accessBlockResponse: (context: unknown) => accessBlockMock(context) }));
 vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: findFirstMock } } }));
 vi.mock("@/server/googleReviews", async (importOriginal) => ({

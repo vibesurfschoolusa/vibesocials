@@ -10,7 +10,7 @@ const { getWorkspaceContextMock, checkRateLimitMock, memberFindManyMock } = vi.h
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
-const { accessBlockMock } = vi.hoisted(() => ({ accessBlockMock: vi.fn((_context: unknown): Response | null => null) }));
+const { accessBlockMock } = vi.hoisted(() => ({ accessBlockMock: vi.fn<(context: unknown) => Response | null>(() => null) }));
 vi.mock("@/lib/workspaceStatus", () => ({ accessBlockResponse: (context: unknown) => accessBlockMock(context) }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 // R5-security M1: the owner budget reads the workspace's owners.
