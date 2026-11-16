@@ -523,6 +523,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         error: DISPATCH_FAILURE.errorMessage,
         postJobId,
         resultsMarked: dispatch.resultsMarked,
+        // R28 publishing L2: no results, so Activity offers Send again, not Retry.
+        ...(dispatch.withoutResults.has(postJobId) ? { withoutResults: true } : {}),
       },
       { status: 503 },
     );

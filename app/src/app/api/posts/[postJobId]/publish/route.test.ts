@@ -19,6 +19,7 @@ const {
   checkDailyPostLimitMock,
   transactionMock,
   resultFindFirstMock,
+  resultCountMock,
   reserveSendNowMock,
   releaseMock,
 } = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ const {
   releaseMock: vi.fn(),
   transactionMock: vi.fn(),
   resultFindFirstMock: vi.fn(),
+  resultCountMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -46,7 +48,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock, updateMany: updateManyMock },
     socialConnection: { count: connectionCountMock },
-    postJobResult: { findFirst: resultFindFirstMock },
+    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock },
     $transaction: transactionMock,
   },
 }));
@@ -596,6 +598,28 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       postJobId: "job-1",
       resultsMarked: false,
     });
+    consoleSpy.mockRestore();
+  });
+
+  // R28 publishing L2: the start failed inside prepare, before the post had any
+  // results, so the Queue says to press Send again on its card (queueActions).
+  it("503s with withoutResults when the failed start left the post without results", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue(jobRow());
+    prepareDispatchMock.mockRejectedValue(new Error("pool timeout"));
+    resultCountMock.mockResolvedValue(0);
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-1",
+      resultsMarked: true,
+      withoutResults: true,
+    });
+    expect(inngestSendMock).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
 
