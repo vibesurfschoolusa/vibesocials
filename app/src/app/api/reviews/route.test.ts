@@ -538,3 +538,32 @@ describe("GET /api/reviews and a 401 on a token that ran out on the way", () => 
     expect(flagRejectedTokenMock).toHaveBeenCalledWith({ id: "c1", accessToken: "tok", refreshToken: "ref" }, "GOOGLE_API_TOKEN_REJECTED");
   });
 });
+
+// R27 lead addition: a tab drawn for one workspace never lists another's
+// reviews. A missing id is an old page, which keeps working until it reloads.
+describe("GET /api/reviews: the page's workspace", () => {
+  const withId = (workspaceId: string) =>
+    GET(new Request(`http://localhost/api/reviews?location=accounts%2F1%2Flocations%2F2&workspaceId=${workspaceId}`));
+
+  it("another workspace's id: 409 WORKSPACE_CHANGED, no connection read and nothing asked of Google", async () => {
+    const response = await withId("ws-other");
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED", error: expect.any(String) });
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(fetchAllReviewsMock).not.toHaveBeenCalled();
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the active workspace's id", () => withId("ws-1")],
+    ["no id (an old page)", get],
+  ])("%s: the reviews as today", async (_label, call) => {
+    fetchAllReviewsMock.mockResolvedValue({ reviews: [], truncated: false });
+
+    const response = await call();
+
+    expect(response.status).toBe(200);
+    expect(fetchAllReviewsMock).toHaveBeenCalledTimes(1);
+  });
+});

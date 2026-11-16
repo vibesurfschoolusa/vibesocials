@@ -56,6 +56,12 @@ const CONNECTION = {
 
 const originalFetch = global.fetch;
 
+/** GET, with or without the workspace the Reviews page was rendered for (R27 lead addition). */
+function list(workspaceId?: string) {
+  const query = workspaceId === undefined ? "" : `?workspaceId=${encodeURIComponent(workspaceId)}`;
+  return GET(new Request(`http://localhost/api/reviews/locations${query}`));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   getWorkspaceContextMock.mockResolvedValue(CONTEXT);
@@ -71,7 +77,7 @@ describe("GET /api/reviews/locations", () => {
   it("returns 401 when there is no workspace context", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(401);
   });
@@ -84,7 +90,7 @@ describe("GET /api/reviews/locations", () => {
   it("returns 200 with connected:false when the workspace has no GBP connection", async () => {
     findFirstMock.mockResolvedValue(null);
 
-    const response = await GET();
+    const response = await list();
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -99,7 +105,7 @@ describe("GET /api/reviews/locations", () => {
       json: async () => ({ accounts: [] }),
     }) as unknown as typeof fetch;
 
-    const response = await GET();
+    const response = await list();
     const body = await response.json();
 
     // R26 client-journey L3: the picker's notice, with the owner's in-place sign-in.
@@ -127,7 +133,7 @@ describe("GET /api/reviews/locations", () => {
       });
     }) as unknown as typeof fetch;
 
-    const response = await GET();
+    const response = await list();
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -149,7 +155,7 @@ describe("GET /api/reviews/locations", () => {
       text: async () => "upstream down",
     }) as unknown as typeof fetch;
 
-    const response = await GET();
+    const response = await list();
     const body = await response.json();
 
     expect(response.status).toBe(500);
@@ -163,7 +169,7 @@ describe("GET /api/reviews/locations", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body).toEqual({
       error: "Google refused the request. Sign in to Google again with the account that manages this listing.",
@@ -182,7 +188,7 @@ describe("GET /api/reviews/locations", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 403 })) as unknown as typeof fetch;
 
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await list()).json()).toEqual({
       error:
         "Google refused access to this Business Profile account: the connected Google account may no longer manage your business. Sign in to Google again with the account that manages your business.",
       reconnect: true,
@@ -198,7 +204,7 @@ describe("GET /api/reviews/locations", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
 
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await list()).json()).toEqual({
       error: "Google refused the request. The workspace owner can reconnect Google Business Profile.",
     });
   });
@@ -214,7 +220,7 @@ describe("GET /api/reviews/locations", () => {
       text: async () => "upstream down",
     }) as unknown as typeof fetch;
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body).toEqual({ error: "Google Business Profile isn't answering for Vibe Socials right now. Try again later." });
   });
@@ -238,7 +244,7 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     refreshAccessTokenMock.mockResolvedValue({ ...CONNECTION, accessToken: "fresh", expiresAt: new Date() });
     noAccounts();
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(200);
     expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1);
@@ -250,7 +256,7 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     expiringIn(10 * MINUTE);
     noAccounts();
 
-    await GET();
+    await list();
 
     expect(refreshAccessTokenMock).not.toHaveBeenCalled();
     const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
@@ -268,7 +274,7 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     );
     noAccounts();
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(200);
     const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
@@ -288,7 +294,7 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     );
     noAccounts();
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
@@ -307,7 +313,7 @@ describe("GET /api/reviews/locations for a connection flagged for reconnect", ()
     global.fetch = vi.fn() as unknown as typeof fetch;
     findFirstMock.mockResolvedValue({ ...CONNECTION, expiresAt: new Date(Date.now() + 4 * 60 * 1000), needsReconnect: true });
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
@@ -355,7 +361,7 @@ describe("GET /api/reviews/locations lists every page", () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     const fetchMock = twoPagesEach();
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body).toEqual({
       connected: true,
@@ -380,7 +386,7 @@ describe("GET /api/reviews/locations lists every page", () => {
     findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/2/locations/3" } });
     twoPagesEach();
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body).toEqual({
       connected: true,
@@ -392,7 +398,7 @@ describe("GET /api/reviews/locations lists every page", () => {
     findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/2/locations/3" } });
     twoPagesEach();
 
-    expect((await (await GET()).json()).locations).toHaveLength(3);
+    expect((await (await list()).json()).locations).toHaveLength(3);
   });
 
   it("a member with no saved location sees none, and is told who chooses it", async () => {
@@ -400,7 +406,7 @@ describe("GET /api/reviews/locations lists every page", () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     twoPagesEach();
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body.locations).toEqual([]);
     expect(body.notice).toBe(
@@ -421,7 +427,7 @@ describe("GET /api/reviews/locations when accounts could not be read", () => {
       [`${INFO}/accounts/2/locations|`]: { body: { locations: [shop(2)] } },
     });
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body.locations).toHaveLength(1);
     expect(body.notice).toBe(
@@ -437,7 +443,7 @@ describe("GET /api/reviews/locations when accounts could not be read", () => {
       [`${INFO}/accounts/1/locations|`]: { status: 503 },
     });
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
@@ -453,7 +459,7 @@ describe("GET /api/reviews/locations when accounts could not be read", () => {
       [`${INFO}/accounts/1/locations|`]: { status: 403 },
     });
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body).toMatchObject({ reconnect: true, signIn: true });
     expect(body.error).toMatch(/^Google refused access to this Business Profile account/);
@@ -466,7 +472,7 @@ describe("GET /api/reviews/locations rate limit", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 9 });
     global.fetch = vi.fn() as unknown as typeof fetch;
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(429);
     expect(checkRateLimitMock).toHaveBeenCalledWith({ userId: "user-1", route: "reviews/locations", limit: 60, windowMs: 300_000 });
@@ -482,7 +488,7 @@ describe("GET /api/reviews/locations for a member with no saved location", () =>
     findFirstMock.mockResolvedValue(CONNECTION);
     global.fetch = vi.fn() as unknown as typeof fetch;
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body).toEqual({
       locations: [],
@@ -508,7 +514,7 @@ describe("GET /api/reviews/locations for a member whose saved location isn't lis
       [`${INFO}/accounts/1/locations|`]: { body: { locations: [shop(1)] } },
     });
 
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await list()).json()).toEqual({
       locations: [],
       connected: true,
       notice:
@@ -524,7 +530,7 @@ describe("GET /api/reviews/locations for a member whose saved location isn't lis
       [`${INFO}/accounts/2/locations|`]: { body: { locations: [shop(2)] } },
     });
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body.locations).toEqual([]);
     expect(body.notice).toBe(
@@ -548,7 +554,7 @@ describe("GET /api/reviews/locations and a saved store code two locations share"
   it("the owner: every location, and to choose it from the list in Settings", async () => {
     sharedCode();
 
-    const body = await (await GET()).json();
+    const body = await (await list()).json();
 
     expect(body.locations).toHaveLength(2);
     expect(body.notice).toBe(
@@ -560,7 +566,7 @@ describe("GET /api/reviews/locations and a saved store code two locations share"
     getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
     sharedCode();
 
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await list()).json()).toEqual({
       locations: [],
       connected: true,
       notice:
@@ -585,7 +591,7 @@ describe("GET /api/reviews/locations sends each location's address and store cod
       },
     });
 
-    expect((await (await GET()).json()).locations).toEqual([
+    expect((await (await list()).json()).locations).toEqual([
       { name: "accounts/1/locations/1", locationName: "Joe's Pizza", title: "Joe's Pizza", storeCode: "J1", address: "1 Main St, Dania" },
       { name: "accounts/1/locations/2", locationName: "Joe's Pizza", title: "Joe's Pizza", address: "9 Beach Rd, Hollywood" },
     ]);
@@ -614,11 +620,40 @@ describe("GET /api/reviews/locations and a 401 on a token that ran out on the wa
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const response = await GET();
+    const response = await list();
 
     expect(response.status).toBe(200);
     expect((await response.json()).connected).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+});
+
+// R27 lead addition: a tab drawn for one workspace never lists another's
+// locations (an agency login lists every client's). A missing id is an old
+// page, which keeps working until it reloads.
+describe("GET /api/reviews/locations: the page's workspace", () => {
+  it("another workspace's id: 409 WORKSPACE_CHANGED, no connection read and nothing asked of Google", async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const response = await list("ws-other");
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED", error: expect.any(String) });
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the active workspace's id", "ws-1"],
+    ["no id (an old page)", undefined],
+  ])("%s: answers as today", async (_label, workspaceId) => {
+    findFirstMock.mockResolvedValue(null);
+
+    const response = await list(workspaceId);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ locations: [], connected: false });
   });
 });

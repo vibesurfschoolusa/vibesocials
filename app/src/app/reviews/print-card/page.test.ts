@@ -17,7 +17,7 @@ vi.mock("next/navigation", () => ({ redirect: h.redirect }));
 
 import ReviewPrintCardPage, { metadata } from "./page";
 
-const WRONG_WORKSPACE = "This page was opened for another workspace. Go back and open Print card again.";
+const WRONG_WORKSPACE = "This page was opened for another workspace. Go back, reload that page, then open Print card again.";
 
 async function render(query: Record<string, string> = {}): Promise<string> {
   return renderToStaticMarkup(await ReviewPrintCardPage({ searchParams: Promise.resolve(query) }));

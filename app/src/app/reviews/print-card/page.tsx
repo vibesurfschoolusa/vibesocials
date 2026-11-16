@@ -20,7 +20,8 @@ export const metadata: Metadata = {
  *
  * R27 security-billing L2: the panel links it with `?workspaceId=` of the
  * workspace the Reviews page was rendered for; another workspace's id (a switch
- * in another tab) gets a plain page instead of the cookie workspace's card. A
+ * in another tab) gets a plain page instead of the cookie workspace's card (a
+ * reload of the Reviews page sends the active id). A
  * link without one (an old link, a bookmark) prints the active workspace's card.
  */
 export default async function ReviewPrintCardPage({
@@ -41,7 +42,7 @@ export default async function ReviewPrintCardPage({
       <div className="mx-auto max-w-xl px-4 py-8">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Review card</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          This page was opened for another workspace. Go back and open Print card again.
+          This page was opened for another workspace. Go back, reload that page, then open Print card again.
         </p>
       </div>
     );

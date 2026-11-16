@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { flagIfTokenRejected, googleFailureKind, withGoogleTokenRetry } from "@/server/googleFailure";
@@ -46,6 +47,14 @@ export async function GET(request: Request) {
       return signedOutResponse();
     }
     role = context.role;
+
+    // R27 (lead addition): the workspace the Reviews page was rendered for,
+    // refused when it is not the active one, before any Google call (an
+    // agency login lists every client's locations). No id is a page drawn
+    // before the id was sent: it reads the active workspace until reloaded.
+    const sent = new URL(request.url).searchParams.get("workspaceId");
+    const refusal = sent === null ? null : renderedWorkspaceRefusal(sent, context.workspace.id);
+    if (refusal) return refusal;
 
     // R25 security-billing L1: before any Google call.
     const limited = await googleRouteRateLimit(context.user.id, "reviews");

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
@@ -40,7 +41,7 @@ const WHERE = "GET /api/reviews/locations";
  * the same `notice` about accounts that could not be read. A member is served
  * only the workspace's saved location (client-journey L3); an owner, every one.
  */
-export async function GET() {
+export async function GET(request: Request) {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
   // The row whose token the Google calls send: a token Google refuses is flagged with it.
@@ -52,6 +53,14 @@ export async function GET() {
       return signedOutResponse();
     }
     role = context.role;
+
+    // R27 (lead addition): the workspace the Reviews page was rendered for,
+    // refused when it is not the active one, before any Google call (an
+    // agency login lists every client's locations). No id is a page drawn
+    // before the id was sent: it reads the active workspace until reloaded.
+    const sent = new URL(request.url).searchParams.get("workspaceId");
+    const refusal = sent === null ? null : renderedWorkspaceRefusal(sent, context.workspace.id);
+    if (refusal) return refusal;
 
     // R25 security-billing L1: before any Google call.
     const limited = await googleRouteRateLimit(context.user.id, "reviews/locations");
