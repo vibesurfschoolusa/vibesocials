@@ -123,9 +123,12 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
 
   // R28 client-journey L3: removed while Reviews is open; the step, by role.
   it.each([
-    ["member", "Google Business Profile was disconnected from this workspace. The workspace owner can connect it again; then reload this page."],
-    ["owner", "Google Business Profile was disconnected, maybe in another tab. Reload this page, then connect it again."],
-  ] as const)("no connection any more (%s): 404 with what happened and the step", async (role, sentence) => {
+    [
+      "member",
+      "Google Business Profile was disconnected from this workspace. Copy your reply. The workspace owner can connect Google Business Profile again; then reload this page.",
+    ],
+    ["owner", "Google Business Profile was disconnected, maybe in another tab. Copy your reply, then reload this page and connect it again."],
+  ] as const)("no connection any more (%s): 404, copy the typed reply before the reload", async (role, sentence) => {
     getWorkspaceContextMock.mockResolvedValue({ ...OWNER, role });
     findFirstMock.mockResolvedValue(null);
 

@@ -62,10 +62,14 @@ import { ReviewLinkPanel } from "./review-link-panel";
 // F7 (R1 M5): plain sentences for a failure the route did not explain.
 const LOCATIONS_FAILED = "Couldn't load your Google locations. Try again in a minute.";
 const REPLY_FAILED = "Couldn't post your reply. Try again in a minute.";
-/** R28 pages L1: the answer can be lost after Google took the reply, so it may be posted. */
+/**
+ * R28 pages L1: the answer can be lost after Google took the reply, so it may
+ * be posted. Lead review: no reload (it would throw away the typed reply);
+ * a reply is a PUT that replaces any earlier one, so sending again is safe.
+ */
 export const REPLY_ANSWER_LOST_MESSAGE = answerLostText(
   "your reply may have been posted",
-  "Reload this page and look under Replied before you send it again.",
+  "Then press Post reply again: it replaces any reply already posted, so it won't post twice.",
 );
 
 /**

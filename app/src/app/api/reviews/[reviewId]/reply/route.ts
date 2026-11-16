@@ -108,7 +108,7 @@ export async function POST(request: Request) {
     });
 
     if (!connection) {
-      return NextResponse.json(gbpDisconnectedBody(role), { status: 404 });
+      return NextResponse.json(gbpDisconnectedBody(role, { reply: true }), { status: 404 });
     }
 
     // A connection Google has revoked reads "Reconnect" at once, as the link

@@ -266,9 +266,11 @@ describe("ReviewsView when a reply fails", () => {
     const shown = replyFailureShown(new NoAnswerError(new TypeError("Failed to fetch")));
     expect(shown.message).toBe(REPLY_ANSWER_LOST_MESSAGE);
     expect(REPLY_ANSWER_LOST_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so your reply may have been posted. If your connection dropped, reconnect first. Reload this page and look under Replied before you send it again.",
+      "Vibe Socials' answer didn't reach you, so your reply may have been posted. If your connection dropped, reconnect first. Then press Post reply again: it replaces any reply already posted, so it won't post twice.",
     );
     expect(REPLY_ANSWER_LOST_MESSAGE).not.toMatch(/wasn't posted/);
+    // Lead review: a reload would throw away the typed reply.
+    expect(REPLY_ANSWER_LOST_MESSAGE).not.toMatch(/[Rr]eload/);
     expect(canRetry(shown)).toBe(true);
   });
 
