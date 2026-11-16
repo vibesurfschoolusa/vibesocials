@@ -291,6 +291,37 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       await expect(press()).resolves.toEqual({ ok: true });
     });
 
+    // R29 OO3 follow-up: the re-read is the truth about the post.
+    it("the 503 says not marked, but the re-read shows it unsent: press Send again", async () => {
+      const body = { ...dispatchBody(false), withoutResults: true };
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+        .mockResolvedValueOnce(unsentPost());
+      const press = createSendAgain("job-9", fetcher, () => true);
+      await expect(press()).resolves.toEqual({
+        ok: false,
+        error: "Publishing couldn't start, so nothing was sent. Press Send again to try once more.",
+        refetch: true,
+      });
+    });
+
+    it("not marked, and the re-read shows it still in progress with no results: tried again on its own", async () => {
+      const body = { ...dispatchBody(false), withoutResults: true };
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+        .mockResolvedValueOnce(response(200, { postJob: { id: "job-9", status: "in_progress" }, results: [] }));
+      const press = createSendAgain("job-9", fetcher, () => true);
+      await expect(press()).resolves.toEqual({
+        ok: false,
+        error:
+          "Publishing didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed on this card, with Send again.",
+        refetch: true,
+      });
+      await expect(press()).resolves.toBeNull();
+    });
+
     it("a refusal with no sentence says it could not send", async () => {
       const noBody = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response("", { status: 400 })), () => true);
       await expect(noBody()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });

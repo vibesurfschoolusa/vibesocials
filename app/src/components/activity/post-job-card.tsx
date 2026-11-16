@@ -269,8 +269,10 @@ export function createSendAgain(
       const post = read.kind === "answer" && read.response.ok ? await readStillUnsent(read.response) : "unread";
       // R28 publishing L2: still unsent (a start that failed before any result
       // was written, or a refusal before the claim): Send again is offered back.
+      // R29 OO3 follow-up: that read is the truth, so it counts as marked
+      // whatever the 503 said; still in progress keeps the body's state.
       const error = dispatchFailed
-        ? dispatchFailedText(post === "unsent" ? { ...body, withoutResults: true } : body, "Send again")
+        ? dispatchFailedText(post === "unsent" ? { ...body, withoutResults: true, resultsMarked: true } : body, "Send again")
         : serverError;
       if (post === "unread") {
         locked = false;
