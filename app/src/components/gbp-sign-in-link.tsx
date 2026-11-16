@@ -2,16 +2,12 @@
 
 import { useSyncExternalStore } from "react";
 
+import { NewTabHint } from "@/components/external-link";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { isInstalledApp } from "@/lib/installedApp";
 
 const HINT_CLASS = "text-xs font-normal opacity-90";
-
-/** R26 pages L6: the visible hint every new-tab link in these pages carries, as part of its text. */
-export function NewTabHint() {
-  return <span className={HINT_CLASS}>(opens in a new tab)</span>;
-}
 
 /**
  * R26 pages L3: in the installed app the sign-in leaves this page, so anything

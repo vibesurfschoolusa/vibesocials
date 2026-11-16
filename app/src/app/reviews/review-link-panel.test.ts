@@ -78,12 +78,12 @@ describe("ReviewLinkPanelView", () => {
   // R26 pages L6: both new-tab links say so, with the shared visible hint, in their own text.
   it("the review link and Print card show that they open in a new tab", () => {
     const html = render({ status: "ready", url: LINK });
-    const hint = '<span class="text-xs font-normal opacity-90">(opens in a new tab)</span>';
+    // One hint, from ExternalLink (external-link.tsx).
     expect(html).toContain(
       // LL2 lead review: the hint doesn't inherit the URL's break-all, so it breaks only between words.
-      `<a href="${LINK}" target="_blank" rel="noopener noreferrer" class="break-all text-sm text-primary underline-offset-4 hover:underline">${LINK} <span class="break-normal">${hint}</span></a>`,
+      `<a href="${LINK}" class="break-all text-sm text-primary underline-offset-4 hover:underline" target="_blank" rel="noopener noreferrer">${LINK} <span class="text-xs font-normal print:hidden break-normal">(opens in a new tab)</span></a>`,
     );
-    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/reviews\/print-card"[^>]*>Print card <span class="text-xs font-normal print:hidden">\(opens in a new tab\)<\/span><\/a>/);
     expect(html).toMatch(/<a [^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Print card/);
   });
 
@@ -101,7 +101,7 @@ describe("ReviewLinkPanelView", () => {
 describe("Print card and the installed app", () => {
   it("in a browser tab: a new tab, with the visible hint", () => {
     const html = renderToStaticMarkup(createElement(PrintCardLinkView, { installed: false }));
-    expect(html).toMatch(/<a [^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*href="\/reviews\/print-card">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
+    expect(html).toMatch(/<a href="\/reviews\/print-card" [^>]*target="_blank" rel="noopener noreferrer">Print card <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
   });
 
   it("in the installed app: the same view, and no new-tab hint", () => {

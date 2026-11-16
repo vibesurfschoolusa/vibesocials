@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import { NewTabHint, SignInAgainLink, useInstalledApp } from "@/components/gbp-sign-in-link";
+import { ExternalLink } from "@/components/external-link";
+import { SignInAgainLink, useInstalledApp } from "@/components/gbp-sign-in-link";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -88,9 +89,9 @@ export function PrintCardLinkView({ installed }: { installed: boolean }) {
     );
   }
   return (
-    <Link href="/reviews/print-card" target="_blank" rel="noopener noreferrer" className={className}>
-      Print card <NewTabHint />
-    </Link>
+    <ExternalLink href="/reviews/print-card" className={className}>
+      Print card
+    </ExternalLink>
   );
 }
 
@@ -150,15 +151,14 @@ export function ReviewLinkPanelView({
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-foreground">Your Google review link</span>
               {/* R26 pages L6: both new-tab links show the shared visible hint in their text. */}
-              <a
+              {/* The hint doesn't inherit break-all: it breaks only between words. */}
+              <ExternalLink
                 href={state.url}
-                target="_blank"
-                rel="noopener noreferrer"
                 className="break-all text-sm text-primary underline-offset-4 hover:underline"
+                hintClassName="break-normal"
               >
-                {/* The hint doesn't inherit break-all: it breaks only between words. */}
-                {state.url} <span className="break-normal"><NewTabHint /></span>
-              </a>
+                {state.url}
+              </ExternalLink>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => copy(state.url, "Link")}>
                   Copy link

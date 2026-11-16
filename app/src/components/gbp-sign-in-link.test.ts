@@ -4,7 +4,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { INSTALLED_APP_HINT, NewTabHint, SignInAgainLink, SignInAgainLinkView } from "./gbp-sign-in-link";
+import { NEW_TAB_HINT, NewTabHint } from "./external-link";
+import { INSTALLED_APP_HINT, SignInAgainLink, SignInAgainLinkView } from "./gbp-sign-in-link";
 
 const HREF = "/api/auth/google_business_profile/start?workspaceId=ws-1";
 
@@ -81,12 +82,16 @@ describe("SignInAgainLinkView in the installed app", () => {
   });
 });
 
-// R26 pages L6: every new-tab link in these pages shows the same visible hint.
+// R26 pages L6: every new-tab link shows the same visible hint, from the one
+// component (external-link.tsx).
 describe("NewTabHint", () => {
-  it("is the visible hint the sign-in link uses", () => {
+  it("is the visible hint the sign-in link uses, from external-link.tsx", () => {
     const hint = renderToStaticMarkup(createElement(NewTabHint));
-    expect(hint).toMatch(/^<span class="[^"]*">\(opens in a new tab\)<\/span>$/);
+    expect(hint).toBe(`<span class="text-xs font-normal print:hidden">${NEW_TAB_HINT}</span>`);
     expect(renderToStaticMarkup(createElement(SignInAgainLink, { href: HREF }))).toContain(hint);
+    const source = readFileSync(path.join(__dirname, "gbp-sign-in-link.tsx"), "utf8");
+    expect(source).toContain('from "@/components/external-link"');
+    expect(source).not.toContain("(opens in a new tab)");
   });
 });
 
