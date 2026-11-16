@@ -18,7 +18,7 @@
  */
 
 /** Out of reach for focus or out of sight: a closed drawer, an aria-hidden layer. */
-function isHiddenElement(element: Element): boolean {
+export function isHiddenElement(element: Element): boolean {
   return (
     element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true" || element.hasAttribute("inert")
   );
@@ -50,7 +50,7 @@ function firstFocusableIn(element: Element): HTMLElement | null {
   return null;
 }
 
-function isMainLandmark(element: Element): boolean {
+export function isMainLandmark(element: Element): boolean {
   return element.tagName === "MAIN" || element.getAttribute("role") === "main";
 }
 
@@ -100,8 +100,11 @@ export function focusFallbacks(trigger: HTMLElement | null): HTMLElement[] {
  * (lead review: Queue's heading is at the top, the card that went was far
  * down). A heading or status line is made focusable by script only.
  */
-function focusFirstOf(candidates: HTMLElement[]): boolean {
-  const target = candidates.find(canTakeFocus);
+export function focusFirstOf(
+  candidates: HTMLElement[],
+  usable: (element: HTMLElement) => boolean = canTakeFocus,
+): boolean {
+  const target = candidates.find(usable);
   if (!target) return false;
   if (!isFocusable(target) && !target.hasAttribute("tabindex")) target.tabIndex = -1;
   target.focus({ preventScroll: true });
@@ -149,6 +152,18 @@ const browserSchedule: FocusSchedule = {
   later: (run, ms) => window.setTimeout(run, ms),
 };
 
+/**
+ * R28 NN1: the controls a watch below is looking after, so the page-wide
+ * focus keeper (focusKeeper.ts) leaves their drop to it: a press's explicit
+ * target wins, and the Dialog keeps its own restore. A count, as /u can hold
+ * two watches for one press for a moment.
+ */
+const watched = new Map<HTMLElement, number>();
+
+export function isWatchedForFocus(element: HTMLElement): boolean {
+  return watched.has(element);
+}
+
 /** Starts the watch; the function it returns ends it early. */
 function watch(
   trigger: HTMLElement,
@@ -157,9 +172,14 @@ function watch(
 ): () => void {
   let done = false;
   let checksLeft = 1 + FOCUS_RECHECK_MS.length;
+  watched.set(trigger, (watched.get(trigger) ?? 0) + 1);
   const stop = () => {
+    if (done) return;
     done = true;
     doc.removeEventListener("focusin", onFocusIn);
+    const left = (watched.get(trigger) ?? 1) - 1;
+    if (left > 0) watched.set(trigger, left);
+    else watched.delete(trigger);
   };
   function onFocusIn(event: Event) {
     if (event.target !== trigger) stop();

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 
 import { useSignedInAccount } from "@/components/signed-in-swap";
 import { ToastProvider } from "@/components/ui/toast";
+import { installFocusKeeper } from "@/lib/focusKeeper";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./top-bar";
 import { MobileDrawer } from "./mobile-drawer";
@@ -54,6 +55,11 @@ export function AppShell({ children, pricingPublic }: { children: ReactNode; pri
   // FF1 review: the line waits for the server's own "signed out"; a failed
   // session fetch also reads as nobody here.
   const signedOut = useServerSaysSignedOut(isAppRoute && namedSomeone && status !== "loading" && !signedIn);
+
+  // R28 NN1: the root layout wraps every route in AppShell (the frame, the
+  // public pages and the bare /c, /u and /v client pages), so the page-wide
+  // focus keeper is installed once here for all of them.
+  useEffect(() => installFocusKeeper(), []);
 
   return (
     <ToastProvider>
