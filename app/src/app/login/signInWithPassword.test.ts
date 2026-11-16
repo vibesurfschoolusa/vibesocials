@@ -133,6 +133,11 @@ describe("signInWithPassword when sign-in can't be reached", () => {
     );
   });
 
+  it("Google's press when the server answered but the sign-in didn't start (R31 lead review 2)", async () => {
+    const { GOOGLE_NOT_STARTED_MESSAGE } = await import("./signInWithPassword");
+    expect(GOOGLE_NOT_STARTED_MESSAGE).toBe("Google sign-in didn't start. Press Continue with Google again.");
+  });
+
   it("the other sentences: Google's press, and Register's automatic sign-in", () => {
     expect(GOOGLE_NOT_SENT_MESSAGE).toBe(
       "Vibe Socials couldn't be reached, so nothing was sent. If your connection dropped, reconnect first, then press Continue with Google again.",
@@ -206,7 +211,9 @@ describe("every sign-in entry point goes through signInChecked", () => {
     expect(source).toContain("googleSignInChecked(callbackUrl)");
     // R31 lead review: no next-auth signIn for Google (its second csrf read failed silently).
     expect(source).not.toMatch(/\bsignIn\b/);
-    expect(source).toMatch(/if \(!result\.ok\) \{\s+setError\(GOOGLE_NOT_SENT_MESSAGE\);\s+setLoading\(false\);/);
+    expect(source).toMatch(
+      /if \(!result\.ok\) \{\s+setError\(result\.reason === "not_started" \? GOOGLE_NOT_STARTED_MESSAGE : GOOGLE_NOT_SENT_MESSAGE\);\s+setLoading\(false\);/,
+    );
     expect(source).not.toMatch(/signIn\("google"/);
     expect(source).toMatch(/<p role="alert"[^>]*>\s*\{error\}/);
   });

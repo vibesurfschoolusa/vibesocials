@@ -111,14 +111,16 @@ function leaveFor(url: string): void {
  * core/index.js). So this makes signIn's own request itself, with the token
  * just read: POST /api/auth/signin/google, form-encoded { callbackUrl,
  * csrfToken, json: true } (react/index.js), and leaves for the answer's url
- * only when it has no csrf=true and no error. Anything else: nothing reached
- * Google, and the page stays.
+ * only when it has no csrf=true and no error. R31 lead review 2: a lost
+ * answer or a 5xx is not_sent (nothing reached Google, maybe not us either);
+ * an answer that came but didn't start the sign-in (csrf=true, an error, no
+ * url, a refusal) is not_started. Either way the page stays.
  */
 export async function googleSignInChecked(
   callbackUrl: string,
   fetchImpl: typeof fetch = fetch,
   navigate: (url: string) => void = leaveFor,
-): Promise<{ ok: true } | { ok: false; reason: "not_sent" }> {
+): Promise<{ ok: true } | { ok: false; reason: "not_sent" | "not_started" }> {
   const csrfToken = await readyCsrfToken(fetchImpl);
   if (!csrfToken) return { ok: false, reason: "not_sent" };
   let url: unknown;
@@ -132,13 +134,14 @@ export async function googleSignInChecked(
       },
       fetchImpl,
     );
-    if (!response.ok) return { ok: false, reason: "not_sent" };
+    if (response.status >= 500) return { ok: false, reason: "not_sent" };
+    if (!response.ok) return { ok: false, reason: "not_started" };
     const data: unknown = await response.json().catch(() => null);
     url = typeof data === "object" && data !== null ? (data as { url?: unknown }).url : undefined;
   } catch {
     return { ok: false, reason: "not_sent" };
   }
-  if (typeof url !== "string" || url === "" || saysCsrf(url) || saysError(url)) return { ok: false, reason: "not_sent" };
+  if (typeof url !== "string" || url === "" || saysCsrf(url) || saysError(url)) return { ok: false, reason: "not_started" };
   navigate(url);
   return { ok: true };
 }

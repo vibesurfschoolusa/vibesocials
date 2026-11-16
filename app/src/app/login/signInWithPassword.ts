@@ -12,6 +12,8 @@ export const LOGIN_NOT_SENT_MESSAGE =
   "Vibe Socials couldn't be reached, so your email and password weren't sent. If your connection dropped, reconnect first, then press Sign in again.";
 export const GOOGLE_NOT_SENT_MESSAGE =
   "Vibe Socials couldn't be reached, so nothing was sent. If your connection dropped, reconnect first, then press Continue with Google again.";
+/** R31 lead review 2: the server answered, but the Google sign-in didn't start (csrf=true, an error). */
+export const GOOGLE_NOT_STARTED_MESSAGE = "Google sign-in didn't start. Press Continue with Google again.";
 /**
  * Register's automatic sign-in after its 201, when the providers list didn't
  * come back. The 201 also comes for an email that already had an account, so

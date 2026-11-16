@@ -141,21 +141,23 @@ describe("googleSignInChecked", () => {
     expect(navigate).toHaveBeenCalledWith(toGoogle);
   });
 
-  it("an answer whose url says csrf=true, or has an error: not sent, and the page stays", async () => {
-    for (const url of ["http://localhost/api/auth/signin?csrf=true", "http://localhost/login?callbackUrl=%2Fqueue&error=OAuthSignin"]) {
-      const { navigate, run } = google(async () => Response.json({ url }));
-      await expect(run()).resolves.toEqual({ ok: false, reason: "not_sent" });
+  // R31 lead review 2: the server was reached, so "couldn't be reached" isn't true.
+  it("an answer whose url says csrf=true or has an error, or has no url: not started, and the page stays", async () => {
+    const answers: Answer[] = [
+      async () => Response.json({ url: "http://localhost/api/auth/signin?csrf=true" }),
+      async () => Response.json({ url: "http://localhost/login?callbackUrl=%2Fqueue&error=OAuthSignin" }),
+      async () => Response.json({}),
+      async () => Response.json({ error: "x" }, { status: 400 }),
+    ];
+    for (const answer of answers) {
+      const { navigate, run } = google(answer);
+      await expect(run()).resolves.toEqual({ ok: false, reason: "not_started" });
       expect(navigate).not.toHaveBeenCalled();
     }
   });
 
-  it("a lost answer, a gateway's 5xx, our own 5xx, or no url: not sent, and the page stays", async () => {
-    const answers: Answer[] = [
-      offline,
-      gateway,
-      async () => Response.json({ error: "x" }, { status: 500 }),
-      async () => Response.json({}),
-    ];
+  it("a lost answer, a gateway's 5xx, or our own 5xx: not sent, and the page stays", async () => {
+    const answers: Answer[] = [offline, gateway, async () => Response.json({ error: "x" }, { status: 500 })];
     for (const answer of answers) {
       const { navigate, run } = google(answer);
       await expect(run()).resolves.toEqual({ ok: false, reason: "not_sent" });

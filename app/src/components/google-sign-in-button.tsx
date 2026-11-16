@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { getProviders } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
-import { GOOGLE_NOT_SENT_MESSAGE } from "@/app/login/signInWithPassword";
+import { GOOGLE_NOT_SENT_MESSAGE, GOOGLE_NOT_STARTED_MESSAGE } from "@/app/login/signInWithPassword";
 import { googleSignInChecked } from "@/lib/signInChecked";
 
 /**
@@ -67,7 +67,7 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
           // only stopping the spinner. On success the page leaves for Google.
           const result = await googleSignInChecked(callbackUrl);
           if (!result.ok) {
-            setError(GOOGLE_NOT_SENT_MESSAGE);
+            setError(result.reason === "not_started" ? GOOGLE_NOT_STARTED_MESSAGE : GOOGLE_NOT_SENT_MESSAGE);
             setLoading(false);
           }
         }}
