@@ -1264,16 +1264,14 @@ export async function POST(request: Request) {
     : undefined;
 
   // Q1: a Feed and Story pair is held the same way, inside the create
-  // transaction, so it is never half held. A single post is held after the
-  // create (below), as before.
-  const storyArgs = storyJob
-    ? {
-        story: storyJob,
-        ...(heldForApproval
-          ? { approvalHold: { submittedForApprovalAt: new Date(), scheduledFor: scheduledForDate } }
-          : {}),
-      }
-    : {};
+  // transaction, so it is never half held. R25 L3: so is a single post, so it
+  // exists held for approval or not at all, never as a plain draft. The create
+  // helpers write no time for a draft; the hold keeps the member's chosen one.
+  const holdArgs =
+    heldForApproval && !series
+      ? { approvalHold: { submittedForApprovalAt: new Date(), scheduledFor: scheduledForDate } }
+      : {};
+  const storyArgs = storyJob ? { story: storyJob } : {};
 
   // Publishing needs no verified email (2026-11-09): only the person's own
   // platform accounts, connected through each platform's sign-in, receive it.
@@ -1313,6 +1311,7 @@ export async function POST(request: Request) {
         ...placementArgs,
         targetPlatforms,
         ...(series ? { series } : {}),
+        ...holdArgs,
       });
       postJobId = created.postJobId;
       sendsWritten = created.sendsWritten;
@@ -1342,6 +1341,7 @@ export async function POST(request: Request) {
         ...(series ? { series } : {}),
         ...coverArgs,
         ...storyArgs,
+        ...holdArgs,
       });
       postJobId = created.postJobId;
       sendsWritten = created.sendsWritten;
@@ -1387,6 +1387,7 @@ export async function POST(request: Request) {
         ...(series ? { series } : {}),
         ...coverArgs,
         ...storyArgs,
+        ...holdArgs,
       });
       postJobId = created.postJobId;
       sendsWritten = created.sendsWritten;
@@ -1402,23 +1403,8 @@ export async function POST(request: Request) {
     // run-time-result-creation fix), and a draft is promoted via the publish
     // endpoint. The event shape is identical to the reuse path; the publisher
     // resolves media by id, so it needs no changes.
-    // Approval workflow: stamp the submission and restore the member's chosen
-    // time. The create helpers write `scheduledFor: null` for a draft intent,
-    // so it is re-applied here rather than threading an extra param through
-    // both helpers (and their tests).
+    // Approval workflow: the post was held in the create transaction (above).
     if (heldForApproval) {
-      // A series, and a Feed and Story pair, were held in the create
-      // transaction (above).
-      if (!series && !storyJob) {
-        await prisma.postJob.update({
-          where: { id: postJobId },
-          data: {
-            submittedForApprovalAt: new Date(),
-            ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
-          },
-        });
-      }
-
       // 2026-11-01 audit: tell the owners something is waiting. Never throws.
       // A series sends this one email, not one per post, and it says so.
       await notifyOwnersOfApprovalRequest({
@@ -1530,22 +1516,77 @@ export async function POST(request: Request) {
       }
     }
 
-    // Return immediately - job runs in background
-    const postJob = await prisma.postJob.findUnique({
-      where: { id: postJobId },
-    });
-    const results = await prisma.postJobResult.findMany({
-      where: { postJobId },
-    });
+    // The sentence for a post that was created and sent (or saved) as asked.
+    function createdMessage(): string {
+      return series
+        ? heldForApproval
+          ? `Sent for approval: ${series.times.length} posts. An owner will review each one before it publishes.`
+          : `${series.times.length} posts scheduled.`
+        : heldForApproval
+        ? "Sent for approval — an owner will review it before it publishes."
+        : intent === "draft"
+          ? "Draft saved."
+          : intent === "scheduled"
+            ? "Post scheduled."
+            : textOnly
+              ? "Publishing in progress."
+              : "Publishing in progress. Large videos may take a few minutes.";
+    }
 
-    // G1 review: a "Post now" writes a failed row for each chosen platform whose
-    // connection needs reconnecting or is gone (posting.ts). Say which, across
-    // the feed and Story jobs, so Create can warn instead of "Post queued".
-    // R10-client-journey L1: a member reads the owner's step, not Settings.
-    const storyResults =
-      effectiveIntent === "immediate" && storyPostJobId
-        ? await prisma.postJobResult.findMany({ where: { postJobId: storyPostJobId } })
-        : [];
+    // What the answer says of a post that exists, whatever fails below.
+    const known = {
+      // Approval workflow: lets the composer tell the member their post is
+      // queued for review rather than published/scheduled.
+      ...(heldForApproval ? { awaitingApproval: true } : {}),
+      // Repeat: `postJob` is the first post of the series.
+      ...(series ? { series: { id: series.seriesId, count: series.times.length } } : {}),
+      // Q1: Feed and Story made a second job; `postJob` is the feed one.
+      ...(storyPostJobId ? { storyPostJobId } : {}),
+    };
+
+    // R25 L3: the create has committed (and a Post now was handed off), so these
+    // reads only describe the post. A failure answers 200 with what is known:
+    // a 500 would tell Create nothing was created, and a second press would
+    // post a second copy everywhere.
+    let postJob: Awaited<ReturnType<typeof prisma.postJob.findUnique>>;
+    let results: Awaited<ReturnType<typeof prisma.postJobResult.findMany>>;
+    let storyResults: typeof results;
+    try {
+      // Return immediately - job runs in background
+      postJob = await prisma.postJob.findUnique({
+        where: { id: postJobId },
+      });
+      results = await prisma.postJobResult.findMany({
+        where: { postJobId },
+      });
+      // G1 review: a "Post now" writes a failed row for each chosen platform whose
+      // connection needs reconnecting or is gone (posting.ts). Say which, across
+      // the feed and Story jobs, so Create can warn instead of "Post queued".
+      // R10-client-journey L1: a member reads the owner's step, not Settings.
+      storyResults =
+        effectiveIntent === "immediate" && storyPostJobId
+          ? await prisma.postJobResult.findMany({ where: { postJobId: storyPostJobId } })
+          : [];
+    } catch (readError: unknown) {
+      logger.error("[POST /api/posts] Created, but couldn't read it back for the answer", {
+        error: readError,
+        postJobId,
+        ...(storyPostJobId ? { storyPostJobId } : {}),
+        userId: context.user.id,
+        workspaceId: context.workspace.id,
+      });
+      // Without the rows the reason is unknown, but not that nothing was handed off.
+      const nothingSent = effectiveIntent === "immediate" && !mainSends && !storySends;
+      return NextResponse.json({
+        postJob: null,
+        results: [],
+        postJobId,
+        message: nothingSent
+          ? "The post was saved, but none of its platforms could be sent. Open Activity to see why."
+          : createdMessage(),
+        ...known,
+      });
+    }
     const upFront =
       effectiveIntent === "immediate"
         ? notSentAtCreation([...results, ...storyResults])
@@ -1560,21 +1601,7 @@ export async function POST(request: Request) {
       ),
     }));
 
-    const message = upFront.allFailed
-      ? notSentSentence(upFront.notSent, true, context.role)
-      : series
-      ? heldForApproval
-        ? `Sent for approval: ${series.times.length} posts. An owner will review each one before it publishes.`
-        : `${series.times.length} posts scheduled.`
-      : heldForApproval
-      ? "Sent for approval — an owner will review it before it publishes."
-      : intent === "draft"
-        ? "Draft saved."
-        : intent === "scheduled"
-          ? "Post scheduled."
-          : textOnly
-            ? "Publishing in progress."
-            : "Publishing in progress. Large videos may take a few minutes.";
+    const message = upFront.allFailed ? notSentSentence(upFront.notSent, true, context.role) : createdMessage();
 
     // SEC-1 (post-release review Task C): project to the display-safe DTOs —
     // the raw rows carry userId/workspaceId/publishMetadata (job) and
@@ -1587,13 +1614,7 @@ export async function POST(request: Request) {
       postJob: postJob ? toPostJobDetailDto(postJob) : null,
       results: postJob ? results.map(toPostJobResultSummaryDto) : [],
       message,
-      // Approval workflow: lets the composer tell the member their post is
-      // queued for review rather than published/scheduled.
-      ...(heldForApproval ? { awaitingApproval: true } : {}),
-      // Repeat: `postJob` is the first post of the series.
-      ...(series ? { series: { id: series.seriesId, count: series.times.length } } : {}),
-      // Q1: Feed and Story made a second job; `postJob` is the feed one.
-      ...(storyPostJobId ? { storyPostJobId } : {}),
+      ...known,
       // G1 review: platforms not sent, and whether nothing was sent at all.
       ...(notSent.length > 0
         ? { notSent, notSentText: notSentSentence(upFront.notSent, upFront.allFailed, context.role) }

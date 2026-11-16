@@ -113,6 +113,7 @@ import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH, canonicalBlobUrl } from
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
+import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
 import { POST } from "./route";
 
 /**
@@ -589,14 +590,14 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
         expect.objectContaining({ intent: "draft" }),
       );
       expect(inngestSendMock).not.toHaveBeenCalled();
-      // Submission stamped and the member's chosen time restored on the row.
-      expect(postJobUpdateMock).toHaveBeenCalledWith({
-        where: { id: "job-1" },
-        data: {
-          submittedForApprovalAt: expect.any(Date),
-          scheduledFor: new Date(FUTURE),
-        },
-      });
+      // R25 L3: submission stamped and the member's chosen time kept inside
+      // the create call's transaction, so the post is held or doesn't exist.
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalHold: { submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(FUTURE) },
+        }),
+      );
+      expect(postJobUpdateMock).not.toHaveBeenCalled();
       expect(body.awaitingApproval).toBe(true);
       expect(body.message).toContain("approval");
     });
@@ -614,11 +615,11 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
         expect.objectContaining({ intent: "draft" }),
       );
       expect(inngestSendMock).not.toHaveBeenCalled();
-      // No chosen time to restore — only the submission stamp.
-      expect(postJobUpdateMock).toHaveBeenCalledWith({
-        where: { id: "job-1" },
-        data: { submittedForApprovalAt: expect.any(Date) },
-      });
+      // No chosen time to keep — only the submission stamp, in the create call.
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalHold: { submittedForApprovalAt: expect.any(Date), scheduledFor: null } }),
+      );
+      expect(postJobUpdateMock).not.toHaveBeenCalled();
     });
 
     it("never holds an OWNER's post — owners are the approvers", async () => {
@@ -676,8 +677,8 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
         caption: "Held caption",
         platformCaptions: null,
       });
-      // Notified only once the hold is stamped on the row.
-      expect(postJobUpdateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      // Notified only once the held post is created.
+      expect(createPostJobOnlyMock.mock.invocationCallOrder[0]).toBeLessThan(
         notifyOwnersMock.mock.invocationCallOrder[0],
       );
     });
@@ -3087,19 +3088,18 @@ describe("POST /api/posts - Feed and Story (both)", () => {
     expect(notifyOwnersMock).not.toHaveBeenCalled();
   });
 
-  it("a member's single post (no both): held exactly as today, email without a Story line", async () => {
+  it("a member's single post (no both): held in the create call like a pair, email without a Story line", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
     createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
     await POST(
       jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: STORY }),
     );
 
-    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("approvalHold");
-    expect(postJobUpdateMock).toHaveBeenCalledTimes(1);
-    expect(postJobUpdateMock).toHaveBeenCalledWith({
-      where: { id: "job-1" },
-      data: { submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(LATER) },
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({
+      approvalHold: { submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(LATER) },
     });
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("story");
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
     expect(notifyOwnersMock.mock.calls[0][0]).not.toHaveProperty("alsoAsStory");
   });
 
@@ -3522,5 +3522,168 @@ describe("POST /api/posts - platforms not sent at creation", () => {
 
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
     expect(inngestSendMock.mock.calls[0][0]).toMatchObject({ id: "publish-job-s", data: { postJobId: "job-s" } });
+  });
+});
+
+// R25 publishing-flow L3: once the create has committed, nothing after it may
+// answer 500, or Create keeps the form and a second press posts a second copy.
+describe("POST /api/posts - after the create has committed", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const photo = { blobUrl: `${HOST}/p1.jpg`, filename: "p1.jpg", mimeType: "image/jpeg", sizeBytes: 101 };
+  const DAY = 24 * 60 * 60 * 1000;
+  const LATER = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  const blip = () => new Error("database blip");
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-9", resultIds: ["r1"] });
+  });
+
+  async function send(body: Record<string, unknown>) {
+    const response = await POST(jsonRequest({ baseCaption: "hi", ...body }));
+    return { response, body: (await response.json()) as Record<string, unknown> };
+  }
+
+  it("Post now: the job read after the hand-off fails -> 200 with the postJobId, Create resets the form", async () => {
+    postJobFindUniqueMock.mockRejectedValue(blip());
+    const { response, body } = await send(photo);
+
+    expect(response.status).toBe(200);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(body).toMatchObject({ postJobId: "job-1", postJob: null, results: [] });
+    expect(typeof body.message).toBe("string");
+    expect(failPendingMock).not.toHaveBeenCalled();
+    expect(withdrawSendMock).not.toHaveBeenCalled();
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" })).toMatchObject({
+      kind: "success",
+      resetForm: true,
+    });
+  });
+
+  it("Post now: the results read fails -> 200 with the postJobId", async () => {
+    postJobResultFindManyMock.mockRejectedValue(blip());
+    const { response, body } = await send(photo);
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ postJobId: "job-1" });
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" }).kind).toBe("success");
+  });
+
+  it("Post now with nothing it could send: a read failure says so instead of 'in progress'", async () => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"], unsent: ["job-1"] });
+    postJobResultFindManyMock.mockRejectedValue(blip());
+    const { response, body } = await send(photo);
+
+    expect(response.status).toBe(200);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ postJobId: "job-1" });
+    expect(body.message).not.toMatch(/in progress/);
+  });
+
+  it("reuse path: a read failure after the create is a 200 too", async () => {
+    postJobFindUniqueMock.mockRejectedValue(blip());
+    const { response, body } = await send({ mediaItemId: "media-9" });
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ postJobId: "job-1" });
+  });
+
+  it("Feed and Story pair: the Story's results read fails -> 200 with both ids", async () => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      storyPostJobId: "job-s",
+      mediaItemId: "media-1",
+      resultIds: ["r1"],
+    });
+    postJobResultFindManyMock.mockImplementation(async (args: { where: { postJobId: string } }) => {
+      if (args.where.postJobId === "job-s") throw blip();
+      return [];
+    });
+    const { response, body } = await send({ ...photo, platforms: ["instagram"], instagramMetadata: { placement: "both" } });
+
+    expect(response.status).toBe(200);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(body).toMatchObject({ postJobId: "job-1", storyPostJobId: "job-s" });
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" }).kind).toBe("success");
+  });
+
+  it("Repeat series: a read failure after the create -> 200 with the series and its count", async () => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      postJobIds: ["job-1", "job-2"],
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+    postJobFindUniqueMock.mockRejectedValue(blip());
+    const { response, body } = await send({
+      ...photo,
+      scheduledFor: LATER.toISOString(),
+      repeatAt: [new Date(LATER.getTime() + 7 * DAY).toISOString()],
+    });
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ postJobId: "job-1", series: { id: expect.any(String), count: 2 }, message: "2 posts scheduled." });
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "schedule" }).kind).toBe("success");
+  });
+
+  it("a member's held post: a read failure after the create still says it was sent for approval", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    postJobFindUniqueMock.mockRejectedValue(blip());
+    const { response, body } = await send({ ...photo, scheduledFor: LATER.toISOString() });
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ postJobId: "job-1", awaitingApproval: true });
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "schedule" })).toMatchObject({
+      kind: "success",
+      heldForApproval: true,
+    });
+  });
+
+  it("a member's single post is held inside the create call on the upload and reuse paths", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    await send({ ...photo, scheduledFor: LATER.toISOString() });
+    await send({ mediaItemId: "media-9" });
+
+    const hold = (scheduledFor: Date | null) => ({ submittedForApprovalAt: expect.any(Date), scheduledFor });
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({ intent: "draft", approvalHold: hold(LATER) });
+    expect(createPostJobForExistingMediaMock.mock.calls[0][0]).toMatchObject({ intent: "draft", approvalHold: hold(null) });
+    // Nothing is written after the create, so a failed stamp can't leave a plain draft.
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("a member's series carries its hold in the series, not a second hold", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    await send({
+      ...photo,
+      scheduledFor: LATER.toISOString(),
+      repeatAt: [new Date(LATER.getTime() + 7 * DAY).toISOString()],
+    });
+
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args.series).toMatchObject({ submittedForApprovalAt: expect.any(Date) });
+    expect(args).not.toHaveProperty("approvalHold");
+  });
+
+  it("a member's held write fails: nothing created, today's 500, no email", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    createPostJobOnlyMock.mockRejectedValue(blip());
+    const { response, body } = await send({ ...photo, scheduledFor: LATER.toISOString() });
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error: "Failed to create post" });
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("a failure before the create commits: today's 500 and no hand-off", async () => {
+    createPostJobOnlyMock.mockRejectedValue(blip());
+    const { response, body } = await send(photo);
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error: "Failed to create post" });
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" }).kind).toBe("error");
   });
 });

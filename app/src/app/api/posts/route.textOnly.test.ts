@@ -310,6 +310,19 @@ describe("POST /api/posts - textOnly (a post without a photo)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
+  // R25 publishing-flow L3: the hold is written with the post, never after it.
+  it("a member's text post is held inside the create call, with no update after it", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    const response = await POST(textRequest());
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({
+      intent: "draft",
+      approvalHold: { submittedForApprovalAt: expect.any(Date), scheduledFor: null },
+    });
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+  });
+
   it("without textOnly the old answers are unchanged", async () => {
     const missing = await POST(jsonRequest({ baseCaption: "hi" }));
     expect(missing.status).toBe(400);
