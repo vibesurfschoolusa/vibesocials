@@ -891,7 +891,7 @@ describe("POST /api/posts/[postJobId]/approval — the start failed before any r
   });
 
   // R29 publishing L1: still in_progress with no results, so the requeue sends it by itself.
-  it("not marked either: the email says it is tried again on its own, then Send again", async () => {
+  it("not marked either: the email says it is tried again on its own, then what its card says", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
     prepareDispatchMock.mockRejectedValue(new Error("pool timeout"));
@@ -903,7 +903,7 @@ describe("POST /api/posts/[postJobId]/approval — the start failed before any r
     await expect(res.json()).resolves.toMatchObject({ resultsMarked: false, withoutResults: true });
     const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
     expect(text).toContain(
-      "Approved, but publishing didn't start as it should. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity: press Send again on it there.",
+      "Approved, but publishing didn't start as it should. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card.",
     );
     expect(text).not.toMatch(/two hours/);
     expect(text).not.toMatch(/retry/i);
@@ -1238,6 +1238,34 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
     expect(text).toContain("Approved, but nothing was sent: publishing couldn't start. Open the post in Activity and retry it there.");
     expect(text).toContain("Its Story was not sent: press Send again on its card in Activity.");
+    expect(sendEmailMock.mock.calls[0][0].subject).toMatch(/but nothing was sent$/);
+  });
+
+  // Review of R29 L2: the Story's marking threw, so its results may still be
+  // pending and it may go out; the email's subject must not say nothing was sent.
+  it("a failed start whose Story couldn't be marked: it may have started, and the subject says so", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) => ({
+      ok: true,
+      event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+    }));
+    inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+    failPendingMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("db blip");
+      return { failedCount: 1, unconfirmedCount: 0, status: "failed" };
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.resultsMarked).toBe(true);
+    expect(body.otherHalf.note).toBe("Its Story may not have started: check its card in Activity.");
+    const email = sendEmailMock.mock.calls[0][0];
+    expect(htmlToPlainText(email.html as string)).toContain("Its Story may not have started: check its card in Activity.");
+    expect(email.subject).not.toMatch(/nothing was sent/);
+    expect(email.subject).toMatch(/but publishing may not have started$/);
   });
 
   it("without includePair an approval takes this post alone, exactly as for any post", async () => {

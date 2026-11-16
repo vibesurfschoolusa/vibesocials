@@ -174,7 +174,7 @@ export function notSentNote(kind: PairHalf["kind"], role: ViewerRole = "owner"):
  * R29 publishing L1 + L2: the 503 fields after a failed start. `resultsMarked`
  * and `withoutResults` are the pressed post's own; a claimed other half (one
  * that had a platform to go to) gets its note by its own state, also returned
- * as `halfNote` for the member's email. A half left alone keeps its note.
+ * as `halfNote` for the member's email (with `halfMayHaveStarted` for its subject). A half left alone keeps its note.
  */
 export function failedStartAnswer(
   postJobId: string,
@@ -183,13 +183,16 @@ export function failedStartAnswer(
 ): {
   body: { resultsMarked: boolean; withoutResults?: true; otherHalf?: PairReport };
   halfNote?: string;
+  /** The claimed other half's marking threw: it may still go out. */
+  halfMayHaveStarted?: boolean;
 } {
   const start = failedStartOf(dispatch, postJobId);
   const own = { resultsMarked: start.resultsMarked, ...(start.withoutResults ? { withoutResults: true as const } : {}) };
   if (!pair) return { body: own };
   if (!pair.changed || dispatch.notSent.has(pair.id)) return { body: { ...own, otherHalf: pair } };
-  const halfNote = otherHalfStartText(halfName(pair.kind), failedStartOf(dispatch, pair.id));
-  return { body: { ...own, otherHalf: { ...pair, note: halfNote } }, halfNote };
+  const half = failedStartOf(dispatch, pair.id);
+  const halfNote = otherHalfStartText(halfName(pair.kind), half);
+  return { body: { ...own, otherHalf: { ...pair, note: halfNote } }, halfNote, halfMayHaveStarted: !half.resultsMarked };
 }
 
 function failedStartOf(dispatch: DispatchResult, id: string): FailedStart {

@@ -316,7 +316,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       await expect(press()).resolves.toEqual({
         ok: false,
         error:
-          "Publishing didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed on this card, with Send again.",
+          "Publishing didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card.",
         refetch: true,
       });
       await expect(press()).resolves.toBeNull();

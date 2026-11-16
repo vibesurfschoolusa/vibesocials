@@ -448,10 +448,10 @@ describe("approved, publishing not confirmed as stopped, and the post has no res
 
   // R29 publishing L1: with no results it is still in_progress, so the
   // scanner's requeue sends it again by itself.
-  it("says it is tried again on its own, and Send again only if that fails too (never Retry)", () => {
+  it("says it is tried again on its own, and what next is on its card (never Retry)", () => {
     const text = htmlToPlainText(email.html);
     expect(text).toContain(
-      "Approved, but publishing didn't start as it should. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity: press Send again on it there.",
+      "Approved, but publishing didn't start as it should. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card.",
     );
     expect(text).not.toMatch(/two hours/);
     expect(text).not.toMatch(/retry/i);
@@ -486,5 +486,33 @@ describe("approved, publishing couldn't start, with the other half's note", () =
     const { otherHalfNote: _unused, ...plain } = base;
     void _unused;
     expect(buildApprovalDecisionEmail(plain).html).not.toContain("Send again");
+  });
+});
+
+// Review of R29 L2: a subject true for the pair: "nothing was sent" only when
+// neither half can have started.
+describe("approved, nothing sent for this post, the other half may have started", () => {
+  const base = {
+    approved: true,
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    timeZone: null,
+    caption: "x",
+    scheduledFor: null,
+    appBaseUrl: "https://vibesocials.wtf",
+    notSent: "publishing couldn't start. Open the post in Activity and retry it there.",
+  } as const;
+
+  it("the subject says publishing may not have started", () => {
+    const email = buildApprovalDecisionEmail({
+      ...base,
+      otherHalfNote: "Its Story may not have started: check its card in Activity.",
+      otherHalfMayHaveStarted: true,
+    });
+    expect(email.subject).toBe("Your post in Acme was approved, but publishing may not have started");
+  });
+
+  it("neither half can have started: nothing was sent", () => {
+    expect(buildApprovalDecisionEmail(base).subject).toBe("Your post in Acme was approved, but nothing was sent");
   });
 });

@@ -157,9 +157,9 @@ const START_UNCONFIRMED_TEXT = `${START_UNCONFIRMED_LEAD} Don't retry it until i
 /**
  * R28 publishing L2 + R29 publishing L1: a post with no results is still
  * in_progress with none, so the scanner's requeue sends it again by itself;
- * failed after that, its card offers Send again.
+ * if that fails, its card says what to do next.
  */
-const START_UNCONFIRMED_NO_RESULTS_TEXT = `Approved, but publishing didn't start as it should. ${RETRIED_ON_ITS_OWN_TEXT} in Activity: press Send again on it there.`;
+const START_UNCONFIRMED_NO_RESULTS_TEXT = `Approved, but publishing didn't start as it should. ${RETRIED_ON_ITS_OWN_TEXT}`;
 
 /** Sent to the submitting member once an owner approves or rejects. */
 export function buildApprovalDecisionEmail(params: {
@@ -193,6 +193,11 @@ export function buildApprovalDecisionEmail(params: {
   withoutResults?: boolean;
   /** R29 publishing L2: a Feed and Story card whose start failed: what became of the other half. */
   otherHalfNote?: string;
+  /**
+   * Review of R29 L2: the other half's marking threw, so it may still go out;
+   * the subject then never says nothing was sent.
+   */
+  otherHalfMayHaveStarted?: boolean;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const storyLine = decidedStoryLine(params.approved, params.alsoAsStory);
@@ -235,7 +240,11 @@ export function buildApprovalDecisionEmail(params: {
 
   return {
     subject: `Your post in ${subjectText(params.workspaceName)} was approved${
-      params.notSent ? ", but nothing was sent" : params.startUnconfirmed ? ", but publishing may not have started" : ""
+      params.notSent && !params.otherHalfMayHaveStarted
+        ? ", but nothing was sent"
+        : params.startUnconfirmed || params.notSent
+          ? ", but publishing may not have started"
+          : ""
     }`,
     html: [
       `<p>An owner of <strong>${workspace}</strong> approved your post.</p>`,

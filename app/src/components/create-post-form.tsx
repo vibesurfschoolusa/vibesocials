@@ -807,6 +807,14 @@ function CreatePostFormInner({
   const reuseMediaItemId = searchParams.get("mediaItemId");
   const [reuseItem, setReuseItem] = useState<MediaItemDto | null>(null);
   const [reuseLoading, setReuseLoading] = useState(() => Boolean(reuseMediaItemId));
+  // Review of R29 pages L6: the "loading from your library" line gets its
+  // text a frame after the first render, so a screen reader hears it change
+  // (a status region that mounts already filled may not be read).
+  const [libraryStatusReady, setLibraryStatusReady] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setLibraryStatusReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   // A different caption per platform, as the user typed them, for both a fresh
   // upload and reused media (starts from the reused item's own captions). What
   // is sent and previewed is the cleaned form (lib/platformOverrides.ts).
@@ -2229,6 +2237,10 @@ function CreatePostFormInner({
   // G1 review: what the confirmation says about platforms not sent.
   const banner = notSentBanner(notSent);
 
+  // Review of R29 pages L6: the first child of every view below, so React
+  // keeps this one region mounted while the views change around it.
+  const libraryStatus = <LibraryFileStatus loading={libraryStatusReady && reuseLoading} />;
+
   // `composerGate` (computed above the hooks that need it). The `loading`
   // branch exists because rendering the full form during the first fetch let
   // the user attach a file (the blob upload even ran) that the
@@ -2238,7 +2250,12 @@ function CreatePostFormInner({
   if (composerGate === "loading") {
     // Same placeholder the Suspense boundary below shows, so first paint and
     // connections-loading are visually indistinguishable.
-    return <CreatePostFormSkeleton status="Loading your connections…" />;
+    return (
+      <>
+        {libraryStatus}
+        <CreatePostFormSkeleton status="Loading your connections…" />
+      </>
+    );
   }
 
   // The connections request failed (2026-11-01 audit). The form can't help
@@ -2247,6 +2264,8 @@ function CreatePostFormInner({
   // retry; a retry flips the gate back to the loading skeleton.
   if (composerGate === "error") {
     return (
+      <>
+      {libraryStatus}
       <Card className="p-6">
         <Alert variant="danger" title="Couldn't load your connections">
           <div className="flex flex-col items-start gap-3">
@@ -2269,6 +2288,7 @@ function CreatePostFormInner({
           </div>
         </Alert>
       </Card>
+      </>
     );
   }
 
@@ -2279,7 +2299,12 @@ function CreatePostFormInner({
   // (arriving from Media -> "Use in new post"), where posting is equally
   // impossible.
   if (composerGate === "connect") {
-    return <NothingConnectedState isMember={isMember} />;
+    return (
+      <>
+        {libraryStatus}
+        <NothingConnectedState isMember={isMember} />
+      </>
+    );
   }
 
   // Publish-now confirmation copy — a held member's post is submitted for
@@ -2321,6 +2346,7 @@ function CreatePostFormInner({
 
   return (
     <>
+    {libraryStatus}
     <Card className="p-6">
       <form id="create-post-form" onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && dispatchFailed && (
@@ -2399,7 +2425,6 @@ function CreatePostFormInner({
         {uploadError && <Alert variant="danger">{uploadError}</Alert>}
 
         <div className="space-y-1.5">
-          <LibraryFileStatus loading={reuseLoading} />
           {reuseItem ? (
             // Roadmap Phase 2 — reuse mode: preview the already-persisted
             // MediaItem from its storageLocation and skip the upload UI

@@ -50,10 +50,12 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
  * R29 publishing L1: a post left `in_progress` with no results (prepare threw
  * before writing any, and failing it threw too) is put back by the scanner's
  * requeue after 6 minutes and sent on that scan, every 10 minutes: about 6-16
- * minutes. Only if that send fails too does its card show it failed.
+ * minutes. Only if that send fails too does its card show it failed, with
+ * Retry when that attempt wrote results, else Send again: so the text names
+ * neither (review of R29 L1).
  */
 export const RETRIED_ON_ITS_OWN_TEXT =
-  "It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed";
+  "It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card.";
 
 /**
  * KK4: the 503 says `resultsMarked: false` when the route couldn't mark the
@@ -67,12 +69,12 @@ function dispatchUnmarkedText(button: DispatchFailedButton, withoutResults: bool
   // and that card has no Send again while the post shows as publishing.
   if (button === "Send again") {
     return withoutResults
-      ? `Publishing didn't start. ${RETRIED_ON_ITS_OWN_TEXT} on this card, with Send again.`
+      ? `Publishing didn't start. ${RETRIED_ON_ITS_OWN_TEXT}`
       : "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.";
   }
   const done = button === "Approve" ? "approved" : "saved";
   if (withoutResults) {
-    return `The post was ${done} but didn't start. ${RETRIED_ON_ITS_OWN_TEXT} in Activity, with Send again on its card. Don't press ${button} again.`;
+    return `The post was ${done} but didn't start. ${RETRIED_ON_ITS_OWN_TEXT} Don't press ${button} again.`;
   }
   return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
 }
@@ -83,17 +85,14 @@ export type FailedStart = { resultsMarked: boolean; withoutResults: boolean };
 /**
  * R29 publishing L2: the sentence for the other half of a Feed and Story card
  * whose start failed too, by its own state (its card offers Send again only
- * when it has no results).
+ * when it has no results). Review of R29 L2: one whose marking threw may
+ * still have pending results and go out, so its card is the one to check.
  */
 export function otherHalfStartText(name: "Story" | "feed post", start: FailedStart): string {
-  if (start.withoutResults) {
-    return start.resultsMarked
-      ? `Its ${name} was not sent: press Send again on its card in Activity.`
-      : `Its ${name} didn't start either. ${RETRIED_ON_ITS_OWN_TEXT} in Activity, with Send again on its card.`;
-  }
-  return start.resultsMarked
-    ? `Its ${name} couldn't start either: retry it on its card in Activity.`
-    : `Its ${name} didn't start either. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.`;
+  if (!start.resultsMarked) return `Its ${name} may not have started: check its card in Activity.`;
+  return start.withoutResults
+    ? `Its ${name} was not sent: press Send again on its card in Activity.`
+    : `Its ${name} couldn't start either: retry it on its card in Activity.`;
 }
 
 export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post", false);

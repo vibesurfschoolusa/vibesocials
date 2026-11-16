@@ -719,15 +719,17 @@ describe("failedStartAnswer", () => {
       otherHalf: { ...story, note: "Its Story was not sent: press Send again on its card in Activity." },
     });
     expect(answer.halfNote).toBe("Its Story was not sent: press Send again on its card in Activity.");
+    expect(answer.halfMayHaveStarted).toBe(false);
   });
 
-  it("pressed on the Story, the feed post left without results and unmarked: tried again on its own", () => {
+  it("pressed on the Story, the feed post left unmarked: it may have started", () => {
     const feed = { id: "feed-1", kind: "feed" as const, changed: true, note: "Its feed post is publishing too." };
     const answer = failedStartAnswer("story-1", feed, dispatch({ withoutResults: ["feed-1"], unmarked: ["feed-1"] }));
     expect(answer.body.resultsMarked).toBe(true);
     expect(answer.body.otherHalf?.note).toBe(
-      "Its feed post didn't start either. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card.",
+      "Its feed post may not have started: check its card in Activity.",
     );
+    expect(answer.halfMayHaveStarted).toBe(true);
   });
 
   it("a half left alone, or one with no connected platform, keeps its note", () => {

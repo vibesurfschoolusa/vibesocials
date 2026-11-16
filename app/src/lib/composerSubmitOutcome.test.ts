@@ -231,7 +231,7 @@ describe("dispatchFailedText for Send again", () => {
   // in_progress with none, so the scanner's requeue sends it again by itself.
   it("left without results and not marked: it is tried again on its own within about 20 minutes", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Send again")).toBe(
-      "Publishing didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed on this card, with Send again.",
+      "Publishing didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card.",
     );
   });
 
@@ -245,12 +245,12 @@ describe("dispatchFailedText for Send again", () => {
 // R29 publishing L1: Publish now and Approve, for a post left in_progress with
 // no results (the requeue sends it again); with results, the two-hours text.
 describe("dispatchFailedText - no results and not marked", () => {
-  it("Publish and Approve: tried again on its own; Send again only if that fails too", () => {
+  it("Publish and Approve: tried again on its own; its card says what next if that fails too", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Publish")).toBe(
-      "The post was saved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card. Don't press Publish again.",
+      "The post was saved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't press Publish again.",
     );
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Approve")).toBe(
-      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card. Don't press Approve again.",
+      "The post was approved but didn't start. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with what to do next on its card. Don't press Approve again.",
     );
   });
 
@@ -294,12 +294,12 @@ describe("otherHalfStartText", () => {
     [{ resultsMarked: true, withoutResults: true }, "Its Story was not sent: press Send again on its card in Activity."],
     [
       { resultsMarked: false, withoutResults: true },
-      "Its Story didn't start either. It will be tried again on its own within about 20 minutes; if that fails too, it shows as failed in Activity, with Send again on its card.",
+      "Its Story may not have started: check its card in Activity.",
     ],
     [{ resultsMarked: true, withoutResults: false }, "Its Story couldn't start either: retry it on its card in Activity."],
     [
       { resultsMarked: false, withoutResults: false },
-      "Its Story didn't start either. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.",
+      "Its Story may not have started: check its card in Activity.",
     ],
   ])("%o", (start, text) => {
     expect(otherHalfStartText("Story", start)).toBe(text);

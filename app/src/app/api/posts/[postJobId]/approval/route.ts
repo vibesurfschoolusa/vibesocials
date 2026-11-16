@@ -348,7 +348,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     notSent?: string,
     startUnconfirmed = false,
     withoutResults = false,
-    otherHalfNote?: string,
+    otherHalf?: { note?: string; mayHaveStarted?: boolean },
   ): Promise<AuthorEmail> => {
     try {
       // R7-client-journey L1: only a submitter who is still a member hears about
@@ -379,7 +379,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
           ...(notSent ? { notSent } : {}),
           ...(startUnconfirmed ? { startUnconfirmed: true, ...(withoutResults ? { withoutResults: true } : {}) } : {}),
-          ...(otherHalfNote ? { otherHalfNote } : {}),
+          ...(otherHalf?.note ? { otherHalfNote: otherHalf.note } : {}),
+          ...(otherHalf?.mayHaveStarted ? { otherHalfMayHaveStarted: true } : {}),
         });
         const sent = await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
         return sent ? "sent" : "failed";
@@ -427,9 +428,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       // note (by its own state) in the answer and the email.
       const failed = failedStartAnswer(postJobId, pair, dispatch);
       const withoutResults = failed.body.withoutResults === true;
+      const otherHalf = { note: failed.halfNote, mayHaveStarted: failed.halfMayHaveStarted };
       await (failed.body.resultsMarked
-        ? tellSubmitter(withoutResults ? NOT_SENT_SEND_FAILED_NO_RESULTS : NOT_SENT_SEND_FAILED, false, false, failed.halfNote)
-        : tellSubmitter(undefined, true, withoutResults, failed.halfNote));
+        ? tellSubmitter(withoutResults ? NOT_SENT_SEND_FAILED_NO_RESULTS : NOT_SENT_SEND_FAILED, false, false, otherHalf)
+        : tellSubmitter(undefined, true, withoutResults, otherHalf));
       return NextResponse.json(
         // R26 LL3: as Create's 503, so the Queue can say where to retry it and
         // whether it shows as publishing first.

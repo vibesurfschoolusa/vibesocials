@@ -228,7 +228,7 @@ describe("CreatePostFormSkeleton", () => {
 
   it("the connections loading branch names the connections", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
-    expect(raw).toMatch(/if \(composerGate === "loading"\) \{[^}]*<CreatePostFormSkeleton status="Loading your connections…" \/>/);
+    expect(raw).toMatch(/if \(composerGate === "loading"\) \{[\s\S]*?<CreatePostFormSkeleton status="Loading your connections…" \/>/);
   });
 });
 
@@ -1275,8 +1275,26 @@ describe("LibraryFileStatus", () => {
     );
   });
 
-  it("is rendered outside the media branches, so it is there before the skeleton shows", () => {
-    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
-    expect(raw).toContain('<LibraryFileStatus loading={reuseLoading} /> {reuseItem ? (');
+  // Review of R29 L6: the region is the first child of every view the
+  // composer renders (the connections skeleton, its error, nothing connected,
+  // the form), so it stays mounted from the first render; its text is set
+  // only on a frame after that render, and empties once the file has loaded.
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("is the first child of every view, so it is on the page from the first render", () => {
+    expect(raw).toMatch(/if \(composerGate === "loading"\) \{[^}]*?return \( <> \{libraryStatus\} <CreatePostFormSkeleton /);
+    expect(raw).toContain('if (composerGate === "error") { return ( <> {libraryStatus} <Card className="p-6">');
+    expect(raw).toContain('if (composerGate === "connect") { return ( <> {libraryStatus} <NothingConnectedState');
+    expect(raw).toContain('return ( <> {libraryStatus} <Card className="p-6"> <form id="create-post-form"');
+    expect(raw).not.toContain("<LibraryFileStatus loading={reuseLoading} />");
+    expect(raw.match(/<LibraryFileStatus /g)).toHaveLength(1);
+  });
+
+  it("gets its text only after it is on the page, and loses it once the file has loaded", () => {
+    expect(raw).toContain("const libraryStatus = <LibraryFileStatus loading={libraryStatusReady && reuseLoading} />;");
+    expect(raw).toContain(
+      "useEffect(() => { const frame = requestAnimationFrame(() => setLibraryStatusReady(true)); return () => cancelAnimationFrame(frame); }, []);",
+    );
+    expect(raw).toContain("const [libraryStatusReady, setLibraryStatusReady] = useState(false);");
   });
 });
