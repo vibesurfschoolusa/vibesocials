@@ -688,6 +688,9 @@ async function uploadVideo(
       `LinkedIn video registration failed (status ${registerResponse.status})`,
     ) as Error & { code: string };
     error.code = "LINKEDIN_VIDEO_REGISTRATION_FAILED";
+    // R32 platform-clients L1: the status lets the in-step retry repeat a 5xx;
+    // nothing is live before /rest/posts.
+    (error as Error & { status?: number }).status = registerResponse.status;
     throw error;
   }
 

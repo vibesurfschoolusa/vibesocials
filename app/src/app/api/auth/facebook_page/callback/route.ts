@@ -3,6 +3,7 @@ import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { listMetaPages } from "@/server/connections/metaPages";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
@@ -109,38 +110,29 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     const userAccessToken = longLivedData.access_token;
     const expiresIn = longLivedData.expires_in || 5184000; // 60 days default
 
-    // 3. Get user's Facebook Pages
-    const pagesUrl = new URL(`${META_GRAPH_BASE_URL}/me/accounts`);
-    pagesUrl.searchParams.set("access_token", userAccessToken);
-    pagesUrl.searchParams.set("fields", "id,name,access_token");
-
-    const pagesResponse = await fetch(pagesUrl.toString());
-    if (!pagesResponse.ok) {
-      const errorText = await pagesResponse.text();
-      console.error("[FacebookPage OAuth] Failed to fetch pages:", errorText);
+    // 3. Get user's Facebook Pages: every page of the list (R32 platform-clients M1)
+    const pagesRead = await listMetaPages<{ id: string; name: string; access_token: string }>(
+      userAccessToken,
+      "id,name,access_token",
+      "[FacebookPage OAuth]",
+    );
+    if (!pagesRead.ok) {
       return oauthErrorRedirect("facebook_page", "failed_to_fetch_pages", request.url);
     }
 
-    const pagesData = (await pagesResponse.json()) as {
-      data: Array<{
-        id: string;
-        name: string;
-        access_token: string;
-      }>;
-    };
-
     console.log("[FacebookPage OAuth] Pages fetched:", {
-      count: pagesData.data?.length ?? 0,
-      pages: pagesData.data?.map((page) => ({ id: page.id, name: page.name })) ?? [],
+      count: pagesRead.pages.length,
+      cut: pagesRead.cut,
+      pages: pagesRead.pages.map((page) => ({ id: page.id, name: page.name })),
     });
 
-    if (!pagesData.data || pagesData.data.length === 0) {
+    if (pagesRead.pages.length === 0) {
       console.error("[FacebookPage OAuth] No Facebook Pages found");
       return oauthErrorRedirect("facebook_page", "no_pages", request.url);
     }
 
     const expiresAt = new Date(Date.now() + expiresIn * 1000);
-    const pages = pagesData.data.map((page) => ({
+    const pages = pagesRead.pages.map((page) => ({
       id: page.id,
       name: page.name,
       accessToken: page.access_token,

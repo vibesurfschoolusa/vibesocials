@@ -722,9 +722,14 @@ async function postInstagramContainer(args: {
       await throwInstagramReconnect(connection);
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
-    throw instagramCodedError(
-      "INSTAGRAM_CONTAINER_FAILED",
-      `Instagram container creation failed (status ${containerResponse.status})`,
+    // R32 platform-clients L1: the status lets the in-step retry repeat a 5xx;
+    // nothing is live before media_publish.
+    throw Object.assign(
+      instagramCodedError(
+        "INSTAGRAM_CONTAINER_FAILED",
+        `Instagram container creation failed (status ${containerResponse.status})`,
+      ),
+      { status: containerResponse.status },
     );
   }
 

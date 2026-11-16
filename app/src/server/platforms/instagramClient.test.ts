@@ -611,6 +611,37 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(statusMock).toHaveBeenCalledTimes(1);
   });
 
+  // R32 platform-clients L1: nothing is live before media_publish, so a brief
+  // Meta error on the container is retried in-step like the other uploads.
+  it("a container answered 500 once is retried in-step and the post goes out", async () => {
+    vi.useFakeTimers();
+    const container = vi
+      .fn(() => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }))
+      .mockImplementationOnce(() => new Response("{}", { status: 500 }));
+    const publish = vi.fn(() => new Response(JSON.stringify({ id: "media-1" }), { status: 200 }));
+    stubGraph({ container, publish });
+
+    const promise = withTransientRetries(() => instagramClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    await expect(promise).resolves.toBeTruthy();
+    expect(container).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("a container failure carries its status, and a 400 is tried once", async () => {
+    stubGraph({ container: () => new Response("{}", { status: 500 }) });
+    expect(await failure(instagramClient.publishVideo(ctx("image/jpeg")))).toMatchObject({ code: "INSTAGRAM_CONTAINER_FAILED", status: 500 });
+
+    const container = vi.fn(() => new Response("{}", { status: 400 }));
+    stubGraph({ container });
+    const refused = await failure(
+      withTransientRetries(() => instagramClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} }),
+    );
+    expect(refused).toMatchObject({ code: "INSTAGRAM_CONTAINER_FAILED", status: 400 });
+    expect(container).toHaveBeenCalledTimes(1);
+  });
+
   it("suspected spam (code 4 / subcode 2207051) is not a rate limit: INSTAGRAM_CONTAINER_FAILED", async () => {
     stubGraph({ container: () => graphError(4, 2207051) });
 

@@ -3,6 +3,7 @@ import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { listMetaPages } from "@/server/connections/metaPages";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
@@ -111,36 +112,25 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // Default to 60 days if expires_in is not provided
     const expiresIn = longLivedData.expires_in || 5184000; // 60 days in seconds
 
-    // 3. Get user's Facebook Pages
-    const pagesUrl = new URL(`${META_GRAPH_BASE_URL}/me/accounts`);
-    pagesUrl.searchParams.set("access_token", accessToken);
-    pagesUrl.searchParams.set("fields", "id,name,access_token,instagram_business_account");
-
-    const pagesResponse = await fetch(pagesUrl.toString());
-    if (!pagesResponse.ok) {
-      const errorText = await pagesResponse.text();
-      console.error("[Instagram OAuth] Failed to fetch pages:", errorText);
+    // 3. Get user's Facebook Pages: every page of the list (R32 platform-clients M1)
+    const pagesRead = await listMetaPages<{
+      id: string;
+      name: string;
+      access_token: string;
+      instagram_business_account?: { id: string };
+    }>(accessToken, "id,name,access_token,instagram_business_account", "[Instagram OAuth]");
+    if (!pagesRead.ok) {
       return oauthErrorRedirect("instagram", "failed_to_fetch_pages", request.url);
     }
 
-    const pagesData = (await pagesResponse.json()) as {
-      data: Array<{
-        id: string;
-        name: string;
-        access_token: string;
-        instagram_business_account?: {
-          id: string;
-        };
-      }>;
-    };
-
     console.log("[Instagram OAuth] Pages fetched:", {
-      count: pagesData.data?.length ?? 0,
-      pages: pagesData.data?.map((page) => ({ id: page.id, name: page.name })) ?? [],
+      count: pagesRead.pages.length,
+      cut: pagesRead.cut,
+      pages: pagesRead.pages.map((page) => ({ id: page.id, name: page.name })),
     });
 
     // The pages with an Instagram Business Account linked
-    const pagesWithInstagram = pagesData.data.flatMap((page) =>
+    const pagesWithInstagram = pagesRead.pages.flatMap((page) =>
       page.instagram_business_account
         ? [{ page, igAccountId: page.instagram_business_account.id }]
         : [],

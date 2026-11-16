@@ -478,6 +478,32 @@ function instagramProvider(
   };
 }
 
+/**
+ * `base`, with /me/accounts answered page by page as Graph pages it: a
+ * `cursors.after` always, `next` only while there is another page. `fail`: the
+ * page index answered 500.
+ */
+function withPagedAccounts(
+  base: FakeProvider,
+  pages: Array<Array<Record<string, unknown>>>,
+  opts: { fail?: number } = {},
+): FakeProvider {
+  return (url) => {
+    if (!url.includes("/me/accounts")) return base(url);
+    const after = new URL(url).searchParams.get("after");
+    const index = after ? Number(after.replace("cursor-", "")) : 0;
+    if (index === opts.fail) return json({ error: { message: "An unexpected error has occurred." } }, 500);
+    const cursor = `cursor-${index + 1}`;
+    return json({
+      data: pages[index] ?? [],
+      paging: {
+        cursors: { before: `cursor-${index}b`, after: cursor },
+        ...(index + 1 < pages.length ? { next: `https://graph.facebook.com/v26.0/me/accounts?after=${cursor}` } : {}),
+      },
+    });
+  };
+}
+
 /** A page as GET /rest/organizations/{id} answers it. */
 type LinkedInPage = { id: number; localizedName?: string; vanityName?: string };
 
@@ -730,6 +756,94 @@ describe("choosing which account to connect", () => {
           },
         ],
       });
+    });
+  });
+
+  // R32 platform-clients M1: /me/accounts gives 25 Pages a page by default; an
+  // agency's client Page (or the one Page with Instagram) can be further on.
+  describe("every page of /me/accounts is read", () => {
+    const accountsCalls = () =>
+      (fetchMock.mock.calls as Array<[string | URL]>).map((c) => String(c[0])).filter((u) => u.includes("/me/accounts"));
+
+    it("facebook_page: a Page on the second page is offered too, read with the user token and the next cursor", async () => {
+      useProvider(
+        withPagedAccounts(facebookProvider([]), [
+          [{ id: "page-1", name: "My Surf School", access_token: "page-token-1" }],
+          [{ id: "page-27", name: "Client Cafe", access_token: "page-token-27" }],
+        ]),
+      );
+
+      const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
+
+      expectChooseRedirect(res);
+      expect(createMock).not.toHaveBeenCalled();
+      expect(createdPending().opened.pages).toEqual([
+        { id: "page-1", name: "My Surf School", accessToken: "page-token-1" },
+        { id: "page-27", name: "Client Cafe", accessToken: "page-token-27" },
+      ]);
+      const [first, second] = accountsCalls().map((u) => new URL(u));
+      expect(accountsCalls()).toHaveLength(2);
+      expect(first.searchParams.get("limit")).toBe("100");
+      expect(first.searchParams.get("after")).toBeNull();
+      expect(second.origin + second.pathname).toBe(first.origin + first.pathname);
+      expect(second.searchParams.get("after")).toBe("cursor-1");
+      expect(second.searchParams.get("access_token")).toBe("fb-user-token");
+      expect(second.searchParams.get("fields")).toBe("id,name,access_token");
+    });
+
+    it("facebook_page: a second page that fails says the Pages couldn't be read, never that there are none", async () => {
+      useProvider(
+        withPagedAccounts(facebookProvider([]), [[{ id: "page-1", name: "Page", access_token: "page-token" }], []], { fail: 1 }),
+      );
+
+      const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
+
+      expect(location(res).searchParams.get("error")).toBe("facebook_page_failed_to_fetch_pages");
+      expectNoConnectionWrites();
+    });
+
+    it("facebook_page: the reading stops at 10 pages", async () => {
+      useProvider(
+        withPagedAccounts(
+          facebookProvider([]),
+          Array.from({ length: 12 }, (_, i) => [{ id: `page-${i + 1}`, name: `Page ${i + 1}`, access_token: `t-${i + 1}` }]),
+        ),
+      );
+
+      const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
+
+      expectChooseRedirect(res);
+      expect(accountsCalls()).toHaveLength(10);
+      expect((createdPending().opened.pages as unknown[]).length).toBe(10);
+    });
+
+    it("instagram: the one Page with an Instagram account on the second page connects", async () => {
+      useProvider(
+        withPagedAccounts(instagramProvider([], { "ig-27": "clientcafe" }), [
+          [{ id: "page-1", name: "No IG", access_token: "page-token-1" }],
+          [{ id: "page-27", name: "Client Cafe", access_token: "page-token-27", instagram_business_account: { id: "ig-27" } }],
+        ]),
+      );
+
+      const res = await instagramGET(callbackRequest("instagram", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("instagram_connected");
+      expect(createMock).toHaveBeenCalledWith({
+        data: expect.objectContaining({ platform: "instagram", accountIdentifier: "ig-27", accessToken: "page-token-27" }),
+      });
+    });
+
+    it("instagram: a second page that fails says the Pages couldn't be read, not that none has Instagram", async () => {
+      useProvider(
+        withPagedAccounts(instagramProvider([], {}), [[{ id: "page-1", name: "No IG", access_token: "page-token-1" }], []], {
+          fail: 1,
+        }),
+      );
+
+      const res = await instagramGET(callbackRequest("instagram", signedState()));
+
+      expect(location(res).searchParams.get("error")).toBe("instagram_failed_to_fetch_pages");
+      expectNoConnectionWrites();
     });
   });
 

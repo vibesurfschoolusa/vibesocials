@@ -269,6 +269,45 @@ describe("a choice at the end of a link flow", () => {
   });
 });
 
+// R32 platform-clients M1: the visitor's Page can be past Graph's first page.
+describe("a link flow whose Page is on the second page of /me/accounts", () => {
+  function pagedAccounts(second: "ig" | "fail") {
+    return async (input: string | URL) => {
+      const url = String(input);
+      if (!url.includes("/me/accounts")) return url.includes("/ig-2") ? json({ username: "cafe" }) : provider(url);
+      if (!new URL(url).searchParams.get("after")) {
+        return json({
+          data: [{ id: "page-1", name: "No IG", access_token: "page-token-1" }],
+          paging: { cursors: { after: "c1" }, next: "https://graph.facebook.com/v26.0/me/accounts?after=c1" },
+        });
+      }
+      if (second === "fail") return json({ error: { message: "An unexpected error has occurred." } }, 500);
+      return json({
+        data: [{ id: "page-2", name: "Cafe", access_token: "page-token-2", instagram_business_account: { id: "ig-2" } }],
+        paging: { cursors: { after: "c2" } },
+      });
+    };
+  }
+
+  it("instagram: the account on the second page connects and the visitor lands on their page", async () => {
+    h.fetch.mockImplementation(pagedAccounts("ig"));
+
+    const res = await instagramGET(linkRequest("instagram"));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?success=instagram_connected`);
+    expect(h.create.mock.calls[0][0].data).toMatchObject({ platform: "instagram", accountIdentifier: "ig-2" });
+  });
+
+  it("instagram: a second page that fails says the Pages couldn't be read, not that none has Instagram", async () => {
+    h.fetch.mockImplementation(pagedAccounts("fail"));
+
+    const res = await instagramGET(linkRequest("instagram"));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=instagram_failed_to_fetch_pages`);
+    expect(h.create).not.toHaveBeenCalled();
+  });
+});
+
 // Fix round 1: what the platform itself said decides the visitor's sentence,
 // not the code a callback picks for a provider error.
 describe("the platform's own refusal in a link flow", () => {

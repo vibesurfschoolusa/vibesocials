@@ -93,13 +93,14 @@ exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
     [
       "fetch",
       "GET",
-      "https://graph.facebook.com/v26.0/me/accounts?access_token=fb-user-token&fields=id%2Cname%2Caccess_token",
+      "https://graph.facebook.com/v26.0/me/accounts?access_token=fb-user-token&fields=id%2Cname%2Caccess_token&limit=100",
     ],
     [
       "console.log",
       "[FacebookPage OAuth] Pages fetched:",
       {
         "count": 1,
+        "cut": false,
         "pages": [
           {
             "id": "page-1",
@@ -429,13 +430,14 @@ exports[`'instagram' callback, signed in: unchanged > success 1`] = `
     [
       "fetch",
       "GET",
-      "https://graph.facebook.com/v26.0/me/accounts?access_token=fb-user-token&fields=id%2Cname%2Caccess_token%2Cinstagram_business_account",
+      "https://graph.facebook.com/v26.0/me/accounts?access_token=fb-user-token&fields=id%2Cname%2Caccess_token%2Cinstagram_business_account&limit=100",
     ],
     [
       "console.log",
       "[Instagram OAuth] Pages fetched:",
       {
         "count": 1,
+        "cut": false,
         "pages": [
           {
             "id": "page-1",

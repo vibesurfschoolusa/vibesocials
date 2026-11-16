@@ -692,6 +692,37 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.retryAt).toBeNull();
   });
 
+  // R32 platform-clients L1: nothing is live before /rest/posts, so a brief
+  // LinkedIn error on the video's initializeUpload is retried in-step.
+  it("a video initializeUpload answered 503 once is retried in-step and the post goes out", async () => {
+    const register = vi
+      .fn(() => registered("https://api.linkedin.com/rest/videos?action=initializeUpload"))
+      .mockImplementationOnce(() => new Response("busy", { status: 503 }));
+    const fetchMock = stubLinkedIn({ register });
+
+    await expect(
+      withTransientRetries(() => linkedinClient.publishVideo(ctx("video/mp4")), { sleep: async () => {} }),
+    ).resolves.toBeTruthy();
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]) === "https://api.linkedin.com/rest/posts")).toHaveLength(1);
+  });
+
+  it("a video registration failure carries its status: a 503 is transient, a 400 is tried once", async () => {
+    stubLinkedIn({ register: () => new Response("busy", { status: 503 }) });
+    expect(await failure(linkedinClient.publishVideo(ctx("video/mp4")))).toMatchObject({
+      code: "LINKEDIN_VIDEO_REGISTRATION_FAILED",
+      status: 503,
+    });
+
+    const register = vi.fn(() => new Response("{}", { status: 400 }));
+    stubLinkedIn({ register });
+    const refused = await failure(
+      withTransientRetries(() => linkedinClient.publishVideo(ctx("video/mp4")), { sleep: async () => {} }),
+    );
+    expect(refused).toMatchObject({ code: "LINKEDIN_VIDEO_REGISTRATION_FAILED", status: 400 });
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
   it("a non-429 posts failure keeps LINKEDIN_POST_CREATION_FAILED", async () => {
     stubLinkedIn({ post: () => new Response("{}", { status: 422 }) });
     expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe(
