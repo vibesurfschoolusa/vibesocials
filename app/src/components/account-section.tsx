@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 
@@ -18,7 +18,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
 
@@ -33,6 +35,20 @@ interface AccountSectionProps {
 
 const GOOGLE_ONLY = "You sign in with Google, so this account has no password to change.";
 const PASSWORD_CHANGED = "Password changed. Sign in again with your new password.";
+const PASSWORD_NOT_CHANGED = "Could not change your password. Try again.";
+
+/**
+ * R27 MM3 (new-customer L7): a change signs every device out on the server, so
+ * when the answer is lost the password may have changed. Never "nothing changed".
+ */
+export const PASSWORD_MAYBE_CHANGED_MESSAGE =
+  "The answer was lost, so your password may have changed. Check your connection, then reload this page: if it asks you to sign in, use your new password.";
+
+/** What a refused or unreadable change-password answer says. */
+export function passwordFailureText(status: number, data: { error?: unknown } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  return status >= 500 ? PASSWORD_MAYBE_CHANGED_MESSAGE : PASSWORD_NOT_CHANGED;
+}
 
 /** R5 new-customer L4: nothing changes until the link sent to the new address is followed. */
 export function emailChangeSentMessage(newEmail: string, currentEmail: string): string {
@@ -42,11 +58,6 @@ export function emailChangeSentMessage(newEmail: string, currentEmail: string): 
 function scheduledNote(count: number): string {
   if (count === 0) return "no scheduled posts";
   return count === 1 ? "1 scheduled post will not go out" : `${count} scheduled posts will not go out`;
-}
-
-async function errorFrom(response: Response, fallback: string): Promise<string> {
-  const data = (await response.json().catch(() => null)) as { error?: string } | null;
-  return data?.error ?? fallback;
 }
 
 /**
@@ -131,6 +142,8 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  const changeEmailRef = useRef<HTMLButtonElement>(null);
+  const newEmailRef = useRef<HTMLInputElement>(null);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -165,7 +178,16 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
   if (!open) {
     return (
       <div>
-        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        <Button
+          ref={changeEmailRef}
+          size="sm"
+          variant="outline"
+          onClick={(event) => {
+            // R27 MM3: the button is replaced by the form; focus goes to its first field.
+            focusAfterPress(event.currentTarget, () => newEmailRef.current);
+            setOpen(true);
+          }}
+        >
           Change email
         </Button>
       </div>
@@ -177,6 +199,7 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="new-email">New email</Label>
         <Input
+          ref={newEmailRef}
           id="new-email"
           type="email"
           autoComplete="email"
@@ -204,7 +227,16 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
         <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
           Send confirmation link
         </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={(event) => {
+            focusAfterPress(event.currentTarget, () => changeEmailRef.current);
+            setOpen(false);
+          }}
+          disabled={busy}
+        >
           Cancel
         </Button>
       </div>
@@ -267,21 +299,22 @@ function ChangePasswordForm() {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/auth/change-password", {
+      const response = await fetchOrNoAnswer("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ currentPassword, newPassword }),
       });
       if (!response.ok) {
-        setError(await errorFrom(response, "Could not change your password. Try again."));
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        setError(passwordFailureText(response.status, data));
         return;
       }
       setChanged(true);
       // Every session is already signed out by the server; give the message a
       // moment on screen, then clear this browser's cookie too.
       window.setTimeout(() => void signOut({ callbackUrl: "/login" }), 2000);
-    } catch {
-      setError("Could not change your password. Try again.");
+    } catch (error) {
+      setError(isNoAnswer(error) ? PASSWORD_MAYBE_CHANGED_MESSAGE : PASSWORD_NOT_CHANGED);
     } finally {
       setBusy(false);
     }

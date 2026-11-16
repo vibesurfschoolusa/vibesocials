@@ -20,5 +20,14 @@ export function forgotPasswordOutcome(status: number | null): ForgotPasswordOutc
       message: "Too many requests. Please wait a few minutes and try again.",
     };
   }
+  if (status === null) {
+    // R27 MM3: no answer at all. The request may have gone through, and the
+    // sentence is the same for every address, so it still reveals nothing.
+    return {
+      kind: "error",
+      message:
+        "The answer was lost, so we can't tell whether the request went through. Check your connection and try again. If an account exists for that address, a link may already be on its way.",
+    };
+  }
   return { kind: "error", message: "Something went wrong. Please try again." };
 }

@@ -21,9 +21,19 @@ describe("forgotPasswordOutcome", () => {
     [403, GENERIC],
     [500, GENERIC],
     [503, GENERIC],
-    // Network failure / fetch threw: no status at all.
-    [null, GENERIC],
   ])("status %s", (status, expected) => {
     expect(forgotPasswordOutcome(status)).toEqual(expected);
+  });
+});
+
+// R27 MM3 (new-customer L7): no answer at all said "Something went wrong". It
+// says the connection, and still never whether the address has an account.
+describe("forgotPasswordOutcome with no answer", () => {
+  it("says the connection was lost and what to do, the same for every address", () => {
+    expect(forgotPasswordOutcome(null)).toEqual({
+      kind: "error",
+      message:
+        "The answer was lost, so we can't tell whether the request went through. Check your connection and try again. If an account exists for that address, a link may already be on its way.",
+    });
   });
 });

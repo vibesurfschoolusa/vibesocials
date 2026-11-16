@@ -11,10 +11,12 @@ import {
   AccountSection,
   ChangeEmailForm,
   FormError,
+  PASSWORD_MAYBE_CHANGED_MESSAGE,
   UndoLinkNotice,
   accountDeleteRefusal,
   emailChangeRefusal,
   emailChangeSentMessage,
+  passwordFailureText,
   undoLinkSentence,
 } from "./account-section";
 
@@ -152,5 +154,45 @@ describe("Settings, Account: deletion refused during the undo window", () => {
   it("is what the delete dialog uses", () => {
     const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
     expect(source).toContain('accountDeleteRefusal(data, "Could not delete your account. Try again.")');
+  });
+});
+
+// R27 MM3 (new-customer L2): "Change email" is replaced by its form, and the
+// form's Cancel by the button again. Focus goes to the New email field, and
+// back to "Change email" (lib/focusAfter).
+describe("Settings, Account: focus in Change email", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+  const form = source.slice(source.indexOf("export function ChangeEmailForm"), source.indexOf("export function undoLinkSentence"));
+
+  it("Change email hands focus to the New email field", () => {
+    expect(form).toMatch(/ref=\{changeEmailRef\}[\s\S]{0,200}focusAfterPress\(event\.currentTarget, \(\) => newEmailRef\.current\);\s+setOpen\(true\);/);
+    expect(form).toMatch(/<Input\s+ref=\{newEmailRef\}\s+id="new-email"/);
+  });
+
+  it("Cancel hands it back to Change email", () => {
+    expect(form).toMatch(/focusAfterPress\(event\.currentTarget, \(\) => changeEmailRef\.current\);\s+setOpen\(false\);/);
+  });
+});
+
+// R27 MM3 (new-customer L7): Change password said "Try again" with no answer.
+// The server signs every device out on a change, so a lost answer may mean the
+// password changed: say so, and what to do.
+describe("Settings, Account: change password when the answer is lost", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+  const form = source.slice(source.indexOf("function ChangePasswordForm"), source.indexOf("function DeleteAccount"));
+
+  it("no answer or an unreadable 5xx: it may have changed; a refusal: the route's own sentence", () => {
+    expect(PASSWORD_MAYBE_CHANGED_MESSAGE).toBe(
+      "The answer was lost, so your password may have changed. Check your connection, then reload this page: if it asks you to sign in, use your new password.",
+    );
+    expect(passwordFailureText(502, null)).toBe(PASSWORD_MAYBE_CHANGED_MESSAGE);
+    expect(passwordFailureText(400, { error: "Your current password is wrong." })).toBe("Your current password is wrong.");
+    expect(passwordFailureText(400, null)).toBe("Could not change your password. Try again.");
+  });
+
+  it("sends through fetchOrNoAnswer and words no answer with that sentence", () => {
+    expect(form).toMatch(/await fetchOrNoAnswer\("\/api\/auth\/change-password"/);
+    expect(form).not.toMatch(/await fetch\(/);
+    expect(form).toMatch(/isNoAnswer\(error\) \? PASSWORD_MAYBE_CHANGED_MESSAGE : /);
   });
 });
