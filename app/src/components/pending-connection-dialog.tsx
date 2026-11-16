@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { answerLostText } from "@/lib/answerLost";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { cn } from "@/lib/cn";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -116,6 +117,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState<"connect" | "cancel" | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -151,7 +153,8 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
   // Drops ?choose= so the dialog stays closed.
   const leave = () => router.replace("/settings");
 
-  async function handleConnect() {
+  /** `pressed`: Connect, which a gone answer removes with the radios and Cancel. */
+  async function handleConnect(pressed: HTMLElement | null) {
     if (!selectedId || busy) return;
     setBusy("connect");
     setConnectError(null);
@@ -167,6 +170,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
         | null;
 
       if (response.status === 404) {
+        focusAfterPress(pressed, () => closeRef.current);
         setLoad({ status: "expired", message: pendingGoneText(data) });
         setBusy(null);
         return;
@@ -296,7 +300,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
               Cancel
             </Button>
             <Button
-              onClick={handleConnect}
+              onClick={(event) => handleConnect(event.currentTarget)}
               loading={busy === "connect"}
               disabled={!selectedId}
               aria-disabled={busy !== null || undefined}
@@ -305,7 +309,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
             </Button>
           </>
         ) : (
-          <Button variant="outline" onClick={handleClose} disabled={busy !== null}>
+          <Button ref={closeRef} variant="outline" onClick={handleClose} disabled={busy !== null}>
             Close
           </Button>
         )}

@@ -106,3 +106,19 @@ describe("PendingConnectionDialog: a choice that is gone", () => {
     expect(source).not.toContain("Close this and connect again");
   });
 });
+
+// R30 pages L2: a gone answer to Connect swaps the radios, Cancel and Connect
+// for the warning and Close; the pressed Connect is removed, and inside a
+// dialog the focus keeper does nothing, so the press hands focus to Close (as /c).
+describe("PendingConnectionDialog: focus when Connect finds the choice gone", () => {
+  it("Connect passes the pressed button, and the gone branch hands focus to Close", () => {
+    const source = readFileSync(join(__dirname, "pending-connection-dialog.tsx"), "utf8");
+    const connect = source.slice(source.indexOf("async function handleConnect"), source.indexOf("async function handleCancel"));
+    expect(connect).toMatch(/async function handleConnect\(pressed: HTMLElement \| null\)/);
+    expect(connect).toMatch(
+      /if \(response\.status === 404\) \{\s+focusAfterPress\(pressed, \(\) => closeRef\.current\);\s+setLoad\(\{ status: "expired", message: pendingGoneText\(data\) \}\);/,
+    );
+    expect(source).toMatch(/onClick=\{\(event\) => handleConnect\(event\.currentTarget\)\}/);
+    expect(source).toMatch(/<Button ref=\{closeRef\} variant="outline" onClick=\{handleClose\}/);
+  });
+});
