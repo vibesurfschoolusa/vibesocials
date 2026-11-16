@@ -136,10 +136,10 @@ export function pickAfterSave(name: string, from: SavePlace, ok: boolean): strin
  * saved, else the first step.
  */
 export function savedLocationLine(title: string | null, name: string | null): string {
-  if (title) return `Posting to ${title}. Load your locations again to choose another.`;
+  if (title) return `Posting to ${title}. Press Fetch locations from Google to choose another.`;
   const saved = name?.trim();
   if (saved) return `Posting to the location you saved (${saved}). Press Fetch locations from Google to choose it by name.`;
-  return "Load your locations from Google and choose the one to post to.";
+  return "Press Fetch locations from Google and choose the one to post to.";
 }
 
 /** R25 pages L4: one sentence of the status region, which stays until the next fetch or save. */

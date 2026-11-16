@@ -234,13 +234,13 @@ describe("Google location form: the dropdown after a save", () => {
 
   it("says what is saved, a pasted store code or resource name included", () => {
     expect(savedLocationLine("Joe's Pizza", "accounts/1/locations/2")).toBe(
-      "Posting to Joe's Pizza. Load your locations again to choose another.",
+      "Posting to Joe's Pizza. Press Fetch locations from Google to choose another.",
     );
     expect(savedLocationLine(null, "STORE-1")).toBe(
       "Posting to the location you saved (STORE-1). Press Fetch locations from Google to choose it by name.",
     );
-    expect(savedLocationLine(null, null)).toBe("Load your locations from Google and choose the one to post to.");
-    expect(savedLocationLine(null, "  ")).toBe("Load your locations from Google and choose the one to post to.");
+    expect(savedLocationLine(null, null)).toBe("Press Fetch locations from Google and choose the one to post to.");
+    expect(savedLocationLine(null, "  ")).toBe("Press Fetch locations from Google and choose the one to post to.");
     expect(formSource).toContain("{savedLocationLine(savedTitle, savedName)}");
     const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
     expect(save).toContain("setSavedName(name);");
@@ -301,5 +301,9 @@ describe("Google location form: the saved line names the real button", () => {
   it("says Fetch locations from Google, the button's own label", () => {
     expect(formSource).toContain('"Fetch locations from Google"}');
     expect(savedLocationLine(null, "STORE-1")).toContain("Fetch locations from Google");
+    expect(savedLocationLine("Joe's Pizza", "accounts/1/locations/2")).toContain("Fetch locations from Google");
+    expect(savedLocationLine(null, null)).toContain("Fetch locations from Google");
+    // No sentence names a control that isn't on the page.
+    expect(formSource).not.toContain("Load your locations");
   });
 });
