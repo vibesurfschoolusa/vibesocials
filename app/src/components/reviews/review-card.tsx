@@ -70,7 +70,7 @@ export function ReviewCard({
           </div>
         )}
 
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between">
             <div>
               <div className="font-semibold text-foreground">
@@ -88,7 +88,7 @@ export function ReviewCard({
 
           {/* Review Comment */}
           {review.comment && (
-            <p className="mt-3 text-foreground">{review.comment}</p>
+            <p className="mt-3 whitespace-pre-wrap break-words text-foreground">{review.comment}</p>
           )}
 
           {/* Existing Reply */}
@@ -103,7 +103,7 @@ export function ReviewCard({
                   {formatDate(review.reviewReply.updateTime)}
                 </span>
               </div>
-              <p className="text-sm text-foreground">
+              <p className="whitespace-pre-wrap break-words text-sm text-foreground">
                 {review.reviewReply.comment}
               </p>
             </div>

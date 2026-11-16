@@ -7,7 +7,7 @@ import type { GoogleReview } from "./types";
 
 // R19 client-journey: an anonymous reviewer reaches the card as "A Google user"
 // (server/googleReviews.ts), so the card shows that name and its initial.
-function card(displayName: string): string {
+function card(displayName: string, extra: Partial<GoogleReview> = {}): string {
   const review: GoogleReview = {
     name: "accounts/1/locations/2/reviews/r1",
     reviewId: "r1",
@@ -15,6 +15,7 @@ function card(displayName: string): string {
     starRating: "FIVE",
     createTime: "2026-11-01T00:00:00Z",
     updateTime: "2026-11-01T00:00:00Z",
+    ...extra,
   };
   const noop = () => {};
   return renderToStaticMarkup(
@@ -53,5 +54,26 @@ describe("ReviewCard: the reviewer", () => {
     const html = card("\u{1F30A} Kai");
     expect(html).toContain(">K</div>");
     expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+});
+
+// R22 client-journey L3: a translated review and a multi-paragraph reply keep
+// their line breaks, and a long URL wraps inside the card at 375 px.
+describe("ReviewCard: the review and reply text", () => {
+  const html = card("Maria Lopez", {
+    comment: "(Translated by Google) Great\n\n(Original)\nGenial",
+    reviewReply: { comment: "Thanks!\n\nSee you soon", updateTime: "2026-11-02T00:00:00Z" },
+  });
+
+  it("the review keeps its line breaks and wraps long words", () => {
+    expect(html).toMatch(/<p class="[^"]*\bwhitespace-pre-wrap\b[^"]*\bbreak-words\b[^"]*">\(Translated by Google\)/);
+  });
+
+  it("the reply keeps its line breaks and wraps long words", () => {
+    expect(html).toMatch(/<p class="[^"]*\bwhitespace-pre-wrap\b[^"]*\bbreak-words\b[^"]*">Thanks!/);
+  });
+
+  it("the text column can shrink below its content's width", () => {
+    expect(html).toContain('class="min-w-0 flex-1"');
   });
 });
