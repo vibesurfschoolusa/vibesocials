@@ -111,7 +111,9 @@ function movedOnPhrase(status: PostJobStatus): string | null {
     case "completed":
       return "was already published";
     case "failed":
-      return "was already sent and did not go out";
+      // R32 client-journey L7: a failed half may never have been sent (no
+      // connection, a pause, the daily limit), so it says nothing about sending.
+      return "failed";
     case "cancelled":
       return "was already cancelled";
     default:
@@ -129,7 +131,9 @@ function report(half: PairHalf, changed: boolean, phrase: string, wording: PairW
     id: half.id,
     kind: half.kind,
     changed,
-    note: changed ? `Its ${name} ${wording.done}.` : `Its ${name} ${phrase}, so it was not ${wording.verb}.`,
+    note: changed
+      ? `Its ${name} ${wording.done}.`
+      : `Its ${name} ${phrase}, so it was not ${wording.verb}.${half.status === "failed" ? " Check Activity for what to do next." : ""}`,
   };
 }
 

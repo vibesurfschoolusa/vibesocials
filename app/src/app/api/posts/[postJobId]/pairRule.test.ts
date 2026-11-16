@@ -187,7 +187,8 @@ describe("applyToPair", () => {
     ["in_progress", "Its Story has already started publishing, so it was not cancelled."],
     ["pending", "Its Story has already started publishing, so it was not cancelled."],
     ["completed", "Its Story was already published, so it was not cancelled."],
-    ["failed", "Its Story was already sent and did not go out, so it was not cancelled."],
+    // R32 client-journey L7: a failed half may never have been sent (as postMovedOnText).
+    ["failed", "Its Story failed, so it was not cancelled. Check Activity for what to do next."],
     ["cancelled", "Its Story was already cancelled, so it was not cancelled."],
   ] as const)("a %s other half is left alone and named", async (status, note) => {
     const write = vi.fn().mockResolvedValue(true);
