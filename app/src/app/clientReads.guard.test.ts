@@ -12,14 +12,10 @@ import { describe, expect, it } from "vitest";
 const SRC = path.join(__dirname, "..");
 
 /** The guarded reads' paths (the Settings-only workspace routes have their own callers' checks). */
-const GUARDED = /^\/api\/(posts|media|dashboard\/summary|insights\/|connections|reviews)/;
+const GUARDED = /^\/api\/(posts|media|dashboard\/summary|insights\/|connections|reviews|upload|workspaces\/(status|invites|members))/;
 
 /** Calls that may read without the id this round, by file: each says why. */
-const NAMED: Record<string, { path: string; why: string }[]> = {
-  "components/create-post-form.tsx": [
-    { path: "/api/media/", why: "Create's reuse-a-file read: outside RR2's brief, its route is pending (lead)" },
-  ],
-};
+const NAMED: Record<string, { path: string; why: string }[]> = {};
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -59,7 +55,15 @@ describe("every client read of a guarded route sends the page's workspace id", (
     expect(readsWithoutId('fetch(withWorkspaceId("/api/posts?status=completed", workspaceId));')).toEqual([]);
     expect(readsWithoutId("fetch(`/api/media?cursor=${c}&workspaceId=${encodeURIComponent(workspaceId)}`);")).toEqual([]);
     expect(readsWithoutId('fetchOrNoAnswer("/api/posts", { method: "POST", body });')).toEqual([]);
-    expect(readsWithoutId('fetch("/api/workspaces/status");')).toEqual([]);
+    expect(readsWithoutId('fetch("/api/workspaces");')).toEqual([]);
+  });
+
+  // R32 lead follow-up: GET /api/connections requires the id, so every use of the hook passes one.
+  it("every useConnections call passes the page's workspace", () => {
+    const bare = sourceFiles(SRC).flatMap((file) =>
+      /\buseConnections\(\s*\)/.test(readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")) ? [path.relative(SRC, file).split(path.sep).join("/")] : [],
+    );
+    expect(bare).toEqual([]);
   });
 
   it("holds for every file under src outside the routes, except the named calls", () => {

@@ -43,25 +43,9 @@ export const READ_CHECK_EXCEPTIONS: Record<string, string> = {
   "upload-link/[token]/": "the public /u page: its token names the workspace",
   "invites/[token]/route.ts": "the Join page: the invite's token names the workspace",
   "workspaces/route.ts": "the signed-in person's list of workspaces, for the switcher",
-  "workspaces/status/route.ts":
-    "the shell's pause and trial banner: it follows the active workspace on each page change and each switch in this tab",
-  "upload/route.ts":
-    "why this person's last upload token was refused (remembered per person by the upload's own workspace check), else the storage-full flag; asked by every upload path, Create's among them",
+  "tiktok/creator-info/route.ts": "read only by tiktok-post-settings.tsx, whose TikTok parts are frozen",
 };
 
-/**
- * R32: reads whose callers are in files another worker owns this round (RR4:
- * team-section.tsx) or in Create's frozen or out-of-brief parts. The lead
- * adds the id there after the rebase and moves each route under the check;
- * until then they answer for the cookie's workspace, as before.
- */
-export const READ_CHECK_PENDING: Record<string, string> = {
-  "workspaces/invites/route.ts": "team-section.tsx (RR4) reads it",
-  "workspaces/members/route.ts": "team-section.tsx (RR4) reads it",
-  "workspaces/members/roster/route.ts": "team-section.tsx (RR4) reads it",
-  "tiktok/creator-info/route.ts": "only tiktok-post-settings.tsx reads it (TikTok parts are frozen)",
-  "media/[id]/route.ts": "only Create's reuse-a-file read (create-post-form.tsx:1251) reads it, outside RR2's brief",
-};
 
 describe("every signed-in read route checks the page's workspace id", () => {
   it("the scan judges GET handlers as the write guard judges writes", () => {
@@ -77,24 +61,29 @@ describe("every signed-in read route checks the page's workspace id", () => {
     expect(uncheckedHandlers('export { GET } from "./x";\n', ["GET"])).toEqual(["GET"]);
   });
 
-  it("holds for every route under src/app/api, except the named and pending ones", () => {
+  it("holds for every route under src/app/api, except the named ones", () => {
     const files = routeFiles(API);
     expect(files.length).toBeGreaterThan(50);
     const offenders = files.flatMap((file) => {
       const relative = relativeRoute(API, file);
-      if (exceptionFor(READ_CHECK_EXCEPTIONS, relative) || exceptionFor(READ_CHECK_PENDING, relative)) return [];
+      if (exceptionFor(READ_CHECK_EXCEPTIONS, relative)) return [];
       return uncheckedHandlers(readFileSync(file, "utf8"), ["GET"]).map((method) => `${method} ${relative}`);
     });
     expect(offenders).toEqual([]);
   });
 
-  it("every exception names a route that exists, and a pending one still lacks the check", () => {
+  it("every exception names a route that exists", () => {
     const relatives = routeFiles(API).map((file) => relativeRoute(API, file));
-    for (const key of [...Object.keys(READ_CHECK_EXCEPTIONS), ...Object.keys(READ_CHECK_PENDING)]) {
+    for (const key of Object.keys(READ_CHECK_EXCEPTIONS)) {
       expect(relatives.some((relative) => (key.endsWith("/") ? relative.startsWith(key) : relative === key)), key).toBe(true);
     }
-    for (const key of Object.keys(READ_CHECK_PENDING)) {
-      expect(uncheckedHandlers(readFileSync(`${API}/${key}`, "utf8"), ["GET"]), key).toEqual(["GET"]);
-    }
+  });
+
+  // R32 lead follow-up: the reads that waited on other workers' files are closed.
+  it("no signed-in workspace read is left out but the frozen TikTok one", () => {
+    const signedInReads = Object.keys(READ_CHECK_EXCEPTIONS).filter((key) =>
+      /^(workspaces\/(status|invites|members)|upload\/route|media|connections\/route|tiktok)/.test(key),
+    );
+    expect(signedInReads).toEqual(["tiktok/creator-info/route.ts"]);
   });
 });
