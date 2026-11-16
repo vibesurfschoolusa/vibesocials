@@ -69,12 +69,13 @@ describe("Help: the retry step names both buttons", () => {
 
 // R29 lead review: after a cancelled Reconnect the existing connection is
 // unchanged, so the cancel line neither says nothing was connected nor names
-// only Connect.
+// only Connect. R30 pages L3: Switch account disconnects first, so after it
+// a cancel leaves no connection: not "nothing changed".
 describe("Help: a cancelled sign-in", () => {
-  it("says nothing changed, and names Connect or Reconnect", () => {
+  it("says nothing new was connected, warns after Switch account, and names Connect or Reconnect", () => {
     const section = renderToStaticMarkup(HelpPage()).split('id="troubleshooting"')[1];
     expect(section).toContain(
-      "Nothing changed. Click Connect (or Reconnect, if the platform is already connected) to try again.",
+      "Nothing new was connected. If you used Switch account, the old account was already disconnected: click Connect. Otherwise, click Connect (or Reconnect, if the platform is already connected) to try again.",
     );
     expect(section).not.toContain("Nothing was connected. Click Connect to try again.");
   });

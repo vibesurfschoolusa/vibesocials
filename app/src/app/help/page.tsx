@@ -86,8 +86,9 @@ export default function HelpPage() {
           <ul className="list-disc space-y-1 pl-5">
             <li>
               <span className="text-foreground">You cancelled on the platform&apos;s screen.</span>{" "}
-              Nothing changed. Click Connect (or Reconnect, if the platform is already connected) to try
-              again.
+              Nothing new was connected. If you used Switch account, the old account was already
+              disconnected: click Connect. Otherwise, click Connect (or Reconnect, if the platform is
+              already connected) to try again.
             </li>
             <li>
               <span className="text-foreground">
