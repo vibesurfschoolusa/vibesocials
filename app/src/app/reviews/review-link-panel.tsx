@@ -16,9 +16,27 @@ import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "@/components/reviews/workspace-changed";
 import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
 
-/** Under the link: which location it sends customers to. */
-export function reviewLinkLocationLine(location: string): string {
-  return `It sends customers to ${location}, the location saved in Settings, even while the list above shows another location.`;
+/** A location as the panel names it: its saved name (or the shown one's resource name) and title. */
+export type LinkLocation = { id: string; title: string };
+
+/**
+ * R32 client-journey L4: under the link, only while the list shows another
+ * location than the saved one. The saved name may be a store code (Settings'
+ * Advanced field); then the titles are compared.
+ */
+export function reviewLinkLocationLine(saved: LinkLocation, shown: LinkLocation | null): string | null {
+  if (!shown) return null;
+  const same = shown.id === saved.id || (!saved.id.includes("locations/") && shown.title === saved.title);
+  return same ? null : `This link is for ${saved.title}, the location saved in Settings, not for ${shown.title}.`;
+}
+
+/** The location the Reviews list shows, as the panel compares it. */
+export function shownLinkLocation(
+  locations: readonly { name: string; title: string }[],
+  selected: string | null,
+): LinkLocation | null {
+  const shown = selected ? locations.find((location) => location.name === selected) : undefined;
+  return shown ? { id: shown.name, title: shown.title } : null;
 }
 
 /** The message an owner sends a customer to ask for a review; fits any kind of business. */
@@ -29,7 +47,7 @@ export function reviewRequestMessage(link: string): string {
 export type ReviewLinkState =
   | { status: "loading" }
   /** `location`: the saved location's title, which the link is for (R32 client-journey L4). */
-  | { status: "ready"; url: string; location?: string }
+  | { status: "ready"; url: string; location?: LinkLocation }
   | { status: "none"; reason: string; signIn?: true }
   /** R27 lead's second review: the route refused a page drawn for another workspace. */
   | { status: "workspace_changed" };
@@ -39,12 +57,13 @@ const LOAD_FAILED = "Couldn't load your review link. Reload this page to try aga
 /** What an answer from GET /api/reviews/link shows. Only flags and the code are read: a URL elsewhere is never followed. */
 export function reviewLinkStateFrom(
   ok: boolean,
-  body: { url?: unknown; reason?: unknown; signIn?: unknown; code?: unknown; location?: unknown } | null,
+  body: { url?: unknown; reason?: unknown; signIn?: unknown; code?: unknown; location?: unknown; locationId?: unknown } | null,
 ): ReviewLinkState {
   if (isWorkspaceChanged(body)) return { status: "workspace_changed" };
   if (ok && typeof body?.url === "string") {
-    const location = typeof body.location === "string" && body.location.trim() ? body.location.trim() : null;
-    return location ? { status: "ready", url: body.url, location } : { status: "ready", url: body.url };
+    const title = typeof body.location === "string" ? body.location.trim() : "";
+    const id = typeof body.locationId === "string" ? body.locationId.trim() : "";
+    return title && id ? { status: "ready", url: body.url, location: { id, title } } : { status: "ready", url: body.url };
   }
   const reason = typeof body?.reason === "string" ? body.reason : LOAD_FAILED;
   // JJ3 lead review: the route only says an owner should sign in again;
@@ -62,6 +81,7 @@ export function ReviewLinkPanel({
   isMember,
   signInShownAbove = false,
   workspaceNoticeShownAbove = false,
+  shownLocation = null,
 }: {
   workspaceId: string;
   isMember: boolean;
@@ -69,6 +89,8 @@ export function ReviewLinkPanel({
   signInShownAbove?: boolean;
   /** The page's workspace notice (with Reload) already shows, so this panel adds no second Reload. */
   workspaceNoticeShownAbove?: boolean;
+  /** The location the Reviews list shows (shownLinkLocation). */
+  shownLocation?: LinkLocation | null;
 }) {
   const [state, setState] = useState<ReviewLinkState>({ status: "loading" });
 
@@ -79,7 +101,7 @@ export function ReviewLinkPanel({
         // R27 lead's second review: the route refuses a page drawn for another workspace.
         const response = await fetch(withWorkspaceId("/api/reviews/link", workspaceId));
         const body = (await response.json().catch(() => null)) as
-          | { url?: unknown; reason?: unknown; signIn?: unknown; code?: unknown; location?: unknown }
+          | { url?: unknown; reason?: unknown; signIn?: unknown; code?: unknown; location?: unknown; locationId?: unknown }
           | null;
         if (cancelled) return;
         setState(reviewLinkStateFrom(response.ok, body));
@@ -99,6 +121,7 @@ export function ReviewLinkPanel({
       isMember={isMember}
       signInShownAbove={signInShownAbove}
       workspaceNoticeShownAbove={workspaceNoticeShownAbove}
+      shownLocation={shownLocation}
     />
   );
 }
@@ -139,6 +162,7 @@ export function ReviewLinkPanelView({
   isMember,
   signInShownAbove = false,
   workspaceNoticeShownAbove = false,
+  shownLocation = null,
 }: {
   state: ReviewLinkState;
   workspaceId: string;
@@ -148,6 +172,8 @@ export function ReviewLinkPanelView({
   signInShownAbove?: boolean;
   /** The page's workspace notice already offers Reload: one per page. */
   workspaceNoticeShownAbove?: boolean;
+  /** The location the list above shows, compared with the saved one (R32 client-journey L4). */
+  shownLocation?: LinkLocation | null;
 }) {
   const toast = useToast();
 
@@ -194,11 +220,11 @@ export function ReviewLinkPanelView({
           <div className="flex min-w-0 flex-1 flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-foreground">
-                {state.location ? `Your Google review link for ${state.location}` : "Your Google review link"}
+                {state.location ? `Your Google review link for ${state.location.title}` : "Your Google review link"}
               </span>
               {/* R32 client-journey L4: the link is always the saved location's, whichever one the list shows. */}
-              {state.location ? (
-                <p className="text-sm text-muted-foreground">{reviewLinkLocationLine(state.location)}</p>
+              {state.location && reviewLinkLocationLine(state.location, shownLocation) ? (
+                <p className="text-sm text-muted-foreground">{reviewLinkLocationLine(state.location, shownLocation)}</p>
               ) : null}
               {/* R26 pages L6: both new-tab links show the shared visible hint in their text. */}
               {/* The hint doesn't inherit break-all: it breaks only between words. */}

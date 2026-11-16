@@ -58,7 +58,7 @@ import type { GoogleReview, Location } from "@/components/reviews/types";
 import { refusedPageView, workspaceChangedAfter } from "@/components/reviews/workspace-changed";
 import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
 
-import { ReviewLinkPanel } from "./review-link-panel";
+import { ReviewLinkPanel, shownLinkLocation } from "./review-link-panel";
 
 // F7 (R1 M5): plain sentences for a failure the route did not explain.
 const LOCATIONS_FAILED = "Couldn't load your Google locations. Try again in a minute.";
@@ -702,6 +702,7 @@ export function ReviewsView({
           // error card's, when one shows it.
           signInShownAbove={Boolean(locationsSignInUrl || (reviewsError && signInHref(reviewsError, workspaceId)))}
           workspaceNoticeShownAbove={workspaceChanged !== null}
+          shownLocation={shownLinkLocation(locations, selectedLocation)}
         />
       )}
 

@@ -10,7 +10,14 @@ import { qrSvg } from "@/lib/qrSvg";
 
 import { WORKSPACE_CHANGED_RELOAD_MESSAGE } from "@/components/reviews/workspace-changed";
 
-import { PrintCardLinkView, ReviewLinkPanelView, reviewLinkStateFrom, reviewRequestMessage } from "./review-link-panel";
+import {
+  PrintCardLinkView,
+  ReviewLinkPanelView,
+  reviewLinkLocationLine,
+  reviewLinkStateFrom,
+  reviewRequestMessage,
+  shownLinkLocation,
+} from "./review-link-panel";
 
 const LINK = "https://g.page/r/abc/review";
 const render = (state: Parameters<typeof ReviewLinkPanelView>[0]["state"], workspaceId = "ws-A", isMember = false) =>
@@ -178,25 +185,68 @@ describe("the review link and the page's workspace", () => {
 });
 
 // R32 client-journey L4: the link is the saved location's, whichever location
-// the list above shows, so the panel says which one it is for.
+// the list above shows. The panel names it; only when the list shows another
+// location does it add that the link is not for that one.
 describe("the review link names its location", () => {
-  it("reads the route's location with the link", () => {
-    expect(reviewLinkStateFrom(true, { url: LINK, location: "Branch A" })).toEqual({ status: "ready", url: LINK, location: "Branch A" });
-    expect(reviewLinkStateFrom(true, { url: LINK, location: "" })).toEqual({ status: "ready", url: LINK });
-    expect(reviewLinkStateFrom(true, { url: LINK, location: 7 })).toEqual({ status: "ready", url: LINK });
+  const A = "accounts/1/locations/2";
+  const B = "accounts/1/locations/5";
+
+  it("reads the route's saved location with the link", () => {
+    expect(reviewLinkStateFrom(true, { url: LINK, location: "Branch A", locationId: A })).toEqual({
+      status: "ready",
+      url: LINK,
+      location: { id: A, title: "Branch A" },
+    });
+    expect(reviewLinkStateFrom(true, { url: LINK, location: "", locationId: A })).toEqual({ status: "ready", url: LINK });
+    expect(reviewLinkStateFrom(true, { url: LINK, location: 7, locationId: A })).toEqual({ status: "ready", url: LINK });
+    expect(reviewLinkStateFrom(true, { url: LINK, location: "Branch A" })).toEqual({ status: "ready", url: LINK });
   });
 
-  it("labels the link with the saved location and says it is for that one", () => {
-    const html = render({ status: "ready", url: LINK, location: "Branch A" });
+  it("the shown location is the saved one: the label names it, nothing more", () => {
+    const html = renderShown({ id: A, title: "Branch A" });
     expect(html).toContain("Your Google review link for Branch A");
-    expect(html).toContain(
-      "It sends customers to Branch A, the location saved in Settings, even while the list above shows another location.",
-    );
+    expect(html).not.toContain("not for");
+    expect(renderShown(null)).toContain("Your Google review link for Branch A");
+    expect(renderShown(null)).not.toContain("not for");
   });
 
-  it("without a title, the label stays as it was", () => {
+  it("another location is shown: the link is said to be the saved one's, not the shown one's", () => {
+    const html = renderShown({ id: B, title: "Branch B" });
+    expect(html).toContain("Your Google review link for Branch A");
+    expect(html).toContain("This link is for Branch A, the location saved in Settings, not for Branch B.");
+  });
+
+  it("a saved store code matches the shown location by its title", () => {
+    expect(reviewLinkLocationLine({ id: "FTL-01", title: "Branch A" }, { id: A, title: "Branch A" })).toBeNull();
+    expect(reviewLinkLocationLine({ id: "FTL-01", title: "Branch A" }, { id: B, title: "Branch B" })).toBe(
+      "This link is for Branch A, the location saved in Settings, not for Branch B.",
+    );
+    expect(reviewLinkLocationLine({ id: A, title: "Branch A" }, { id: A, title: "Renamed" })).toBeNull();
+  });
+
+  it("without a saved title, the label stays as it was", () => {
     const html = render({ status: "ready", url: LINK });
     expect(html).toContain("Your Google review link<");
     expect(html).not.toContain("the location saved in Settings");
   });
+
+  it("Reviews passes the shown location's id and title to the panel", () => {
+    const view = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
+    const panel = view.slice(view.indexOf("<ReviewLinkPanel"), view.indexOf("/>", view.indexOf("<ReviewLinkPanel")));
+    expect(panel).toContain("shownLocation={shownLinkLocation(locations, selectedLocation)}");
+    expect(shownLinkLocation([{ name: B, title: "Branch B" }], B)).toEqual({ id: B, title: "Branch B" });
+    expect(shownLinkLocation([{ name: B, title: "Branch B" }], A)).toBeNull();
+    expect(shownLinkLocation([], null)).toBeNull();
+  });
 });
+
+function renderShown(shownLocation: { id: string; title: string } | null): string {
+  return renderToStaticMarkup(
+    createElement(ReviewLinkPanelView, {
+      state: { status: "ready", url: LINK, location: { id: "accounts/1/locations/2", title: "Branch A" } },
+      workspaceId: "ws-A",
+      isMember: false,
+      shownLocation,
+    }),
+  );
+}

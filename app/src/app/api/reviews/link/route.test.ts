@@ -107,12 +107,12 @@ describe("GET /api/reviews/link", () => {
         metadata: { locationName: LOCATION, locationTitle: " Branch A ", newReviewUri: LINK, newReviewUriFor: LOCATION },
       }),
     );
-    await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A" });
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A", locationId: LOCATION });
 
     mocks.findFirst.mockResolvedValue(connection({ metadata: { locationName: LOCATION, locationTitle: "Branch A" } }));
     mocks.fetchNewReviewUri.mockResolvedValue(LINK);
     mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
-    await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A" });
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A", locationId: LOCATION });
   });
 
   it("fetches the link when it is missing and saves it, merged onto the row as it is now", async () => {

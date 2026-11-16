@@ -12,6 +12,7 @@ import {
   googleAccessRefusedMessage,
   refreshAccessToken,
   reviewLinkReason,
+  savedLocationName,
   savedNewReviewUri,
   storeCodeStaleMessage,
   type ReviewsReader,
@@ -52,7 +53,8 @@ async function saveLinkIfUnchanged(id: string, locationName: string, url: string
  * Any member may read, like the rest of the reviews surface. Returns `{ url }`,
  * or `{ url: null, reason }` with one line on what to do, worded for the
  * caller's role (R12 L1: only an owner can connect, choose or reconnect).
- * With the link, `location`: the saved location's title, when there is one.
+ * With the link, `location` and `locationId`: the saved location's title and
+ * its saved name (Settings' resource name or store code), when it has a title.
  *
  * The link is read from Google (metadata.newReviewUri) only while none is saved
  * for the chosen location, then kept in the connection's metadata, so a page
@@ -95,7 +97,8 @@ export async function GET(request?: Request) {
   // Reviews page shows, so the panel names it (its title, as the print card).
   const rawTitle = metadataOf(connection.metadata).locationTitle;
   const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
-  const linkBody = (url: string) => (title ? { url, location: title } : { url });
+  const savedId = savedLocationName(connection.metadata);
+  const linkBody = (url: string) => (title && savedId ? { url, location: title, locationId: savedId } : { url });
 
   const saved = savedNewReviewUri(connection.metadata);
   if (saved) return NextResponse.json(linkBody(saved));
