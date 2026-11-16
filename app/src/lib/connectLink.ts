@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { causeMessage, googlePermissionMessage, isGooglePermissionCode, type ShownControl } from "@/lib/oauthResult";
+import { causeMessage, googlePermissionMessage, isGooglePermissionCode, signInLeft, type ShownControl } from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 
 /**
@@ -184,8 +184,15 @@ export function describeConnectLinkResult(
     const platform = platformOfCode(error);
     const label = platform ? PLATFORM_LABELS[platform] : null;
 
+    // R29 OO1 lead follow-up: with a row (a Reconnect), its connection is
+    // unchanged; "Nothing was connected" only when there was none.
+    const rowShown: ShownControl = platform && shown ? shown(platform) : "connect";
     if (platform && error === cancelledCode(platform)) {
-      return { variant: "danger", message: "You cancelled. Nothing was connected." };
+      const left = signInLeft(rowShown, label);
+      return {
+        variant: "danger",
+        message: rowShown === "connect" ? `You cancelled. ${left[0].toUpperCase()}${left.slice(1)}.` : `You cancelled, so ${left}.`,
+      };
     }
     if (platform && error === alreadyConnectedCode(platform)) {
       return { variant: "danger", message: `${label} is already connected. Ask the person who sent you this link if it should be changed.` };
@@ -200,11 +207,13 @@ export function describeConnectLinkResult(
     // ending-soon row, so the cause names the row's own button.
     const cause = platform && VISITOR_CAUSES.has(error) ? causeMessage(error, shown ? shown(platform) : "connect", "press") : null;
     if (cause) return { variant: "danger", message: cause };
+    const tellThem = "Try again, or tell the person who sent you this link.";
+    if (label && rowShown !== "connect") {
+      return { variant: "danger", message: `We couldn't reconnect ${label}, so ${signInLeft(rowShown, label)}. ${tellThem}` };
+    }
     return {
       variant: "danger",
-      message: label
-        ? `We couldn't connect ${label}. Try again, or tell the person who sent you this link.`
-        : "We couldn't connect the account. Try again, or tell the person who sent you this link.",
+      message: label ? `We couldn't connect ${label}. ${tellThem}` : `We couldn't connect the account. ${tellThem}`,
     };
   }
 

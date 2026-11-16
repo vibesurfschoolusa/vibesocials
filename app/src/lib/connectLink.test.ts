@@ -107,6 +107,26 @@ describe("the sentence the visitor reads after a flow", () => {
     }
   });
 
+  // R29 OO1 lead follow-up: a cancelled or failed Reconnect (a row exists)
+  // said "Nothing was connected", which reads as if nothing is connected. The
+  // shown row decides, through the table Settings uses.
+  it("a cancel or a failure with a row: the existing connection is unchanged; without one: nothing was connected", () => {
+    const withShown = (error: string, shown: ShownControl) =>
+      describeConnectLinkResult(new URLSearchParams({ error }), { shown: () => shown })?.message ?? "";
+    expect(withShown("facebook_page_cancelled", "connect")).toBe("You cancelled. Nothing was connected.");
+    expect(withShown("facebook_page_cancelled", "reconnect")).toBe("You cancelled, so your Facebook Page connection is unchanged.");
+    expect(withShown("facebook_page_cancelled", "connected")).toBe("You cancelled, so your Facebook Page connection is unchanged.");
+    for (const error of ["tiktok_token_exchange_failed", "youtube_oauth_denied", "linkedin_connect_failed"]) {
+      expect(withShown(error, "connect"), error).toMatch(/^We couldn't connect (TikTok|YouTube|LinkedIn)\. Try again, or tell the person who sent you this link\.$/);
+      expect(withShown(error, "reconnect"), error).toMatch(
+        /^We couldn't reconnect (TikTok|YouTube|LinkedIn), so your \1 connection is unchanged\. Try again, or tell the person who sent you this link\.$/,
+      );
+    }
+    for (const shown of ["reconnect", "connected"] as const) {
+      expect(withShown("x_cancelled", shown)).not.toMatch(/[Nn]othing was connected/);
+    }
+  });
+
   it("a callback's own denied or auth_failed code is never read as a cancellation", () => {
     expect(describe_({ error: "youtube_oauth_denied" })?.message).toBe(
       "We couldn't connect YouTube. Try again, or tell the person who sent you this link.",

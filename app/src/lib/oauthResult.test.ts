@@ -554,10 +554,10 @@ describe("describeOAuthResult — every sentence names only the button the row s
 
   it("a cancelled Reconnect: the existing connection is unchanged, and Reconnect tries again", () => {
     expect(describe_("youtube_oauth_denied", "reconnect")).toBe(
-      "You cancelled the YouTube authorization — your existing connection is unchanged. Click Reconnect to try again.",
+      "You cancelled the YouTube authorization — your YouTube connection is unchanged. Click Reconnect to try again.",
     );
     expect(describe_("youtube_oauth_denied", "connected")).toBe(
-      "You cancelled the YouTube authorization — your existing connection is unchanged.",
+      "You cancelled the YouTube authorization — your YouTube connection is unchanged.",
     );
     expect(describe_("youtube_oauth_denied", "connect")).toBe(
       "You cancelled the YouTube authorization — nothing was connected. Click Connect to try again.",

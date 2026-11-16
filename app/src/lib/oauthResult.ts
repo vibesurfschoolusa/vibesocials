@@ -62,6 +62,17 @@ export function signInButton(shown: ShownControl): "Connect" | "Reconnect" | nul
   return shown === "reconnect" ? "Reconnect" : null;
 }
 
+/**
+ * R29 OO1 lead follow-up: what a cancelled or failed sign-in left, from the
+ * shown row. A sign-in that doesn't finish saves nothing, so a row that had a
+ * connection keeps it; "nothing was connected" only when there was none.
+ * Lower case, no full stop. Settings and the connect link page both use it.
+ */
+export function signInLeft(shown: ShownControl, label: string | null): string {
+  if (shown === "connect") return "nothing was connected";
+  return label ? `your ${label} connection is unchanged` : "your existing connection is unchanged";
+}
+
 /** The step that tries the sign-in once more: "Click Connect again", "Click Reconnect". */
 function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
   return button === "Connect" ? `${press} Connect again` : `${press} ${button}`;
@@ -219,9 +230,9 @@ function describeCode(
     if (error.includes("denied") || error.endsWith("auth_failed")) {
       return {
         variant: "danger",
-        message: `You cancelled the ${label ? `${label} ` : ""}authorization — ${
-          shown === "connect" ? "nothing was connected" : "your existing connection is unchanged"
-        }.${button ? ` Click ${button} to try again.` : ""}`,
+        message: `You cancelled the ${label ? `${label} ` : ""}authorization — ${signInLeft(shown, label)}.${
+          button ? ` Click ${button} to try again.` : ""
+        }`,
       };
     }
     if (error.includes("missing_params") || error.includes("invalid_state")) {
