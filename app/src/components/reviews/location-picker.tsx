@@ -7,6 +7,13 @@ interface LocationPickerProps {
   locations: Location[];
   selectedLocation: string | null;
   onChange: (locationName: string) => void;
+  /** R27 lead review: the page belongs to another workspace; picks are ignored until Reload. */
+  locked?: boolean;
+}
+
+/** A pick reaches `onChange` only while the picker is not locked; locked, the value stays. */
+export function pickLocation(value: string, locked: boolean, onChange: (locationName: string) => void): void {
+  if (!locked) onChange(value);
 }
 
 /**
@@ -16,6 +23,7 @@ export function LocationPicker({
   locations,
   selectedLocation,
   onChange,
+  locked = false,
 }: LocationPickerProps) {
   const labels = locationLabels(locations);
   return (
@@ -27,7 +35,10 @@ export function LocationPicker({
         <Select
           id="location-picker"
           value={selectedLocation || ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => pickLocation(e.target.value, locked, onChange)}
+          // Stays focusable (aria-disabled, not disabled), so focus never drops.
+          aria-disabled={locked || undefined}
+          className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         >
           <option value="">Choose a location...</option>
           {locations.map((loc) => (

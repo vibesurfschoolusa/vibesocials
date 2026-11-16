@@ -479,3 +479,12 @@ describe("ReviewsView tab counts", () => {
     expect(source).toContain('["replied", tabLabel("Replied", loading ? null : repliedReviews.length)]');
   });
 });
+
+// R27 lead review: after any workspace refusal the picker is locked; the
+// selected location (which drives the list request) never changes.
+describe("ReviewsView locks the picker after a workspace refusal", () => {
+  it("passes the lock, and changes the location only through the picker", () => {
+    expect(source).toMatch(/<LocationPicker\s+locations=\{locations\}\s+selectedLocation=\{selectedLocation\}\s+onChange=\{setSelectedLocation\}\s+locked=\{workspaceChanged !== null\}/);
+    expect(source.split("setSelectedLocation(").length - 1).toBe(1);
+  });
+});

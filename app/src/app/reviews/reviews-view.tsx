@@ -552,6 +552,7 @@ export function ReviewsView({
           locations={locations}
           selectedLocation={selectedLocation}
           onChange={setSelectedLocation}
+          locked={workspaceChanged !== null}
         />
       )}
 

@@ -1,10 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { reviewsListedLocation } from "@/server/googleReviews";
 
-import { LocationPicker } from "./location-picker";
+import { LocationPicker, pickLocation } from "./location-picker";
 import type { Location } from "./types";
 
 // R26 client-journey L4: the Reviews locations route now sends each listed
@@ -46,5 +46,30 @@ describe("LocationPicker with the route's listed locations", () => {
     ).replace(/&#x27;/g, "'");
     expect(html).toContain(`<option value="accounts/1/locations/11">Joe's Pizza (1 Main St)</option>`);
     expect(html).toContain(`<option value="accounts/1/locations/22">Joe's Pizza (location 2)</option>`);
+  });
+});
+
+// R27 lead review: once the page knows it belongs to another workspace, the
+// picker is locked, so the list, its name and the reply box stay until Reload.
+describe("LocationPicker locked", () => {
+  const two = [
+    { name: "a", locationName: "A", title: "A" },
+    { name: "b", locationName: "B", title: "B" },
+  ] satisfies Location[];
+
+  it("a pick while locked changes nothing (so no request is sent)", () => {
+    const onChange = vi.fn();
+    pickLocation("b", true, onChange);
+    expect(onChange).not.toHaveBeenCalled();
+    pickLocation("b", false, onChange);
+    expect(onChange).toHaveBeenCalledWith("b");
+  });
+
+  it("is aria-disabled and keeps its value", () => {
+    const html = renderToStaticMarkup(createElement(LocationPicker, { locations: two, selectedLocation: "a", onChange: () => {}, locked: true }));
+    expect(html).toMatch(/<select[^>]*aria-disabled="true"/);
+    expect(html).toContain('<option value="a" selected="">A</option>');
+    const open = renderToStaticMarkup(createElement(LocationPicker, { locations: two, selectedLocation: "a", onChange: () => {} }));
+    expect(open).not.toContain("aria-disabled=");
   });
 });
