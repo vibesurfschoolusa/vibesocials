@@ -23,6 +23,7 @@ import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "
 import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { retryAllPlan, type LeftOut } from "@/lib/retryAll";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { PlatformResultBadge } from "./platform-result";
 import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
 
@@ -246,15 +247,11 @@ export function createSendAgain(
     if (locked) return null;
     locked = true;
     // R31 pages L2: with the workspace the list was drawn for.
-    const request = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(workspaceId ? { workspaceId } : {}),
-    };
-    const answer = await sendActionRequest(`/api/posts/${postJobId}/publish`, request, {
-      fetchImpl: fetcher as typeof fetch,
-      ...(online ? { online } : {}),
-    });
+    const answer = await sendActionRequest(
+      `/api/posts/${postJobId}/publish`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(workspaceId ? { workspaceId } : {}) },
+      { fetchImpl: fetcher as typeof fetch, ...(online ? { online } : {}) },
+    );
     if (answer.kind === "not_sent") {
       locked = false;
       return { ok: false, error: SEND_AGAIN_NOT_SENT };
@@ -286,7 +283,8 @@ export function createSendAgain(
     // post (nothing could be sent; prepare wrote failed rows), like a failed
     // start, so the post is read again and the list with it.
     if (dispatchFailed || response.status === 409 || response.status === 429) {
-      const read = await sendActionRequest(`/api/posts/${postJobId}`, { method: "GET" }, {
+      // R32 lead review: the post read again for the page's workspace (the read requires it).
+      const read = await sendActionRequest(withWorkspaceId(`/api/posts/${postJobId}`, workspaceId), { method: "GET" }, {
         fetchImpl: fetcher as typeof fetch,
         ...(online ? { online } : {}),
       });

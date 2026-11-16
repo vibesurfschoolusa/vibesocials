@@ -31,7 +31,8 @@ function sourceFiles(dir: string): string[] {
 /** Each fetch whose first argument starts with a literal address: the address and the call's next 400 characters. */
 export function literalReads(source: string): { path: string; call: string }[] {
   const reads: { path: string; call: string }[] = [];
-  for (const match of source.matchAll(/\b(?:fetch|fetchOrNoAnswer|fetchImpl)\(\s*["'`](\/api\/[^"'`?$]*)/g)) {
+  // R32 lead review: every request helper, not only fetch (sendActionRequest, a passed-in fetcher, any `...fetch...(`).
+  for (const match of source.matchAll(/\b(?:[\w.]*[fF]etch\w*|sendActionRequest)\(\s*["'`](\/api\/[^"'`?$]*)/g)) {
     reads.push({ path: match[1], call: source.slice(match.index, match.index + 400) });
   }
   return reads;
@@ -43,7 +44,8 @@ export function readsWithoutId(source: string): string[] {
     .filter(({ path: address }) => GUARDED.test(address))
     .filter(({ call }) => {
       const first = call.slice(0, call.search(/\)\s*[;.,]|\)\s*\n/) + 1 || undefined);
-      if (/method:\s*["'](POST|PUT|PATCH|DELETE)["']/.test(call.slice(0, 300))) return false;
+      // A write names its method, itself or through the Queue's cardRequest.
+      if (/method:\s*["'](POST|PUT|PATCH|DELETE)["']|cardRequest\([^,]*,\s*["'](POST|PUT|PATCH|DELETE)["']/.test(call.slice(0, 300))) return false;
       return !/workspaceId/.test(first);
     })
     .map(({ path: address }) => address);
@@ -56,6 +58,11 @@ describe("every client read of a guarded route sends the page's workspace id", (
     expect(readsWithoutId("fetch(`/api/media?cursor=${c}&workspaceId=${encodeURIComponent(workspaceId)}`);")).toEqual([]);
     expect(readsWithoutId('fetchOrNoAnswer("/api/posts", { method: "POST", body });')).toEqual([]);
     expect(readsWithoutId('fetch("/api/workspaces");')).toEqual([]);
+    // R32 lead review: other request helpers are seen too.
+    expect(readsWithoutId('sendActionRequest(`/api/posts/${id}`, { method: "GET" }, { fetchImpl });')).toEqual(["/api/posts/"]);
+    expect(readsWithoutId('sendActionRequest(withWorkspaceId(`/api/posts/${id}`, workspaceId), { method: "GET" });')).toEqual([]);
+    expect(readsWithoutId('fetcher("/api/media");')).toEqual(["/api/media"]);
+    expect(readsWithoutId('sendActionRequest(`/api/posts/${job.id}`, cardRequest(job, "PATCH", workspaceId, { scheduledFor }));')).toEqual([]);
   });
 
   // R32 lead follow-up: GET /api/connections requires the id, so every use of the hook passes one.

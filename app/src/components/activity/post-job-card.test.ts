@@ -276,7 +276,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       const press = createSendAgain("job-9", "ws-1", fetcher);
 
       await expect(press()).resolves.toEqual({ ok: false, error: "An owner needs to approve this post first.", refetch: true });
-      expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9", { method: "GET" });
+      expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9?workspaceId=ws-1", { method: "GET" });
       await expect(press()).resolves.toEqual({ ok: true });
       expect(fetcher).toHaveBeenCalledTimes(3);
     });
@@ -367,7 +367,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
           .mockResolvedValueOnce(fresh());
         const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
         await expect(press()).resolves.toEqual({ ok: false, error: dispatchFailedText(body, "Send again"), refetch: true });
-        expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9", { method: "GET" });
+        expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9?workspaceId=ws-1", { method: "GET" });
         await expect(press()).resolves.toBeNull();
       }
     });
