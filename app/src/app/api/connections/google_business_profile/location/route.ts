@@ -93,7 +93,9 @@ export async function POST(request: Request) {
     // Found nowhere, but an account's list could not all be read: the
     // location may be on the part that is missing, so this is Google's
     // failure, not a refusal. Found in an account that answered, it saves.
-    return listed.complete
+    // JJ3 lead review: accounts that refused access cannot be posted to
+    // either, so when they are all that is missing, it is a refusal.
+    return listed.complete || listed.refusedOnly
       ? NextResponse.json({ error: LOCATION_NOT_LISTED_MESSAGE }, { status: 400 })
       : NextResponse.json({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 });
   }

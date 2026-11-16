@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
-import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
+import { classifyGoogleFailure } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { readGoogleErrorReasons } from "./platforms/rateLimited";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
@@ -247,91 +247,59 @@ export function reviewLinkReason(problem: ReviewLinkProblem, role: ReviewsReader
 }
 
 /**
- * JJ3 lead review: Google's 403 is not a dead grant. With a permission reason
- * (or none) the connected account no longer manages the location; with one of
- * {@link GOOGLE_SERVICE_REASONS} the API is off or out of quota on our side.
- * Reconnecting fixes neither, and nothing is flagged.
+ * JJ3 lead review: what the Reviews page says for each kind of Google failure
+ * (server/googleFailure.ts decides the kind). An access refusal is about the
+ * location being read, or, where none is chosen yet (GET /api/reviews/locations),
+ * about the Business Profile account. Reconnecting with the same account fixes
+ * neither, so it carries no reconnect flag, and nothing is flagged.
  */
 export const GOOGLE_ACCESS_REFUSED_MESSAGE =
   "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.";
 export const GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE =
   "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.";
+const GOOGLE_ACCOUNT_REFUSED_MESSAGE =
+  "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or reconnect with an account that does.";
+const GOOGLE_ACCOUNT_REFUSED_MEMBER_MESSAGE =
+  "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile.";
+/** Google or our own setup failed, not the person: the same words for everyone. */
 export const GOOGLE_NOT_ANSWERING_MESSAGE =
   "Google Business Profile isn't answering for Vibe Socials right now. Try again later.";
 
-/** 403 reasons (googleErrorReasons' normalized form) that are our side's API setup or quota. */
-const GOOGLE_SERVICE_REASONS: ReadonlySet<string> = new Set([
-  "servicedisabled",
-  "accessnotconfigured",
-  "quotaexceeded",
-  "dailylimitexceeded",
-  "ratelimitexceeded",
-  "userratelimitexceeded",
-]);
+/** What an access refusal is about: a chosen location, or the account (no location chosen yet). */
+export type AccessSubject = "location" | "account";
 
-/** The sentence for a Google 403, or null when `error` is not one. Shared by every Reviews route. */
-export function googleForbiddenMessage(error: unknown, role: ReviewsReader): string | null {
-  const { status, googleReasons } = (error ?? {}) as { status?: unknown; googleReasons?: unknown };
-  if (status !== 403) return null;
-  const reasons = Array.isArray(googleReasons) ? googleReasons.filter((r): r is string => typeof r === "string") : [];
-  if (reasons.some((reason) => GOOGLE_SERVICE_REASONS.has(reason))) {
-    // Our own setup or quota: worth a look in the logs. Status and reasons only.
-    console.warn("[GBP Reviews] Google answered 403 for our API setup or quota", { status, reasons });
-    return GOOGLE_NOT_ANSWERING_MESSAGE;
+/** The access sentence, for whoever reads it. */
+export function googleAccessRefusedMessage(subject: AccessSubject, role: ReviewsReader): string {
+  if (subject === "account") {
+    return role === "member" ? GOOGLE_ACCOUNT_REFUSED_MEMBER_MESSAGE : GOOGLE_ACCOUNT_REFUSED_MESSAGE;
   }
   return role === "member" ? GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE : GOOGLE_ACCESS_REFUSED_MESSAGE;
 }
 
-/** What the Reviews page says when our own Google setup, not the person's grant, failed. */
-export const REVIEWS_UNAVAILABLE_MESSAGE = "Google Reviews are not available right now. Try again later.";
-
-const RECONNECT_CODES = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE", "GOOGLE_NO_REFRESH_TOKEN"]);
-const REFRESH_FAILED_CODE = "GOOGLE_TOKEN_REFRESH_FAILED";
-
 /**
- * The error body the reviews routes answer with (F7, R1 M5). A reconnect is
- * asked for, with `reconnect: true` so the page links to Settings, only when
- * the person's Google grant is the problem: a 401/403 from a Google API call,
- * a connection already flagged or gone, no refresh token, or a refresh failure
- * that flags the row. JJ3 lead review: that last one is decided by the rule
- * that flags it (connectionHealth.ts isTerminalRefreshFailure: a 400 or 401,
- * or invalid_grant, but never invalid_client, 429 or 5xx), so a flagged row
- * never reads "not available" here while Settings shows Reconnect. A failure of
- * the app's own setup (missing OAuth credentials, invalid_client) says Reviews
- * are not available. Anything else is the route's plain `fallback`: an error's
- * own text is never shown.
- *
- * `oauthError` is the token endpoint's OAuth code when the thrown error carries
- * it. The GBP location picker uses this too (gbpLocations.ts).
- * `role` is the route's workspace context's: a member reads who can reconnect
- * (googleRefusedBody).
+ * The error body the Reviews routes answer with (F7, R1 M5): the kind of the
+ * failure (classifyGoogleFailure, which logs it once), worded for the page.
+ * Only a reconnect carries `reconnect: true` (the page then links to
+ * Settings), and only for an owner (googleRefusedBody). `fallback` is the
+ * route's own sentence for anything else: an error's own text is never shown.
  */
 export function reviewsErrorBody(
   error: unknown,
   fallback: string,
   role: ReviewsReader,
+  options: { where?: string; subject?: AccessSubject } = {},
 ): { error: string; reconnect?: true } {
-  const { status, code, oauthError } = (error ?? {}) as {
-    status?: unknown;
-    code?: unknown;
-    oauthError?: unknown;
-  };
-  const refused = googleRefusedBody(role);
-  const unavailable = { error: REVIEWS_UNAVAILABLE_MESSAGE };
-
-  if (code === "GOOGLE_MISSING_OAUTH_CREDENTIALS") return unavailable;
-  if (code === REFRESH_FAILED_CODE) {
-    const oauth = typeof oauthError === "string" ? oauthError : undefined;
-    if (oauth === "invalid_client") return unavailable;
-    // No status passed on: only the OAuth code can say the grant is dead.
-    if (isTerminalRefreshFailure(typeof status === "number" ? status : 0, oauth)) return refused;
-    return { error: fallback };
+  const kind = classifyGoogleFailure(error, options.where ?? "Reviews");
+  switch (kind) {
+    case "reconnect":
+      return googleRefusedBody(role);
+    case "access":
+      return { error: googleAccessRefusedMessage(options.subject ?? "location", role) };
+    case "tryLater":
+      return { error: GOOGLE_NOT_ANSWERING_MESSAGE };
+    default:
+      return { error: fallback };
   }
-  const forbidden = googleForbiddenMessage(error, role);
-  if (forbidden) return { error: forbidden };
-  if (status === 401) return refused;
-  if (typeof code === "string" && RECONNECT_CODES.has(code)) return refused;
-  return { error: fallback };
 }
 
 /**

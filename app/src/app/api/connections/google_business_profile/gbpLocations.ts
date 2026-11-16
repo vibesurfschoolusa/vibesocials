@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { reviewsErrorBody } from "@/server/googleReviews";
+import { classifyGoogleFailure, type GoogleFailureKind } from "@/server/googleFailure";
+import { readGoogleErrorReasons } from "@/server/platforms/rateLimited";
 import {
   CONNECTION_RECONNECT_REQUIRED_CODE,
   refreshConnectionToken,
@@ -23,8 +24,24 @@ const LOCATIONS_PAGE_SIZE = 100;
 /** Pages read of any one list before giving up: 5,000 locations for one account. */
 export const GBP_MAX_PAGES = 50;
 
-/** Google failed (429, 5xx or no answer at all); trying again later may work. */
+/**
+ * What the picker (owner-only) says for each kind of Google failure
+ * (server/googleFailure.ts decides the kind; JJ3 lead review).
+ * tryLater: Google or our own setup failed; trying again later may work.
+ */
 export const GOOGLE_NO_ANSWER_MESSAGE = "Google didn't answer. Try again in a minute.";
+/** access: this Google login may not read its Business Profile accounts. */
+export const GBP_ACCOUNTS_REFUSED_MESSAGE =
+  "Google refused access to the Business Profile accounts of this Google account. Press Switch account above and sign in with the Google account that manages your listing.";
+/** other: the accounts list did not come back, for no reason we can name. */
+export const GBP_ACCOUNTS_NOT_SENT_MESSAGE =
+  "Google didn't send your Business Profile accounts. Press Fetch locations from Google again in a minute.";
+/** Shown with the list when some accounts' locations could not be read: access refused. */
+export const GBP_SOME_ACCOUNTS_REFUSED_NOTICE =
+  "Google refused access to some of your Business Profile accounts, so their locations aren't listed. Check in Google Business Profile that this Google account still manages them.";
+/** The same, when Google failed for them instead. */
+export const GBP_SOME_ACCOUNTS_FAILED_NOTICE =
+  "Google didn't send the locations of some of your Business Profile accounts. Press Fetch locations from Google again in a minute to see them all.";
 
 /**
  * R24 platform-clients L1: the grant is dead (the row is flagged, or Google
@@ -47,10 +64,26 @@ export interface ListedGbpLocation {
  * `complete` is false when an account's locations could not all be read (it
  * failed, or ran past GBP_MAX_PAGES): the picker still shows what was read,
  * but the location save must not treat a missing location as "not listed".
+ * `unread` says why accounts were skipped: "access" when any refused access
+ * (the person can fix that), "failed" when Google failed for them, else null.
+ * `refusedOnly` is true when access refusals are the only reason the list is
+ * not complete: a location missing from it is then not one this login manages.
  */
 export type GbpLocationList =
-  | { ok: true; locations: ListedGbpLocation[]; complete: boolean }
+  | {
+      ok: true;
+      locations: ListedGbpLocation[];
+      complete: boolean;
+      unread: "access" | "failed" | null;
+      refusedOnly: boolean;
+    }
   | { ok: false; response: NextResponse };
+
+/** The picker's line about skipped accounts, or null when none were skipped. */
+export function unreadAccountsNotice(unread: "access" | "failed" | null): string | null {
+  if (unread === "access") return GBP_SOME_ACCOUNTS_REFUSED_NOTICE;
+  return unread === "failed" ? GBP_SOME_ACCOUNTS_FAILED_NOTICE : null;
+}
 
 function refused(body: { error: string; code?: string }, init: { status: number }): GbpLocationList {
   return { ok: false, response: NextResponse.json(body, init) };
@@ -58,6 +91,20 @@ function refused(body: { error: string; code?: string }, init: { status: number 
 
 const reconnectRefusal = (): GbpLocationList =>
   refused({ error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE }, { status: 409 });
+
+/** The accounts list failed: the answer for each kind. */
+function accountsRefusal(kind: GoogleFailureKind): GbpLocationList {
+  switch (kind) {
+    case "reconnect":
+      return reconnectRefusal();
+    case "access":
+      return refused({ error: GBP_ACCOUNTS_REFUSED_MESSAGE }, { status: 403 });
+    case "tryLater":
+      return refused({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 });
+    default:
+      return refused({ error: GBP_ACCOUNTS_NOT_SENT_MESSAGE }, { status: 502 });
+  }
+}
 
 interface GbpAccount {
   name?: string | null; // "accounts/{accountId}"
@@ -95,23 +142,22 @@ interface GbpLocation {
 // per-connection lock (connectionRefresh.ts); a lock timeout, a gone or flagged
 // connection also lands in the catch -> null, like any other failure.
 //
-// R24 platform-clients L1: a failure also says whether the grant is dead, by
-// the rule the Reviews routes use (reviewsErrorBody asks for a reconnect),
-// which follows the rule that flags the row (isTerminalRefreshFailure).
+// R24 platform-clients L1 / JJ3 lead review: a failed refresh is kept, so the
+// failure it caused is sorted by what the refresh said (googleFailure.ts).
 async function refreshAccessToken(
   connection: SocialConnection,
-): Promise<{ renewed: SocialConnection | null; grantDead: boolean }> {
+): Promise<{ renewed: SocialConnection | null; failure: unknown }> {
   try {
-    return { renewed: await refreshConnectionToken(connection, (current) => refreshGoogleToken(current)), grantDead: false };
+    return { renewed: await refreshConnectionToken(connection, (current) => refreshGoogleToken(current)), failure: null };
   } catch (error) {
-    console.error("[GBP] Failed to refresh access token", { error });
-    return { renewed: null, grantDead: reviewsErrorBody(error, "", "owner").reconnect === true };
+    return { renewed: null, failure: error };
   }
 }
 
+/** `failure` carries status and Google's reasons (or is what was thrown, when nothing answered). */
 type PageResult<T> =
   | { ok: true; items: T[]; complete: boolean }
-  | { ok: false; status: number | null };
+  | { ok: false; failure: unknown };
 
 /**
  * Every page of one Google list (`key` names its array), following
@@ -133,10 +179,16 @@ async function readAllPages<T>(
     let json: Record<string, unknown> | null;
     try {
       const response = await get(url);
-      if (!response.ok) return { ok: false, status: response.status };
+      if (!response.ok) {
+        const googleReasons = await readGoogleErrorReasons(response);
+        return {
+          ok: false,
+          failure: Object.assign(new Error("Google list failed"), { status: response.status, googleReasons }),
+        };
+      }
       json = (await response.json()) as Record<string, unknown> | null;
-    } catch {
-      return { ok: false, status: null };
+    } catch (error) {
+      return { ok: false, failure: error };
     }
     const pageItems = json?.[key];
     if (Array.isArray(pageItems)) items.push(...(pageItems as T[]));
@@ -148,11 +200,6 @@ async function readAllPages<T>(
     pageToken = next;
   }
   return { ok: true, items, complete: false };
-}
-
-/** A 429, a 5xx or no answer: Google, not the request, failed. */
-function googleDidNotAnswer(status: number | null): boolean {
-  return status === null || status === 429 || status >= 500;
 }
 
 /** Lists the locations of every account the connection's Google login can see. */
@@ -171,13 +218,13 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
 
   // One token refresh at most, on the first 401 (an expired access token).
   let refreshed = false;
-  let grantDead = false;
+  let refreshFailure: unknown = null;
   const get = async (url: URL): Promise<Response> => {
     const response = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
     if (response.status !== 401 || refreshed) return response;
     refreshed = true;
-    const { renewed, grantDead: dead } = await refreshAccessToken(connection);
-    grantDead = dead;
+    const { renewed, failure } = await refreshAccessToken(connection);
+    refreshFailure = failure;
     if (!renewed?.accessToken) return response;
     accessToken = renewed.accessToken;
     return fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -189,15 +236,15 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
   try {
     // 1. Every account the login has access to.
     const accounts = await readAllPages<GbpAccount>(new URL(`${accountManagementBase}/accounts`), "accounts", get);
-    if (!accounts.ok) {
-      console.error("[GBP] accounts.list failed while listing locations", { status: accounts.status });
-      if (grantDead) return reconnectRefusal();
-      return googleDidNotAnswer(accounts.status)
-        ? refused({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 })
-        : refused({ error: "Failed to list Google Business Profile accounts" }, { status: 502 });
-    }
+    // A 401 after a failed refresh is sorted by what the refresh said.
+    // Each failure is logged once, by kind (classifyGoogleFailure).
+    const kindOf = (failure: unknown) => classifyGoogleFailure(refreshFailure ?? failure, "GBP location picker");
+    if (!accounts.ok) return accountsRefusal(kindOf(accounts.failure));
 
     let complete = accounts.complete;
+    let unread: "access" | "failed" | null = null;
+    // Not complete for a reason other than an account refusing access.
+    let partlyUnread = !accounts.complete;
     const allLocations: ListedGbpLocation[] = [];
 
     // 2. Every location of each account, via the Business Information API.
@@ -213,12 +260,19 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
 
       const locations = await readAllPages<GbpLocation>(url, "locations", get);
       if (!locations.ok) {
-        console.error("[GBP] accounts.locations.list failed", { accountName, status: locations.status });
-        if (grantDead) return reconnectRefusal();
+        const kind = kindOf(locations.failure);
+        if (kind === "reconnect") return reconnectRefusal();
+        // Skipped, and said so (unreadAccountsNotice): access refused is what
+        // the person can fix, so it outranks Google failing.
+        unread = kind === "access" || unread === "access" ? "access" : "failed";
+        if (kind !== "access") partlyUnread = true;
         complete = false;
         continue;
       }
-      if (!locations.complete) complete = false;
+      if (!locations.complete) {
+        complete = false;
+        partlyUnread = true;
+      }
 
       for (const loc of locations.items) {
         if (!loc.name) continue;
@@ -256,7 +310,7 @@ export async function listGbpLocations(connection: SocialConnection): Promise<Gb
       }
     }
 
-    return { ok: true, locations: allLocations, complete };
+    return { ok: true, locations: allLocations, complete, unread, refusedOnly: !complete && !partlyUnread };
   } catch (error) {
     console.error("[GBP] Unexpected error while listing locations", { error });
     return refused(

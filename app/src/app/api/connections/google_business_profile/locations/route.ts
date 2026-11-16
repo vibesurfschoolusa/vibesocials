@@ -4,7 +4,7 @@ import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { Platform } from "@prisma/client";
 
-import { listGbpLocations } from "../gbpLocations";
+import { listGbpLocations, unreadAccountsNotice } from "../gbpLocations";
 
 export const runtime = "nodejs";
 
@@ -37,5 +37,8 @@ export async function GET() {
   }
 
   const listed = await listGbpLocations(connection);
-  return listed.ok ? NextResponse.json({ locations: listed.locations }) : listed.response;
+  if (!listed.ok) return listed.response;
+  // JJ3 lead review: accounts whose locations could not be read are said, with why.
+  const notice = unreadAccountsNotice(listed.unread);
+  return NextResponse.json(notice ? { locations: listed.locations, notice } : { locations: listed.locations });
 }

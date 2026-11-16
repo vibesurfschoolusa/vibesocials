@@ -82,7 +82,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ reviews, truncated });
   } catch (error: unknown) {
-    console.error("[Reviews API] Error:", error);
-    return NextResponse.json(reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE, role), { status: 500 });
+    // Logged once, by kind (classifyGoogleFailure, via reviewsErrorBody).
+    const body = reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE, role, { where: "GET /api/reviews" });
+    return NextResponse.json(body, { status: 500 });
   }
 }

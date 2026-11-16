@@ -196,7 +196,7 @@ describe("GET /api/reviews/link", () => {
     expect((await (await GET()).json()).reason).toMatch(/Reconnect/);
 
     mocks.refreshAccessToken.mockRejectedValueOnce(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }));
-    expect((await (await GET()).json()).reason).toMatch(/try again/);
+    expect((await (await GET()).json()).reason).toMatch(/Try again later/);
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });
 
@@ -218,7 +218,8 @@ describe("GET /api/reviews/link", () => {
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
   });
 
-  it("an expired token whose refresh gets a 5xx keeps today's text", async () => {
+  // JJ3 lead review: a 5xx is "try later" on every Google surface now.
+  it("an expired token whose refresh gets a 5xx says to try later", async () => {
     mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
     mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() - 60 * 1000) }));
     mocks.refreshAccessToken.mockRejectedValue(
@@ -226,7 +227,7 @@ describe("GET /api/reviews/link", () => {
     );
 
     expect((await (await GET()).json()).reason).toBe(
-      "Couldn't get your review link from Google. Reload this page to try again.",
+      "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
     );
   });
 
@@ -268,6 +269,32 @@ describe("GET /api/reviews/link", () => {
         "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
       );
       expect(mocks.update).not.toHaveBeenCalled();
+    });
+
+    it("a member reads who can take each step, never the step itself", async () => {
+      mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "member"));
+      mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 401 }));
+      expect((await (await GET()).json()).reason).toBe(
+        "The workspace owner can reconnect Google Business Profile; then the review link shows here.",
+      );
+
+      mocks.fetchNewReviewUri.mockRejectedValueOnce(failing({ status: 403 }));
+      expect((await (await GET()).json()).reason).toBe(
+        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
+      );
+    });
+
+    it("anything else keeps today's text, and each failure is logged once", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      warn.mockClear();
+      mocks.fetchNewReviewUri.mockRejectedValue(failing({ status: 404 }));
+
+      expect((await (await GET()).json()).reason).toBe(
+        "Couldn't get your review link from Google. Reload this page to try again.",
+      );
+      const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
+      expect(lines).toHaveLength(1);
+      expect(lines[0][1]).toMatchObject({ where: "GET /api/reviews/link", kind: "other", status: 404 });
     });
   });
 

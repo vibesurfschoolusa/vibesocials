@@ -82,11 +82,20 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
   });
 
   it("gives a plain sentence for any other failure", async () => {
-    replyToReviewMock.mockRejectedValue(new TypeError("fetch failed"));
+    replyToReviewMock.mockRejectedValue(new SyntaxError("Unexpected token < in JSON"));
 
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     await expect(response.json()).resolves.toEqual({ error: "Couldn't post your reply. Try again in a minute." });
+  });
+
+  // JJ3 lead review: no answer from Google is "try later" on every Google surface.
+  it("no answer from Google says to try later", async () => {
+    replyToReviewMock.mockRejectedValue(new TypeError("fetch failed"));
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    await expect(response.json()).resolves.toEqual({ error: "Google Business Profile isn't answering for Vibe Socials right now. Try again later." });
   });
 
   // Coordinator (b): the review's location must be one this connection's Google account lists.
@@ -127,7 +136,7 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Couldn't post your reply. Try again in a minute." });
+    await expect(response.json()).resolves.toEqual({ error: "Google Business Profile isn't answering for Vibe Socials right now. Try again later." });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 

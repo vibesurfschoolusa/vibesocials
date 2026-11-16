@@ -128,7 +128,8 @@ export async function POST(request: Request) {
       reply: result,
     });
   } catch (error: unknown) {
-    console.error("[Reviews API] Reply error:", error);
-    return NextResponse.json(reviewsErrorBody(error, REPLY_FAILED_MESSAGE, role), { status: 500 });
+    // Logged once, by kind (classifyGoogleFailure, via reviewsErrorBody).
+    const body = reviewsErrorBody(error, REPLY_FAILED_MESSAGE, role, { where: "POST /api/reviews/[reviewId]/reply" });
+    return NextResponse.json(body, { status: 500 });
   }
 }

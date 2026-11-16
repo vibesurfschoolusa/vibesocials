@@ -160,14 +160,15 @@ describe("GET /api/reviews/locations", () => {
     });
   });
 
-  it("a 403 says to check that the account still manages the location, with no reconnect flag", async () => {
+  // JJ3 lead review: no location is chosen here yet, so the sentence is about the account.
+  it("a 403 says to check that the account still manages the business, with no reconnect flag", async () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 403 })) as unknown as typeof fetch;
 
     expect(await (await GET()).json()).toEqual({
       error:
-        "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.",
+        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or reconnect with an account that does.",
     });
   });
 
@@ -188,7 +189,8 @@ describe("GET /api/reviews/locations", () => {
     });
   });
 
-  it("gives a plain sentence when Google is down", async () => {
+  // JJ3 lead review: a 5xx is "try later" on every Google surface.
+  it("says to try later when Google is down", async () => {
     findFirstMock.mockResolvedValue(CONNECTION);
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue({
@@ -200,7 +202,7 @@ describe("GET /api/reviews/locations", () => {
 
     const body = await (await GET()).json();
 
-    expect(body).toEqual({ error: "Couldn't load your Google locations. Try again in a minute." });
+    expect(body).toEqual({ error: "Google Business Profile isn't answering for Vibe Socials right now. Try again later." });
   });
 });
 

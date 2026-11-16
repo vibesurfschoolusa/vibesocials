@@ -3,17 +3,18 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
-import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import {
+  GOOGLE_NOT_ANSWERING_MESSAGE,
   fetchNewReviewUri,
-  googleForbiddenMessage,
+  googleAccessRefusedMessage,
   refreshAccessToken,
   reviewLinkReason,
-  reviewsErrorBody,
   savedNewReviewUri,
+  type ReviewsReader,
 } from "@/server/googleReviews";
+import { classifyGoogleFailure, type GoogleFailureKind } from "@/server/googleFailure";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -100,22 +101,24 @@ export async function GET() {
     await saveLinkIfUnchanged(connection.id, locationName, url);
     return NextResponse.json({ url });
   } catch (error) {
-    // The error kind only: a message could quote a URL.
-    logger.warn("[GET /api/reviews/link] Couldn't read the review link", {
-      connectionId: connection.id,
-      error: error instanceof Error ? error.name : "unknown",
-      code: (error as { code?: unknown } | null)?.code,
-    });
-    // JJ3 lead review: the Reviews routes' rule (reviewsErrorBody), so a
-    // refresh that flags the row reads "Reconnect", not "Reload this page".
-    // Asked as "owner" only because a member's body carries no reconnect
-    // flag; the reason itself is worded for the caller's role below.
-    const asksReconnect = reviewsErrorBody(error, GOOGLE_FAILED, "owner").reconnect === true;
-    // A Google 403 says what it means (googleForbiddenMessage); nothing is flagged.
-    const forbidden = googleForbiddenMessage(error, context.role);
-    return NextResponse.json({
-      url: null,
-      reason: asksReconnect ? reason("needs_reconnect") : (forbidden ?? GOOGLE_FAILED),
-    });
+    // JJ3 lead review: the kind of Google failure is the one rule every Google
+    // surface uses (classifyGoogleFailure, which logs it once: status, code and
+    // reasons, never a message, which could quote a URL); this panel words it.
+    const kind = classifyGoogleFailure(error, "GET /api/reviews/link");
+    return NextResponse.json({ url: null, reason: linkFailureReason(kind, context.role) });
+  }
+}
+
+/** What the panel says for each kind of Google failure, for whoever reads it. */
+function linkFailureReason(kind: GoogleFailureKind, role: ReviewsReader): string {
+  switch (kind) {
+    case "reconnect":
+      return reviewLinkReason("needs_reconnect", role);
+    case "access":
+      return googleAccessRefusedMessage("location", role);
+    case "tryLater":
+      return GOOGLE_NOT_ANSWERING_MESSAGE;
+    default:
+      return GOOGLE_FAILED;
   }
 }

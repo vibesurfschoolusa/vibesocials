@@ -24,6 +24,10 @@ vi.mock("@/server/platforms/connectionRefresh", () => ({
 vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: h.refreshGoogle }));
 
 import {
+  GBP_ACCOUNTS_REFUSED_MESSAGE,
+  GBP_ACCOUNTS_NOT_SENT_MESSAGE,
+  GBP_SOME_ACCOUNTS_FAILED_NOTICE,
+  GBP_SOME_ACCOUNTS_REFUSED_NOTICE,
   GBP_RECONNECT_CODE,
   GBP_RECONNECT_MESSAGE,
   GOOGLE_NO_ANSWER_MESSAGE,
@@ -300,14 +304,15 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
   });
 
-  it.each(routes)("%s: a refresh that gets no answer keeps today's answer", async (_label, call) => {
+  // JJ3 lead review: one rule sorts every Google failure (googleFailure.ts); no answer is "try later".
+  it.each(routes)("%s: a refresh that gets no answer says to try again", async (_label, call) => {
     googleInTurn({ status: 401 });
     h.refresh.mockRejectedValue(new TypeError("fetch failed"));
 
     const res = await call();
 
-    expect(res.status).toBe(502);
-    await expect(res.json()).resolves.toEqual({ error: "Failed to list Google Business Profile accounts" });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
   });
 
   it.each(routes)("%s: a 401 on a row flagged meanwhile says reconnect", async (_label, call) => {
@@ -336,7 +341,7 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     expect(lastHeaders.Authorization).toBe("Bearer fresh");
   });
 
-  it.each(routes)("%s: a 401 whose refresh fails on Google's side keeps today's answer", async (_label, call) => {
+  it.each(routes)("%s: a 401 whose refresh fails on Google's side says to try again", async (_label, call) => {
     googleInTurn({ status: 401 });
     h.refresh.mockRejectedValue(
       Object.assign(new Error("Google token refresh failed"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }),
@@ -344,8 +349,8 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
 
     const res = await call();
 
-    expect(res.status).toBe(502);
-    await expect(res.json()).resolves.toEqual({ error: "Failed to list Google Business Profile accounts" });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
   });
 
   it.each([
@@ -361,6 +366,70 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
     expect(h.refresh).not.toHaveBeenCalled();
   });
 
+  // JJ3 lead review: each kind of Google failure on the accounts list, worded for the picker (owner-only).
+  const googleError = (status: number, reason?: string): Page => ({
+    status,
+    body: { error: { code: status, ...(reason ? { details: [{ reason }] } : {}) } },
+  });
+
+  it.each(routes)("%s: a 403 for a missing scope says reconnect, flags nothing and refreshes nothing", async (_label, call) => {
+    googleInTurn(googleError(403, "ACCESS_TOKEN_SCOPE_INSUFFICIENT"));
+
+    const res = await call();
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual(RECONNECT_BODY);
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.refreshGoogle).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each(routes)("%s: a 403 permission refusal says to sign in with the account that manages the listing", async (_label, call) => {
+    googleInTurn(googleError(403, "PERMISSION_DENIED"));
+
+    const res = await call();
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: GBP_ACCOUNTS_REFUSED_MESSAGE });
+    expect(GBP_ACCOUNTS_REFUSED_MESSAGE).toBe(
+      "Google refused access to the Business Profile accounts of this Google account. Press Switch account above and sign in with the Google account that manages your listing.",
+    );
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each(routes)("%s: a 403 for a disabled service says to try again", async (_label, call) => {
+    googleInTurn(googleError(403, "SERVICE_DISABLED"));
+
+    const res = await call();
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
+  });
+
+  it.each(routes)("%s: anything else says Google didn't send the accounts", async (_label, call) => {
+    googleInTurn(googleError(404));
+
+    const res = await call();
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({ error: GBP_ACCOUNTS_NOT_SENT_MESSAGE });
+    expect(GBP_ACCOUNTS_NOT_SENT_MESSAGE).toBe(
+      "Google didn't send your Business Profile accounts. Press Fetch locations from Google again in a minute.",
+    );
+  });
+
+  it("each failure is logged once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    googleInTurn(googleError(403, "PERMISSION_DENIED"));
+
+    await GET();
+
+    const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0][1]).toMatchObject({ kind: "access", status: 403, reasons: ["permissiondenied"] });
+  });
+
   it("the picker lists as before for a healthy row", async () => {
     google({
       [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
@@ -371,5 +440,95 @@ describe("a revoked grant: reconnect, from the picker and the save", () => {
 
     expect(res.status).toBe(200);
     expect((await res.json()).locations).toHaveLength(1);
+  });
+});
+
+// JJ3 lead review: an account whose locations Google would not send was skipped
+// without a word. The picker now says so, and why; the save treats a location
+// on an account that refused access as not one this login manages.
+describe("some accounts' locations could not be read", () => {
+  const accounts = { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] } };
+
+  it("says it plainly", () => {
+    expect(GBP_SOME_ACCOUNTS_REFUSED_NOTICE).toBe(
+      "Google refused access to some of your Business Profile accounts, so their locations aren't listed. Check in Google Business Profile that this Google account still manages them.",
+    );
+    expect(GBP_SOME_ACCOUNTS_FAILED_NOTICE).toBe(
+      "Google didn't send the locations of some of your Business Profile accounts. Press Fetch locations from Google again in a minute to see them all.",
+    );
+  });
+
+  it("an account refusing access: the rest are listed, with a notice saying why", async () => {
+    google({
+      [`${ACCOUNTS}|`]: accounts,
+      [`${INFO}/accounts/1/locations|`]: { status: 403, body: { error: { details: [{ reason: "PERMISSION_DENIED" }] } } },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
+    });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.locations).toHaveLength(1);
+    expect(body.notice).toBe(GBP_SOME_ACCOUNTS_REFUSED_NOTICE);
+  });
+
+  it("an account Google didn't answer for: the notice says to fetch again", async () => {
+    google({
+      [`${ACCOUNTS}|`]: accounts,
+      [`${INFO}/accounts/1/locations|`]: { status: 503 },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
+    });
+
+    expect((await (await GET()).json()).notice).toBe(GBP_SOME_ACCOUNTS_FAILED_NOTICE);
+  });
+
+  it("refused access outranks a failure: the notice names what the person can fix", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }, { name: "accounts/3" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 503 },
+      [`${INFO}/accounts/2/locations|`]: { status: 403 },
+      [`${INFO}/accounts/3/locations|`]: { body: { locations: [location(3, 1)] } },
+    });
+
+    expect((await (await GET()).json()).notice).toBe(GBP_SOME_ACCOUNTS_REFUSED_NOTICE);
+  });
+
+  it("every account read: no notice", async () => {
+    google({
+      [`${ACCOUNTS}|`]: accounts,
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
+    });
+
+    expect(await (await GET()).json()).not.toHaveProperty("notice");
+  });
+
+  it("the save: a location not listed while an account refused access is not one this login manages (400)", async () => {
+    google({
+      [`${ACCOUNTS}|`]: accounts,
+      [`${INFO}/accounts/1/locations|`]: { status: 403 },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
+    });
+
+    const res = await save("accounts/1/locations/5");
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/^That location isn't one this Google account manages\./);
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it("each skipped account is logged once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    google({
+      [`${ACCOUNTS}|`]: accounts,
+      [`${INFO}/accounts/1/locations|`]: { status: 403 },
+      [`${INFO}/accounts/2/locations|`]: { status: 503 },
+    });
+
+    await GET();
+
+    const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
+    expect(lines.map(([, fields]) => (fields as { kind: string }).kind)).toEqual(["access", "tryLater"]);
   });
 });

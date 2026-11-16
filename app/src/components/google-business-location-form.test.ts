@@ -5,7 +5,12 @@ import {
   GBP_RECONNECT_MESSAGE,
 } from "@/app/api/connections/google_business_profile/gbpLocations";
 
-import { LOCATION_MESSAGES, LOCATION_RECONNECT_CODE, locationFailure } from "./google-business-location-form";
+import {
+  LOCATION_MESSAGES,
+  LOCATION_RECONNECT_CODE,
+  locationFailure,
+  locationsLoadedMessage,
+} from "./google-business-location-form";
 
 // R5 new-customer L8 and pages L8: each message says what happened and what to do.
 describe("Google location form messages", () => {
@@ -50,5 +55,25 @@ describe("Google location form: a failed answer", () => {
       message: LOCATION_MESSAGES.saveFailed,
       reconnect: false,
     });
+  });
+});
+
+// JJ3 lead review: accounts whose locations Google would not send are said,
+// with why, instead of being left out without a word.
+describe("Google location form: what a loaded list says", () => {
+  const notice = "Google refused access to some of your Business Profile accounts, so their locations aren't listed.";
+
+  it("the route's notice, with or without locations", () => {
+    expect(locationsLoadedMessage(3, notice)).toBe(notice);
+    expect(locationsLoadedMessage(0, notice)).toBe(notice);
+  });
+
+  it("an empty list without a notice: switch to the account that manages the listing", () => {
+    expect(locationsLoadedMessage(0, undefined)).toBe(LOCATION_MESSAGES.noLocations);
+  });
+
+  it("a full list: nothing to say", () => {
+    expect(locationsLoadedMessage(2, undefined)).toBeNull();
+    expect(locationsLoadedMessage(2, 42)).toBeNull();
   });
 });

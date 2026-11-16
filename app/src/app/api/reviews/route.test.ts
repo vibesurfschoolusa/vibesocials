@@ -119,6 +119,28 @@ describe("GET /api/reviews for a member", () => {
     await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
   });
 
+  // JJ3 lead review: each kind, for a member, and one log line per failure.
+  it("a 403 permission refusal: who can check the account, and one log line", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("403"), { status: 403, googleReasons: ["forbidden"] }));
+
+    await expect((await get()).json()).resolves.toEqual({
+      error:
+        "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
+    });
+    const lines = warn.mock.calls.filter(([message]) => message === "[Google] request failed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0][1]).toMatchObject({ where: "GET /api/reviews", kind: "access", status: 403 });
+  });
+
+  it("Google down: the same try-later sentence as an owner's", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("503"), { status: 503 }));
+
+    await expect((await get()).json()).resolves.toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
+  });
+
   it("no token: the same", async () => {
     findFirstMock.mockResolvedValue({ id: "c1", accessToken: null, expiresAt: null, metadata: {} });
 

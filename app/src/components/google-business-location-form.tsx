@@ -56,6 +56,16 @@ export function locationFailure(
   return { message: data?.error ?? fallback, reconnect: data?.code === LOCATION_RECONNECT_CODE };
 }
 
+/**
+ * What a loaded list says (JJ3 lead review): the route's notice about accounts
+ * whose locations could not be read, else, for an empty list, how to find the
+ * listing; null when there is nothing to say.
+ */
+export function locationsLoadedMessage(count: number, notice: unknown): string | null {
+  if (typeof notice === "string" && notice) return notice;
+  return count === 0 ? LOCATION_MESSAGES.noLocations : null;
+}
+
 export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, initialLocationTitle }: Props) {
   const toast = useToast();
   const router = useRouter();
@@ -121,7 +131,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
       const data = (await response.json().catch(() => null)) as
-        | { locations?: RemoteLocation[]; error?: string; code?: string }
+        | { locations?: RemoteLocation[]; error?: string; code?: string; notice?: string }
         | null;
 
       if (!response.ok) {
@@ -136,9 +146,8 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       const list: RemoteLocation[] =
         data && Array.isArray(data.locations) ? data.locations : [];
       setLocations(list);
-      if (list.length === 0) {
-        toast.info(LOCATION_MESSAGES.noLocations);
-      }
+      const loaded = locationsLoadedMessage(list.length, data?.notice);
+      if (loaded) toast.info(loaded);
       setLoadingLocations(false);
     } catch {
       setLocations(null);

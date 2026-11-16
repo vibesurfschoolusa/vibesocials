@@ -301,7 +301,7 @@ describe("refreshGoogleToken — failure classification", () => {
     ["401 invalid_client", 401, "invalid_client", "unavailable"],
   ] as const)("%s: carries oauthError, and the Reviews page reads it", async (_l, status, oauthError, shown) => {
     failWith(status, { error: oauthError });
-    const { GOOGLE_REFUSED_MESSAGE, REVIEWS_UNAVAILABLE_MESSAGE, reviewsErrorBody } = await import(
+    const { GOOGLE_REFUSED_MESSAGE, GOOGLE_NOT_ANSWERING_MESSAGE, reviewsErrorBody } = await import(
       "@/server/googleReviews"
     );
 
@@ -313,7 +313,7 @@ describe("refreshGoogleToken — failure classification", () => {
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual(
       shown === "reconnect"
         ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true }
-        : { error: REVIEWS_UNAVAILABLE_MESSAGE },
+        : { error: GOOGLE_NOT_ANSWERING_MESSAGE },
     );
   });
 

@@ -69,7 +69,12 @@ export async function GET() {
       connected: true,
     });
   } catch (error: unknown) {
-    console.error("[GBP Locations] Error:", error);
-    return NextResponse.json(reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE, role), { status: 500 });
+    // Logged once, by kind (classifyGoogleFailure, via reviewsErrorBody).
+    // No location is chosen here yet: an access refusal is about the account.
+    const body = reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE, role, {
+      where: "GET /api/reviews/locations",
+      subject: "account",
+    });
+    return NextResponse.json(body, { status: 500 });
   }
 }

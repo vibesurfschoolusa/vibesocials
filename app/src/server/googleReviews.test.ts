@@ -14,10 +14,10 @@ import {
   GOOGLE_REFUSED_MEMBER_MESSAGE,
   GOOGLE_REFUSED_MESSAGE,
   REVIEWS_SHOWN_MAX,
-  REVIEWS_UNAVAILABLE_MESSAGE,
   GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE,
   GOOGLE_ACCESS_REFUSED_MESSAGE,
   GOOGLE_NOT_ANSWERING_MESSAGE,
+  googleAccessRefusedMessage,
   fetchAllReviews,
   fetchNewReviewUri,
   fetchReviews,
@@ -286,105 +286,87 @@ describe("fetchAllReviews", () => {
   });
 });
 
-// F7 (R1 M5): what the Reviews page shows when something fails.
-describe("reviewsErrorBody", () => {
-  const coded = (fields: Record<string, unknown>) => Object.assign(new Error("Failed (status 403)"), fields);
-
-  it.each([
-    ["a 401 from Google", coded({ status: 401, code: "GBP_REVIEWS_FETCH_FAILED" })],
-    ["a connection already flagged for reconnecting", coded({ code: "RECONNECT_REQUIRED" })],
-    ["a connection removed meanwhile", coded({ code: "CONNECTION_GONE" })],
-    ["a refused token refresh", coded({ status: 400, code: "GOOGLE_TOKEN_REFRESH_FAILED" })],
-  ])("asks for a reconnect after %s", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+// JJ3 lead review: the Reviews routes word each kind of Google failure
+// (server/googleFailure.ts decides the kind), for an owner or a member.
+describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
+  const failing = (fields: Record<string, unknown>) => Object.assign(new Error("Google failed"), fields);
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
-  it("says the reconnect sentence the brief asks for", () => {
-    expect(GOOGLE_REFUSED_MESSAGE).toBe(
-      "Google refused the request. Reconnect Google Business Profile in Settings.",
-    );
-  });
-
-  it.each([
-    ["a 500 from Google", coded({ status: 500, code: "GBP_REVIEWS_FETCH_FAILED" })],
-    ["a 429", coded({ status: 429 })],
-    ["a token refresh Google could not answer", coded({ status: 503, code: "GOOGLE_TOKEN_REFRESH_FAILED" })],
-    ["a network failure", new TypeError("fetch failed")],
-    ["a JSON parse error", new SyntaxError("Unexpected token < in JSON at position 0")],
-    ["something that is not an error", "boom"],
-  ])("gives the plain fallback for %s, never the raw message", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: "Fallback." });
-  });
-
-  // R12 L1: a member may read and reply, but only an owner can reconnect, so a
-  // member reads who can, without the flag that makes the page link to Settings.
-  it("words a refusal for a member: who can reconnect, no reconnect flag", () => {
-    expect(reviewsErrorBody(coded({ status: 401 }), "Fallback.", "member")).toEqual({
-      error: GOOGLE_REFUSED_MEMBER_MESSAGE,
-    });
+  it("reconnect: the owner gets the step and the Settings link, a member who can take it", () => {
+    for (const error of [failing({ status: 401 }), failing({ status: 403, googleReasons: ["accesstokenscopeinsufficient"] })]) {
+      expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+      expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_REFUSED_MEMBER_MESSAGE });
+    }
+    expect(GOOGLE_REFUSED_MESSAGE).toBe("Google refused the request. Reconnect Google Business Profile in Settings.");
     expect(GOOGLE_REFUSED_MEMBER_MESSAGE).toBe(
       "Google refused the request. The workspace owner can reconnect Google Business Profile.",
     );
   });
 
-  it("gives a member the same sentence as an owner where no reconnect is asked", () => {
-    expect(reviewsErrorBody(coded({ status: 500 }), "Fallback.", "member")).toEqual({ error: "Fallback." });
-    expect(reviewsErrorBody(coded({ code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" }), "Fallback.", "member")).toEqual({
-      error: REVIEWS_UNAVAILABLE_MESSAGE,
-    });
-  });
-});
-
-// JJ3 lead review: Google also answers 403 when the connected account no
-// longer manages the location, or when the API is off on our side, and
-// reconnecting fixes neither. A 403 never asks for a reconnect.
-describe("reviewsErrorBody: a 403 from Google", () => {
-  const forbidden = (googleReasons?: string[]) =>
-    Object.assign(new Error("Failed (status 403)"), { status: 403, code: "GBP_REVIEWS_FETCH_FAILED", googleReasons });
-
-  it("says the sentences plainly", () => {
+  it("access, about a location (list, reply): no reconnect flag", () => {
+    const error = failing({ status: 403, googleReasons: ["forbidden"] });
+    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE });
+    expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE });
     expect(GOOGLE_ACCESS_REFUSED_MESSAGE).toBe(
       "Google refused access to this location. Check that the connected Google account still manages it in Google Business Profile, or reconnect with an account that does.",
     );
-    expect(GOOGLE_NOT_ANSWERING_MESSAGE).toBe(
-      "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
-    );
-  });
-
-  it.each([
-    ["no reason", undefined],
-    ["an empty reason list", []],
-    ["forbidden", ["forbidden"]],
-    ["PERMISSION_DENIED", ["permissiondenied"]],
-  ])("%s: the access sentence, no reconnect flag", (_label, reasons) => {
-    expect(reviewsErrorBody(forbidden(reasons), "Fallback.", "owner")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MESSAGE });
-  });
-
-  it("a member reads who can check it", () => {
-    expect(reviewsErrorBody(forbidden(), "Fallback.", "member")).toEqual({ error: GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE });
     expect(GOOGLE_ACCESS_REFUSED_MEMBER_MESSAGE).toBe(
       "Google refused access to this location. The workspace owner can check that the connected Google account still manages it in Google Business Profile.",
     );
   });
 
-  it.each([
-    ["SERVICE_DISABLED", ["servicedisabled"]],
-    ["accessNotConfigured", ["accessnotconfigured"]],
-    ["quotaExceeded", ["quotaexceeded"]],
-    ["rateLimitExceeded", ["ratelimitexceeded"]],
-    ["RATE_LIMIT_EXCEEDED among others", ["forbidden", "ratelimitexceeded"]],
-  ])("%s: the try-later sentence for owner and member, and it is logged", (_label, reasons) => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(reviewsErrorBody(forbidden(reasons), "Fallback.", "owner")).toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
-    expect(reviewsErrorBody(forbidden(reasons), "Fallback.", "member")).toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("403"), { status: 403, reasons });
+  it("access, where no location is chosen yet (locations): about the account", () => {
+    const error = failing({ status: 403 });
+    expect(reviewsErrorBody(error, "Fallback.", "owner", { subject: "account" })).toEqual({
+      error:
+        "Google refused access to this Business Profile account. Check that the connected Google account still manages your business in Google Business Profile, or reconnect with an account that does.",
+    });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { subject: "account" })).toEqual({
+      error:
+        "Google refused access to this Business Profile account. The workspace owner can check that the connected Google account still manages your business in Google Business Profile.",
+    });
+    expect(googleAccessRefusedMessage("location", "owner")).toBe(GOOGLE_ACCESS_REFUSED_MESSAGE);
   });
 
-  it("a 401 still asks for a reconnect", () => {
-    expect(reviewsErrorBody(Object.assign(new Error("x"), { status: 401 }), "Fallback.", "owner")).toEqual({
-      error: GOOGLE_REFUSED_MESSAGE,
-      reconnect: true,
-    });
+  it("tryLater: the same plain sentence for owner and member", () => {
+    for (const error of [
+      failing({ status: 403, googleReasons: ["servicedisabled"] }),
+      failing({ status: 503 }),
+      failing({ status: 429 }),
+      new TypeError("fetch failed"),
+      failing({ code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" }),
+      failing({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 401, oauthError: "invalid_client" }),
+    ]) {
+      expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
+      expect(reviewsErrorBody(error, "Fallback.", "member")).toEqual({ error: GOOGLE_NOT_ANSWERING_MESSAGE });
+    }
+    expect(GOOGLE_NOT_ANSWERING_MESSAGE).toBe(
+      "Google Business Profile isn't answering for Vibe Socials right now. Try again later.",
+    );
+  });
+
+  it("other: the route's own sentence, never the error's text", () => {
+    expect(reviewsErrorBody(new SyntaxError("Unexpected token < in JSON"), "Fallback.", "owner")).toEqual({ error: "Fallback." });
+    expect(reviewsErrorBody(failing({ status: 404 }), "Fallback.", "member")).toEqual({ error: "Fallback." });
+  });
+
+  it("logs one line per failure", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    reviewsErrorBody(failing({ status: 403 }), "Fallback.", "owner", { where: "GET /api/reviews" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({ where: "GET /api/reviews", kind: "access", status: 403 });
+  });
+
+  it("asks for a reconnect exactly when a refresh failure flags the row (isTerminalRefreshFailure)", () => {
+    for (const status of [200, 400, 401, 403, 404, 429, 500, 503]) {
+      for (const oauthError of [undefined, "invalid_grant", "unauthorized_client", "invalid_client", "invalid_request"]) {
+        const error = failing({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status, ...(oauthError ? { oauthError } : {}) });
+        const body = reviewsErrorBody(error, "Fallback.", "owner");
+        expect(body.reconnect === true, `${status} ${oauthError}`).toBe(isTerminalRefreshFailure(status, oauthError));
+      }
+    }
   });
 });
 
@@ -490,68 +472,17 @@ describe("listGbpLocations", () => {
 
     await expect(listGbpLocations("tok")).rejects.toMatchObject({ status: 403 });
   });
-});
 
-// Review point 3: a reconnect only when the person's Google grant is the
-// problem; a refresh our own app setup broke cannot be fixed by reconnecting.
-describe("reviewsErrorBody: token refresh failures", () => {
-  const refresh = (status: number, oauthError?: string) =>
-    Object.assign(new Error(`Failed to refresh Google access token (status ${status})`), {
-      status,
-      code: "GOOGLE_TOKEN_REFRESH_FAILED",
-      ...(oauthError ? { oauthError } : {}),
-    });
+  it("carries Google's reasons when the accounts call fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn(async () =>
+      json({ error: { details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } }, 403),
+    ) as unknown as typeof fetch;
 
-  it("asks for a reconnect when Google refused the grant (invalid_grant)", () => {
-    expect(reviewsErrorBody(refresh(400, "invalid_grant"), "Fallback.", "owner")).toEqual({
-      error: GOOGLE_REFUSED_MESSAGE,
-      reconnect: true,
+    await expect(listGbpLocations("tok")).rejects.toMatchObject({
+      status: 403,
+      googleReasons: ["accesstokenscopeinsufficient"],
     });
   });
-
-  it("asks for a reconnect when there is no refresh token to use", () => {
-    const error = Object.assign(new Error("No refresh token"), { code: "GOOGLE_NO_REFRESH_TOKEN" });
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
-  });
-
-  // JJ3 lead review: the answer follows the rule that flags the row
-  // (connectionHealth.ts isTerminalRefreshFailure), so a flagged row never
-  // reads "not available" while Settings shows Reconnect.
-  it.each([
-    ["unauthorized_client (400)", refresh(400, "unauthorized_client")],
-    ["a 401 with no OAuth code", refresh(401)],
-    ["invalid_grant with no status", Object.assign(new Error("Failed"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", oauthError: "invalid_grant" })],
-  ])("asks for a reconnect for %s, as the row is flagged", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
-  });
-
-  it.each([
-    ["a 503", refresh(503)],
-    ["a 429", refresh(429)],
-    ["a 403 unauthorized_client (not flagged)", refresh(403, "unauthorized_client")],
-  ])("gives the route's own sentence for %s, never a reconnect", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: "Fallback." });
-  });
-
-  it.each([
-    ["invalid_client (401)", refresh(401, "invalid_client")],
-    ["invalid_client (400)", refresh(400, "invalid_client")],
-    ["missing OAuth credentials", Object.assign(new Error("Missing"), { code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" })],
-  ])("gives the not-available sentence for %s, never a reconnect", (_label, error) => {
-    expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: REVIEWS_UNAVAILABLE_MESSAGE });
-    expect(REVIEWS_UNAVAILABLE_MESSAGE).toBe("Google Reviews are not available right now. Try again later.");
-  });
-
-  it("asks for a reconnect exactly when the refresh flags the row (isTerminalRefreshFailure)", () => {
-    for (const status of [200, 400, 401, 403, 404, 429, 500, 503]) {
-      for (const oauthError of [undefined, "invalid_grant", "unauthorized_client", "invalid_client", "invalid_request"]) {
-        const body = reviewsErrorBody(refresh(status, oauthError), "Fallback.", "owner");
-        expect(body.reconnect === true, `${status} ${oauthError}`).toBe(isTerminalRefreshFailure(status, oauthError));
-      }
-    }
-  });
-
-  it("a 400 whose OAuth code was not passed on still reads as a refused grant (the common case)", () => {
-    expect(reviewsErrorBody(refresh(400), "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
-  });
 });
+
