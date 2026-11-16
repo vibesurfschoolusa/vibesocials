@@ -488,8 +488,9 @@ async function registerVideoUpload(
       hasParameters: parameters !== null,
       isHttps,
     });
+    // A 2xx is not a refusal (R22 platform-clients L3).
     throw codedError(
-      "Pinterest did not accept the video upload",
+      "Pinterest answered the start of the video upload without the details needed to send the video. Nothing was posted. Try again.",
       "PINTEREST_VIDEO_REGISTER_FAILED",
     );
   }

@@ -606,6 +606,52 @@ describe("youtubeClient — serialized token refresh", () => {
     expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
   });
 
+  // R22 platform-clients L1: as LinkedIn, TikTok and Pinterest, a token in its
+  // last 5 minutes is refreshed first, so a slow download never sends a dead one.
+  const expiringIn = (ms: number): PublishContext => {
+    const base = ytCtx();
+    return { ...base, socialConnection: { ...base.socialConnection, expiresAt: new Date(Date.now() + ms) } } as PublishContext;
+  };
+
+  it("publishVideo refreshes a token with 4 minutes left, through the lock", async () => {
+    stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+    refreshConnectionTokenMock.mockResolvedValueOnce({
+      id: "conn-yt",
+      platform: "youtube",
+      accessToken: "fresh-access-token",
+      refreshToken: "refresh-token",
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    const ctx = expiringIn(4 * 60_000);
+
+    await youtubeClient.publishVideo(ctx);
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(refreshConnectionTokenMock.mock.calls[0][0]).toBe(ctx.socialConnection);
+    const insertCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+      String(c[0]).includes(INSERT_URL_FRAGMENT),
+    );
+    expect(((insertCall?.[1] as RequestInit).headers as Record<string, string>).Authorization).toBe(
+      "Bearer fresh-access-token",
+    );
+  });
+
+  it("leaves a token with 10 minutes left alone", async () => {
+    stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+    await youtubeClient.publishVideo(expiringIn(10 * 60_000));
+
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed refresh of a token with 4 minutes left fails as an expired one does", async () => {
+    stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+    const failure = Object.assign(new Error("Reconnect YouTube"), { code: "RECONNECT_REQUIRED" });
+    refreshConnectionTokenMock.mockRejectedValueOnce(failure);
+
+    await expect(youtubeClient.publishVideo(expiringIn(4 * 60_000))).rejects.toBe(failure);
+  });
+
   it("refreshToken (the health sweep's hook) forwards its deadline to the Google refresh", async () => {
     const fetchMock = vi.fn<typeof fetch>(() =>
       Promise.resolve(
@@ -951,6 +997,10 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+      // R22 platform-clients L3: a 200 is shown as written, so it says what happened.
+      expect(publishErrorMessage("youtube", error!)).toBe(
+        "YouTube answered the start of the upload without the address to send the video to. Nothing was posted. Try again.",
+      );
       expect(mocks.save).not.toHaveBeenCalled();
       expect(upload.sessionCalls()).toHaveLength(0);
     });
@@ -1089,7 +1139,11 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       const { store } = fakeStore();
       stubUpload({ session: [reply(308, null, { Range: "garbage" })] });
 
-      expect((await failure(bigCtx(store)))?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+      const error = await failure(bigCtx(store));
+      expect(error?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+      expect(publishErrorMessage("youtube", error!)).toBe(
+        "YouTube's answer did not say how much of the video it had received. Nothing was posted. Try again.",
+      );
     });
 
     it("a chunk that is not the last but is answered 201 means the video exists: it is returned, not continued", async () => {
@@ -2063,15 +2117,15 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       const { store } = fakeStore();
       stubUpload({ session: accepts(6) });
 
-      await run(expiringIn(STEP + 60_000, { uploadState: store, deadline: NOW + STEP }));
+      await run(expiringIn(STEP + 10 * 60_000, { uploadState: store, deadline: NOW + STEP }));
 
       expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
     });
 
-    it("the multipart path keeps refreshing only a token that has already expired", async () => {
+    it("the multipart path refreshes only a token in its last 5 minutes, not one the step outlives", async () => {
       stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
 
-      await run(expiringIn(120_000, { deadline: NOW + STEP }, 4));
+      await run(expiringIn(6 * 60_000, { deadline: NOW + STEP }, 4));
 
       expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
     });

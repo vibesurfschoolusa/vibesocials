@@ -655,6 +655,60 @@ describe("googleBusinessProfileClient — serialized token refresh", () => {
     expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
   });
 
+  // R22 platform-clients L1: as LinkedIn, TikTok and Pinterest, a token in its
+  // last 5 minutes is refreshed first, so a slow store-code lookup never sends a dead one.
+  const expiringIn = (ms: number): PublishContext => {
+    const base = makeContext();
+    return { ...base, socialConnection: { ...base.socialConnection, expiresAt: new Date(Date.now() + ms) } } as PublishContext;
+  };
+  const posted = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" }))),
+      ),
+    );
+
+  it("publishVideo refreshes a token with 4 minutes left, through the lock", async () => {
+    posted();
+    refreshConnectionTokenMock.mockResolvedValueOnce({ ...makeContext().socialConnection, accessToken: "fresh" });
+    const ctx = expiringIn(4 * 60_000);
+
+    await googleBusinessProfileClient.publishVideo(ctx);
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(refreshConnectionTokenMock.mock.calls[0][0]).toBe(ctx.socialConnection);
+  });
+
+  it("publishText refreshes a token with 4 minutes left, through the lock", async () => {
+    workspaceFindUniqueMock.mockImplementation(async () => null);
+    posted();
+    refreshConnectionTokenMock.mockResolvedValueOnce({ ...makeContext().socialConnection, accessToken: "fresh" });
+    const { mediaItem: _m, mediaItems: _ms, ...rest } = expiringIn(4 * 60_000);
+    void _m;
+    void _ms;
+
+    await googleBusinessProfileClient.publishText!({ ...rest, caption: "Open today", baseCaption: "Open today" });
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a token with 10 minutes left alone", async () => {
+    posted();
+
+    await googleBusinessProfileClient.publishVideo(expiringIn(10 * 60_000));
+
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed refresh of a token with 4 minutes left fails as an expired one does", async () => {
+    posted();
+    const failure = Object.assign(new Error("Reconnect Google"), { code: "RECONNECT_REQUIRED" });
+    refreshConnectionTokenMock.mockRejectedValueOnce(failure);
+
+    await expect(googleBusinessProfileClient.publishVideo(expiringIn(4 * 60_000))).rejects.toBe(failure);
+  });
+
   it("refreshToken (the health sweep's hook) forwards its deadline to the Google refresh", async () => {
     updateMock.mockImplementation((args: { data: Record<string, unknown> }) =>
       Promise.resolve({ ...makeContext().socialConnection, ...args.data }),

@@ -1876,7 +1876,11 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("X_VIDEO_APPEND_FAILED");
-      expect(error?.message).toMatch(/segment 10/);
+      // R22 platform-clients L3: parts count from 1, and the text is plain.
+      expect(error?.message).toBe(
+        "X did not answer while part 11 of the video was uploading, even after a second try. Nothing was posted. Try again.",
+      );
+      expect(publishErrorMessage("x", error!)).toBe(error?.message);
       expect(x.appends()).toHaveLength(1);
       expect(x.finalizes()).toHaveLength(0);
       expect(x.tweets()).toHaveLength(0);
@@ -2073,6 +2077,9 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
       expect(first.saves().at(-1)).toEqual({ ...appendState(SEGMENTS).data, failedSegmentRetries: 1 });
       expect(error?.code).toBe("X_VIDEO_FINALIZE_FAILED");
       expect(error?.status).toBeUndefined();
+      expect(error?.message).toBe(
+        "X did not answer when the video upload was finishing, even after a second try. Nothing was posted. Try again.",
+      );
       expect(x.tweets()).toHaveLength(0);
     });
 
@@ -2114,8 +2121,40 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
 
       expect(failed).toMatchObject({ code: "X_VIDEO_INIT_FAILED", status: 503 });
       expect(missing?.code).toBe("X_VIDEO_INIT_FAILED");
+      expect(publishErrorMessage("x", missing!)).toBe(
+        "X did not start the video upload. Nothing was posted. Try again.",
+      );
       expect(serverError.mocks.save).not.toHaveBeenCalled();
       expect(noId.mocks.save).not.toHaveBeenCalled();
+    });
+  });
+
+  // R22 platform-clients L3: a 2xx X answered but the app could not use.
+  describe("an answer that could not be read", () => {
+    it("on INIT: plain text, X_VIDEO_INIT_FAILED, nothing saved", async () => {
+      const { store, mocks } = fakeStore();
+      stubX({ init: [reply(200, "not json")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("X_VIDEO_INIT_FAILED");
+      expect(publishErrorMessage("x", error!)).toBe(
+        "X's answer to the start of the video upload could not be read. Nothing was posted. Try again.",
+      );
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    it("on FINALIZE: plain text, X_VIDEO_FINALIZE_FAILED, no tweet", async () => {
+      const { store } = fakeStore(appendState(SEGMENTS));
+      const x = stubX({ finalize: [reply(200, "not json")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("X_VIDEO_FINALIZE_FAILED");
+      expect(publishErrorMessage("x", error!)).toBe(
+        "X's answer when the video upload finished could not be read. Nothing was posted. Try again.",
+      );
+      expect(x.tweets()).toHaveLength(0);
     });
   });
 
@@ -2945,7 +2984,11 @@ describe("xClient.publishText - a post without a photo", () => {
     const error = await failure();
 
     expect(error?.code).toBe("X_DUPLICATE_POST");
-    expect(error?.message).toBe("X refused this post because it is the same as a recent one. Change the text a little, then retry.");
+    // R22 publishing-flow L1: a run post can't be edited and Retry resends the saved
+    // text, so the steps named are ones the person can take.
+    expect(error?.message).toBe(
+      "X refused this post because it is the same as a recent one, so nothing was posted. Make a new post with different text, or delete the earlier post on X, then retry.",
+    );
   });
 
   it("refuses without a token, sending nothing", async () => {

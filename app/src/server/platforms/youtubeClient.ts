@@ -55,6 +55,9 @@ interface YouTubeVideoResource {
 /** YouTube's hard limit on a video title. */
 const YOUTUBE_TITLE_MAX_GRAPHEMES = 100;
 
+/** A token within 5 minutes of expiry is refreshed first, as LinkedIn, TikTok and Pinterest do. */
+const GOOGLE_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
 /**
  * Per-request timeouts, each further clamped to the time left in the step by
  * budgetedTimeout (2026-11-01 scale audit, step budget, Task 7).
@@ -386,7 +389,9 @@ function confirmedFromRange(response: Response, totalBytes: number): number {
   const match = /^(?:bytes=)?0-(\d+)$/i.exec(header.trim());
   const confirmed = match ? Number(match[1]) + 1 : Number.NaN;
   if (!Number.isSafeInteger(confirmed)) {
-    throw youtubeUploadError("YouTube answered with an upload position that could not be read.");
+    throw youtubeUploadError(
+      "YouTube's answer did not say how much of the video it had received. Nothing was posted. Try again.",
+    );
   }
   if (confirmed >= totalBytes) {
     throw publishUnconfirmedError("youtube", new Error("308 whose range covers the whole video"));
@@ -438,7 +443,10 @@ async function startUploadSession(args: {
 
   const location = response.headers.get("Location");
   if (!location || !isHttpsUrl(location)) {
-    throw youtubeUploadError("YouTube did not return a usable upload location.", response.status);
+    throw youtubeUploadError(
+      "YouTube answered the start of the upload without the address to send the video to. Nothing was posted. Try again.",
+      response.status,
+    );
   }
   return location;
 }
@@ -986,7 +994,10 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
   // A resumable step sends a request with the token for as long as its budget
   // lasts, so a token that expires before the deadline is refreshed first: one that
   // died mid-step would fail the upload with a 401 on a chunk.
-  const tokenMustLastUntil = resumable && deadline !== undefined ? Math.max(deadline, Date.now()) : Date.now();
+  // R22 platform-clients L1: as LinkedIn, TikTok and Pinterest, a token in its
+  // last 5 minutes is refreshed too, so a slow download never sends a dead one.
+  const soon = Date.now() + GOOGLE_TOKEN_EXPIRY_BUFFER_MS;
+  const tokenMustLastUntil = resumable && deadline !== undefined ? Math.max(deadline, soon) : soon;
   if (socialConnection.expiresAt && socialConnection.expiresAt < new Date(tokenMustLastUntil)) {
     console.log("[YouTube] Access token expired, refreshing...");
     socialConnection = await refreshConnectionToken(

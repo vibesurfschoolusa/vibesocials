@@ -662,8 +662,11 @@ export async function classifyXAccessError(
   return error;
 }
 
+// A run post can't be edited and Retry resends the saved text, so the steps
+// named are ones the person can take (R22 publishing-flow L1). Retry stays:
+// once the earlier post is deleted on X, it goes through.
 export const X_DUPLICATE_POST_MESSAGE =
-  "X refused this post because it is the same as a recent one. Change the text a little, then retry.";
+  "X refused this post because it is the same as a recent one, so nothing was posted. Make a new post with different text, or delete the earlier post on X, then retry.";
 
 /**
  * X refuses a post whose text matches a recent one: v2 answers 403 with "You are
@@ -1025,12 +1028,15 @@ async function attemptRequest(
   return { response };
 }
 
-/** The body of a 2xx answer, or a coded failure (never X's own text). */
-async function readJsonBody<T>(response: Response, code: string, message: string): Promise<T | null> {
+/**
+ * The body of a 2xx answer, or a coded failure (never X's own text) whose
+ * message is `unreadable`, a sentence shown as written (R22 platform-clients L3).
+ */
+async function readJsonBody<T>(response: Response, code: string, unreadable: string): Promise<T | null> {
   try {
     return (await response.json()) as T | null;
   } catch {
-    throw xUploadError(code, `${message}: X's answer could not be read`);
+    throw xUploadError(code, unreadable);
   }
 }
 
@@ -1109,11 +1115,11 @@ async function initChunkedMedia(args: {
   const result = await readJsonBody<{ media_id_string?: unknown; expires_after_secs?: unknown }>(
     response,
     "X_VIDEO_INIT_FAILED",
-    "X video upload initialization failed",
+    "X's answer to the start of the video upload could not be read. Nothing was posted. Try again.",
   );
   const mediaId = result?.media_id_string;
   if (typeof mediaId !== "string" || mediaId === "") {
-    throw xUploadError("X_VIDEO_INIT_FAILED", "X video upload initialization failed: X returned no media id");
+    throw xUploadError("X_VIDEO_INIT_FAILED", "X did not start the video upload. Nothing was posted. Try again.");
   }
   const said = result?.expires_after_secs;
   const expiresAfterSecs =
@@ -1367,7 +1373,7 @@ async function publishChunked(args: {
             return await retryOrFail(attempt.failure, () =>
               xUploadError(
                 "X_VIDEO_APPEND_FAILED",
-                `X video APPEND failed (segment ${index}): no usable answer after a retry`,
+                `X did not answer while part ${index + 1} of the video was uploading, even after a second try. Nothing was posted. Try again.`,
               ),
             );
           }
@@ -1400,7 +1406,7 @@ async function publishChunked(args: {
           return await retryOrFail(attempt.failure, () =>
             xUploadError(
               "X_VIDEO_FINALIZE_FAILED",
-              "X video upload finalization failed: no usable answer after a retry",
+              "X did not answer when the video upload was finishing, even after a second try. Nothing was posted. Try again.",
             ),
           );
         }
@@ -1411,7 +1417,7 @@ async function publishChunked(args: {
         const finalized = await readJsonBody<{ processing_info?: XProcessingInfo }>(
           attempt.response,
           "X_VIDEO_FINALIZE_FAILED",
-          "X video upload finalization failed",
+          "X's answer when the video upload finished could not be read. Nothing was posted. Try again.",
         );
         const verdict = judgeProcessing(finalized?.processing_info);
         console.log("[X OAuth 1.0a] Video upload finalized", {

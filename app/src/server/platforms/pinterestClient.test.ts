@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { publishErrorMessage } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
@@ -601,6 +602,21 @@ describe("pinterestClient.publishVideo: a video", () => {
 
     expect(await codeOf(pinterestClient.publishVideo(ctx))).toBe("PINTEREST_VIDEO_REGISTER_FAILED");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // R22 platform-clients L3: a 2xx is not a refusal, and the text is shown as written.
+  it("a 2xx registration answer it can't use says so plainly", async () => {
+    fetchMock.mockResolvedValueOnce(json(201, { ...REGISTERED, media_id: undefined }));
+
+    const error = await pinterestClient.publishVideo(makeContext({ uploadState: makeStore() }, VIDEO)).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string },
+    );
+
+    expect(error?.code).toBe("PINTEREST_VIDEO_REGISTER_FAILED");
+    expect(publishErrorMessage("pinterest", error!)).toBe(
+      "Pinterest answered the start of the video upload without the details needed to send the video. Nothing was posted. Try again.",
+    );
   });
 
   it("a rejected token while registering flags the connection", async () => {

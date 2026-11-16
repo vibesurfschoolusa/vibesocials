@@ -41,6 +41,15 @@ import type {
 // or higher". Google's 400 doesn't say which part it refused: a photo post's
 // may also be its caption, button or event/offer details, so the text names
 // them last.
+// R22 platform-clients L1: a token within 5 minutes of expiry is refreshed
+// first, as LinkedIn, TikTok and Pinterest do, so a slow store-code lookup
+// never sends a dead one (a 401 would read "Reconnect").
+const GOOGLE_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
+function tokenExpiresSoon(connection: SocialConnection): boolean {
+  return connection.expiresAt !== null && connection.expiresAt.getTime() - Date.now() <= GOOGLE_TOKEN_EXPIRY_BUFFER_MS;
+}
+
 const GBP_PHOTO_REFUSED_TEXT =
   "Google did not accept this post, so nothing was posted. Check the photo meets Google's rules: JPG or PNG, between 10 KB and 5 MB, at least 250 by 250 pixels. If it does, check the caption, the button link and any event or offer details.";
 const GBP_VIDEO_REFUSED_TEXT =
@@ -57,8 +66,8 @@ export const googleBusinessProfileClient: PlatformClient = {
     // The refresh runs under the per-connection lock (2026-11-01 scale audit,
     // jobs, token refresh), so a concurrent publish or the health sweep never
     // refreshes the same connection at once.
-    if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
-      console.log("[GBP] Access token expired, refreshing...");
+    if (tokenExpiresSoon(socialConnection)) {
+      console.log("[GBP] Access token expired or about to, refreshing...");
       socialConnection = await refreshConnectionToken(
         socialConnection,
         (current) => refreshGoogleToken(current, { deadline }),
@@ -187,9 +196,9 @@ export const googleBusinessProfileClient: PlatformClient = {
     let { socialConnection } = ctx;
     const { deadline } = ctx;
 
-    // As publishVideo: refresh under the per-connection lock when expired.
-    if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
-      console.log("[GBP] Access token expired, refreshing...");
+    // As publishVideo: refresh under the per-connection lock when expired or about to.
+    if (tokenExpiresSoon(socialConnection)) {
+      console.log("[GBP] Access token expired or about to, refreshing...");
       socialConnection = await refreshConnectionToken(
         socialConnection,
         (current) => refreshGoogleToken(current, { deadline }),
