@@ -892,6 +892,18 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     setDeleteTarget(item);
   }, []);
 
+  // A deleted file, or one already gone (R32 pages L2), leaves the loaded pages
+  // and the Add many choice; nothing is read again. nextCursor stays valid even
+  // if it was the last loaded row (see handleLoadMore).
+  const forgetItem = useCallback((id: string) => {
+    setItems((prev) => removeMediaItem(prev, id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
   // Passed as ConfirmDialog's `onConfirm`: it awaits this (showing a busy
   // state) and only closes the dialog if it resolves without throwing — so
   // every failure path below throws AFTER toasting, which keeps the dialog
@@ -915,23 +927,17 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       // server's message already states the reason, so it's shown as-is.
       toast.error(mediaDeleteFailureText(response.status, data));
       if (response.status === 404) {
-        // R31: the file is gone already: the dialog closes and the list is read again.
-        void fetchItems();
+        // R31 / R32 pages L2: the file is gone already: the dialog closes and
+        // the file leaves the list, as a delete does.
+        forgetItem(target.id);
         return;
       }
       throw new ConfirmFailureShown("DELETE_FAILED");
     }
 
-    // No re-fetch of the list — just remove it client-side. nextCursor stays
-    // valid even if `target` was the last loaded row (see handleLoadMore).
-    setItems((prev) => removeMediaItem(prev, target.id));
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(target.id);
-      return next;
-    });
+    forgetItem(target.id);
     toast.success("Media deleted.");
-  }, [deleteTarget, fetchItems, toast, workspaceId]);
+  }, [deleteTarget, forgetItem, toast, workspaceId]);
 
   return (
     <div className="space-y-8">

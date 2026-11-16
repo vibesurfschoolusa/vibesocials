@@ -208,6 +208,12 @@ describe("Media: a lost answer may have gone through", () => {
     // R31 pages L2: with the workspace the library was drawn for (a DELETE has no body).
     expect(remove).toMatch(/await fetchOrNoAnswer\(withWorkspaceId\(`\/api\/media\/\$\{target\.id\}`, workspaceId\), \{ method: "DELETE" \}\)/);
     expect(remove).toMatch(/toast\.error\(MEDIA_MESSAGES\.deleteLost\)/);
-    expect(remove).toMatch(/if \(response\.status === 404\) \{\s+(\/\/[^\n]*\n\s+)*void fetchItems\(\);\s+return;\s+\}/);
+    // R32 pages L2: a file already gone leaves the list and the Add many choice, as a delete does; no reload.
+    expect(remove).toMatch(/if \(response\.status === 404\) \{\s+(\/\/[^\n]*\n\s+)*forgetItem\(target\.id\);\s+return;\s+\}/);
+    expect(remove).not.toContain("fetchItems");
+    expect(remove.match(/forgetItem\(target\.id\)/g)).toHaveLength(2);
+    const forget = source.slice(source.indexOf("const forgetItem"), source.indexOf("const handleConfirmDelete"));
+    expect(forget).toMatch(/setItems\(\(prev\) => removeMediaItem\(prev, id\)\)/);
+    expect(forget).toMatch(/next\.delete\(id\)/);
   });
 });
