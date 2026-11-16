@@ -19,8 +19,10 @@ export const REVIEW_POST_LOCKED_MESSAGE = "This post can no longer be changed he
 /**
  * R32 client-journey L1: the locked sentence once the list was read again
  * (the post published, was cancelled or moved out of reach meanwhile).
+ * The list also holds change requests waiting as drafts, so it is not called
+ * "the posts still scheduled".
  */
-export const REVIEW_POST_LOCKED_RELOADED_MESSAGE = `${REVIEW_POST_LOCKED_MESSAGE} The list below shows the posts still scheduled.`;
+export const REVIEW_POST_LOCKED_RELOADED_MESSAGE = `${REVIEW_POST_LOCKED_MESSAGE} The list below is up to date.`;
 
 /** An approval of a version the client did not see: the post was edited since the page loaded. */
 export const REVIEW_POST_CHANGED_MESSAGE =

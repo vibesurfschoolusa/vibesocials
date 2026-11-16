@@ -149,7 +149,7 @@ describe("reviewDecisionOutcome", () => {
       message: REVIEW_POST_LOCKED_RELOADED_MESSAGE,
     });
     expect(REVIEW_POST_LOCKED_RELOADED_MESSAGE).toBe(
-      "This post can no longer be changed here. The list below shows the posts still scheduled.",
+      "This post can no longer be changed here. The list below is up to date.",
     );
   });
 

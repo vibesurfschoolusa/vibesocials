@@ -108,6 +108,14 @@ export function replaceDescription(link: ConnectLinkDto | null, available: reado
   return `${base} It offers ${names(kept)} only: ${names(dropped)} can't be connected on this site now.`;
 }
 
+/** The link's platforms the site no longer offers, in one line, or null. */
+export function droppedPlatformsLine(link: ConnectLinkDto, available: readonly Platform[]): string | null {
+  const dropped = link.platforms.filter((platform) => !available.includes(platform));
+  if (dropped.length === 0) return null;
+  const names = dropped.map((platform) => PLATFORM_LABELS[platform]).join(", ");
+  return `No longer offered: ${names}. This site can't connect ${dropped.length === 1 ? "it" : "them"} now.`;
+}
+
 /** With nothing left to offer, the link can only be turned off. */
 export const REPLACE_NONE_OFFERED_MESSAGE =
   "None of the platforms this link offers can be connected on this site now, so it can't be replaced. Press Turn off to stop it.";
@@ -182,9 +190,15 @@ export function ConnectLinkSectionView({
                 This link can&apos;t be shown again. Replace it to get a new one.
               </p>
             ) : null}
-            <p className="text-sm text-muted-foreground">
-              Offers: {link.platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ")}
-            </p>
+            {/* R32 lead review: what the link really offers now, as /c shows it. */}
+            {replacePlatforms(link, available).length > 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Offers: {replacePlatforms(link, available).map((platform) => PLATFORM_LABELS[platform]).join(", ")}
+              </p>
+            ) : null}
+            {droppedPlatformsLine(link, available) ? (
+              <p className="text-sm text-muted-foreground">{droppedPlatformsLine(link, available)}</p>
+            ) : null}
             {workspaceBlocked || pausedByPlan || replacePlatforms(link, available).length > 0 ? null : (
               <p className="text-sm text-muted-foreground">{REPLACE_NONE_OFFERED_MESSAGE}</p>
             )}

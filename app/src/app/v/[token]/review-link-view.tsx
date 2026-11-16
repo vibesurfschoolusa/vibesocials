@@ -75,6 +75,26 @@ export function cardLineAfterReload(line: CardLine, message: string, reloaded: b
   return reloaded ? { text: message, clearAfter: null } : line;
 }
 
+/** R32 lead review: on a kept card whose post the reloaded list no longer has. */
+export const REVIEW_POST_GONE_MESSAGE = "This post can no longer be changed here: it was published, cancelled or moved.";
+
+/**
+ * The cards to show: the list as loaded, plus each kept card (one whose
+ * refusal reloaded the list) that the list no longer has, marked gone, in
+ * time order (no time last), so its typed note, line and focus stay.
+ */
+export function cardsShown(posts: ReviewPostDTO[], kept: ReviewPostDTO[]): { post: ReviewPostDTO; gone: boolean }[] {
+  const listed = new Set(posts.map((post) => post.id));
+  const at = (post: ReviewPostDTO) => (post.scheduledFor ? Date.parse(post.scheduledFor) : Number.POSITIVE_INFINITY);
+  const cards = posts.map((post) => ({ post, gone: false }));
+  for (const post of kept) {
+    if (listed.has(post.id)) continue;
+    const index = cards.findIndex((card) => at(card.post) > at(post));
+    cards.splice(index === -1 ? cards.length : index, 0, { post, gone: true });
+  }
+  return cards;
+}
+
 /** The line as shown, given the count of list reloads that worked. */
 export function shownCardLine(line: CardLine | null, reloads: number): string | null {
   if (!line) return null;
@@ -163,21 +183,36 @@ export function ReviewPostCard({
   onDecided,
   onStale,
   reloads,
+  gone = false,
+  onDismiss,
 }: {
   post: ReviewPostDTO;
   token: string;
   /** Saved: update this card from the answer (state, new version, stored note). */
   onDecided: (patch: Partial<ReviewPostDTO>) => void;
-  /** The post changed since the page loaded: show why above the list and reload it; true when it reloaded. */
-  onStale: (message: string) => Promise<boolean>;
+  /**
+   * The post changed since the page loaded: show why above the list and reload
+   * it; true when it reloaded. `keep`: the card to keep, shown gone, if the
+   * reloaded list no longer has it.
+   */
+  onStale: (message: string, keep?: ReviewPostDTO) => Promise<boolean>;
   /** How many list reloads have worked (shownCardLine). */
   reloads: number;
+  /** R32 lead review: kept after the reloaded list dropped its post (cardsShown). */
+  gone?: boolean;
+  /** Removes a gone card. */
+  onDismiss?: () => void;
 }) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<CardLine | null>(null);
-  const shownError = shownCardLine(error, reloads);
+  const shownError = gone ? REVIEW_POST_GONE_MESSAGE : shownCardLine(error, reloads);
+  const lineRef = useRef<HTMLParagraphElement>(null);
+  // The card the person acted on just lost its post: the line says why, and takes focus.
+  useEffect(() => {
+    if (gone) lineRef.current?.focus();
+  }, [gone]);
   const stateRef = useRef<HTMLParagraphElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
@@ -226,7 +261,7 @@ export function ReviewPostCard({
       const start = cardRefusalStart(outcome, reloads);
       setError(start.line);
       if (start.reload) {
-        void onStale(outcome.message).then((reloaded) =>
+        void onStale(outcome.message, post).then((reloaded) =>
           setError((current) => (current === start.line ? cardLineAfterReload(start.line, outcome.message, reloaded) : current)),
         );
       }
@@ -315,12 +350,14 @@ export function ReviewPostCard({
                 required
                 aria-invalid={noteTooLong || undefined}
                 disabled={busy}
+                // A gone card keeps the note to read and copy.
+                readOnly={gone}
               />
               <p className={noteTooLong ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
                 {noteLength}/{REVIEW_NOTE_MAX}. {changeNoteHint(post)}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={noteTooShort || noteTooLong}>
+                <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={gone || noteTooShort || noteTooLong}>
                   Send
                 </Button>
                 <Button
@@ -345,7 +382,7 @@ export function ReviewPostCard({
                 size="lg"
                 className="w-full sm:w-auto"
                 loading={busy}
-                disabled={post.state === "approved"}
+                disabled={gone || post.state === "approved"}
                 onClick={(event) => void decide({ decision: "approve", version: post.version }, event.currentTarget)}
               >
                 Looks good
@@ -356,7 +393,7 @@ export function ReviewPostCard({
                 className="w-full sm:w-auto"
                 variant="outline"
                 ref={askRef}
-                disabled={busy}
+                disabled={gone || busy}
                 onClick={(event) => {
                   // R27 MM3: the buttons are replaced by the form; focus goes to its note box.
                   focusAfterPress(event.currentTarget, () => noteRef.current);
@@ -370,9 +407,14 @@ export function ReviewPostCard({
         ) : null}
 
         {shownError ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p ref={lineRef} role="alert" tabIndex={-1} className="text-sm text-destructive outline-none">
             {shownError}
           </p>
+        ) : null}
+        {gone ? (
+          <Button type="button" variant="outline" size="md" onClick={onDismiss}>
+            Dismiss
+          </Button>
         ) : null}
       </div>
     </li>
@@ -388,6 +430,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   // List reloads that worked; a card's line set before one can go (shownCardLine).
   const [reloads, setReloads] = useState(0);
+  // R32 lead review: cards whose refusal reloaded the list; shown gone if it dropped them.
+  const [kept, setKept] = useState<ReviewPostDTO[]>([]);
 
   /** True when the list was read again. */
   const load = useCallback(async (): Promise<boolean> => {
@@ -426,13 +470,17 @@ export function ReviewLinkView({ token }: { token: string }) {
   }, []);
 
   const stale = useCallback(
-    (message: string) =>
-      load().then((reloaded) => {
+    (message: string, keep?: ReviewPostDTO) => {
+      // Kept before the reload, so the card is never unmounted between the two renders.
+      if (keep) setKept((current) => [...current.filter((p) => p.id !== keep.id), keep]);
+      return load().then((reloaded) => {
         setNotice(staleNotice(message, reloaded));
         return reloaded;
-      }),
+      });
+    },
     [load],
   );
+  const cards = posts === null ? [] : cardsShown(posts, kept);
 
   // R30 PP2: one return, so both status lines are on the page from the first
   // render and only their text changes.
@@ -465,11 +513,11 @@ export function ReviewLinkView({ token }: { token: string }) {
         <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
           {notice}
         </p>
-        {posts === null ? null : posts.length === 0 ? (
+        {posts === null ? null : cards.length === 0 ? (
           <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
         ) : (
           <ul className="space-y-4">
-            {posts.map((post) => (
+            {cards.map(({ post, gone }) => (
               // Keyed on the id only, so a card keeps its sentence across a reload.
               <ReviewPostCard
                 key={post.id}
@@ -478,6 +526,8 @@ export function ReviewLinkView({ token }: { token: string }) {
                 onDecided={(change) => patch(post.id, change)}
                 onStale={stale}
                 reloads={reloads}
+                gone={gone}
+                onDismiss={() => setKept((current) => current.filter((p) => p.id !== post.id))}
               />
             ))}
           </ul>

@@ -319,3 +319,33 @@ describe("Client connect link: Replace when the site offers fewer platforms", ()
     expect(source).not.toContain("makeLink(link?.platforms ?? [])");
   });
 });
+
+// R32 lead review: "Offers:" lists what the link really offers now, as /c does;
+// a platform the site dropped is named on a line of its own.
+describe("Client connect link: Offers lists only what the site still offers", () => {
+  const LINK = {
+    url: "https://vibesocials.example/c/abc",
+    platforms: ["tiktok", "instagram"] as ConnectLinkViewProps["available"],
+    expiresAt: "2026-11-25T08:00:00.000Z",
+    lastUsedAt: null,
+    createdAt: "2026-11-11T08:00:00.000Z",
+  };
+
+  it("all still offered: one Offers line", () => {
+    const html = view({ link: LINK, available: ["tiktok", "instagram"] });
+    expect(html).toContain("Offers: TikTok, Instagram");
+    expect(html).not.toContain("No longer offered");
+  });
+
+  it("some dropped: Offers names the rest, and one line names the dropped ones", () => {
+    const html = view({ link: LINK, available: ["instagram"] });
+    expect(html).toContain("Offers: Instagram<");
+    expect(html).toContain("No longer offered: TikTok. This site can&#x27;t connect it now.");
+  });
+
+  it("none left: no empty Offers line, the dropped line and the Turn off sentence", () => {
+    const html = view({ link: LINK, available: [] });
+    expect(html).not.toContain("Offers:");
+    expect(html).toContain("No longer offered: TikTok, Instagram. This site can&#x27;t connect them now.");
+  });
+});

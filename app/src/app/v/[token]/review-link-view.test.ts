@@ -21,6 +21,8 @@ import {
   alreadyStood,
   cardLineAfterReload,
   cardRefusalStart,
+  cardsShown,
+  REVIEW_POST_GONE_MESSAGE,
   changeNoteHint,
   shownCardLine,
   staleNotice,
@@ -290,7 +292,7 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     const decide = source.slice(source.indexOf("async function decide("), source.indexOf("return (", source.indexOf("async function decide(")));
-    expect(decide).toMatch(/const start = cardRefusalStart\(outcome, reloads\);\s*setError\(start\.line\);\s*if \(start\.reload\) \{\s*void onStale\(outcome\.message\)\.then\(/);
+    expect(decide).toMatch(/const start = cardRefusalStart\(outcome, reloads\);\s*setError\(start\.line\);\s*if \(start\.reload\) \{\s*void onStale\(outcome\.message, post\)\.then\(/);
     expect(decide).not.toMatch(/await onStale|await cardRefusal/);
     expect(source).toContain("shownCardLine(error, reloads)");
   });
@@ -319,7 +321,7 @@ describe("ReviewPostCard: a post that can no longer be changed here", () => {
   it("the reload worked: the card and the notice say what the list now shows", () => {
     const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, true);
     expect(shownCardLine(line, 1)).toBe(
-      "This post can no longer be changed here. The list below shows the posts still scheduled.",
+      "This post can no longer be changed here. The list below is up to date.",
     );
     expect(staleNotice(locked.message, true)).toBe(shownCardLine(line, 1));
   });
@@ -331,5 +333,62 @@ describe("ReviewPostCard: a post that can no longer be changed here", () => {
     const notice = staleNotice(locked.message, false);
     expect(notice).toBe(REVIEW_POST_LOCKED_MESSAGE);
     expect(`${REFRESH_FAILED_MESSAGE} ${notice} ${card}`.match(/reload/gi)).toHaveLength(1);
+  });
+});
+
+// R32 lead review: a card the person acted on that the reload no longer lists
+// (published, cancelled or moved) stays, shown as gone, so its typed note,
+// focus and line are not lost; Dismiss removes it.
+describe("ReviewPostCard: kept after the reload when the post left the list", () => {
+  const a = post({ id: "a", scheduledFor: "2026-11-20T10:00:00.000Z" });
+  const b = post({ id: "b", scheduledFor: "2026-11-21T10:00:00.000Z" });
+  const c = post({ id: "c", scheduledFor: "2026-11-22T10:00:00.000Z" });
+
+  it("a kept card shows as gone only when the list no longer has it, in its time order", () => {
+    expect(cardsShown([a, c], [b])).toEqual([
+      { post: a, gone: false },
+      { post: b, gone: true },
+      { post: c, gone: false },
+    ]);
+    expect(cardsShown([a, b], [b])).toEqual([
+      { post: a, gone: false },
+      { post: b, gone: false },
+    ]);
+    expect(cardsShown([], [b])).toEqual([{ post: b, gone: true }]);
+    expect(cardsShown([a], [post({ id: "n", scheduledFor: null })])).toEqual([
+      { post: a, gone: false },
+      { post: post({ id: "n", scheduledFor: null }), gone: true },
+    ]);
+  });
+
+  it("a gone card says so, disables Looks good and Ask for a change, and offers Dismiss", () => {
+    expect(REVIEW_POST_GONE_MESSAGE).toBe(
+      "This post can no longer be changed here: it was published, cancelled or moved.",
+    );
+    const html = renderToStaticMarkup(
+      createElement(
+        "ul",
+        null,
+        createElement(ReviewPostCard, { post: a, token: "t", onDecided: () => {}, onStale: async () => true, reloads: 0, gone: true, onDismiss: () => {} }),
+      ),
+    );
+    expect(html).toContain(REVIEW_POST_GONE_MESSAGE);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Looks good<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Ask for a change<\/button>/);
+    expect(html).toContain(">Dismiss</button>");
+    expect(render(a)).not.toContain("Dismiss");
+  });
+
+  it("the card keeps its note readable and copyable, disables Send, and takes focus to its line", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/readOnly=\{gone\}/);
+    expect(source).toMatch(/disabled=\{gone \|\| noteTooShort \|\| noteTooLong\}/);
+    expect(source).toMatch(/if \(gone\) lineRef\.current\?\.focus\(\);/);
+    // Only a refusal that reloads keeps its card; the view merges with cardsShown.
+    expect(source).toContain("void onStale(outcome.message, post).then(");
+    expect(source).toContain("cardsShown(posts, kept)");
+    expect(source).toMatch(/setKept\(\(current\) => \[\.\.\.current\.filter\(\(p\) => p\.id !== keep\.id\), keep\]\)/);
   });
 });
