@@ -952,3 +952,36 @@ describe("pending/[id]: a choice that is gone", () => {
     expect(connectionFindUniqueMock).not.toHaveBeenCalled();
   });
 });
+
+// R31 follow-up: the load error said only "Failed to load the accounts."
+describe("GET /api/connections/pending/[id]: a load that fails", () => {
+  const load = (platform?: string) =>
+    GET(new Request(`http://localhost/api/connections/pending/pending-1${platform ? `?platform=${platform}` : ""}`), ctx());
+
+  beforeEach(() => {
+    findUniqueMock.mockRejectedValue(new Error("db down"));
+    connectionFindUniqueMock.mockReset();
+  });
+
+  it("names the button the platform's card shows when it can be read", async () => {
+    connectionFindUniqueMock.mockResolvedValue({ platform: "facebook_page", needsReconnect: true, expiresAt: null, refreshToken: null });
+    const response = await load("facebook_page");
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't load your accounts. Reload the page to try again, or close this and press Reconnect on Facebook Page.",
+    });
+    connectionFindUniqueMock.mockResolvedValue(null);
+    await expect((await load("facebook_page")).json()).resolves.toEqual({
+      error: "Couldn't load your accounts. Reload the page to try again, or close this and press Connect on Facebook Page.",
+    });
+  });
+
+  it("no platform, a working card, or a read that fails too: names no button", async () => {
+    const plain = { error: "Couldn't load your accounts. Reload the page to try again." };
+    await expect((await load()).json()).resolves.toEqual(plain);
+    connectionFindUniqueMock.mockResolvedValue({ platform: "instagram", needsReconnect: false, expiresAt: null, refreshToken: null });
+    await expect((await load("instagram")).json()).resolves.toEqual(plain);
+    connectionFindUniqueMock.mockRejectedValue(new Error("db down"));
+    await expect((await load("instagram")).json()).resolves.toEqual(plain);
+  });
+});

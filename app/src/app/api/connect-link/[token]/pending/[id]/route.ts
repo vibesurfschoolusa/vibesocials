@@ -116,7 +116,8 @@ export async function GET(request: Request, context: RouteContext) {
     );
   } catch (error) {
     logger.error("[GET /api/connect-link/pending] Unexpected error", { error: errorKind(error) });
-    return NextResponse.json({ error: "Failed to load the accounts." }, { status: 500 });
+    // R31 follow-up: reloading reads the same choice again; the rows below show each platform's own button.
+    return NextResponse.json({ error: "The accounts couldn't be loaded. Reload this page to try again." }, { status: 500 });
   }
 }
 

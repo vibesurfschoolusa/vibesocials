@@ -152,3 +152,29 @@ describe("login page for a signed-in visitor", () => {
     expect(html).toContain('href="/register?callbackUrl=%2Fjoin%2Fabc"');
   });
 });
+
+// Coordinator (R31 follow-up): next-auth lands here as ?csrf=true when its own
+// csrf read failed (Google's second read, or any other path), with no sentence.
+describe("login page after a refused csrf token", () => {
+  it("says signing in didn't finish", () => {
+    search.value = "csrf=true&callbackUrl=%2Fqueue";
+    expect(text(render())).toContain("Signing in didn't finish. Press the button again.");
+  });
+
+  it("says nothing on a plain visit", () => {
+    expect(text(render())).not.toContain("Signing in didn't finish");
+  });
+
+  it("drops the param from the address once shown, keeping the rest", async () => {
+    const { addressWithoutCsrf } = await import("./signInWithPassword");
+    expect(addressWithoutCsrf("/login", "?csrf=true&callbackUrl=%2Fqueue")).toBe("/login?callbackUrl=%2Fqueue");
+    expect(addressWithoutCsrf("/login", "?csrf=true")).toBe("/login");
+    expect(addressWithoutCsrf("/login", "?callbackUrl=%2Fqueue")).toBeNull();
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
+    // Shown from state read once, so dropping the param keeps the sentence and what was typed.
+    expect(source).toMatch(/useState\(\(\) => searchParams\.get\("csrf"\) === "true"\)/);
+    expect(source).toMatch(/window\.history\.replaceState\(window\.history\.state, "", next\)/);
+  });
+});

@@ -57,7 +57,7 @@ type LoadState =
   | { status: "loading" }
   | { status: "ready"; platform: ChoosablePlatform; candidates: Candidate[] }
   | { status: "expired"; message: string }
-  | { status: "error" };
+  | { status: "error"; message: string };
 
 const noSubscription = () => () => {};
 
@@ -81,6 +81,15 @@ export function pendingGoneText(data: { error?: unknown } | null): string {
   return typeof data?.error === "string" && data.error
     ? data.error
     : "This choice has ended: it expired, or an account was already chosen. Close this to see your connections.";
+}
+
+/**
+ * R31 follow-up: a load that failed. Closing would cancel the choice, so the
+ * step is a reload (the same choice is read again); the route may add its
+ * card's button.
+ */
+export function pendingLoadFailedText(data: { error?: unknown } | null): string {
+  return typeof data?.error === "string" && data.error ? data.error : "Couldn't load your accounts. Reload the page to try again.";
 }
 
 /** What a refused or unreadable Connect answer says. */
@@ -139,10 +148,10 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
           rememberChoicePlatform(pendingId, data.platform);
           setLoad({ status: "ready", platform: data.platform, candidates: data.candidates });
         } else {
-          setLoad({ status: "error" });
+          setLoad({ status: "error", message: pendingLoadFailedText(data) });
         }
       } catch {
-        if (!cancelled) setLoad({ status: "error" });
+        if (!cancelled) setLoad({ status: "error", message: pendingLoadFailedText(null) });
       }
     })();
     return () => {
@@ -240,7 +249,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
         ) : load.status === "expired" ? (
           <Alert variant="warning">{load.message}</Alert>
         ) : load.status === "error" ? (
-          <Alert variant="danger">Couldn&apos;t load your accounts. Close this and reload the page to try again.</Alert>
+          <Alert variant="danger">{load.message}</Alert>
         ) : (
           <fieldset className="flex flex-col gap-2" disabled={busy !== null}>
             <legend className="sr-only">{title}</legend>

@@ -122,3 +122,22 @@ describe("PendingConnectionDialog: focus when Connect finds the choice gone", ()
     expect(source).toMatch(/<Button ref=\{closeRef\} variant="outline" onClick=\{handleClose\}/);
   });
 });
+
+// R31 follow-up: a failed load showed a fixed sentence whose "Close this"
+// cancelled the choice before the reload it advised.
+describe("PendingConnectionDialog: a load that fails", () => {
+  it("shows the route's sentence, else one that keeps the choice", async () => {
+    const { pendingLoadFailedText } = await import("./pending-connection-dialog");
+    expect(pendingLoadFailedText({ error: "Couldn't load your accounts. Reload the page to try again, or close this and press Reconnect on Facebook Page." })).toBe(
+      "Couldn't load your accounts. Reload the page to try again, or close this and press Reconnect on Facebook Page.",
+    );
+    for (const data of [null, {}, { error: 5 }]) {
+      expect(pendingLoadFailedText(data)).toBe("Couldn't load your accounts. Reload the page to try again.");
+    }
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./pending-connection-dialog.tsx", import.meta.url)), "utf8");
+    expect(source).not.toContain("Close this and reload the page");
+    expect(source).toMatch(/<Alert variant="danger">\{load\.message\}<\/Alert>/);
+  });
+});

@@ -94,6 +94,35 @@ async function notFound(request: Request, id: string, owner: { workspaceId: stri
   );
 }
 
+/** The sign-in button `platform`'s card shows in `workspaceId` (shownControl), or null for a working card. Throws on a failed read. */
+async function cardButton(workspaceId: string, platform: Platform): Promise<"Connect" | "Reconnect" | null> {
+  const row = await prisma.socialConnection.findUnique({
+    where: { workspaceId_platform: { workspaceId, platform } },
+    select: CONNECTION_EXPIRY_SELECT,
+  });
+  return signInButton(shownControl(row ? { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row) } : null));
+}
+
+/**
+ * R31 follow-up: the load failed. Reloading reads the same choice again; when
+ * the dialog named the platform and its card can be read, starting over with
+ * the card's button is the other way.
+ */
+async function loadFailedText(request: Request, workspaceId: string): Promise<string> {
+  const plain = "Couldn't load your accounts. Reload the page to try again.";
+  const hint = new URL(request.url).searchParams.get("platform");
+  const platform = CHOOSABLE.find((choosable) => choosable === hint);
+  if (!platform) return plain;
+  try {
+    const button = await cardButton(workspaceId, platform);
+    return button
+      ? `Couldn't load your accounts. Reload the page to try again, or close this and press ${button} on ${PLATFORM_LABELS[platform]}.`
+      : plain;
+  } catch {
+    return plain;
+  }
+}
+
 /**
  * R31 (platform-clients L1): what to press on the choice's platform card in
  * its own workspace, read there only while this user is still an owner
@@ -110,13 +139,7 @@ async function otherWorkspaceStep(workspaceId: string, userId: string, platform:
       select: { role: true },
     });
     if (member?.role !== "owner") return noButton;
-    const row = await prisma.socialConnection.findUnique({
-      where: { workspaceId_platform: { workspaceId, platform } },
-      select: CONNECTION_EXPIRY_SELECT,
-    });
-    const button = signInButton(
-      shownControl(row ? { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row) } : null),
-    );
+    const button = await cardButton(workspaceId, platform);
     return button ? `press ${button} on ${label} there` : noButton;
   } catch (error) {
     logger.warn("[pending/[id]] Couldn't read the other workspace's card (ignored)", { error: errorKind(error) });
@@ -163,7 +186,7 @@ export async function GET(request: Request, { params }: PendingRouteContext) {
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return NextResponse.json({ error: "Failed to load the accounts." }, { status: 500 });
+    return NextResponse.json({ error: await loadFailedText(request, contextOrError.workspace.id) }, { status: 500 });
   }
 }
 

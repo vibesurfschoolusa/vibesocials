@@ -161,6 +161,16 @@ describe("GET: the accounts to choose from", () => {
   });
 });
 
+// R31 follow-up: the load error said only "Failed to load the accounts."
+describe("GET: a load that fails", () => {
+  it("is a 500 that says to reload, naming no button", async () => {
+    h.pendingFind.mockRejectedValue(new Error("db down"));
+    const res = await GET(request("GET"), context());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "The accounts couldn't be loaded. Reload this page to try again." });
+  });
+});
+
 describe("POST: the visitor's choice", () => {
   it("connects the chosen account as the creator's, deletes the choice, records the use, ends the flow", async () => {
     const res = await POST(request("POST", { candidateId: "page-2" }), context());
