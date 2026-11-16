@@ -151,7 +151,7 @@ describe("GET /api/media/[id]", () => {
     findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 item
     const response = await GET(dummyRequest, ctx("foreign-item"));
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual({ error: "This file no longer exists." });
   });
 
   it("any member can view an item they didn't upload (shared library, not owner-only)", async () => {
@@ -216,7 +216,7 @@ describe("DELETE /api/media/[id]", () => {
     findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 item
     const response = await DELETE(dummyRequest, ctx("foreign-item"));
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual({ error: "This file no longer exists." });
     expect(transactionMock).not.toHaveBeenCalled();
   });
 

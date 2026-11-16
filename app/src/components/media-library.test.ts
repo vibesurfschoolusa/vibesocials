@@ -193,10 +193,14 @@ describe("Media: a lost answer may have gone through", () => {
     );
     expect(mediaDeleteFailureText(502, null)).toBe(MEDIA_MESSAGES.deleteLost);
     expect(mediaDeleteFailureText(409, { error: "It is used by a scheduled post." })).toBe("It is used by a scheduled post.");
-    expect(mediaDeleteFailureText(404, null)).toBe(MEDIA_MESSAGES.deleteFailed);
+    // R31 (lead follow-up): a 404 says the file is gone (never "Not found"), and the list reloads.
+    expect(mediaDeleteFailureText(404, null)).toBe("This file no longer exists.");
+    expect(mediaDeleteFailureText(404, { error: "Not found" })).toBe("This file no longer exists.");
+    expect(mediaDeleteFailureText(400, null)).toBe(MEDIA_MESSAGES.deleteFailed);
     const remove = source.slice(source.indexOf("const handleConfirmDelete"), source.indexOf("return (", source.indexOf("const handleConfirmDelete")));
     // R31 pages L2: with the workspace the library was drawn for (a DELETE has no body).
     expect(remove).toMatch(/await fetchOrNoAnswer\(withWorkspaceId\(`\/api\/media\/\$\{target\.id\}`, workspaceId\), \{ method: "DELETE" \}\)/);
     expect(remove).toMatch(/toast\.error\(MEDIA_MESSAGES\.deleteLost\)/);
+    expect(remove).toMatch(/if \(response\.status === 404\) \{\s+(\/\/[^\n]*\n\s+)*void fetchItems\(\);\s+return;\s+\}/);
   });
 });

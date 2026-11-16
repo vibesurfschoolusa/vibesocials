@@ -21,6 +21,9 @@ interface MediaItemRouteContext {
  * it's unit-testable without a database — mirrors `isMediaSweepEligible` in
  * `mediaRetention.ts`.
  */
+/** R31: a library item that is gone (deleted, or in another workspace), never a bare "Not found". */
+export const MEDIA_GONE_TEXT = "This file no longer exists.";
+
 export function isMediaDeletable(nonTerminalJobCount: number): boolean {
   return nonTerminalJobCount === 0;
 }
@@ -65,7 +68,7 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
   });
 
   if (!item) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: MEDIA_GONE_TEXT }, { status: 404 });
   }
 
   return NextResponse.json({ item: toMediaItemDto(item) }, { status: 200 });
@@ -123,7 +126,7 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
   });
 
   if (!item) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: MEDIA_GONE_TEXT }, { status: 404 });
   }
 
   // Team Workspaces (Task 4, design §1): the uploader or the workspace owner

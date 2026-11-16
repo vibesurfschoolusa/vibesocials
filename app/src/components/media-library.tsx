@@ -43,7 +43,7 @@ import { bulkHandoffHref, toggleMediaSelection } from "@/lib/bulkMedia";
 import { BULK_MAX_FILES } from "@/lib/bulkPosts";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
-import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE } from "@/lib/uploadFailure";
+import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, uploadRouteUrl } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import {
@@ -105,7 +105,11 @@ export function mediaSaveFailureText(status: number, data: { error?: string } | 
 }
 
 /** A refused delete: the route's sentence, else an unreadable 5xx may come after the delete. */
+/** R31: a file deleted meanwhile (or another workspace's), never a bare "Not found". */
+export const MEDIA_GONE_TEXT = "This file no longer exists.";
+
 export function mediaDeleteFailureText(status: number, data: { error?: string } | null): string {
+  if (status === 404) return MEDIA_GONE_TEXT;
   if (typeof data?.error === "string" && data.error) return data.error;
   return status >= 500 ? MEDIA_MESSAGES.deleteLost : MEDIA_MESSAGES.deleteFailed;
 }
@@ -822,7 +826,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       // the blob client's generic token failure (lib/uploadFailure.ts).
       const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
-        handleUploadUrl: "/api/upload",
+        handleUploadUrl: uploadRouteUrl(workspaceId),
         clientPayload: uploadSizePayload(prepared),
         onUploadProgress: (progressEvent) => setUploadProgress(progressEvent.percentage),
       }).catch(async (uploadError: unknown) => {
@@ -908,6 +912,11 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       // Covers the 409 "still referenced by an active post" case: the
       // server's message already states the reason, so it's shown as-is.
       toast.error(mediaDeleteFailureText(response.status, data));
+      if (response.status === 404) {
+        // R31: the file is gone already: the dialog closes and the list is read again.
+        void fetchItems();
+        return;
+      }
       throw new ConfirmFailureShown("DELETE_FAILED");
     }
 
@@ -920,7 +929,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       return next;
     });
     toast.success("Media deleted.");
-  }, [deleteTarget, toast, workspaceId]);
+  }, [deleteTarget, fetchItems, toast, workspaceId]);
 
   return (
     <div className="space-y-8">
