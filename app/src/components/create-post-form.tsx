@@ -166,6 +166,25 @@ export function captionsAfterReuseDismissed(
   };
 }
 
+/**
+ * R30 new-customer L1: the item from ?mediaItemId= can arrive after the person
+ * started typing. Its captions fill only the boxes still as they started
+ * (empty); a box the person changed stays, the rule of captionsAfterReuseDismissed.
+ */
+export function captionsAfterReuseLoaded(
+  item: { baseCaption: string | null; perPlatformOverrides: unknown },
+  caption: string,
+  overrides: PlatformOverrides | null,
+): { caption: string; overrides: PlatformOverrides | null } {
+  const own = (item.perPlatformOverrides ?? {}) as PlatformOverrides;
+  const typed = Object.fromEntries(Object.entries(overrides ?? {}).filter(([, text]) => text !== "")) as PlatformOverrides;
+  const merged = { ...own, ...typed };
+  return {
+    caption: caption === "" ? (item.baseCaption ?? "") : caption,
+    overrides: Object.keys(merged).length > 0 ? merged : null,
+  };
+}
+
 /** R29 pages L6: on the page from the first render; only its text changes. */
 export function LibraryFileStatus({ loading }: { loading: boolean }) {
   return (
@@ -1205,10 +1224,9 @@ function CreatePostFormInner({
         setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
         setSingleAltText("");
         singlePhotoRef.current = item;
-        setUploadCaption(item.baseCaption ?? "");
-        setPlatformOverrides(
-          (item.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
-        );
+        // R30 new-customer L1: what was typed while the item loaded stays.
+        setUploadCaption((current) => captionsAfterReuseLoaded(item, current, null).caption);
+        setPlatformOverrides((current) => captionsAfterReuseLoaded(item, "", current).overrides);
         setReuseLoading(false);
       } catch {
         if (cancelled) return;

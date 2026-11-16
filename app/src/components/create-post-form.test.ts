@@ -23,6 +23,7 @@ import {
   CreatePostFormSkeleton,
   LibraryFileStatus,
   UntouchedSubmitStatus,
+  captionsAfterReuseLoaded,
   NothingConnectedState,
   composerPageState,
   composerPageView,
@@ -1305,5 +1306,47 @@ describe("LibraryFileStatus", () => {
       "useEffect(() => { const frame = requestAnimationFrame(() => setLibraryStatusReady(true)); return () => cancelAnimationFrame(frame); }, []);",
     );
     expect(raw).toContain("const [libraryStatusReady, setLibraryStatusReady] = useState(false);");
+  });
+});
+
+// R30 new-customer L1: on a weak signal the caption boxes are editable before
+// the ?mediaItemId= item arrives; its captions then replaced what was typed.
+// The item's captions now fill only the boxes still as they started (empty),
+// the same rule as captionsAfterReuseDismissed.
+describe("captionsAfterReuseLoaded", () => {
+  const item = { baseCaption: "Sunset surf", perPlatformOverrides: { x: "Sunset surf on X", instagram: "IG sunset" } };
+
+  it("nothing typed: the item's captions fill the boxes", () => {
+    expect(captionsAfterReuseLoaded(item, "", null)).toEqual({
+      caption: "Sunset surf",
+      overrides: { x: "Sunset surf on X", instagram: "IG sunset" },
+    });
+  });
+
+  it("a caption typed and an X caption typed: both stay; the empty Instagram box gets the item's", () => {
+    expect(captionsAfterReuseLoaded(item, "My own words", { x: "My X words" })).toEqual({
+      caption: "My own words",
+      overrides: { x: "My X words", instagram: "IG sunset" },
+    });
+  });
+
+  it("an item with no captions erases nothing", () => {
+    expect(captionsAfterReuseLoaded({ baseCaption: null, perPlatformOverrides: null }, "Typed", { facebook_page: "FB" })).toEqual({
+      caption: "Typed",
+      overrides: { facebook_page: "FB" },
+    });
+    expect(captionsAfterReuseLoaded({ baseCaption: null, perPlatformOverrides: null }, "", null)).toEqual({
+      caption: "",
+      overrides: null,
+    });
+  });
+
+  it("the load uses it on the boxes as they are when the item arrives", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const start = raw.indexOf("const item = data.item;");
+    const body = raw.slice(start, raw.indexOf("setReuseLoading(false);", start));
+    expect(body).toMatch(/setUploadCaption\(\(current\) => captionsAfterReuseLoaded\(item, current, null\)\.caption\)/);
+    expect(body).toMatch(/setPlatformOverrides\(\(current\) => captionsAfterReuseLoaded\(item, "", current\)\.overrides\)/);
+    expect(body).not.toContain('setUploadCaption(item.baseCaption ?? "")');
   });
 });
