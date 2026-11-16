@@ -51,9 +51,14 @@ export function chooseFailure(status: number, data: ChoiceAnswer): { gone: boole
   return { gone: false, message: maySaved ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE };
 }
 
-/** R30: Cancel's DELETE didn't answer that it cancelled; the choice may still be waiting. */
+/** R30: Cancel's DELETE was refused; the choice is still waiting. */
 export const CANCEL_FAILED_MESSAGE =
   "Couldn't cancel the choice. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.";
+/** R30: Cancel's answer was lost, so the choice may have been cancelled already. */
+export const CANCEL_LOST_MESSAGE = answerLostText(
+  "the choice may already be cancelled",
+  "Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
+);
 
 /**
  * R30 client-journey L2: where Cancel goes, from the DELETE answer. Only a
@@ -142,7 +147,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
       const data = (await response.json().catch(() => null)) as ChoiceAnswer;
       outcome = cancelOutcome(response.status, data, platform, page);
     } catch {
-      outcome = { error: CANCEL_FAILED_MESSAGE };
+      outcome = { error: CANCEL_LOST_MESSAGE };
     }
     if ("go" in outcome) {
       router.push(outcome.go);

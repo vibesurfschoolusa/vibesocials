@@ -9,6 +9,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 import {
   CHOICE_MAYBE_CONNECTED_MESSAGE,
   CANCEL_FAILED_MESSAGE,
+  CANCEL_LOST_MESSAGE,
   ConnectLinkChoiceView,
   cancelOutcome,
   chooseFailure,
@@ -188,6 +189,13 @@ describe("the account choice after a lost Connect answer (R30)", () => {
       expect(cancelOutcome(status, null, "instagram", "/c/t")).toEqual({ error: CANCEL_FAILED_MESSAGE });
     }
     expect(CANCEL_FAILED_MESSAGE).not.toMatch(/cancelled/);
+  });
+
+  it("Cancel: a lost answer may have cancelled it, and says so in the shared words", async () => {
+    expect(CANCEL_LOST_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so the choice may already be cancelled. If your connection dropped, reconnect first. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
+    );
+    expect(await source()).toMatch(/\} catch \{\s+outcome = \{ error: CANCEL_LOST_MESSAGE \};/);
   });
 
   it("Cancel reads the DELETE answer, asking with the platform so a used choice can say it is connected", async () => {
