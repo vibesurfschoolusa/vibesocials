@@ -5,7 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 
-import { CONFIRM_FAILED_MESSAGE, CONFIRM_UNREACHABLE_MESSAGE, ConfirmFailureShown, confirmFailureText } from "./dialog";
+import {
+  CONFIRM_FAILED_MESSAGE,
+  CONFIRM_UNREACHABLE_MESSAGE,
+  ConfirmFailureShown,
+  confirmFailureText,
+  focusFallbacks,
+  restoreFocus,
+} from "./dialog";
 
 /**
  * Live check 2026-11-14: Add many's "Choose from Media" listed a real library
@@ -183,4 +190,111 @@ describe("ConfirmDialog callers", () => {
       expect(body).toMatch(/catch \(error\) \{\s+const text = confirmFailureText\(error\);\s+if \(text\) toast\.error\(text\);/);
     });
   }
+});
+
+/**
+ * R26 pages L4: a confirmed action can remove the button that opened the
+ * dialog (Team Remove and the "gone" drop, Queue Cancel/Delete/Publish,
+ * "Create link"), and focus returned to a button no longer on the page lands
+ * on the body. The dialog records, at open, the headings above the trigger
+ * (nearest first) and, on close, focuses the first one still on the page.
+ * A fake element tree: the panel renders into a portal and vitest has no DOM.
+ */
+type Fake = {
+  tagName: string;
+  parentElement: Fake | null;
+  children: Fake[];
+  attrs: Record<string, string>;
+  tabIndex: number;
+  focus: ReturnType<typeof vi.fn>;
+  hasAttribute(name: string): boolean;
+  readonly isConnected: boolean;
+};
+
+function el(tagName: string, children: Fake[] = [], attrs: Record<string, string> = {}): Fake {
+  const node: Fake = {
+    tagName,
+    parentElement: null,
+    children,
+    attrs,
+    tabIndex: tagName === "BUTTON" ? 0 : -1,
+    focus: vi.fn(),
+    hasAttribute: (name) => name in node.attrs,
+    get isConnected() {
+      let at: Fake = node;
+      while (at.parentElement) at = at.parentElement;
+      return at.tagName === "HTML";
+    },
+  };
+  for (const child of children) child.parentElement = node;
+  return node;
+}
+
+function detach(node: Fake) {
+  const parent = node.parentElement;
+  if (parent) parent.children = parent.children.filter((child) => child !== node);
+  node.parentElement = null;
+}
+
+const asElement = (node: Fake) => node as unknown as HTMLElement;
+
+describe("Dialog focus when its trigger is gone", () => {
+  function teamPage() {
+    const remove = el("BUTTON");
+    const otherRemove = el("BUTTON");
+    const row = el("LI", [el("P"), remove]);
+    const otherRow = el("LI", [el("P"), otherRemove]);
+    const members = el("H3");
+    const invite = el("H3", [], { tabindex: "0" });
+    el("HTML", [el("BODY", [el("H1"), el("DIV", [invite]), el("DIV", [members, el("UL", [otherRow, row])])])]);
+    return { remove, row, members, invite };
+  }
+
+  it("records the headings above the trigger, nearest section first", () => {
+    const { remove, members, invite } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    expect(fallbacks[0]).toBe(members);
+    expect(fallbacks).toContain(invite);
+    expect(fallbacks).toHaveLength(3);
+  });
+
+  it("the trigger still on the page gets focus back, as before", () => {
+    const { remove } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    restoreFocus(asElement(remove), fallbacks);
+    expect(remove.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("the trigger's row was removed: its section heading gets focus, made focusable", () => {
+    const { remove, row, members } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    detach(row);
+    restoreFocus(asElement(remove), fallbacks);
+    expect(remove.focus).not.toHaveBeenCalled();
+    expect(members.focus).toHaveBeenCalledTimes(1);
+    expect(members.tabIndex).toBe(-1);
+  });
+
+  it("a heading that is gone too is skipped; one with its own tabindex is left as is", () => {
+    const { remove, row, members, invite } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    detach(row);
+    detach(members);
+    invite.tabIndex = 0;
+    restoreFocus(asElement(remove), fallbacks);
+    expect(invite.focus).toHaveBeenCalledTimes(1);
+    expect(invite.tabIndex).toBe(0);
+  });
+
+  it("nothing was focused at open: nothing to restore", () => {
+    expect(focusFallbacks(null)).toEqual([]);
+    expect(() => restoreFocus(null, [])).not.toThrow();
+  });
+
+  it("Dialog records the fallbacks at open and restores through them on close", () => {
+    const dialog = source.slice(source.indexOf("export function Dialog("), source.indexOf("export const DialogHeader"));
+    expect(dialog).toContain("fallbacks.current = focusFallbacks(previouslyFocused.current);");
+    expect(dialog).toContain("restoreFocus(previouslyFocused.current, fallbacks.current);");
+    expect(dialog).not.toContain("previouslyFocused.current?.focus();");
+  });
 });

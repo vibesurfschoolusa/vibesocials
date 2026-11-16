@@ -44,6 +44,41 @@ function unlockBodyScroll() {
   }
 }
 
+function headingsIn(element: Element): HTMLElement[] {
+  if (/^H[1-6]$/.test(element.tagName)) return [element as HTMLElement];
+  return Array.from(element.children).flatMap(headingsIn);
+}
+
+/**
+ * R26 pages L4: the headings above `trigger` in the page, nearest first,
+ * recorded when a dialog opens. A confirmed action can remove the button that
+ * opened the dialog (Team Remove, Queue Cancel, "Create link"); then focus goes
+ * to the nearest of these still on the page instead of the page body.
+ */
+export function focusFallbacks(trigger: HTMLElement | null): HTMLElement[] {
+  const found: HTMLElement[] = [];
+  let child: Element | null = trigger;
+  while (child?.parentElement) {
+    const siblings = Array.from(child.parentElement.children);
+    found.push(...siblings.slice(0, siblings.indexOf(child)).flatMap(headingsIn).reverse());
+    child = child.parentElement;
+  }
+  return found;
+}
+
+/** Focus the trigger if it is still on the page, else the first fallback that is. */
+export function restoreFocus(trigger: HTMLElement | null, fallbacks: HTMLElement[]): void {
+  if (!trigger) return;
+  if (trigger.isConnected) {
+    trigger.focus();
+    return;
+  }
+  const heading = fallbacks.find((candidate) => candidate.isConnected);
+  if (!heading) return;
+  if (!heading.hasAttribute("tabindex")) heading.tabIndex = -1;
+  heading.focus();
+}
+
 interface DialogContextValue {
   titleId: string;
   descriptionId: string;
@@ -75,13 +110,15 @@ export interface DialogProps {
 /**
  * Accessible modal dialog: `role="dialog"` + `aria-modal`, focus trap, Esc to
  * close, backdrop-click to close, body scroll lock, and focus restored to the
- * trigger on close. Controlled via `open` / `onOpenChange`.
+ * trigger on close (or, when the trigger is gone, to the nearest heading above
+ * it: focusFallbacks). Controlled via `open` / `onOpenChange`.
  */
 export function Dialog({ open, onOpenChange, children, label, className }: DialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  const fallbacks = useRef<HTMLElement[]>([]);
 
   const [hasTitle, setHasTitle] = useState(false);
   const [hasDescription, setHasDescription] = useState(false);
@@ -101,6 +138,7 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
 
     previouslyFocused.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    fallbacks.current = focusFallbacks(previouslyFocused.current);
 
     lockBodyScroll();
 
@@ -111,7 +149,7 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
 
     return () => {
       unlockBodyScroll();
-      previouslyFocused.current?.focus();
+      restoreFocus(previouslyFocused.current, fallbacks.current);
     };
   }, [open]);
 
