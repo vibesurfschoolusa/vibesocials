@@ -49,41 +49,76 @@ function headingsIn(element: Element): HTMLElement[] {
   return Array.from(element.children).flatMap(headingsIn);
 }
 
+const FIELD_TAGS = new Set(["BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
+
+/** What FOCUSABLE_SELECTOR matches, read from attributes so it needs no layout. */
+function isFocusable(element: Element): boolean {
+  const tabindex = element.getAttribute("tabindex");
+  if (tabindex !== null) return tabindex !== "-1";
+  if (FIELD_TAGS.has(element.tagName)) return !element.hasAttribute("disabled");
+  return element.tagName === "A" && element.hasAttribute("href");
+}
+
+function firstFocusableIn(element: Element): HTMLElement | null {
+  if (isFocusable(element)) return element as HTMLElement;
+  for (const child of Array.from(element.children)) {
+    const found = firstFocusableIn(child);
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
- * R26 pages L4: the headings above `trigger` in the page, nearest first,
- * recorded when a dialog opens. A confirmed action can remove the button that
- * opened the dialog (Team Remove, Queue Cancel, "Create link"); then focus goes
- * to the nearest of these still on the page instead of the page body.
+ * R26 pages L4: where focus goes when a confirmed action removed the button
+ * that opened the dialog (Team Remove, Queue Cancel/Delete/Publish, a Media
+ * delete, "Create link"), recorded when the dialog opens. Level by level from
+ * the trigger outwards: the next row's first control, then the previous
+ * row's, then the headings above, nearest first. Controls in the trigger's own
+ * row come first but go with it, so the first one still on the page is the
+ * neighbouring row, or the section heading when no row is left.
  */
 export function focusFallbacks(trigger: HTMLElement | null): HTMLElement[] {
   const found: HTMLElement[] = [];
+  const add = (element: HTMLElement | null | undefined) => {
+    if (element && element !== trigger && !found.includes(element)) found.push(element);
+  };
   let child: Element | null = trigger;
   while (child?.parentElement) {
     const siblings = Array.from(child.parentElement.children);
-    found.push(...siblings.slice(0, siblings.indexOf(child)).flatMap(headingsIn).reverse());
+    const at = siblings.indexOf(child);
+    add(siblings.slice(at + 1).map(firstFocusableIn).find(Boolean));
+    add(siblings.slice(0, at).reverse().map(firstFocusableIn).find(Boolean));
+    for (const heading of siblings.slice(0, at).flatMap(headingsIn).reverse()) add(heading);
     child = child.parentElement;
   }
   return found;
 }
 
-/** Focus the trigger if it is still on the page, else the first fallback that is. */
-export function restoreFocus(trigger: HTMLElement | null, fallbacks: HTMLElement[]): void {
-  if (!trigger) return;
+/**
+ * Focus the trigger if it is still on the page, else the first fallback that
+ * is. A fallback never scrolls the page (lead review: Queue's heading is at
+ * the top, the card that went was far down). Returns whether a fallback took it.
+ */
+export function restoreFocus(trigger: HTMLElement | null, fallbacks: HTMLElement[]): boolean {
+  if (!trigger) return false;
   if (trigger.isConnected) {
     trigger.focus();
-    return;
+    return false;
   }
-  const heading = fallbacks.find((candidate) => candidate.isConnected);
-  if (!heading) return;
-  if (!heading.hasAttribute("tabindex")) heading.tabIndex = -1;
-  heading.focus();
+  const target = fallbacks.find((candidate) => candidate.isConnected);
+  if (!target) return false;
+  if (/^H[1-6]$/.test(target.tagName) && !target.hasAttribute("tabindex")) target.tabIndex = -1;
+  target.focus({ preventScroll: true });
+  return true;
 }
 
 /**
  * Lead follow-up: a caller can remove the trigger after the dialog closed
  * (Queue's series cancel reads the list again), when focus was already given
  * back to it. So look again on the next frame and after these delays, and only
- * if the trigger is gone and focus fell to the page body.
+ * if the trigger is gone and focus fell to the page body. The watch ends after
+ * one restore, and as soon as focus has been anywhere but the body and the
+ * trigger since close: focus the person moved is never pulled back.
  */
 export const FOCUS_RECHECK_MS = [1000, 3000];
 
@@ -97,18 +132,34 @@ const browserSchedule: FocusSchedule = {
   later: (run, ms) => window.setTimeout(run, ms),
 };
 
+type FocusDocument = Pick<Document, "activeElement" | "body" | "addEventListener" | "removeEventListener">;
+
 export function watchFocusAfterClose(
   trigger: HTMLElement | null,
   fallbacks: HTMLElement[],
   schedule: FocusSchedule = browserSchedule,
-  doc: Pick<Document, "activeElement" | "body"> = document,
+  doc: FocusDocument = document,
 ): void {
   if (!trigger) return;
-  const check = () => {
-    if (trigger.isConnected) return;
-    if (doc.activeElement && doc.activeElement !== doc.body) return;
-    restoreFocus(trigger, fallbacks);
+  let done = false;
+  let checksLeft = 1 + FOCUS_RECHECK_MS.length;
+  const stop = () => {
+    done = true;
+    doc.removeEventListener("focusin", onFocusIn);
   };
+  function onFocusIn(event: Event) {
+    if (event.target !== trigger) stop();
+  }
+  const check = () => {
+    checksLeft -= 1;
+    if (!done) {
+      const active = doc.activeElement;
+      if (active && active !== doc.body && active !== trigger) stop();
+      else if (!trigger.isConnected && restoreFocus(trigger, fallbacks)) stop();
+    }
+    if (checksLeft === 0 && !done) stop();
+  };
+  doc.addEventListener("focusin", onFocusIn);
   schedule.frame(check);
   for (const ms of FOCUS_RECHECK_MS) schedule.later(check, ms);
 }

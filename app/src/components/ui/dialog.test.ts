@@ -238,6 +238,7 @@ type Fake = {
   tabIndex: number;
   focus: ReturnType<typeof vi.fn>;
   hasAttribute(name: string): boolean;
+  getAttribute(name: string): string | null;
   readonly isConnected: boolean;
 };
 
@@ -250,6 +251,7 @@ function el(tagName: string, children: Fake[] = [], attrs: Record<string, string
     tabIndex: tagName === "BUTTON" ? 0 : -1,
     focus: vi.fn(),
     hasAttribute: (name) => name in node.attrs,
+    getAttribute: (name) => node.attrs[name] ?? null,
     get isConnected() {
       let at: Fake = node;
       while (at.parentElement) at = at.parentElement;
@@ -269,51 +271,72 @@ function detach(node: Fake) {
 const asElement = (node: Fake) => node as unknown as HTMLElement;
 
 describe("Dialog focus when its trigger is gone", () => {
+  // Team: a heading, then rows of a name and a button; the trigger's row is in the middle.
   function teamPage() {
+    const before = el("BUTTON");
     const remove = el("BUTTON");
-    const otherRemove = el("BUTTON");
+    const after = el("BUTTON");
     const row = el("LI", [el("P"), remove]);
-    const otherRow = el("LI", [el("P"), otherRemove]);
     const members = el("H3");
     const invite = el("H3", [], { tabindex: "0" });
-    el("HTML", [el("BODY", [el("H1"), el("DIV", [invite]), el("DIV", [members, el("UL", [otherRow, row])])])]);
-    return { remove, row, members, invite };
+    const h1 = el("H1");
+    const list = el("UL", [el("LI", [el("P"), before]), row, el("LI", [el("P"), after])]);
+    el("HTML", [el("BODY", [h1, el("DIV", [invite]), el("DIV", [members, list])])]);
+    return { before, remove, after, row, members, invite, h1 };
   }
 
-  it("records the headings above the trigger, nearest section first", () => {
-    const { remove, members, invite } = teamPage();
-    const fallbacks = focusFallbacks(asElement(remove));
-    expect(fallbacks[0]).toBe(members);
-    expect(fallbacks).toContain(invite);
-    expect(fallbacks).toHaveLength(3);
+  it("records the next row's control, then the previous row's, then the headings above", () => {
+    const { remove, before, after, members, invite, h1 } = teamPage();
+    expect(focusFallbacks(asElement(remove))).toEqual([after, before, members, invite, h1]);
   });
 
   it("the trigger still on the page gets focus back, as before", () => {
     const { remove } = teamPage();
-    const fallbacks = focusFallbacks(asElement(remove));
-    restoreFocus(asElement(remove), fallbacks);
+    restoreFocus(asElement(remove), focusFallbacks(asElement(remove)));
     expect(remove.focus).toHaveBeenCalledTimes(1);
   });
 
-  it("the trigger's row was removed: its section heading gets focus, made focusable", () => {
-    const { remove, row, members } = teamPage();
+  it("the trigger's row was removed: the next row's control, without scrolling the page", () => {
+    const { remove, row, after, members } = teamPage();
     const fallbacks = focusFallbacks(asElement(remove));
     detach(row);
     restoreFocus(asElement(remove), fallbacks);
     expect(remove.focus).not.toHaveBeenCalled();
-    expect(members.focus).toHaveBeenCalledTimes(1);
-    expect(members.tabIndex).toBe(-1);
+    expect(after.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(members.focus).not.toHaveBeenCalled();
   });
 
-  it("a heading that is gone too is skipped; one with its own tabindex is left as is", () => {
-    const { remove, row, members, invite } = teamPage();
+  it("the last row: the previous row's control", () => {
+    const { remove, row, after, before } = teamPage();
     const fallbacks = focusFallbacks(asElement(remove));
+    detach(after.parentElement!);
     detach(row);
+    restoreFocus(asElement(remove), fallbacks);
+    expect(before.focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("no row left: the section heading, made focusable, without scrolling; one with a tabindex is left as is", () => {
+    const { remove, row, before, after, members, invite } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    for (const node of [before.parentElement!, after.parentElement!, row]) detach(node);
+    restoreFocus(asElement(remove), fallbacks);
+    expect(members.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(members.tabIndex).toBe(-1);
+
     detach(members);
     invite.tabIndex = 0;
     restoreFocus(asElement(remove), fallbacks);
-    expect(invite.focus).toHaveBeenCalledTimes(1);
+    expect(invite.focus).toHaveBeenCalledWith({ preventScroll: true });
     expect(invite.tabIndex).toBe(0);
+  });
+
+  it("a disabled button in the next row is skipped", () => {
+    const disabled = el("BUTTON", [], { disabled: "" });
+    const enabled = el("BUTTON");
+    const remove = el("BUTTON");
+    const row = el("LI", [remove]);
+    el("HTML", [el("BODY", [el("UL", [row, el("LI", [disabled, enabled])])])]);
+    expect(focusFallbacks(asElement(remove))[0]).toBe(enabled);
   });
 
   it("nothing was focused at open: nothing to restore", () => {
@@ -330,44 +353,87 @@ describe("Dialog focus when its trigger is gone", () => {
       frames,
       timers,
       schedule: { frame: (run: () => void) => frames.push(run), later: (run: () => void, ms: number) => timers.push({ ms, run }) },
+      runAll() {
+        for (const run of frames) run();
+        for (const timer of timers) timer.run();
+      },
+    };
+  }
+
+  function fakeDoc(active: Fake | null) {
+    const body = el("BODY");
+    const listeners = new Set<(event: { target: unknown }) => void>();
+    const doc = {
+      activeElement: (active ?? body) as Fake,
+      body,
+      addEventListener: (_type: string, listener: (event: { target: unknown }) => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: (event: { target: unknown }) => void) => listeners.delete(listener),
+    };
+    return {
+      doc: doc as unknown as Document,
+      listeners,
+      focusIn(target: Fake) {
+        doc.activeElement = target;
+        for (const listener of [...listeners]) listener({ target });
+      },
+      toBody() {
+        doc.activeElement = body;
+      },
     };
   }
 
   it("checks again on the next frame and after short timeouts", () => {
     const { remove } = teamPage();
     const { frames, timers, schedule } = scheduler();
-    watchFocusAfterClose(asElement(remove), [], schedule, { activeElement: null, body: null } as unknown as Document);
+    watchFocusAfterClose(asElement(remove), [], schedule, fakeDoc(null).doc);
     expect(frames).toHaveLength(1);
     expect(timers.map((timer) => timer.ms)).toEqual(FOCUS_RECHECK_MS);
-    expect(FOCUS_RECHECK_MS.length).toBeGreaterThan(0);
   });
 
-  it("the trigger was removed after close and focus fell to the body: the heading gets it", () => {
-    const { remove, row, members } = teamPage();
+  it("the trigger was removed after close and focus fell to the body: one restore, then it stops", () => {
+    const { remove, row, after } = teamPage();
     const fallbacks = focusFallbacks(asElement(remove));
-    const body = el("BODY");
-    const doc = { activeElement: body, body } as unknown as Document;
+    const page = fakeDoc(remove);
     const { frames, timers, schedule } = scheduler();
-    watchFocusAfterClose(asElement(remove), fallbacks, schedule, doc);
+    watchFocusAfterClose(asElement(remove), fallbacks, schedule, page.doc);
     frames[0]();
-    expect(members.focus).not.toHaveBeenCalled(); // the trigger is still there
+    expect(after.focus).not.toHaveBeenCalled(); // the trigger is still there
     detach(row);
+    page.toBody();
     timers[0].run();
-    expect(members.focus).toHaveBeenCalledTimes(1);
+    expect(after.focus).toHaveBeenCalledTimes(1);
+    // Later checks never act again, even if focus is on the body once more.
+    page.toBody();
+    timers[1].run();
+    expect(after.focus).toHaveBeenCalledTimes(1);
+    expect(page.listeners.size).toBe(0);
   });
 
-  it("focus the person moved elsewhere is left alone, and a kept trigger is never replaced", () => {
-    const { remove, row, members } = teamPage();
+  it("focus the person moved since close, even back to the body, is never pulled back", () => {
+    const { remove, row, after } = teamPage();
     const fallbacks = focusFallbacks(asElement(remove));
-    const body = el("BODY");
-    const elsewhere = el("INPUT");
-    const doc = { activeElement: elsewhere, body } as unknown as Document;
+    const page = fakeDoc(remove);
+    const { schedule, runAll } = scheduler();
+    watchFocusAfterClose(asElement(remove), fallbacks, schedule, page.doc);
+    page.focusIn(el("INPUT"));
+    page.toBody();
+    detach(row);
+    runAll();
+    expect(after.focus).not.toHaveBeenCalled();
+    expect(page.listeners.size).toBe(0);
+  });
+
+  it("focus elsewhere at a check stops the watch too", () => {
+    const { remove, row, after } = teamPage();
+    const fallbacks = focusFallbacks(asElement(remove));
+    const page = fakeDoc(el("INPUT"));
     const { frames, timers, schedule } = scheduler();
-    watchFocusAfterClose(asElement(remove), fallbacks, schedule, doc);
+    watchFocusAfterClose(asElement(remove), fallbacks, schedule, page.doc);
     detach(row);
     frames[0]();
+    page.toBody();
     for (const timer of timers) timer.run();
-    expect(members.focus).not.toHaveBeenCalled();
+    expect(after.focus).not.toHaveBeenCalled();
   });
 
   it("Dialog records the fallbacks at open and restores through them on close", () => {
