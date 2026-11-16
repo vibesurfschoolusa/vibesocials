@@ -16,6 +16,12 @@ export const REVIEW_LINK_INACTIVE_MESSAGE = "This link is not active. Ask for a 
 /** Shown for a post that is not (or no longer) one the client may decide on. */
 export const REVIEW_POST_LOCKED_MESSAGE = "This post can no longer be changed here.";
 
+/**
+ * R32 client-journey L1: the locked sentence once the list was read again
+ * (the post published, was cancelled or moved out of reach meanwhile).
+ */
+export const REVIEW_POST_LOCKED_RELOADED_MESSAGE = `${REVIEW_POST_LOCKED_MESSAGE} The list below shows the posts still scheduled.`;
+
 /** An approval of a version the client did not see: the post was edited since the page loaded. */
 export const REVIEW_POST_CHANGED_MESSAGE =
   "This post was changed after you opened this page. Have a look at the new version.";
@@ -157,7 +163,7 @@ const REVIEW_DECISION_FAILED_MESSAGE = "Couldn't save that. Try again.";
 /**
  * What the page does with a decision's answer. A saved one updates that card
  * from the answer alone (no list reload, which could fail and hide the save);
- * a "changed" 409 reloads the list, and so does an approval that already stood
+ * a "changed" 409 (edited, or no longer changeable here) reloads the list, and so does an approval that already stood
  * ("stands"): the server cannot tell a retry from a page still showing text
  * from before an edit, so the card is never marked approved from that answer.
  * Anything else shows its sentence on the card.
@@ -186,5 +192,9 @@ export function reviewDecisionOutcome(status: number, data: unknown): ReviewDeci
   if (!routeSentence && status >= 500) return { kind: "refused", message: REVIEW_DECISION_MAYBE_SAVED_MESSAGE };
   const message = routeSentence ?? REVIEW_DECISION_FAILED_MESSAGE;
   if (status === 409 && message === REVIEW_POST_CHANGED_MESSAGE) return { kind: "changed", message };
+  // R32 client-journey L1: a post that left the schedule is out of date too: the list reloads.
+  if (status === 409 && message === REVIEW_POST_LOCKED_MESSAGE) {
+    return { kind: "changed", message: REVIEW_POST_LOCKED_RELOADED_MESSAGE };
+  }
   return { kind: "refused", message };
 }

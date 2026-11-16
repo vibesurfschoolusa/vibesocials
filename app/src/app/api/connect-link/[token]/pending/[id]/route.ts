@@ -135,11 +135,14 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ error: "candidateId is required." }, { status: 400 });
     }
 
-    // Rule 3, once more before the chosen account is saved.
+    // Rule 3, once more before the chosen account is saved. R32 client-journey
+    // L2: `connected` tells the page the choice is over, so it ends it and
+    // reads its rows again, as for a 404.
     if (await placeTaken(link.workspaceId, pending.platform)) {
       return NextResponse.json(
         {
           error: `${PLATFORM_LABELS[pending.platform]} is already connected. Ask the person who sent you this link if it should be changed.`,
+          connected: true,
         },
         { status: 409 },
       );

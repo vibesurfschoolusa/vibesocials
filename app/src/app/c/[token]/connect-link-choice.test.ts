@@ -124,6 +124,12 @@ describe("the account choice's answers (R29)", () => {
     });
   });
 
+  // R32 client-journey L2: the place was taken while the client chose; the choice is over.
+  it("choose: a 409 marked connected ends the choice like a 404", () => {
+    const sentence = "Facebook Page is already connected. Ask the person who sent you this link if it should be changed.";
+    expect(chooseFailure(409, { error: sentence, connected: true })).toEqual({ gone: true, message: sentence });
+  });
+
   it("choose: the route's own sentence stays under the buttons", () => {
     expect(chooseFailure(409, { error: "Pick the connected one." })).toEqual({ gone: false, message: "Pick the connected one." });
     expect(chooseFailure(500, { error: "Failed to connect the account." })).toEqual({

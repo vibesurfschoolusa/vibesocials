@@ -52,6 +52,7 @@ async function saveLinkIfUnchanged(id: string, locationName: string, url: string
  * Any member may read, like the rest of the reviews surface. Returns `{ url }`,
  * or `{ url: null, reason }` with one line on what to do, worded for the
  * caller's role (R12 L1: only an owner can connect, choose or reconnect).
+ * With the link, `location`: the saved location's title, when there is one.
  *
  * The link is read from Google (metadata.newReviewUri) only while none is saved
  * for the chosen location, then kept in the connection's metadata, so a page
@@ -90,8 +91,14 @@ export async function GET(request?: Request) {
   });
   if (!connection) return NextResponse.json({ url: null, reason: reason("not_connected") });
 
+  // R32 client-journey L4: the link is the saved location's, whichever one the
+  // Reviews page shows, so the panel names it (its title, as the print card).
+  const rawTitle = metadataOf(connection.metadata).locationTitle;
+  const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
+  const linkBody = (url: string) => (title ? { url, location: title } : { url });
+
   const saved = savedNewReviewUri(connection.metadata);
-  if (saved) return NextResponse.json({ url: saved });
+  if (saved) return NextResponse.json(linkBody(saved));
 
   const rawLocation = metadataOf(connection.metadata).locationName;
   const locationName = typeof rawLocation === "string" ? rawLocation.trim() : "";
@@ -118,7 +125,7 @@ export async function GET(request?: Request) {
     if (!url) return NextResponse.json({ url: null, reason: reason("google_has_none") });
 
     await saveLinkIfUnchanged(connection.id, locationName, url);
-    return NextResponse.json({ url });
+    return NextResponse.json(linkBody(url));
   } catch (error) {
     // JJ3 lead review: the kind of Google failure is the one rule every Google
     // surface uses (classifyGoogleFailure, which writes one classification

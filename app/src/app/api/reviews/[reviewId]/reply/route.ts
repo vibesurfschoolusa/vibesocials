@@ -10,6 +10,7 @@ import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import { classifyGoogleFailure, flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
 import {
   MEMBER_OTHER_LOCATION_MESSAGE,
+  REPLY_FINAL_CODES,
   replyErrorBody,
   reviewLocationName,
   savedLocationIn,
@@ -25,6 +26,28 @@ export const dynamic = "force-dynamic";
 const REPLY_FAILED_MESSAGE = "Couldn't post your reply. Try again in a minute.";
 const REVIEW_NOT_FOUND = { error: "Review not found." };
 const WHERE = "POST /api/reviews/[reviewId]/reply";
+
+/**
+ * R32 client-journey L6: the review's location is not in the connected
+ * account's complete listing (Google signed in again, maybe in another tab,
+ * with an account that does not manage it). The review is there; the step is
+ * the in-place sign-in, which only an owner gets. The code marks it final, as
+ * Google's own refusal of the location.
+ */
+function locationNotManagedBody(role: ReviewsReader) {
+  const what = "The connected Google account no longer manages this location, so your reply wasn't posted.";
+  return role === "member"
+    ? {
+        error: `${what} Copy your reply. The workspace owner can sign in to Google again with the account that manages it.`,
+        code: REPLY_FINAL_CODES.access,
+      }
+    : {
+        error: `${what} Sign in to Google again with the account that manages it, then post your reply again.`,
+        reconnect: true as const,
+        signIn: true as const,
+        code: REPLY_FINAL_CODES.access,
+      };
+}
 
 /**
  * POST /api/reviews/[reviewId]/reply - Reply to a Google Business Profile
@@ -147,7 +170,7 @@ export async function POST(request: Request) {
       }
       if (!listing.locations.some((location) => location.resourceName === reviewLocation)) {
         return listing.complete
-          ? NextResponse.json(REVIEW_NOT_FOUND, { status: 404 })
+          ? NextResponse.json(locationNotManagedBody(role), { status: 403 })
           : NextResponse.json({ error: REPLY_FAILED_MESSAGE }, { status: 500 });
       }
       if (

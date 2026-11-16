@@ -972,6 +972,9 @@ function OwnerView({
       setInvite(null);
       setFreshUrl(null);
     }
+    // R32 client-journey L5: a connect link they made stopped with their role;
+    // the connect link card reads its link only when mounted, so it is told.
+    announceClientLinksReplaced("team");
     // Check 4: read the links after the demotion, so the toast names only the
     // ones that really still work (a connect link they made has stopped).
     const links = await fetchClientLinks(workspaceId);

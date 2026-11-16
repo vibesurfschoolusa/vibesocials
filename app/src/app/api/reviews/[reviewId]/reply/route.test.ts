@@ -277,10 +277,34 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     expect(replyToReviewMock).toHaveBeenCalledTimes(1);
   });
 
-  it("answers 404 for a location the account does not list, and sends no reply", async () => {
+  // R32 client-journey L6: the review exists; the connected Google account (maybe
+  // signed in again in another tab) no longer manages its location. Not "Review
+  // not found": what happened, and the step by role (an owner's in-place sign-in).
+  it.each([
+    [
+      "owner",
+      {
+        error:
+          "The connected Google account no longer manages this location, so your reply wasn't posted. Sign in to Google again with the account that manages it, then post your reply again.",
+        reconnect: true,
+        signIn: true,
+        code: "GBP_ACCESS_REFUSED",
+      },
+    ],
+    [
+      "member",
+      {
+        error:
+          "The connected Google account no longer manages this location, so your reply wasn't posted. Copy your reply. The workspace owner can sign in to Google again with the account that manages it.",
+        code: "GBP_ACCESS_REFUSED",
+      },
+    ],
+  ] as const)("a location the complete listing leaves out (%s): 403 with the sign-in step, and no reply sent", async (role, body) => {
+    getWorkspaceContextMock.mockResolvedValue({ ...OWNER, role });
     const response = await post({ comment: "Thanks", reviewName: "accounts/7/locations/99/reviews/r1" });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual(body);
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 

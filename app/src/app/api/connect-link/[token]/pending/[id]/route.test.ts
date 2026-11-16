@@ -194,7 +194,11 @@ describe("POST: the visitor's choice", () => {
     const res = await POST(request("POST", { candidateId: "page-2" }), context());
 
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe("Facebook Page is already connected. Ask the person who sent you this link if it should be changed.");
+    // R32 client-journey L2: marked, so the page ends the choice and reads its rows again.
+    expect(await res.json()).toEqual({
+      error: "Facebook Page is already connected. Ask the person who sent you this link if it should be changed.",
+      connected: true,
+    });
     expect(h.saveFacebookPage).not.toHaveBeenCalled();
   });
 

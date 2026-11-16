@@ -12,6 +12,9 @@ import {
   CONNECT_LINK_MAYBE_OFF_MESSAGE,
   changeConnectLink,
   ConnectLinkSection,
+  REPLACE_NONE_OFFERED_MESSAGE,
+  replaceDescription,
+  replacePlatforms,
   ConnectLinkSectionView,
   type ConnectLinkViewProps,
 } from "./connect-link-section";
@@ -267,5 +270,52 @@ describe("Client connect link: focus after Create link", () => {
     expect(create).toMatch(/await makeLink\(selected\);\s+(\/\/[^\n]*\n\s+)?focusAfterPress\(pressed, \(\) => copyRef\.current\);/);
     expect(source).toMatch(/<Button ref=\{copyRef\} type="button" variant="outline" onClick=\{onCopy\}>/);
     expect(source).toMatch(/copyRef=\{copyRef\}/);
+  });
+});
+
+// R32 client-journey L3: Replace sent the old link's platforms as they were, so
+// one the site no longer offers was refused with "Untick it", and the dialog has
+// no boxes. Replace sends only what the site still offers, as Make new client
+// links does; with none left it says so and leaves Turn off.
+describe("Client connect link: Replace when the site offers fewer platforms", () => {
+  const LINK = {
+    url: "https://vibesocials.example/c/abc",
+    platforms: ["tiktok", "instagram"] as ConnectLinkViewProps["available"],
+    expiresAt: "2026-11-25T08:00:00.000Z",
+    lastUsedAt: null,
+    createdAt: "2026-11-11T08:00:00.000Z",
+  };
+
+  it("sends only the platforms the site still offers", () => {
+    expect(replacePlatforms(LINK, ["instagram", "facebook_page"])).toEqual(["instagram"]);
+    expect(replacePlatforms(LINK, ["tiktok", "instagram"])).toEqual(["tiktok", "instagram"]);
+    expect(replacePlatforms(LINK, ["facebook_page"])).toEqual([]);
+    expect(replacePlatforms(null, ["instagram"])).toEqual([]);
+  });
+
+  it("the confirm names what the new link will offer when some are dropped", () => {
+    expect(replaceDescription(LINK, ["tiktok", "instagram"])).toBe(
+      "The old link stops working. Your client will need the new one.",
+    );
+    expect(replaceDescription(LINK, ["instagram"])).toBe(
+      "The old link stops working. Your client will need the new one. It offers Instagram only: TikTok can't be connected on this site now.",
+    );
+  });
+
+  it("with none left: no Replace link, a sentence that says why, and Turn off", () => {
+    const html = view({ link: LINK, available: ["facebook_page"] });
+    expect(html).not.toContain("Replace link");
+    expect(REPLACE_NONE_OFFERED_MESSAGE).toBe(
+      "None of the platforms this link offers can be connected on this site now, so it can't be replaced. Press Turn off to stop it.",
+    );
+    expect(html).toContain(REPLACE_NONE_OFFERED_MESSAGE.replace("'", "&#x27;"));
+    expect(html).toContain("Turn off");
+  });
+
+  it("the panel's Replace confirm sends replacePlatforms and words it with replaceDescription", () => {
+    const source = readFileSync(join(__dirname, "connect-link-section.tsx"), "utf8");
+    expect(source).toContain("() => makeLink(replacePlatforms(link, available))");
+    expect(source).toContain("replaceDescription(link, available)");
+    expect(source).not.toContain("makeLink(link?.platforms ?? [])");
   });
 });

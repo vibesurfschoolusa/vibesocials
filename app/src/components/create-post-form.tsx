@@ -738,6 +738,52 @@ export function revealRefusal(
 }
 
 /**
+ * R32 pages L1: a press's refusal line, with the form as it was at that press
+ * (refusalFormKey). The line named a field to fix; once the form is edited it
+ * may no longer be true, and it is the phone bar's reason (the button's
+ * description) too, so it goes. The next press says what is true then.
+ */
+export interface PressRefusal {
+  text: string;
+  form: string;
+}
+
+/** The parts of the form a refusal names, as one comparable string. */
+export function refusalFormKey(form: {
+  caption: string;
+  platformCaptions: PlatformOverrides | null;
+  platforms: readonly Platform[];
+  mode: PublishMode;
+  scheduledFor: string;
+  repeat: string;
+  repeatCount: number;
+  /** The picked file (name, size, time), or null. */
+  file: string | null;
+  reuseId: string | null;
+  /** Each attached photo's key and status. */
+  photos: readonly string[];
+}): string {
+  return JSON.stringify([
+    form.caption,
+    form.platformCaptions,
+    form.platforms,
+    form.mode,
+    form.scheduledFor,
+    form.repeat,
+    form.repeatCount,
+    form.file,
+    form.reuseId,
+    form.photos,
+  ]);
+}
+
+/** The form's error line as shown: a press's refusal goes once the form changed since that press. */
+export function refusalLineShown(error: string | null, refusal: PressRefusal | null, form: string): string | null {
+  if (error !== null && refusal !== null && refusal.text === error && refusal.form !== form) return null;
+  return error;
+}
+
+/**
  * R28 new-customer addendum L10: a platform's own caption makes the page a
  * text post (composerPageState), but the post is sent with its main caption
  * and the route refuses one without it, so the step is to write the Caption.
@@ -904,6 +950,8 @@ function CreatePostFormInner({
   const captionOver = captionCounter(uploadCaption).over;
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // R32 pages L1: the line a press refused with, and the form it judged (refuse below).
+  const [pressRefusal, setPressRefusal] = useState<PressRefusal | null>(null);
   // Counts presses that got past the first checks, so a refusal with the same
   // sentence as the last one is brought into view again.
   const [pressCount, setPressCount] = useState(0);
@@ -2144,6 +2192,26 @@ function CreatePostFormInner({
     }
   }
 
+  // R32 pages L1: the form as it is now; a refusal set from another form is not shown.
+  const formNow = refusalFormKey({
+    caption: uploadCaption,
+    platformCaptions: platformOverrides,
+    platforms: selectedPlatforms,
+    mode: publishMode,
+    scheduledFor: scheduledForLocal,
+    repeat,
+    repeatCount,
+    file: uploadFile ? `${uploadFile.name}:${uploadFile.size}:${uploadFile.lastModified}` : null,
+    reuseId: reuseItem?.id ?? null,
+    photos: photoSet.map((photo) => `${photo.key}:${photo.status}`),
+  });
+  const shownUploadError = refusalLineShown(uploadError, pressRefusal, formNow);
+  /** A press's refusal: the line, tied to the form it judged (refusalLineShown). */
+  const refuse = (text: string) => {
+    setUploadError(text);
+    setPressRefusal({ text, form: formNow });
+  };
+
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
     // Only opens the box, so its message shows; what the press does next is unchanged.
@@ -2177,7 +2245,7 @@ function CreatePostFormInner({
     setPressCount((count) => count + 1);
 
     if (first.stop === "wait") {
-      setUploadError(first.message);
+      refuse(first.message);
       return;
     }
 
@@ -2195,34 +2263,34 @@ function CreatePostFormInner({
         allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
       });
       if (textError) {
-        setUploadError(textError);
+        refuse(textError);
         return;
       }
     } else if (!reuseItem && !uploadFile && photoSet.length === 0) {
-      setUploadError(CHOOSE_FILE_MESSAGE);
+      refuse(CHOOSE_FILE_MESSAGE);
       return;
     }
 
     if (photoSet.length > 0 && !photoSetReady(photoSet)) {
-      setUploadError("Wait until every photo has uploaded, or remove the ones that failed.");
+      refuse("Wait until every photo has uploaded, or remove the ones that failed.");
       return;
     }
 
     if (!uploadCaption.trim()) {
-      setUploadError("Please enter a caption for this post.");
+      refuse("Please enter a caption for this post.");
       return;
     }
 
     // 2026-11-01 scale audit (jobs, event size): POST /api/posts 400s a caption over the
     // cap; the submit button is already disabled, this covers any other path.
     if (captionOver) {
-      setUploadError(captionTooLongMessage("Caption"));
+      refuse(captionTooLongMessage("Caption"));
       return;
     }
 
     // Task 7 — at least one target platform must stay selected.
     if (selectedPlatforms.length === 0) {
-      setUploadError(
+      refuse(
         platformChoices.every((choice) => choice.disabledReason !== null)
           ? "None of your connected platforms can publish this media. Choose a different file."
           : "Select at least one platform to publish to.",
@@ -2241,22 +2309,22 @@ function CreatePostFormInner({
     }
 
     if (storyLengthRefusal) {
-      setUploadError(storyLengthRefusal);
+      refuse(storyLengthRefusal);
       return;
     }
 
     if (publishMode === "schedule") {
       const iso = localDateTimeToUtcIso(scheduledForLocal);
       if (!iso) {
-        setUploadError("Please choose a valid date and time to schedule this post.");
+        refuse("Please choose a valid date and time to schedule this post.");
         return;
       }
       if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
-        setUploadError("Scheduled time must be at least a minute in the future.");
+        refuse("Scheduled time must be at least a minute in the future.");
         return;
       }
       if (repeatOn && repeatDates.length < REPEAT_MIN_COUNT) {
-        setUploadError("Choose how many times the post repeats, then press the button again.");
+        refuse("Choose how many times the post repeats, then press the button again.");
         return;
       }
     }
@@ -2286,7 +2354,7 @@ function CreatePostFormInner({
 
   async function handleEnhanceCaption() {
     if (!uploadCaption.trim()) {
-      setUploadError("Please enter some text first to enhance.");
+      refuse("Please enter some text first to enhance.");
       return;
     }
 
@@ -2439,7 +2507,7 @@ function CreatePostFormInner({
     }),
     untouchedMessage,
     platformAlert,
-    pageError: uploadError,
+    pageError: shownUploadError,
   });
 
   return (
@@ -2521,7 +2589,7 @@ function CreatePostFormInner({
           </div>
         )}
 
-        {uploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger" className="scroll-mt-24">{uploadError}</Alert>}
+        {shownUploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger" className="scroll-mt-24">{shownUploadError}</Alert>}
 
         <div className="space-y-1.5">
           {reuseItem ? (

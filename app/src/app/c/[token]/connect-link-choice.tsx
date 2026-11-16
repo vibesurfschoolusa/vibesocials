@@ -47,11 +47,15 @@ const CHOICE_GONE_MESSAGE =
 /**
  * A choice that didn't come back connected. `gone`: any 404 (R31
  * client-journey L2, as Settings): the choice ended (used, expired, or the
- * link turned off), so the buttons give way to the sentence. With no sentence
- * of ours, a 2xx or 5xx may have come after the save; a 4xx did not.
+ * link turned off), so the buttons give way to the sentence; so does a 409
+ * marked `connected` (R32 client-journey L2: the platform was connected
+ * meanwhile, so nothing is left to choose). With no sentence of ours, a 2xx
+ * or 5xx may have come after the save; a 4xx did not.
  */
 export function chooseFailure(status: number, data: ChoiceAnswer): { gone: boolean; message: string } {
-  if (status === 404) return { gone: true, message: data?.error || CHOICE_GONE_MESSAGE };
+  if (status === 404 || (status === 409 && data?.connected === true)) {
+    return { gone: true, message: data?.error || CHOICE_GONE_MESSAGE };
+  }
   if (data?.error) return { gone: false, message: data.error };
   const maySaved = status < 300 || status >= 500;
   return { gone: false, message: maySaved ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE };

@@ -88,6 +88,30 @@ export async function changeConnectLink(
   return { ok: true, link: method === "POST" ? data!.link! : null };
 }
 
+/**
+ * R32 client-journey L3: what Replace sends. A platform the site no longer
+ * offers (its settings were removed) would be refused with "Untick it", and
+ * the Replace confirm has no boxes, so it is left out, as "Make new client
+ * links" does (api/workspaces/client-links).
+ */
+export function replacePlatforms(link: ConnectLinkDto | null, available: readonly Platform[]): Platform[] {
+  return (link?.platforms ?? []).filter((platform) => available.includes(platform));
+}
+
+/** The Replace confirm's sentence, naming what the new link offers when some are left out. */
+export function replaceDescription(link: ConnectLinkDto | null, available: readonly Platform[]): string {
+  const base = "The old link stops working. Your client will need the new one.";
+  const kept = replacePlatforms(link, available);
+  const dropped = (link?.platforms ?? []).filter((platform) => !kept.includes(platform));
+  if (dropped.length === 0 || kept.length === 0) return base;
+  const names = (platforms: Platform[]) => platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ");
+  return `${base} It offers ${names(kept)} only: ${names(dropped)} can't be connected on this site now.`;
+}
+
+/** With nothing left to offer, the link can only be turned off. */
+export const REPLACE_NONE_OFFERED_MESSAGE =
+  "None of the platforms this link offers can be connected on this site now, so it can't be replaced. Press Turn off to stop it.";
+
 export interface ConnectLinkViewProps {
   available: Platform[];
   link: ConnectLinkDto | null;
@@ -153,20 +177,23 @@ export function ConnectLinkSectionView({
                   Copy
                 </Button>
               </div>
-            ) : (
+            ) : replacePlatforms(link, available).length > 0 ? (
               <p className="text-sm text-muted-foreground">
                 This link can&apos;t be shown again. Replace it to get a new one.
               </p>
-            )}
+            ) : null}
             <p className="text-sm text-muted-foreground">
               Offers: {link.platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ")}
             </p>
+            {workspaceBlocked || pausedByPlan || replacePlatforms(link, available).length > 0 ? null : (
+              <p className="text-sm text-muted-foreground">{REPLACE_NONE_OFFERED_MESSAGE}</p>
+            )}
             <p className="text-sm text-muted-foreground">Expires on {formatDisplayDate(link.expiresAt)}</p>
             <p className="text-sm text-muted-foreground">
               {link.lastUsedAt ? `Last used ${formatDisplayDate(link.lastUsedAt)}` : "Not used yet"}
             </p>
             <div className="flex flex-wrap gap-2">
-              {workspaceBlocked || pausedByPlan ? null : (
+              {workspaceBlocked || pausedByPlan || replacePlatforms(link, available).length === 0 ? null : (
                 <Button type="button" variant="outline" size="sm" onClick={onReplace}>
                   Replace link
                 </Button>
@@ -289,7 +316,8 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   );
 
   // Create and Replace are the same call: the server revokes any old link.
-  // Replace keeps the platforms the old link offered. Throws on failure, so the
+  // Replace keeps the platforms the old link offered that the site still
+  // offers (replacePlatforms). Throws on failure, so the
   // confirm dialog stays open; the toast says why.
   const makeLink = useCallback(
     async (platforms: Platform[]) => {
@@ -363,12 +391,12 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
           title={confirm === "replace" ? "Replace the client connect link?" : "Turn off the client connect link?"}
           description={
             confirm === "replace"
-              ? "The old link stops working. Your client will need the new one."
+              ? replaceDescription(link, available)
               : "The old link stops working. Accounts your client already connected stay connected."
           }
           confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
           destructive
-          onConfirm={confirm === "replace" ? () => makeLink(link?.platforms ?? []) : turnOff}
+          onConfirm={confirm === "replace" ? () => makeLink(replacePlatforms(link, available)) : turnOff}
         />
       }
     />

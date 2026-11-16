@@ -40,6 +40,8 @@ import {
   nextPickJudgment,
   CHOOSE_FILE_MESSAGE,
   LIBRARY_FILE_WAIT_MESSAGE,
+  refusalFormKey,
+  refusalLineShown,
   revealRefusal,
   uploadErrorAfterLibraryLoad,
   notSentBanner,
@@ -1392,7 +1394,8 @@ describe("a file still loading from Media", () => {
     const load = raw.slice(raw.indexOf("if (!reuseMediaItemId) return;"), raw.indexOf("}, [reuseMediaItemId, toast]);"));
     expect(load.match(/setUploadError\(\(current\) => uploadErrorAfterLibraryLoad\(current, "failed"\)\)/g)).toHaveLength(2);
     expect(load.match(/setUploadError\(\(current\) => uploadErrorAfterLibraryLoad\(current, "loaded"\)\)/g)).toHaveLength(1);
-    expect(submit).toContain("setUploadError(CHOOSE_FILE_MESSAGE)");
+    // R32 pages L1: a press's refusal, through refuse.
+    expect(submit).toContain("refuse(CHOOSE_FILE_MESSAGE)");
   });
 });
 
@@ -1427,7 +1430,7 @@ describe("a refused press shows its reason where the person is", () => {
     // Counted with the clear, before any refusal, so the same sentence twice is shown twice.
     expect(submit).toMatch(/setUploadError\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*if \(first\.stop === "wait"\)/);
     expect(raw).toMatch(/if \(pressCount === 0\) return;[\s\S]{0,200}revealRefusal\(uploadErrorRef\.current, reduce\);\s*\}, \[pressCount\]\);/);
-    expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger" className="scroll-mt-24">\{uploadError\}<\/Alert>/);
+    expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger" className="scroll-mt-24">\{shownUploadError\}<\/Alert>/);
   });
 
   // R31 lead review: the top bar is sticky, see-through and 64px tall (h-16);
@@ -1442,10 +1445,10 @@ describe("a refused press shows its reason where the person is", () => {
     for (const banner of banners) expect(banner).toBe('<div ref={successRef} className="scroll-mt-24">');
   });
 
-  it("the phone bar's reason is the form's line", () => {
+  it("the phone bar's reason is the form's line, as shown", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const control = raw.slice(raw.indexOf("const control = submitControl({"), raw.indexOf("return (", raw.indexOf("const control = submitControl({")));
-    expect(control).toContain("pageError: uploadError,");
+    expect(control).toContain("pageError: shownUploadError,");
   });
 });
 
@@ -1459,5 +1462,74 @@ describe("Create's AI requests carry the page's workspace id", () => {
     expect(source).toMatch(/requestCaption\(\s*"\/api\/posts\/enhance-caption",\s*\{ workspaceId, caption: uploadCaption \}/);
     expect(source).not.toMatch(/requestPhotoDescription\(blob\)/);
     expect(source.match(/requestPhotoDescription\([^)]*, workspaceId\)/g)?.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// R32 pages L1: a press's refusal line stayed after the person fixed what it
+// named (a caption typed, a time picked), on the form and as the phone bar's
+// reason, and hid the reason that is true now. The line is tied to the form
+// as it was at the press: any edit of the form takes it away.
+describe("a refusal line goes when the form is edited", () => {
+  const form = {
+    caption: "",
+    platformCaptions: null,
+    platforms: ["instagram"] as Platform[],
+    mode: "schedule" as const,
+    scheduledFor: "",
+    repeat: "none" as const,
+    repeatCount: 4,
+    file: "a.jpg:100:1",
+    reuseId: null,
+    photos: [] as string[],
+  };
+  const caption = "Please enter a caption for this post.";
+
+  it("stays while the form is as it was at the press", () => {
+    const at = refusalFormKey(form);
+    expect(refusalLineShown(caption, { text: caption, form: at }, refusalFormKey({ ...form }))).toBe(caption);
+  });
+
+  it("goes when the caption, a time, the platforms, the file or the repeat change", () => {
+    const at = refusalFormKey(form);
+    for (const edit of [
+      { caption: "Sunday session" },
+      { scheduledFor: "2026-11-20T10:00" },
+      { platforms: [] as Platform[] },
+      { platformCaptions: { instagram: "x" } },
+      { mode: "now" as const },
+      { repeat: "weekly" as const },
+      { repeatCount: 5 },
+      { file: "b.jpg:200:2" },
+      { reuseId: "m1" },
+      { photos: ["p1:uploaded"] },
+    ]) {
+      expect(refusalLineShown(caption, { text: caption, form: at }, refusalFormKey({ ...form, ...edit }))).toBeNull();
+    }
+  });
+
+  it("a line that was not a press's refusal (an upload failure) is not touched", () => {
+    const at = refusalFormKey(form);
+    const failure = "The upload failed. Try again.";
+    expect(refusalLineShown(failure, { text: caption, form: at }, refusalFormKey({ ...form, caption: "x" }))).toBe(failure);
+    expect(refusalLineShown(failure, null, refusalFormKey(form))).toBe(failure);
+    expect(refusalLineShown(null, { text: caption, form: at }, at)).toBeNull();
+  });
+
+  it("the form's refusals go through refuse, and the line and the bar show the shown line", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
+    for (const line of [
+      'refuse("Please enter a caption for this post.")',
+      'refuse("Please choose a valid date and time to schedule this post.")',
+      'refuse("Scheduled time must be at least a minute in the future.")',
+      "refuse(CHOOSE_FILE_MESSAGE)",
+      "refuse(textError)",
+      "refuse(first.message)",
+    ]) {
+      expect(submit).toContain(line);
+    }
+    expect(submit).not.toContain('setUploadError("Please enter a caption for this post.")');
+    expect(raw).toContain("const shownUploadError = refusalLineShown(uploadError, pressRefusal, formNow);");
+    expect(raw).toContain("{shownUploadError && <Alert ref={uploadErrorRef}");
   });
 });

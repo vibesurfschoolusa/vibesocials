@@ -176,3 +176,27 @@ describe("the review link and the page's workspace", () => {
     expect(html).not.toContain(">Reload</button>");
   });
 });
+
+// R32 client-journey L4: the link is the saved location's, whichever location
+// the list above shows, so the panel says which one it is for.
+describe("the review link names its location", () => {
+  it("reads the route's location with the link", () => {
+    expect(reviewLinkStateFrom(true, { url: LINK, location: "Branch A" })).toEqual({ status: "ready", url: LINK, location: "Branch A" });
+    expect(reviewLinkStateFrom(true, { url: LINK, location: "" })).toEqual({ status: "ready", url: LINK });
+    expect(reviewLinkStateFrom(true, { url: LINK, location: 7 })).toEqual({ status: "ready", url: LINK });
+  });
+
+  it("labels the link with the saved location and says it is for that one", () => {
+    const html = render({ status: "ready", url: LINK, location: "Branch A" });
+    expect(html).toContain("Your Google review link for Branch A");
+    expect(html).toContain(
+      "It sends customers to Branch A, the location saved in Settings, even while the list above shows another location.",
+    );
+  });
+
+  it("without a title, the label stays as it was", () => {
+    const html = render({ status: "ready", url: LINK });
+    expect(html).toContain("Your Google review link<");
+    expect(html).not.toContain("the location saved in Settings");
+  });
+});

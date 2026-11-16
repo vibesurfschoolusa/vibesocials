@@ -407,6 +407,20 @@ describe("the Turn off toast", () => {
   });
 });
 
+// R32 client-journey L5: a demoted owner's connect link stops working, and the
+// connect link card reads its link only when it mounts, so the demotion is
+// announced as a Team change and the card (RemountOnClientLinksReplaced) reads again.
+describe("confirmDemote and the connect link card", () => {
+  it("announces a Team change after another owner's demotion, before the links are read", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    const demote = source.slice(source.indexOf("const confirmDemote"), source.indexOf("const replaceClientLinks"));
+    const self = demote.indexOf("if (demoteTarget.userId === currentUserId)");
+    const announced = demote.indexOf('announceClientLinksReplaced("team");');
+    expect(announced).toBeGreaterThan(self);
+    expect(announced).toBeLessThan(demote.indexOf("await fetchClientLinks(workspaceId)"));
+  });
+});
+
 describe("demotionOutcome", () => {
   it("clears the invite link and says so when the demotion turned links off", () => {
     expect(demotionOutcome({ ok: true, role: "member", joinLinksRevoked: 1 })).toEqual({

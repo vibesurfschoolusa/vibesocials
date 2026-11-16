@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { REVIEW_ALREADY_APPROVED_MESSAGE, REVIEW_DECISION_MAYBE_SAVED_MESSAGE, REVIEW_POST_CHANGED_MESSAGE } from "@/lib/reviewLink";
+import {
+  REVIEW_ALREADY_APPROVED_MESSAGE,
+  REVIEW_DECISION_MAYBE_SAVED_MESSAGE,
+  REVIEW_POST_CHANGED_MESSAGE,
+  REVIEW_POST_LOCKED_MESSAGE,
+  reviewDecisionOutcome,
+} from "@/lib/reviewLink";
 
 import {
   REVIEW_CHANGE_ALREADY_SAVED_MESSAGE,
@@ -295,5 +301,35 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     expect(source).toMatch(/setPosts\(data\.posts\);\s*setMore\(data\.more === true\);\s*setReloads\(\(count\) => count \+ 1\);\s*return true;/);
     expect(source).toContain("reloads={reloads}");
+  });
+});
+
+// R32 client-journey L1: "can no longer be changed here" reloads the list like
+// "changed": the card says it at once, the reload runs in the background, and
+// the line follows the reload's result.
+describe("ReviewPostCard: a post that can no longer be changed here", () => {
+  const locked = reviewDecisionOutcome(409, { error: REVIEW_POST_LOCKED_MESSAGE }) as { kind: "changed"; message: string };
+
+  it("at once: the short sentence, and a reload to start", () => {
+    const start = cardRefusalStart(locked, 1);
+    expect(start.reload).toBe(true);
+    expect(start.line).toEqual({ text: REVIEW_POST_LOCKED_MESSAGE, clearAfter: 1 });
+  });
+
+  it("the reload worked: the card and the notice say what the list now shows", () => {
+    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, true);
+    expect(shownCardLine(line, 1)).toBe(
+      "This post can no longer be changed here. The list below shows the posts still scheduled.",
+    );
+    expect(staleNotice(locked.message, true)).toBe(shownCardLine(line, 1));
+  });
+
+  it("the reload failed: no claim about the list, and the reload step only once (the refresh alert's)", () => {
+    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, false);
+    const card = shownCardLine(line, 0) ?? "";
+    expect(card).toBe(REVIEW_POST_LOCKED_MESSAGE);
+    const notice = staleNotice(locked.message, false);
+    expect(notice).toBe(REVIEW_POST_LOCKED_MESSAGE);
+    expect(`${REFRESH_FAILED_MESSAGE} ${notice} ${card}`.match(/reload/gi)).toHaveLength(1);
   });
 });

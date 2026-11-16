@@ -100,6 +100,21 @@ describe("GET /api/reviews/link", () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
+  // R32 client-journey L4: the panel names the location its link is for (the saved one).
+  it("names the saved location's title with the link, saved or fresh", async () => {
+    mocks.findFirst.mockResolvedValue(
+      connection({
+        metadata: { locationName: LOCATION, locationTitle: " Branch A ", newReviewUri: LINK, newReviewUriFor: LOCATION },
+      }),
+    );
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A" });
+
+    mocks.findFirst.mockResolvedValue(connection({ metadata: { locationName: LOCATION, locationTitle: "Branch A" } }));
+    mocks.fetchNewReviewUri.mockResolvedValue(LINK);
+    mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A" });
+  });
+
   it("fetches the link when it is missing and saves it, merged onto the row as it is now", async () => {
     mocks.findFirst.mockResolvedValue(connection());
     mocks.fetchNewReviewUri.mockResolvedValue(LINK);

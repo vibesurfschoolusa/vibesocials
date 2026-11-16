@@ -8,6 +8,7 @@ import {
   REVIEW_VERSION_MISSING_MESSAGE,
   REVIEW_POST_CHANGED_MESSAGE,
   REVIEW_POST_LOCKED_MESSAGE,
+  REVIEW_POST_LOCKED_RELOADED_MESSAGE,
   REVIEW_ANSWER_UNREADABLE_MESSAGE,
   REVIEW_ALREADY_APPROVED_MESSAGE,
   REVIEW_DECISION_MAYBE_SAVED_MESSAGE,
@@ -132,15 +133,24 @@ describe("reviewDecisionOutcome", () => {
     ).toEqual({ kind: "saved", patch: { state: "change_requested", note: "Use the other photo" } });
   });
 
-  it("asks for the list to be reloaded only when the post changed", () => {
+  it("asks for the list to be reloaded when the post changed", () => {
     expect(reviewDecisionOutcome(409, { error: REVIEW_POST_CHANGED_MESSAGE })).toEqual({
       kind: "changed",
       message: REVIEW_POST_CHANGED_MESSAGE,
     });
+  });
+
+  // R32 client-journey L1: a post that left the schedule (published, cancelled,
+  // moved past the window) is handled like a changed one: the list reloads, and
+  // the reloaded sentence says what the list now shows.
+  it("reloads the list when the post can no longer be changed here", () => {
     expect(reviewDecisionOutcome(409, { error: REVIEW_POST_LOCKED_MESSAGE })).toEqual({
-      kind: "refused",
-      message: REVIEW_POST_LOCKED_MESSAGE,
+      kind: "changed",
+      message: REVIEW_POST_LOCKED_RELOADED_MESSAGE,
     });
+    expect(REVIEW_POST_LOCKED_RELOADED_MESSAGE).toBe(
+      "This post can no longer be changed here. The list below shows the posts still scheduled.",
+    );
   });
 
   it("reloads the list when the approval already stood, instead of marking the text on screen as approved", () => {

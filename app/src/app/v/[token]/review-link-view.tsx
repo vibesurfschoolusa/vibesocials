@@ -13,6 +13,8 @@ import {
   REVIEW_LIST_MAX,
   REVIEW_DECISION_MAYBE_SAVED_MESSAGE,
   REVIEW_POST_CHANGED_MESSAGE,
+  REVIEW_POST_LOCKED_MESSAGE,
+  REVIEW_POST_LOCKED_RELOADED_MESSAGE,
   REVIEW_NOTE_MAX,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
@@ -33,6 +35,7 @@ const NOT_RELOADED: Record<string, string> = {
   [REVIEW_CHANGE_ALREADY_SAVED_MESSAGE]: "Your change request was already saved.",
   [REVIEW_ALREADY_APPROVED_MESSAGE]: "This post was already approved.",
   [REVIEW_POST_CHANGED_MESSAGE]: "This post was changed after you opened this page.",
+  [REVIEW_POST_LOCKED_RELOADED_MESSAGE]: REVIEW_POST_LOCKED_MESSAGE,
 };
 
 export function staleNotice(message: string, reloaded: boolean): string {
