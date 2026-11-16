@@ -18,6 +18,7 @@ import {
 } from "@/server/googleReviews";
 import { googleRouteRateLimit, listGbpLocationsWithToken } from "@/app/api/connections/google_business_profile/gbpLocations";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { gbpDisconnectedBody } from "@/app/api/reviews/gbpDisconnected";
 
 export const dynamic = "force-dynamic";
 
@@ -46,15 +47,6 @@ export async function POST(request: Request) {
     }
     role = context.role;
 
-    // Pause (2026-11-10): a paused workspace cannot create or move work.
-    const blocked = accessBlockResponse(context);
-    if (blocked) return blocked;
-
-    // R25 security-billing L1: before any Google call (after the pause check,
-    // which reads and writes nothing); a reply is a public write.
-    const limited = await googleRouteRateLimit(context.user.id, "reviews/reply", 20);
-    if (limited) return limited;
-
     const body = await readJsonObject(request);
     if (!body) {
       return invalidJsonBodyResponse();
@@ -63,9 +55,20 @@ export async function POST(request: Request) {
     // the cookie alone: a stale tab would post publicly through another
     // workspace's connection. Before any Google call.
     // No id is a page open from before the id was sent: as before, until reloaded.
+    // R28 client-journey L6: before the pause, which is the cookie's workspace's.
     const refusal =
       body.workspaceId === undefined ? null : renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
     if (refusal) return refusal;
+
+    // Pause (2026-11-10): a paused workspace cannot create or move work.
+    const blocked = accessBlockResponse(context);
+    if (blocked) return blocked;
+
+    // R25 security-billing L1: before any Google call (after the workspace and
+    // pause checks, which write nothing); a reply is a public write.
+    const limited = await googleRouteRateLimit(context.user.id, "reviews/reply", 20);
+    if (limited) return limited;
+
     const { comment, reviewName } = body;
 
     if (!comment || typeof comment !== "string" || comment.trim().length === 0) {
@@ -105,10 +108,7 @@ export async function POST(request: Request) {
     });
 
     if (!connection) {
-      return NextResponse.json(
-        { error: "No Google Business Profile connection found" },
-        { status: 404 }
-      );
+      return NextResponse.json(gbpDisconnectedBody(role), { status: 404 });
     }
 
     // A connection Google has revoked reads "Reconnect" at once, as the link

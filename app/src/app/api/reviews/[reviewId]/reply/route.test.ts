@@ -22,7 +22,8 @@ vi.mock("@/app/api/connections/google_business_profile/gbpLocations", async (imp
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
-vi.mock("@/lib/workspaceStatus", () => ({ accessBlockResponse: () => null }));
+const { accessBlockMock } = vi.hoisted(() => ({ accessBlockMock: vi.fn((_context: unknown): Response | null => null) }));
+vi.mock("@/lib/workspaceStatus", () => ({ accessBlockResponse: (context: unknown) => accessBlockMock(context) }));
 vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: findFirstMock } } }));
 vi.mock("@/server/googleReviews", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/googleReviews")>()),
@@ -66,6 +67,7 @@ beforeEach(() => {
   listGbpLocationsMock.mockResolvedValue(listing([listed("accounts/1/locations/2", "FTL-01"), listed("accounts/1/locations/5")]));
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   flagRejectedTokenMock.mockResolvedValue("flagged");
+  accessBlockMock.mockImplementation(() => null);
 });
 
 const OWNER = { user: { id: "u1" }, workspace: { id: "ws-1" }, role: "owner" };
@@ -101,6 +103,36 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED", error: expect.any(String) });
     expect(findFirstMock).not.toHaveBeenCalled();
     expect(listGbpLocationsMock).not.toHaveBeenCalled();
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  // R28 client-journey L6: a tab drawn for another workspace gets the Reload
+  // notice, not the cookie's workspace's pause.
+  it("checks the page's workspace before the pause: 409 for another workspace's tab, the pause for its own", async () => {
+    const paused = () => Response.json({ error: "This workspace is paused.", code: "WORKSPACE_PAUSED" }, { status: 403 });
+    accessBlockMock.mockImplementation(paused);
+
+    const other = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1", workspaceId: "ws-other" });
+    expect(other.status).toBe(409);
+    await expect(other.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+
+    const own = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+    expect(own.status).toBe(403);
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  // R28 client-journey L3: removed while Reviews is open; the step, by role.
+  it.each([
+    ["member", "Google Business Profile was disconnected from this workspace. The workspace owner can connect it again; then reload this page."],
+    ["owner", "Google Business Profile was disconnected, maybe in another tab. Reload this page, then connect it again."],
+  ] as const)("no connection any more (%s): 404 with what happened and the step", async (role, sentence) => {
+    getWorkspaceContextMock.mockResolvedValue({ ...OWNER, role });
+    findFirstMock.mockResolvedValue(null);
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: sentence });
     expect(replyToReviewMock).not.toHaveBeenCalled();
   });
 

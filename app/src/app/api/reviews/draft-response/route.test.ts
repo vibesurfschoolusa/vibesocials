@@ -10,6 +10,8 @@ const { getWorkspaceContextMock, checkRateLimitMock, memberFindManyMock } = vi.h
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
+const { accessBlockMock } = vi.hoisted(() => ({ accessBlockMock: vi.fn((_context: unknown): Response | null => null) }));
+vi.mock("@/lib/workspaceStatus", () => ({ accessBlockResponse: (context: unknown) => accessBlockMock(context) }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 // R5-security M1: the owner budget reads the workspace's owners.
 // aiGuards reads the AI counters before spending any (R6-security L3).
@@ -87,6 +89,25 @@ describe("POST /api/reviews/draft-response", () => {
 
   // R27 security-billing L1: a tab rendered for another workspace drafts nothing
   // (no brand voice, no AI quota, no provider call) in the cookie's workspace.
+  // R28 client-journey L6: a tab drawn for another workspace gets the Reload
+  // notice, not the cookie's workspace's pause.
+  it("checks the page's workspace before the pause: 409 for another workspace's tab, the pause for its own", async () => {
+    accessBlockMock.mockImplementation(() =>
+      Response.json({ error: "This workspace is paused.", code: "WORKSPACE_PAUSED" }, { status: 403 }),
+    );
+    try {
+      const other = await post({ ...validBody, workspaceId: "ws-other" });
+      expect(other.status).toBe(409);
+      await expect(other.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+
+      const own = await post(validBody);
+      expect(own.status).toBe(403);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      accessBlockMock.mockImplementation(() => null);
+    }
+  });
+
   it("refuses a workspaceId that is not the active workspace: 409, no limiter, quota or provider call", async () => {
     const response = await post({ ...validBody, workspaceId: "ws-other" });
 

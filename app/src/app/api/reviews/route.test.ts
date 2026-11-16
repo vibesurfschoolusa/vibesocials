@@ -77,6 +77,20 @@ const listing = (locations: ReturnType<typeof listed>[]) => ({
 });
 
 describe("GET /api/reviews", () => {
+  // R28 client-journey L3: removed while Reviews is open; the step, by role.
+  it.each([
+    ["member", "Google Business Profile was disconnected from this workspace. The workspace owner can connect it again; then reload this page."],
+    ["owner", "Google Business Profile was disconnected, maybe in another tab. Reload this page, then connect it again."],
+  ] as const)("no connection any more (%s): 404 with what happened and the step", async (role, sentence) => {
+    getWorkspaceContextMock.mockResolvedValue({ ...OWNER, role });
+    findFirstMock.mockResolvedValue(null);
+
+    const response = await GET(new Request("http://localhost/api/reviews?location=accounts/1/locations/2"));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: sentence });
+  });
+
   it("returns every review read and whether the list was cut short", async () => {
     fetchAllReviewsMock.mockResolvedValue({ reviews: [{ reviewId: "a" }, { reviewId: "b" }], truncated: true });
 

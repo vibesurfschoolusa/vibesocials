@@ -16,6 +16,7 @@ import {
 } from "@/server/googleReviews";
 import { googleRouteRateLimit, listGbpLocationsWithToken } from "@/app/api/connections/google_business_profile/gbpLocations";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { gbpDisconnectedBody } from "@/app/api/reviews/gbpDisconnected";
 
 export const dynamic = "force-dynamic";
 
@@ -73,10 +74,7 @@ export async function GET(request: Request) {
     });
 
     if (!connection) {
-      return NextResponse.json(
-        { error: "No Google Business Profile connection found" },
-        { status: 404 }
-      );
+      return NextResponse.json(gbpDisconnectedBody(role), { status: 404 });
     }
 
     // A connection Google has revoked reads "Reconnect" at once, as the link
