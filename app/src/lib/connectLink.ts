@@ -158,11 +158,12 @@ const LINKEDIN_NO_PAGE_CODE = "linkedin_no_admin_pages";
  * Settings uses (lib/oauthResult.ts causeMessage) with this page's "press";
  * they never mention Settings.
  */
-const VISITOR_CAUSES: ReadonlySet<string> = new Set([
+export const VISITOR_CAUSES: ReadonlySet<string> = new Set([
   "facebook_page_no_pages",
   "instagram_no_instagram_account",
   LINKEDIN_NO_PAGE_CODE,
   "pinterest_no_boards",
+  "youtube_no_channel",
 ]);
 
 export type ConnectLinkResult = { variant: "success" | "danger"; message: string };

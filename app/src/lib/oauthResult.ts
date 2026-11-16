@@ -132,6 +132,9 @@ const CAUSE_FIXES: Record<string, string> = {
     "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one)",
 };
 
+/** Every code {@link causeMessage} words (the connect link page keeps its own list of them). */
+export const CAUSE_CODES: readonly string[] = Object.keys(CAUSE_FIXES);
+
 /** The fix-first sentence for `code`, naming the button `shown` gives; null for any other code. */
 export function causeMessage(code: string, shown: ShownControl, press: "click" | "press"): string | null {
   return Object.hasOwn(CAUSE_FIXES, code) ? fixThenTryAgain(CAUSE_FIXES[code], shown, press) : null;

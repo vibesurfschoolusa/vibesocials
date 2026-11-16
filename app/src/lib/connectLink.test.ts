@@ -8,8 +8,9 @@ import {
   describeConnectLinkResult,
   isConnectLinkTokenShape,
   parseConnectLinkPlatforms,
+  VISITOR_CAUSES,
 } from "./connectLink";
-import type { ShownControl } from "./oauthResult";
+import { CAUSE_CODES, type ShownControl } from "./oauthResult";
 
 const ALL_ENV = {
   TIKTOK_CLIENT_KEY: "k",
@@ -125,6 +126,22 @@ describe("the sentence the visitor reads after a flow", () => {
     for (const shown of ["reconnect", "connected"] as const) {
       expect(withShown("x_cancelled", shown)).not.toMatch(/[Nn]othing was connected/);
     }
+  });
+
+  // R30 (platform-clients L2, pages L1): the client can fix each of these on
+  // the platform's side, so "Try again" alone repeats the failure.
+  it("every fix-first cause Settings words is worded on this page too, or left out on purpose", () => {
+    // Codes deliberately worded as "Try again" here, with why. None today.
+    const NOT_ON_LINK_PAGE: string[] = [];
+    expect([...VISITOR_CAUSES, ...NOT_ON_LINK_PAGE].sort()).toEqual([...CAUSE_CODES].sort());
+  });
+
+  it("a Google account with no YouTube channel: create one or use the account that owns it", () => {
+    expect(describe_({ error: "youtube_no_channel" })).toEqual({
+      variant: "danger",
+      message:
+        "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel, then press Connect again.",
+    });
   });
 
   it("a callback's own denied or auth_failed code is never read as a cancellation", () => {
