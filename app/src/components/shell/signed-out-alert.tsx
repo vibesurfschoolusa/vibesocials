@@ -36,6 +36,27 @@ export function useServerSaysSignedOut(
   return nobody && answer !== null && answer.about === session && answer.signedOut;
 }
 
+const LINK_CLASS = "font-medium text-primary underline-offset-4 hover:underline";
+
+/**
+ * Where "Sign in again" goes. In a browser tab: Log in in a new tab, which
+ * lands on /signed-in-again (#177), so this page and what it holds stay. In an
+ * installed app (display-mode standalone, or iOS's navigator.standalone) a new
+ * tab would open the browser, with other cookies: Log in in the same view,
+ * coming back to this page.
+ */
+export function signInAgainLink(win: Window | undefined): { href: string; newTab: boolean } {
+  const standalone =
+    !!win &&
+    ((typeof win.matchMedia === "function" && win.matchMedia("(display-mode: standalone)").matches) ||
+      (win.navigator as Navigator & { standalone?: boolean } | undefined)?.standalone === true);
+  if (!standalone || !win) {
+    return { href: `/login?callbackUrl=${encodeURIComponent("/signed-in-again")}`, newTab: true };
+  }
+  const here = `${win.location.pathname}${win.location.search}${win.location.hash}`;
+  return { href: `/login?callbackUrl=${encodeURIComponent(here)}`, newTab: false };
+}
+
 /**
  * R20 new-customer L1 (= pages L1): an open app page whose session now names
  * nobody (password changed on another device, signed out in another tab). The
@@ -50,10 +71,17 @@ export function useServerSaysSignedOut(
  * GG1 follow-up: the new tab lands on /signed-in-again, not on this page,
  * which would open a second, empty copy of it.
  *
+ * R22 new-customer / pages: an installed app (an iPhone home-screen web app
+ * above all) keeps its own cookies, apart from the browser's, so a new tab
+ * opens the browser and a sign-in there never reaches the app. There the link
+ * opens Log in in the same view and comes back to this page
+ * (signInAgainLink), and the line says to copy unsent work first.
+ *
  * Only rendered once the server has said so (useServerSaysSignedOut), never
  * in the server's HTML.
  */
 export function SignedOutAlert() {
+  const [link] = useState(() => signInAgainLink(typeof window === "undefined" ? undefined : window));
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState === "visible") rereadSessionHere(window);
@@ -66,15 +94,21 @@ export function SignedOutAlert() {
       <Alert variant="warning" className="items-center p-3">
         <span className="text-foreground">
           You were signed out.{" "}
-          <a
-            href={`/login?callbackUrl=${encodeURIComponent("/signed-in-again")}`}
-            target="_blank"
-            rel="noopener"
-            className="font-medium text-primary underline-offset-4 hover:underline"
-          >
-            Sign in again in a new tab
-          </a>
-          , then come back: this page keeps what you wrote.
+          {link.newTab ? (
+            <>
+              <a href={link.href} target="_blank" rel="noopener" className={LINK_CLASS}>
+                Sign in again in a new tab
+              </a>
+              , then come back: this page keeps what you wrote.
+            </>
+          ) : (
+            <>
+              <a href={link.href} className={LINK_CLASS}>
+                Sign in again
+              </a>
+              . Copy anything you haven&apos;t sent first: this page will reload.
+            </>
+          )}
         </span>
       </Alert>
     </div>
