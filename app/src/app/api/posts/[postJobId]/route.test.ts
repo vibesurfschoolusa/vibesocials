@@ -138,24 +138,45 @@ beforeEach(() => {
   postJobResultFindManyMock.mockResolvedValue([]);
 });
 
+/** R32: the Queue's single-post read, from a page drawn for `workspaceId` (null sends none). */
+function getReq(workspaceId: string | null = "ws-1"): NextRequest {
+  const address = new URL("http://localhost/api/posts/job-1");
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address) as unknown as NextRequest;
+}
+
 describe("GET /api/posts/[postJobId]", () => {
+  // R32 publishing L1: the Queue's Edit reads the post for the page's workspace only.
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(getReq("ws-2"), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("WORKSPACE_CHANGED");
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(getReq(null), ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
   it("401s when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
-    const res = await GET(req(null), ctx("job-1"));
+    const res = await GET(getReq(), ctx("job-1"));
     expect(res.status).toBe(401);
     expect(findFirstMock).not.toHaveBeenCalled();
   });
 
   it("404s when the job isn't in the caller's active workspace", async () => {
     findFirstMock.mockResolvedValue(null);
-    const res = await GET(req(null), ctx("job-1"));
+    const res = await GET(getReq(), ctx("job-1"));
     expect(res.status).toBe(404);
   });
 
   it("scopes the ownership read to workspaceId (not userId) — cross-workspace isolation", async () => {
     findFirstMock.mockResolvedValue(makeJobRow());
 
-    await GET(req(null), ctx("job-1"));
+    await GET(getReq(), ctx("job-1"));
 
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1" },
@@ -167,7 +188,7 @@ describe("GET /api/posts/[postJobId]", () => {
     // a job that actually lives in ws-2 — the where clause wouldn't match it,
     // so Prisma would return null, same as "doesn't exist".
     findFirstMock.mockResolvedValue(null);
-    const res = await GET(req(null), ctx("foreign-job"));
+    const res = await GET(getReq(), ctx("foreign-job"));
     expect(res.status).toBe(404);
     await expect(res.json()).resolves.toEqual({ error: "This post no longer exists." });
   });
@@ -180,7 +201,7 @@ describe("GET /api/posts/[postJobId] — response DTO projection (SEC-1)", () =>
     findFirstMock.mockResolvedValue(jobRow);
     postJobResultFindManyMock.mockResolvedValue([resultRow]);
 
-    const res = await GET(req(null), ctx("job-1"));
+    const res = await GET(getReq(), ctx("job-1"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -220,7 +241,7 @@ describe("GET /api/posts/[postJobId] — response DTO projection (SEC-1)", () =>
       makeResultRow({ socialConnectionId: null, status: "failed", externalPostId: null, errorMessage: "boom" }),
     ]);
 
-    const res = await GET(req(null), ctx("job-1"));
+    const res = await GET(getReq(), ctx("job-1"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -237,7 +258,7 @@ describe("GET /api/posts/[postJobId] — response DTO projection (SEC-1)", () =>
     );
     postJobResultFindManyMock.mockResolvedValue([]);
 
-    const res = await GET(req(null), ctx("job-1"));
+    const res = await GET(getReq(), ctx("job-1"));
     const body = await res.json();
 
     expect(body.postJob.status).toBe("scheduled");

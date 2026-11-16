@@ -10,7 +10,7 @@ import { shownControl, signInButton } from "@/lib/oauthResult";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import {
   connectPendingCandidate,
   deletePendingConnection,
@@ -168,6 +168,11 @@ export async function GET(request: Request, { params }: PendingRouteContext) {
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
+
+  // R32 publishing L1: the page's workspace, so a Settings tab left on another
+  // one never lists this workspace's account choice.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), contextOrError.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const { id } = await params;
 

@@ -30,10 +30,12 @@ export default async function HomePage({
   const user = await getCurrentUser();
   if (user) {
     const { notice } = (await searchParams) ?? {};
+    const { workspaceId, setup } = await loadDashboardWorkspace();
     return (
       <DashboardHome
         availablePlatforms={advertisedPlatforms()}
-        setup={await loadWorkspaceSetup()}
+        workspaceId={workspaceId}
+        setup={setup}
         notice={homeNotice(notice, user.email)}
       />
     );
@@ -50,15 +52,20 @@ export default async function HomePage({
 }
 
 /**
- * What the Get started steps need from the active workspace (S2): whether the
- * footer and brand voice are set and, for an owner, whether a client link is
- * on. Null when it cannot be read: the dashboard then hides the steps, as it
- * does when its own fetches fail, instead of the page failing.
+ * The active workspace's id, which the dashboard's reads send (R32: a tab left
+ * on it after another tab switched gets the switch sentence, not the other
+ * workspace's posts), and what the Get started steps need from it (S2):
+ * whether the footer and brand voice are set and, for an owner, whether a
+ * client link is on. The setup is null when it cannot be read: the dashboard
+ * then hides the steps, as it does when its own fetches fail, instead of the
+ * page failing.
  */
-async function loadWorkspaceSetup(): Promise<WorkspaceSetup | null> {
+async function loadDashboardWorkspace(): Promise<{ workspaceId: string | null; setup: WorkspaceSetup | null }> {
+  let workspaceId: string | null = null;
   try {
     const context = await getWorkspaceContext();
-    if (!context) return null;
+    if (!context) return { workspaceId, setup: null };
+    workspaceId = context.workspace.id;
     let hasClientLink = false;
     if (context.role === "owner") {
       // Active as each link's own page counts it: not revoked, and a connect
@@ -79,9 +86,9 @@ async function loadWorkspaceSetup(): Promise<WorkspaceSetup | null> {
       const count = row?._count;
       hasClientLink = Boolean(count && count.uploadLinks + count.reviewLinks + count.connectLinks > 0);
     }
-    return workspaceSetupFrom(context.workspace, context.role, hasClientLink);
+    return { workspaceId, setup: workspaceSetupFrom(context.workspace, context.role, hasClientLink) };
   } catch (error) {
     logger.error("[dashboard] Couldn't read the workspace setup", { error: error instanceof Error ? error.name : typeof error });
-    return null;
+    return { workspaceId, setup: null };
   }
 }

@@ -730,7 +730,9 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   // error — clears it the same way.
   const fetchItems = useCallback(async () => {
     try {
-      const response = await fetch("/api/media");
+      // R32 publishing L1: the workspace the library was drawn for; the route's
+      // refusal sentence (another tab switched) is shown in place of the list.
+      const response = await fetch(withWorkspaceId("/api/media", workspaceId));
       const data = (await response.json().catch(() => null)) as ListResponse | null;
 
       if (!response.ok) {
@@ -748,7 +750,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
@@ -770,7 +772,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const response = await fetch(`/api/media?cursor=${encodeURIComponent(nextCursor)}`);
+      const response = await fetch(withWorkspaceId(`/api/media?cursor=${encodeURIComponent(nextCursor)}`, workspaceId));
       const data = (await response.json().catch(() => null)) as
         | ListResponse
         | { error?: string }
@@ -790,7 +792,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     } finally {
       setLoadingMore(false);
     }
-  }, [nextCursor, loadingMore, toast]);
+  }, [nextCursor, loadingMore, toast, workspaceId]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();

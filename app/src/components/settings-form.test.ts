@@ -7,7 +7,9 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: () => {}, 
 
 import type { UserSettings } from "@/lib/userSettings";
 
-import { SettingsForm } from "./settings-form";
+import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
+
+import { readRecentCaptions, SettingsForm } from "./settings-form";
 
 const SETTINGS: UserSettings = {
   companyWebsite: "www.example.com",
@@ -338,5 +340,41 @@ describe("SettingsForm — the brand voice heading and the plan", () => {
     const html = squash(render(SETTINGS));
     expect(html).toContain(`>${TODAY}<`);
     expect(html).not.toContain("On the Growth and Pro plans");
+  });
+});
+
+// R32 new-customer L3: "Use my recent posts" reads this page's workspace only;
+// a refusal (another tab switched) says the shared sentence and fills nothing.
+describe("readRecentCaptions", () => {
+  it("asks for this workspace's published posts and gives their captions", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ jobs: [{ caption: "One" }, { caption: null }] }));
+    await expect(readRecentCaptions("ws-1", fetchImpl as unknown as typeof fetch)).resolves.toEqual({
+      ok: true,
+      captions: ["One", null],
+    });
+    expect(String((fetchImpl.mock.calls as unknown as [string][])[0][0])).toBe("/api/posts?status=completed&workspaceId=ws-1");
+  });
+
+  it("a refusal: the switch sentence, no captions", async () => {
+    const fetchImpl = vi.fn(async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response);
+    await expect(readRecentCaptions("ws-1", fetchImpl as unknown as typeof fetch)).resolves.toEqual({
+      ok: false,
+      text: WORKSPACE_CHANGED_SAVE_MESSAGE,
+    });
+  });
+
+  it("any other failure: the form's own try-again sentence", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ error: "x" }, { status: 500 }));
+    await expect(readRecentCaptions("ws-1", fetchImpl as unknown as typeof fetch)).resolves.toEqual({
+      ok: false,
+      text: "Could not load your recent posts. Try again.",
+    });
+    const offline = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(readRecentCaptions("ws-1", offline as unknown as typeof fetch)).resolves.toEqual({
+      ok: false,
+      text: "Could not load your recent posts. Try again.",
+    });
   });
 });

@@ -573,8 +573,11 @@ describe("POST /api/media", () => {
 });
 
 /** GET request for the paged list; `query` is the raw query string (no `?`). */
-function getRequest(query = ""): Request {
-  return new Request(`http://localhost/api/media${query ? `?${query}` : ""}`);
+/** R32: a read from a page drawn for `workspaceId` (ws-1, the mock's own, by default; null sends none). */
+function getRequest(query = "", workspaceId: string | null = "ws-1"): Request {
+  const address = new URL(`http://localhost/api/media${query ? `?${query}` : ""}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
 }
 
 /**
@@ -603,6 +606,22 @@ interface ListBody {
 }
 
 describe("GET /api/media", () => {
+  // R32 publishing L1: Media and Add many's picker on a page drawn for another
+  // workspace get the switch sentence, never this library.
+  it("409s another workspace's id and reads nothing", async () => {
+    const response = await GET(getRequest("", "ws-2"));
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("WORKSPACE_CHANGED");
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const response = await GET(getRequest("", null));
+    expect(response.status).toBe(400);
+    expect((await response.json()).code).toBe("MISSING_WORKSPACE_ID");
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
   it("401s and never queries when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
@@ -616,7 +635,7 @@ describe("GET /api/media", () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-shared" }));
     findManyMock.mockResolvedValue([]);
 
-    await GET(getRequest());
+    await GET(getRequest("", "ws-shared"));
 
     expect(findManyMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { workspaceId: "ws-shared", deletedAt: null } }),
@@ -831,7 +850,7 @@ describe("GET /api/media", () => {
       findManyMock.mockResolvedValue([]);
       const cursor = encodePostsCursor(new Date("2026-06-01T00:00:00.000Z"), "media-050");
 
-      await GET(getRequest(`cursor=${encodeURIComponent(cursor)}`));
+      await GET(getRequest(`cursor=${encodeURIComponent(cursor)}`, "ws-other"));
 
       expect(findManyMock).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -27,17 +27,20 @@ const FILTER_TABS: readonly (readonly [ActivityFilter, string])[] = [
   ["problems", "Had a problem"],
 ];
 
-/** Client-rendered activity list. The parent server component gates access. */
-export function ActivityView() {
+/**
+ * Client-rendered activity list. The parent server component gates access and
+ * passes the workspace the page was drawn for (R32), which every read sends.
+ */
+export function ActivityView({ workspaceId }: { workspaceId: string | null }) {
   // useSearchParams needs a Suspense boundary above it (same as register-form).
   return (
     <Suspense fallback={null}>
-      <ActivityViewInner />
+      <ActivityViewInner pageWorkspaceId={workspaceId} />
     </Suspense>
   );
 }
 
-function ActivityViewInner() {
+function ActivityViewInner({ pageWorkspaceId }: { pageWorkspaceId: string | null }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const filter = activityFilterFromSearch(searchParams);
@@ -50,13 +53,14 @@ function ActivityViewInner() {
     workspaceMemberCount,
     workspaceRole,
     workspaceId,
+    workspaceChanged,
     loadMore,
     loadingMore,
     loadMoreError,
     hasMore,
     watchRetry,
     pollingStopped,
-  } = usePostJobs(filter === "problems" ? { show: "problems" } : undefined);
+  } = usePostJobs(pageWorkspaceId, filter === "problems" ? { show: "problems" } : undefined);
   // Team Workspaces (Task 7, design §7) — attribution only in a shared
   // (>1-member) workspace, so a solo workspace's activity feed is unchanged.
   const showAttribution = (workspaceMemberCount ?? 0) > 1;
@@ -149,6 +153,12 @@ function ActivityViewInner() {
             {pollingStopped ? (
               <Alert variant="info" className="mb-3">
                 {POLLING_STOPPED_HINT}
+              </Alert>
+            ) : null}
+            {/* R32: another tab switched workspace; the list stays as it was. */}
+            {workspaceChanged ? (
+              <Alert variant="warning" className="mb-3">
+                {workspaceChanged}
               </Alert>
             ) : null}
             <div className="space-y-3">

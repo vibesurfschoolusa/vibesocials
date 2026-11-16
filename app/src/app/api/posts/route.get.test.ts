@@ -42,6 +42,12 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
+
 import { GET } from "./route";
 
 /** F6: the pair lookup every non-empty page makes (Feed and Story labels). */
@@ -59,8 +65,11 @@ function listCalls() {
   return postJobFindManyMock.mock.calls.filter(([arg]) => !isPairLookup(arg));
 }
 
-function getRequest(url = "http://localhost/api/posts"): Request {
-  return new Request(url, { method: "GET" });
+/** R32: every read names the page's workspace (ws-1, the mock's), unless a test says otherwise. */
+function getRequest(url = "http://localhost/api/posts", workspaceId: string | null = "ws-1"): Request {
+  const address = new URL(url);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address, { method: "GET" });
 }
 
 /** A job whose fan-out includes a successful YouTube result + a TikTok result. */
@@ -117,6 +126,24 @@ beforeEach(() => {
   // 07a: by default no post on the page has several photos.
   postJobMediaGroupByMock.mockReset();
   postJobMediaGroupByMock.mockResolvedValue([]);
+});
+
+// R32 publishing L1 / new-customer L3: a page drawn for another workspace
+// (another tab switched) gets the switch sentence, never this workspace's posts.
+describe("GET /api/posts — the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(getRequest("http://localhost/api/posts?status=completed", "ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id (from before the release) and reads nothing", async () => {
+    const res = await GET(getRequest("http://localhost/api/posts", null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
@@ -427,7 +454,7 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
   it("queries jobs scoped to the active workspace, selecting the creator relation for attribution", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-active" }));
 
-    await GET(getRequest());
+    await GET(getRequest(undefined, "ws-active"));
 
     expect(listCalls()).toHaveLength(1);
     const arg = postJobFindManyMock.mock.calls[0][0];
@@ -443,7 +470,7 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-A" }));
     postJobFindManyMock.mockResolvedValue([]); // workspace A has no jobs of its own
 
-    const res = await GET(getRequest());
+    const res = await GET(getRequest(undefined, "ws-A"));
     const body = (await res.json()) as PostsResponse;
 
     expect(postJobFindManyMock).toHaveBeenCalledWith(
@@ -459,7 +486,7 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
     getWorkspaceMemberCountMock.mockResolvedValue(4);
     postJobFindManyMock.mockResolvedValue([]);
 
-    const res = await GET(getRequest());
+    const res = await GET(getRequest(undefined, "ws-A"));
     const body = (await res.json()) as PostsResponse;
 
     expect(body.workspaceMemberCount).toBe(4);
@@ -1117,7 +1144,7 @@ describe("GET /api/posts - the client's review (client review link)", () => {
 
   it("says which workspace the list is for, so the Queue's link panel acts on that one", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-7" }));
-    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+    const body = (await (await GET(getRequest(undefined, "ws-7"))).json()) as PostsResponse;
     expect(body.workspaceId).toBe("ws-7");
   });
 

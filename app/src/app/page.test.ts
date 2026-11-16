@@ -114,6 +114,24 @@ describe("HomePage — the workspace setup the dashboard gets", () => {
   });
 });
 
+// R32 publishing L1: the dashboard's reads name the workspace the page was drawn for.
+describe("HomePage — the workspace the dashboard reads", () => {
+  const workspaceIdOf = async () => ((await HomePage()) as { props: { workspaceId: string | null } }).props.workspaceId;
+
+  it("passes the active workspace's id, also when the setup read fails", async () => {
+    m.context = { role: "owner", workspace: WORKSPACE };
+    m.findUnique.mockResolvedValue(null);
+    expect(await workspaceIdOf()).toBe("ws1");
+    m.findUnique.mockRejectedValue(new Error("db down"));
+    expect(await workspaceIdOf()).toBe("ws1");
+  });
+
+  it("passes null when the workspace can't be read", async () => {
+    m.contextError = new Error("db down");
+    expect(await workspaceIdOf()).toBeNull();
+  });
+});
+
 // Go-live check 2026-11-11: the dashboard gets the platforms this site offers,
 // so its YouTube card names Pinterest only where Pinterest is configured.
 describe("HomePage — signed in", () => {

@@ -171,7 +171,9 @@ function postReq(body: Record<string, unknown>) {
   });
 }
 
-const getReq = () => new Request("http://localhost/api/connections/pending/pending-1");
+/** R32: the dialog's read, from a page drawn for `workspaceId` (null sends none). */
+const getReq = (workspaceId: string | null = "ws-1") =>
+  new Request(`http://localhost/api/connections/pending/pending-1${workspaceId === null ? "" : `?workspaceId=${workspaceId}`}`);
 const deleteReq = (body: unknown = { workspaceId: "ws-1" }) =>
   new Request("http://localhost/api/connections/pending/pending-1", {
     method: "DELETE",
@@ -306,6 +308,19 @@ describe.each(HANDLERS)("%s /api/connections/pending/[id]: access", (_method, ha
 });
 
 describe("GET /api/connections/pending/[id]", () => {
+  // R32 publishing L1: the choice dialog reads only for the page's workspace.
+  it("409s another workspace's id and reads nothing", async () => {
+    const response = await GET(getReq("ws-2"), ctx());
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("WORKSPACE_CHANGED");
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a read that sent no id", async () => {
+    expect((await GET(getReq(null), ctx())).status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
   it("lists the Facebook Pages by id and name", async () => {
     findUniqueMock.mockResolvedValue(row(FACEBOOK));
 
@@ -777,7 +792,7 @@ describe("POST: the same-end flag on a LinkedIn choice", () => {
 // shows for it (shownControl), and without it names no button.
 describe("pending/[id]: a choice that is gone", () => {
   const hinted = (method: string, platform: string) =>
-    new Request(`http://localhost/api/connections/pending/pending-1?platform=${platform}`, {
+    new Request(`http://localhost/api/connections/pending/pending-1?platform=${platform}${method === "GET" ? "&workspaceId=ws-1" : ""}`, {
       method,
       headers: { "content-type": "application/json" },
       body: method === "GET" ? undefined : JSON.stringify({ workspaceId: "ws-1", candidateId: "page-2" }),
@@ -956,7 +971,7 @@ describe("pending/[id]: a choice that is gone", () => {
 // R31 follow-up: the load error said only "Failed to load the accounts."
 describe("GET /api/connections/pending/[id]: a load that fails", () => {
   const load = (platform?: string) =>
-    GET(new Request(`http://localhost/api/connections/pending/pending-1${platform ? `?platform=${platform}` : ""}`), ctx());
+    GET(new Request(`http://localhost/api/connections/pending/pending-1?workspaceId=ws-1${platform ? `&platform=${platform}` : ""}`), ctx());
 
   beforeEach(() => {
     findUniqueMock.mockRejectedValue(new Error("db down"));

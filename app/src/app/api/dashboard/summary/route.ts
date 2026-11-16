@@ -9,6 +9,7 @@ import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
 import { planIncludes } from "@/lib/planFeatures";
 import type { DashboardSummary } from "@/lib/needsYou";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 export const dynamic = "force-dynamic";
 
@@ -63,11 +64,15 @@ const AWAITING_APPROVAL: Prisma.PostJobWhereInput = {
  * not grow with the number of posts, and nothing but numbers and one time
  * leaves the server.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so a dashboard left on another one never counts this one's posts.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const rateLimit = await checkRateLimit({
     userId: context.user.id,

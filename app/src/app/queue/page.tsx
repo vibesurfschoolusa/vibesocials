@@ -31,5 +31,6 @@ export default async function QueuePage() {
     : undefined;
 
   // R5-new-customer L6: the empty Queue offers Add many only where the plan includes it.
-  return <QueueView footerSettings={footerSettings} addManyIncluded={context ? planIncludes(context.workspace, "bulk") : true} />;
+  // R32: the workspace the page was drawn for, which the Queue's reads and actions send.
+  return <QueueView workspaceId={context?.workspace.id ?? null} footerSettings={footerSettings} addManyIncluded={context ? planIncludes(context.workspace, "bulk") : true} />;
 }

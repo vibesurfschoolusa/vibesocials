@@ -11,6 +11,7 @@ import type {
   ConnectionsResponse,
 } from "@/lib/connectionsDto";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
  * GET /api/connections
@@ -22,12 +23,20 @@ import { signedOutResponse } from "@/lib/signedOutResponse";
  * exposing any connection details. Complements the existing per-platform
  * `GET /api/connections/[platform]` in a single request.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so a page left on another one never
+  // shows this one's connections. Create's read (useConnections in
+  // create-post-form.tsx, outside R32's RR2 brief) sends no id yet, so a missing
+  // one still reads the active workspace; the lead makes it required with that line.
+  const sent = sentWorkspaceId(request);
+  const workspaceRefusal = sent === undefined ? null : renderedWorkspaceRefusal(sent, context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   try {
     const rows = await prisma.socialConnection.findMany({

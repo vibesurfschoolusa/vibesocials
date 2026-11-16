@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import {
   AlertTriangle,
   CalendarClock,
@@ -39,9 +41,16 @@ const ICONS: Record<NeedsYouRowKind, LucideIcon> = {
  * connections fetch has finished, so `hasGoogleListing` is settled on mount:
  * both fetches run once per visit and are never polled. The reviews call
  * reaches Google, which is why it has no retry; any failure there just leaves
- * its row out.
+ * its row out. Both send the workspace the page was drawn for (R32), so a
+ * tab left on it after another tab switched gets nothing, not the other's counts.
  */
-export function NeedsYou({ hasGoogleListing: googleOnMount }: { hasGoogleListing: boolean }) {
+export function NeedsYou({
+  workspaceId,
+  hasGoogleListing: googleOnMount,
+}: {
+  workspaceId: string | null;
+  hasGoogleListing: boolean;
+}) {
   // Read once: a later connections reload must not start a second Google call.
   const [hasGoogleListing] = useState(googleOnMount);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -51,7 +60,7 @@ export function NeedsYou({ hasGoogleListing: googleOnMount }: { hasGoogleListing
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/dashboard/summary")
+    fetch(withWorkspaceId("/api/dashboard/summary", workspaceId))
       .then(async (response) => {
         if (!response.ok) throw new Error("summary");
         const body = (await response.json()) as DashboardSummary;
@@ -63,12 +72,12 @@ export function NeedsYou({ hasGoogleListing: googleOnMount }: { hasGoogleListing
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!hasGoogleListing) return;
     let cancelled = false;
-    fetch("/api/reviews")
+    fetch(withWorkspaceId("/api/reviews", workspaceId))
       .then(async (response) => {
         if (!response.ok) return;
         const count = reviewsNeedingReply(await response.json());
@@ -81,7 +90,7 @@ export function NeedsYou({ hasGoogleListing: googleOnMount }: { hasGoogleListing
     return () => {
       cancelled = true;
     };
-  }, [hasGoogleListing]);
+  }, [hasGoogleListing, workspaceId]);
 
   const view = needsYouView({
     summary: failed ? "failed" : summary ? "loaded" : "loading",

@@ -63,7 +63,33 @@ export function pageWorkspaceRefusalText(code: unknown): string | null {
   return null;
 }
 
-/** `path` with `workspaceId` added to its query, for the OAuth start links. */
-export function withWorkspaceId(path: string, workspaceId: string): string {
+/**
+ * R32 publishing L1: the id a read sent as ?workspaceId=, for
+ * renderedWorkspaceRefusal (absent is undefined, so it is that 400). Reads
+ * answered for the cookie's workspace, which every tab shares, so a page drawn
+ * for A filled itself with B's posts, files or times.
+ */
+export function sentWorkspaceId(request: Request): string | undefined {
+  return new URL(request.url).searchParams.get("workspaceId") ?? undefined;
+}
+
+/**
+ * R32: the shared sentence when a read was refused for the page's workspace
+ * (pageWorkspaceRefusalText), else null. Reads a clone, so the caller can
+ * still read the body of any other answer.
+ */
+export async function readWorkspaceRefusalText(response: Response): Promise<string | null> {
+  if (response.status !== 409 && response.status !== 400) return null;
+  const body = (await response.clone().json().catch(() => null)) as { code?: unknown } | null;
+  return pageWorkspaceRefusalText(body?.code);
+}
+
+/**
+ * `path` with `workspaceId` added to its query, for the OAuth start links
+ * and (R32) every read. A page that couldn't read its workspace (null) sends
+ * none, which the route answers with the reload sentence.
+ */
+export function withWorkspaceId(path: string, workspaceId: string | null): string {
+  if (workspaceId === null) return path;
   return `${path}${path.includes("?") ? "&" : "?"}workspaceId=${encodeURIComponent(workspaceId)}`;
 }

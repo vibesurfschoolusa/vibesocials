@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { readPostingSlots } from "@/lib/postingSlots";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 /** As far ahead as "Next free slot" looks for posts already there. */
 const LOOKAHEAD_MS = 90 * 24 * 60 * 60 * 1000;
@@ -21,12 +22,16 @@ const MAX_TIMES = 500;
  * times, so the Create and add-many pages get what "Next free slot" needs in
  * one request. Read-only, like GET /api/posts, so it carries no rate limit.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 new-customer L3: the page's workspace, so Create's Next free slot never fills a time from another one's posts.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const now = new Date();
   try {

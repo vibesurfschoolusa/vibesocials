@@ -14,6 +14,7 @@ import {
   isTextPost,
   labelName,
   pairLabel,
+  queueListUrl,
   queueLoadErrorText,
   readQueueView,
   saveQueueView,
@@ -343,6 +344,36 @@ describe("Load more in the Queue", () => {
     expect(queueSource).toMatch(/loadMoreFailureText\(\s*isNoConnection\(error\) \? "offline"/);
     expect(queueSource).toMatch(/loadMoreFailureText\(response\.status\)/);
     expect(queueSource).toMatch(/role="status"[^>]*>\s*\{loadMoreError\}/);
+  });
+});
+
+// R32 publishing L1: the Queue's reads name the workspace the page was drawn
+// for; a refusal says the shared sentence and keeps the cards on the page.
+describe("the Queue's reads and the page's workspace", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("the list and Load more addresses carry the page's id", () => {
+    expect(queueListUrl("ws-1")).toBe("/api/posts?status=scheduled%2Cdraft&clientChangesFirst=1&workspaceId=ws-1");
+    expect(queueListUrl("ws-1", "c 1")).toBe("/api/posts?status=scheduled%2Cdraft&cursor=c+1&workspaceId=ws-1");
+    expect(queueListUrl(null)).toBe("/api/posts?status=scheduled%2Cdraft&clientChangesFirst=1");
+  });
+
+  it("the page passes its workspace, and no answer re-points it", () => {
+    expect(queueSource).not.toMatch(/setWorkspaceId\(/);
+    expect(queueSource).toMatch(/useState<string \| null>\(pageWorkspaceId\)|const workspaceId = pageWorkspaceId/);
+    const page = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
+    expect(page).toMatch(/workspaceId=\{context\?\.workspace\.id \?\? null\}/);
+  });
+
+  it("a refused read says the shared sentence: the first load in place of the list, Load more under its button", () => {
+    expect(queueSource.match(/readWorkspaceRefusalText\(response\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(queueSource).toMatch(/if \(refusal\) \{\s*if \(!silent\) setError\(refusal\);/);
+    expect(queueSource).toMatch(/if \(refusal\) \{\s*setLoadMoreError\(refusal\);/);
+  });
+
+  it("the edit dialog's reads send it too", () => {
+    expect(queueSource).toContain("useConnections(workspaceId)");
+    expect(queueSource).toContain("fetch(withWorkspaceId(`/api/posts/${encodeURIComponent(job.id)}`, workspaceId))");
   });
 });
 

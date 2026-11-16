@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { shiftDay, summarizeListingMetrics, type ListingMetricTotals } from "@/lib/listingMetrics";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 export const dynamic = "force-dynamic";
 
@@ -38,11 +39,15 @@ function nonEmptyString(value: unknown): string | null {
  * counted yet, lib/listingMetrics.ts), so that day is found first and the rows
  * of the two windows before it are read. Calls no Google API.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so a dashboard left on another one never shows this listing.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const workspaceId = context.workspace.id;
   const empty: ListingMetricsResponse = { listing: null };
 

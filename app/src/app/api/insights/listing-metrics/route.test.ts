@@ -19,7 +19,19 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { GET, LISTING_METRICS_WINDOW_DAYS } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/insights/listing-metrics${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 
 const LOCATION = "accounts/1/locations/22";
 const OLD_LOCATION = "accounts/1/locations/99";
@@ -94,10 +106,28 @@ beforeEach(() => {
   );
 });
 
+// R32 publishing L1: a page drawn for another workspace (another tab switched)
+// gets the switch sentence, never this workspace's numbers.
+describe("GET /api/insights/listing-metrics - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(connectionFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(connectionFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/insights/listing-metrics", () => {
   it("401s without a workspace and reads nothing", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(req());
     expect(res.status).toBe(401);
     expect(connectionFindUniqueMock).not.toHaveBeenCalled();
     expect(metricFindManyMock).not.toHaveBeenCalled();
@@ -106,7 +136,7 @@ describe("GET /api/insights/listing-metrics", () => {
   it("serves any member the active workspace's current listing, with both 28-day totals", async () => {
     table = span("ws-1", LOCATION, "2026-11-07", 56, { calls: 2 });
 
-    const res = await GET();
+    const res = await GET(req());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -134,7 +164,7 @@ describe("GET /api/insights/listing-metrics", () => {
       ...span("ws-1", LOCATION, "2026-09-12", 30, { calls: 100 }),
     ];
 
-    const body = await (await GET()).json();
+    const body = await (await GET(req())).json();
 
     expect(body.listing.endDay).toBe("2026-11-07");
     expect(body.listing.current.calls).toBe(28);
@@ -153,7 +183,7 @@ describe("GET /api/insights/listing-metrics", () => {
       ...span("ws-2", LOCATION, "2026-11-07", 60, { calls: 1000 }),
     ];
 
-    const body = await (await GET()).json();
+    const body = await (await GET(req())).json();
 
     expect(body.listing.current.calls).toBe(3);
     expect(body.listing.previous).toBeNull();
@@ -165,27 +195,27 @@ describe("GET /api/insights/listing-metrics", () => {
   it("uses the workspace name when the listing has no saved title", async () => {
     table = span("ws-1", LOCATION, "2026-11-07", 1);
     connectionFindUniqueMock.mockResolvedValue({ metadata: { locationName: LOCATION } });
-    expect((await (await GET()).json()).listing.title).toBe("Acme");
+    expect((await (await GET(req())).json()).listing.title).toBe("Acme");
   });
 
   it("after a change of listing shows only the new listing's numbers", async () => {
     table = [...span("ws-1", LOCATION, "2026-11-07", 60, { calls: 1 }), ...span("ws-1", OLD_LOCATION, "2026-11-07", 2, { calls: 7 })];
     connectionFindUniqueMock.mockResolvedValue({ metadata: { locationName: OLD_LOCATION, locationTitle: "Old" } });
-    const body = await (await GET()).json();
+    const body = await (await GET(req())).json();
     expect(body.listing.current.calls).toBe(14);
     expect(body.listing.previous).toBeNull();
   });
 
   it("answers an empty listing, not an error, with no Google connection, no location or no stored day", async () => {
     connectionFindUniqueMock.mockResolvedValueOnce(null);
-    let res = await GET();
+    let res = await GET(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ listing: null });
 
     connectionFindUniqueMock.mockResolvedValueOnce({ metadata: {} });
-    expect(await (await GET()).json()).toEqual({ listing: null });
+    expect(await (await GET(req())).json()).toEqual({ listing: null });
 
-    res = await GET();
+    res = await GET(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ listing: null });
   });

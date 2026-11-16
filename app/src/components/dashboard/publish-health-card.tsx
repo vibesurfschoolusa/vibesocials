@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { platformLabel } from "@/lib/platforms";
 import type { PublishHealthSummary } from "@/lib/publishHealth";
 
@@ -33,9 +34,10 @@ function rateTone(rate: number): string {
  * Renders nothing when the workspace has never finished a publish, so a new
  * user never meets an empty "0%" card. A failed fetch also renders nothing:
  * this is supplementary information, and a red error box for it would be louder
- * than the fact deserves.
+ * than the fact deserves. R32: it reads for the workspace the page was drawn
+ * for, so a refusal (another tab switched) also renders nothing.
  */
-export function PublishHealthCard() {
+export function PublishHealthCard({ workspaceId }: { workspaceId: string | null }) {
   const [data, setData] = useState<PublishHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -43,7 +45,7 @@ export function PublishHealthCard() {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/insights/publish-health");
+        const response = await fetch(withWorkspaceId("/api/insights/publish-health", workspaceId));
         if (!response.ok) return;
         const payload: PublishHealthResponse = await response.json();
         if (!cancelled) setData(payload);
@@ -56,7 +58,7 @@ export function PublishHealthCard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   // Shown only once this workspace has finished at least one publish (the rate is then a number).
   const shown =

@@ -67,7 +67,7 @@ import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
-import type { PostingSlot } from "@/lib/postingSlots";
+import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
 import { BulkPostRow, captionFailedText, captionLocked } from "./bulk-post-row";
@@ -280,8 +280,9 @@ export function BulkPostsForm({
   // already hold come from GET /api/posts/scheduled-times, read once.
   const [useSlots, setUseSlots] = useState(false);
   const useSlotsRef = useRef(false);
-  const [slotData, setSlotData] = useState<{ slots: PostingSlot[]; taken: Date[] } | "error" | null>(null);
-  const slotDataRef = useRef<{ slots: PostingSlot[]; taken: Date[] } | null>(null);
+  // R32: `refused` when the read was refused for this page's workspace (another tab switched).
+  const [slotData, setSlotData] = useState<ScheduledTimes | { refused: string } | "error" | null>(null);
+  const slotDataRef = useRef<ScheduledTimes | null>(null);
   // Raw text of the "every N days" box, so it can be cleared while typing.
   const [everyDaysText, setEveryDaysText] = useState("1");
   // Once the user picks a first day it is theirs; until then it follows "tomorrow".
@@ -360,21 +361,16 @@ export function BulkPostsForm({
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/posts/scheduled-times")
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("not ok"))))
-      .then((body: { times?: string[]; slots?: PostingSlot[] }) => {
-        if (cancelled) return;
-        const data = { slots: body.slots ?? [], taken: (body.times ?? []).map((time) => new Date(time)) };
-        slotDataRef.current = data;
-        setSlotData(data);
-      })
-      .catch(() => {
-        if (!cancelled) setSlotData("error");
-      });
+    // R32 new-customer L3: the times of the workspace this page was drawn for only.
+    void readScheduledTimes(workspaceId).then((read) => {
+      if (cancelled) return;
+      if (read !== "error" && !("refused" in read)) slotDataRef.current = read;
+      setSlotData(read);
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   function changeUseSlots(on: boolean) {
     useSlotsRef.current = on;
@@ -1110,7 +1106,9 @@ export function BulkPostsForm({
             </div>
           </div>
           {slotData && slotData !== "error" ? (
-            slotData.slots.length > 0 ? (
+            "refused" in slotData ? (
+              <Alert variant="warning">{slotData.refused}</Alert>
+            ) : slotData.slots.length > 0 ? (
               <label className="flex items-center gap-2 text-sm text-foreground">
                 <input
                   type="checkbox"
@@ -1132,6 +1130,7 @@ export function BulkPostsForm({
       </Card>
 
       <MediaPickerDialog
+        workspaceId={workspaceId}
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         addedIds={new Set(rows.flatMap((row) => (row.mediaItemId ? [row.mediaItemId] : [])))}

@@ -18,6 +18,7 @@ import {
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_MESSAGE,
   renderedWorkspaceRefusal,
+  sentWorkspaceId,
 } from "@/lib/workspaceChanged";
 import { textPostsEnabled } from "@/lib/platformLimits";
 import {
@@ -304,6 +305,12 @@ export async function GET(request: Request) {
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so a tab left on another one never
+  // fills itself with this workspace's posts (Activity's poll, Load more,
+  // Settings' "Use my recent posts").
+  const refusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (refusal) return refusal;
 
   // Optional `?status=` filter (Roadmap Phase 5) — a comma-separated list of
   // PostJobStatus values, e.g. `?status=scheduled,draft` for the Queue view.

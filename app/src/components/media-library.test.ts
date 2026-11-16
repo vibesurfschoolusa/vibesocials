@@ -187,6 +187,13 @@ describe("Media: a lost answer may have gone through", () => {
     expect(source).toMatch(/await fetchOrNoAnswer\("\/api\/media", \{/);
   });
 
+  // R32 publishing L1: the library's reads name the workspace it was drawn for;
+  // the route's refusal sentence is what the page then says.
+  it("reads the first page and Load more for the page's workspace", () => {
+    expect(source).toContain('fetch(withWorkspaceId("/api/media", workspaceId))');
+    expect(source).toContain("fetch(withWorkspaceId(`/api/media?cursor=${encodeURIComponent(nextCursor)}`, workspaceId))");
+  });
+
   it("deleting a file: no answer or an unreadable 5xx may have deleted it", () => {
     expect(MEDIA_MESSAGES.deleteLost).toBe(
       "Vibe Socials' answer didn't reach you, so the file may have been deleted. If your connection dropped, reconnect first. Reload this page to see.",

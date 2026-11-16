@@ -42,13 +42,15 @@ import {
  */
 type DashboardProps = {
   availablePlatforms: readonly Platform[];
+  /** R32: the workspace the page was drawn for, which every read sends; null when it couldn't be read. */
+  workspaceId: string | null;
   /** The page's server read of the active workspace; null when it failed. */
   setup: WorkspaceSetup | null;
   /** A sentence the page was opened with (R2-client-journey L2: /go for another workspace); null for none. */
   notice?: string | null;
 };
 
-export function DashboardHome({ availablePlatforms, setup, notice }: DashboardProps) {
+export function DashboardHome({ availablePlatforms, workspaceId, setup, notice }: DashboardProps) {
   const { status } = useSession();
   const signedIn = useSignedInAccount() !== null;
   const router = useRouter();
@@ -72,7 +74,7 @@ export function DashboardHome({ availablePlatforms, setup, notice }: DashboardPr
     <>
       <p role="status" className="sr-only">{signedIn ? "" : "Loading your dashboard…"}</p>
       {signedIn ? (
-        <Dashboard availablePlatforms={availablePlatforms} setup={setup} notice={notice} />
+        <Dashboard availablePlatforms={availablePlatforms} workspaceId={workspaceId} setup={setup} notice={notice} />
       ) : (
         <div className="flex min-h-screen items-center justify-center bg-background">
           <h1 className="sr-only">Dashboard</h1>
@@ -83,14 +85,14 @@ export function DashboardHome({ availablePlatforms, setup, notice }: DashboardPr
   );
 }
 
-function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
+function Dashboard({ availablePlatforms, workspaceId, setup, notice }: DashboardProps) {
   // Task 8 — single fetch/poll owner for the dashboard: both widgets below
   // took this over their own `usePostJobs()` call, so the dashboard makes one
   // `/api/posts` request (and one poll timer) instead of two. Same pattern
   // for connections: this is the one `/api/connections` fetch, shared by the
   // Get started checklist and the ConnectionHealth widget.
-  const postJobs = usePostJobs();
-  const connectionsState = useConnections();
+  const postJobs = usePostJobs(workspaceId);
+  const connectionsState = useConnections(workspaceId);
   const { data: session } = useSession();
 
   // Both derivations are pure and cheap, so each consumer re-derives from the
@@ -191,7 +193,7 @@ function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
               appear, and so the connections it reads are known on its one
               mount. Hidden whenever the checklist shows. */}
           {needsYouMounted && !onboarding.show ? (
-            <NeedsYou hasGoogleListing={hasGoogleListing(connectionsState.connections)} />
+            <NeedsYou workspaceId={workspaceId} hasGoogleListing={hasGoogleListing(connectionsState.connections)} />
           ) : null}
           {/* First-run checklist — renders nothing once this person's steps
               are done (see lib/gettingStarted.ts). */}
@@ -214,10 +216,10 @@ function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
           <ConnectionHealth {...connectionsState} isMember={setup?.role === "member"} />
           {/* Renders only once this workspace has finished at least one
               publish, so a new user never meets an empty "0%" card. */}
-          <PublishHealthCard />
+          <PublishHealthCard workspaceId={workspaceId} />
           {/* Renders only once the workspace's chosen Google listing has a
               stored day of numbers (google-listing-metrics-sync). */}
-          <ListingMetricsCard />
+          <ListingMetricsCard workspaceId={workspaceId} />
         </div>
       </div>
     </div>

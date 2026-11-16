@@ -29,6 +29,7 @@ import { trackedWebsiteLink } from "@/lib/trackingTags";
 import type { UserSettings } from "@/lib/userSettings";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 
 /** R28 NN2: the settings may have been saved before the answer was lost. */
 export const SETTINGS_MAYBE_SAVED_MESSAGE = answerLostText(
@@ -86,6 +87,29 @@ function TrackingTagsField({
       ) : null}
     </div>
   );
+}
+
+const RECENT_POSTS_FAILED_TEXT = "Could not load your recent posts. Try again.";
+
+/**
+ * R32 new-customer L3: the published captions "Use my recent posts" adds, read
+ * for the workspace this page was drawn for. A tab left on it after another
+ * tab switched gets the switch sentence, never the other client's captions.
+ */
+export async function readRecentCaptions(
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true; captions: Array<string | null | undefined> } | { ok: false; text: string }> {
+  try {
+    const response = await fetchImpl(withWorkspaceId("/api/posts?status=completed", workspaceId));
+    const refusal = await readWorkspaceRefusalText(response);
+    if (refusal) return { ok: false, text: refusal };
+    if (!response.ok) return { ok: false, text: RECENT_POSTS_FAILED_TEXT };
+    const data = (await response.json()) as { jobs?: Array<{ caption?: string | null }> };
+    return { ok: true, captions: (data.jobs ?? []).map((job) => job.caption) };
+  } catch {
+    return { ok: false, text: RECENT_POSTS_FAILED_TEXT };
+  }
 }
 
 interface SettingsFormProps {
@@ -156,15 +180,12 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
     }
     setIsFillingExamples(true);
     try {
-      const response = await fetch("/api/posts?status=completed");
-      if (!response.ok) {
-        throw new Error("Failed to load posts");
+      const read = await readRecentCaptions(workspaceId);
+      if (!read.ok) {
+        toast.error(read.text);
+        return;
       }
-      const data = (await response.json()) as { jobs?: Array<{ caption?: string | null }> };
-      const result = mergeExampleCaptions(
-        examplesRef.current,
-        (data.jobs ?? []).map((job) => job.caption),
-      );
+      const result = mergeExampleCaptions(examplesRef.current, read.captions);
       if (result.kind === "full") {
         toast.error("You already have five examples. Remove one to add another.");
         return;
@@ -179,8 +200,6 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
       toast.success(
         `Added ${result.added} ${result.added === 1 ? "caption" : "captions"} from your recent posts. Edit them if you like, then save.`,
       );
-    } catch {
-      toast.error("Could not load your recent posts. Try again.");
     } finally {
       setIsFillingExamples(false);
     }

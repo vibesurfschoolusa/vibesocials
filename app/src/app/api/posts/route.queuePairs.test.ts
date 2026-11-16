@@ -173,7 +173,9 @@ function plain(prefix: string, count: number, from: number): Row[] {
 const QUEUE = "http://localhost/api/posts?status=scheduled,draft";
 
 async function page(url: string): Promise<PostsResponse> {
-  const response = await GET(new Request(url));
+  const address = new URL(url);
+  address.searchParams.set("workspaceId", "ws-1");
+  const response = await GET(new Request(address));
   expect(response.status).toBe(200);
   return (await response.json()) as PostsResponse;
 }

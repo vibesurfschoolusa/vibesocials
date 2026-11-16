@@ -97,7 +97,7 @@ describe("PendingConnectionDialog: a choice that is gone", () => {
 
   it("asks with the platform, shows the sentence, and no longer says connect again", () => {
     const source = readFileSync(join(__dirname, "pending-connection-dialog.tsx"), "utf8");
-    expect(source).toMatch(/await fetch\(choiceAddress\(endpoint, rememberedChoicePlatform\(pendingId\)\)\)/);
+    expect(source).toContain("await fetch(withWorkspaceId(choiceAddress(endpoint, rememberedChoicePlatform(pendingId)), workspaceId))");
     expect(source).toMatch(/rememberChoicePlatform\(pendingId, data\.platform\)/);
     expect(source).toMatch(/await fetchOrNoAnswer\(choiceAddress\(endpoint, load\.status === "ready" \? load\.platform : null\), \{/);
     expect(source).toMatch(/setLoad\(\{ status: "expired", message: pendingGoneText\(data\) \}\)/);
@@ -139,5 +139,15 @@ describe("PendingConnectionDialog: a load that fails", () => {
     const source = readFileSync(fileURLToPath(new URL("./pending-connection-dialog.tsx", import.meta.url)), "utf8");
     expect(source).not.toContain("Close this and reload the page");
     expect(source).toMatch(/<Alert variant="danger">\{load\.message\}<\/Alert>/);
+  });
+});
+
+// R32 publishing L1: the choice is read for the workspace Settings was drawn
+// for; the route's refusal sentence is what the dialog then says.
+describe("the choice read and the page's workspace", () => {
+  it("sends the page's id and shows a refusal's own sentence", () => {
+    const source = readFileSync(join(__dirname, "pending-connection-dialog.tsx"), "utf8");
+    expect(source).toContain("fetch(withWorkspaceId(choiceAddress(endpoint, rememberedChoicePlatform(pendingId)), workspaceId))");
+    expect(source).toMatch(/\}, \[endpoint, pendingId, workspaceId\]\);/);
   });
 });

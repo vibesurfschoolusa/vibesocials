@@ -110,7 +110,19 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { GET } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/dashboard/summary${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 
 const NOW = new Date("2026-11-14T12:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -139,7 +151,7 @@ function job(fields: Row): Row {
 }
 
 async function summary() {
-  const response = await GET();
+  const response = await GET(req());
   return { status: response.status, body: await response.json() };
 }
 
@@ -155,6 +167,24 @@ beforeEach(() => {
   checkRateLimitMock.mockResolvedValue({ allowed: true });
 });
 
+// R32 publishing L1: a page drawn for another workspace (another tab switched)
+// gets the switch sentence, never this workspace's numbers.
+describe("GET /api/dashboard/summary - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/dashboard/summary", () => {
   it("401s when signed out and reads nothing", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
@@ -165,7 +195,7 @@ describe("GET /api/dashboard/summary", () => {
 
   it("429s when rate-limited, keyed on the user", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 7 });
-    const response = await GET();
+    const response = await GET(req());
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("7");
     expect(checkRateLimitMock).toHaveBeenCalledWith(

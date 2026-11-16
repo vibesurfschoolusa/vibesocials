@@ -7,6 +7,7 @@ import type { ListingMetricsResponse } from "@/app/api/insights/listing-metrics/
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { describeListingChange, type ListingMetricTotals } from "@/lib/listingMetrics";
 import { countWord } from "@/lib/plural";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 type Listing = NonNullable<ListingMetricsResponse["listing"]>;
 
@@ -86,16 +87,17 @@ export function ListingMetricsCardView({ listing, today }: { listing: Listing | 
  * Dashboard card with the Google listing's views, calls, direction requests and
  * website clicks. Renders nothing until the workspace has a chosen listing with
  * a stored day, and nothing on a failed fetch: like publish health, it is
- * supplementary.
+ * supplementary. R32: it reads for the workspace the page was drawn for, so a
+ * refusal (another tab switched) also renders nothing.
  */
-export function ListingMetricsCard() {
+export function ListingMetricsCard({ workspaceId }: { workspaceId: string | null }) {
   const [listing, setListing] = useState<Listing | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/insights/listing-metrics");
+        const response = await fetch(withWorkspaceId("/api/insights/listing-metrics", workspaceId));
         if (!response.ok) return;
         const payload: ListingMetricsResponse = await response.json();
         if (!cancelled) setListing(payload.listing);
@@ -106,7 +108,7 @@ export function ListingMetricsCard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   return <ListingMetricsCardView listing={listing} today={new Date()} />;
 }

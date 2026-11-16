@@ -16,6 +16,7 @@ import {
 import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
 import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+import { readWorkspaceRefusalText } from "@/lib/workspaceChanged";
 
 /** R26 LL3: a Load more that got no answer. */
 export const LOAD_MORE_OFFLINE_TEXT =
@@ -52,12 +53,18 @@ export interface UsePostJobsResult {
    */
   workspaceRole: WorkspaceRole | null;
   /**
-   * R31 pages L2: the workspace these posts belong to, as the first load
-   * reported it (`null` until then). Retry and Send again send it, so a
-   * switch in another tab answers 409 instead of acting on that workspace.
-   * Kept from the first load: a later poll after a switch must not re-point it.
+   * R31 pages L2 / R32: the workspace the page was drawn for, as the page
+   * passed it. Every read sends it, and Retry and Send again send it too, so a
+   * switch in another tab answers 409 instead of reading or acting on that
+   * workspace.
    */
   workspaceId: string | null;
+  /**
+   * R32 publishing L1: the shared switch sentence once a background poll was
+   * refused for the page's workspace (another tab switched); null otherwise.
+   * The list stays as it was and polling stops: the page is out of date.
+   */
+  workspaceChanged: string | null;
   /**
    * Activity pagination (Task C2) — fetch the next (older) page via the last
    * response's `nextCursor` and APPEND it, de-duplicated by id. A no-op while a
@@ -103,11 +110,16 @@ export interface UsePostJobsOptions {
   show?: "problems";
 }
 
-/** The list URL for a filter and an optional Load more cursor. */
-export function postJobsUrl(show: UsePostJobsOptions["show"], cursor?: string): string {
+/**
+ * The list URL for a filter and an optional Load more cursor, with the
+ * workspace the page was drawn for (R32: none when the page couldn't read it,
+ * which the route answers with the reload sentence).
+ */
+export function postJobsUrl(show: UsePostJobsOptions["show"], cursor: string | undefined, workspaceId: string | null): string {
   const params = new URLSearchParams();
   if (show) params.set("show", show);
   if (cursor) params.set("cursor", cursor);
+  if (workspaceId) params.set("workspaceId", workspaceId);
   const query = params.toString();
   return query ? `/api/posts?${query}` : "/api/posts";
 }
@@ -143,7 +155,7 @@ function isTabHidden(): boolean {
  * dependency to re-arm on after every completed background attempt, success
  * or failure.
  */
-export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
+export function usePostJobs(workspaceId: string | null, options?: UsePostJobsOptions): UsePostJobsResult {
   // A primitive, so callers can pass a fresh `{ show }` object every render.
   const show = options?.show;
   // The filter the list on screen belongs to. A response for another filter
@@ -160,7 +172,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   const [error, setError] = useState<string | null>(null);
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
   const [workspaceRole, setWorkspaceRole] = useState<WorkspaceRole | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [workspaceChanged, setWorkspaceChanged] = useState<string | null>(null);
   // Bumped in the `finally` of every *background* load (see the poll effect
   // below). A failed background poll intentionally never calls `setJobs`, so
   // without this counter the poll effect would have no changed dependency to
@@ -198,7 +210,16 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       setLoadMoreError(null);
     }
     try {
-      const response = await fetch(postJobsUrl(show));
+      const response = await fetch(postJobsUrl(show, undefined, workspaceId));
+      const refusal = await readWorkspaceRefusalText(response);
+      if (refusal) {
+        if (show !== showRef.current) return;
+        // R32: never another workspace's posts. A first load or Retry says it
+        // in place of the list; a poll keeps the list and stops.
+        if (background) setWorkspaceChanged(refusal);
+        else setError(refusal);
+        return;
+      }
       if (!response.ok) {
         throw new Error(
           response.status === 401
@@ -230,7 +251,6 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       }
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole ?? null);
-      setWorkspaceId((prev) => prev ?? data.workspaceId ?? null);
       setRetryWatch((prev) => settleRetryWatch(prev, data.jobs));
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
@@ -248,7 +268,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
         setJobsShow(show);
       }
     }
-  }, [show]);
+  }, [show, workspaceId]);
 
   const loadMore = useCallback(async () => {
     // Guard: nothing older to fetch, or a page is already in flight. Reading
@@ -258,7 +278,13 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const response = await fetchOrNoAnswer(postJobsUrl(show, nextCursor));
+      const response = await fetchOrNoAnswer(postJobsUrl(show, nextCursor, workspaceId));
+      const refusal = await readWorkspaceRefusalText(response);
+      if (refusal) {
+        // R32: said under the button the person pressed; the list stays.
+        if (show === showRef.current) setLoadMoreError(refusal);
+        return;
+      }
       if (!response.ok) {
         // The full-width error state is owned by the initial load / reload
         // only (Finding 1); R26 LL3: a line under the button says why. The list
@@ -279,7 +305,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     } finally {
       setLoadingMore(false);
     }
-  }, [nextCursor, loadingMore, show]);
+  }, [nextCursor, loadingMore, show, workspaceId]);
 
   const watchRetry = useCallback(
     (jobId: string) => {
@@ -335,7 +361,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   // schedule that has already run out arms a 0 ms tick so the stop is decided in
   // one place (and a hidden tab still never advances to stopped).
   useEffect(() => {
-    if (stopped || !shouldPollPostJobs(jobs, retryWatch)) return;
+    if (stopped || workspaceChanged || !shouldPollPostJobs(jobs, retryWatch)) return;
     const start = scheduleStartRef.current ?? Date.now();
     const t = setTimeout(() => {
       const action = decidePollAction("timer", Date.now() - start, isTabHidden());
@@ -343,7 +369,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       else if (action === "stop") setStopped(true);
     }, nextPollDelayMs(Date.now() - start) ?? 0);
     return () => clearTimeout(t);
-  }, [jobs, load, pollCycle, retryWatch, stopped]);
+  }, [jobs, load, pollCycle, retryWatch, stopped, workspaceChanged]);
 
   // 2026-11-01 scale audit (W5): back in the foreground — fetch at once rather
   // than wait out the next tick, so a user returning to the tab after their
@@ -357,7 +383,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   const onVisibilityChangeRef = useRef<() => void>(() => {});
   useEffect(() => {
     onVisibilityChangeRef.current = () => {
-      if (!shouldPollPostJobs(jobs, retryWatch)) return;
+      if (workspaceChanged || !shouldPollPostJobs(jobs, retryWatch)) return;
       const start = scheduleStartRef.current ?? Date.now();
       if (decidePollAction("visibility", Date.now() - start, isTabHidden()) === "fetch") {
         void load({ background: true });
@@ -380,6 +406,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     workspaceMemberCount,
     workspaceRole,
     workspaceId,
+    workspaceChanged,
     loadMore,
     loadingMore,
     loadMoreError,

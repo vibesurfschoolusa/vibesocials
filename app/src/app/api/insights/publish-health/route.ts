@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { summarizePublishHealthCounts, type PublishHealthSummary } from "@/lib/publishHealth";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 export const dynamic = "force-dynamic";
 
@@ -32,12 +33,16 @@ export interface PublishHealthResponse extends PublishHealthSummary {
  * SEC-1: groups only on platform and status — errorCode, socialConnectionId and
  * externalPostId are never read.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so a dashboard left on another one never shows this one's results.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const now = new Date();
   const since = new Date(now.getTime() - PUBLISH_HEALTH_WINDOW_DAYS * 24 * 60 * 60 * 1000);

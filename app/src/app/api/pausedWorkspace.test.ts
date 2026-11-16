@@ -108,8 +108,8 @@ const GATED: RouteCase[] = [
 
 /** What a paused customer must still be able to do: see their data, tidy up, change settings, leave. */
 const ALLOWED: RouteCase[] = [
-  { name: "GET /api/posts (read)", load: () => import("./posts/route"), method: "GET" },
-  { name: "GET /api/media (read)", load: () => import("./media/route"), method: "GET" },
+  { name: "GET /api/posts (read)", load: () => import("./posts/route"), method: "GET", query: "?workspaceId=ws-1" },
+  { name: "GET /api/media (read)", load: () => import("./media/route"), method: "GET", query: "?workspaceId=ws-1" },
   { name: "PATCH /api/posts/[id] (edit a draft's text)", load: () => import("./posts/[postJobId]/route"), method: "PATCH", params: { postJobId: "job-1" }, body: { baseCaption: "New text", workspaceId: "ws-1" } },
   { name: "DELETE /api/posts/[id]", load: () => import("./posts/[postJobId]/route"), method: "DELETE", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },
   { name: "POST /api/posts/[id]/cancel", load: () => import("./posts/[postJobId]/cancel/route"), method: "POST", params: { postJobId: "job-1" }, body: { workspaceId: "ws-1" } },

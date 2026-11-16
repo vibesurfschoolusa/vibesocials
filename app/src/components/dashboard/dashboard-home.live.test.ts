@@ -67,7 +67,7 @@ async function show(session: unknown) {
       createElement(
         SessionContext.Provider as never,
         { value: session } as never,
-        createElement(AppShell, null, createElement(DashboardHome, { availablePlatforms: [], setup: null })),
+        createElement(AppShell, null, createElement(DashboardHome, { availablePlatforms: [], workspaceId: "ws-1", setup: null })),
       ),
     );
   });

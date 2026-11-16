@@ -8,7 +8,11 @@ const {
   listingMetricDeleteManyMock,
   pendingDeleteManyMock,
   transactionMock,
+  getWorkspaceContextMock,
+  connectionFindFirstMock,
 } = vi.hoisted(() => ({
+  getWorkspaceContextMock: vi.fn(),
+  connectionFindFirstMock: vi.fn(),
   requireOwnerContextMock: vi.fn(),
   connectionDeleteManyMock: vi.fn(),
   metricDeleteManyMock: vi.fn(),
@@ -19,7 +23,7 @@ const {
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    socialConnection: { deleteMany: connectionDeleteManyMock },
+    socialConnection: { deleteMany: connectionDeleteManyMock, findFirst: connectionFindFirstMock },
     postMetric: { deleteMany: metricDeleteManyMock },
     locationMetricDaily: { deleteMany: listingMetricDeleteManyMock },
     pendingConnection: { deleteMany: pendingDeleteManyMock },
@@ -29,9 +33,10 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/workspace", () => ({
   requireOwnerContext: requireOwnerContextMock,
+  getWorkspaceContext: getWorkspaceContextMock,
 }));
 
-import { DELETE } from "./route";
+import { DELETE, GET } from "./route";
 
 const CONTEXT = {
   user: { id: "user-1", email: "owner@example.com", name: "Owner" },
@@ -162,5 +167,39 @@ describe("DELETE /api/connections/[platform]", () => {
 
     expect(response.status).toBe(400);
     expect(connectionDeleteManyMock).not.toHaveBeenCalled();
+  });
+});
+
+// R32 publishing L1: the connection-status read answers for the page's workspace only.
+describe("GET /api/connections/[platform]", () => {
+  function read(workspaceId: string | null) {
+    const address = new URL("http://localhost/api/connections/x");
+    if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+    return GET(new NextRequest(address), { params: Promise.resolve({ platform: "x" }) } as never);
+  }
+
+  beforeEach(() => {
+    getWorkspaceContextMock.mockReset();
+    getWorkspaceContextMock.mockResolvedValue(CONTEXT);
+    connectionFindFirstMock.mockReset();
+    connectionFindFirstMock.mockResolvedValue({ id: "conn-1" });
+  });
+
+  it("answers for the page's workspace", async () => {
+    const response = await read("ws-1");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ connected: true });
+  });
+
+  it("409s another workspace's id and reads nothing", async () => {
+    const response = await read("ws-2");
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("WORKSPACE_CHANGED");
+    expect(connectionFindFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a read that sent no id", async () => {
+    expect((await read(null)).status).toBe(400);
+    expect(connectionFindFirstMock).not.toHaveBeenCalled();
   });
 });

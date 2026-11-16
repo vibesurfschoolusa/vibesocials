@@ -28,6 +28,7 @@ export function RecentActivity({
   workspaceMemberCount,
   workspaceRole,
   workspaceId,
+  workspaceChanged,
   watchRetry,
   pollingStopped,
   showCreateCta = true,
@@ -110,6 +111,8 @@ export function RecentActivity({
           {pollingStopped ? (
             <Alert variant="info">{POLLING_STOPPED_HINT}</Alert>
           ) : null}
+          {/* R32: another tab switched workspace; the list stays as it was. */}
+          {workspaceChanged ? <Alert variant="warning">{workspaceChanged}</Alert> : null}
           {preview.map((job) => (
             <PostJobCard
               key={job.id}

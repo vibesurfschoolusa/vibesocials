@@ -92,6 +92,7 @@ import {
 } from "@/lib/queueActions";
 import { scheduleDraft } from "@/lib/scheduleDraft";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 import {
   SCHEDULE_BUFFER_MS,
   localTimeZoneLabel,
@@ -545,7 +546,7 @@ function QueueEditDialog({
   // The post's platforms: its chosen targets, or (no targets = every platform
   // connected at publish time) the connected ones plus any that already have a
   // caption, so a saved caption is never hidden while connections load.
-  const { connections } = useConnections();
+  const { connections } = useConnections(workspaceId);
   const targetPlatforms = job.publish?.targetPlatforms ?? null;
   // A Story has no caption to edit, so it gets no own-caption editor, but its
   // stored caption must still be sent back with the others.
@@ -569,7 +570,7 @@ function QueueEditDialog({
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(`/api/posts/${encodeURIComponent(job.id)}`);
+        const response = await fetch(withWorkspaceId(`/api/posts/${encodeURIComponent(job.id)}`, workspaceId));
         const data = (await response.json().catch(() => null)) as
           | { postJob?: { baseCaption?: unknown } }
           | null;
@@ -583,7 +584,7 @@ function QueueEditDialog({
     return () => {
       cancelled = true;
     };
-  }, [job.id]);
+  }, [job.id, workspaceId]);
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // PATCH /api/posts/[id] rejects - blocks Save (lib/captionLimits.ts).
   const captionOver = captionCounter(caption).over;
@@ -1106,6 +1107,19 @@ export function ReviewLinkPanelView({
   );
 }
 
+/**
+ * The Queue's list address: page 1 (with every draft the client asked to
+ * change, however old) or the page after `cursor`, for the workspace the page
+ * was drawn for (R32: a tab left on it after another tab switched is refused,
+ * never shown the other workspace's posts).
+ */
+export function queueListUrl(workspaceId: string | null, cursor?: string): string {
+  const params = new URLSearchParams({ status: "scheduled,draft" });
+  if (cursor) params.set("cursor", cursor);
+  else params.set("clientChangesFirst", "1");
+  return withWorkspaceId(`/api/posts?${params.toString()}`, workspaceId);
+}
+
 /** What the Queue says when it cannot load; a 401 is the shared signed-out sentence (R21 pages L3). */
 export function queueLoadErrorText(status: number): string {
   return status === 401 ? SIGNED_OUT_ERROR : "Failed to load your queue.";
@@ -1132,9 +1146,10 @@ export function QueueEmptyActions({ addManyIncluded = true }: { addManyIncluded?
 }
 
 export function QueueView({
+  workspaceId: pageWorkspaceId = null,
   footerSettings,
   addManyIncluded = true,
-}: { footerSettings?: CaptionFooterUser; addManyIncluded?: boolean } = {}) {
+}: { workspaceId?: string | null; footerSettings?: CaptionFooterUser; addManyIncluded?: boolean } = {}) {
   const toast = useToast();
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1148,10 +1163,9 @@ export function QueueView({
   // ...and whether the workspace requires owner approval, which decides what a
   // member's Publish / Edit actually does (lib/queueActions.ts).
   const [workspaceRequireApproval, setWorkspaceRequireApproval] = useState(false);
-  // The workspace these posts belong to, as the first load reported it. The
-  // review link panel sends it, so a switch in another tab answers 409. Kept
-  // from the first load: a later reload after a switch must not re-point it.
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  // R32: the workspace the page was drawn for. Every read and action sends it,
+  // so a switch in another tab answers 409 instead of reading or acting there.
+  const workspaceId = pageWorkspaceId;
   // Clock for the owner's approve hint (does the proposed time still hold?).
   // Refreshed on an interval so the hint can't promise a time that has since
   // passed, and kept out of render so the component stays pure.
@@ -1197,7 +1211,12 @@ export function QueueView({
     try {
       // clientChangesFirst: the first page also carries every draft the client
       // asked to change (up to 20), however old, so none hides behind Load more.
-      const response = await fetch("/api/posts?status=scheduled,draft&clientChangesFirst=1");
+      const response = await fetch(queueListUrl(workspaceId));
+      const refusal = await readWorkspaceRefusalText(response);
+      if (refusal) {
+        if (!silent) setError(refusal);
+        return;
+      }
       if (!response.ok) {
         if (!silent) {
           setError(queueLoadErrorText(response.status));
@@ -1211,14 +1230,13 @@ export function QueueView({
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole);
       setWorkspaceRequireApproval(data.workspaceRequireApproval);
-      setWorkspaceId((prev) => prev ?? data.workspaceId);
       setNowMs(Date.now());
     } catch {
       if (!silent) setError("Failed to load your queue.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
@@ -1258,9 +1276,12 @@ export function QueueView({
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const response = await fetchOrNoAnswer(
-        `/api/posts?status=scheduled,draft&cursor=${encodeURIComponent(nextCursor)}`,
-      );
+      const response = await fetchOrNoAnswer(queueListUrl(workspaceId, nextCursor));
+      const refusal = await readWorkspaceRefusalText(response);
+      if (refusal) {
+        setLoadMoreError(refusal);
+        return;
+      }
       if (!response.ok) {
         // The full-width error state belongs to the initial load / Retry only;
         // R26 LL3: a line under the button says why. nextCursor stays, so the
@@ -1281,7 +1302,7 @@ export function QueueView({
     } finally {
       setLoadingMore(false);
     }
-  }, [nextCursor, loadingMore]);
+  }, [nextCursor, loadingMore, workspaceId]);
 
   const removeJobs = useCallback((ids: readonly string[]) => {
     setJobs((prev) => (prev ? prev.filter((j) => !ids.includes(j.id)) : prev));

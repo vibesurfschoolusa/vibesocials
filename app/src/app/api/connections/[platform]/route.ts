@@ -4,7 +4,7 @@ import { getWorkspaceContext, requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import { Platform } from "@prisma/client";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -19,12 +19,16 @@ interface PlatformRouteContext {
  * design §1: "View connection health" is member-readable). Used by
  * post-creation UI to conditionally show per-platform settings.
  */
-export async function GET(_request: NextRequest, context: PlatformRouteContext) {
+export async function GET(request: NextRequest, context: PlatformRouteContext) {
   const wsContext = await getWorkspaceContext();
 
   if (!wsContext) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, never the one another tab switched to.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), wsContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   // In Next.js 15+, params might be a Promise
   const params = await Promise.resolve(context.params);

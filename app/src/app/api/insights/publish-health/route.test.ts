@@ -13,7 +13,19 @@ vi.mock("@/lib/db", () => ({
   prisma: { postJobResult: { groupBy: groupByMock, findMany: findManyMock } },
 }));
 
+import {
+  MISSING_WORKSPACE_ID_CODE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { GET, PUBLISH_HEALTH_WINDOW_DAYS } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/insights/publish-health${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -25,10 +37,28 @@ beforeEach(() => {
   groupByMock.mockResolvedValue([]);
 });
 
+// R32 publishing L1: a page drawn for another workspace (another tab switched)
+// gets the switch sentence, never this workspace's numbers.
+describe("GET /api/insights/publish-health - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(groupByMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a page that sent no id and reads nothing", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe(MISSING_WORKSPACE_ID_CODE);
+    expect(groupByMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/insights/publish-health", () => {
   it("401s when unauthenticated and never queries", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(req());
     expect(res.status).toBe(401);
     expect(groupByMock).not.toHaveBeenCalled();
     expect(findManyMock).not.toHaveBeenCalled();
@@ -39,7 +69,7 @@ describe("GET /api/insights/publish-health", () => {
   // join through PostJob, and no row cap: the counts are exact for any tenant.
   it("counts finished results of the active workspace in one grouped query", async () => {
     const before = Date.now();
-    await GET();
+    await GET(req());
     const after = Date.now();
 
     expect(groupByMock).toHaveBeenCalledTimes(1);
@@ -69,7 +99,7 @@ describe("GET /api/insights/publish-health", () => {
   // SEC-1: only platform and status are grouped, so errorCode,
   // socialConnectionId and externalPostId can never reach the response.
   it("groups on platform and status only", async () => {
-    await GET();
+    await GET(req());
 
     expect(groupByMock.mock.calls[0][0].by).toEqual(["platform", "status"]);
     expect(groupByMock.mock.calls[0][0]).not.toHaveProperty("select");
@@ -81,7 +111,7 @@ describe("GET /api/insights/publish-health", () => {
       { platform: "x", status: "failed", _count: { _all: 1 } },
     ]);
 
-    const res = await GET();
+    const res = await GET(req());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -99,7 +129,7 @@ describe("GET /api/insights/publish-health", () => {
       { platform: "youtube", status: "failed", _count: { _all: 1 } },
     ]);
 
-    const body = await (await GET()).json();
+    const body = await (await GET(req())).json();
 
     expect(body.overall).toEqual({ attempted: 3, succeeded: 2, failed: 1, successRate: 67 });
     expect(body.platforms.map((p: { platform: string }) => p.platform)).toEqual([
@@ -122,7 +152,7 @@ describe("GET /api/insights/publish-health", () => {
       { platform: "x", status: "failed", _count: { _all: 1000 } },
     ]);
 
-    const body = await (await GET()).json();
+    const body = await (await GET(req())).json();
 
     expect(body.overall).toEqual({ attempted: 10000, succeeded: 9000, failed: 1000, successRate: 90 });
   });
@@ -131,7 +161,7 @@ describe("GET /api/insights/publish-health", () => {
   // SET NULL), and health must keep counting them. The query is therefore
   // keyed on the result's workspace and never on the connection relation.
   it("does not filter on the connection, so results of a removed connection still count", async () => {
-    await GET();
+    await GET(req());
 
     const args = groupByMock.mock.calls[0][0];
     expect(Object.keys(args.where).sort()).toEqual(["status", "updatedAt", "workspaceId"]);
@@ -139,7 +169,7 @@ describe("GET /api/insights/publish-health", () => {
   });
 
   it("returns an empty summary for a workspace that has never published", async () => {
-    const res = await GET();
+    const res = await GET(req());
     const body = await res.json();
 
     expect(body.platforms).toEqual([]);

@@ -129,7 +129,8 @@ import {
   repeatSchedule,
   type RepeatInterval,
 } from "@/lib/repeatSchedule";
-import { nextFreeSlots, type PostingSlot } from "@/lib/postingSlots";
+import { nextFreeSlots } from "@/lib/postingSlots";
+import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
 
 interface UploadedBlobInfo {
   url: string;
@@ -991,7 +992,8 @@ function CreatePostFormInner({
   const [repeatCount, setRepeatCount] = useState(REPEAT_DEFAULT_COUNT);
   // Posting times and the times posts already hold, read once Schedule is
   // chosen (GET /api/posts/scheduled-times); "Next free slot" works from them.
-  const [slotData, setSlotData] = useState<{ slots: PostingSlot[]; taken: Date[] } | "error" | null>(null);
+  // R32: `refused` when the read was refused for this page's workspace (another tab switched).
+  const [slotData, setSlotData] = useState<ScheduledTimes | { refused: string } | "error" | null>(null);
   // How many times "Next free slot" was pressed since the time was last typed:
   // each press moves to the free slot after the one before.
   const [slotPresses, setSlotPresses] = useState(0);
@@ -1918,22 +1920,17 @@ function CreatePostFormInner({
   useEffect(() => {
     if (publishMode !== "schedule" || slotData !== null) return;
     let cancelled = false;
-    fetch("/api/posts/scheduled-times")
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("not ok"))))
-      .then((body: { times?: string[]; slots?: PostingSlot[] }) => {
-        if (cancelled) return;
-        setSlotData({ slots: body.slots ?? [], taken: (body.times ?? []).map((time) => new Date(time)) });
-      })
-      .catch(() => {
-        if (!cancelled) setSlotData("error");
-      });
+    // R32 new-customer L3: the times of the workspace this page was drawn for only.
+    void readScheduledTimes(workspaceId).then((read) => {
+      if (!cancelled) setSlotData(read);
+    });
     return () => {
       cancelled = true;
     };
-  }, [publishMode, slotData]);
+  }, [publishMode, slotData, workspaceId]);
 
   function fillNextFreeSlot() {
-    if (!slotData || slotData === "error") return;
+    if (!slotData || slotData === "error" || "refused" in slotData) return;
     const presses = slotPresses + 1;
     const next = nextFreeSlots(slotData.slots, slotData.taken, new Date(), presses)[presses - 1];
     if (!next) {
@@ -3014,7 +3011,9 @@ function CreatePostFormInner({
                   className={cn(fieldBaseClasses, "h-10 w-auto px-3 py-2")}
                 />
                 {slotData && slotData !== "error" ? (
-                  slotData.slots.length > 0 ? (
+                  "refused" in slotData ? (
+                    <Alert variant="warning">{slotData.refused}</Alert>
+                  ) : slotData.slots.length > 0 ? (
                     <Button type="button" variant="outline" size="sm" onClick={fillNextFreeSlot}>
                       Next free slot
                     </Button>

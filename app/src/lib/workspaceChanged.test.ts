@@ -6,7 +6,9 @@ import {
   MISSING_WORKSPACE_ID_MESSAGE,
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_SAVE_MESSAGE,
+  readWorkspaceRefusalText,
   renderedWorkspaceRefusal,
+  sentWorkspaceId,
   withWorkspaceId,
 } from "./workspaceChanged";
 
@@ -59,6 +61,10 @@ describe("withWorkspaceId", () => {
     );
   });
 
+  it("leaves the path as it is for a page that couldn't read its workspace", () => {
+    expect(withWorkspaceId("/api/posts?status=completed", null)).toBe("/api/posts?status=completed");
+  });
+
   it("encodes the id", () => {
     expect(withWorkspaceId("/x", "a b&c")).toBe("/x?workspaceId=a%20b%26c");
   });
@@ -74,5 +80,30 @@ describe("pageWorkspaceRefusalText", () => {
     expect(pageWorkspaceRefusalText("INVALID_WORKSPACE_ID")).toBe("This page is out of date. Reload it, then try again.");
     expect(pageWorkspaceRefusalText("AI_WORKSPACE_DAILY_LIMIT")).toBeNull();
     expect(pageWorkspaceRefusalText(undefined)).toBeNull();
+  });
+});
+
+// R32 publishing L1: reads take the page's id from the query, as writes take it from the body.
+describe("sentWorkspaceId", () => {
+  it("reads ?workspaceId=, and an absent one is undefined (renderedWorkspaceRefusal's 400)", () => {
+    expect(sentWorkspaceId(new Request("http://localhost/api/posts?workspaceId=ws-1&status=x"))).toBe("ws-1");
+    expect(sentWorkspaceId(new Request("http://localhost/api/posts"))).toBeUndefined();
+  });
+});
+
+describe("readWorkspaceRefusalText", () => {
+  it("gives the shared sentence for a read refused for the page's workspace", async () => {
+    const changed = renderedWorkspaceRefusal("ws-2", "ws-1") as Response;
+    await expect(readWorkspaceRefusalText(changed)).resolves.toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    const missing = renderedWorkspaceRefusal(undefined, "ws-1") as Response;
+    await expect(readWorkspaceRefusalText(missing)).resolves.toBe(MISSING_WORKSPACE_ID_MESSAGE);
+  });
+
+  it("is null for any other answer, and leaves the body for the caller", async () => {
+    const other = Response.json({ error: "Invalid cursor." }, { status: 400 });
+    await expect(readWorkspaceRefusalText(other)).resolves.toBeNull();
+    await expect(other.json()).resolves.toEqual({ error: "Invalid cursor." });
+    await expect(readWorkspaceRefusalText(Response.json({ jobs: [] }))).resolves.toBeNull();
+    await expect(readWorkspaceRefusalText(new Response("<html>", { status: 409 }))).resolves.toBeNull();
   });
 });

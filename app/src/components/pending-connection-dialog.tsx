@@ -9,6 +9,7 @@ import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from 
 import { cn } from "@/lib/cn";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -132,7 +133,8 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(choiceAddress(endpoint, rememberedChoicePlatform(pendingId)));
+        // R32: for the workspace this page was drawn for; a refusal's sentence is shown below.
+        const response = await fetch(withWorkspaceId(choiceAddress(endpoint, rememberedChoicePlatform(pendingId)), workspaceId));
         const data = (await response.json().catch(() => null)) as
           | { platform?: ChoosablePlatform; candidates?: Candidate[]; error?: string }
           | null;
@@ -157,7 +159,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     return () => {
       cancelled = true;
     };
-  }, [endpoint, pendingId]);
+  }, [endpoint, pendingId, workspaceId]);
 
   // Drops ?choose= so the dialog stays closed.
   const leave = () => router.replace("/settings");

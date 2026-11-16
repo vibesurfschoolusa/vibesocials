@@ -33,7 +33,7 @@ import {
   type PairHalf,
 } from "./pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import { POST_GONE_TEXT, POST_NOW_DRAFT_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 
 interface PostJobRouteContext {
@@ -96,12 +96,16 @@ interface PatchBody {
   scheduledFor?: unknown;
 }
 
-export async function GET(_request: NextRequest, context: PostJobRouteContext) {
+export async function GET(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so the Queue's Edit never reads a post for another one.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   // Next 16 passes `params` as a promise — it MUST be awaited. Reading it
   // synchronously yielded `postJobId: undefined`, and Prisma treats an

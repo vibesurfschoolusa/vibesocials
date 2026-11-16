@@ -17,7 +17,18 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+import {
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { GET } from "./route";
+
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/connections${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
 
 const SEVEN = [
   "tiktok",
@@ -49,11 +60,28 @@ afterEach(() => {
 });
 
 // GET /api/connections feeds the dashboard's connection list and the composer.
+// R32 publishing L1: a page drawn for another workspace (another tab switched)
+// gets the switch sentence, never this workspace's numbers.
+describe("GET /api/connections - the page's workspace", () => {
+  it("409s another workspace's id and reads nothing", async () => {
+    const res = await GET(req("ws-2"));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  // Create's own read (create-post-form.tsx, outside R32's brief) sends none yet.
+  it("still answers a read that sent no id, for the active workspace", async () => {
+    const res = await GET(req(null));
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("GET /api/connections", () => {
   it("401s when signed out", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    expect((await GET()).status).toBe(401);
+    expect((await GET(req())).status).toBe(401);
     expect(findManyMock).not.toHaveBeenCalled();
   });
 
@@ -63,7 +91,7 @@ describe("GET /api/connections", () => {
       { platform: "x", needsReconnect: true },
     ]);
 
-    const body = (await (await GET()).json()) as {
+    const body = (await (await GET(req())).json()) as {
       connections: Array<{ platform: string; connected: boolean; needsReconnect: boolean }>;
     };
 
@@ -94,7 +122,7 @@ describe("GET /api/connections", () => {
   // 2026-11-10: Pinterest's code ships before Pinterest approves the app. The
   // dashboard must not count, or offer, a platform nobody can connect yet.
   it("leaves Pinterest out while this deployment has no Pinterest app", async () => {
-    expect((await platformsOf(await GET())).sort()).toEqual([...SEVEN].sort());
+    expect((await platformsOf(await GET(req()))).sort()).toEqual([...SEVEN].sort());
   });
 
   it("lists Pinterest once its app credentials are set", async () => {
@@ -102,13 +130,13 @@ describe("GET /api/connections", () => {
     vi.stubEnv("PINTEREST_APP_SECRET", "shh");
     vi.stubEnv("PINTEREST_REDIRECT_URI", "https://app.example.com/api/auth/pinterest/callback");
 
-    expect(await platformsOf(await GET())).toContain("pinterest");
+    expect(await platformsOf(await GET(req()))).toContain("pinterest");
   });
 
   it("still lists a Pinterest connection the workspace already has, so it can be seen and removed", async () => {
     findManyMock.mockResolvedValue([{ platform: "pinterest", needsReconnect: true }]);
 
-    const body = (await (await GET()).json()) as {
+    const body = (await (await GET(req())).json()) as {
       connections: Array<{ platform: string; connected: boolean; needsReconnect: boolean }>;
     };
 
@@ -130,7 +158,7 @@ describe("GET /api/connections", () => {
       { platform: "youtube", needsReconnect: false, expiresAt: new Date(now + day), refreshToken: "sealed-secret" },
     ]);
 
-    const response = await GET();
+    const response = await GET(req());
     const text = await response.text();
     const body = JSON.parse(text) as { connections: Array<{ platform: string; expiry: string | null }> };
 

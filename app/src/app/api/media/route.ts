@@ -11,7 +11,7 @@ import { readStoredMedia } from "@/lib/mediaInput";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import type { Prisma } from "@prisma/client";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -28,6 +28,10 @@ export async function GET(request: Request) {
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32 publishing L1: the page's workspace, so Media and Add many's picker never list another one's files.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const url = new URL(request.url);
 

@@ -2,6 +2,8 @@ import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
+
 import {
   LOAD_MORE_FAILED_TEXT,
   LOAD_MORE_OFFLINE_TEXT,
@@ -53,7 +55,7 @@ const fetchMock = vi.fn();
 // Publishes the hook's result from an effect (not during render) so the tests
 // can read the latest value after each `act`.
 function Probe({ onResult }: { onResult: (result: UsePostJobsResult) => void }) {
-  const result = usePostJobs();
+  const result = usePostJobs("ws-1");
   useEffect(() => {
     onResult(result);
   });
@@ -68,7 +70,7 @@ function FilteredProbe({
   onResult: (result: UsePostJobsResult) => void;
   options?: { show?: "problems" };
 }) {
-  const result = usePostJobs(options);
+  const result = usePostJobs("ws-1", options);
   useEffect(() => {
     onResult(result);
   });
@@ -319,22 +321,22 @@ describe("usePostJobs show filter", () => {
       json: async () => ({ jobs: payloadJobs, nextCursor: "c1", workspaceMemberCount: 1 }),
     }));
     await mount({ show: "problems" });
-    expect(urls()[0]).toBe("/api/posts?show=problems");
+    expect(urls()[0]).toBe("/api/posts?show=problems&workspaceId=ws-1");
 
     await advance(STEP_MS);
-    expect(urls()[1]).toBe("/api/posts?show=problems");
+    expect(urls()[1]).toBe("/api/posts?show=problems&workspaceId=ws-1");
 
     await act(async () => {
       latest.watchRetry("j1");
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(urls()[2]).toBe("/api/posts?show=problems");
+    expect(urls()[2]).toBe("/api/posts?show=problems&workspaceId=ws-1");
 
     await act(async () => {
       latest.loadMore();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(urls()[3]).toBe("/api/posts?show=problems&cursor=c1");
+    expect(urls()[3]).toBe("/api/posts?show=problems&cursor=c1&workspaceId=ws-1");
   });
 
   it("restarts the list when the filter changes, and a late answer for the old filter is dropped", async () => {
@@ -395,7 +397,7 @@ describe("usePostJobs show filter - fix round 1", () => {
 
     await advance(STEP_MS);
     expect(fetchMock).toHaveBeenCalledTimes(afterMount + 2);
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe("/api/posts?show=problems");
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe("/api/posts?show=problems&workspaceId=ws-1");
     expect(latest.jobs?.map((j) => j.id)).toEqual(["a", "j1", "b"]);
 
     // It settles: polling stops.
@@ -593,6 +595,73 @@ describe("usePostJobs Load more failure", () => {
   it("is null before any Load more", async () => {
     await mount();
     expect(latest.loadMoreError).toBeNull();
+  });
+});
+
+// R32 publishing L1: every read names the page's workspace; a refusal (another
+// tab switched workspace) says the shared sentence and never fills the page
+// with the other workspace's posts.
+describe("usePostJobs and the page's workspace", () => {
+  const urls = () => fetchMock.mock.calls.map((call) => String(call[0]));
+  const refused = async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response;
+
+  it("sends the page's id on the first load, the poll and Load more, and reports it before any answer", async () => {
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jobs: payloadJobs, nextCursor: "c1", workspaceMemberCount: 1 }),
+    }));
+    await mount();
+    expect(history[0].workspaceId).toBe("ws-1");
+    await advance(STEP_MS);
+    await act(async () => {
+      latest.loadMore();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(urls().slice(0, 3)).toEqual(["/api/posts?workspaceId=ws-1", "/api/posts?workspaceId=ws-1", "/api/posts?cursor=c1&workspaceId=ws-1"]);
+  });
+
+  it("a refused first load shows the sentence in place of the list", async () => {
+    fetchMock.mockImplementation(refused);
+    await mount();
+    expect(latest.error).toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    expect(latest.jobs).toBeNull();
+  });
+
+  it("a refused poll keeps the list, says the sentence and stops polling", async () => {
+    await mount();
+    expect(latest.jobs).toHaveLength(1);
+    fetchMock.mockImplementation(refused);
+    await advance(STEP_MS);
+    const calls = fetchMock.mock.calls.length;
+    expect(latest.jobs).toHaveLength(1);
+    expect(latest.error).toBeNull();
+    expect(latest.workspaceChanged).toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    await advance(5 * 60_000);
+    await fireVisibilityChange();
+    expect(fetchMock.mock.calls.length).toBe(calls);
+    expect(latest.pollingStopped).toBe(false);
+  });
+
+  it("a refused Load more says the sentence under the button and keeps the list", async () => {
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jobs: [jobFixture({ status: "completed" })], nextCursor: "c1", workspaceMemberCount: 1 }),
+    }));
+    await mount();
+    fetchMock.mockImplementationOnce(refused);
+    await act(async () => {
+      latest.loadMore();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.loadMoreError).toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    expect(latest.jobs).toHaveLength(1);
+  });
+
+  it("is null while every read is answered", async () => {
+    await mount();
+    expect(latest.workspaceChanged).toBeNull();
   });
 });
 

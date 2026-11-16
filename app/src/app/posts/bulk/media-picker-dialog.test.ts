@@ -2,7 +2,23 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { FIRST_LOAD_FAILED_MESSAGE, LOAD_MORE_FAILED_MESSAGE } from "./media-picker-dialog";
+import { FIRST_LOAD_FAILED_MESSAGE, LOAD_MORE_FAILED_MESSAGE, mediaPageUrl } from "./media-picker-dialog";
+
+// R32 publishing L1: the picker lists the library of the workspace Add many
+// was drawn for; the route's refusal sentence is what it then says.
+describe("Media picker and the page's workspace", () => {
+  it("every page's address carries the page's id", () => {
+    expect(mediaPageUrl("ws-1", null)).toBe("/api/media?workspaceId=ws-1");
+    expect(mediaPageUrl("ws-1", "c 1")).toBe("/api/media?cursor=c%201&workspaceId=ws-1");
+  });
+
+  it("Add many passes its workspace", () => {
+    const form = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(form).toMatch(/<MediaPickerDialog\s+workspaceId=\{workspaceId\}/);
+    const picker = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8");
+    expect(picker).toContain("fetch(mediaPageUrl(workspaceId, cursor))");
+  });
+});
 
 // R27 pages L11: the picker has nothing to upload with, so its empty state
 // sends the person to this page's own file choice or to Media.

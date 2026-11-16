@@ -30,7 +30,7 @@ import { DashboardHome } from "./dashboard-home";
 // loading (the first render, before any effect runs), not only once they end.
 describe("dashboard header while loading", () => {
   it("has the page's h1", () => {
-    const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], setup: null }));
+    const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], workspaceId: "ws-1", setup: null }));
     expect(html).toMatch(/<h1[^>]*>Dashboard<\/h1>/);
   });
 });
@@ -44,7 +44,7 @@ describe("dashboard while the session loads", () => {
 
   it("has the page's h1 and one loading line", () => {
     session.status = "loading";
-    const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], setup: null }));
+    const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], workspaceId: "ws-1", setup: null }));
     expect(html).toMatch(/<h1 class="sr-only">Dashboard<\/h1>/);
     expect(html.match(/role="status"/g)).toHaveLength(1);
     expect(html).toMatch(/<p role="status" class="sr-only">Loading your dashboard…<\/p>/);

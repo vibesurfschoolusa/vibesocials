@@ -2,6 +2,8 @@ import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
+
 import {
   CONNECTIONS_FAILED_TEXT,
   CONNECTIONS_OFFLINE_TEXT,
@@ -18,8 +20,10 @@ let latest: UseConnectionsResult;
 let root: Root | null = null;
 const fetchMock = vi.fn();
 
+let probeWorkspaceId: string | null | undefined = "ws-1";
+
 function Probe() {
-  const result = useConnections();
+  const result = useConnections(probeWorkspaceId);
   useEffect(() => {
     latest = result;
   });
@@ -38,6 +42,7 @@ async function mount() {
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   fetchMock.mockReset();
+  probeWorkspaceId = "ws-1";
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("window", { event: undefined, document: {}, HTMLIFrameElement: class {}, addEventListener() {}, removeEventListener() {} });
   vi.stubGlobal("document", { addEventListener() {}, removeEventListener() {} });
@@ -93,5 +98,29 @@ describe("useConnections failures", () => {
     await mount();
     expect(latest.error).toBeNull();
     expect(latest.connections).toHaveLength(1);
+  });
+});
+
+// R32 publishing L1: the read names the page's workspace; a refusal says the
+// shared sentence instead of another workspace's connections.
+describe("useConnections and the page's workspace", () => {
+  it("sends the page's id", async () => {
+    fetchMock.mockResolvedValue(Response.json({ connections: [] }));
+    await mount();
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/connections?workspaceId=ws-1");
+  });
+
+  it("sends none when called without one (Create, until it passes its own)", async () => {
+    probeWorkspaceId = undefined;
+    fetchMock.mockResolvedValue(Response.json({ connections: [] }));
+    await mount();
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/connections");
+  });
+
+  it("a refusal: the switch sentence, no list", async () => {
+    fetchMock.mockResolvedValue(renderedWorkspaceRefusal("ws-1", "ws-2"));
+    await mount();
+    expect(latest.error).toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    expect(latest.connections).toBeNull();
   });
 });

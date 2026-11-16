@@ -16,8 +16,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { toggleMediaSelection } from "@/lib/bulkMedia";
 import { appendMediaPage, type MediaItemDto } from "@/lib/mediaDto";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 interface MediaPickerDialogProps {
+  /** R32: the workspace Add many was drawn for; every page read sends it. */
+  workspaceId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Items already added as rows: shown ticked and locked, so none is added twice. */
@@ -37,8 +40,17 @@ export const FIRST_LOAD_FAILED_MESSAGE = "Your media could not be loaded. Close 
 /** R30 pages L5: a later page failed; the list, its ticks and Load more are still there. */
 export const LOAD_MORE_FAILED_MESSAGE = "Couldn't load more. Press Load more to try again.";
 
+/**
+ * A page of the library of the workspace Add many was drawn for (R32
+ * publishing L1: a tab left on it after another tab switched is refused, and
+ * the picker says the route's sentence instead of listing the other library).
+ */
+export function mediaPageUrl(workspaceId: string, cursor: string | null): string {
+  return withWorkspaceId(cursor ? `/api/media?cursor=${encodeURIComponent(cursor)}` : "/api/media", workspaceId);
+}
+
 /** "Choose from Media": the workspace's photos and videos, newest first, paged like the Media page. */
-export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }: MediaPickerDialogProps) {
+export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, room, onAdd }: MediaPickerDialogProps) {
   const [items, setItems] = useState<MediaItemDto[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,7 +62,7 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
 
   const fetchPage = useCallback(async (cursor: string | null, failed: string): Promise<Page | string> => {
     try {
-      const response = await fetch(cursor ? `/api/media?cursor=${encodeURIComponent(cursor)}` : "/api/media");
+      const response = await fetch(mediaPageUrl(workspaceId, cursor));
       const data = (await response.json().catch(() => null)) as
         | (Partial<Page> & { error?: string })
         | null;
@@ -62,7 +74,7 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
     } catch {
       return failed;
     }
-  }, []);
+  }, [workspaceId]);
 
   // Loaded again each time the dialog opens, so an item the client just sent shows up.
   useEffect(() => {
