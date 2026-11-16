@@ -80,7 +80,8 @@ export function UploadSummary({
 }) {
   return (
     <>
-      <div role="alert">
+      {/* Visually hidden while empty: no room taken, still live regions. */}
+      <div role="alert" className="empty:sr-only">
         {sentCount === 0 && failures.length > 0 ? (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
             <p className="text-lg font-semibold">Nothing was sent</p>
@@ -88,7 +89,7 @@ export function UploadSummary({
           </div>
         ) : null}
       </div>
-      <div role="status">
+      <div role="status" className="empty:sr-only">
         {sentCount > 0 ? (
           <div className="rounded-lg border border-border bg-muted p-4">
             <p className="text-lg font-semibold">Sent</p>

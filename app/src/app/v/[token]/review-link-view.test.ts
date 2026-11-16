@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { REVIEW_MORE_SENTENCE, ReviewListMore, ReviewPostCard, changeNoteHint } from "./review-link-view";
+import { DECISION_MAYBE_SAVED_MESSAGE, REVIEW_MORE_SENTENCE, ReviewListMore, ReviewPostCard, changeNoteHint } from "./review-link-view";
 
 type ReviewPostDTO = ReviewCardDTO;
 
@@ -130,5 +130,32 @@ describe("ReviewPostCard: the answer to a decision", () => {
     expect(source).toMatch(/void decide\(\{ decision: "change", note \}, sendRef\.current\);/);
     expect(source).toMatch(/<Button ref=\{sendRef\} type="submit"/);
     expect(source).toMatch(/<p\s+ref=\{stateRef\}/);
+  });
+});
+
+// Lead follow-up (R27 MM3): the empty region took the card's 12 px gap. It
+// stays in the accessibility tree but takes no room while empty.
+describe("ReviewPostCard: the empty status region takes no space", () => {
+  it("is visually hidden while empty, never display:none", () => {
+    const html = render(post());
+    expect(html).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
+    expect(html).not.toMatch(/<div role="status"[^>]*(hidden|display:\s*none)/);
+  });
+});
+
+// Lead follow-up (R27 MM3): with no answer the decision may have been saved.
+describe("ReviewPostCard: a decision that got no answer", () => {
+  it("says it may have been saved and to reload, never that it failed", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(DECISION_MAYBE_SAVED_MESSAGE).toBe(
+      "The answer was lost, so your choice may have been saved. Reload the page to see.",
+    );
+    const decide = source.slice(source.indexOf("async function decide("), source.indexOf("return (", source.indexOf("async function decide(")));
+    expect(decide).toMatch(/await fetchOrNoAnswer\(/);
+    expect(decide).not.toMatch(/await fetch\(/);
+    expect(decide).toMatch(/isNoAnswer\(error\) \? DECISION_MAYBE_SAVED_MESSAGE : /);
+    expect(decide).not.toContain("Couldn't save that. Check your connection");
   });
 });

@@ -150,22 +150,20 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/auth/change-email", {
+      const response = await fetchOrNoAnswer("/api/auth/change-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ newEmail, currentPassword }),
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string; until?: string } | null;
-        setError(
-          emailChangeRefusal(data, "We couldn't start the change. Your email is unchanged. Please try again in a minute."),
-        );
+        setError(emailChangeFailureText(response.status, data));
         return;
       }
       setSentTo(newEmail.trim());
       setCurrentPassword("");
-    } catch {
-      setError("We couldn't reach Vibe Socials, so your email is unchanged. Check your internet connection and try again.");
+    } catch (error) {
+      setError(isNoAnswer(error) ? EMAIL_CHANGE_MAYBE_SENT_MESSAGE : EMAIL_CHANGE_NOT_STARTED);
     } finally {
       setBusy(false);
     }
@@ -242,6 +240,22 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
       </div>
     </form>
   );
+}
+
+const EMAIL_CHANGE_NOT_STARTED = "We couldn't start the change. Your email is unchanged. Please try again in a minute.";
+
+/**
+ * R27 MM3 lead follow-up: with no answer the confirmation link may already be
+ * on its way, so "unchanged" could be wrong. Say where to check instead.
+ */
+export const EMAIL_CHANGE_MAYBE_SENT_MESSAGE =
+  "The answer was lost, so the change may have gone through. Check the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.";
+
+/** What a refused or unreadable change-email answer says. */
+export function emailChangeFailureText(status: number, data: { error?: string; until?: string } | null): string {
+  const readable = (typeof data?.error === "string" && data.error !== "") || typeof data?.until === "string";
+  if (status >= 500 && !readable) return EMAIL_CHANGE_MAYBE_SENT_MESSAGE;
+  return emailChangeRefusal(data, EMAIL_CHANGE_NOT_STARTED);
 }
 
 /** Review 2: until when the previous address can undo the last email change. */

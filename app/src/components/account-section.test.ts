@@ -10,10 +10,12 @@ vi.mock("next-auth/react", () => ({ signOut: vi.fn() }));
 import {
   AccountSection,
   ChangeEmailForm,
+  EMAIL_CHANGE_MAYBE_SENT_MESSAGE,
   FormError,
   PASSWORD_MAYBE_CHANGED_MESSAGE,
   UndoLinkNotice,
   accountDeleteRefusal,
+  emailChangeFailureText,
   emailChangeRefusal,
   emailChangeSentMessage,
   passwordFailureText,
@@ -194,5 +196,30 @@ describe("Settings, Account: change password when the answer is lost", () => {
     expect(form).toMatch(/await fetchOrNoAnswer\("\/api\/auth\/change-password"/);
     expect(form).not.toMatch(/await fetch\(/);
     expect(form).toMatch(/isNoAnswer\(error\) \? PASSWORD_MAYBE_CHANGED_MESSAGE : /);
+  });
+});
+
+// Lead follow-up (R27 MM3): with no answer the link may have been sent, so
+// "your email is unchanged" could be wrong. Same rule as Create workspace.
+describe("Settings, Account: change email when the answer is lost", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+  const form = source.slice(source.indexOf("export function ChangeEmailForm"), source.indexOf("export function undoLinkSentence"));
+
+  it("no answer or an unreadable 5xx: it may have gone through, and where to check", () => {
+    expect(EMAIL_CHANGE_MAYBE_SENT_MESSAGE).toBe(
+      "The answer was lost, so the change may have gone through. Check the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.",
+    );
+    expect(emailChangeFailureText(502, null)).toBe(EMAIL_CHANGE_MAYBE_SENT_MESSAGE);
+    expect(emailChangeFailureText(400, { error: "That is your current email." })).toBe("That is your current email.");
+    expect(emailChangeFailureText(400, null)).toBe(
+      "We couldn't start the change. Your email is unchanged. Please try again in a minute.",
+    );
+  });
+
+  it("sends through fetchOrNoAnswer and never says unchanged when no answer came", () => {
+    expect(form).toMatch(/await fetchOrNoAnswer\("\/api\/auth\/change-email"/);
+    expect(form).toMatch(/setError\(emailChangeFailureText\(response\.status, data\)\);/);
+    expect(form).toMatch(/isNoAnswer\(error\) \? EMAIL_CHANGE_MAYBE_SENT_MESSAGE : /);
+    expect(form).not.toContain("so your email is unchanged");
   });
 });

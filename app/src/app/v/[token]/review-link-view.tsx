@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { focusAfterPress } from "@/lib/focusAfter";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import {
   REVIEW_LIST_MAX,
   REVIEW_NOTE_MAX,
@@ -18,6 +19,10 @@ import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
 /** Shown when the first load failed. */
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
+
+/** R27 MM3 lead follow-up: with no answer the decision may have been saved. */
+export const DECISION_MAYBE_SAVED_MESSAGE =
+  "The answer was lost, so your choice may have been saved. Reload the page to see.";
 
 /** R7-client-journey L5: under the list when it holds the first 100 of more. */
 export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} scheduled posts; more appear as these go out.`;
@@ -119,7 +124,7 @@ export function ReviewPostCard({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(
+      const response = await fetchOrNoAnswer(
         `/api/review-link/${encodeURIComponent(token)}/posts/${encodeURIComponent(post.id)}`,
         {
           method: "POST",
@@ -143,8 +148,8 @@ export function ReviewPostCard({
       // A refused decision always says why on its own card.
       setError(outcome.message);
       if (outcome.kind === "changed") onStale(outcome.message);
-    } catch {
-      setError("Couldn't save that. Check your connection and try again.");
+    } catch (error) {
+      setError(isNoAnswer(error) ? DECISION_MAYBE_SAVED_MESSAGE : "Couldn't save that. Reload the page and try again.");
     } finally {
       setBusy(false);
     }
@@ -183,7 +188,8 @@ export function ReviewPostCard({
         ) : null}
 
         {/* R27 MM3: on the page from the first render, so a decision's new state is announced. */}
-        <div role="status">
+        {/* Visually hidden while empty, so it takes no room but stays a live region. */}
+        <div role="status" className="empty:sr-only">
           {state ? (
             <p
               ref={stateRef}

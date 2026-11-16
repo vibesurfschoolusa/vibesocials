@@ -90,13 +90,13 @@ describe("failureOf, what a failed file says", () => {
 describe("UploadSummary before anything was sent", () => {
   it("renders both live regions, empty", () => {
     const html = render(0, [], 0);
-    expect(html).toMatch(/<div role="alert"><\/div>/);
-    expect(html).toMatch(/<div role="status"><\/div>/);
+    expect(html).toMatch(/<div role="alert" class="empty:sr-only"><\/div>/);
+    expect(html).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
   });
 
   it("puts each result in its own region", () => {
-    expect(render(2, [])).toMatch(/<div role="alert"><\/div><div role="status">.*2 files arrived/);
-    expect(render(0, [network])).toMatch(/<div role="alert">.*Nothing was sent.*<\/div><div role="status"><\/div>/);
+    expect(render(2, [])).toMatch(/<div role="alert" class="empty:sr-only"><\/div><div role="status" class="empty:sr-only">.*2 files arrived/);
+    expect(render(0, [network])).toMatch(/<div role="alert" class="empty:sr-only">.*Nothing was sent.*<\/div><div role="status" class="empty:sr-only"><\/div>/);
   });
 
   it("the form renders the summary from the first render and moves focus to it when sending ends", async () => {
