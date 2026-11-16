@@ -83,7 +83,8 @@ function disabledWhileLoading(flag: string, value: string | null, disabled: stri
           ? [new RegExp(`${name}\\s*===\\s*(?!${escape(value)})("[^"]*"|'[^']*')`, "g")]
           : []),
       ]
-    : [new RegExp(`!${name}(?![\\w$.])`, "g")];
+    : // A single `!` only: `!!flag` is true while loading.
+      [new RegExp(`(?<![!\\w$.])!${name}(?![\\w$.])`, "g")];
   const isFalse = (text: string) => falseTerms.some((term) => new RegExp(term.source).test(text));
   let left = disabled.replace(/\([^()]*\)/g, (group) => (group.includes("&&") && isFalse(group) ? "" : group));
   for (const term of falseTerms) left = left.replace(term, "");
@@ -142,7 +143,11 @@ describe("Button busy guard", () => {
     expect(sharedBusyFlags(`<Button loading={saving} disabled={!saving && !ready}>`)).toEqual([]);
   });
 
+  // The guard reads one tag's text: a flag copied into another variable
+  // (`const locked = busy; disabled={locked}`) is past what it can see.
   it("still finds one that is true while loading", () => {
+    expect(sharedBusyFlags(`<Button loading={busy} disabled={!!busy}>`)).toEqual(["busy"]);
+    expect(sharedBusyFlags(`<Button loading={busy} disabled={ready && !!busy}>`)).toEqual(["busy"]);
     expect(sharedBusyFlags(`<Button loading={mode === "schedule"} disabled={mode !== null}>`)).toEqual(["mode"]);
     expect(sharedBusyFlags(`<Button loading={mode === "schedule"} disabled={mode === "schedule"}>`)).toEqual(["mode"]);
     expect(
