@@ -670,6 +670,10 @@ async function createContainerWithCover(
   } catch (error) {
     if ((error as { code?: unknown } | null)?.code !== "INSTAGRAM_CONTAINER_FAILED") throw error;
     if ((error as Error).message === INSTAGRAM_NO_CONTAINER_ID_MESSAGE) throw error;
+    // R32 lead review 3: only a 4xx refuses the cover. A 5xx says nothing about
+    // it and carries its status, so the in-step retry sends it all again.
+    const status = (error as { status?: unknown }).status;
+    if (typeof status !== "number" || status < 400 || status >= 500) throw error;
     console.warn("[Instagram] The container was refused with the cover; creating it without one");
     return {
       containerId: await createInstagramContainer({ ...args, cover: undefined }),

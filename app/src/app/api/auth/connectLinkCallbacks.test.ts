@@ -289,6 +289,31 @@ describe("a link flow whose Page is on the second page of /me/accounts", () => {
     };
   }
 
+  it("facebook_page: the visitor's Page on the second page is offered in the choice on their page", async () => {
+    h.fetch.mockImplementation(pagedAccounts("ig"));
+
+    const res = await facebookPageGET(linkRequest("facebook_page"));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?choose=pending-1`);
+    const pages = (h.fetch.mock.calls as Array<[string | URL]>).map((c) => String(c[0])).filter((u) => u.includes("/me/accounts"));
+    expect(pages).toHaveLength(2);
+    expect(h.pendingUpdateMany).toHaveBeenCalledWith({
+      where: { id: "pending-1", workspaceId: WORKSPACE, userId: CREATOR },
+      data: { connectLinkId: "link-1" },
+    });
+    expect(h.create).not.toHaveBeenCalled();
+  });
+
+  it("facebook_page: a second page that fails says the Pages couldn't be read, never that there are none", async () => {
+    h.fetch.mockImplementation(pagedAccounts("fail"));
+
+    const res = await facebookPageGET(linkRequest("facebook_page"));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=facebook_page_failed_to_fetch_pages`);
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.pendingCreate).not.toHaveBeenCalled();
+  });
+
   it("instagram: the account on the second page connects and the visitor lands on their page", async () => {
     h.fetch.mockImplementation(pagedAccounts("ig"));
 

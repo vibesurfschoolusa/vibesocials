@@ -802,6 +802,46 @@ describe("choosing which account to connect", () => {
       expectNoConnectionWrites();
     });
 
+    it("facebook_page: a cursor Graph already sent ends the list, so no Page is added twice", async () => {
+      useProvider((url) => {
+        if (!url.includes("/me/accounts")) return facebookProvider([])(url);
+        const after = new URL(url).searchParams.get("after");
+        const page = after ? { id: "page-2", name: "Two", access_token: "t-2" } : { id: "page-1", name: "One", access_token: "t-1" };
+        return json({
+          data: [page],
+          paging: { cursors: { after: "c1" }, next: "https://graph.facebook.com/v26.0/me/accounts?after=c1" },
+        });
+      });
+
+      const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
+
+      expectChooseRedirect(res);
+      expect(accountsCalls()).toHaveLength(2);
+      expect((createdPending().opened.pages as Array<{ id: string }>).map((p) => p.id)).toEqual(["page-1", "page-2"]);
+    });
+
+    it("facebook_page: a page that doesn't answer within 10 seconds is a failed read, never a short list", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(NOW);
+      const paged = withPagedAccounts(facebookProvider([]), [[{ id: "page-1", name: "One", access_token: "t-1" }], []]);
+      fetchMock.mockImplementation((input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (!url.includes("/me/accounts") || !new URL(url).searchParams.get("after")) return Promise.resolve(paged(url));
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        });
+      });
+
+      const pending = facebookPageGET(callbackRequest("facebook_page", signedState()));
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(accountsCalls()).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const res = await pending;
+
+      expect(location(res).searchParams.get("error")).toBe("facebook_page_failed_to_fetch_pages");
+      expectNoConnectionWrites();
+    });
+
     it("facebook_page: the reading stops at 10 pages", async () => {
       useProvider(
         withPagedAccounts(

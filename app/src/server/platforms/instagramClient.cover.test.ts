@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { INSTAGRAM_COVER_REFUSED_NOTE, instagramClient } from "./instagramClient";
+import { withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
 
 vi.mock("@/lib/db", () => ({
@@ -175,6 +176,31 @@ describe("instagramClient - a Reel's cover", () => {
     const result = await publishAcrossSteps(ctx({ cover: { imageUrl: COVER_URL } }));
 
     expect(calls).toHaveLength(2);
+    expect(calls.map((url) => url.searchParams.get("cover_url"))).toEqual([COVER_URL, COVER_URL]);
+    expect(result).toEqual({ externalPostId: "media-1" });
+  });
+
+  // R32 lead review 3: a 5xx says nothing about the cover. It is rethrown with its
+  // status, so the in-step retry sends the whole container again, cover included.
+  it("a 5xx while sending the cover is rethrown, not answered by dropping the cover", async () => {
+    const calls = stubGraph(() => new Response("{}", { status: 503 }));
+
+    await expect(
+      instagramClient.publishVideo({ ...ctx({ cover: { imageUrl: COVER_URL } }), uploadState: makeStore() }),
+    ).rejects.toMatchObject({ code: "INSTAGRAM_CONTAINER_FAILED", status: 503 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a 5xx once with the cover: the retry sends the cover again and posts with it, with no note", async () => {
+    let answers = 0;
+    const calls = stubGraph(() => (answers++ === 0 ? new Response("{}", { status: 500 }) : containerOk()));
+    const store = makeStore();
+    const context = { ...ctx({ cover: { imageUrl: COVER_URL } }), uploadState: store };
+
+    const first = await withTransientRetries(() => instagramClient.publishVideo(context), { sleep: async () => {} });
+    expect(first.continuation).toBeDefined();
+    const result = await instagramClient.publishVideo(context);
+
     expect(calls.map((url) => url.searchParams.get("cover_url"))).toEqual([COVER_URL, COVER_URL]);
     expect(result).toEqual({ externalPostId: "media-1" });
   });

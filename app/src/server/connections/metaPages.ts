@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 
 /**
@@ -9,6 +10,8 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
  */
 export const META_PAGES_PAGE_SIZE = 100;
 export const META_PAGES_MAX_PAGES = 10;
+/** Each page's read; one that doesn't answer in time is a failed read. */
+export const META_PAGES_TIMEOUT_MS = 10_000;
 
 export type MetaPagesRead<T> =
   /** `cut`: Graph had more after {@link META_PAGES_MAX_PAGES} pages; the rest weren't read. */
@@ -26,6 +29,8 @@ export type MetaPagesRead<T> =
 export async function listMetaPages<T>(accessToken: string, fields: string, logTag: string): Promise<MetaPagesRead<T>> {
   const pages: T[] = [];
   let after: string | null = null;
+  // R32 lead review 2: a cursor Graph already sent would read the same Pages again.
+  const seen = new Set<string>();
 
   for (let page = 0; page < META_PAGES_MAX_PAGES; page += 1) {
     const url = new URL(`${META_GRAPH_BASE_URL}/me/accounts`);
@@ -34,7 +39,18 @@ export async function listMetaPages<T>(accessToken: string, fields: string, logT
     url.searchParams.set("limit", String(META_PAGES_PAGE_SIZE));
     if (after) url.searchParams.set("after", after);
 
-    const response = await fetch(url.toString());
+    let response: Response;
+    try {
+      // The signal bounds the body too; fetchWithTimeout's own bound ends at the headers.
+      response = await fetchWithTimeout(
+        url.toString(),
+        { signal: AbortSignal.timeout(META_PAGES_TIMEOUT_MS) },
+        META_PAGES_TIMEOUT_MS,
+      );
+    } catch (error) {
+      console.error(`${logTag} Failed to fetch pages:`, { page, error: errorKind(error) });
+      return { ok: false };
+    }
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
       console.error(`${logTag} Failed to fetch pages:`, { status: response.status, page, error: errorText });
@@ -51,12 +67,20 @@ export async function listMetaPages<T>(accessToken: string, fields: string, logT
     pages.push(...(body.data as T[]));
 
     const cursor = body.paging?.cursors?.after;
-    if (typeof body.paging?.next !== "string" || typeof cursor !== "string" || cursor === "") {
+    if (typeof body.paging?.next !== "string" || typeof cursor !== "string" || cursor === "" || seen.has(cursor)) {
       return { ok: true, pages, cut: false };
     }
+    seen.add(cursor);
     after = cursor;
   }
 
   console.warn(`${logTag} Stopped reading Pages at the page cap`, { pages: pages.length });
   return { ok: true, pages, cut: true };
+}
+
+/** The error's code or name only: a message could quote the request URL, which holds the token. */
+function errorKind(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string") return code;
+  return error instanceof Error ? error.name : "unknown";
 }
