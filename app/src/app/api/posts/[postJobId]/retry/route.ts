@@ -9,7 +9,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
-import { leftOutSentence, retryAllPlan, type LeftOut } from "@/lib/retryAll";
+import { leftOutSentence, needsReconnecting, retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { retryReconnectMessage } from "@/lib/ownerStepAnswers";
@@ -67,7 +67,7 @@ async function needsReconnect(workspaceId: string, platform: Platform): Promise<
     where: { workspaceId_platform: { workspaceId, platform } },
     select: { needsReconnect: true },
   });
-  return !connection || connection.needsReconnect;
+  return needsReconnecting(connection);
 }
 
 /**

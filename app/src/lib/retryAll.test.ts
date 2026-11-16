@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { leftOutSentence, retryAllPlan } from "./retryAll";
+import { failedRowStep, leftOutSentence, needsReconnecting, retryAllPlan } from "./retryAll";
 
 // R7 review, points 1 and 2: the one rule for what Retry all failed covers.
 describe("retryAllPlan", () => {
@@ -48,5 +50,27 @@ describe("retryAllPlan", () => {
 
   it("nothing left out: no sentence", () => {
     expect(leftOutSentence([])).toBeNull();
+  });
+});
+
+// R27 MM4 review: the one rule for the step a failed row gets, shared by the
+// Activity card's Retry all failed and the outcome email.
+describe("failedRowStep and needsReconnecting", () => {
+  it("unconfirmed: check the platform first; a connection that needs reconnecting: reconnect; else retry", () => {
+    expect(failedRowStep({ unconfirmed: true }, false)).toBe("check_platform");
+    expect(failedRowStep({ unconfirmed: true }, true)).toBe("check_platform");
+    expect(failedRowStep({ unconfirmed: false }, true)).toBe("reconnect");
+    expect(failedRowStep({ unconfirmed: false }, false)).toBe("retry");
+  });
+
+  it("no connection, or one flagged needsReconnect, needs reconnecting", () => {
+    expect(needsReconnecting(null)).toBe(true);
+    expect(needsReconnecting({ needsReconnect: true })).toBe(true);
+    expect(needsReconnecting({ needsReconnect: false })).toBe(false);
+  });
+
+  it("retryAllPlan reads the same rule", () => {
+    const source = readFileSync(new URL("./retryAll.ts", import.meta.url), "utf8");
+    expect(source).toMatch(/const step = failedRowStep\(result, needsReconnect\(result\.platform\)\);/);
   });
 });

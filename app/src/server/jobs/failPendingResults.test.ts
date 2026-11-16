@@ -18,6 +18,7 @@ const {
   mediaUpdateManyMock,
   executeRawMock,
   transactionMock,
+  postJobCountMock,
 } = vi.hoisted(() => ({
   resultUpdateManyMock: vi.fn(),
   resultFindManyMock: vi.fn(),
@@ -26,6 +27,7 @@ const {
   mediaUpdateManyMock: vi.fn(),
   executeRawMock: vi.fn(),
   transactionMock: vi.fn(),
+  postJobCountMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -48,6 +50,7 @@ import {
   RECOMPUTE_TX_MAX_WAIT_MS,
   RECOMPUTE_TX_TIMEOUT_MS,
   failPendingPostJobResults,
+  failPendingResultsIfStillStale,
   finishPostJob,
   recomputeAndStorePostJobStatus,
 } from "./failPendingResults";
@@ -58,7 +61,7 @@ import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/pub
 const tx = {
   $executeRaw: executeRawMock,
   postJobResult: { findMany: resultFindManyMock, updateMany: resultUpdateManyMock },
-  postJob: { update: postJobUpdateMock, findUnique: postJobFindUniqueMock },
+  postJob: { update: postJobUpdateMock, findUnique: postJobFindUniqueMock, count: postJobCountMock },
   mediaItem: { updateMany: mediaUpdateManyMock },
 };
 
@@ -139,6 +142,45 @@ describe("PUBLISH_STALLED_FAILURE", () => {
       where: { postJobId: "job-1", status: "pending", claimRunId: { not: null } },
       data: { status: "failed", errorCode: PUBLISH_UNCONFIRMED_CODE, errorMessage: PUBLISH_UNCONFIRMED_MESSAGE },
     });
+  });
+});
+
+// R27 MM4 review: the stale sweep's marking re-checks, under the job's row lock
+// and inside the marking transaction, that the job is still stale. A run that
+// woke up (claimed a row, or wrote its heartbeat) after the sweep read its
+// candidates keeps its rows, and no "may already be live" email goes out.
+describe("failPendingResultsIfStillStale", () => {
+  const stillStale = {
+    status: { in: ["pending" as const, "in_progress" as const] },
+    updatedAt: { lt: new Date("2026-11-02T04:30:00.000Z") },
+  };
+
+  beforeEach(() => {
+    postJobCountMock.mockReset();
+  });
+
+  it("still stale: locks the job, re-checks, then marks and recomputes like failPendingPostJobResults", async () => {
+    postJobCountMock.mockResolvedValue(1);
+    const out = await failPendingResultsIfStillStale("job-1", PUBLISH_STALLED_FAILURE, stillStale);
+
+    expect(postJobCountMock).toHaveBeenCalledWith({ where: { id: "job-1", ...stillStale } });
+    const lockOrder = executeRawMock.mock.invocationCallOrder[0];
+    expect(lockOrder).toBeLessThan(postJobCountMock.mock.invocationCallOrder[0]);
+    expect(postJobCountMock.mock.invocationCallOrder[0]).toBeLessThan(resultUpdateManyMock.mock.invocationCallOrder[0]);
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: null },
+      data: { status: "failed", ...PUBLISH_STALLED_FAILURE },
+    });
+    expect(out).toEqual({ marked: true, failedCount: 2, unconfirmedCount: 2, status: "failed" });
+  });
+
+  it("touched since the candidate read (the race): nothing is marked or recomputed", async () => {
+    postJobCountMock.mockResolvedValue(0);
+    const out = await failPendingResultsIfStillStale("job-1", PUBLISH_STALLED_FAILURE, stillStale);
+
+    expect(out).toEqual({ marked: false });
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
   });
 });
 

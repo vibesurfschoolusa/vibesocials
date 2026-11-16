@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { BULK_IMPROVE_FAILED_TEXT } from "./bulkExtras";
-import { BulkPostRow } from "./bulk-post-row";
+import { BulkPostRow, captionLocked } from "./bulk-post-row";
 import type { BulkRow } from "./bulk-posts-form";
 
 const noop = () => {};
@@ -266,5 +266,40 @@ describe("Add many row: Write again", () => {
       );
     }
     expect(render(row({ captionStatus: "done", captionOverwrite: true }))).toMatch(/id="bulk-row-r1-caption-status" class="[^"]*"><\/p>/);
+  });
+});
+
+// R27 MM4 review (medium): after Write again focus is in the caption box, and
+// the new caption replaces the text when it comes. So while it is written the
+// box is read-only (still focusable, as on Reviews) and the row says why;
+// typing then changes nothing, so nothing typed can be lost.
+describe("Add many row: the caption box during Write again", () => {
+  const rewriting = row({ captionStatus: "writing", captionOverwrite: true, caption: "Old caption" });
+
+  it("is read-only and says so, while staying focusable (not disabled)", () => {
+    const box = textarea(render(rewriting));
+    expect(box).toMatch(/readOnly=""/);
+    expect(box).toContain('aria-readonly="true"');
+    expect(box).not.toMatch(/\sdisabled=""/);
+    expect(render(rewriting)).toContain("Writing a new caption...");
+  });
+
+  it("drops a change while a new caption is written; accepts it otherwise", () => {
+    expect(captionLocked(rewriting)).toBe(true);
+    expect(captionLocked(row({ captionStatus: "waiting", captionOverwrite: true }))).toBe(true);
+    expect(captionLocked(row({ improving: true }))).toBe(true);
+    expect(captionLocked(row())).toBe(false);
+    // The AI failed: the old text stays and the box unlocks.
+    const failed = row({ captionStatus: "failed", captionOverwrite: false, caption: "Old caption" });
+    expect(captionLocked(failed)).toBe(false);
+    expect(textarea(render(failed))).not.toContain("readOnly");
+  });
+
+  it("the row and the form both go through captionLocked", () => {
+    const rowSource = readFileSync(new URL("./bulk-post-row.tsx", import.meta.url), "utf8");
+    const formSource = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(rowSource).toMatch(/readOnly=\{locked \|\| captionIsLocked\}|readOnly=\{captionIsLocked\}/);
+    expect(rowSource).toMatch(/onChange=\{\(event\) => \{\s*if \(!captionIsLocked\) onCaptionChange\(event\.target\.value\);/);
+    expect(formSource).toMatch(/onCaptionChange=\{\(caption\) => \{\s*if \(captionLocked\(row\)\) return;/);
   });
 });

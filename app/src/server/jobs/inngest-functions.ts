@@ -16,6 +16,7 @@ import { drainPendingBlobDeletions } from "@/server/jobs/pendingBlobDeletion";
 import {
   CONNECTION_GONE_FAILURE,
   failPendingPostJobResults,
+  failPendingResultsIfStillStale,
   finishPostJob,
   PUBLISH_STALLED_FAILURE,
   recomputeAndStorePostJobStatus,
@@ -2263,8 +2264,21 @@ export const stalePostJobSweep = inngest.createFunction(
         });
         let failed = 0;
         if (stillPending.length > 0) {
-          const marked = await failPendingPostJobResults(id, PUBLISH_STALLED_FAILURE);
-          failed = marked.failedCount + marked.unconfirmedCount > 0 && marked.status !== "in_progress" ? 1 : 0;
+          // R27 MM4 review: re-checked under the job's lock before marking (a run
+          // may have woken since the read above). A row claimed since the cutoff
+          // means a run is live: a claim lasts one step, a few minutes at most.
+          const marked = await failPendingResultsIfStillStale(id, PUBLISH_STALLED_FAILURE, {
+            ...stale,
+            results: {
+              none: {
+                OR: [
+                  { status: "pending", deferredUntil: { gte: cutoff } },
+                  { status: "pending", claimedAt: { gte: cutoff } },
+                ],
+              },
+            },
+          });
+          failed = marked.marked && marked.failedCount + marked.unconfirmedCount > 0 && marked.status !== "in_progress" ? 1 : 0;
         } else {
           failed = await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
         }

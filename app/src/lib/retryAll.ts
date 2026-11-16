@@ -14,6 +14,23 @@ import { platformLabel } from "./platforms";
 export type LeftOutReason = "unconfirmed" | "reconnect";
 export type LeftOut = { platform: Platform; reason: LeftOutReason };
 
+/**
+ * R27 MM4 review: the step a failed row gets, read by Retry all failed (here)
+ * and by the outcome email, so the email names the control the Activity card
+ * offers: check the platform first (it may be live), reconnect, or Retry.
+ */
+export type FailedRowStep = "check_platform" | "reconnect" | "retry";
+
+export function failedRowStep(result: { unconfirmed: boolean }, needsReconnect: boolean): FailedRowStep {
+  if (result.unconfirmed) return "check_platform";
+  return needsReconnect ? "reconnect" : "retry";
+}
+
+/** No connection for the platform, or one flagged as needing a reconnect. */
+export function needsReconnecting(connection: { needsReconnect: boolean } | null | undefined): boolean {
+  return !connection || connection.needsReconnect;
+}
+
 export function retryAllPlan(
   results: ReadonlyArray<{ platform: Platform; status: string; unconfirmed: boolean }>,
   needsReconnect: (platform: Platform) => boolean,
@@ -22,8 +39,9 @@ export function retryAllPlan(
   const leftOut: LeftOut[] = [];
   for (const result of results) {
     if (result.status !== "failed") continue;
-    if (result.unconfirmed) leftOut.push({ platform: result.platform, reason: "unconfirmed" });
-    else if (needsReconnect(result.platform)) leftOut.push({ platform: result.platform, reason: "reconnect" });
+    const step = failedRowStep(result, needsReconnect(result.platform));
+    if (step === "check_platform") leftOut.push({ platform: result.platform, reason: "unconfirmed" });
+    else if (step === "reconnect") leftOut.push({ platform: result.platform, reason: "reconnect" });
     else included.push(result.platform);
   }
   return { included, leftOut };

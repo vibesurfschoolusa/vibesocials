@@ -70,7 +70,7 @@ import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
-import { BulkPostRow, captionFailedText } from "./bulk-post-row";
+import { BulkPostRow, captionFailedText, captionLocked } from "./bulk-post-row";
 import { MediaPickerDialog } from "./media-picker-dialog";
 import { BatchSettingsFieldset } from "./batch-settings";
 import {
@@ -1163,7 +1163,10 @@ export function BulkPostsForm({
               coverOpen={coverOpenId === row.id}
               onConfirmInQueue={() => markInQueue(row.id)}
               onSendAgain={() => sendAgain(row.id)}
-              onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null, improveError: null })}
+              onCaptionChange={(caption) => {
+                if (captionLocked(row)) return;
+                updateRow(row.id, { caption, sendError: null, improveError: null });
+              }}
               onAltTextChange={(altText) => updateRow(row.id, { altText, altTextError: null })}
               onImprove={() => void improveRow(row.id)}
               onWriteDescription={() => void writeDescription(row.id)}

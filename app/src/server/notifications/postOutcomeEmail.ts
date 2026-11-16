@@ -3,6 +3,7 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { failedRowStep, needsReconnecting } from "@/lib/retryAll";
 import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
@@ -61,6 +62,8 @@ export interface PostOutcomeResultSummary {
   /** Internal code, read only to word a stalled or unconfirmed row (R27 MM4). */
   errorCode?: string | null;
   errorMessage?: string | null;
+  /** A stalled row's connection needs reconnecting (or is gone), read when the email is sent. */
+  needsReconnect?: boolean;
   /** Sent as a Story: the row reads "Instagram Story" (R5-client-journey L3). */
   story?: boolean;
   /**
@@ -89,6 +92,8 @@ export interface BuildPostOutcomeEmailParams {
   caption: string;
   /** The scanner's once-a-day notice (scannerNotice.ts): adds {@link SCAN_NOTICE_ONCE_A_DAY_LINE}. */
   scanNotice?: boolean;
+  /** Who reads it: a member is told the owner can reconnect (R9-client-journey L4). */
+  recipientRole?: "owner" | "member";
 }
 
 export interface PostOutcomeEmail {
@@ -157,7 +162,7 @@ function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
 // Field-by-field rendering (never a blanket JSON.stringify of `result`) so a
 // result object that happens to carry extra runtime fields beyond this
 // module's DTO type can never leak into the email body.
-function renderResultRow(result: PostOutcomeResultSummary): string {
+function renderResultRow(result: PostOutcomeResultSummary, recipientRole: "owner" | "member"): string {
   const label = escapeHtml(`${platformLabel(result.platform)}${result.story ? " Story" : ""}`);
   const stopped = `Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}.`;
   // R27 MM4: the stale sweep now marks a closed job's pending rows (stalled, or
@@ -166,13 +171,18 @@ function renderResultRow(result: PostOutcomeResultSummary): string {
   if (result.notSent) {
     return `<li>${label}: ${stopped} Open the post in Activity to see where it stands.</li>`;
   }
-  // As the card: a stalled row never reached the platform and has Retry; an
-  // unconfirmed one may already be live, so the platform is checked first.
-  if (result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode) {
-    return `<li>${label}: ${stopped} Retry it in Activity.</li>`;
-  }
-  if (result.status === "failed" && result.errorCode === PUBLISH_UNCONFIRMED_CODE) {
-    return `<li>${label}: ${escapeHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`;
+  // The card's rule (lib/retryAll.ts failedRowStep): an unconfirmed row may
+  // already be live, so the platform is checked first; a stalled one never
+  // reached the platform and is retried, after a reconnect when it needs one.
+  const unconfirmed = result.status === "failed" && result.errorCode === PUBLISH_UNCONFIRMED_CODE;
+  if (unconfirmed || (result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode)) {
+    const step = failedRowStep({ unconfirmed }, result.needsReconnect === true);
+    if (step === "check_platform") return `<li>${label}: ${escapeHtml(PUBLISH_UNCONFIRMED_MESSAGE)}</li>`;
+    const name = escapeHtml(platformLabel(result.platform));
+    if (step === "retry") return `<li>${label}: ${stopped} Retry it in Activity.</li>`;
+    return recipientRole === "member"
+      ? `<li>${label}: ${stopped} The workspace owner can reconnect ${name}; then retry it in Activity.</li>`
+      : `<li>${label}: ${stopped} Reconnect ${name} in Settings, then retry it in Activity.</li>`;
   }
   if (result.status === "success") {
     return `<li>${label}: Succeeded</li>`;
@@ -200,6 +210,7 @@ export function buildPostOutcomeEmail({
   workspaceName,
   caption,
   scanNotice = false,
+  recipientRole = "owner",
 }: BuildPostOutcomeEmailParams): PostOutcomeEmail {
   const base = appBaseUrl || null;
   // Omitted cleanly (no dead link, no crash) when no base URL is available.
@@ -249,7 +260,7 @@ export function buildPostOutcomeEmail({
 
   const headline = buildHeadline(results);
 
-  const rows = results.map(renderResultRow).join("");
+  const rows = results.map((result) => renderResultRow(result, recipientRole)).join("");
 
   const html = [
     "<div>",
@@ -604,9 +615,27 @@ export async function deliverPostOutcomeNotification({
     const { feed, story } = claimed;
     // R9-client-journey L4: a member can't reconnect, so is told the owner can.
     const role = membership.role === "member" ? "member" : "owner";
-    const rows = [...summaryRows(feed), ...(story ? summaryRows(story) : [])].map((result) => ({
+    const summaries = [...summaryRows(feed), ...(story ? summaryRows(story) : [])];
+    // R27 MM4 review: a stalled row is worded by the card's rule, which needs
+    // its connection now; read only when there is one.
+    const stalledPlatforms = [
+      ...new Set(
+        summaries
+          .filter((result) => result.status === "failed" && result.errorCode === PUBLISH_STALLED_FAILURE.errorCode)
+          .map((result) => result.platform),
+      ),
+    ];
+    const connections =
+      stalledPlatforms.length > 0
+        ? await prisma.socialConnection.findMany({
+            where: { workspaceId: feed.workspaceId, platform: { in: stalledPlatforms } },
+            select: { platform: true, needsReconnect: true },
+          })
+        : [];
+    const rows = summaries.map((result) => ({
       ...result,
       errorMessage: sentenceForRecipient(result.errorMessage, result.platform, role),
+      needsReconnect: needsReconnecting(connections.find((connection) => connection.platform === result.platform)),
     }));
 
     // Pause (2026-11-10): a paused workspace's due posts are all failed with this
@@ -630,6 +659,7 @@ export async function deliverPostOutcomeNotification({
       // The pair is described by its feed post (its caption; a Story has none).
       caption: feed.baseCaption ?? feed.mediaItem?.baseCaption ?? "",
       scanNotice,
+      recipientRole: role,
     });
 
     await sendEmail(

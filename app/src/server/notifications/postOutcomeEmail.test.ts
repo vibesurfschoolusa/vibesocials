@@ -11,6 +11,7 @@ const {
   updateManyPostJobMock,
   findUniqueMemberMock,
   sendEmailMock,
+  findManyConnectionMock,
 } = vi.hoisted(() => ({
   findUniqueUserMock: vi.fn(),
   findUniquePostJobMock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   updateManyPostJobMock: vi.fn(),
   findUniqueMemberMock: vi.fn(),
   sendEmailMock: vi.fn(),
+  findManyConnectionMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -27,6 +29,8 @@ vi.mock("@/lib/db", () => ({
     postJob: { findUnique: findUniquePostJobMock, findFirst: findFirstPostJobMock, updateMany: updateManyPostJobMock },
     // R6-publishing L1: the author must still be a member of the post's workspace.
     workspaceMember: { findUnique: findUniqueMemberMock },
+    // R27 MM4: a stalled row's connection, to word it as the card's control.
+    socialConnection: { findMany: findManyConnectionMock },
   },
 }));
 
@@ -129,6 +133,23 @@ describe("buildPostOutcomeEmail", () => {
           errorMessage: "Publish did not complete (stalled). You can retry this platform.",
         }),
       ).toContain("<li>Instagram: Not sent — publishing stopped before it reached Instagram. Retry it in Activity.</li>");
+    });
+
+    it("stalled on a connection that needs reconnecting: reconnect first, as the card asks (owner and member)", () => {
+      const row = {
+        platform: "instagram" as const,
+        status: "failed" as const,
+        errorCode: "PUBLISH_STALLED",
+        errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+        needsReconnect: true,
+      };
+      const stopped = "<li>Instagram: Not sent — publishing stopped before it reached Instagram.";
+      expect(buildPostOutcomeEmail({ results: [row], appBaseUrl: null, ...WS }).html).toContain(
+        `${stopped} Reconnect Instagram in Settings, then retry it in Activity.</li>`,
+      );
+      expect(buildPostOutcomeEmail({ results: [row], appBaseUrl: null, recipientRole: "member", ...WS }).html).toContain(
+        `${stopped} The workspace owner can reconnect Instagram; then retry it in Activity.</li>`,
+      );
     });
 
     it("unconfirmed: the shared sentence, check the platform first", () => {
@@ -1311,5 +1332,50 @@ describe("deliverPostOutcomeNotification - reconnect sentence for the recipient"
     await deliverPostOutcomeNotification({ userId: `${role}-1`, postJobId: "job-1" });
     expect(html()).toContain(`Failed — ${expected}</li>`);
     if (role === "member") expect(html()).not.toContain("location in Settings");
+  });
+});
+
+// R27 MM4 review: a stalled row's wording follows the connection, read when the email is sent.
+describe("deliverPostOutcomeNotification - stalled rows and their connection", () => {
+  const stalled = {
+    platform: "instagram",
+    status: "failed",
+    errorCode: "PUBLISH_STALLED",
+    errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+  };
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ status: "failed", results: [stalled] }));
+    findUniqueMemberMock.mockResolvedValue({ id: "m", role: "owner" });
+    findManyConnectionMock.mockReset();
+  });
+  const html = () => (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+
+  it("a connection that is fine: retry it in Activity", async () => {
+    findManyConnectionMock.mockResolvedValue([{ platform: "instagram", needsReconnect: false }]);
+    await deliverPostOutcomeNotification({ userId: "owner-1", postJobId: "job-1" });
+    expect(findManyConnectionMock).toHaveBeenCalledWith({
+      where: { workspaceId: expect.any(String), platform: { in: ["instagram"] } },
+      select: { platform: true, needsReconnect: true },
+    });
+    expect(html()).toContain("Instagram. Retry it in Activity.</li>");
+  });
+
+  it.each([
+    ["flagged", [{ platform: "instagram", needsReconnect: true }]],
+    ["gone", []],
+  ])("a connection that is %s: reconnect first", async (_label, connections) => {
+    findManyConnectionMock.mockResolvedValue(connections);
+    await deliverPostOutcomeNotification({ userId: "owner-1", postJobId: "job-1" });
+    expect(html()).toContain("Instagram. Reconnect Instagram in Settings, then retry it in Activity.</li>");
+  });
+
+  it("no stalled rows: no connection lookup", async () => {
+    findUniquePostJobMock.mockResolvedValue(
+      jobRow({ status: "failed", results: [{ platform: "x", status: "failed", errorCode: "X", errorMessage: "X refused it." }] }),
+    );
+    await deliverPostOutcomeNotification({ userId: "owner-1", postJobId: "job-1" });
+    expect(findManyConnectionMock).not.toHaveBeenCalled();
   });
 });

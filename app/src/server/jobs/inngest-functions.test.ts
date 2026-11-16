@@ -42,6 +42,7 @@ const db = vi.hoisted(() => ({
 const {
   getPlatformClientMock,
   failPendingMock,
+  failIfStaleMock,
   recomputeSpy,
   releaseSpy,
   releaseContinuationSpy,
@@ -59,6 +60,7 @@ const {
   finishSpy: vi.fn(),
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
+  failIfStaleMock: vi.fn(),
   recomputeSpy: vi.fn(),
   /** Wraps the real releaseClaimForDeferral so its calls can be asserted. */
   releaseSpy: vi.fn(),
@@ -159,6 +161,7 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
   return {
     ...actual,
     failPendingPostJobResults: failPendingMock,
+    failPendingResultsIfStillStale: failIfStaleMock,
     recomputeAndStorePostJobStatus: recomputeSpy,
     // Follow-up 3: the stale sweep stamps media through the shared helper.
     stampPostMediaLastUsed: stampMediaSpy,
@@ -250,6 +253,7 @@ beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
   getPlatformClientMock.mockReset();
   failPendingMock.mockReset();
+  failIfStaleMock.mockReset();
   recomputeSpy.mockClear();
   releaseSpy.mockClear();
   releaseContinuationSpy.mockClear();
@@ -4131,8 +4135,8 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
       finishSpy.mockResolvedValue(1);
     });
 
-    it("marks them through failPendingPostJobResults with the stalled reason (claimed ones become unconfirmed there), not finishPostJob", async () => {
-      failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 1, status: "failed" });
+    it("marks them with the stalled reason (claimed ones become unconfirmed there), re-checking the job is still stale, not finishPostJob", async () => {
+      failIfStaleMock.mockResolvedValue({ marked: true, failedCount: 1, unconfirmedCount: 1, status: "failed" });
 
       const { out, step } = await sweep();
 
@@ -4141,7 +4145,21 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
         select: { id: true },
         take: 1,
       });
-      expect(failPendingMock).toHaveBeenCalledWith("stale-1", PUBLISH_STALLED_FAILURE);
+      const cutoff = new Date(NOW - STALE_AFTER_MS);
+      expect(failIfStaleMock).toHaveBeenCalledWith("stale-1", PUBLISH_STALLED_FAILURE, {
+        status: { in: ["pending", "in_progress"] },
+        updatedAt: { lt: cutoff },
+        // Also no row a run claimed since the cutoff: a claim lives inside one step.
+        results: {
+          none: {
+            OR: [
+              { status: "pending", deferredUntil: { gte: cutoff } },
+              { status: "pending", claimedAt: { gte: cutoff } },
+            ],
+          },
+        },
+      });
+      expect(failPendingMock).not.toHaveBeenCalled();
       expect(finishSpy).not.toHaveBeenCalled();
       expect(out).toMatchObject({ swept: 1 });
       expect(step.sendEvent).toHaveBeenCalledWith("notify-stale-closed", [
@@ -4154,12 +4172,22 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
     });
 
     it("rows another sweep or the reconciler already marked: nothing changes, nothing is counted or announced", async () => {
-      failPendingMock.mockResolvedValue({ failedCount: 0, unconfirmedCount: 0, status: "failed" });
+      failIfStaleMock.mockResolvedValue({ marked: true, failedCount: 0, unconfirmedCount: 0, status: "failed" });
 
       const { out, step } = await sweep();
 
       expect(out).toMatchObject({ swept: 0 });
       expect(step.sendEvent).not.toHaveBeenCalled();
+    });
+
+    it("the job was touched after the candidate read (a run woke and claimed a row): not marked, no email", async () => {
+      failIfStaleMock.mockResolvedValue({ marked: false });
+
+      const { out, step } = await sweep();
+
+      expect(out).toMatchObject({ swept: 0 });
+      expect(step.sendEvent).not.toHaveBeenCalled();
+      expect(finishSpy).not.toHaveBeenCalled();
     });
   });
 

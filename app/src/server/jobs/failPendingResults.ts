@@ -223,25 +223,63 @@ export async function failPendingPostJobResults(
   // its job's heartbeat), so the two can't deadlock, and the recompute (which
   // only reads results under the job lock) never waits on a result row.
   return prisma.$transaction(
+    (tx) => markPendingAndRecompute(tx, postJobId, scope, failure),
+    { maxWait: RECOMPUTE_TX_MAX_WAIT_MS, timeout: RECOMPUTE_TX_TIMEOUT_MS },
+  );
+}
+
+/** The rule's writes: claimed rows unconfirmed, unclaimed ones `failure`, then the recompute. */
+async function markPendingAndRecompute(
+  tx: Prisma.TransactionClient,
+  postJobId: string,
+  scope: Prisma.PostJobResultWhereInput,
+  failure: PendingResultFailure,
+): Promise<{ failedCount: number; unconfirmedCount: number; status: PostJobStatus }> {
+  const { count: unconfirmedCount } = await tx.postJobResult.updateMany({
+    where: { ...scope, claimRunId: { not: null } },
+    data: {
+      status: "failed",
+      errorCode: PUBLISH_UNCONFIRMED.errorCode,
+      errorMessage: PUBLISH_UNCONFIRMED.errorMessage,
+    },
+  });
+  const { count: failedCount } = await tx.postJobResult.updateMany({
+    where: { ...scope, claimRunId: null },
+    data: {
+      status: "failed",
+      errorCode: failure.errorCode,
+      errorMessage: failure.errorMessage,
+    },
+  });
+  const { status } = await recomputeInTransaction(tx, postJobId);
+  return { failedCount, unconfirmedCount, status };
+}
+
+/**
+ * R27 MM4 review: the 6-hour stale sweep's version of the rule above. The sweep
+ * read its candidates earlier; a run that woke up since (claimed a row, or
+ * wrote its heartbeat) must keep its rows, or the email would wrongly say "may
+ * already be live". So the job's row is locked first and `stillStale` is checked
+ * again under that lock, inside the marking transaction; only then are the rows
+ * marked and the job recomputed.
+ *
+ * Lock order: job, then its result rows, the reverse of a platform step's
+ * finalize (result row, then the job's heartbeat). Both can meet only when a
+ * run holds a claim, which `stillStale` refuses (no row claimed since the
+ * cutoff), so in practice they don't; if they ever do, Postgres ends one of
+ * the two and that write is retried (the sweep's step, or the run's step).
+ */
+export async function failPendingResultsIfStillStale(
+  postJobId: string,
+  failure: PendingResultFailure,
+  stillStale: Prisma.PostJobWhereInput,
+): Promise<{ marked: false } | { marked: true; failedCount: number; unconfirmedCount: number; status: PostJobStatus }> {
+  return prisma.$transaction(
     async (tx) => {
-      const { count: unconfirmedCount } = await tx.postJobResult.updateMany({
-        where: { ...scope, claimRunId: { not: null } },
-        data: {
-          status: "failed",
-          errorCode: PUBLISH_UNCONFIRMED.errorCode,
-          errorMessage: PUBLISH_UNCONFIRMED.errorMessage,
-        },
-      });
-      const { count: failedCount } = await tx.postJobResult.updateMany({
-        where: { ...scope, claimRunId: null },
-        data: {
-          status: "failed",
-          errorCode: failure.errorCode,
-          errorMessage: failure.errorMessage,
-        },
-      });
-      const { status } = await recomputeInTransaction(tx, postJobId);
-      return { failedCount, unconfirmedCount, status };
+      await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
+      if ((await tx.postJob.count({ where: { id: postJobId, ...stillStale } })) === 0) return { marked: false as const };
+      const marked = await markPendingAndRecompute(tx, postJobId, { postJobId, status: "pending" }, failure);
+      return { marked: true as const, ...marked };
     },
     { maxWait: RECOMPUTE_TX_MAX_WAIT_MS, timeout: RECOMPUTE_TX_TIMEOUT_MS },
   );

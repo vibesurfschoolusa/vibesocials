@@ -112,6 +112,16 @@ function uploadText(row: BulkRow): string | null {
   return null;
 }
 
+/**
+ * Whether the caption box takes no typing: Improve, or Write again (R27 MM4
+ * review), replaces the text when it answers, so anything typed meanwhile
+ * would be lost. The box stays focusable (read-only, not disabled); when the
+ * AI fails the old text stays and the box unlocks.
+ */
+export function captionLocked(row: Pick<BulkRow, "improving" | "captionOverwrite" | "captionStatus">): boolean {
+  return row.improving || (row.captionOverwrite && (row.captionStatus === "waiting" || row.captionStatus === "writing"));
+}
+
 export function BulkPostRow({
   row,
   index,
@@ -145,6 +155,7 @@ export function BulkPostRow({
   const isVideo = row.mimeType.startsWith("video/");
   const status = uploadText(row);
   const captionRef = useRef<HTMLTextAreaElement>(null);
+  const captionIsLocked = captionLocked(row);
   // R27 MM4: Write again hides both caption buttons and the old text stays, so this line says it is working.
   const rewriting = row.captionOverwrite && (row.captionStatus === "waiting" || row.captionStatus === "writing");
 
@@ -209,10 +220,13 @@ export function BulkPostRow({
             rows={3}
             value={row.caption}
             disabled={!editable}
-            // Improve replaces the text when it answers, so nothing typed meanwhile is lost.
-            readOnly={row.improving}
+            // Improve and Write again replace the text when they answer, so nothing typed meanwhile is lost.
+            readOnly={captionIsLocked}
+            aria-readonly={captionIsLocked || undefined}
             placeholder={aiCaptions && row.captionStatus === "writing" ? "Writing a caption..." : "Write a caption"}
-            onChange={(event) => onCaptionChange(event.target.value)}
+            onChange={(event) => {
+              if (!captionIsLocked) onCaptionChange(event.target.value);
+            }}
           />
           <p role="status" id={`bulk-row-${row.id}-caption-status`} className="text-sm text-muted-foreground empty:sr-only">
             {rewriting ? "Writing a new caption..." : ""}
