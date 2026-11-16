@@ -552,6 +552,20 @@ export function photoSetTypeKeyOf(photos: readonly { file: { type: string }; sta
     .join(" ");
 }
 
+/**
+ * The one type the platform list is judged on when the set has fewer than two
+ * ready photos: the first ready photo's, or nothing (null) while every attached
+ * photo is still "preparing", so a pick of Windows HEICs shows no false reason
+ * while they convert. With no photo set, the single file's type as before.
+ */
+export function judgedMimeType(
+  photos: readonly { file: { type: string }; status: string }[],
+  activeMimeType: string | null,
+): string | null {
+  if (photos.length === 0) return activeMimeType;
+  return photos.find((photo) => photo.status !== "preparing")?.file.type ?? null;
+}
+
 /** The first press while the notice is fresh stops there, before any dialog. */
 export function fileLostBlocksSubmit(state: FileLostNotice): boolean {
   return state === "fresh";
@@ -968,19 +982,21 @@ function CreatePostFormInner({
   // Joined into a key so the list only changes when a type or the order does.
   const photoSetTypeKey = photoSetTypeKeyOf(photoSet);
   const photoSetTypes = useMemo(() => (photoSetTypeKey ? photoSetTypeKey.split(" ") : []), [photoSetTypeKey]);
+  // A text value, so upload progress on the photos does not redo the view.
+  const judgedType = judgedMimeType(photoSet, activeMimeType);
   const pageView = useMemo(
     () =>
       composerPageView({
         pageState,
         connected: connectedPlatforms,
         deselected,
-        mimeType: activeMimeType,
+        mimeType: judgedType,
         mimeTypes: photoSetTypes,
         mode: publishMode,
         loading: uploadLoading,
         triedSend,
       }),
-    [pageState, connectedPlatforms, deselected, activeMimeType, photoSetTypes, publishMode, uploadLoading, triedSend],
+    [pageState, connectedPlatforms, deselected, judgedType, photoSetTypes, publishMode, uploadLoading, triedSend],
   );
   const { noFile, untouched, choices: platformChoices, selected: selectedPlatforms, platformAlert, textNotice } =
     pageView;

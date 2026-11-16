@@ -35,6 +35,7 @@ import {
   noFileSubmitError,
   photosFailureLosesFile,
   photoSetTypeKeyOf,
+  judgedMimeType,
   scheduleWhenText,
   platformListAlert,
   pressCountsAsTry,
@@ -71,6 +72,43 @@ describe("photoSetTypeKeyOf", () => {
     expect(photoSetTypeKeyOf([photo("image/png", "waiting"), photo("image/webp", "uploaded")])).toBe(
       "image/png image/webp",
     );
+  });
+});
+
+// R22 new-customer L1 follow-up: the single type the platform list is judged on.
+describe("judgedMimeType", () => {
+  const photo = (type: string, status: "preparing" | "waiting" | "uploaded") => ({
+    file: new File(["x"], "p", { type }),
+    status,
+  });
+
+  it("judges nothing while every photo is still being prepared", () => {
+    expect(judgedMimeType([photo("", "preparing"), photo("", "preparing"), photo("", "preparing")], "")).toBeNull();
+  });
+
+  it("once one is ready, judges the first ready photo", () => {
+    expect(judgedMimeType([photo("", "preparing"), photo("image/jpeg", "waiting")], "")).toBe("image/jpeg");
+  });
+
+  it("with no photo set, the single file's type as before", () => {
+    expect(judgedMimeType([], "video/mp4")).toBe("video/mp4");
+    expect(judgedMimeType([], null)).toBeNull();
+  });
+
+  it("three Windows HEICs being prepared: no platform greyed out, no alert", () => {
+    const preparing = [photo("", "preparing"), photo("", "preparing"), photo("", "preparing")];
+    const v = composerPageView({
+      pageState: "file",
+      connected: ["instagram", "facebook_page", "linkedin", "x"],
+      deselected: new Set(),
+      mimeType: judgedMimeType(preparing, ""),
+      mimeTypes: photoSetTypeKeyOf(preparing) ? photoSetTypeKeyOf(preparing).split(" ") : [],
+      mode: "now",
+      loading: false,
+      triedSend: true,
+    });
+    expect(v.choices.every((c) => c.disabledReason === null)).toBe(true);
+    expect(v.platformAlert).toBeNull();
   });
 });
 
@@ -264,6 +302,8 @@ describe("no Location field on Create", () => {
 
   it("builds the photo types from photoSetTypeKeyOf", () => {
     expect(source).toContain("const photoSetTypeKey = photoSetTypeKeyOf(photoSet);");
+    expect(source).toContain("const judgedType = judgedMimeType(photoSet, activeMimeType);");
+    expect(source).toContain("mimeType: judgedType,");
   });
 
   it("sends no location in a post's body", () => {

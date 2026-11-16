@@ -1723,6 +1723,10 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
 
       expect(error?.code).toBe("X_VIDEO_STATUS_CHECK_FAILED");
       expect(error?.message).not.toContain("UPSTREAM-DETAIL");
+      // R22 platform-clients L3 follow-up: the tweet is not sent yet, so nothing was posted.
+      expect(publishErrorMessage("x", error!)).toBe(
+        "X's answer about the video's processing could not be read. Nothing was posted. Try again.",
+      );
     });
 
     it("keeps trying only until the processing cap", async () => {

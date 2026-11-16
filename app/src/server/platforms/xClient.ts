@@ -1319,7 +1319,7 @@ async function publishChunked(args: {
       if (isTransientUploadFailure(error)) return await unanswered(error);
       throw xUploadError(
         "X_VIDEO_STATUS_CHECK_FAILED",
-        "X video processing status check failed: X's answer could not be read",
+        "X's answer about the video's processing could not be read. Nothing was posted. Try again.",
       );
     }
     return { verdict: judgeProcessing(body?.processing_info) };
