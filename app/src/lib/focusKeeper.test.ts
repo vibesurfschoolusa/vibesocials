@@ -390,6 +390,63 @@ describe("the focus keeper", () => {
     expect(doc.activeElement).toBe(added);
   });
 
+  it("a control in a disabled fieldset is not usable: the next fallback is used", () => {
+    const { buttons, rows, focusOn, remove, doc, el } = setup();
+    const fieldset = el("FIELDSET", [], { disabled: "" });
+    const row = rows[2];
+    row.children = row.children.filter((child) => child !== buttons[2]);
+    fieldset.children = [buttons[2]];
+    buttons[2].parentElement = fieldset;
+    fieldset.parentElement = row;
+    row.children.push(fieldset);
+    focusOn(buttons[1]);
+    remove(rows[1]);
+    expect(buttons[2].focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(buttons[0]);
+  });
+
+  for (const [label, make] of [
+    ["a text input", (el: ReturnType<typeof makeWorld>["el"]) => el("INPUT", [], { type: "text" })],
+    ["an input with no type", (el: ReturnType<typeof makeWorld>["el"]) => el("INPUT")],
+    ["a textarea", (el: ReturnType<typeof makeWorld>["el"]) => el("TEXTAREA")],
+    ["a contenteditable box", (el: ReturnType<typeof makeWorld>["el"]) => el("DIV", [], { contenteditable: "true", tabindex: "0" })],
+  ] as const) {
+    it(`Space typed in ${label} does not read the fallbacks again`, () => {
+      const { rows, focusOn, remove, fire, doc, el, buttons } = setup();
+      const field = make(el);
+      const row = rows[0];
+      row.children.push(field);
+      field.parentElement = row;
+      focusOn(field);
+      const added = el("BUTTON");
+      const addedRow = el("LI", [added]);
+      const list = row.parentElement!;
+      addedRow.parentElement = list;
+      list.children.splice(1, 0, addedRow);
+      fire("keydown", field, " ");
+      remove(row);
+      expect(added.focus).not.toHaveBeenCalled();
+      expect(doc.activeElement).toBe(buttons[1]);
+    });
+  }
+
+  it("Space on a checkbox still reads them again", () => {
+    const { rows, focusOn, remove, fire, doc, el } = setup();
+    const box = el("INPUT", [], { type: "checkbox" });
+    const row = rows[0];
+    row.children.push(box);
+    box.parentElement = row;
+    focusOn(box);
+    const added = el("BUTTON");
+    const addedRow = el("LI", [added]);
+    const list = row.parentElement!;
+    addedRow.parentElement = list;
+    list.children.splice(1, 0, addedRow);
+    fire("keydown", box, " ");
+    remove(row);
+    expect(doc.activeElement).toBe(added);
+  });
+
   it("a press that navigates (the address changed): focus is left on the body", () => {
     const { buttons, rows, focusOn, remove, doc, bannerButton } = setup();
     focusOn(buttons[1]);

@@ -58,14 +58,21 @@ function selfOrAncestor(element: Element, matches: (element: Element) => boolean
   return false;
 }
 
+/** A surrounding <fieldset disabled> disables its controls (Add many's batch settings). */
+function isDisabledFieldset(element: Element): boolean {
+  return element.tagName === "FIELDSET" && element.hasAttribute("disabled");
+}
+
 /**
- * On the page, not disabled, not in a hidden, aria-hidden or inert part, and
- * drawn: a control hidden by CSS (hidden md:inline) has no boxes.
+ * On the page, not disabled (itself or by a fieldset), not in a hidden,
+ * aria-hidden or inert part, and drawn: a control hidden by CSS (hidden
+ * md:inline) has no boxes.
  */
 function isUsable(element: HTMLElement): boolean {
   return (
     element.isConnected &&
     !element.hasAttribute("disabled") &&
+    !selfOrAncestor(element, isDisabledFieldset) &&
     !selfOrAncestor(element, isHiddenElement) &&
     (typeof element.getClientRects !== "function" || element.getClientRects().length > 0)
   );
@@ -86,6 +93,17 @@ function removesPage(record: MutationRecord, root: Element | null): boolean {
 
 /** The keys that press a control; the fallbacks are read again only then. */
 const PRESS_KEYS = new Set(["Enter", " "]);
+
+/** Input types where Space is a press (a checkbox, a button), not a typed character. */
+const PRESSABLE_INPUT_TYPES = new Set(["button", "checkbox", "color", "file", "image", "radio", "reset", "submit"]);
+
+/** A box the person types in: Space there is text, not a press. */
+function isTextField(element: Element): boolean {
+  if (element.tagName === "TEXTAREA") return true;
+  if (element.tagName === "INPUT") return !PRESSABLE_INPUT_TYPES.has((element.getAttribute("type") ?? "text").toLowerCase());
+  const editable = element.getAttribute("contenteditable");
+  return editable !== null && editable !== "false";
+}
 
 function isElement(target: unknown): target is HTMLElement {
   return typeof target === "object" && target !== null && typeof (target as Element).getAttribute === "function";
@@ -125,7 +143,10 @@ function start({ doc, MutationObserver: Observer }: KeeperEnv): () => void {
       return;
     }
     // Lead review: only a press reads them again, not every key typed.
-    if (event.type === "keydown" && !PRESS_KEYS.has((event as KeyboardEvent).key)) return;
+    if (event.type === "keydown") {
+      const key = (event as KeyboardEvent).key;
+      if (!PRESS_KEYS.has(key) || (key === " " && isTextField(tracked.element))) return;
+    }
     if (isUsable(tracked.element)) tracked = record(tracked.element);
   };
 
