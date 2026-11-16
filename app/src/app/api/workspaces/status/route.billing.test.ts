@@ -8,6 +8,13 @@ vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock
 
 import { GET } from "./route";
 
+/** R32: a read from a page drawn for `workspaceId` (the mock's own by default; null sends none). */
+function req(workspaceId: string | null = "ws-1", query = ""): Request {
+  const address = new URL(`http://localhost/api/workspaces/status${query}`);
+  if (workspaceId !== null) address.searchParams.set("workspaceId", workspaceId);
+  return new Request(address);
+}
+
 /** 21a: the banner's answer with billing on. Billing off: route.test.ts pins today's. */
 
 const NOW = new Date("2026-12-10T12:00:00Z");
@@ -52,26 +59,26 @@ describe("GET /api/workspaces/status with billing on", () => {
   it("gives the block's sentence for a workspace whose trial ended, owners with the plan link", async () => {
     const blockedMessage = `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() - DAY) }));
-    expect(await (await GET()).json()).toEqual({ blockedMessage, planLink: true });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage, planLink: true });
   });
 
   // R12-publishing L1: a member has no Settings, Plan, so the banner names who can choose a plan.
   it("gives a member who can choose a plan, for an ended trial and an ended plan, and no link", async () => {
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() - DAY) }));
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await GET(req())).json()).toEqual({
       blockedMessage: `This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`,
     });
     getWorkspaceContextMock.mockResolvedValue(
       context("member", { plan: "growth", planStatus: "canceled", currentPeriodEnd: new Date(NOW.getTime() - 3 * DAY) }),
     );
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await GET(req())).json()).toEqual({
       blockedMessage: `This workspace's plan has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`,
     });
   });
 
   it("gives owners the quieter line in the last 3 days of a trial", async () => {
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }));
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await GET(req())).json()).toEqual({
       blockedMessage: null,
       trialNotice: "Your free trial ends on December 12, 2026 (UTC). Choose a plan in Settings.",
     });
@@ -81,7 +88,7 @@ describe("GET /api/workspaces/status with billing on", () => {
   it("writes the trial's end in the owner's zone", async () => {
     const owner = context("owner", { trialEndsAt: new Date("2026-12-11T01:30:00Z") });
     getWorkspaceContextMock.mockResolvedValue({ ...owner, user: { ...owner.user, timeZone: "America/New_York" } });
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await GET(req())).json()).toEqual({
       blockedMessage: null,
       trialNotice: "Your free trial ends on December 10, 2026, 8:30 PM EST. Choose a plan in Settings.",
     });
@@ -89,18 +96,18 @@ describe("GET /api/workspaces/status with billing on", () => {
 
   it("gives members nothing, and owners earlier in the trial the days left (S1 item 7)", async () => {
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }));
-    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage: null });
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }));
-    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage: null });
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }));
-    expect(await (await GET()).json()).toEqual({ blockedMessage: null, trialDaysLeft: "Free trial: 10 days left." });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage: null, trialDaysLeft: "Free trial: 10 days left." });
   });
 
   it("gives an unconfirmed address the sentence, and says the link can be sent again", async () => {
     getWorkspaceContextMock.mockResolvedValue(
       context("owner", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }, { emailVerifiedAt: null, googleLinkedAt: null }),
     );
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await GET(req())).json()).toEqual({
       blockedMessage: "Confirm your email address to start posting. We sent a link to new@example.com.",
       emailUnconfirmed: true,
     });
@@ -110,12 +117,12 @@ describe("GET /api/workspaces/status with billing on", () => {
     const unconfirmed = { emailVerifiedAt: null, googleLinkedAt: null };
     vi.stubEnv("RESEND_API_KEY", undefined);
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, unconfirmed));
-    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage: null });
     vi.stubEnv("RESEND_API_KEY", "re_test_placeholder");
     getWorkspaceContextMock.mockResolvedValue(
       context("member", { plan: "starter", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 5 * DAY) }, unconfirmed),
     );
-    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage: null });
   });
 
   it("gives the workspace's block, not the address, when both apply", async () => {
@@ -123,13 +130,13 @@ describe("GET /api/workspaces/status with billing on", () => {
       context("member", { trialEndsAt: new Date(NOW.getTime() - DAY) }, { emailVerifiedAt: null, googleLinkedAt: null }),
     );
     // R12-publishing L1: a member's sentence names who chooses a plan.
-    expect(await (await GET()).json()).toEqual({
+    expect(await (await GET(req())).json()).toEqual({
       blockedMessage: `This workspace's free trial has ended. The workspace owner can choose a plan in Settings, Plan, or contact ${SUPPORT_EMAIL}.`,
     });
   });
 
   it("says nothing about the address in an exempt workspace", async () => {
     getWorkspaceContextMock.mockResolvedValue(context("owner", {}, { emailVerifiedAt: null, googleLinkedAt: null }));
-    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    expect(await (await GET(req())).json()).toEqual({ blockedMessage: null });
   });
 });

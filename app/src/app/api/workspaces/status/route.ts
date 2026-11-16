@@ -9,6 +9,7 @@ import {
   trialEndingNotice,
 } from "@/lib/workspaceStatus";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +26,15 @@ export const dynamic = "force-dynamic";
  * `planLink`, so the banner links to Settings, Plan. Read
  * fresh on every call (no-store), so a pause or resume shows on the next page.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
   if (!context) {
     return signedOutResponse();
   }
+
+  // R32: the workspace the shell's page was drawn for, so a tab left on it never shows another one's pause or trial line.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
   const block = accessBlock(context);
   const trialNotice = block ? null : trialEndingNotice(context.workspace, context.role, new Date(), context.user.timeZone ?? null);
   const trialDaysLeft = block || trialNotice ? null : trialDaysLeftNotice(context.workspace, context.role);

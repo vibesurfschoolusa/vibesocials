@@ -8,7 +8,18 @@ vi.mock("next-auth/react", () => ({ useSession: () => ({ status: "loading" }) })
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { readWorkspaceStatus, readWorkspaceStatusOnce, watchWorkspaceStatus, WorkspaceStatusAlert } from "./workspace-paused-banner";
+import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
+
+import {
+  readWorkspaceStatus,
+  readWorkspaceStatusOnce,
+  tabWorkspace,
+  watchWorkspaceStatus,
+  WorkspaceStatusAlert,
+} from "./workspace-paused-banner";
+
+/** R32: the tab's workspace, as the banner reads it once. */
+const WS = async () => "ws-1";
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 /** 23: the banner's line for an unconfirmed address, with its resend button, and only for it. */
@@ -109,12 +120,12 @@ describe("watchWorkspaceStatus", () => {
   it("reads the status again on each announce, until it stops", async () => {
     const fetchImpl = vi.fn(() => answer({ blockedMessage: null }));
     const onStatus = vi.fn();
-    const stop = watchWorkspaceStatus(onStatus, fetchImpl as unknown as typeof fetch);
+    const stop = watchWorkspaceStatus(onStatus, WS, fetchImpl as unknown as typeof fetch);
     expect(fetchImpl).not.toHaveBeenCalled();
 
     announceWorkspaceChange();
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledTimes(1));
-    expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces/status", { cache: "no-store" });
+    expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces/status?workspaceId=ws-1", { cache: "no-store" });
 
     stop();
     announceWorkspaceChange();
@@ -129,7 +140,7 @@ describe("watchWorkspaceStatus", () => {
     watchWorkspaceStatus(
       (status) => {
         shown = status;
-      },
+      }, WS,
       (() => answer({ blockedMessage: null })) as unknown as typeof fetch,
     );
     announceWorkspaceChange();
@@ -140,14 +151,14 @@ describe("watchWorkspaceStatus", () => {
   it("an answer that comes after it stopped, or a failed read, changes nothing", async () => {
     let release: (value: Response) => void = () => {};
     const onStatus = vi.fn();
-    const stop = watchWorkspaceStatus(onStatus, (() => new Promise<Response>((resolve) => (release = resolve))) as unknown as typeof fetch);
+    const stop = watchWorkspaceStatus(onStatus, WS, (() => new Promise<Response>((resolve) => (release = resolve))) as unknown as typeof fetch);
     announceWorkspaceChange();
     stop();
     release(new Response(JSON.stringify({ blockedMessage: "Paused." }), { status: 200 }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onStatus).not.toHaveBeenCalled();
 
-    watchWorkspaceStatus(onStatus, (() => Promise.resolve(new Response("", { status: 500 }))) as unknown as typeof fetch);
+    watchWorkspaceStatus(onStatus, WS, (() => Promise.resolve(new Response("", { status: 500 }))) as unknown as typeof fetch);
     announceWorkspaceChange();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onStatus).not.toHaveBeenCalled();
@@ -177,9 +188,10 @@ describe("the banner keeps the newest answer", () => {
     const reads = newestAnswer();
     const shown: Array<string | null> = [];
     const onStatus = (status: { daysLeft: string | null }) => shown.push(status.daysLeft);
-    readWorkspaceStatusOnce(onStatus, fetchImpl, reads); // navigation, as owner
-    watchWorkspaceStatus(onStatus, fetchImpl, reads);
+    readWorkspaceStatusOnce(onStatus, WS, fetchImpl, reads); // navigation, as owner
+    watchWorkspaceStatus(onStatus, WS, fetchImpl, reads);
     announceWorkspaceChange(); // after stepping down
+    await settle();
     expect(pending).toHaveLength(2);
 
     pending[1]({ blockedMessage: null });
@@ -194,9 +206,10 @@ describe("the banner keeps the newest answer", () => {
     const reads = newestAnswer();
     const shown: Array<string | null> = [];
     const onStatus = (status: { daysLeft: string | null }) => shown.push(status.daysLeft);
-    readWorkspaceStatusOnce(onStatus, fetchImpl, reads);
-    watchWorkspaceStatus(onStatus, fetchImpl, reads);
+    readWorkspaceStatusOnce(onStatus, WS, fetchImpl, reads);
+    watchWorkspaceStatus(onStatus, WS, fetchImpl, reads);
     announceWorkspaceChange();
+    await settle();
     pending[0]({ blockedMessage: null, trialDaysLeft: "Free trial: 9 days left." });
     await settle();
     pending[1]({ blockedMessage: null });
@@ -207,7 +220,8 @@ describe("the banner keeps the newest answer", () => {
   it("a navigation read cancelled by the next page change shows nothing", async () => {
     const { pending, fetchImpl } = deferredFetches();
     const onStatus = vi.fn();
-    const cancel = readWorkspaceStatusOnce(onStatus, fetchImpl, newestAnswer());
+    const cancel = readWorkspaceStatusOnce(onStatus, WS, fetchImpl, newestAnswer());
+    await settle();
     cancel();
     pending[0]({ blockedMessage: "Paused." });
     await settle();
@@ -216,9 +230,52 @@ describe("the banner keeps the newest answer", () => {
 
   it("every status read in the banner takes its place in the order", () => {
     const source = readFileSync(fileURLToPath(new URL("./workspace-paused-banner.tsx", import.meta.url)), "utf8");
-    const reads = source.match(/fetchWorkspaceStatus\(fetchImpl\)/g) ?? [];
+    const reads = source.match(/fetchWorkspaceStatus\(fetchImpl, workspaceOf\)/g) ?? [];
     expect(reads.length).toBeGreaterThan(0);
     expect((source.match(/\breads\.next\(\)/g) ?? []).length).toBe(reads.length);
     expect(source).not.toMatch(/fetchWorkspaceStatus\(fetch\)/);
+  });
+});
+
+// R32 lead follow-up: the banner asks for the workspace the tab was drawn for
+// (the active one in the tab's first workspace list read, which the account
+// menu shows), so a tab left on it after another tab switched says the shared
+// sentence instead of the other workspace's pause or trial line.
+describe("the banner and the tab's workspace", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", new EventTarget());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("a refusal: the switch sentence, as the banner's line", async () => {
+    const onStatus = vi.fn();
+    readWorkspaceStatusOnce(onStatus, WS, (async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response) as unknown as typeof fetch);
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalled());
+    expect(onStatus.mock.calls[0][0].message).toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+  });
+
+  it("no workspace known: no status read, nothing shown", async () => {
+    const fetchImpl = vi.fn();
+    const onStatus = vi.fn();
+    readWorkspaceStatusOnce(onStatus, async () => null, fetchImpl as unknown as typeof fetch);
+    await settle();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  it("tabWorkspace reads the list once and keeps the active id; a failed read is asked again", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(Response.json({ workspaces: [{ id: "ws-9", isActive: false }, { id: "ws-1", isActive: true }] }));
+    const workspaceOf = tabWorkspace(fetchImpl as unknown as typeof fetch);
+    await expect(workspaceOf()).resolves.toBeNull();
+    await expect(workspaceOf()).resolves.toBe("ws-1");
+    await expect(workspaceOf()).resolves.toBe("ws-1");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/workspaces", { cache: "no-store" });
   });
 });

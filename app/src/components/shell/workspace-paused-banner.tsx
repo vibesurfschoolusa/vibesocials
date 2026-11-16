@@ -11,6 +11,7 @@ import { useToast } from "@/components/ui/toast";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { VERIFY_RESEND_MAYBE_SENT_MESSAGE } from "@/app/verify-email/verifyOutcome";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
  * The one banner a paused workspace's members see on every signed-in page
@@ -37,16 +38,18 @@ export function WorkspacePausedBanner({
   const [sending, setSending] = useState(false);
   // The navigation read and the announce read share one order: the later one shows.
   const [reads] = useState(newestAnswer);
+  // R32: the workspace this tab was drawn for, read once and kept across page changes.
+  const [workspaceOf] = useState(() => tabWorkspace(fetch));
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    return readWorkspaceStatusOnce(setWorkspaceStatus, fetch, reads);
-  }, [status, pathname, reads]);
+    return readWorkspaceStatusOnce(setWorkspaceStatus, workspaceOf, fetch, reads);
+  }, [status, pathname, reads, workspaceOf]);
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    return watchWorkspaceStatus(setWorkspaceStatus, fetch, reads);
-  }, [status, reads]);
+    return watchWorkspaceStatus(setWorkspaceStatus, workspaceOf, fetch, reads);
+  }, [status, reads, workspaceOf]);
 
   const confirmShown = confirmEmailBannerShown(workspaceStatus);
   useEffect(() => {
@@ -74,10 +77,44 @@ export function WorkspacePausedBanner({
   return <WorkspaceStatusAlert status={workspaceStatus} sending={sending} onResend={handleResend} />;
 }
 
-/** The status route's answer, or null when it can't be read (best effort: the routes still refuse with the same message). */
-async function fetchWorkspaceStatus(fetchImpl: typeof fetch): Promise<WorkspaceStatus | null> {
+/**
+ * R32: the workspace this tab was drawn for: the active one in the tab's first
+ * workspace list (the one the account menu names), kept for the life of the
+ * tab, since a switch in this tab is a full load (afterWorkspaceChange). A
+ * failed read is asked again next time; null until one is answered.
+ */
+export function tabWorkspace(fetchImpl: typeof fetch = fetch): () => Promise<string | null> {
+  let known: string | null = null;
+  return async () => {
+    if (known) return known;
+    try {
+      const response = await fetchImpl("/api/workspaces", { cache: "no-store" });
+      const data = (await response.json().catch(() => null)) as { workspaces?: { id?: unknown; isActive?: unknown }[] } | null;
+      const active = response.ok ? data?.workspaces?.find((workspace) => workspace.isActive === true) : undefined;
+      if (typeof active?.id === "string") known = active.id;
+    } catch {
+      // Asked again on the next read.
+    }
+    return known;
+  };
+}
+
+/**
+ * The status route's answer for the tab's workspace, or null when it can't be
+ * read (best effort: the routes still refuse with the same message). R32: a
+ * tab left on it after another tab switched gets the shared sentence as the
+ * banner's line, never the other workspace's pause or trial.
+ */
+async function fetchWorkspaceStatus(
+  fetchImpl: typeof fetch,
+  workspaceOf: () => Promise<string | null>,
+): Promise<WorkspaceStatus | null> {
   try {
-    const response = await fetchImpl("/api/workspaces/status", { cache: "no-store" });
+    const workspaceId = await workspaceOf();
+    if (!workspaceId) return null;
+    const response = await fetchImpl(withWorkspaceId("/api/workspaces/status", workspaceId), { cache: "no-store" });
+    const refusal = await readWorkspaceRefusalText(response);
+    if (refusal) return { ...NO_STATUS, message: refusal };
     if (!response.ok) return null;
     return readWorkspaceStatus(await response.json());
   } catch {
@@ -91,12 +128,13 @@ async function fetchWorkspaceStatus(fetchImpl: typeof fetch): Promise<WorkspaceS
  */
 export function readWorkspaceStatusOnce(
   onStatus: (status: WorkspaceStatus) => void,
+  workspaceOf: () => Promise<string | null>,
   fetchImpl: typeof fetch = fetch,
   reads = newestAnswer(),
 ): () => void {
   let cancelled = false;
   const show = reads.next();
-  void fetchWorkspaceStatus(fetchImpl).then((next) => {
+  void fetchWorkspaceStatus(fetchImpl, workspaceOf).then((next) => {
     if (!cancelled && next && show()) onStatus(next);
   });
   return () => {
@@ -111,13 +149,14 @@ export function readWorkspaceStatusOnce(
  */
 export function watchWorkspaceStatus(
   onStatus: (status: WorkspaceStatus) => void,
+  workspaceOf: () => Promise<string | null>,
   fetchImpl: typeof fetch = fetch,
   reads = newestAnswer(),
 ): () => void {
   let stopped = false;
   const unsubscribe = subscribeWorkspaceChange(() => {
     const show = reads.next();
-    void fetchWorkspaceStatus(fetchImpl).then((next) => {
+    void fetchWorkspaceStatus(fetchImpl, workspaceOf).then((next) => {
       if (!stopped && next && show()) onStatus(next);
     });
   });
