@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  CONFIRM_FAILED_MESSAGE,
   CONFIRM_NOTHING_SENT_MESSAGE,
   ConfirmDialog,
   ConfirmFailureShown,
@@ -700,7 +701,8 @@ function QueueEditDialog({
       toast.success(withPairNote(result.message, pairFetch.lastAnswer()));
       onSaved({ ...result.patch, ...overridesPatch }, pairFetch.lastAnswer());
     } catch {
-      toast.error("Couldn't save your changes.");
+      // scheduleDraft words a lost answer itself; this is an unexpected failure, which may follow a save.
+      toast.error(CONFIRM_FAILED_MESSAGE);
       setSaving(false);
     }
   };

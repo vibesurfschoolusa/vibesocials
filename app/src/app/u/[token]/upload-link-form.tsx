@@ -34,7 +34,8 @@ function FileRow({ item, onRemove }: { item: PickedFile; onRemove?: () => void }
   return <UploadFileRow item={item} previewUrl={previewUrl} onRemove={onRemove} />;
 }
 
-const NETWORK_MESSAGE = "Couldn't reach Vibe Socials. Check your connection and try again.";
+/** Lead review 3 (R28 NN2): not a lost answer (send-file.ts words those); the file may still have arrived. */
+const NETWORK_MESSAGE = "Something went wrong while sending this file. It may have arrived: if you send it again, it may arrive twice.";
 
 /**
  * A failed file's kind and sentence, as send-file.ts set them where the

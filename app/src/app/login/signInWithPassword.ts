@@ -1,10 +1,11 @@
 import type { signIn as nextAuthSignIn } from "next-auth/react";
 
+import { answerLostText } from "@/lib/answerLost";
 import { beforeSignIn } from "@/lib/staleSignOut";
 
 export const LOGIN_FAILED_MESSAGE = "Invalid email or password.";
-export const LOGIN_UNREACHABLE_MESSAGE =
-  "We couldn't reach Vibe Socials. Check your internet connection and try again.";
+/** Lead review 3 (R28 NN2): the sign-in may have set the session before the answer was lost. */
+export const LOGIN_UNREACHABLE_MESSAGE = answerLostText("you may be signed in", "Then reload the page to see.");
 
 type SignIn = (
   provider: "credentials",

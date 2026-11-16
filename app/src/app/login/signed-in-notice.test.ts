@@ -38,7 +38,10 @@ describe("signed-in notice on Log in and Register", () => {
       throw new Error("offline");
     });
     await expect(signOutHere(signOut)).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
-    expect(SIGN_OUT_FAILED_MESSAGE).toBe("Couldn't sign you out. Check your internet connection and try again.");
+    // Lead review 3 (R28 NN2): the sign-out may have ended the session before the answer was lost.
+    expect(SIGN_OUT_FAILED_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so you may be signed out. If your connection dropped, reconnect first. Then reload the page to see.",
+    );
   });
 });
 

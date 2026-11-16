@@ -75,10 +75,11 @@ describe("failureOf, what a failed file says", () => {
     expect(failureOf(new ClientFileError("network", network.message))).toEqual(network);
   });
 
+  // Lead review 3 (R28 NN2): not a lost answer (send-file.ts words those), and it may have arrived.
   it("treats anything else as a network failure, in plain words", () => {
     expect(failureOf(new TypeError("Failed to fetch"))).toEqual({
       kind: "network",
-      message: "Couldn't reach Vibe Socials. Check your connection and try again.",
+      message: "Something went wrong while sending this file. It may have arrived: if you send it again, it may arrive twice.",
     });
   });
 });

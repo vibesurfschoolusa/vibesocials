@@ -80,4 +80,10 @@ describe("Queue: a lost answer may have gone through", () => {
   it("the Edit dialog's requests go through fetchOrNoAnswer", () => {
     expect(view).toMatch(/pairAwareFetch\(job, \(url, init\) => fetchOrNoAnswer\(url, init\)\)/);
   });
+
+  // Lead review 3: scheduleDraft words a lost answer itself; its catch is an unexpected failure, which may follow a save.
+  it("an unexpected failure in Save never says nothing was saved", () => {
+    expect(view).not.toContain('toast.error("Couldn\'t save your changes.");');
+    expect(view).toMatch(/\} catch \{\s+(\/\/[^\n]*\s+)?toast\.error\(CONFIRM_FAILED_MESSAGE\);\s+setSaving\(false\);/);
+  });
 });

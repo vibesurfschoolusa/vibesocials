@@ -8,8 +8,10 @@ import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import type { SignedInAccount } from "@/components/signed-in-swap";
+import { answerLostText } from "@/lib/answerLost";
 
-export const SIGN_OUT_FAILED_MESSAGE = "Couldn't sign you out. Check your internet connection and try again.";
+/** Lead review 3 (R28 NN2): the sign-out may have ended the session before the answer was lost. */
+export const SIGN_OUT_FAILED_MESSAGE = answerLostText("you may be signed out", "Then reload the page to see.");
 
 /**
  * R17-pages L1: Log in and Register show who is signed in instead of their

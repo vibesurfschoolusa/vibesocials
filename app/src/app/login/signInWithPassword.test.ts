@@ -38,8 +38,9 @@ describe("signInWithPassword", () => {
       ok: false,
       error: LOGIN_UNREACHABLE_MESSAGE,
     });
+    // Lead review 3 (R28 NN2): the sign-in may have set the session before the answer was lost.
     expect(LOGIN_UNREACHABLE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials. Check your internet connection and try again.",
+      "Vibe Socials' answer didn't reach you, so you may be signed in. If your connection dropped, reconnect first. Then reload the page to see.",
     );
   });
 

@@ -30,23 +30,67 @@ import { describe, expect, it } from "vitest";
  *    so moving a sentence into a variable doesn't hide it. The only exception
  *    is a branch chosen by `navigator.onLine` being false: the browser was
  *    offline at the press, so nothing was sent.
+ *
+ * 3. Positive (lead review 3): a no-answer branch of a data change shows only
+ *    the shared answerLost text, the offline-at-the-press "nothing was sent",
+ *    or a named exception in TRUE_WHATEVER_ARRIVED that says why. Reads (GET)
+ *    are left out. Rule 2 stays as a second check.
  */
 
 const SRC = __dirname;
 
 /**
- * Sentences that are true whatever reached the server, named one by one.
- * CAPTION_OFFLINE_MESSAGE, CAPTION_FAILED_MESSAGE: asking for an AI caption
- * saves nothing on the server, and the caption box changes only from an
- * answer, so "your caption is unchanged" holds after a lost answer too.
+ * Sentences that are true whatever reached the server, named one by one (a
+ * constant, or an inline text by its start), each with why. Nothing else may
+ * stand in a no-answer branch of a data change but the shared answerLost text
+ * and the offline-at-the-press "nothing was sent".
  */
-const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant: string }> = [
-  { file: "lib/captionRequest.ts", constant: "CAPTION_OFFLINE_MESSAGE" },
-  { file: "lib/captionRequest.ts", constant: "CAPTION_FAILED_MESSAGE" },
+const AI_WRITE = "An AI write saves nothing on the server: the box changes only from an answer, so nothing changed holds after a lost answer.";
+const UPLOAD_STEP =
+  "The file-storage step: nothing is in the library or on a post until a later request saves it, and that one has its own lost-answer text.";
+const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: string; why: string }> = [
+  { file: "lib/captionRequest.ts", constant: "CAPTION_OFFLINE_MESSAGE", why: AI_WRITE },
+  { file: "lib/captionRequest.ts", constant: "CAPTION_FAILED_MESSAGE", why: AI_WRITE },
+  { file: "app/reviews/reviews-view.tsx", constant: "DRAFT_OFFLINE_MESSAGE", why: AI_WRITE },
+  { file: "components/composer/attached-photos.tsx", constant: "PHOTO_DESCRIPTION_OFFLINE_MESSAGE", why: AI_WRITE },
+  { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_IMPROVE_FAILED_TEXT", why: AI_WRITE },
+  { file: "app/posts/bulk/bulk-post-row.tsx", text: "No caption was written", why: AI_WRITE },
+  { file: "components/composer/platform-caption-editor.tsx", text: "Couldn't adapt the caption for", why: AI_WRITE },
+  { file: "lib/uploadFailure.ts", constant: "UPLOAD_OFFLINE_MESSAGE", why: UPLOAD_STEP },
+  { file: "lib/uploadFailure.ts", constant: "UPLOAD_REFUSED_MESSAGE", why: UPLOAD_STEP },
+  { file: "lib/uploadFailure.ts", constant: "UPLOAD_STORAGE_UNREACHABLE_MESSAGE", why: UPLOAD_STEP },
+  { file: "components/media-library.tsx", constant: "uploadNetwork", why: UPLOAD_STEP },
+  { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_COVER_FAILED_TEXT", why: UPLOAD_STEP },
+  { file: "app/posts/bulk/bulk-posts-form.tsx", text: "The upload failed. Retry it or remove it.", why: UPLOAD_STEP },
+  { file: "app/u/[token]/send-file.ts", constant: "UPLOAD_FAILED_MESSAGE", why: `${UPLOAD_STEP} On /u the token and storage steps register nothing; the last step says the file may have arrived.` },
+  {
+    file: "components/create-post-form.tsx",
+    text: "Failed to prepare media for posting.",
+    why: `${UPLOAD_STEP} Create uploads the picked file for the caption step; the post is made only by Publish.`,
+  },
+  {
+    file: "components/plan-actions.tsx",
+    text: "Couldn't reach the server. Check the connection and try again.",
+    why: "Starting Stripe Checkout or the portal makes a session and charges nothing; the plan changes only from Stripe's webhook.",
+  },
+  { file: "lib/signedOutMessage.ts", constant: "SIGNED_OUT_ERROR", why: "An answer arrived (401): the session had ended, so nothing was done." },
+  {
+    file: "components/ui/dialog.tsx",
+    constant: "CONFIRM_FAILED_MESSAGE",
+    why: "An unexpected failure, not a lost answer (those are worded where they are caught); it already says to reload to see whether it went through.",
+  },
 ];
 
 function isTrueWhateverArrived(file: string, name: string): boolean {
-  return TRUE_WHATEVER_ARRIVED.some((entry) => entry.file === rel(file) && entry.constant === name);
+  return TRUE_WHATEVER_ARRIVED.some((entry) => entry.file === rel(file) && entry.constant !== undefined && entry.constant === name);
+}
+
+function isUploadOrSignIn(name: string, sf: ts.SourceFile): boolean {
+  const from = (module: string) =>
+    sf.statements.some((statement) => ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === module);
+  // Signing in or out sets or clears the session: a data change whose answer can be lost.
+  if (/^sign(In|Out)(Fn)?$/.test(name)) return from("next-auth/react");
+  return UPLOAD_HELPERS.has(name) && from("@vercel/blob/client");
 }
 
 /** Wordings that say a request which may have arrived did nothing. */
@@ -387,7 +431,14 @@ function sayings(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): void {
 function containsNoAnswerTest(expression: ts.Node): "yes" | "negated" | "no" {
   let found: "yes" | "negated" | "no" = "no";
   const visit = (node: ts.Node) => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "isNoAnswer") {
+    const isTest =
+      (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "isNoAnswer") ||
+      // `error instanceof PostConnectionLostError`: a class named for a lost answer.
+      (ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword &&
+        ts.isIdentifier(node.right) &&
+        NO_ANSWER_NAME.test(node.right.text));
+    if (isTest) {
       const negated = ts.isPrefixUnaryExpression(node.parent) && node.parent.operator === ts.SyntaxKind.ExclamationToken;
       found = negated ? "negated" : "yes";
     }
@@ -659,6 +710,228 @@ function browserFileList(): string[] {
 
 const clientFiles = browserFileList();
 
+/*
+ * Lead review 3 (R28 NN2): the positive rule. A no-answer branch of a request
+ * that changes data shows only the shared answerLost text, the offline-at-the-
+ * press "nothing was sent", or a named exception above. The branches are the
+ * catch (or `.catch`) around a mutation, followed out of any function that
+ * lets the no-answer error through to the try of its callers; outcome
+ * comparisons (`=== "no_answer"`, `"network"`) in a file that makes such a
+ * request; every `unreachableText`; and confirmFailureText's second argument.
+ */
+
+/** Blob uploads store a file: a data change, like a POST. */
+const UPLOAD_HELPERS = new Set(["upload", "put"]);
+
+/** A call that changes data: fetchOrNoAnswer, sendActionRequest or a fetch-named field with a changing init, or a blob upload. */
+function isMutationCall(call: ts.CallExpression): boolean {
+  const callee = call.expression;
+  const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : "";
+  if (name === "fetchOrNoAnswer" || name === "sendActionRequest" || (name === "fetch" && ts.isPropertyAccessExpression(callee))) {
+    return !readOnlyInit(call.arguments[1]);
+  }
+  return isUploadOrSignIn(name, call.getSourceFile());
+}
+
+/** The name a function is called by: its own, or the variable it (or a useCallback around it) is stored in. */
+function functionName(fn: ts.Node): string | null {
+  if ((ts.isFunctionDeclaration(fn) || ts.isFunctionExpression(fn)) && fn.name) return fn.name.text;
+  let holder: ts.Node = fn.parent;
+  if (ts.isCallExpression(holder) && ts.isIdentifier(holder.expression) && holder.expression.text === "useCallback") holder = holder.parent;
+  return ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name) ? holder.name.text : null;
+}
+
+/** The no-answer branches of every data-changing request in the files. */
+function mutationBranches(files: string[]): ts.Node[] {
+  const branches = new Set<ts.Node>();
+  const seen = new Set<ts.Node>();
+  const queue: ts.CallExpression[] = [];
+  // Functions that make (or pass on) a data-changing request: their outcome comparisons are branches.
+  const mutating = new Set<ts.Node>();
+  const enclosingFunction = (node: ts.Node): ts.Node => {
+    let at: ts.Node = node;
+    while (at.parent && !ts.isFunctionLike(at) && !ts.isSourceFile(at)) at = at.parent;
+    return at;
+  };
+  for (const file of files) {
+    const sf = parse(file);
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && isMutationCall(node)) queue.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  while (queue.length > 0) {
+    const point = queue.pop() as ts.CallExpression;
+    if (seen.has(point)) continue;
+    seen.add(point);
+    mutating.add(enclosingFunction(point.parent));
+    // sendActionRequest answers { kind: "no_answer" } rather than throwing: its branches are those comparisons.
+    if (ts.isIdentifier(point.expression) && point.expression.text === "sendActionRequest") continue;
+    let handled = false;
+    let node: ts.Node = point;
+    while (node.parent && !ts.isFunctionLike(node.parent) && !ts.isSourceFile(node.parent)) {
+      const parent: ts.Node = node.parent;
+      if (ts.isTryStatement(parent) && parent.tryBlock === node && parent.catchClause) {
+        branches.add(parent.catchClause.block);
+        handled = true;
+        break;
+      }
+      if (ts.isPropertyAccessExpression(parent) && parent.name.text === "catch" && ts.isCallExpression(parent.parent)) {
+        for (const argument of parent.parent.arguments) branches.add(argument);
+        handled = true;
+        break;
+      }
+      node = parent;
+    }
+    if (handled) continue;
+    // The no-answer error leaves the function: its callers' catches are the branches.
+    const fn = node.parent;
+    if (!fn || !ts.isFunctionLike(fn)) continue;
+    const name = functionName(fn);
+    // An unnamed callback handed to a call (`beforeSignIn(() => signIn(...))`): that call runs it.
+    if (!name) {
+      if (ts.isCallExpression(fn.parent) && fn.parent.arguments.includes(fn as ts.Expression)) queue.push(fn.parent);
+      continue;
+    }
+    const sf = fn.getSourceFile();
+    for (const use of [...usesIn(sf, name), ...importedUses(sf.fileName, name)]) {
+      if (ts.isCallExpression(use.parent) && use.parent.expression === use) queue.push(use.parent);
+    }
+  }
+  for (const fn of mutating) {
+    const visit = (node: ts.Node) => {
+      if (node !== fn && ts.isFunctionLike(node)) return;
+      if ((ts.isIfStatement(node) || ts.isConditionalExpression(node)) && comparesWithNoAnswerName(testOf(node))) {
+        branches.add(ts.isIfStatement(node) ? node.thenStatement : node.whenTrue);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(fn);
+  }
+  for (const file of files) {
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxAttribute(node) && nameText(node.name) === "unreachableText" && node.initializer) branches.add(node.initializer);
+      if ((ts.isPropertyAssignment(node) || ts.isParameter(node)) && nameText(node.name) === "unreachableText" && node.initializer) branches.add(node.initializer);
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "confirmFailureText" && node.arguments[1]) {
+        branches.add(node.arguments[1]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parse(file));
+  }
+  return [...branches];
+}
+
+/**
+ * What a helper returns for a lost answer: once it tests for one at the top
+ * (`if (isNoAnswer(error)) return ...`), only that return; the returns after
+ * it are for other failures.
+ */
+function lostReturnsOf(body: ts.Block): ts.Expression[] {
+  const out: ts.Expression[] = [];
+  for (const statement of body.statements) {
+    if (ts.isIfStatement(statement) && containsNoAnswerTest(statement.expression) === "yes") {
+      const then = statement.thenStatement;
+      if (ts.isReturnStatement(then) && then.expression) out.push(then.expression);
+      else if (ts.isBlock(then)) out.push(...returnsOf(then));
+      return out;
+    }
+    if (ts.isReturnStatement(statement)) {
+      if (statement.expression) out.push(statement.expression);
+      return out;
+    }
+    const visit = (node: ts.Node) => {
+      if (ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node) && node.expression) out.push(node.expression);
+      ts.forEachChild(node, visit);
+    };
+    visit(statement);
+  }
+  return out;
+}
+
+/** A string a person reads: words, ending as a sentence. */
+function isSentence(text: string): boolean {
+  const trimmed = text.trim().replace(/^`|`$/g, "");
+  return /\s/.test(trimmed) && /[A-Za-z]{3}/.test(trimmed) && /[.!?]["'’)]?$/.test(trimmed);
+}
+
+function isExceptedText(file: string, text: string): boolean {
+  return TRUE_WHATEVER_ARRIVED.some((entry) => entry.file === rel(file) && entry.text !== undefined && text.trim().replace(/^`|`$/g, "").startsWith(entry.text));
+}
+
+/** Sentences in a branch that aren't the shared text, the offline side or a named exception. */
+function unsharedSentences(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): void {
+  if (seen.has(node)) return;
+  seen.add(node);
+  const sf = node.getSourceFile();
+  if (ts.isCallExpression(node)) {
+    const callee = node.expression;
+    const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : "";
+    if (name === "answerLostText") return; // the shared text
+    if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "console") return;
+  }
+  if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "ConfirmFailureShown") return;
+  if (ts.isIfStatement(node) || ts.isConditionalExpression(node)) {
+    const [whenTrue, whenFalse] = ts.isIfStatement(node) ? [node.thenStatement, node.elseStatement] : [node.whenTrue, node.whenFalse];
+    const offline = offlineSide(testOf(node));
+    if (offline !== null) {
+      const online = offline === "true" ? whenFalse : whenTrue;
+      if (online) unsharedSentences(online, seen, out);
+      return;
+    }
+    const test = containsNoAnswerTest(testOf(node));
+    if (test === "yes") return unsharedSentences(whenTrue, seen, out);
+    if (test === "negated") {
+      if (whenFalse) unsharedSentences(whenFalse, seen, out);
+      return;
+    }
+  }
+  const report = (text: string) => {
+    if (isSentence(text) && !isExceptedText(sf.fileName, text)) {
+      out.push({ file: rel(sf.fileName), line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1, text });
+    }
+  };
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isJsxText(node)) report(node.text);
+  if (ts.isTemplateExpression(node)) report(node.getText());
+  if (ts.isIdentifier(node)) {
+    const parent = node.parent;
+    const isPropertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node) || (ts.isPropertyAssignment(parent) && parent.name === node);
+    if (!isPropertyName) {
+      for (let value of resolveName(node)) {
+        if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text)) continue;
+        // `useCallback(async () => ..., deps)`: the function inside.
+        if (ts.isCallExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === "useCallback" && value.arguments[0]) {
+          value = value.arguments[0];
+        }
+        const body = ts.isBlock(value) ? value : (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) && ts.isBlock(value.body) ? value.body : null;
+        if (body) {
+          for (const returned of lostReturnsOf(body)) unsharedSentences(returned, seen, out);
+          continue;
+        }
+        while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isParenthesizedExpression(value)) value = value.expression;
+        if (ts.isPropertyAccessExpression(parent) && parent.expression === node && ts.isObjectLiteralExpression(value)) {
+          const field = value.properties.find((property) => nameText(property.name) === parent.name.text);
+          if (field && ts.isPropertyAssignment(field)) {
+            if (!isTrueWhateverArrived(value.getSourceFile().fileName, parent.name.text)) unsharedSentences(field.initializer, seen, out);
+          } else if (!field) unsharedSentences(value, seen, out);
+          continue;
+        }
+        unsharedSentences(value, seen, out);
+      }
+    }
+  }
+  ts.forEachChild(node, (child) => unsharedSentences(child, seen, out));
+}
+
+function positiveFindings(files: string[]): Finding[] {
+  const found: Finding[] = [];
+  const seen = new Set<ts.Node>();
+  for (const branch of mutationBranches(files)) unsharedSentences(branch, seen, found);
+  return [...new Map(found.map((finding) => [`${finding.file}:${finding.line}:${finding.text}`, finding])).values()];
+}
+
 /** Findings in one scan, deduplicated (a followed helper can be reached from two callers). */
 function fetchFindings(files: string[]): Finding[] {
   const all = files.filter((file) => rel(file) !== "lib/requestNoAnswer.ts").flatMap((file) => plainFetchesThatMayChange(parse(file)));
@@ -813,6 +1086,45 @@ try { await go(); } catch { show(lostText("a")); }`;
   });
 });
 
+// Lead review 3 (R28 NN2): the positive rule, on fixtures.
+describe("the guard itself: only the shared text on a data change's no-answer branch", () => {
+  const flagged = [
+    `try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { toast.error("Couldn't reach Vibe Socials. Check your connection and try again."); }`,
+    `async function save() { await fetchOrNoAnswer("/x", { method: "DELETE" }); }
+async function press() { try { await save(); } catch { setError("Couldn't reach Vibe Socials. Check your connection and try again."); } }`,
+    `const LOST = "Couldn't reach the server. Try again."; try { await fetchOrNoAnswer("/x", { method: "PATCH", body }); } catch (e) { show(isNoAnswer(e) ? LOST : "Other."); }`,
+    `async function press() { const answer = await sendActionRequest("/x", { method: "POST" }); if (answer.kind === "no_answer") toast.error("Couldn't save. Try again."); }`,
+  ];
+  const fine = [
+    `try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { toast.error(answerLostText("it may have been saved", "Reload to see.")); }`,
+    `const LOST = answerLostText("it may have gone through", "Reload the page."); try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { toast.error(LOST); }`,
+    `async function press() { const online = navigator.onLine; try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { if (!online) toast.error("You're offline, so nothing was sent."); } }`,
+    // A read changes nothing: its wording is its own.
+    `try { await fetchOrNoAnswer("/x"); } catch { toast.error("Couldn't load your media. Check your connection, then press Retry."); }`,
+    // Not a lost answer: the other branch of the test.
+    `try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch (e) { show(isNoAnswer(e) ? answerLostText("it may have gone", "Reload.") : "Something else went wrong. Try again."); }`,
+  ];
+
+  it("fails a custom sentence on a mutation's no-answer branch, through a helper, a constant or an outcome", () => {
+    flagged.forEach((code, index) => {
+      expect(positiveFindings([fake(`custom${index}.tsx`, code)]).length, code).toBeGreaterThan(0);
+    });
+  });
+
+  it("passes the shared text, the offline side, a read, and the other branch", () => {
+    fine.forEach((code, index) => {
+      expect(positiveFindings([fake(`shared${index}.tsx`, code)]), code).toEqual([]);
+    });
+  });
+
+  it("passes a named exception, and only in its own file", () => {
+    const named = fake("components/plan-actions.tsx", `try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { show("Couldn't reach the server. Check the connection and try again."); }`);
+    expect(positiveFindings([named]).length).toBeGreaterThan(0); // a fixture path is not the real file
+    expect(isExceptedText(path.join(SRC, "components/plan-actions.tsx"), "Couldn't reach the server. Check the connection and try again.")).toBe(true);
+    expect(isExceptedText(path.join(SRC, "components/settings-form.tsx"), "Couldn't reach the server. Check the connection and try again.")).toBe(false);
+  });
+});
+
 describe("requests that change data, and their no-answer wording", () => {
   it("covers the browser code (sanity)", () => {
     const names = clientFiles.map(rel);
@@ -832,10 +1144,16 @@ describe("requests that change data, and their no-answer wording", () => {
     expect(wordingFindings(clientFiles).map((finding) => `${finding.file}:${finding.line} ${finding.text}`)).toEqual([]);
   });
 
-  it("each documented exception names a constant that exists, by name, not by count", () => {
+  it("a no-answer branch of a data change shows only the shared text, the offline side or a named exception", () => {
+    expect(positiveFindings(clientFiles).map((finding) => `${finding.file}:${finding.line} ${finding.text}`)).toEqual([]);
+  });
+
+  it("each documented exception names a constant or text that exists, and says why", () => {
     for (const entry of TRUE_WHATEVER_ARRIVED) {
       const source = readFileSync(path.join(SRC, entry.file), "utf8");
-      expect(source, entry.constant).toMatch(new RegExp(`export const ${entry.constant}\\b`));
+      if (entry.constant) expect(source, entry.constant).toMatch(new RegExp(`(const |\\b)${entry.constant}\\b\\s*[:=]`));
+      if (entry.text) expect(source, entry.text).toContain(entry.text);
+      expect(entry.why.length, entry.file).toBeGreaterThan(20);
     }
   });
 });
