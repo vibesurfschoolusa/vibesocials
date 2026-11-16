@@ -1,10 +1,20 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
-import { changeConnectLink, ConnectLinkSection, ConnectLinkSectionView, type ConnectLinkViewProps } from "./connect-link-section";
+import {
+  CONNECT_LINK_MAYBE_MADE_MESSAGE,
+  CONNECT_LINK_MAYBE_OFF_MESSAGE,
+  changeConnectLink,
+  ConnectLinkSection,
+  ConnectLinkSectionView,
+  type ConnectLinkViewProps,
+} from "./connect-link-section";
 
 function view(overrides: Partial<ConnectLinkViewProps> = {}): string {
   const props: ConnectLinkViewProps = {
@@ -180,6 +190,51 @@ describe("changeConnectLink", () => {
       error: "Pick a platform.",
     });
     expect(announce).not.toHaveBeenCalled();
+  });
+});
+
+// Lead review 2 (R28 NN2): the route turns the old link off before it
+// answers, so a lost answer (or a gateway's 5xx) may have replaced it or
+// turned it off. The panel says so and reads the link again; offline at the
+// press nothing was sent.
+describe("changeConnectLink when the answer is lost", () => {
+  it("no answer or an unreadable 5xx: lost, and the Team card is told to read again", async () => {
+    for (const fetchImpl of [
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+      vi.fn(async () => new Response("<html>Bad gateway</html>", { status: 502 })),
+    ]) {
+      const announce = vi.fn();
+      await expect(
+        changeConnectLink(fetchImpl as unknown as typeof fetch, "DELETE", { workspaceId: "ws-1" }, announce, () => true),
+      ).resolves.toEqual({ ok: false, error: null, lost: true });
+      expect(announce).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("offline at the press: nothing is sent", async () => {
+    const announce = vi.fn();
+    const fetchImpl = vi.fn();
+    await expect(
+      changeConnectLink(fetchImpl as unknown as typeof fetch, "POST", { workspaceId: "ws-1" }, announce, () => false),
+    ).resolves.toEqual({ ok: false, error: null, notSent: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("the panel says what may have happened, reads the link again, and says nothing was sent offline", () => {
+    expect(CONNECT_LINK_MAYBE_MADE_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so a new connect link may have been made, which turns any old one off. If your connection dropped, reconnect first. Reload this page and copy the link before you send it.",
+    );
+    expect(CONNECT_LINK_MAYBE_OFF_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so the connect link may have been turned off. If your connection dropped, reconnect first. Reload this page to see.",
+    );
+    const source = readFileSync(join(__dirname, "connect-link-section.tsx"), "utf8");
+    const send = source.slice(source.indexOf("const send = useCallback("), source.indexOf("const makeLink = useCallback("));
+    expect(send).toMatch(/result\.notSent\) \{\s+toast\.error\(CONFIRM_NOTHING_SENT_MESSAGE\);\s+throw new ConfirmFailureShown/);
+    expect(send).toMatch(/result\.lost\) \{\s+toast\.error\(method === "POST" \? CONNECT_LINK_MAYBE_MADE_MESSAGE : CONNECT_LINK_MAYBE_OFF_MESSAGE\);\s+void readLink\(\);\s+throw new ConfirmFailureShown/);
+    expect(source).not.toContain("Couldn't reach Vibe Socials. Check your connection and try again.");
   });
 });
 

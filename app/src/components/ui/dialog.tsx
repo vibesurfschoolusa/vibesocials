@@ -402,7 +402,7 @@ export function ConfirmDialog({
     setBusy(true);
     setFailure(null);
     // Read at the press: offline now means the request never left.
-    const onLineAtPress = typeof navigator === "undefined" || navigator.onLine !== false;
+    const onLineAtPress = navigator.onLine !== false;
     try {
       await onConfirm();
       onOpenChange(false);

@@ -6,8 +6,9 @@ import type { Platform } from "@prisma/client";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
-import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { CONFIRM_NOTHING_SENT_MESSAGE, ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
+import { answerLostText } from "@/lib/answerLost";
+import { sendActionRequest } from "@/lib/queueActions";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
@@ -32,22 +33,47 @@ export type ConnectLinkDto = {
   createdAt: string;
 };
 
+/*
+ * Lead review 2 (R28 NN2): the route turns the old link off before it answers,
+ * so a lost answer may leave a new link, or none.
+ */
+export const CONNECT_LINK_MAYBE_MADE_MESSAGE = answerLostText(
+  "a new connect link may have been made, which turns any old one off",
+  "Reload this page and copy the link before you send it.",
+);
+export const CONNECT_LINK_MAYBE_OFF_MESSAGE = answerLostText(
+  "the connect link may have been turned off",
+  "Reload this page to see.",
+);
+
 /**
  * Makes, replaces (POST) or turns off (DELETE) the link. On success it is
  * announced (R6 review low 2), so the Team card's "Make new client links"
- * shows or hides without a reload. A network failure throws.
+ * shows or hides without a reload. `notSent`: offline at the press. `lost`: no
+ * answer, or a gateway's 5xx; it may have gone through, so that is announced
+ * too and the Team card reads the links again.
  */
 export async function changeConnectLink(
   fetchImpl: typeof fetch,
   method: "POST" | "DELETE",
   body: object,
   announce: () => void = () => announceClientLinksReplaced("connect-link"),
-): Promise<{ ok: true; link: ConnectLinkDto | null } | { ok: false; error: string | null }> {
-  const response = await fetchOrNoAnswer(
+  online?: () => boolean,
+): Promise<
+  | { ok: true; link: ConnectLinkDto | null }
+  | { ok: false; error: string | null; lost?: true; notSent?: true }
+> {
+  const answer = await sendActionRequest(
     "/api/workspaces/connect-link",
     { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-    fetchImpl,
+    { fetchImpl, ...(online ? { online } : {}) },
   );
+  if (answer.kind === "not_sent") return { ok: false, error: null, notSent: true };
+  if (answer.kind === "no_answer") {
+    announce();
+    return { ok: false, error: null, lost: true };
+  }
+  const { response } = answer;
   const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto; error?: string } | null;
   if (!response.ok || (method === "POST" && !data?.link)) {
     return { ok: false, error: typeof data?.error === "string" ? data.error : null };
@@ -225,19 +251,35 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     );
   }, []);
 
-  /** The link route, with a network failure said in a toast (and thrown, so a confirm stays open). */
+  // Lead review 2: after a lost answer the panel reads the link again, so it
+  // shows the one that works and no dead link is left to copy. A failed read
+  // keeps what is shown; the sentence says to reload.
+  const readLink = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/workspaces/connect-link?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const data = (await response.json().catch(() => null)) as { link?: ConnectLinkDto | null } | null;
+      if (response.ok && data && "link" in data) setLink(data.link ?? null);
+    } catch {
+      // Still no connection: the sentence already says to reload.
+    }
+  }, [workspaceId]);
+
+  /** The link route; offline or a lost answer said in a toast (and thrown, so a confirm stays open). */
   const send = useCallback(
     async (method: "POST" | "DELETE", body: object) => {
-      try {
-        return await changeConnectLink(fetch, method, body);
-      } catch (error) {
-        // Anything but a request that got no answer is the dialog's to say.
-        if (!isNoAnswer(error)) throw error;
-        toast.error("Couldn't reach Vibe Socials. Check your connection and try again.");
-        throw new ConfirmFailureShown("UNREACHABLE");
+      const result = await changeConnectLink(fetch, method, body);
+      if (!result.ok && result.notSent) {
+        toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
+        throw new ConfirmFailureShown("NOT_SENT");
       }
+      if (!result.ok && result.lost) {
+        toast.error(method === "POST" ? CONNECT_LINK_MAYBE_MADE_MESSAGE : CONNECT_LINK_MAYBE_OFF_MESSAGE);
+        void readLink();
+        throw new ConfirmFailureShown("ANSWER_LOST");
+      }
+      return result;
     },
-    [toast],
+    [readLink, toast],
   );
 
   // Create and Replace are the same call: the server revokes any old link.

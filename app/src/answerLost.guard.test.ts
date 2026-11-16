@@ -172,24 +172,34 @@ function testOf(node: ts.IfStatement | ts.ConditionalExpression): ts.Expression 
   return ts.isIfStatement(node) ? node.expression : node.condition;
 }
 
-/** `navigator.onLine`, or a value named for it (`onLineAtPress`). */
-function isOnLineRead(node: ts.Expression): boolean {
-  if (ts.isPropertyAccessExpression(node)) return node.name.text === "onLine";
-  return ts.isIdentifier(node) && /^onLine/.test(node.text);
+type Side = "true" | "false";
+
+function flip(side: Side | null): Side | null {
+  return side === null ? null : side === "true" ? "false" : "true";
+}
+
+function isNavigatorOnLine(node: ts.Expression): boolean {
+  if (!ts.isPropertyAccessExpression(node) || node.name.text !== "onLine") return false;
+  const owner = node.expression;
+  return (ts.isIdentifier(owner) && owner.text === "navigator") || (ts.isPropertyAccessExpression(owner) && owner.name.text === "navigator");
 }
 
 /**
- * Which side of a test is taken when the browser is offline: "true" (the
- * then side), "false" (the else side), or null when the test isn't a plain
- * read of onLine (`a && navigator.onLine`): then both sides are read.
+ * Which side of a test is taken when the browser was offline AT THE PRESS:
+ * "true" (the then side), "false" (the else side), or null when that can't
+ * be told: then both sides are read. Lead review 2: `navigator.onLine` read
+ * where the test is (in a catch, after the request) says nothing about the
+ * press, so it counts only inside the initializer of a value captured before
+ * the request (`captured`); a value counts by where it came from, never by
+ * its name.
  */
-function offlineSide(condition: ts.Expression): "true" | "false" | null {
+function offlineSide(condition: ts.Expression, captured = false, visiting = new Set<ts.Node>()): Side | null {
   let node = condition;
   while (ts.isParenthesizedExpression(node)) node = node.expression;
-  if (isOnLineRead(node)) return "false";
+  if (isNavigatorOnLine(node)) return captured ? "false" : null;
+  if (ts.isIdentifier(node)) return capturedOnLineSide(node, visiting);
   if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
-    const inner = offlineSide(node.operand);
-    return inner === null ? null : inner === "true" ? "false" : "true";
+    return flip(offlineSide(node.operand, captured, visiting));
   }
   if (ts.isBinaryExpression(node)) {
     const kind = node.operatorToken.kind;
@@ -197,15 +207,102 @@ function offlineSide(condition: ts.Expression): "true" | "false" | null {
     const notEqual = kind === ts.SyntaxKind.ExclamationEqualsEqualsToken || kind === ts.SyntaxKind.ExclamationEqualsToken;
     if (!equal && !notEqual) return null;
     const literal = [node.left, node.right].find((side) => side.kind === ts.SyntaxKind.TrueKeyword || side.kind === ts.SyntaxKind.FalseKeyword);
-    const read = [node.left, node.right].find((side) => side !== literal && offlineSide(side) !== null);
+    const read = [node.left, node.right].find((side) => side !== literal);
     if (!literal || !read) return null;
-    // `onLine === false` and `onLine !== true` are offline when true.
-    const offlineWhenTrue = (literal.kind === ts.SyntaxKind.FalseKeyword) === equal;
-    const inner = offlineSide(read);
-    // `read` itself is offline on its "false" side for a plain read; a negated read flips it.
-    return (inner === "false") === offlineWhenTrue ? "true" : "false";
+    const inner = offlineSide(read, captured, visiting);
+    if (inner === null) return null;
+    // `x === true` and `x !== false` keep x's sense; `x === false` and `x !== true` flip it.
+    const keeps = (literal.kind === ts.SyntaxKind.TrueKeyword) === equal;
+    return keeps ? inner : flip(inner);
   }
   return null;
+}
+
+/** The first `await` in a function body, not counting functions inside it. */
+function firstAwait(body: ts.Node): number | null {
+  let found: number | null = null;
+  const visit = (node: ts.Node) => {
+    if (found !== null || (node !== body && ts.isFunctionLike(node))) return;
+    if (ts.isAwaitExpression(node)) {
+      found = node.getStart();
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+/**
+ * The offline side of a name that holds a captured onLine value: a const or
+ * let whose initializer reads navigator.onLine, declared before the
+ * function's first await and not in a catch or a `.catch`/`.then` callback; or
+ * a parameter every caller fills with such a value (or leaves to a default
+ * of true). Anything else: null.
+ */
+function capturedOnLineSide(id: ts.Identifier, visiting: Set<ts.Node>): Side | null {
+  for (let scope: ts.Node | undefined = id.parent; scope; scope = scope.parent) {
+    if (ts.isFunctionLike(scope)) {
+      const index = scope.parameters.findIndex((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === id.text);
+      if (index >= 0) return parameterSide(scope, index, visiting);
+    }
+    if (!(ts.isBlock(scope) || ts.isSourceFile(scope))) continue;
+    for (const statement of scope.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      const declaration = statement.declarationList.declarations.find((d) => ts.isIdentifier(d.name) && d.name.text === id.text);
+      if (!declaration?.initializer) continue;
+      if (visiting.has(declaration)) return null;
+      visiting.add(declaration);
+      let fn: ts.Node = statement;
+      while (fn.parent && !ts.isFunctionLike(fn) && !ts.isSourceFile(fn)) {
+        if (ts.isCatchClause(fn)) return null;
+        fn = fn.parent;
+      }
+      if (ts.isFunctionLike(fn)) {
+        const call = fn.parent;
+        if (ts.isCallExpression(call) && ts.isPropertyAccessExpression(call.expression) && ["catch", "then", "finally"].includes(call.expression.name.text)) return null;
+        const body = (fn as ts.FunctionLikeDeclaration).body;
+        const awaited = body ? firstAwait(body) : null;
+        if (awaited !== null && statement.getStart() > awaited) return null;
+      }
+      return offlineSide(declaration.initializer, true, visiting);
+    }
+  }
+  return null;
+}
+
+/** A parameter's offline side, from every call of its function in the scanned files. */
+function parameterSide(fn: ts.SignatureDeclaration, index: number, visiting: Set<ts.Node>): Side | null {
+  const parameter = fn.parameters[index];
+  if (visiting.has(parameter)) return null;
+  visiting.add(parameter);
+  const name =
+    ts.isFunctionDeclaration(fn) && fn.name
+      ? fn.name.text
+      : ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
+        ? fn.parent.name.text
+        : null;
+  if (!name) return null;
+  const sf = fn.getSourceFile();
+  const uses = [...usesIn(sf, name), ...importedUses(sf.fileName, name)];
+  // A default of true is "online": a call that leaves it out never says nothing was sent.
+  const defaultOnline = parameter.initializer?.kind === ts.SyntaxKind.TrueKeyword;
+  let side: Side | null = null;
+  let calls = 0;
+  for (const use of uses) {
+    const call = use.parent;
+    if (!ts.isCallExpression(call) || call.expression !== use) return null;
+    calls += 1;
+    const argument = call.arguments[index];
+    if (!argument) {
+      if (!defaultOnline) return null;
+      continue;
+    }
+    const argumentSide = offlineSide(argument, false, visiting);
+    if (argumentSide === null || (side !== null && side !== argumentSide)) return null;
+    side = argumentSide;
+  }
+  return calls > 0 ? (side ?? "false") : null;
 }
 
 /** The expressions a function body returns, not those of functions inside it. */
@@ -416,7 +513,8 @@ function usesIn(scope: ts.Node, name: string): ts.Identifier[] {
         (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
         ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isMethodDeclaration(parent)) && parent.name === node) ||
         ts.isTypeQueryNode(parent) ||
-        ts.isImportSpecifier(parent);
+        ts.isImportSpecifier(parent) ||
+        ((ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent)) && parent.name === node);
       if (!isDeclaration) uses.push(node);
     }
     ts.forEachChild(node, visit);
@@ -493,9 +591,11 @@ function plainFetchesThatMayChange(sf: ts.SourceFile): Finding[] {
       if (ts.isSourceFile(scope)) for (const use of importedUses(scope.fileName, parent.name.text)) holder(use);
       return;
     }
-    if (ts.isPropertyAssignment(parent) && parent.initializer === here && ts.isObjectLiteralExpression(parent.parent)) {
+    // `{ fetchImpl: held }` or `{ fetchImpl }` handed to a sink that tells a lost answer apart.
+    const inField = (ts.isPropertyAssignment(parent) && parent.initializer === here) || (ts.isShorthandPropertyAssignment(parent) && parent.name === here);
+    if (inField && ts.isObjectLiteralExpression(parent.parent)) {
       const call = parent.parent.parent;
-      const key = nameText(parent.name);
+      const key = nameText((parent as ts.PropertyAssignment | ts.ShorthandPropertyAssignment).name);
       if (ts.isCallExpression(call) && ts.isIdentifier(call.expression)) {
         const index = call.arguments.indexOf(parent.parent);
         const fn = call.expression.text;
@@ -633,7 +733,7 @@ describe("the guard itself: a variable can't hide a change or a sentence", () =>
   it("lets a server's refusal, the offline-at-the-press branch and comments through", () => {
     const fine = [
       `try { await go(); } catch (error) { show(isNoAnswer(error) ? LOST : "Nothing changed."); }`,
-      `try { await go(); } catch { if (navigator.onLine === false) show("Nothing was sent."); }`,
+      `async function press() { const online = navigator.onLine; try { await go(); } catch { if (online === false) show("Nothing was sent."); } }`,
       `if (!response.ok) show("Nothing changed.");`,
       `try { await go(); } catch { /* nothing changed */ show(answerLostText("it may have gone through", "Reload.")); }`,
     ];
@@ -645,36 +745,51 @@ describe("the guard itself: a variable can't hide a change or a sentence", () =>
 
 // Lead review (R28 NN2): only the side where the browser is offline may say nothing was sent.
 describe("the guard itself: the offline side of an onLine test", () => {
+  // Captured at the press, before the request.
+  const at = (code: string) => `async function press() { const online = navigator.onLine; try { await go(); } catch { ${code} } }`;
   const flagged = [
-    `try { await go(); } catch { if (navigator.onLine) show("Nothing was sent."); }`,
-    `try { await go(); } catch { if (navigator.onLine === true) show("Nothing was sent."); }`,
-    `try { await go(); } catch { if (navigator.onLine !== false) show("Nothing was sent."); }`,
-    `try { await go(); } catch { if (!navigator.onLine) {} else { show("Nothing was sent."); } }`,
-    `try { await go(); } catch { show(navigator.onLine ? "Nothing was sent." : LOST); }`,
-    `try { await go(); } catch { show(navigator.onLine === false ? LOST : "Nothing was sent."); }`,
-    `try { await go(); } catch { show(onLineAtPress !== true ? LOST : "Nothing was sent."); }`,
+    at(`if (online) show("Nothing was sent.");`),
+    at(`if (online === true) show("Nothing was sent.");`),
+    at(`if (online !== false) show("Nothing was sent.");`),
+    at(`if (!online) {} else { show("Nothing was sent."); }`),
+    at(`show(online ? "Nothing was sent." : LOST);`),
+    at(`show(online === false ? LOST : "Nothing was sent.");`),
     // Can't tell which side is offline: both are read.
-    `try { await go(); } catch { show(navigator.onLine && ready ? LOST : "Nothing was sent."); }`,
+    at(`show(online && ready ? LOST : "Nothing was sent.");`),
+    // Lead review 2: read where the test is, not at the press.
+    `async function press() { try { await go(); } catch { if (!navigator.onLine) show("Nothing was sent."); } }`,
+    `async function press() { try { await go(); } catch { const online = navigator.onLine; if (!online) show("Nothing was sent."); } }`,
+    `async function press(e: unknown) { await go(); const online = navigator.onLine; if (isNoAnswer(e)) { if (!online) show("Nothing was sent."); } }`,
+    `fetch("/x").catch(() => { const online = navigator.onLine; if (!online) show("Nothing was sent."); });`,
+    // A name is not a read: what it holds is.
+    `async function press() { const onLineAtPress = ready; try { await go(); } catch { show(onLineAtPress === false ? "Nothing was sent." : LOST); } }`,
+    `async function press() { const onLineLost = !navigator.onLine; try { await go(); } catch { if (!onLineLost) show("Nothing was sent."); } }`,
+    // A parameter counts only when its callers pass a captured value.
+    `function lostText(e: unknown, onLineAtPress = true) { return onLineAtPress === false ? "Nothing was sent." : LOST; }
+async function press() { try { await go(); } catch (e) { show(lostText(e, navigator.onLine)); } }`,
   ];
   const fine = [
-    `try { await go(); } catch { if (!navigator.onLine) show("Nothing was sent."); }`,
-    `try { await go(); } catch { if (navigator.onLine === false) show("Nothing was sent."); }`,
-    `try { await go(); } catch { if (navigator.onLine !== true) show("Nothing was sent."); }`,
-    `try { await go(); } catch { if (navigator.onLine) {} else { show("Nothing was sent."); } }`,
-    `try { await go(); } catch { show(navigator.onLine ? LOST : "Nothing was sent."); }`,
-    `try { await go(); } catch { show(navigator.onLine == false ? "Nothing was sent." : LOST); }`,
-    `try { await go(); } catch { show(false === navigator.onLine ? "Nothing was sent." : LOST); }`,
-    `try { await go(); } catch { show(onLineAtPress === false ? "Nothing was sent." : LOST); }`,
-    `try { await go(); } catch { show(!(navigator.onLine) ? "Nothing was sent." : LOST); }`,
+    at(`if (!online) show("Nothing was sent.");`),
+    at(`if (online === false) show("Nothing was sent.");`),
+    at(`if (online !== true) show("Nothing was sent.");`),
+    at(`if (online) {} else { show("Nothing was sent."); }`),
+    at(`show(online ? LOST : "Nothing was sent.");`),
+    at(`show(online == false ? "Nothing was sent." : LOST);`),
+    at(`show(false === online ? "Nothing was sent." : LOST);`),
+    at(`show(!(online) ? "Nothing was sent." : LOST);`),
+    `async function press() { const sentOffline = navigator.onLine === false; try { await go(); } catch { if (sentOffline) show("Nothing was sent."); } }`,
+    `async function press() { const onLineLost = !navigator.onLine; try { await go(); } catch { if (onLineLost) show("Nothing was sent."); } }`,
+    `function lostText(e: unknown, onLineAtPress = true) { return onLineAtPress === false ? "Nothing was sent." : LOST; }
+async function press() { const onLineAtPress = navigator.onLine !== false; try { await go(); } catch (e) { show(lostText(e, onLineAtPress)); show(lostText(e)); } }`,
   ];
 
-  it("flags the online side, and a test it can't read", () => {
+  it("flags the online side, a value read after the request, and a test it can't read", () => {
     flagged.forEach((code, index) => {
       expect(wordingFindings([fake(`online${index}.tsx`, code)]).length, code).toBeGreaterThan(0);
     });
   });
 
-  it("lets the offline side through, however it is written", () => {
+  it("lets the offline side of a value captured at the press through, however it is written", () => {
     fine.forEach((code, index) => {
       expect(wordingFindings([fake(`offline${index}.tsx`, code)]), code).toEqual([]);
     });
