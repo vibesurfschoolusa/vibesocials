@@ -27,10 +27,11 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
+import { SignInAgainLink } from "./gbp-sign-in-link";
 import { LinkedInConnectButton } from "./linkedin-account-dialog";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
 import { PendingConnectionDialog } from "./pending-connection-dialog";
-import { GBP_CARD_ID } from "@/lib/gbpSignIn";
+import { GBP_CARD_ID, gbpSignInUrl } from "@/lib/gbpSignIn";
 
 interface PlatformConfig {
   key: Platform;
@@ -282,6 +283,18 @@ export function ConnectionsSection({
 
               {isGoogleBusinessProfile && connection && !readOnly ? (
                 <div className="mt-4 border-t border-border pt-4">
+                  {/* LL1's publish 403 sends the owner here to sign in again
+                      (lib/publishFailureText.ts). Where the card shows
+                      Reconnect, that is the one step. */}
+                  {!connection.needsReconnect && !reconnectSoon.includes(key) ? (
+                    <div className="mb-4 flex flex-col items-start gap-2">
+                      <p className="text-sm text-muted-foreground">
+                        If Google refuses posts or reviews for this listing, sign in again with the Google
+                        account that manages it. The listing&apos;s numbers are kept.
+                      </p>
+                      <SignInAgainLink href={gbpSignInUrl(workspaceId)} />
+                    </div>
+                  ) : null}
                   <GoogleBusinessLocationForm
                     workspaceId={workspaceId}
                     initialLocationName={locationName}

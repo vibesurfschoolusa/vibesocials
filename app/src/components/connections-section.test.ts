@@ -221,3 +221,50 @@ describe("ConnectionsSection: the Google Business Profile card's anchor", () => 
     expect(tag).toMatch(/class="[^"]*\bscroll-mt-32\b[^"]*\blg:scroll-mt-20\b/);
   });
 });
+
+// Lead follow-up (LL1's GBP publish 403): the sentence sends an owner to "Sign
+// in to Google again on the Google Business Profile card in Settings", so that
+// card has that control for an owner whenever it shows a connected listing,
+// unless it already shows Reconnect (then Reconnect is the one step).
+describe("ConnectionsSection: the Business Profile card's Google sign-in", () => {
+  const gbp = (overrides: Partial<ConnectionSummary> = {}) =>
+    ({ ...connected("google_business_profile"), ...overrides }) as ConnectionSummary;
+  // Connect on an unconnected card goes to the same start route; this is the sign-in link only.
+  const signIn = (html: string) =>
+    (html.match(/<a [^>]*href="\/api\/auth\/google_business_profile\/start[^"]*"[^>]*>[\s\S]*?<\/a>/g) ?? []).filter((link) =>
+      link.includes("Sign in to Google again"),
+    );
+
+  it("an owner with a connected listing: the in-place sign-in for this page's workspace, with the hint", () => {
+    const html = renderToStaticMarkup(
+      createElement(ConnectionsSection, { connections: [gbp()], workspaceId: "ws-A" }),
+    );
+    const links = signIn(html);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toContain('href="/api/auth/google_business_profile/start?workspaceId=ws-A"');
+    expect(links[0]).toMatch(/>Sign in to Google again <span[^>]*>\(opens in a new tab\)<\/span><\/a>$/);
+  });
+
+  it("the publish sentence names this link's label and this card", async () => {
+    const { GBP_ACCESS_REFUSED_TEXT } = await import("@/lib/publishFailureText");
+    expect(GBP_ACCESS_REFUSED_TEXT).toContain("Sign in to Google again on the Google Business Profile card in Settings");
+    expect(render({ connections: [gbp()] })).toContain(">Google Business Profile<");
+  });
+
+  it("no link for a member, while the card shows Reconnect, or with no connection", () => {
+    expect(signIn(render({ connections: [gbp()], readOnly: true }))).toEqual([]);
+    expect(signIn(render({ connections: [gbp({ needsReconnect: true })] }))).toEqual([]);
+    expect(
+      signIn(
+        renderToStaticMarkup(
+          createElement(ConnectionsSection, {
+            connections: [gbp()],
+            workspaceId: "ws-1",
+            reconnectSoon: ["google_business_profile"],
+          }),
+        ),
+      ),
+    ).toEqual([]);
+    expect(signIn(render({}))).toEqual([]);
+  });
+});
