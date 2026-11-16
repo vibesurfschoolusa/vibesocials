@@ -95,6 +95,29 @@ export function cardsShown(posts: ReviewPostDTO[], kept: ReviewPostDTO[]): { pos
   return cards;
 }
 
+/**
+ * R32 lead's second review: only a post that can no longer be changed here
+ * keeps its card; a changed one is still on the list.
+ */
+export function keepsCard(message: string): boolean {
+  return message === REVIEW_POST_LOCKED_RELOADED_MESSAGE;
+}
+
+/** After a reload: a kept card whose post is listed again is let go, so it can't come back later. */
+export function keptAfterReload(kept: ReviewPostDTO[], listed: ReviewPostDTO[]): ReviewPostDTO[] {
+  const ids = new Set(listed.map((post) => post.id));
+  const next = kept.filter((post) => !ids.has(post.id));
+  return next.length === kept.length ? kept : next;
+}
+
+/** Where Dismiss sends focus: the next card, else the page's heading (read at the press). */
+export function dismissFocusTarget(
+  card: Element | null,
+  doc: Pick<Document, "querySelector">,
+): HTMLElement | null {
+  return (card?.nextElementSibling as HTMLElement | null) ?? doc.querySelector<HTMLElement>("main h1");
+}
+
 /** The line as shown, given the count of list reloads that worked. */
 export function shownCardLine(line: CardLine | null, reloads: number): string | null {
   if (!line) return null;
@@ -261,7 +284,7 @@ export function ReviewPostCard({
       const start = cardRefusalStart(outcome, reloads);
       setError(start.line);
       if (start.reload) {
-        void onStale(outcome.message, post).then((reloaded) =>
+        void onStale(outcome.message, keepsCard(outcome.message) ? post : undefined).then((reloaded) =>
           setError((current) => (current === start.line ? cardLineAfterReload(start.line, outcome.message, reloaded) : current)),
         );
       }
@@ -365,7 +388,7 @@ export function ReviewPostCard({
                   size="lg"
                   className="w-full sm:w-auto"
                   variant="ghost"
-                  disabled={busy}
+                  disabled={gone || busy}
                   onClick={(event) => {
                     focusAfterPress(event.currentTarget, () => askRef.current);
                     setAsking(false);
@@ -412,7 +435,17 @@ export function ReviewPostCard({
           </p>
         ) : null}
         {gone ? (
-          <Button type="button" variant="outline" size="md" onClick={onDismiss}>
+          <Button
+            type="button"
+            variant="outline"
+            size="md"
+            onClick={(event) => {
+              const pressed = event.currentTarget;
+              const target = dismissFocusTarget(pressed.closest("li"), document);
+              focusAfterPress(pressed, () => target);
+              onDismiss?.();
+            }}
+          >
             Dismiss
           </Button>
         ) : null}
@@ -448,6 +481,9 @@ export function ReviewLinkView({ token }: { token: string }) {
         setError(data?.error ?? "");
         return false;
       }
+      // R32 lead's second review: a kept card whose post is listed again is let go.
+      const listed = data.posts;
+      setKept((current) => keptAfterReload(current, listed));
       setPosts(data.posts);
       setMore(data.more === true);
       setReloads((count) => count + 1);

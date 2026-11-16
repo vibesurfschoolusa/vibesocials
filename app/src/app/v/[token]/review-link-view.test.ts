@@ -22,6 +22,9 @@ import {
   cardLineAfterReload,
   cardRefusalStart,
   cardsShown,
+  dismissFocusTarget,
+  keepsCard,
+  keptAfterReload,
   REVIEW_POST_GONE_MESSAGE,
   changeNoteHint,
   shownCardLine,
@@ -292,7 +295,7 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     const decide = source.slice(source.indexOf("async function decide("), source.indexOf("return (", source.indexOf("async function decide(")));
-    expect(decide).toMatch(/const start = cardRefusalStart\(outcome, reloads\);\s*setError\(start\.line\);\s*if \(start\.reload\) \{\s*void onStale\(outcome\.message, post\)\.then\(/);
+    expect(decide).toMatch(/const start = cardRefusalStart\(outcome, reloads\);\s*setError\(start\.line\);\s*if \(start\.reload\) \{\s*void onStale\(outcome\.message, keepsCard\(outcome\.message\) \? post : undefined\)\.then\(/);
     expect(decide).not.toMatch(/await onStale|await cardRefusal/);
     expect(source).toContain("shownCardLine(error, reloads)");
   });
@@ -387,8 +390,63 @@ describe("ReviewPostCard: kept after the reload when the post left the list", ()
     expect(source).toMatch(/disabled=\{gone \|\| noteTooShort \|\| noteTooLong\}/);
     expect(source).toMatch(/if \(gone\) lineRef\.current\?\.focus\(\);/);
     // Only a refusal that reloads keeps its card; the view merges with cardsShown.
-    expect(source).toContain("void onStale(outcome.message, post).then(");
+    expect(source).toContain("void onStale(outcome.message, keepsCard(outcome.message) ? post : undefined).then(");
     expect(source).toContain("cardsShown(posts, kept)");
     expect(source).toMatch(/setKept\(\(current\) => \[\.\.\.current\.filter\(\(p\) => p\.id !== keep\.id\), keep\]\)/);
+  });
+});
+
+// R32 lead's second review: only a LOCKED refusal keeps a card, and a reload
+// that lists the post again lets it go, so a card can't come back hours later
+// and take focus. A gone card's note can't be closed away by Cancel, and
+// Dismiss hands focus to the next card, or the page's heading.
+describe("ReviewPostCard: which cards are kept, and for how long", () => {
+  const a = post({ id: "a", scheduledFor: "2026-11-20T10:00:00.000Z" });
+  const b = post({ id: "b", scheduledFor: "2026-11-21T10:00:00.000Z" });
+
+  it("only the locked refusal keeps a card", () => {
+    const locked = reviewDecisionOutcome(409, { error: REVIEW_POST_LOCKED_MESSAGE }) as { message: string };
+    expect(keepsCard(locked.message)).toBe(true);
+    expect(keepsCard(REVIEW_POST_CHANGED_MESSAGE)).toBe(false);
+    expect(keepsCard(REVIEW_ALREADY_APPROVED_MESSAGE)).toBe(false);
+  });
+
+  it("changed, then approved, then a later reload for another card: A doesn't return", () => {
+    let kept: ReviewPostDTO[] = [];
+    // A changed: not kept; reload lists A (approved later, still listed).
+    if (keepsCard(REVIEW_POST_CHANGED_MESSAGE)) kept = [...kept, a];
+    kept = keptAfterReload(kept, [a, b]);
+    // B locked: kept; the reload no longer has A (published) or B.
+    kept = [...kept, b];
+    kept = keptAfterReload(kept, []);
+    expect(cardsShown([], kept).map((card) => card.post.id)).toEqual(["b"]);
+  });
+
+  it("a kept card is let go once a reload lists its post again", () => {
+    let kept = keptAfterReload([a], []);
+    expect(kept).toEqual([a]);
+    kept = keptAfterReload(kept, [a, b]);
+    expect(kept).toEqual([]);
+    expect(cardsShown([b], kept).map((card) => card.post.id)).toEqual(["b"]);
+  });
+
+  it("Dismiss's focus goes to the next card, else the page's heading", () => {
+    const next = { id: "next" } as unknown as HTMLElement;
+    const heading = { id: "h1" } as unknown as HTMLElement;
+    const doc = { querySelector: (selector: string) => (selector === "main h1" ? heading : null) };
+    expect(dismissFocusTarget({ nextElementSibling: next } as unknown as Element, doc)).toBe(next);
+    expect(dismissFocusTarget({ nextElementSibling: null } as unknown as Element, doc)).toBe(heading);
+    expect(dismissFocusTarget(null, doc)).toBe(heading);
+  });
+
+  it("the view lets kept cards go on each reload; Cancel is off on a gone card; Dismiss uses focusAfterPress", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/setKept\(\(current\) => keptAfterReload\(current, listed\)\);\s*setPosts\(data\.posts\);/);
+    const at = source.search(/>\s*Cancel\s*</);
+    const cancel = source.slice(source.lastIndexOf("<Button", at), at);
+    expect(cancel).toContain("disabled={gone || busy}");
+    expect(source).toMatch(/const target = dismissFocusTarget\(pressed\.closest\("li"\), document\);\s*focusAfterPress\(pressed, \(\) => target\);\s*onDismiss\?\.\(\);/);
   });
 });
