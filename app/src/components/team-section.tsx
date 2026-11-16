@@ -64,7 +64,7 @@ export function teamMemberLines(member: Pick<Member, "name" | "email">): { label
  */
 export const INVITE_MAYBE_MADE_MESSAGE = answerLostText(
   "a new invite link may have been made, which turns the old one off",
-  "reload this page and check Invite link before you send a link",
+  "Reload this page and check Invite link before you send a link.",
 );
 
 /** What a failed Create invite link says, from the answer it got. */

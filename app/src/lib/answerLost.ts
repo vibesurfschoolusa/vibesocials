@@ -1,10 +1,11 @@
 /**
  * R27 MM3 lead review: the one lead-in for a request that may have gone
  * through. fetchOrNoAnswer cannot tell "offline, nothing sent" from "sent,
- * answer lost" (nor can an unreadable 5xx), so the text names both, as
- * Create's connectionLostText does: what may have happened, then where to check.
- * `mayHave` and `next` are lower-case clauses without a final full stop.
+ * answer lost", and an unreadable 5xx can come with the connection fine, so
+ * the lead-in is true for all three: the answer didn't arrive. Then what may
+ * have happened, then where to check.
+ * `mayHave`: a lower-case clause without a full stop. `next`: whole sentences.
  */
 export function answerLostText(mayHave: string, next: string): string {
-  return `We lost the connection before Vibe Socials answered, so ${mayHave}. Check your connection, then ${next}.`;
+  return `Vibe Socials' answer didn't reach you, so ${mayHave}. ${next}`;
 }

@@ -5,13 +5,14 @@
  * MM3: "Create link" replaced by the new link, a Save that disables itself).
  *
  * The API:
- * - focusAfterPress(pressed, target?): call it in a press handler right
+ * - focusAfterPress(pressed, target?) => stop: call it in a press handler right
  *   before the state change that may remove or disable `pressed` (the
  *   `event.currentTarget` taken at the start of the press). Once the page has
  *   changed, if `pressed` is gone or disabled and focus is on the page body or
  *   still on `pressed`, focus goes to `target()` (read then, so a ref to the
  *   new control works), else to the fallback recorded now. Focus the person
- *   moved in the meantime is never pulled back.
+ *   moved in the meantime is never pulled back. The returned `stop()` ends
+ *   the watch early, before a later watch for the same press starts.
  * - focusFallbacks / restoreFocus / watchFocusAfterClose: the Dialog's parts
  *   (record at open, restore and keep watching on close).
  */
@@ -148,7 +149,12 @@ const browserSchedule: FocusSchedule = {
   later: (run, ms) => window.setTimeout(run, ms),
 };
 
-function watch(trigger: HTMLElement, candidates: () => HTMLElement[], { schedule, doc }: Required<FocusWatchOptions>) {
+/** Starts the watch; the function it returns ends it early. */
+function watch(
+  trigger: HTMLElement,
+  candidates: () => HTMLElement[],
+  { schedule, doc }: Required<FocusWatchOptions>,
+): () => void {
   let done = false;
   let checksLeft = 1 + FOCUS_RECHECK_MS.length;
   const stop = () => {
@@ -170,6 +176,7 @@ function watch(trigger: HTMLElement, candidates: () => HTMLElement[], { schedule
   doc.addEventListener("focusin", onFocusIn);
   schedule.frame(check);
   for (const ms of FOCUS_RECHECK_MS) schedule.later(check, ms);
+  return stop;
 }
 
 /** The Dialog's watch after close, over the fallbacks it recorded at open. */
@@ -180,21 +187,24 @@ export function watchFocusAfterClose(
   doc: FocusDocument = document,
 ): void {
   if (!trigger) return;
-  watch(trigger, () => fallbacks, { schedule, doc });
+  void watch(trigger, () => fallbacks, { schedule, doc });
 }
 
 /**
  * After this press, if `pressed` is gone or disabled, focus `target()` or the
- * fallback (see the API at the top of this file).
+ * fallback (see the API at the top of this file). Returns a function that ends
+ * the watch early: call it before starting a later watch for the same press
+ * (lead review: /u's retry and end-of-send watches).
  */
 export function focusAfterPress(
   pressed: HTMLElement | null,
   target?: () => HTMLElement | null | undefined,
-  { schedule = browserSchedule, doc = document }: FocusWatchOptions = {},
-): void {
-  if (!pressed) return;
+  options: FocusWatchOptions = {},
+): () => void {
+  if (!pressed) return () => {};
+  const { schedule = browserSchedule, doc = document } = options;
   const fallbacks = focusFallbacks(pressed);
-  watch(
+  return watch(
     pressed,
     () => {
       const chosen = target?.();

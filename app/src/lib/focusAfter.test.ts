@@ -442,3 +442,62 @@ describe("restoreFocus and a disabled trigger", () => {
     expect(second.focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 });
+
+/**
+ * Lead review (R27 MM3): on /u a fast failure ended sending before the
+ * press-time watch on the retry button ran. That watch found no Send and
+ * landed on its fallback (the Terms link), so the end-of-send watch stopped
+ * and the summary never got focus. focusAfterPress returns a stop function;
+ * the form stops the press-time watch when the end-of-send watch starts.
+ */
+describe("focusAfterPress: stopping a watch", () => {
+  function setup() {
+    const retry = el("BUTTON");
+    const terms = el("A", [], { href: "/terms" });
+    const summary = el("DIV", [], { tabindex: "-1" });
+    const form = el("FORM", [summary, el("DIV", [retry])]);
+    el("HTML", [el("BODY", [el("MAIN", [form, el("P", [terms])])])]);
+    const frames: (() => void)[] = [];
+    const timers: (() => void)[] = [];
+    const body = el("BODY");
+    const doc = {
+      activeElement: retry as Fake,
+      body,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const options = {
+      schedule: { frame: (run: () => void) => frames.push(run), later: (run: () => void) => timers.push(run) },
+      doc: doc as unknown as Document,
+    };
+    return { retry, terms, summary, frames, timers, doc, options };
+  }
+
+  it("returns a stop function; a stopped watch never moves focus", () => {
+    const { retry, terms, frames, timers, doc, options } = setup();
+    const stop = focusAfterPress(asElement(retry), () => null, options);
+    stop();
+    detach(retry);
+    doc.activeElement = doc.body;
+    for (const run of [...frames, ...timers]) run();
+    expect(terms.focus).not.toHaveBeenCalled();
+  });
+
+  it("a fast failure: the press-time watch is stopped, so the summary gets focus, not the fallback", () => {
+    const { retry, terms, summary, frames, timers, doc, options } = setup();
+    // Press: the retry button will go; its target (Send) never renders.
+    const stopPressWatch = focusAfterPress(asElement(retry), () => null, options);
+    // Sending ends before any frame: the end-of-send watch starts, the first stops.
+    stopPressWatch();
+    focusAfterPress(asElement(retry), () => asElement(summary), options);
+    detach(retry);
+    doc.activeElement = doc.body;
+    for (const run of [...frames, ...timers]) run();
+    expect(terms.focus).not.toHaveBeenCalled();
+    expect(summary.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("nothing pressed: the stop function is still safe to call", () => {
+    expect(() => focusAfterPress(null)()).not.toThrow();
+  });
+});

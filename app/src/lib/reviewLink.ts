@@ -149,7 +149,7 @@ export const REVIEW_ANSWER_UNREADABLE_MESSAGE =
  * R27 MM3: no answer, or a 5xx the page cannot read (a gateway's page, a
  * timeout), can come after the decision was saved. The /v page says this for both.
  */
-export const REVIEW_DECISION_MAYBE_SAVED_MESSAGE = answerLostText("your choice may have been saved", "reload the page to see");
+export const REVIEW_DECISION_MAYBE_SAVED_MESSAGE = answerLostText("your choice may have been saved", "Reload the page to see.");
 
 /** A refused decision with no sentence of its own. */
 const REVIEW_DECISION_FAILED_MESSAGE = "Couldn't save that. Try again.";

@@ -105,7 +105,7 @@ describe("UploadSummary before anything was sent", () => {
     const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
     expect(source).not.toMatch(/phase === "done" \? \(\s+<UploadSummary/);
     expect(source).toMatch(/<div ref=\{summaryRef\} tabIndex=\{-1\}[^>]*>\s+<UploadSummary/);
-    expect(source).toMatch(/focusAfterPress\(submitter, \(\) => sendRef\.current\);/);
+    expect(source).toMatch(/focusAfterPress\(submitter, \(\) => sendRef\.current\)/);
     expect(source).toMatch(/focusAfterPress\(sendRef\.current, \(\) => summaryRef\.current\);\s+setPhase\("done"\);/);
   });
 });
@@ -121,8 +121,10 @@ describe("UploadLinkForm: one focus watch per change", () => {
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
     expect(source).toMatch(
-      /const submitter = \(event\.nativeEvent as SubmitEvent\)\.submitter;\s+if \(submitter !== sendRef\.current\) focusAfterPress\(submitter, \(\) => sendRef\.current\);/,
+      /const submitter = \(event\.nativeEvent as SubmitEvent\)\.submitter;\s+const stopPressWatch =\s+submitter !== sendRef\.current \? focusAfterPress\(submitter, \(\) => sendRef\.current\) : \(\) => \{\};/,
     );
+    // Lead review: a fast failure ends sending before the press-time watch runs; it is stopped first.
+    expect(source).toMatch(/stopPressWatch\(\);\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(sendRef\.current, \(\) => summaryRef\.current\);\s+setPhase\("done"\);/);
   });
 
   it("Send more hands focus to the name field", async () => {

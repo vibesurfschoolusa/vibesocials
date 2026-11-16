@@ -128,7 +128,8 @@ export function UploadLinkForm({ token }: { token: string }) {
     // R27 MM3: "Try the files that didn't send" goes when sending starts; focus goes to Send.
     // Send itself stays (loading), and the watch at the end covers it: one watch at a time.
     const submitter = (event.nativeEvent as SubmitEvent).submitter;
-    if (submitter !== sendRef.current) focusAfterPress(submitter, () => sendRef.current);
+    const stopPressWatch =
+      submitter !== sendRef.current ? focusAfterPress(submitter, () => sendRef.current) : () => {};
     setPhase("sending");
     for (const item of files) {
       if (item.status === "sent") continue;
@@ -149,6 +150,9 @@ export function UploadLinkForm({ token }: { token: string }) {
       }
     }
     // Send is replaced by the result: focus goes to the summary, which says it.
+    // Lead review: a fast failure can end here before the press-time watch ran;
+    // it would land on its fallback and end this one, so it stops first.
+    stopPressWatch();
     focusAfterPress(sendRef.current, () => summaryRef.current);
     setPhase("done");
   }

@@ -28,9 +28,10 @@ export function forgotPasswordOutcome(status: number | null): ForgotPasswordOutc
     // sentence is the same for every address, so it still reveals nothing.
     return {
       kind: "error",
+      // Lead review: the inbox first, so following the steps in order never sends a second email.
       message: answerLostText(
         "the request may have gone through",
-        "try again. If an account exists for that address, a link may already be on its way",
+        "If an account exists for that address, a link may already be on its way: check your inbox first. If nothing arrives in a few minutes, check your connection and try again.",
       ),
     };
   }

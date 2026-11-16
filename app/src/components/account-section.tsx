@@ -44,7 +44,7 @@ const PASSWORD_NOT_CHANGED = "Could not change your password. Try again.";
  */
 export const PASSWORD_MAYBE_CHANGED_MESSAGE = answerLostText(
   "your password may have changed",
-  "reload this page: if it asks you to sign in, use your new password",
+  "Reload this page: if it asks you to sign in, use your new password.",
 );
 
 /** What a refused or unreadable change-password answer says. */
@@ -253,7 +253,7 @@ const EMAIL_CHANGE_NOT_STARTED = "We couldn't start the change. Your email is un
  */
 export const EMAIL_CHANGE_MAYBE_SENT_MESSAGE = answerLostText(
   "the change may have gone through",
-  "look in the new address's inbox for the confirmation email, or reload this page to see your current sign-in email",
+  "Look in the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.",
 );
 
 /** What a refused or unreadable change-email answer says. */

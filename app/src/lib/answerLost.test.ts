@@ -11,19 +11,25 @@ import { answerLostText } from "./answerLost";
  * both, as Create's connectionLostText does. One lead-in for every such text.
  */
 describe("answerLostText", () => {
-  it("names the lost connection, what may have happened, and the next step", () => {
-    expect(answerLostText("the workspace may have been made", "reload this page")).toBe(
-      "We lost the connection before Vibe Socials answered, so the workspace may have been made. Check your connection, then reload this page.",
+  // Lead review: true offline and for an unreadable 5xx, where the connection may be fine.
+  it("says the answer didn't arrive, what may have happened, and the next step", () => {
+    expect(answerLostText("the workspace may have been made", "Reload this page.")).toBe(
+      "Vibe Socials' answer didn't reach you, so the workspace may have been made. Reload this page.",
     );
   });
 
-  it("is the only lead-in: no page writes its own 'The answer was lost' text", () => {
+  it("is the only copy: no other file in src writes the lead-in by hand", () => {
     const walk = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {
         const full = join(dir, name);
         return statSync(full).isDirectory() ? walk(full) : /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : [];
       });
-    const offenders = walk(join(__dirname, "..")).filter((file) => readFileSync(file, "utf8").includes("The answer was lost"));
+    // Every wording this lead-in has had, and the current one, outside answerLost.ts.
+    // queue-view.tsx is MM4's: it adopts the helper after its rebase.
+    const leadIns = [/The answer was lost/, /We lost the connection before Vibe Socials answered/, /answer didn.t reach you/];
+    const offenders = walk(join(__dirname, ".."))
+      .filter((file) => !/[\\/]lib[\\/]answerLost\.ts$/.test(file) && !/[\\/]queue-view\.tsx$/.test(file))
+      .filter((file) => leadIns.some((leadIn) => leadIn.test(readFileSync(file, "utf8"))));
     expect(offenders).toEqual([]);
   });
 });

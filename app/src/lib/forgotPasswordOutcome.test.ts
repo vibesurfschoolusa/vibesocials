@@ -33,7 +33,7 @@ describe("forgotPasswordOutcome with no answer", () => {
     expect(forgotPasswordOutcome(null)).toEqual({
       kind: "error",
       message:
-        "We lost the connection before Vibe Socials answered, so the request may have gone through. Check your connection, then try again. If an account exists for that address, a link may already be on its way.",
+        "Vibe Socials' answer didn't reach you, so the request may have gone through. If an account exists for that address, a link may already be on its way: check your inbox first. If nothing arrives in a few minutes, check your connection and try again.",
     });
   });
 });

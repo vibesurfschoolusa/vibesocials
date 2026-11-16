@@ -6,6 +6,7 @@
  * risking a second post.
  */
 
+import { answerLostText } from "./answerLost";
 import { postDestination, type ComposerPublishMode } from "./composerSubmitOutcome";
 import { UploadRefusedError } from "./uploadFailure";
 
@@ -14,7 +15,7 @@ export type SubmitWhere = { mode: ComposerPublishMode; holdsForApproval: boolean
 
 function connectionLostText({ mode, holdsForApproval }: SubmitWhere): string {
   const page = postDestination(mode, holdsForApproval) === "activity" ? "Activity" : "Queue";
-  return `We lost the connection before Vibe Socials answered. Check ${page} to see whether the post was saved before you try again.`;
+  return answerLostText("the post may have been saved", `Check ${page} to see whether it was before you try again.`);
 }
 
 const SUBMIT_FAILED_MESSAGE = "Unexpected error while creating post.";

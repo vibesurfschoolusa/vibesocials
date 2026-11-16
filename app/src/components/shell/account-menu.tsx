@@ -109,7 +109,7 @@ export function focusWhenPending(node: { focus(): void } | null, pending: { curr
  */
 export const WORKSPACE_MAYBE_MADE_MESSAGE = answerLostText(
   "the workspace may have been made",
-  "open this menu again and check the workspace list before you create it again",
+  "Open this menu again and check the workspace list before you create it again.",
 );
 
 /** What a refused or unreadable Create workspace answer says. */
