@@ -60,7 +60,8 @@ const AI_WRITE =
   "An AI write: on a lost answer the AI ran and used the allowance, but nothing is saved (the box changes only from an answer). The sentence says the answer isn't shown and nothing was saved.";
 const UPLOAD_STEP =
   "The file-storage step: nothing is in the library or on a post until a later request saves it, and that one has its own lost-answer text.";
-const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: string; why: string }> = [
+/** `usedIn`: only where that file names the constant (R32), not on every data change. */
+const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: string; usedIn?: string; why: string }> = [
   { file: "lib/captionRequest.ts", constant: "CAPTION_OFFLINE_MESSAGE", why: AI_WRITE },
   { file: "lib/captionRequest.ts", constant: "CAPTION_FAILED_MESSAGE", why: AI_WRITE },
   { file: "app/reviews/reviews-view.tsx", constant: "DRAFT_OFFLINE_MESSAGE", why: AI_WRITE },
@@ -75,16 +76,13 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
   { file: "lib/uploadFailure.ts", constant: "UPLOAD_REFUSED_MESSAGE", why: UPLOAD_STEP },
   { file: "lib/uploadFailure.ts", constant: "UPLOAD_STORAGE_UNREACHABLE_MESSAGE", why: UPLOAD_STEP },
   { file: "components/media-library.tsx", constant: "uploadNetwork", why: UPLOAD_STEP },
-  // R32: explainUploadFailure's question is refused for a page drawn for another workspace (or sent no id).
+  // R32 (lead review: scoped to the upload path): explainUploadFailure's question is
+  // refused for a page drawn for another workspace (or one that sent no id).
   {
     file: "lib/workspaceChanged.ts",
-    constant: "WORKSPACE_CHANGED_SAVE_MESSAGE",
-    why: `${UPLOAD_STEP} The page is for another workspace, so its upload token is refused too; the sentence says to reload and try again, not that nothing happened.`,
-  },
-  {
-    file: "lib/workspaceChanged.ts",
-    constant: "MISSING_WORKSPACE_ID_MESSAGE",
-    why: `${UPLOAD_STEP} A page from before the id was sent gets no upload token either; the sentence says to reload and try again.`,
+    constant: "readWorkspaceRefusalText",
+    usedIn: "lib/uploadFailure.ts",
+    why: `${UPLOAD_STEP} The page is for another workspace (or from before the id was sent), so its upload token is refused too; the shared sentence says to reload and try again, not that nothing happened.`,
   },
   { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_COVER_FAILED_TEXT", why: UPLOAD_STEP },
   { file: "app/posts/bulk/bulk-posts-form.tsx", text: "The upload failed. Retry it or remove it.", why: UPLOAD_STEP },
@@ -107,8 +105,14 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
   },
 ];
 
-function isTrueWhateverArrived(file: string, name: string): boolean {
-  return TRUE_WHATEVER_ARRIVED.some((entry) => entry.file === rel(file) && entry.constant !== undefined && entry.constant === name);
+function isTrueWhateverArrived(file: string, name: string, usedAt?: string): boolean {
+  return TRUE_WHATEVER_ARRIVED.some(
+    (entry) =>
+      entry.file === rel(file) &&
+      entry.constant !== undefined &&
+      entry.constant === name &&
+      (entry.usedIn === undefined || (usedAt !== undefined && rel(usedAt) === entry.usedIn)),
+  );
 }
 
 function isUploadOrSignIn(name: string, sf: ts.SourceFile): boolean {
@@ -433,7 +437,7 @@ function sayings(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): void {
     // changed" is caught where it is called. A one-line arrow is a value.
     if (!isPropertyName) {
       for (let value of resolveName(node)) {
-        if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text)) continue;
+        if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text, sf.fileName)) continue;
         const body = ts.isBlock(value) ? value : (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) && ts.isBlock(value.body) ? value.body : null;
         if (body) {
           for (const returned of returnsOf(body)) sayings(returned, seen, out);
@@ -926,7 +930,7 @@ function unsharedSentences(node: ts.Node, seen: Set<ts.Node>, out: Finding[]): v
     const isPropertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node) || (ts.isPropertyAssignment(parent) && parent.name === node);
     if (!isPropertyName) {
       for (let value of resolveName(node)) {
-        if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text)) continue;
+        if (isTrueWhateverArrived(value.getSourceFile().fileName, node.text, sf.fileName)) continue;
         // `useCallback(async () => ..., deps)`: the function inside.
         if (ts.isCallExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === "useCallback" && value.arguments[0]) {
           value = value.arguments[0];
@@ -1174,10 +1178,23 @@ describe("requests that change data, and their no-answer wording", () => {
     expect(positiveFindings(clientFiles).map((finding) => `${finding.file}:${finding.line} ${finding.text}`)).toEqual([]);
   });
 
+  // R32 lead review: the shared reload sentences are allowed on the upload's no-answer path only.
+  it("the workspace refusal is named for the upload's question only", () => {
+    const workspaceEntries = TRUE_WHATEVER_ARRIVED.filter((entry) => entry.file === "lib/workspaceChanged.ts");
+    expect(workspaceEntries.map((entry) => [entry.constant, entry.usedIn])).toEqual([["readWorkspaceRefusalText", "lib/uploadFailure.ts"]]);
+    const elsewhere = fake(
+      "elsewhere.tsx",
+      `import { readWorkspaceRefusalText } from "@/lib/workspaceChanged";
+async function press() { try { await fetchOrNoAnswer("/x", { method: "POST" }); } catch { const r = await fetch("/y"); toast.error(await readWorkspaceRefusalText(r)); } }`,
+    );
+    expect(positiveFindings([elsewhere]).length).toBeGreaterThan(0);
+  });
+
   it("each documented exception names a constant or text that exists, and says why", () => {
     for (const entry of TRUE_WHATEVER_ARRIVED) {
       const source = readFileSync(path.join(SRC, entry.file), "utf8");
-      if (entry.constant) expect(source, entry.constant).toMatch(new RegExp(`(const |\\b)${entry.constant}\\b\\s*[:=]`));
+      if (entry.usedIn) expect(readFileSync(path.join(SRC, entry.usedIn), "utf8"), entry.usedIn).toContain(entry.constant);
+      if (entry.constant) expect(source, entry.constant).toMatch(new RegExp(`(const |\\b)${entry.constant}\\b\\s*[:=]|function ${entry.constant}\\(`));
       if (entry.text) expect(source, entry.text).toContain(entry.text);
       expect(entry.why.length, entry.file).toBeGreaterThan(20);
     }
