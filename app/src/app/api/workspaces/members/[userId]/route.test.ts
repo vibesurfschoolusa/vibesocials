@@ -176,15 +176,16 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     expect(deleteManyMock).not.toHaveBeenCalled();
   });
 
-  it("returns 400 and never deletes when the target membership is an owner (review fix round 1 — future-proofs multi-owner states)", async () => {
+  // R26 new-customer L2: the Team card shows Remove only on a member row, so an
+  // owner here is someone a co-owner made owner meanwhile. The role change's
+  // 409 roleChanged closes the dialog with "Reload" and keeps the row.
+  it("never deletes an owner: 409 roleChanged, as a role change that lost a race answers", async () => {
     findFirstMock.mockResolvedValue({ role: "owner" });
 
     const response = await DELETE(deleteReq(), ctx("user-2"));
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Owners can't be removed.",
-    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual(ROLE_CHANGED_ANSWER);
     expect(deleteManyMock).not.toHaveBeenCalled();
   });
 

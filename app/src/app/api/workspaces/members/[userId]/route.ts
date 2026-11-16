@@ -60,7 +60,7 @@ interface MemberRouteContext {
  * (misleading) 404 branch instead of the correct 400.
  *
  * Owner-role targets remain non-removable through THIS route (review fix
- * round 1, Minor 2). Multi-owner now exists (Task D1), so removing a co-owner
+ * round 1, Minor 2); one answers the 409 roleChanged (R26). Multi-owner now exists (Task D1), so removing a co-owner
  * is the explicit demotion flow this guard always anticipated —
  * `PATCH /api/workspaces/members/[userId] { role: "member" }`, not a member
  * delete. The role is still read for the 400-vs-404 disambiguation, and the
@@ -111,8 +111,11 @@ export async function DELETE(request: Request, { params }: MemberRouteContext) {
     return memberGone();
   }
 
+  // R26 new-customer L2: the Team card offers Remove only on a member row, so
+  // an owner here was made owner by a co-owner meanwhile. The role change's
+  // answer lets the card close the dialog and keep the row.
   if (membership.role === "owner") {
-    return NextResponse.json({ error: "Owners can't be removed." }, { status: 400 });
+    return roleChanged();
   }
 
   // R6-security L1: a co-owner could demote the payer and then remove them,

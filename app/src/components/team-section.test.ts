@@ -99,7 +99,8 @@ describe("a member whose role changed in the meantime", () => {
   });
 
   it("Make owner and Make member keep the row and close on that answer", () => {
-    for (const handler of ["confirmPromote", "confirmDemote"]) {
+    // R26 new-customer L2: Remove too, on someone a co-owner just made owner.
+    for (const handler of ["confirmPromote", "confirmDemote", "confirmRemove"]) {
       const body = source.slice(source.indexOf(`const ${handler} = useCallback`));
       const end = body.indexOf("}, [");
       expect(body.slice(0, end), handler).toMatch(/if \(memberRoleChanged\(response\.status, data\)\) return;/);

@@ -799,6 +799,7 @@ function OwnerView({
         dropMember(removeTarget.userId);
         return;
       }
+      if (memberRoleChanged(response.status, data)) return;
       throw new ConfirmFailureShown("REMOVE_FAILED");
     }
     setMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
