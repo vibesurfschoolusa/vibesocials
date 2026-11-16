@@ -32,8 +32,9 @@ describe("requestCaption", () => {
     });
     const result = await requestCaption("/api/posts/auto-caption", body, "caption", fetchImpl as unknown as typeof fetch);
     expect(result).toEqual({ ok: false, error: CAPTION_OFFLINE_MESSAGE });
+    // Lead review 3 (R28 NN2): on a lost answer the AI ran (and used the allowance); only the answer is missing.
     expect(CAPTION_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so your caption is unchanged. Check your connection and try again.",
+      "Vibe Socials' answer didn't reach you, so the new caption isn't shown. If your connection dropped, reconnect first. Your caption is unchanged; try again.",
     );
   });
 

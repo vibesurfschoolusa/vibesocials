@@ -518,8 +518,9 @@ describe("requestPhotoDescription", () => {
         PHOTO_DESCRIPTION_OFFLINE_MESSAGE,
       );
     }
+    // Lead review 3 (R28 NN2): on a lost answer the AI ran; only the answer is missing.
     expect(PHOTO_DESCRIPTION_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so no description was written. Check your connection and try again.",
+      "Vibe Socials' answer didn't reach you, so the description isn't shown. If your connection dropped, reconnect first. Nothing was saved; try again.",
     );
   });
 

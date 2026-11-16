@@ -5,6 +5,7 @@ import { storyVideoLengthRefusal } from "@/lib/storyPlacement";
 import {
   BULK_COVER_FAILED_TEXT,
   BULK_IMPROVE_FAILED_TEXT,
+  BULK_IMPROVE_LOST_TEXT,
   autoCaptionRequestBody,
   coverUploadFailedText,
   buildBulkRowBody,
@@ -144,7 +145,11 @@ describe("Add many: Improve", () => {
     const thrown = vi.fn(async () => {
       throw new Error("offline");
     });
-    expect(await requestImprovedCaption("x", thrown as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_FAILED_TEXT });
+    // Lead review 3 (R28 NN2): no answer: the AI may have run; the improved caption isn't shown.
+    expect(await requestImprovedCaption("x", thrown as unknown as typeof fetch)).toEqual({ ok: false, error: BULK_IMPROVE_LOST_TEXT });
+    expect(BULK_IMPROVE_LOST_TEXT).toBe(
+      "Vibe Socials' answer didn't reach you, so the improved caption isn't shown. If your connection dropped, reconnect first. The caption is as it was; try again, or edit it yourself.",
+    );
     expect(BULK_IMPROVE_FAILED_TEXT).not.toMatch(/[()]/);
   });
 });

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { ALT_TEXT_MAX, cleanAltText } from "@/lib/altText";
 import { cn } from "@/lib/cn";
 import { focusAfterPress } from "@/lib/focusAfter";
+import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 
@@ -73,8 +74,8 @@ export function whereDescriptionGoes(
   return now.single === photo ? { to: "single" } : null;
 }
 
-export const PHOTO_DESCRIPTION_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so no description was written. Check your connection and try again.";
+/** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
+export const PHOTO_DESCRIPTION_OFFLINE_MESSAGE = answerLostText("the description isn't shown", "Nothing was saved; try again.");
 export const PHOTO_DESCRIPTION_FAILED_MESSAGE =
   "Something went wrong on our side, so no description was written. Please try again in a minute.";
 const PHOTO_DESCRIPTION_EMPTY_MESSAGE = "The AI didn't write a description. Try again or write it yourself.";

@@ -5,10 +5,11 @@
  * act on, the way requestDisconnect does it for Connections.
  */
 
+import { answerLostText } from "./answerLost";
 import { fetchOrNoAnswer } from "./requestNoAnswer";
 
-export const CAPTION_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so your caption is unchanged. Check your connection and try again.";
+/** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
+export const CAPTION_OFFLINE_MESSAGE = answerLostText("the new caption isn't shown", "Your caption is unchanged; try again.");
 export const CAPTION_FAILED_MESSAGE =
   "Something went wrong on our side, so your caption is unchanged. Please try again in a minute.";
 

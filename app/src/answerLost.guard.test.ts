@@ -35,6 +35,17 @@ import { describe, expect, it } from "vitest";
  *    the shared answerLost text, the offline-at-the-press "nothing was sent",
  *    or a named exception in TRUE_WHATEVER_ARRIVED that says why. Reads (GET)
  *    are left out. Rule 2 stays as a second check.
+ *
+ * Known limits (rule 3; rules 1 and 2 still apply everywhere):
+ * - A catch that rethrows is not followed: the branch is that catch, not the
+ *   one its rethrow reaches.
+ * - An outcome reshaped and worded by a caller (a helper that returns
+ *   { kind: "network" } or { lost: true } for another function to word) gets
+ *   only the banned-phrase check, as does an outcome compared in a function
+ *   other than the one that made the request.
+ * - A request made through a passed-in fetch function (a parameter or a
+ *   field holding fetch) gets only the banned-phrase check.
+ * - Re-exports and `export default` of a fetch alias are not followed.
  */
 
 const SRC = __dirname;
@@ -45,7 +56,8 @@ const SRC = __dirname;
  * stand in a no-answer branch of a data change but the shared answerLost text
  * and the offline-at-the-press "nothing was sent".
  */
-const AI_WRITE = "An AI write saves nothing on the server: the box changes only from an answer, so nothing changed holds after a lost answer.";
+const AI_WRITE =
+  "An AI write: on a lost answer the AI ran and used the allowance, but nothing is saved (the box changes only from an answer). The sentence says the answer isn't shown and nothing was saved.";
 const UPLOAD_STEP =
   "The file-storage step: nothing is in the library or on a post until a later request saves it, and that one has its own lost-answer text.";
 const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: string; why: string }> = [
@@ -54,6 +66,9 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
   { file: "app/reviews/reviews-view.tsx", constant: "DRAFT_OFFLINE_MESSAGE", why: AI_WRITE },
   { file: "components/composer/attached-photos.tsx", constant: "PHOTO_DESCRIPTION_OFFLINE_MESSAGE", why: AI_WRITE },
   { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_IMPROVE_FAILED_TEXT", why: AI_WRITE },
+  { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_IMPROVE_LOST_TEXT", why: AI_WRITE },
+  { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_CAPTION_LOST_TEXT", why: AI_WRITE },
+  { file: "components/composer/platform-caption-editor.tsx", constant: "adaptLostText", why: AI_WRITE },
   { file: "app/posts/bulk/bulk-post-row.tsx", text: "No caption was written", why: AI_WRITE },
   { file: "components/composer/platform-caption-editor.tsx", text: "Couldn't adapt the caption for", why: AI_WRITE },
   { file: "lib/uploadFailure.ts", constant: "UPLOAD_OFFLINE_MESSAGE", why: UPLOAD_STEP },

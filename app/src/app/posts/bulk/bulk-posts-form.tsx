@@ -74,6 +74,7 @@ import { BulkPostRow, captionFailedText, captionLocked } from "./bulk-post-row";
 import { MediaPickerDialog } from "./media-picker-dialog";
 import { BatchSettingsFieldset } from "./batch-settings";
 import {
+  BULK_CAPTION_LOST_TEXT,
   BULK_COVER_FAILED_TEXT,
   autoCaptionRequestBody,
   buildBulkRowBody,
@@ -91,7 +92,7 @@ import {
   rowStoryRefusal,
   saveAiCaptionsChoice,
 } from "./bulkExtras";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 export interface BulkRow {
   id: string;
@@ -506,8 +507,8 @@ export function BulkPostsForm({
       updateRow(id, {
         captionStatus: "failed",
         captionOverwrite: false,
-        // No answer at all (the network, or reading the file's frames): plain sentence.
-        captionError: captionFailedText(null, undefined),
+        // No answer: the AI may have written one that isn't shown. Reading the file's frames: plain sentence.
+        captionError: isNoAnswer(error) ? BULK_CAPTION_LOST_TEXT : captionFailedText(null, undefined),
       });
     }
   }

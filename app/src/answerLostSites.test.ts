@@ -120,4 +120,18 @@ describe("lost answers outside the first list", () => {
     };
     await expect(sendClientFile(input, deps)).rejects.toMatchObject({ kind: "network", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
   });
+
+  // Lead review 3: Add many's caption and Create's Adapt are AI writes too.
+  it("Add many's caption and Create's Adapt say the AI's answer isn't shown when it is lost", async () => {
+    const { BULK_CAPTION_LOST_TEXT } = await import("@/app/posts/bulk/bulkExtras");
+    expect(BULK_CAPTION_LOST_TEXT).toBe(
+      `${LEAD}the caption isn't shown. If your connection dropped, reconnect first. Nothing was saved; ask again, or write one yourself.`,
+    );
+    expect(read("app/posts/bulk/bulk-posts-form.tsx")).toMatch(/captionError: isNoAnswer\(error\) \? BULK_CAPTION_LOST_TEXT : captionFailedText\(null, undefined\)/);
+    const { adaptLostText } = await import("@/components/composer/platform-caption-editor");
+    expect(adaptLostText("LinkedIn")).toBe(
+      `${LEAD}the adapted caption for LinkedIn isn't shown. If your connection dropped, reconnect first. Nothing was saved; try again.`,
+    );
+    expect(read("components/composer/platform-caption-editor.tsx")).toMatch(/isNoAnswer\(caught\) \? adaptLostText\(platformLabel\(platform\)\) : /);
+  });
 });

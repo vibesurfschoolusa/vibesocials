@@ -90,8 +90,8 @@ export function draftStillShown(pressedOn: string | null, current: string | null
   return pressedOn === current;
 }
 const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
-export const DRAFT_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so no draft was written. Check your connection and try again.";
+/** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
+export const DRAFT_OFFLINE_MESSAGE = answerLostText("the draft isn't shown", "Nothing was saved; try again.");
 
 /** R26 client-journey L5: what a failed AI draft says; a request that got no answer says so. */
 export function draftFailureMessage(error: unknown): string {

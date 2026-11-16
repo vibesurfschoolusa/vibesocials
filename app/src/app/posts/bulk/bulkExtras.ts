@@ -15,7 +15,8 @@ import { storyVideoLengthRefusal, type PlacementChoiceValue } from "@/lib/storyP
 import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import type { coverRequestFields } from "@/lib/videoCover";
 import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * Add many's share of what makes Create pleasant (P1 parity): Improve, the
@@ -27,6 +28,16 @@ import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 /** The one line under the caption box when Improve got no new caption. */
 export const BULK_IMPROVE_FAILED_TEXT =
   "The caption was not improved and is as it was. Try again, or edit it yourself.";
+
+/** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
+export const BULK_IMPROVE_LOST_TEXT = answerLostText(
+  "the improved caption isn't shown",
+  "The caption is as it was; try again, or edit it yourself.",
+);
+export const BULK_CAPTION_LOST_TEXT = answerLostText(
+  "the caption isn't shown",
+  "Nothing was saved; ask again, or write one yourself.",
+);
 
 /** The cover upload failed: Create's own sentence. */
 export const BULK_COVER_FAILED_TEXT =
@@ -89,7 +100,7 @@ export async function requestImprovedCaption(
     return { ok: true, caption: data.enhancedCaption };
   } catch (error: unknown) {
     console.error("[Add many] Improve failed", error);
-    return { ok: false, error: BULK_IMPROVE_FAILED_TEXT };
+    return { ok: false, error: isNoAnswer(error) ? BULK_IMPROVE_LOST_TEXT : BULK_IMPROVE_FAILED_TEXT };
   }
 }
 

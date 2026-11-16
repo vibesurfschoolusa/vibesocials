@@ -349,9 +349,10 @@ describe("ReviewsView and an empty listing's notice", () => {
 
 // R26 client-journey L5: "Draft AI response" with no connection said the AI failed.
 describe("ReviewsView when a draft fails", () => {
-  it("no answer: says no draft was written and to check the connection", () => {
+  // Lead review 3 (R28 NN2): on a lost answer the AI ran; only the draft is missing.
+  it("no answer: says the draft isn't shown, nothing was saved, and to try again", () => {
     expect(DRAFT_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so no draft was written. Check your connection and try again.",
+      "Vibe Socials' answer didn't reach you, so the draft isn't shown. If your connection dropped, reconnect first. Nothing was saved; try again.",
     );
     expect(draftFailureMessage(new NoAnswerError(new TypeError("Failed to fetch")))).toBe(DRAFT_OFFLINE_MESSAGE);
   });

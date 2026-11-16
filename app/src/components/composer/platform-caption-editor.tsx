@@ -18,7 +18,12 @@ import {
   type PlatformOverrides,
 } from "@/lib/platformOverrides";
 import { platformLabel } from "@/lib/platforms";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+
+/** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
+export const adaptLostText = (label: string): string =>
+  answerLostText(`the adapted caption for ${label} isn't shown`, "Nothing was saved; try again.");
 
 export interface PlatformCaptionEditorProps {
   /** Prefix for element ids, unique on the page. */
@@ -97,8 +102,8 @@ export function PlatformCaptionEditor({
       }
       const adapted = data.enhancedCaption;
       onChange((prev) => applyAdaptedCaption(prev, platform, adapted));
-    } catch {
-      toast.error(`Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
+    } catch (caught) {
+      toast.error(isNoAnswer(caught) ? adaptLostText(platformLabel(platform)) : `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
     } finally {
       setAdapting(null);
     }
