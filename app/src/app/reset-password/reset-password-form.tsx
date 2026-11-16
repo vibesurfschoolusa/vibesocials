@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { signOut } from "next-auth/react";
 import { Eye, EyeOff } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
@@ -11,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { signOutChecked } from "@/lib/signOutChecked";
 
 import { signOutAfterReset, submitReset } from "./resetOutcome";
 
@@ -124,7 +124,8 @@ function ResetPasswordCard({ token, onLinkDead }: { token: string; onLinkDead: (
     setLoading(true);
     const outcome = await submitReset(fetch, token, password);
     // Before "Log in" shows, so it opens the form, not the signed-in notice.
-    await signOutAfterReset(outcome, signOut);
+    // R32 new-customer L2: the checked sign-out never leaves for next-auth's page.
+    await signOutAfterReset(outcome, () => signOutChecked());
     setLoading(false);
     if (outcome.kind === "done") setDone(true);
     else if (outcome.kind === "invalid_link") onLinkDead();

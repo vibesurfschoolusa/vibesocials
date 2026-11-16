@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { signOut } from "next-auth/react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { signOutChecked } from "@/lib/signOutChecked";
 
 import { confirmNewAddress, type NewAddressView } from "./confirmNewAddress";
 
@@ -24,7 +24,8 @@ export function NewAddressClient() {
     setBusy(true);
     const result = await confirmNewAddress(fetch, window.location.hash.slice(1));
     // Only this account's session: another signed-in account stays signed in.
-    if (result.signOutHere) await signOut({ redirect: false }).catch(() => undefined);
+    // R32 new-customer L2: the checked sign-out (never throws); the server already ended this session.
+    if (result.signOutHere) await signOutChecked();
     setView(result);
     setBusy(false);
   }

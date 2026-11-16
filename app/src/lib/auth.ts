@@ -8,20 +8,19 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 import { normalizeEmail } from "./email";
 import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
+import { logger } from "./logger";
+import { LOGIN_EMAIL_IP_LIMIT, loginEmailIpUserId } from "./loginLimit";
 import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 import { checkRateLimit } from "./rateLimit";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "./signInErrorCodes";
 
 // Login throttles (all fail-closed). Keyed per (email, IP) rather than per
 // email so one IP guessing at a victim's address exhausts only ITS bucket —
 // the victim, from their own IP, can still sign in. The per-IP limit caps
 // spraying many addresses from one host, and the per-email hourly backstop
 // caps a distributed attack on one account (one IP alone can reach at most
-// 40/hour against it: 10 per 15-minute bucket).
-const LOGIN_EMAIL_IP_LIMIT = {
-  route: "auth/login",
-  limit: 10,
-  windowMs: 15 * 60 * 1000,
-} as const;
+// 40/hour against it: 10 per 15-minute bucket). The per-(email, IP) limit
+// lives in loginLimit.ts, because a password reset empties it.
 const LOGIN_IP_LIMIT = {
   route: "auth/login-ip",
   limit: 30,
@@ -74,30 +73,41 @@ export async function authorizeCredentials(
   const ip = clientIpFromAuthReq(req);
 
   // Fail-closed throttles: online password guessing + cost amplification.
-  // Exhausted limits return null (same as bad credentials — no oracle).
   // Checked in order and short-circuited, so attempts an IP makes after its
   // own buckets are exhausted never count toward the per-email backstop.
+  // R32 new-customer L1: an exhausted limit throws its own code, so Log in
+  // says so instead of "Invalid email or password." No oracle: every bucket
+  // counts every try for any address, account or not.
   const limits = [
-    { userId: `email-ip:${email}|${ip}`, ...LOGIN_EMAIL_IP_LIMIT },
+    { userId: loginEmailIpUserId(email, ip), ...LOGIN_EMAIL_IP_LIMIT },
     { userId: `ip:${ip}`, ...LOGIN_IP_LIMIT },
     { userId: `email:${email}`, ...LOGIN_EMAIL_LIMIT },
   ];
   for (const limit of limits) {
     const result = await checkRateLimit({ ...limit, failClosed: true });
     if (!result.allowed) {
-      return null;
+      throw new Error(SIGN_IN_LIMITED);
     }
   }
 
-  const user = await prisma.user.findUnique({
-    where: { email },
-  });
+  // R32 new-customer L1: next-auth sends a thrown Error's message to the
+  // browser (?error=), so a database failure becomes the fixed code here.
+  let user: Awaited<ReturnType<typeof prisma.user.findUnique>>;
+  let isValid: boolean;
+  try {
+    user = await prisma.user.findUnique({
+      where: { email },
+    });
 
-  // Always exactly one bcrypt.compare — see LOGIN_DUMMY_PASSWORD_HASH.
-  const isValid = await bcrypt.compare(
-    credentials.password,
-    user?.passwordHash || LOGIN_DUMMY_PASSWORD_HASH,
-  );
+    // Always exactly one bcrypt.compare — see LOGIN_DUMMY_PASSWORD_HASH.
+    isValid = await bcrypt.compare(
+      credentials.password,
+      user?.passwordHash || LOGIN_DUMMY_PASSWORD_HASH,
+    );
+  } catch (error) {
+    logger.error("[auth] password sign-in could not be checked", { error });
+    throw new Error(SIGN_IN_UNCHECKED);
+  }
   if (!user || !user.passwordHash || !isValid) {
     return null;
   }

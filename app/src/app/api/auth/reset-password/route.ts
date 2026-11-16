@@ -5,6 +5,7 @@ import { hashAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { clearLoginLimitForNetwork } from "@/lib/loginLimit";
 import { checkRateLimit } from "@/lib/rateLimit";
 
 /**
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
     // reset can double as email verification only when needed.
     const record = await prisma.accountToken.findUnique({
       where: { tokenHash },
-      include: { user: { select: { emailVerifiedAt: true } } },
+      include: { user: { select: { emailVerifiedAt: true, email: true } } },
     });
 
     if (!record || record.type !== "password_reset" || record.usedAt || record.expiresAt <= now) {
@@ -131,6 +132,13 @@ export async function POST(request: Request) {
     if (!succeeded) {
       return invalidResetResponse();
     }
+
+    // R32 new-customer L1: the new password works at once from this network,
+    // even after 10 wrong ones (lib/loginLimit.ts says why that is safe). The
+    // password did change, so a failed clear is only logged.
+    await clearLoginLimitForNetwork(record.user.email, ip).catch((error: unknown) => {
+      logger.warn("[POST /api/auth/reset-password] Could not clear the sign-in limit", { error });
+    });
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {

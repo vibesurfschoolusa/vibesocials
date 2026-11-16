@@ -2,16 +2,12 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { signOut } from "next-auth/react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import type { SignedInAccount } from "@/components/signed-in-swap";
-import { answerLostText } from "@/lib/answerLost";
-
-/** Lead review 3 (R28 NN2): the sign-out may have ended the session before the answer was lost. */
-export const SIGN_OUT_FAILED_MESSAGE = answerLostText("you may be signed out", "Then reload the page to see.");
+import { SIGN_OUT_FAILED_MESSAGE, signOutChecked } from "@/lib/signOutChecked";
 
 /**
  * R17-pages L1: Log in and Register show who is signed in instead of their
@@ -23,16 +19,13 @@ export function showSignedInNotice(account: SignedInAccount | null, submitting: 
   return Boolean(account) && !submitting;
 }
 
-/** Signs out without leaving the page, so the form shows here with the same callbackUrl. */
-export async function signOutHere(
-  signOutFn: (options: { redirect: false }) => Promise<unknown> = signOut,
-): Promise<string | null> {
-  try {
-    await signOutFn({ redirect: false });
-    return null;
-  } catch {
-    return SIGN_OUT_FAILED_MESSAGE;
-  }
+/**
+ * Signs out without leaving the page, so the form shows here with the same
+ * callbackUrl. R32 new-customer L2: through signOutChecked, so a csrf=true
+ * answer or a session still there is a failure, not a silent "done".
+ */
+export async function signOutHere(signOutFn: () => Promise<boolean> = signOutChecked): Promise<string | null> {
+  return (await signOutFn()) ? null : SIGN_OUT_FAILED_MESSAGE;
 }
 
 /**
@@ -40,7 +33,7 @@ export async function signOutHere(
  * form, so the page is told and moves the focus to the form's heading.
  */
 export async function pressSignOut(
-  signOutFn: (options: { redirect: false }) => Promise<unknown>,
+  signOutFn: () => Promise<boolean>,
   onSignedOut: () => void,
 ): Promise<string | null> {
   const failed = await signOutHere(signOutFn);
@@ -110,7 +103,7 @@ export function SignedInNotice({
               setBusy(true);
               setError(null);
               // On success the session turns signed out and the page shows its form.
-              const failed = await pressSignOut(signOut, onSignedOut);
+              const failed = await pressSignOut(signOutChecked, onSignedOut);
               setError(failed);
               setBusy(false);
             }}

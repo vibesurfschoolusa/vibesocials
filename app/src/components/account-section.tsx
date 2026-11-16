@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { signOut } from "next-auth/react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -24,6 +23,7 @@ import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDa
 import { focusAfterPress } from "@/lib/focusAfter";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { SIGN_OUT_FAILED_MESSAGE, signOutChecked } from "@/lib/signOutChecked";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
 
@@ -336,6 +336,7 @@ function ChangePasswordForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [changed, setChanged] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -354,8 +355,15 @@ function ChangePasswordForm() {
       }
       setChanged(true);
       // Every session is already signed out by the server; give the message a
-      // moment on screen, then clear this browser's cookie too.
-      window.setTimeout(() => void signOut({ callbackUrl: "/login" }), 2000);
+      // moment on screen, then clear this browser's cookie too. R32
+      // new-customer L2: Log in loads only once the sign-out is checked.
+      window.setTimeout(() => {
+        void signOutChecked().then((signedOut) => {
+          // A full load, so nothing of the signed-in page stays in memory.
+          if (signedOut) afterWorkspaceChange("/login");
+          else setSignOutError(SIGN_OUT_FAILED_MESSAGE);
+        });
+      }, 2000);
     } catch (error) {
       setError(isNoAnswer(error) ? PASSWORD_MAYBE_CHANGED_MESSAGE : PASSWORD_NOT_CHANGED);
     } finally {
@@ -372,6 +380,7 @@ function ChangePasswordForm() {
           {PASSWORD_CHANGED}
         </Alert>
       ) : null}
+      {signOutError ? <Alert variant="danger">{signOutError}</Alert> : null}
       {changed ? null : (
         <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
           <div className="flex flex-col gap-1.5">
@@ -452,13 +461,11 @@ function DeleteAccount({
     }
     // Lead review (R28 NN2): the account is gone; a failing sign-out must not
     // show an error, so the page leaves as deleted whatever it does. `busy`
-    // stays set while the page unloads.
-    try {
-      await signOut({ callbackUrl: "/" });
-    } catch {
-      // A full load, as after deleting a workspace: the account and its workspaces are gone.
-      afterWorkspaceChange("/");
-    }
+    // stays set while the page unloads. R32 new-customer L2: signOutChecked
+    // never leaves for next-auth's own sign-out page.
+    await signOutChecked();
+    // A full load, as after deleting a workspace: the account and its workspaces are gone.
+    afterWorkspaceChange("/");
   }
 
   return (

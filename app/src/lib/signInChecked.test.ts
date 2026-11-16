@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next-auth/react", () => ({ getSession: vi.fn(async () => null), signOut: vi.fn() }));
 
 import { credentialsSignInChecked, googleSignInChecked, signInReachable } from "./signInChecked";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "./signInErrorCodes";
 
 type Answers = Partial<Record<"providers" | "csrf" | "session", () => Promise<Response>>>;
 
@@ -75,6 +76,25 @@ describe("credentialsSignInChecked", () => {
         reason: "refused",
       });
     }
+  });
+
+  // R32 new-customer L1: authorize's thrown code comes back as signIn's error
+  // (next-auth puts the message into ?error=, react/index.js reads it back).
+  it("authorize's codes: a used-up sign-in limit, and a password that couldn't be checked", async () => {
+    const answer = (error: string) => vi.fn(async () => ({ ok: false, error, status: 401, url: null }));
+    await expect(credentialsSignInChecked(answer(SIGN_IN_LIMITED), "a@example.test", "x", server())).resolves.toEqual({
+      ok: false,
+      reason: "limited",
+    });
+    await expect(credentialsSignInChecked(answer(SIGN_IN_UNCHECKED), "a@example.test", "x", server())).resolves.toEqual({
+      ok: false,
+      reason: "unchecked",
+    });
+    // Any other error (an old server's database message included) stays refused.
+    await expect(credentialsSignInChecked(answer("Can't reach database"), "a@example.test", "x", server())).resolves.toEqual({
+      ok: false,
+      reason: "refused",
+    });
   });
 
   // R31 new-customer L4: next-auth's own csrf read failed after ours: a 200 whose url says csrf=true.

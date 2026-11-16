@@ -1,4 +1,5 @@
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "@/lib/signInErrorCodes";
 import { beforeSignIn } from "@/lib/staleSignOut";
 
 // A plain module (not "use client"): Log in's helper and the Register form
@@ -18,8 +19,12 @@ import { beforeSignIn } from "@/lib/staleSignOut";
  * - refused: the server refused the email and password.
  * - unfinished: an answer came, but nobody is signed in.
  * - lost: the answer was lost after the sign-in was sent; it may have worked.
+ * - limited, unchecked (R32 new-customer L1): authorize's own codes for a
+ *   used-up sign-in limit and a password it couldn't check.
  */
-export type SignInCheck = { ok: true } | { ok: false; reason: "not_sent" | "refused" | "unfinished" | "lost" };
+export type SignInCheck =
+  | { ok: true }
+  | { ok: false; reason: "not_sent" | "refused" | "unfinished" | "lost" | "limited" | "unchecked" };
 
 async function readJson(path: string, fetchImpl: typeof fetch): Promise<Record<string, unknown> | null> {
   const response = await fetchOrNoAnswer(path, { cache: "no-store" }, fetchImpl);
@@ -83,6 +88,8 @@ export async function credentialsSignInChecked(
   } catch {
     return { ok: false, reason: "lost" };
   }
+  if (result?.error === SIGN_IN_LIMITED) return { ok: false, reason: "limited" };
+  if (result?.error === SIGN_IN_UNCHECKED) return { ok: false, reason: "unchecked" };
   if (result?.ok !== true || result.error) return { ok: false, reason: "refused" };
   if (saysCsrf(result.url)) return { ok: false, reason: "unfinished" };
   try {

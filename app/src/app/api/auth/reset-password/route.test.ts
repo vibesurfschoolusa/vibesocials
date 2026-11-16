@@ -14,7 +14,9 @@ const {
   updateUserMock,
   transactionMock,
   changeRequestDeleteManyMock,
+  clearLoginLimitMock,
 } = vi.hoisted(() => ({
+  clearLoginLimitMock: vi.fn(),
   changeRequestDeleteManyMock: vi.fn(),
   bcryptHashMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -28,6 +30,7 @@ const {
 vi.mock("bcryptjs", () => ({ default: { hash: bcryptHashMock } }));
 
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("@/lib/loginLimit", () => ({ clearLoginLimitForNetwork: clearLoginLimitMock }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -51,7 +54,7 @@ function makeTokenRow(overrides: Partial<Record<string, unknown>> = {}) {
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     usedAt: null,
     createdAt: new Date("2026-07-01T00:00:00Z"),
-    user: { emailVerifiedAt: null },
+    user: { emailVerifiedAt: null, email: "owner@example.test" },
     ...overrides,
   };
 }
@@ -74,6 +77,8 @@ beforeEach(() => {
   transactionMock.mockReset();
   changeRequestDeleteManyMock.mockReset();
   changeRequestDeleteManyMock.mockResolvedValue({ count: 0 });
+  clearLoginLimitMock.mockReset();
+  clearLoginLimitMock.mockResolvedValue(undefined);
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   bcryptHashMock.mockResolvedValue("new-hashed-password");
@@ -142,7 +147,7 @@ describe("POST /api/auth/reset-password", () => {
 
     expect(findUniqueTokenMock).toHaveBeenCalledWith({
       where: { tokenHash: hashAccountToken(RAW_TOKEN) },
-      include: { user: { select: { emailVerifiedAt: true } } },
+      include: { user: { select: { emailVerifiedAt: true, email: true } } },
     });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual(INVALID_BODY);
@@ -225,6 +230,30 @@ describe("POST /api/auth/reset-password", () => {
 
   // R6-security L2: a pending email change may have been asked for by whoever
   // the reset locks out, so its link stops working too.
+  // R32 new-customer L1: 10 wrong passwords, then Forgot password; the new
+  // password must work at once from that network, not after the window ends.
+  it("after a reset, clears the sign-in limit for that address on the network the reset came from", async () => {
+    const response = await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }, { "x-forwarded-for": "203.0.113.9, 10.0.0.1" }));
+    expect(response.status).toBe(200);
+    expect(clearLoginLimitMock).toHaveBeenCalledTimes(1);
+    expect(clearLoginLimitMock).toHaveBeenCalledWith("owner@example.test", "203.0.113.9");
+  });
+
+  it("clears nothing when the link is dead or the claim loses", async () => {
+    findUniqueTokenMock.mockResolvedValueOnce(makeTokenRow({ usedAt: new Date() }));
+    await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }));
+    updateManyTokenMock.mockResolvedValueOnce({ count: 0 });
+    await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }));
+    expect(clearLoginLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed clear never fails the reset (the password did change)", async () => {
+    clearLoginLimitMock.mockRejectedValue(new Error("store down"));
+    const response = await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
   it("deletes unused email-change requests (and so their links) in the same transaction", async () => {
     const response = await POST(req({ token: RAW_TOKEN, password: "brandnewpassword" }));
     expect(response.status).toBe(200);

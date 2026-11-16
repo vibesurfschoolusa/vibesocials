@@ -281,11 +281,30 @@ describe("Settings, Account: sign-out after a delete", () => {
   const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
   const remove = source.slice(source.indexOf("function DeleteAccount"), source.indexOf("return (", source.indexOf("function DeleteAccount")));
 
-  it("signs out in its own try, and leaves for the home page whatever it does", () => {
-    expect(remove).toMatch(/try \{\s+await signOut\(\{ callbackUrl: "\/" \}\);\s+\} catch \{[\s\S]*?afterWorkspaceChange\("\/"\);\s+\}/);
+  // R32 new-customer L2: through the checked sign-out, which never throws and
+  // never leaves for next-auth's own sign-out page; the page then loads home.
+  it("signs out through signOutChecked, and leaves for the home page whatever it says", () => {
+    expect(remove).toMatch(/await signOutChecked\(\);\s+(\/\/[^\n]*\n\s+)*afterWorkspaceChange\("\/"\);/);
     const failure = remove.slice(remove.indexOf("} catch (error) {"), remove.indexOf("return;", remove.indexOf("} catch (error) {")));
     expect(failure).toContain("ACCOUNT_MAYBE_DELETED_MESSAGE");
     expect(failure).not.toContain("signOut");
-    expect(remove.indexOf("await signOut")).toBeGreaterThan(remove.indexOf("} catch (error) {"));
+    expect(remove.indexOf("await signOutChecked")).toBeGreaterThan(remove.indexOf("} catch (error) {"));
+  });
+});
+
+// R32 new-customer L2: Change password signs this browser out through the
+// checked helper; a failure says so on the page instead of next-auth's page.
+describe("Settings, Account: sign-out after a password change", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+  const form = source.slice(source.indexOf("function ChangePasswordForm"), source.indexOf("function DeleteAccount"));
+
+  it("goes to Log in only when signOutChecked says signed out; otherwise the sign-out sentence shows", () => {
+    expect(form).not.toMatch(/\bsignOut\(/);
+    expect(form).toMatch(/signOutChecked\(\)/);
+    expect(form).toMatch(/if \(signedOut\) afterWorkspaceChange\("\/login"\);/);
+    expect(form).toContain("SIGN_OUT_FAILED_MESSAGE");
+    // The sentence shows with the success line (the form is gone by then).
+    const alert = form.indexOf('<Alert variant="success">');
+    expect(form.indexOf("signOutError", alert)).toBeGreaterThan(alert);
   });
 });

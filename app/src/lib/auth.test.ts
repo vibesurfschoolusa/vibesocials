@@ -51,6 +51,7 @@ import {
   serverSessionAuthOptions,
 } from "./auth";
 import { GOOGLE_ADDRESS_HELD_ERROR, GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "./signInErrorCodes";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
@@ -195,8 +196,11 @@ describe("authorizeCredentials — rate limits", () => {
     ]);
   });
 
+  // R32 new-customer L1: a used-up limit throws its own code, so Log in says
+  // so instead of "Invalid email or password." The buckets count every try
+  // for any address, so naming the limit says nothing about an account.
   it.each([0, 1, 2])(
-    "returns null — before any user lookup — when limit #%i denies (fail-closed store errors deny too)",
+    "throws the limit code (never null) — before any user lookup — when limit #%i denies",
     async (deniedIndex) => {
       let call = 0;
       checkRateLimitMock.mockImplementation(async () =>
@@ -205,9 +209,9 @@ describe("authorizeCredentials — rate limits", () => {
       findUniqueMock.mockResolvedValue(USER);
       compareMock.mockResolvedValue(true);
 
-      expect(
-        await authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.1.1.1")),
-      ).toBeNull();
+      await expect(
+        authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.1.1.1")),
+      ).rejects.toThrow(new Error(SIGN_IN_LIMITED));
       expect(findUniqueMock).not.toHaveBeenCalled();
     },
   );
@@ -218,13 +222,13 @@ describe("authorizeCredentials — rate limits", () => {
     compareMock.mockImplementation(async (password: string) => password === "right");
 
     for (let i = 0; i < 25; i++) {
-      await authorizeCredentials({ email: USER.email, password: `guess-${i}` }, reqFrom("6.6.6.6"));
+      await authorizeCredentials({ email: USER.email, password: `guess-${i}` }, reqFrom("6.6.6.6")).catch(() => null);
     }
     // The attacker's own (email, IP) bucket is exhausted...
     compareMock.mockClear();
-    expect(
-      await authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("6.6.6.6")),
-    ).toBeNull();
+    await expect(
+      authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("6.6.6.6")),
+    ).rejects.toThrow(SIGN_IN_LIMITED);
     expect(compareMock).not.toHaveBeenCalled();
 
     // ...but the victim, from their own IP, still signs in.
@@ -249,9 +253,39 @@ describe("authorizeCredentials — rate limits", () => {
       }
     }
 
-    expect(
-      await authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.2.3.4")),
-    ).toBeNull();
+    await expect(
+      authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.2.3.4")),
+    ).rejects.toThrow(SIGN_IN_LIMITED);
+  });
+});
+
+// R32 new-customer L1: next-auth puts a thrown Error's message into the
+// answer's ?error= (core/routes/callback.js), so the database's own message
+// never goes out; a fixed code does, and Log in words it.
+describe("authorizeCredentials — a password that couldn't be checked", () => {
+  it("a database error throws the fixed code, not the database's message", async () => {
+    findUniqueMock.mockRejectedValue(new Error("Can't reach database server at db.internal:5432"));
+    const thrown = await authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.1.1.1")).catch(
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(SIGN_IN_UNCHECKED);
+  });
+
+  it("a failing password compare throws the same code", async () => {
+    findUniqueMock.mockResolvedValue(USER);
+    compareMock.mockRejectedValue(new Error("bcrypt failed"));
+    await expect(
+      authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.1.1.1")),
+    ).rejects.toThrow(new Error(SIGN_IN_UNCHECKED));
+  });
+
+  it("the codes are plain words that survive a URL's query unchanged", () => {
+    for (const code of [SIGN_IN_LIMITED, SIGN_IN_UNCHECKED]) {
+      expect(code).toMatch(/^[A-Za-z]+$/);
+      expect(new URLSearchParams(`error=${encodeURIComponent(code)}`).get("error")).toBe(code);
+    }
+    expect(SIGN_IN_LIMITED).not.toBe(SIGN_IN_UNCHECKED);
   });
 });
 

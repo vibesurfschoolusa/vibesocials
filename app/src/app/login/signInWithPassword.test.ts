@@ -4,11 +4,14 @@ const { getSessionMock } = vi.hoisted(() => ({ getSessionMock: vi.fn(async () =>
 vi.mock("next-auth/react", () => ({ getSession: getSessionMock, signOut: vi.fn() }));
 
 import { signInReachable } from "@/lib/signInChecked";
+import { SIGN_IN_LIMITED, SIGN_IN_UNCHECKED } from "@/lib/signInErrorCodes";
 
 import {
   GOOGLE_NOT_SENT_MESSAGE,
   LOGIN_FAILED_MESSAGE,
+  LOGIN_LIMITED_MESSAGE,
   LOGIN_NOT_SENT_MESSAGE,
+  LOGIN_UNCHECKED_MESSAGE,
   LOGIN_UNFINISHED_MESSAGE,
   LOGIN_UNREACHABLE_MESSAGE,
   REGISTER_SIGN_IN_LOST_MESSAGE,
@@ -51,6 +54,29 @@ describe("signInWithPassword", () => {
       error: LOGIN_FAILED_MESSAGE,
     });
     expect(LOGIN_FAILED_MESSAGE).toBe("Invalid email or password.");
+  });
+
+  // R32 new-customer L1: a used-up limit or a database blip is not a wrong password.
+  it("says the sign-in limit is used up, in its own sentence", async () => {
+    const signIn = vi.fn(async () => ({ ok: false, error: SIGN_IN_LIMITED, status: 401, url: null }));
+    await expect(signInWithPassword(signIn, "a@example.test", "x")).resolves.toEqual({ ok: false, error: LOGIN_LIMITED_MESSAGE });
+    expect(LOGIN_LIMITED_MESSAGE).toBe("Too many sign-in tries from this network. Wait 15 minutes, then try again.");
+  });
+
+  it("says the password couldn't be checked, in its own sentence", async () => {
+    const signIn = vi.fn(async () => ({ ok: false, error: SIGN_IN_UNCHECKED, status: 401, url: null }));
+    await expect(signInWithPassword(signIn, "a@example.test", "x")).resolves.toEqual({ ok: false, error: LOGIN_UNCHECKED_MESSAGE });
+    expect(LOGIN_UNCHECKED_MESSAGE).toBe("We couldn't check your password just now. Try again in a minute.");
+  });
+
+  it("Register's automatic sign-in stays on the form for both, never sending the person to Log in as refused", async () => {
+    for (const error of [SIGN_IN_LIMITED, SIGN_IN_UNCHECKED]) {
+      const signIn = vi.fn(async () => ({ ok: false, error, status: 401, url: null }));
+      await expect(signInAfterRegister(signIn, "a@example.test", "secret12", providersAnswer)).resolves.toEqual({
+        ok: false,
+        error: REGISTER_SIGN_IN_UNFINISHED_MESSAGE,
+      });
+    }
   });
 
   it("gives a plain sentence when the call itself fails", async () => {

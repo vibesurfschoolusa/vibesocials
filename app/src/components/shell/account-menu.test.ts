@@ -10,7 +10,7 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), e
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { SIGN_OUT_FAILED_MESSAGE } from "@/app/login/signed-in-notice";
+import { SIGN_OUT_FAILED_MESSAGE } from "@/lib/signOutChecked";
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 import {
@@ -260,28 +260,29 @@ describe("AccountMenu: Create workspace when the answer is lost", () => {
 describe("AccountMenu: Sign out", () => {
   const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
 
-  it("success: signs out to the home page and closes the menu, no toast", async () => {
-    const signOutFn = vi.fn(async () => undefined);
+  // R32 new-customer L2: through the one checked sign-out; the page leaves
+  // only after it, so next-auth's own sign-out page never shows.
+  it("success: closes the menu and loads the home page, no toast", async () => {
     const close = vi.fn();
     const error = vi.fn();
-    await signOutFromMenu(signOutFn, close, error);
-    expect(signOutFn).toHaveBeenCalledWith({ callbackUrl: "/" });
+    const leave = vi.fn();
+    await signOutFromMenu(async () => true, close, error, leave);
     expect(close).toHaveBeenCalledTimes(1);
+    expect(leave).toHaveBeenCalledWith("/");
     expect(error).not.toHaveBeenCalled();
   });
 
-  it("a failure: the sign-out lost-answer toast, as Log in and Register's notice, and the menu stays open", async () => {
-    const signOutFn = vi.fn(async () => {
-      throw new TypeError("Failed to fetch");
-    });
+  it("a failure: the sign-out lost-answer toast, as Log in and Register's notice, and the menu stays open on this page", async () => {
     const close = vi.fn();
     const error = vi.fn();
-    await signOutFromMenu(signOutFn, close, error);
+    const leave = vi.fn();
+    await signOutFromMenu(async () => false, close, error, leave);
     expect(error).toHaveBeenCalledWith(SIGN_OUT_FAILED_MESSAGE);
     expect(close).not.toHaveBeenCalled();
+    expect(leave).not.toHaveBeenCalled();
   });
 
   it("the menu's Sign out button goes through it", () => {
-    expect(source).toMatch(/signOutFromMenu\(signOut, \(\) => setOpen\(false\), toast\.error\)/);
+    expect(source).toMatch(/signOutFromMenu\(signOutChecked, \(\) => setOpen\(false\), toast\.error\)/);
   });
 });
