@@ -4,7 +4,9 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { answerLostText } from "@/lib/answerLost";
 import { cn } from "@/lib/cn";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,8 +61,21 @@ const noSubscription = () => () => {};
 
 /** R5 pages L8: what the dialog says when Connect didn't work. */
 export const PENDING_CONNECT_FAILED = "That account wasn't connected. Please press Connect again in a minute.";
-export const PENDING_CONNECT_OFFLINE =
-  "We couldn't reach Vibe Socials, so nothing was connected. Check your internet connection and press Connect again.";
+/**
+ * R28 NN2 (new-customer L2): the choice may have been saved before the answer
+ * was lost or a gateway answered 5xx, and Connect again would then say the
+ * choice expired. Cancel leaves for the connections list, where it shows.
+ */
+export const PENDING_CONNECT_MAYBE = answerLostText(
+  "the account may have been connected",
+  "Press Cancel, then look for it in your connections before you connect again.",
+);
+
+/** What a refused or unreadable Connect answer says. */
+export function pendingConnectFailureText(status: number, data: { error?: string } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  return status >= 500 || (status >= 200 && status < 300) ? PENDING_CONNECT_MAYBE : PENDING_CONNECT_FAILED;
+}
 
 /**
  * Opens when Settings has `?choose=<id>`: a Facebook, Instagram or LinkedIn
@@ -130,7 +145,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     setConnectError(null);
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchOrNoAnswer(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId: selectedId, workspaceId }),
@@ -145,7 +160,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
         return;
       }
       if (!response.ok || !data?.platform) {
-        setConnectError(data?.error ?? PENDING_CONNECT_FAILED);
+        setConnectError(pendingConnectFailureText(response.status, data));
         setBusy(null);
         return;
       }
@@ -155,7 +170,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
       // R7 review 4: with same_end when the saved LinkedIn sign-in still ends within a week.
       router.replace(`/settings?${connectedSuccessQuery(data.platform, data.sameEnd === true)}`);
     } catch {
-      setConnectError(PENDING_CONNECT_OFFLINE);
+      setConnectError(PENDING_CONNECT_MAYBE);
       setBusy(null);
     }
   }
@@ -164,7 +179,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     if (busy) return;
     setBusy("cancel");
     try {
-      await fetch(endpoint, {
+      await fetchOrNoAnswer(endpoint, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId }),

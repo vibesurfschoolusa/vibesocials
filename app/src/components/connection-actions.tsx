@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { answerLostText } from "@/lib/answerLost";
 import { platformLabel } from "@/lib/platforms";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
@@ -143,15 +144,21 @@ export async function fetchScheduledCount(
   }
 }
 
-export const DISCONNECT_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so the account is still connected. Check your internet connection and try again.";
-export const DISCONNECT_FAILED_MESSAGE =
-  "The account couldn't be disconnected and is still connected. Please try again in a minute.";
+/**
+ * R28 NN2 (pages L1): the route may have removed the connection before the
+ * answer was lost or a gateway answered 5xx, so never "still connected"; a
+ * Switch account then finds it gone. Say where to check.
+ */
+export const DISCONNECT_MAYBE_MESSAGE = answerLostText(
+  "the account may already be disconnected",
+  "Reload this page to see whether it is connected.",
+);
 
 /**
  * The disconnect call. Throws an Error whose message the person can act on:
  * the route's own refusal (another workspace's tab, not the owner), or ours
- * for a network or server failure instead of the browser's "Failed to fetch".
+ * for a lost answer or a server failure, either of which may follow the
+ * removal, instead of the browser's "Failed to fetch".
  */
 export async function requestDisconnect(
   fetchImpl: typeof fetch,
@@ -166,11 +173,11 @@ export async function requestDisconnect(
       fetchImpl,
     );
   } catch {
-    throw new Error(DISCONNECT_OFFLINE_MESSAGE);
+    throw new Error(DISCONNECT_MAYBE_MESSAGE);
   }
   if (response.ok) return;
   const data = (await response.json().catch(() => null)) as { error?: string } | null;
-  throw new Error(response.status < 500 && data?.error ? data.error : DISCONNECT_FAILED_MESSAGE);
+  throw new Error(response.status < 500 && data?.error ? data.error : DISCONNECT_MAYBE_MESSAGE);
 }
 
 /**
@@ -242,7 +249,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Disconnect] Error:", err);
-      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
+      toast.error(err instanceof Error ? err.message : DISCONNECT_MAYBE_MESSAGE);
       throw new ConfirmFailureShown("DISCONNECT_FAILED");
     }
     toast.success(
@@ -261,7 +268,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Switch Account] Error:", err);
-      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
+      toast.error(err instanceof Error ? err.message : DISCONNECT_MAYBE_MESSAGE);
       throw new ConfirmFailureShown("DISCONNECT_FAILED");
     }
   }
@@ -274,7 +281,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Switch Account] Error:", err);
-      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
+      toast.error(err instanceof Error ? err.message : DISCONNECT_MAYBE_MESSAGE);
       throw new ConfirmFailureShown("DISCONNECT_FAILED");
     }
     window.location.href = authUrl;
@@ -290,7 +297,7 @@ export function ConnectionActions({
       await disconnect();
     } catch (err) {
       console.error("[Switch Account] Error:", err);
-      toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
+      toast.error(err instanceof Error ? err.message : DISCONNECT_MAYBE_MESSAGE);
       setSwitching(false);
       return;
     }

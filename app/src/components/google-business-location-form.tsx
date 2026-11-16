@@ -8,7 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { answerLostText } from "@/lib/answerLost";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { SignInAgainLink } from "./gbp-sign-in-link";
@@ -38,12 +40,17 @@ export const LOCATION_MESSAGES = {
   noLocations:
     "Google sent no locations for this Google account. Check in Google Business Profile that this account manages your listing.",
   saveFailed: "The location wasn't saved. Please try again in a minute.",
-  saveOffline:
-    "We couldn't reach Vibe Socials, so the location wasn't saved. Check your internet connection and try again.",
+  // R28 NN2 (new-customer L2): the save may have reached the server.
+  saveLost: answerLostText("the location may have been saved", "Reload this page to see which location is saved."),
   loadFailed: "Google didn't send the list of locations. Please press Fetch locations from Google again in a minute.",
   loadOffline:
     "We couldn't reach Vibe Socials, so the locations weren't loaded. Check your internet connection and try again.",
 } as const;
+
+/** A refused save without the route's sentence: an unreadable 5xx may come after the save. */
+export function locationSaveFallback(status: number): string {
+  return status >= 500 ? LOCATION_MESSAGES.saveLost : LOCATION_MESSAGES.saveFailed;
+}
 
 /**
  * The code both location routes send when the Google grant is dead (gbpLocations.ts,
@@ -206,7 +213,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     setSaveFailure(null);
 
     try {
-      const response = await fetch("/api/connections/google_business_profile/location", {
+      const response = await fetchOrNoAnswer("/api/connections/google_business_profile/location", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -219,7 +226,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         | null;
 
       if (!response.ok) {
-        const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
+        const failed = locationFailure(data, locationSaveFallback(response.status), workspaceId);
         setSaveFailure({ from, status: { message: failed.message, signInUrl: failed.signInUrl, reload: failed.reload } });
         setPicked(pickAfterSave(name, from, false));
         setSavingFrom(null);
@@ -237,7 +244,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       // Settings' "Connected as" label is server-rendered from the saved name.
       router.refresh();
     } catch {
-      setSaveFailure({ from, status: { message: LOCATION_MESSAGES.saveOffline, signInUrl: null } });
+      setSaveFailure({ from, status: { message: LOCATION_MESSAGES.saveLost, signInUrl: null } });
       setPicked(pickAfterSave(name, from, false));
       setSavingFrom(null);
     }

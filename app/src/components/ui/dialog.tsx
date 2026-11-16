@@ -18,6 +18,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button, type ButtonVariant } from "@/components/ui/button";
 import { focusFallbacks, restoreFocus, watchFocusAfterClose } from "@/lib/focusAfter";
+import { answerLostText } from "@/lib/answerLost";
 import { isNoAnswer } from "@/lib/requestNoAnswer";
 
 const FOCUSABLE_SELECTOR =
@@ -318,23 +319,30 @@ export class ConfirmFailureShown extends Error {
   }
 }
 
-export const CONFIRM_UNREACHABLE_MESSAGE =
-  "We couldn't reach Vibe Socials, so nothing changed. Check your connection and try again.";
+/**
+ * R28 NN2: a lost answer may follow a request the server carried out, so the
+ * default never says nothing changed. Only a browser that was offline at the
+ * press sent nothing (CONFIRM_NOTHING_SENT_MESSAGE).
+ */
+export const CONFIRM_UNREACHABLE_MESSAGE = answerLostText("this may have gone through", "Then reload the page to see.");
+export const CONFIRM_NOTHING_SENT_MESSAGE = "You're offline, so nothing was sent. Reconnect, then try again.";
 export const CONFIRM_FAILED_MESSAGE = "Something went wrong, nothing changed. Try again.";
 
 /**
  * What ConfirmDialog (and a page's own Create link) says when a request
  * fails (R25 new-customer L1): nothing for a ConfirmFailureShown; for a request
  * that got no answer (lib/requestNoAnswer: a rejection of the fetch call
- * itself, not any TypeError) `unreachableText`; for anything else a plain
+ * itself, not any TypeError) `unreachableText`, or that nothing was sent when
+ * the browser was offline at the press (`onLineAtPress` false); for anything else a plain
  * sentence, never the raw error, and the error goes to the console.
  */
 export function confirmFailureText(
   error: unknown,
   unreachableText: string = CONFIRM_UNREACHABLE_MESSAGE,
+  onLineAtPress = true,
 ): string | null {
   if (error instanceof ConfirmFailureShown) return null;
-  if (isNoAnswer(error)) return unreachableText;
+  if (isNoAnswer(error)) return onLineAtPress === false ? CONFIRM_NOTHING_SENT_MESSAGE : unreachableText;
   console.error("[ConfirmDialog] Unexpected failure:", error);
   return CONFIRM_FAILED_MESSAGE;
 }
@@ -356,8 +364,8 @@ export interface ConfirmDialogProps {
    */
   confirmDisabled?: boolean;
   /**
-   * What the dialog says when the request never left, if "nothing changed"
-   * isn't sure (Queue's Publish may have gone out).
+   * What the dialog says when the answer was lost, naming what may have
+   * happened and where to check; the default says it may have gone through.
    */
   unreachableText?: string;
 }
@@ -392,12 +400,14 @@ export function ConfirmDialog({
   const handleConfirm = useCallback(async () => {
     setBusy(true);
     setFailure(null);
+    // Read at the press: offline now means the request never left.
+    const onLineAtPress = typeof navigator === "undefined" || navigator.onLine !== false;
     try {
       await onConfirm();
       onOpenChange(false);
     } catch (error) {
       // Stays open for a retry, and never silent (R25 new-customer L1).
-      setFailure(confirmFailureText(error, unreachableText));
+      setFailure(confirmFailureText(error, unreachableText, onLineAtPress));
     } finally {
       setBusy(false);
     }

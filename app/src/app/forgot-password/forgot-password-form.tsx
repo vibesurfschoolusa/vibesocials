@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { forgotPasswordOutcome } from "@/lib/forgotPasswordOutcome";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
  * Request-a-reset form. Deliberately reveals NOTHING about whether the address
@@ -26,17 +27,19 @@ export function ForgotPasswordForm() {
     setError(null);
     setLoading(true);
     let status: number | null = null;
+    let data: { error?: unknown } | null = null;
     try {
-      const response = await fetch("/api/auth/forgot-password", {
+      const response = await fetchOrNoAnswer("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
       status = response.status;
+      data = (await response.json().catch(() => null)) as { error?: unknown } | null;
     } catch {
       // No response at all (network failure): status stays null.
     }
-    const outcome = forgotPasswordOutcome(status);
+    const outcome = forgotPasswordOutcome(status, data);
     if (outcome.kind === "sent") {
       setSubmitted(true);
     } else {
@@ -45,33 +48,42 @@ export function ForgotPasswordForm() {
     setLoading(false);
   }
 
-  if (submitted) {
-    return (
-      <Alert variant="success">
-        If an account exists for that address, we sent a reset link.
-      </Alert>
-    );
-  }
+  // R28 NN2 (pages L6): on the page from the first render, so the
+  // confirmation that replaces the form is announced; only its text changes.
+  const statusLine = (
+    <div role="status" className="empty:sr-only">
+      {submitted ? (
+        <Alert variant="success" role={undefined}>
+          If an account exists for that address, we sent a reset link.
+        </Alert>
+      ) : null}
+    </div>
+  );
+
+  if (submitted) return <>{statusLine}</>;
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-1.5">
-        <Label htmlFor="email">Email</Label>
-        <Input
-          id="email"
-          type="email"
-          autoComplete="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-      </div>
+    <>
+      {statusLine}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
 
-      {error ? <Alert variant="danger">{error}</Alert> : null}
+        {error ? <Alert variant="danger">{error}</Alert> : null}
 
-      <Button type="submit" loading={loading} className="w-full">
-        Send reset link
-      </Button>
-    </form>
+        <Button type="submit" loading={loading} className="w-full">
+          Send reset link
+        </Button>
+      </form>
+    </>
   );
 }

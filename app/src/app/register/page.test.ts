@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,10 +111,26 @@ describe("Register page landmarks and failure sentences", () => {
   });
 
   it("says what happened and what to do when sign-up fails", async () => {
-    const { REGISTER_FAILED_MESSAGE, REGISTER_OFFLINE_MESSAGE } = await import("./register-form");
+    const { REGISTER_FAILED_MESSAGE } = await import("./register-form");
     expect(REGISTER_FAILED_MESSAGE).toContain("Nothing was saved");
     expect(REGISTER_FAILED_MESSAGE).toContain("try again");
-    expect(REGISTER_OFFLINE_MESSAGE).toContain("Check your internet connection");
+  });
+
+  // R28 NN2 (new-customer L2): the account may have been made before the
+  // answer was lost or a gateway answered 5xx; signing up again would then
+  // not make one. Log in tells.
+  it("a lost answer or an unreadable 5xx: the account may have been created", async () => {
+    const { REGISTER_FAILED_MESSAGE, REGISTER_MAYBE_CREATED_MESSAGE, registerFailureText } = await import("./register-form");
+    expect(REGISTER_MAYBE_CREATED_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so your account may have been created. If your connection dropped, reconnect first. Then press Log in below and use this email and password before you sign up again.",
+    );
+    expect(registerFailureText(502, null)).toBe(REGISTER_MAYBE_CREATED_MESSAGE);
+    expect(registerFailureText(400, null)).toBe(REGISTER_FAILED_MESSAGE);
+    expect(registerFailureText(400, { error: "Password must be at least 8 characters." })).toBe("Password must be at least 8 characters.");
+    const source = readFileSync(join(__dirname, "register-form.tsx"), "utf8");
+    expect(source).toMatch(/await fetchOrNoAnswer\("\/api\/auth\/register"/);
+    expect(source).toMatch(/catch \{\s+setError\(REGISTER_MAYBE_CREATED_MESSAGE\);/);
+    expect(source).toMatch(/setError\(registerFailureText\(response\.status, data\)\)/);
   });
 
   it("caps the name field at what the workspace name can hold", () => {

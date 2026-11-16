@@ -30,7 +30,8 @@ import {
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { ConfirmDialog, ConfirmFailureShown, confirmFailureText } from "@/components/ui/dialog";
 import { focusAfterPress } from "@/lib/focusAfter";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -90,9 +91,30 @@ export const MEDIA_MESSAGES = {
   noFile: "Choose a photo or video first. Then press Upload.",
   uploadNetwork: "Couldn't upload the file. Check your connection and try again.",
   uploadFailed: "Couldn't save the upload. Upload the file again.",
-  deleteNetwork: "Couldn't delete the file. Check your connection and try again.",
+  // R28 NN2: the save and the delete may have gone through when the answer is lost.
+  saveLost: answerLostText("the file may have been saved to your library", "Reload this page to see it before you upload it again."),
+  deleteLost: answerLostText("the file may have been deleted", "Reload this page to see."),
   deleteFailed: "Couldn't delete the file. Try again in a moment.",
 } as const;
+
+/** A refused delete: the route's sentence, else an unreadable 5xx may come after the delete. */
+export function mediaDeleteFailureText(status: number, data: { error?: string } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  return status >= 500 ? MEDIA_MESSAGES.deleteLost : MEDIA_MESSAGES.deleteFailed;
+}
+
+/*
+ * R28 NN2 (client-journey L1, pages L1): the route turns the old upload link
+ * off before it answers, so a lost answer may leave a new link, or none.
+ */
+export const UPLOAD_LINK_MAYBE_MADE_MESSAGE = answerLostText(
+  "a new upload link may have been made, which turns any old one off",
+  "Reload this page and copy the link before you send it.",
+);
+export const UPLOAD_LINK_MAYBE_OFF_MESSAGE = answerLostText(
+  "the upload link may have been turned off",
+  "Reload this page to see.",
+);
 
 /**
  * An upload's failure as a sentence: a network failure (fetch throws a
@@ -100,6 +122,8 @@ export const MEDIA_MESSAGES = {
  * (lib/uploadFailure.ts, lib/prepareUploadFile.ts) as they are.
  */
 export function uploadErrorMessage(error: unknown): string {
+  // The file reached storage; only the answer to saving it to the library was lost.
+  if (isNoAnswer(error)) return MEDIA_MESSAGES.saveLost;
   if (error instanceof TypeError || !(error instanceof Error) || !error.message) return MEDIA_MESSAGES.uploadNetwork;
   // R24: offline, the upload and the save read as this page's one sentence.
   if (error.message === UPLOAD_OFFLINE_MESSAGE) return MEDIA_MESSAGES.uploadNetwork;
@@ -414,39 +438,78 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
     };
   }, [workspaceId]);
 
+  // client-journey L1: after a lost answer the panel reads the link again, so
+  // it shows the one that works. A failed read keeps what is shown; the
+  // sentence says to reload.
+  const readLink = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/workspaces/upload-link?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const data = (await response.json().catch(() => null)) as { link?: UploadLinkDto | null } | null;
+      if (response.ok && data && "link" in data) setLink(data.link ?? null);
+    } catch {
+      // Still no connection: the sentence already says to reload.
+    }
+  }, [workspaceId]);
+
   // Create and Replace are the same call: the server revokes any old link.
   const makeLink = useCallback(async () => {
-    const response = await fetchOrNoAnswer("/api/workspaces/upload-link", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    let response: Response;
+    try {
+      response = await fetchOrNoAnswer("/api/workspaces/upload-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+    } catch (error) {
+      if (isNoAnswer(error)) void readLink();
+      throw error;
+    }
     const data = (await response.json().catch(() => null)) as
       | { link?: UploadLinkDto; error?: string }
       | null;
     if (!response.ok || !data?.link) {
-      toast.error(data?.error ?? "Couldn't make the link. Try again.");
+      if (data?.error) {
+        toast.error(data.error);
+      } else if (response.status >= 500 || response.ok) {
+        toast.error(UPLOAD_LINK_MAYBE_MADE_MESSAGE);
+        void readLink();
+      } else {
+        toast.error("Couldn't make the link. Try again.");
+      }
       throw new ConfirmFailureShown("CREATE_FAILED");
     }
     setLink(data.link);
     toast.success("New link ready. Copy it and send it to your client.");
-  }, [toast, workspaceId]);
+  }, [readLink, toast, workspaceId]);
 
   const turnOff = useCallback(async () => {
-    const response = await fetchOrNoAnswer("/api/workspaces/upload-link", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    let response: Response;
+    try {
+      response = await fetchOrNoAnswer("/api/workspaces/upload-link", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+    } catch (error) {
+      if (isNoAnswer(error)) void readLink();
+      throw error;
+    }
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       // A 409 carries the library's "switched workspace" sentence: shown as is.
-      toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
+      if (data?.error) {
+        toast.error(data.error);
+      } else if (response.status >= 500) {
+        toast.error(UPLOAD_LINK_MAYBE_OFF_MESSAGE);
+        void readLink();
+      } else {
+        toast.error("Couldn't turn the link off. Try again.");
+      }
       throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setLink(null);
     toast.success("The link is off. It no longer works.");
-  }, [toast, workspaceId]);
+  }, [readLink, toast, workspaceId]);
 
   async function handleCreate(event?: MouseEvent<HTMLButtonElement>) {
     const pressed = event?.currentTarget ?? null;
@@ -456,7 +519,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       // R27 MM3: Create link is replaced by the new link; focus goes to its Copy button.
       focusAfterPress(pressed, () => copyRef.current);
     } catch (error) {
-      const text = confirmFailureText(error);
+      const text = confirmFailureText(error, UPLOAD_LINK_MAYBE_MADE_MESSAGE);
       if (text) toast.error(text);
     } finally {
       setBusy(false);
@@ -508,6 +571,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
           confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
           destructive
           onConfirm={confirm === "replace" ? makeLink : turnOff}
+          unreachableText={confirm === "replace" ? UPLOAD_LINK_MAYBE_MADE_MESSAGE : UPLOAD_LINK_MAYBE_OFF_MESSAGE}
         />
       }
     />
@@ -758,7 +822,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         throw await explainUploadFailure(uploadError);
       });
 
-      const response = await fetch("/api/media", {
+      const response = await fetchOrNoAnswer("/api/media", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // 2026-11-02 scale audit (correctness): sends the workspace this page was
@@ -825,9 +889,9 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
 
     let response: Response;
     try {
-      response = await fetch(`/api/media/${target.id}`, { method: "DELETE" });
+      response = await fetchOrNoAnswer(`/api/media/${target.id}`, { method: "DELETE" });
     } catch {
-      toast.error(MEDIA_MESSAGES.deleteNetwork);
+      toast.error(MEDIA_MESSAGES.deleteLost);
       throw new ConfirmFailureShown("DELETE_FAILED");
     }
 
@@ -835,7 +899,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       // Covers the 409 "still referenced by an active post" case: the
       // server's message already states the reason, so it's shown as-is.
-      toast.error(data?.error ?? MEDIA_MESSAGES.deleteFailed);
+      toast.error(mediaDeleteFailureText(response.status, data));
       throw new ConfirmFailureShown("DELETE_FAILED");
     }
 

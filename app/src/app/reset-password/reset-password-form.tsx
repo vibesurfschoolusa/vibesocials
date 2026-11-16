@@ -107,6 +107,18 @@ export function ResetPasswordForm() {
     else setError(outcome.message);
   }
 
+  // R28 NN2 (pages L6): in the card from the form's first render, so the
+  // success that replaces the form is announced; only its text changes.
+  const statusLine = (
+    <div role="status" className="empty:sr-only">
+      {done ? (
+        <Alert variant="success" role={undefined} className="mb-4">
+          You can now log in with your new password.
+        </Alert>
+      ) : null}
+    </div>
+  );
+
   // Before the effect resolves the fragment, show a neutral loading state so
   // the prerendered HTML never flashes the "invalid link" card.
   if (!tokenReady) {
@@ -124,9 +136,7 @@ export function ResetPasswordForm() {
   if (done) {
     return (
       <CardShell title="Password updated" description="Your password has been reset.">
-        <Alert variant="success" className="mb-4">
-          You can now log in with your new password.
-        </Alert>
+        {statusLine}
         <Link
           href="/login"
           className="inline-block font-semibold text-primary outline-none hover:underline focus-visible:underline"
@@ -139,6 +149,7 @@ export function ResetPasswordForm() {
 
   return (
     <CardShell title="Choose a new password" description="Enter a new password for your account.">
+      {statusLine}
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
           <Label htmlFor="password">New password</Label>

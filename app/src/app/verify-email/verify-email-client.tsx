@@ -108,8 +108,16 @@ export function VerifyResult({
           {view.message}
         </p>
       )}
-      {resend.result ? (
-        <Alert variant={resend.result.ok ? "success" : "danger"} className="mt-4">
+      {/* R28 NN2 (pages L6): on the card from the first render, so "We sent a new link" is announced. */}
+      <div role="status" className="empty:sr-only">
+        {resend.result?.ok ? (
+          <Alert variant="success" role={undefined} className="mt-4">
+            {resend.result.message}
+          </Alert>
+        ) : null}
+      </div>
+      {resend.result && !resend.result.ok ? (
+        <Alert variant="danger" className="mt-4">
           {resend.result.message}
         </Alert>
       ) : null}

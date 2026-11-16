@@ -44,7 +44,13 @@ describe("undoEmailChange", () => {
     }) as unknown as typeof fetch;
     const view = await undoEmailChange(offline, "tok");
     expect(view.offerRetry).toBe(true);
-    expect(view.message).toContain("Check your internet connection");
+    // R28 NN2: the undo may have gone through before the answer was lost.
+    expect(view.title).toBe("Vibe Socials didn't answer");
+    expect(view.message).toBe(
+      "Vibe Socials' answer didn't reach you, so the change may have been undone. If your connection dropped, reconnect first. Then press Try again to see.",
+    );
+    const failed = await undoEmailChange(respond(502, null), "tok");
+    expect(failed.message).toBe("The change may not have been undone. Press Try again in a minute to see.");
   });
 
   it("calls a link without a token not valid, without asking the server", async () => {

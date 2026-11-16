@@ -8,6 +8,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
+  confirmFailureText,
   Dialog,
   DialogBody,
   DialogDescription,
@@ -51,6 +52,22 @@ export const PASSWORD_MAYBE_CHANGED_MESSAGE = answerLostText(
 export function passwordFailureText(status: number, data: { error?: unknown } | null): string {
   if (typeof data?.error === "string" && data.error) return data.error;
   return status >= 500 ? PASSWORD_MAYBE_CHANGED_MESSAGE : PASSWORD_NOT_CHANGED;
+}
+
+/**
+ * R28 NN2 (new-customer L2): deleting can't be undone, and the answer can be
+ * lost after the account is gone. A retry then can't find it, so reload first.
+ */
+export const ACCOUNT_MAYBE_DELETED_MESSAGE = answerLostText(
+  "your account may have been deleted",
+  "Reload this page first, and try again only if you're still signed in.",
+);
+
+/** What a refused or unreadable delete-account answer says. */
+export function accountDeleteFailureText(status: number, data: { error?: string; until?: string } | null): string {
+  const readable = (typeof data?.error === "string" && data.error !== "") || typeof data?.until === "string";
+  if (status >= 500 && !readable) return ACCOUNT_MAYBE_DELETED_MESSAGE;
+  return accountDeleteRefusal(data, "Could not delete your account. Try again.");
 }
 
 /** R5 new-customer L4: nothing changes until the link sent to the new address is followed. */
@@ -172,76 +189,90 @@ export function ChangeEmailForm({ email, startOpen = false }: { email: string; s
     }
   }
 
-  if (sentTo) {
-    return <Alert variant="success">{emailChangeSentMessage(sentTo, email)}</Alert>;
-  }
+  const status = (
+    <div role="status" className="empty:sr-only">
+      {sentTo ? (
+        <Alert variant="success" role={undefined}>
+          {emailChangeSentMessage(sentTo, email)}
+        </Alert>
+      ) : null}
+    </div>
+  );
+
+  if (sentTo) return <>{status}</>;
 
   if (!open) {
     return (
-      <div>
-        <Button
-          ref={changeEmailRef}
-          size="sm"
-          variant="outline"
-          onClick={(event) => {
-            // R27 MM3: the button is replaced by the form; focus goes to its first field.
-            focusAfterPress(event.currentTarget, () => newEmailRef.current);
-            setOpen(true);
-          }}
-        >
-          Change email
-        </Button>
-      </div>
+      <>
+        {status}
+        <div>
+          <Button
+            ref={changeEmailRef}
+            size="sm"
+            variant="outline"
+            onClick={(event) => {
+              // R27 MM3: the button is replaced by the form; focus goes to its first field.
+              focusAfterPress(event.currentTarget, () => newEmailRef.current);
+              setOpen(true);
+            }}
+          >
+            Change email
+          </Button>
+        </div>
+      </>
     );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="new-email">New email</Label>
-        <Input
-          ref={newEmailRef}
-          id="new-email"
-          type="email"
-          autoComplete="email"
-          required
-          value={newEmail}
-          onChange={(event) => setNewEmail(event.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">
-          We send a link to this address. The change is made when you open it, and every device is signed out.
-        </p>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="change-email-password">Current password</Label>
-        <Input
-          id="change-email-password"
-          type="password"
-          autoComplete="current-password"
-          required
-          value={currentPassword}
-          onChange={(event) => setCurrentPassword(event.target.value)}
-        />
-      </div>
-      {error ? <FormError message={error} /> : null}
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
-          Send confirmation link
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={(event) => {
-            focusAfterPress(event.currentTarget, () => changeEmailRef.current);
-            setOpen(false);
-          }}
-          disabled={busy}
-        >
-          Cancel
-        </Button>
-      </div>
-    </form>
+    <>
+      {status}
+      <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="new-email">New email</Label>
+          <Input
+            ref={newEmailRef}
+            id="new-email"
+            type="email"
+            autoComplete="email"
+            required
+            value={newEmail}
+            onChange={(event) => setNewEmail(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            We send a link to this address. The change is made when you open it, and every device is signed out.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="change-email-password">Current password</Label>
+          <Input
+            id="change-email-password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+          />
+        </div>
+        {error ? <FormError message={error} /> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" size="sm" variant="outline" loading={busy} disabled={!newEmail || !currentPassword}>
+            Send confirmation link
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={(event) => {
+              focusAfterPress(event.currentTarget, () => changeEmailRef.current);
+              setOpen(false);
+            }}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </>
   );
 }
 
@@ -339,47 +370,58 @@ function ChangePasswordForm() {
     }
   }
 
-  if (changed) {
-    return <Alert variant="success">{PASSWORD_CHANGED}</Alert>;
-  }
+  const status = (
+    <div role="status" className="empty:sr-only">
+      {changed ? (
+        <Alert variant="success" role={undefined}>
+          {PASSWORD_CHANGED}
+        </Alert>
+      ) : null}
+    </div>
+  );
+
+  if (changed) return <>{status}</>;
 
   return (
-    <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="current-password">Current password</Label>
-        <Input
-          id="current-password"
-          type="password"
-          autoComplete="current-password"
-          value={currentPassword}
-          onChange={(event) => setCurrentPassword(event.target.value)}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="new-password">New password</Label>
-        <Input
-          id="new-password"
-          type="password"
-          autoComplete="new-password"
-          minLength={8}
-          value={newPassword}
-          onChange={(event) => setNewPassword(event.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">At least 8 characters.</p>
-      </div>
-      {error ? <FormError message={error} /> : null}
-      <div>
-        <Button
-          type="submit"
-          size="sm"
-          variant="outline"
-          loading={busy}
-          disabled={!currentPassword || !newPassword}
-        >
-          Change password
-        </Button>
-      </div>
-    </form>
+    <>
+      {status}
+      <form onSubmit={handleSubmit} className="flex max-w-sm flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="current-password">Current password</Label>
+          <Input
+            id="current-password"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="new-password">New password</Label>
+          <Input
+            id="new-password"
+            type="password"
+            autoComplete="new-password"
+            minLength={8}
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">At least 8 characters.</p>
+        </div>
+        {error ? <FormError message={error} /> : null}
+        <div>
+          <Button
+            type="submit"
+            size="sm"
+            variant="outline"
+            loading={busy}
+            disabled={!currentPassword || !newPassword}
+          >
+            Change password
+          </Button>
+        </div>
+      </form>
+    </>
   );
 }
 
@@ -400,21 +442,23 @@ function DeleteAccount({
   async function handleDelete() {
     setBusy(true);
     setError(null);
+    // Read at the press: offline now means the request never left.
+    const onLineAtPress = navigator.onLine !== false;
     try {
-      const response = await fetch("/api/auth/account", {
+      const response = await fetchOrNoAnswer("/api/auth/account", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(hasPassword ? { password: confirmValue } : { confirmEmail: confirmValue }),
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string; until?: string } | null;
-        setError(accountDeleteRefusal(data, "Could not delete your account. Try again."));
+        setError(accountDeleteFailureText(response.status, data));
         setBusy(false);
         return;
       }
       await signOut({ callbackUrl: "/" });
-    } catch {
-      setError("Could not delete your account. Try again.");
+    } catch (error) {
+      setError(confirmFailureText(error, ACCOUNT_MAYBE_DELETED_MESSAGE, onLineAtPress));
       setBusy(false);
     }
   }

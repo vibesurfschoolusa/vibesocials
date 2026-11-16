@@ -91,8 +91,18 @@ describe("confirmNewAddress", () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
     const view = await confirmNewAddress(offline, "tok");
-    expect(view.title).toBe("We couldn't reach Vibe Socials");
-    expect(view.message).toContain("this link still works");
+    // R28 NN2: the change may have been made before the answer was lost; Try
+    // again then says the link was already used.
+    expect(view.title).toBe("Vibe Socials didn't answer");
+    expect(view.message).toBe(
+      "Vibe Socials' answer didn't reach you, so your sign-in email may have changed. If your connection dropped, reconnect first. Then press Try again to see.",
+    );
+    expect(view.offerRetry).toBe(true);
+  });
+
+  it("a server failure without a sentence never says the email is unchanged", async () => {
+    const view = await confirmNewAddress(respond(502, null), "tok");
+    expect(view.message).toBe("Your sign-in email may not have changed. Press Try again in a minute to see.");
     expect(view.offerRetry).toBe(true);
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RESET_FAILED_MESSAGE, RESET_OFFLINE_MESSAGE, signOutAfterReset, submitReset } from "./resetOutcome";
+import { RESET_FAILED_MESSAGE, RESET_MAYBE_CHANGED_MESSAGE, signOutAfterReset, submitReset } from "./resetOutcome";
 
 function respond(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
   return vi.fn(async () => new Response(JSON.stringify(body), { status, headers })) as unknown as typeof fetch;
@@ -65,16 +65,18 @@ describe("submitReset", () => {
     });
   });
 
-  it("no network is the offline sentence", async () => {
-    await expect(submitReset(offline, "tok", "new-password")).resolves.toEqual({ kind: "error", message: RESET_OFFLINE_MESSAGE });
+  // R28 NN2 (new-customer L2): the reset may have gone through, and a retry
+  // would then show the dead-link card.
+  it("no answer: the password may have changed", async () => {
+    await expect(submitReset(offline, "tok", "new-password")).resolves.toEqual({ kind: "error", message: RESET_MAYBE_CHANGED_MESSAGE });
   });
 });
 
 describe("reset password failure sentences", () => {
   it("say what happened and what to do", () => {
     expect(RESET_FAILED_MESSAGE).toBe("Your password wasn't changed. Try again in a minute.");
-    expect(RESET_OFFLINE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so your password wasn't changed. Check your internet connection and try again.",
+    expect(RESET_MAYBE_CHANGED_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so your password may have changed. If your connection dropped, reconnect first. Then log in with your new password. If that doesn't work, request a new link: this one may be used up.",
     );
   });
 });

@@ -1,3 +1,6 @@
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+
 /**
  * What /verify-email/undo says after the person presses its button (R5
  * new-customer L4, review). The route's refusals (used, expired, the email
@@ -10,7 +13,7 @@ export type UndoView = {
   title: string;
   message: string;
   next: { href: string; label: string };
-  /** A "Try again" button: nothing was changed and the link still works. */
+  /** A "Try again" button: the link may not be used up, and a used one then says so. */
   offerRetry: boolean;
 };
 
@@ -27,17 +30,18 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
   }
   let response: Response;
   try {
-    response = await fetchImpl("/api/auth/change-email/undo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    });
+    response = await fetchOrNoAnswer(
+      "/api/auth/change-email/undo",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) },
+      fetchImpl,
+    );
   } catch {
+    // R28 NN2: the undo may have gone through before the answer was lost.
     return {
       ...notUndone,
       offerRetry: true,
-      title: "We couldn't reach Vibe Socials",
-      message: "Nothing was changed, and this link still works. Check your internet connection, then press Try again.",
+      title: "Vibe Socials didn't answer",
+      message: answerLostText("the change may have been undone", "Then press Try again to see."),
     };
   }
   const data = (await response.json().catch(() => null)) as
@@ -68,7 +72,7 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
     message:
       data?.error ??
       (serverFailed
-        ? "Nothing was changed, and this link still works. Please try again in a minute."
+        ? "The change may not have been undone. Press Try again in a minute to see."
         : "Nothing was changed. Open the link from the email again."),
   };
 }

@@ -8,7 +8,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next-auth/react", () => ({ signOut: vi.fn() }));
 
 import {
+  ACCOUNT_MAYBE_DELETED_MESSAGE,
   AccountSection,
+  accountDeleteFailureText,
   ChangeEmailForm,
   EMAIL_CHANGE_MAYBE_SENT_MESSAGE,
   FormError,
@@ -221,5 +223,56 @@ describe("Settings, Account: change email when the answer is lost", () => {
     expect(form).toMatch(/setError\(emailChangeFailureText\(response\.status, data\)\);/);
     expect(form).toMatch(/isNoAnswer\(error\) \? EMAIL_CHANGE_MAYBE_SENT_MESSAGE : /);
     expect(form).not.toContain("so your email is unchanged");
+  });
+});
+
+// R28 NN2 (new-customer L2): Delete account can't be undone and its answer can
+// be lost after the account is gone; say so, and to reload first.
+describe("Settings, Account: delete account when the answer is lost", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+  const remove = source.slice(source.indexOf("function DeleteAccount"), source.indexOf("return (", source.indexOf("function DeleteAccount")));
+
+  it("says it may have been deleted, and to reload before trying again", () => {
+    expect(ACCOUNT_MAYBE_DELETED_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so your account may have been deleted. If your connection dropped, reconnect first. Reload this page first, and try again only if you're still signed in.",
+    );
+    expect(accountDeleteFailureText(502, null)).toBe(ACCOUNT_MAYBE_DELETED_MESSAGE);
+    expect(accountDeleteFailureText(400, { error: "That password is wrong." })).toBe("That password is wrong.");
+    expect(accountDeleteFailureText(400, null)).toBe("Could not delete your account. Try again.");
+  });
+
+  it("sends through fetchOrNoAnswer, and a lost answer gets that sentence (offline at the press: nothing sent)", () => {
+    expect(remove).toMatch(/await fetchOrNoAnswer\("\/api\/auth\/account"/);
+    expect(remove).toMatch(/setError\(accountDeleteFailureText\(response\.status, data\)\)/);
+    expect(remove).toMatch(/confirmFailureText\(error, ACCOUNT_MAYBE_DELETED_MESSAGE, onLineAtPress\)/);
+    expect(remove.indexOf("navigator.onLine")).toBeLessThan(remove.indexOf("await fetchOrNoAnswer"));
+  });
+});
+
+// R28 NN2 (new-customer L4, pages L6): a success line that appears already
+// filled may not be announced. Each form keeps an empty status region from
+// its first render, and the success changes only its text.
+describe("Settings, Account: success lines are on the page from the first render", () => {
+  const source = readFileSync(join(__dirname, "account-section.tsx"), "utf8");
+
+  it("Change email and Change password render an empty status region before any press", () => {
+    const email = renderToStaticMarkup(createElement(ChangeEmailForm, { email: "old@example.com" }));
+    expect(email).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
+    const emailOpen = renderToStaticMarkup(createElement(ChangeEmailForm, { email: "old@example.com", startOpen: true }));
+    expect(emailOpen).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
+    expect(render(true).match(/<div role="status" class="empty:sr-only"><\/div>/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("the success Alert sits inside that region, not in its own return", () => {
+    for (const [start, end, text] of [
+      ["export function ChangeEmailForm", "const EMAIL_CHANGE_NOT_STARTED", "emailChangeSentMessage(sentTo, email)"],
+      ["function ChangePasswordForm", "function DeleteAccount", "PASSWORD_CHANGED"],
+    ]) {
+      const form = source.slice(source.indexOf(start), source.indexOf(end));
+      const region = form.indexOf('<div role="status" className="empty:sr-only">');
+      expect(region, start).toBeGreaterThan(-1);
+      expect(form.indexOf(text, region), start).toBeGreaterThan(region);
+      expect(form, start).not.toMatch(/if \((sentTo|changed)\) \{\s+return <Alert/);
+    }
   });
 });

@@ -101,11 +101,15 @@ describe("verifyView", () => {
     }
   });
 
-  it("no network: says the email is not verified yet and offers to try again", () => {
+  // R28 NN2: the link may have verified the email before the answer was lost;
+  // Try again then shows "already verified", so it is the safe next step.
+  it("no answer: the email may already be verified, and Try again shows which", () => {
     for (const account of all) {
       const view = verifyView("network", account);
-      expect(view.message).toContain("Check your internet connection");
-      expect(view.message).not.toContain("invalid");
+      expect(view.title).toBe("Vibe Socials didn't answer");
+      expect(view.message).toBe(
+        "Vibe Socials' answer didn't reach you, so your email may already be verified. If your connection dropped, reconnect first. Then press Try again to see.",
+      );
       expect(view.offerRetry).toBe(true);
     }
   });
@@ -116,9 +120,9 @@ describe("verifyView", () => {
     expect(view.offerRetry).toBe(false);
   });
 
-  it("a server failure says to try again in a minute", () => {
+  it("a server failure says to try again in a minute, and never that the link still works", () => {
     const view = verifyView("server", "unknown");
-    expect(view.message).toContain("try again in a minute");
+    expect(view.message).toBe("Your email may not be verified yet. Press Try again in a minute to see.");
     expect(view.offerRetry).toBe(true);
   });
 
@@ -143,9 +147,13 @@ describe("resendVerificationEmail", () => {
     });
   });
 
-  it("names a network failure", async () => {
+  // R28 NN2: the email may have gone before the answer was lost.
+  it("no answer: a new link may have been sent, so look in the inbox first", async () => {
     const result = await resendVerificationEmail(offline);
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("Check your internet connection");
+    expect(result).toEqual({
+      ok: false,
+      message:
+        "Vibe Socials' answer didn't reach you, so a new link may have been sent. If your connection dropped, reconnect first. Look in your inbox before you ask for another.",
+    });
   });
 });

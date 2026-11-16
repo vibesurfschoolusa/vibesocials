@@ -7,10 +7,20 @@
  * 500 up says the password wasn't changed.
  */
 
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+
 /** R5 pages L8: what the form says when the reset didn't go through. */
 export const RESET_FAILED_MESSAGE = "Your password wasn't changed. Try again in a minute.";
-export const RESET_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so your password wasn't changed. Check your internet connection and try again.";
+/**
+ * R28 NN2 (new-customer L2): the reset may have gone through before the
+ * answer was lost; the link is then used up, so a retry shows the dead-link
+ * card. Logging in with the new password tells.
+ */
+export const RESET_MAYBE_CHANGED_MESSAGE = answerLostText(
+  "your password may have changed",
+  "Then log in with your new password. If that doesn't work, request a new link: this one may be used up.",
+);
 
 /** The route's rate-limit window (api/auth/reset-password RATE_LIMIT), when the answer names no wait. */
 const RATE_WINDOW_SECONDS = 15 * 60;
@@ -33,13 +43,13 @@ async function retryAfterSeconds(response: Response): Promise<number> {
 export async function submitReset(fetchImpl: typeof fetch, token: string, password: string): Promise<ResetOutcome> {
   let response: Response;
   try {
-    response = await fetchImpl("/api/auth/reset-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, password }),
-    });
+    response = await fetchOrNoAnswer(
+      "/api/auth/reset-password",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, password }) },
+      fetchImpl,
+    );
   } catch {
-    return { kind: "error", message: RESET_OFFLINE_MESSAGE };
+    return { kind: "error", message: RESET_MAYBE_CHANGED_MESSAGE };
   }
   if (response.ok) return { kind: "done" };
   if (response.status === 429) return { kind: "error", message: waitSentence(await retryAfterSeconds(response)) };

@@ -9,7 +9,17 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh:
 
 import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE } from "@/lib/uploadFailure";
 
-import { MEDIA_MESSAGES, MediaCard, retentionText, uploadErrorMessage } from "./media-library";
+import { NoAnswerError } from "@/lib/requestNoAnswer";
+
+import {
+  MEDIA_MESSAGES,
+  MediaCard,
+  UPLOAD_LINK_MAYBE_MADE_MESSAGE,
+  UPLOAD_LINK_MAYBE_OFF_MESSAGE,
+  mediaDeleteFailureText,
+  retentionText,
+  uploadErrorMessage,
+} from "./media-library";
 
 // F1 round 2: Media read "auto-removes in 1 days".
 describe("retentionText", () => {
@@ -102,7 +112,8 @@ describe("the media library's error sentences", () => {
 
   it("says what happened and what to do next", () => {
     for (const text of Object.values(MEDIA_MESSAGES)) {
-      expect(text).toMatch(/^Couldn't |^Choose /);
+      // R28 NN2: a lost answer starts with the shared lead-in (lib/answerLost).
+      expect(text).toMatch(/^Couldn't |^Choose |^Vibe Socials' answer didn't reach you/);
       expect(text.split(". ").length).toBeGreaterThanOrEqual(2);
     }
     expect(MEDIA_MESSAGES.loadNetwork).toBe("Couldn't load your media. Check your connection, then press Retry.");
@@ -110,7 +121,6 @@ describe("the media library's error sentences", () => {
       "Couldn't load more media. Check your connection, then press Load more again.",
     );
     expect(MEDIA_MESSAGES.noFile).toBe("Choose a photo or video first. Then press Upload.");
-    expect(MEDIA_MESSAGES.deleteNetwork).toBe("Couldn't delete the file. Check your connection and try again.");
   });
 
   it("explains a network failure of an upload instead of the browser's words", () => {
@@ -143,5 +153,49 @@ describe("Client upload link: focus after Create link", () => {
     expect(create).toMatch(/await makeLink\(\);\s+(\/\/[^\n]*\n\s+)?focusAfterPress\(pressed, \(\) => copyRef\.current\);/);
     expect(source).toMatch(/<Button ref=\{copyRef\} type="button" variant="outline" onClick=\{onCopy\}>/);
     expect(source).toMatch(/copyRef=\{copyRef\}/);
+  });
+});
+
+// R28 NN2 (client-journey L1, pages L1): Replace and Turn off on the upload
+// link, saving an upload and deleting a file may all have gone through when
+// the answer is lost. Each says so and where to check.
+describe("Media: a lost answer may have gone through", () => {
+  const source = readFileSync(fileURLToPath(new URL("./media-library.tsx", import.meta.url)), "utf8");
+
+  it("the upload link's Create, Replace and Turn off say what may have happened", () => {
+    expect(UPLOAD_LINK_MAYBE_MADE_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so a new upload link may have been made, which turns any old one off. If your connection dropped, reconnect first. Reload this page and copy the link before you send it.",
+    );
+    expect(UPLOAD_LINK_MAYBE_OFF_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so the upload link may have been turned off. If your connection dropped, reconnect first. Reload this page to see.",
+    );
+    expect(source).toMatch(/unreachableText=\{confirm === "replace" \? UPLOAD_LINK_MAYBE_MADE_MESSAGE : UPLOAD_LINK_MAYBE_OFF_MESSAGE\}/);
+    expect(source).toMatch(/confirmFailureText\(error, UPLOAD_LINK_MAYBE_MADE_MESSAGE\)/);
+  });
+
+  it("a lost answer after the link was made reads the link again, so the panel shows the one that works", () => {
+    const panel = source.slice(source.indexOf("function UploadLinkPanel"), source.indexOf("export interface UploadLinkPanelViewProps"));
+    expect(panel).toMatch(/const readLink = useCallback\(/);
+    expect(panel).toMatch(/catch \(error\) \{\s+if \(isNoAnswer\(error\)\) void readLink\(\);\s+throw error;/);
+  });
+
+  it("saving an upload whose answer is lost: it may be in the library", () => {
+    expect(uploadErrorMessage(new NoAnswerError(new TypeError("Failed to fetch")))).toBe(MEDIA_MESSAGES.saveLost);
+    expect(MEDIA_MESSAGES.saveLost).toBe(
+      "Vibe Socials' answer didn't reach you, so the file may have been saved to your library. If your connection dropped, reconnect first. Reload this page to see it before you upload it again.",
+    );
+    expect(source).toMatch(/await fetchOrNoAnswer\("\/api\/media", \{/);
+  });
+
+  it("deleting a file: no answer or an unreadable 5xx may have deleted it", () => {
+    expect(MEDIA_MESSAGES.deleteLost).toBe(
+      "Vibe Socials' answer didn't reach you, so the file may have been deleted. If your connection dropped, reconnect first. Reload this page to see.",
+    );
+    expect(mediaDeleteFailureText(502, null)).toBe(MEDIA_MESSAGES.deleteLost);
+    expect(mediaDeleteFailureText(409, { error: "It is used by a scheduled post." })).toBe("It is used by a scheduled post.");
+    expect(mediaDeleteFailureText(404, null)).toBe(MEDIA_MESSAGES.deleteFailed);
+    const remove = source.slice(source.indexOf("const handleConfirmDelete"), source.indexOf("return (", source.indexOf("const handleConfirmDelete")));
+    expect(remove).toMatch(/await fetchOrNoAnswer\(`\/api\/media\/\$\{target\.id\}`, \{ method: "DELETE" \}\)/);
+    expect(remove).toMatch(/toast\.error\(MEDIA_MESSAGES\.deleteLost\)/);
   });
 });

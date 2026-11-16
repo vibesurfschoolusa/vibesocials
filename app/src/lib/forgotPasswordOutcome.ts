@@ -13,7 +13,12 @@ import { answerLostText } from "./answerLost";
 
 export type ForgotPasswordOutcome = { kind: "sent" } | { kind: "error"; message: string };
 
-export function forgotPasswordOutcome(status: number | null): ForgotPasswordOutcome {
+/**
+ * `data`: the answer's body. R28 NN2 (new-customer L3): a 400's sentence
+ * ("Enter a valid email address.") depends only on what was typed, never on
+ * whether an account exists, so it is shown; other bodies are not read.
+ */
+export function forgotPasswordOutcome(status: number | null, data?: { error?: unknown } | null): ForgotPasswordOutcome {
   if (status !== null && status >= 200 && status < 300) {
     return { kind: "sent" };
   }
@@ -34,6 +39,9 @@ export function forgotPasswordOutcome(status: number | null): ForgotPasswordOutc
         "If an account exists for that address, a link may already be on its way: check your inbox first. If nothing arrives in a few minutes, check your connection and try again.",
       ),
     };
+  }
+  if (status === 400 && typeof data?.error === "string" && data.error) {
+    return { kind: "error", message: data.error };
   }
   return { kind: "error", message: "Something went wrong. Please try again." };
 }

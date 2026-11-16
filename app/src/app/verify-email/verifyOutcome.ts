@@ -8,6 +8,9 @@
  * link to an unverified one, and "already verified" for a verified one.
  */
 
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+
 export type VerifyAttempt = "ok" | "invalid" | "rate_limited" | "server" | "network";
 export type AccountState = "verified" | "unverified" | "signed_out" | "unknown";
 
@@ -20,18 +23,18 @@ export type VerifyView = {
   next: { href: string; label: string };
   /** A "Send a new link" button (signed in, not verified). */
   offerResend: boolean;
-  /** A "Try again" button (the link was not used up). */
+  /** A "Try again" button: the link may not be used up, and a used one then says so. */
   offerRetry: boolean;
 };
 
 export async function attemptVerify(fetchImpl: typeof fetch, token: string): Promise<VerifyAttempt> {
   if (!token) return "invalid";
   try {
-    const response = await fetchImpl("/api/auth/verify-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    });
+    const response = await fetchOrNoAnswer(
+      "/api/auth/verify-email",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) },
+      fetchImpl,
+    );
     if (response.ok) return "ok";
     if (response.status === 429) return "rate_limited";
     if (response.status >= 500) return "server";
@@ -63,13 +66,14 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
   if (attempt === "ok") {
     return { ...base, verified: true, next: CONTINUE, title: "Email verified", message: "Email verified. You're all set." };
   }
+  // R28 NN2: the link may have verified the email before the answer was lost.
+  // Try again is safe: a used link then shows "already verified" when signed in.
   if (attempt === "network") {
     return {
       ...base,
       offerRetry: true,
-      title: "We couldn't reach Vibe Socials",
-      message:
-        "Your email isn't verified yet, and this link still works. Check your internet connection, then press Try again.",
+      title: "Vibe Socials didn't answer",
+      message: answerLostText("your email may already be verified", "Then press Try again to see."),
     };
   }
   if (attempt === "rate_limited") {
@@ -85,7 +89,7 @@ export function verifyView(attempt: VerifyAttempt, account: AccountState): Verif
       ...base,
       offerRetry: true,
       title: "Something went wrong on our side",
-      message: "Your email isn't verified yet, and this link still works. Please try again in a minute.",
+      message: "Your email may not be verified yet. Press Try again in a minute to see.",
     };
   }
   // A dead link. It may belong to another account than the one signed in, so
@@ -113,7 +117,7 @@ export async function resendVerificationEmail(
   fetchImpl: typeof fetch,
 ): Promise<{ ok: boolean; message: string }> {
   try {
-    const response = await fetchImpl("/api/auth/resend-verification", { method: "POST" });
+    const response = await fetchOrNoAnswer("/api/auth/resend-verification", { method: "POST" }, fetchImpl);
     if (response.ok) {
       return { ok: true, message: "We sent a new link. Open the newest email from Vibe Socials and press its button." };
     }
@@ -123,9 +127,10 @@ export async function resendVerificationEmail(
       message: data?.error ?? "We couldn't send the verification email just now. Please try again in a few minutes.",
     };
   } catch {
+    // R28 NN2: the email may have gone before the answer was lost.
     return {
       ok: false,
-      message: "We couldn't reach Vibe Socials, so no email was sent. Check your internet connection and try again.",
+      message: answerLostText("a new link may have been sent", "Look in your inbox before you ask for another."),
     };
   }
 }

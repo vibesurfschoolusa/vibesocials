@@ -46,4 +46,22 @@ describe("verify-email page", () => {
     expect(html).toContain("We sent a new link.");
     expect(html).not.toMatch(/<button[^>]*>(<[^>]+>)*Send a new link/);
   });
+
+  // R28 NN2 (pages L6, new-customer L4): "We sent a new link" appeared already
+  // filled as the button went; the status region is on the card from the
+  // first render, and only its text changes.
+  it("keeps an empty status region for the resend answer from the first render", () => {
+    const view = verifyView("invalid", "unverified");
+    const before = renderToStaticMarkup(createElement(VerifyResult, { view, resend: idle, onResend: noop, onRetry: noop }));
+    expect(before).toMatch(/<div role="status" class="empty:sr-only"><\/div>/);
+    const after = renderToStaticMarkup(
+      createElement(VerifyResult, {
+        view,
+        resend: { sending: false, result: { ok: true, message: "We sent a new link." } },
+        onResend: noop,
+        onRetry: noop,
+      }),
+    );
+    expect(after).toMatch(/<div role="status" class="empty:sr-only"><div[^>]*>[\s\S]*We sent a new link\./);
+  });
 });

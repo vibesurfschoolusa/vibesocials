@@ -69,10 +69,52 @@ export const INVITE_MAYBE_MADE_MESSAGE = answerLostText(
 
 /** What a failed Create invite link says, from the answer it got. */
 export function inviteFailureText(status: number, data: { error?: unknown } | null): string {
-  if (typeof data?.error === "string" && data.error) return data.error;
-  if (status >= 500 || (status >= 200 && status < 300)) return INVITE_MAYBE_MADE_MESSAGE;
-  return "Couldn't create an invite link. Reload the page and try again.";
+  return answerFailureText(status, data, INVITE_MAYBE_MADE_MESSAGE, "Couldn't create an invite link. Reload the page and try again.");
 }
+
+/**
+ * R28 NN2: what a refused or unreadable answer says. The route's own sentence
+ * when it gave one; an unreadable 5xx (a gateway's page) or 2xx may come
+ * after the work was done, so `maybe`; any other refusal changed nothing.
+ */
+export function answerFailureText(status: number, data: { error?: unknown } | null, maybe: string, refused: string): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  if (status >= 500 || (status >= 200 && status < 300)) return maybe;
+  return refused;
+}
+
+/*
+ * R28 NN2 (new-customer L1 L2, client-journey L1, pages L1): each Team card
+ * press may have gone through when its answer is lost, so each says what may
+ * have happened and where to check. Leave and Delete workspace say to reload
+ * first: a retry after it went through gets a 409 that isn't the reason.
+ */
+export const CLIENT_LINKS_MAYBE_REPLACED_MESSAGE = answerLostText(
+  "new client links may have been made, which turns the old ones off",
+  "Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page.",
+);
+export const CLIENT_LINKS_MAYBE_OFF_MESSAGE = answerLostText(
+  "the client links may have been turned off",
+  "Reload this page to see.",
+);
+export const INVITE_MAYBE_REVOKED_MESSAGE = answerLostText(
+  "the invite link may have been revoked",
+  "Reload this page and check Invite link before you send it.",
+);
+export const LEAVE_MAYBE_LEFT_MESSAGE = answerLostText(
+  "you may have left this workspace",
+  "Reload this page first, and press Leave again only if you're still a member.",
+);
+export const MEMBER_MAYBE_REMOVED_MESSAGE = answerLostText("they may have been removed", "Reload this page and check Members.");
+export const ROLE_MAYBE_CHANGED_MESSAGE = answerLostText("the role may have changed", "Reload this page and check Members.");
+export const RENAME_MAYBE_SAVED_MESSAGE = answerLostText(
+  "the new name may have been saved",
+  "Reload this page to see the workspace's name.",
+);
+export const WORKSPACE_MAYBE_DELETED_MESSAGE = answerLostText(
+  "this workspace may have been deleted",
+  "Reload this page first, and try again only if the workspace is still there.",
+);
 
 /**
  * GET /api/workspaces/members/roster list item — member-safe route (SEC-1:
@@ -349,19 +391,27 @@ export async function requestClientLinksReplace(
 ): Promise<{ uploadLink?: unknown; reviewLink?: unknown; connectLink?: unknown; connectLinkTurnedOff?: unknown }> {
   let response: Response;
   try {
-    response = await fetchImpl("/api/workspaces/client-links", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    response = await fetchOrNoAnswer(
+      "/api/workspaces/client-links",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId }) },
+      fetchImpl,
+    );
   } catch {
-    throw new Error("Couldn't reach the server. The old client links still work. Check your connection and try again.");
+    // The route replaces the links before it answers: they may be new now,
+    // so the other link cards on this page read theirs again.
+    announce();
+    throw new Error(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE);
   }
   const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
   if (!response.ok) {
-    throw new Error(
-      typeof data?.error === "string" ? data.error : "Couldn't make new client links. The old ones still work. Try again.",
+    const text = answerFailureText(
+      response.status,
+      data,
+      CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
+      "Couldn't make new client links. The old ones still work. Try again.",
     );
+    if (text === CLIENT_LINKS_MAYBE_REPLACED_MESSAGE) announce();
+    throw new Error(text);
   }
   announce();
   return data ?? {};
@@ -379,19 +429,25 @@ export async function requestClientLinksTurnOff(
 ): Promise<void> {
   let response: Response;
   try {
-    response = await fetchImpl("/api/workspaces/client-links", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    response = await fetchOrNoAnswer(
+      "/api/workspaces/client-links",
+      { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId }) },
+      fetchImpl,
+    );
   } catch {
-    throw new Error("Couldn't reach the server. The client links are unchanged. Check your connection and try again.");
+    announce();
+    throw new Error(CLIENT_LINKS_MAYBE_OFF_MESSAGE);
   }
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    throw new Error(
-      typeof data?.error === "string" ? data.error : "Couldn't turn off the client links. Nothing changed. Try again.",
+    const text = answerFailureText(
+      response.status,
+      data,
+      CLIENT_LINKS_MAYBE_OFF_MESSAGE,
+      "Couldn't turn off the client links. Reload the page and try again.",
     );
+    if (text === CLIENT_LINKS_MAYBE_OFF_MESSAGE) announce();
+    throw new Error(text);
   }
   announce();
 }
@@ -443,6 +499,7 @@ export function ClientLinksPanel({
           description={`The client upload, review and connect links stop working for good, including any copies a former owner kept. You can make new ones ${blocked ? "once client links work again" : "on a plan with client links"}.`}
           confirmText="Turn off"
           onConfirm={onTurnOff}
+          unreachableText={CLIENT_LINKS_MAYBE_OFF_MESSAGE}
         />
       </div>
     );
@@ -468,6 +525,7 @@ export function ClientLinksPanel({
         description="The client links that are on stop working, including any copies a former owner kept. Send your client the new ones afterwards."
         confirmText="Make new links"
         onConfirm={onReplace}
+        unreachableText={CLIENT_LINKS_MAYBE_REPLACED_MESSAGE}
       />
     </div>
   );
@@ -534,7 +592,7 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't leave the workspace.");
+      toast.error(answerFailureText(response.status, data, LEAVE_MAYBE_LEFT_MESSAGE, "Couldn't leave the workspace."));
       throw new ConfirmFailureShown("LEAVE_FAILED");
     }
     toast.success("Left the workspace.");
@@ -600,6 +658,7 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
         description="You'll lose access to its accounts and posts. Your own account keeps working."
         confirmText="Leave"
         onConfirm={handleLeave}
+        unreachableText={LEAVE_MAYBE_LEFT_MESSAGE}
       />
     </Card>
   );
@@ -642,7 +701,7 @@ function OwnerView({
       });
       const data = (await response.json().catch(() => null)) as { error?: string; name?: unknown } | null;
       if (!response.ok) {
-        toast.error(data?.error ?? "Couldn't rename workspace.");
+        toast.error(answerFailureText(response.status, data, RENAME_MAYBE_SAVED_MESSAGE, "Couldn't rename workspace."));
         return;
       }
       // The field shows the name as stored, so Save goes quiet until it changes.
@@ -659,7 +718,7 @@ function OwnerView({
       router.refresh();
       announceWorkspaceChange();
     } catch (error) {
-      const text = confirmFailureText(error);
+      const text = confirmFailureText(error, RENAME_MAYBE_SAVED_MESSAGE);
       if (text) toast.error(text);
     } finally {
       setSavingName(false);
@@ -738,7 +797,7 @@ function OwnerView({
     if (!response.ok) {
       // A 409 says another tab switched workspace; show the route's sentence.
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't revoke the invite link.");
+      toast.error(answerFailureText(response.status, data, INVITE_MAYBE_REVOKED_MESSAGE, "Couldn't revoke the invite link."));
       throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setInvite(null);
@@ -822,7 +881,7 @@ function OwnerView({
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't remove that member.");
+      toast.error(answerFailureText(response.status, data, MEMBER_MAYBE_REMOVED_MESSAGE, "Couldn't remove that member."));
       if (memberIsGone(response.status, data)) {
         dropMember(removeTarget.userId);
         return;
@@ -859,7 +918,7 @@ function OwnerView({
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't update that member's role.");
+      toast.error(answerFailureText(response.status, data, ROLE_MAYBE_CHANGED_MESSAGE, "Couldn't update that member's role."));
       if (memberIsGone(response.status, data)) {
         dropMember(promoteTarget.userId);
         return;
@@ -890,7 +949,7 @@ function OwnerView({
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't update that member's role.");
+      toast.error(answerFailureText(response.status, data, ROLE_MAYBE_CHANGED_MESSAGE, "Couldn't update that member's role."));
       if (memberIsGone(response.status, data)) {
         dropMember(demoteTarget.userId);
         return;
@@ -931,7 +990,9 @@ function OwnerView({
     try {
       made = await requestClientLinksReplace(fetch, workspaceId);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't make new client links. The old ones still work. Try again.");
+      toast.error(error instanceof Error ? error.message : CLIENT_LINKS_MAYBE_REPLACED_MESSAGE);
+      // client-journey L1: the panel shows what is on now, not what it last read.
+      void fetchClientLinks(workspaceId).then((links) => links && setClientLinks(links));
       throw new ConfirmFailureShown("REPLACE_FAILED");
     }
     setClientLinks((prev) =>
@@ -951,7 +1012,8 @@ function OwnerView({
     try {
       await requestClientLinksTurnOff(fetch, workspaceId);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't turn off the client links. Nothing changed. Try again.");
+      toast.error(error instanceof Error ? error.message : CLIENT_LINKS_MAYBE_OFF_MESSAGE);
+      void fetchClientLinks(workspaceId).then((links) => links && setClientLinks(links));
       throw new ConfirmFailureShown("TURN_OFF_FAILED");
     }
     setClientLinks((prev) =>
@@ -972,7 +1034,7 @@ function OwnerView({
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      toast.error(data?.error ?? "Couldn't leave the workspace.");
+      toast.error(answerFailureText(response.status, data, LEAVE_MAYBE_LEFT_MESSAGE, "Couldn't leave the workspace."));
       throw new ConfirmFailureShown("LEAVE_FAILED");
     }
     toast.success("Left the workspace.");
@@ -1169,6 +1231,7 @@ function OwnerView({
         description="Anyone with the old link will no longer be able to join. You can create a new one anytime."
         confirmText="Revoke"
         onConfirm={revokeInvite}
+        unreachableText={INVITE_MAYBE_REVOKED_MESSAGE}
       />
 
       <ConfirmDialog
@@ -1181,6 +1244,7 @@ function OwnerView({
         description="They'll lose access to this workspace's accounts and posts. Their own account keeps working."
         confirmText="Remove"
         onConfirm={confirmRemove}
+        unreachableText={MEMBER_MAYBE_REMOVED_MESSAGE}
       />
 
       <ConfirmDialog
@@ -1192,6 +1256,7 @@ function OwnerView({
         description="They'll be able to manage members, connections, and settings."
         confirmText="Make owner"
         onConfirm={confirmPromote}
+        unreachableText={ROLE_MAYBE_CHANGED_MESSAGE}
       />
 
       <ConfirmDialog
@@ -1204,6 +1269,7 @@ function OwnerView({
         description="They'll no longer manage members, connections, or settings."
         confirmText="Make member"
         onConfirm={confirmDemote}
+        unreachableText={ROLE_MAYBE_CHANGED_MESSAGE}
       />
 
       <ConfirmDialog
@@ -1214,6 +1280,7 @@ function OwnerView({
         description="You'll lose access to its accounts and posts. Your own account keeps working."
         confirmText="Leave"
         onConfirm={handleLeave}
+        unreachableText={LEAVE_MAYBE_LEFT_MESSAGE}
       />
     </Card>
   );
@@ -1275,15 +1342,19 @@ export function DeleteWorkspace({
   async function handleDelete() {
     setBusy(true);
     setError(null);
+    // Read at the press: offline now means the request never left.
+    const onLineAtPress = navigator.onLine !== false;
     try {
-      const response = await fetch("/api/workspaces/active", {
+      const response = await fetchOrNoAnswer("/api/workspaces/active", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirmName, workspaceId }),
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        setError(data?.error ?? "Could not delete this workspace. Try again.");
+        setError(
+          answerFailureText(response.status, data, WORKSPACE_MAYBE_DELETED_MESSAGE, "Could not delete this workspace. Reload the page and try again."),
+        );
         setBusy(false);
         return;
       }
@@ -1293,8 +1364,8 @@ export function DeleteWorkspace({
       // the menu naming the deleted workspace. `busy` stays set while the page
       // unloads.
       afterWorkspaceChange("/");
-    } catch {
-      setError("Could not delete this workspace. Try again.");
+    } catch (error) {
+      setError(confirmFailureText(error, WORKSPACE_MAYBE_DELETED_MESSAGE, onLineAtPress));
       setBusy(false);
     }
   }

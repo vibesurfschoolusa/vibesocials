@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
 import { useFreshSignedInAccount } from "@/components/signed-in-swap";
+import { answerLostText } from "@/lib/answerLost";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { beforeSignIn } from "@/lib/staleSignOut";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
@@ -33,8 +35,20 @@ export type RegisterBilling = {
 /** What the form says when sign-up didn't go through (R5 pages L8). */
 export const REGISTER_FAILED_MESSAGE =
   "We couldn't create your account just now. Nothing was saved. Please try again in a minute.";
-export const REGISTER_OFFLINE_MESSAGE =
-  "We couldn't reach Vibe Socials, so no account was created. Check your internet connection and try again.";
+/**
+ * R28 NN2 (new-customer L2): the account may have been made before the answer
+ * was lost or a gateway answered 5xx; signing up again would not make one.
+ */
+export const REGISTER_MAYBE_CREATED_MESSAGE = answerLostText(
+  "your account may have been created",
+  "Then press Log in below and use this email and password before you sign up again.",
+);
+
+/** What a refused or unreadable sign-up answer says. */
+export function registerFailureText(status: number, data: { error?: unknown } | null): string {
+  if (typeof data?.error === "string" && data.error) return data.error;
+  return status >= 500 ? REGISTER_MAYBE_CREATED_MESSAGE : REGISTER_FAILED_MESSAGE;
+}
 
 function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
   const router = useRouter();
@@ -61,7 +75,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/auth/register", {
+      const response = await fetchOrNoAnswer("/api/auth/register", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -70,13 +84,13 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
       });
 
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        setError(data?.error ?? REGISTER_FAILED_MESSAGE);
+        const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+        setError(registerFailureText(response.status, data));
         setLoading(false);
         return;
       }
     } catch {
-      setError(REGISTER_OFFLINE_MESSAGE);
+      setError(REGISTER_MAYBE_CREATED_MESSAGE);
       setLoading(false);
       return;
     }

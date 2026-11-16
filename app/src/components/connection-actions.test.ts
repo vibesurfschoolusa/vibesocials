@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  DISCONNECT_FAILED_MESSAGE,
-  DISCONNECT_OFFLINE_MESSAGE,
+  DISCONNECT_MAYBE_MESSAGE,
   fetchScheduledCount,
   disconnectDescription,
   requestDisconnect,
@@ -88,20 +87,25 @@ describe("fetchScheduledCount", () => {
 // R5 pages L8: a disconnect failure says what happened and what to do, never
 // a raw "Failed to fetch".
 describe("requestDisconnect", () => {
-  it("names a network failure instead of the browser's message", async () => {
+  // R28 NN2 (pages L1): the route may have removed the connection before the
+  // answer was lost or a gateway answered 5xx, so never "still connected".
+  it("no answer: the account may already be disconnected, and where to check", async () => {
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
-    await expect(requestDisconnect(offline, "x", "ws-1")).rejects.toThrow(DISCONNECT_OFFLINE_MESSAGE);
-    expect(DISCONNECT_OFFLINE_MESSAGE).toContain("still connected");
+    await expect(requestDisconnect(offline, "x", "ws-1")).rejects.toThrow(DISCONNECT_MAYBE_MESSAGE);
+    expect(DISCONNECT_MAYBE_MESSAGE).toBe(
+      "Vibe Socials' answer didn't reach you, so the account may already be disconnected. If your connection dropped, reconnect first. Reload this page to see whether it is connected.",
+    );
   });
 
-  it("uses its own sentence for a server failure", async () => {
-    const failing = vi.fn(
-      async () => new Response(JSON.stringify({ error: "Failed to disconnect platform" }), { status: 500 }),
-    ) as unknown as typeof fetch;
-    await expect(requestDisconnect(failing, "x", "ws-1")).rejects.toThrow(DISCONNECT_FAILED_MESSAGE);
-    expect(DISCONNECT_FAILED_MESSAGE).toContain("try again");
+  it("a server failure says the same: it may have gone through", async () => {
+    for (const failing of [
+      vi.fn(async () => new Response(JSON.stringify({ error: "Failed to disconnect platform" }), { status: 500 })),
+      vi.fn(async () => new Response("<html>Bad gateway</html>", { status: 502 })),
+    ]) {
+      await expect(requestDisconnect(failing as unknown as typeof fetch, "x", "ws-1")).rejects.toThrow(DISCONNECT_MAYBE_MESSAGE);
+    }
   });
 
   it("passes on the route's own refusal sentence", async () => {

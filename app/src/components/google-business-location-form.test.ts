@@ -11,6 +11,7 @@ import {
 
 import {
   LOCATION_MESSAGES,
+  locationSaveFallback,
   LOCATION_RECONNECT_CODE,
   PICK_SAVING_STATUS,
   PickerStatusLine,
@@ -45,7 +46,10 @@ describe("Google location form messages", () => {
 
   it("failures say nothing was saved or loaded and what to do next", () => {
     expect(LOCATION_MESSAGES.saveFailed).toBe("The location wasn't saved. Please try again in a minute.");
-    expect(LOCATION_MESSAGES.saveOffline).toContain("Check your internet connection");
+    // R28 NN2 (new-customer L2): a lost save answer may follow the save.
+    expect(LOCATION_MESSAGES.saveLost).toBe(
+      "Vibe Socials' answer didn't reach you, so the location may have been saved. If your connection dropped, reconnect first. Reload this page to see which location is saved.",
+    );
     expect(LOCATION_MESSAGES.loadFailed).toBe(
       "Google didn't send the list of locations. Please press Fetch locations from Google again in a minute.",
     );
@@ -365,3 +369,21 @@ describe("Google location form: the page's workspace", () => {
   });
 });
 
+
+// R28 NN2 (new-customer L2): the save may have reached the server when its
+// answer is lost or a gateway answers 5xx, so it never says it wasn't saved.
+describe("Google location save when the answer is lost", () => {
+  const save = formSource.slice(formSource.indexOf("async function saveLocation"), formSource.indexOf("async function handleSubmit"));
+
+  it("sends through fetchOrNoAnswer and words no answer as may have been saved", () => {
+    expect(save).toMatch(/await fetchOrNoAnswer\("\/api\/connections\/google_business_profile\/location"/);
+    expect(save).toMatch(/catch \{\s+setSaveFailure\(\{ from, status: \{ message: LOCATION_MESSAGES\.saveLost, signInUrl: null \} \}\);/);
+  });
+
+  it("an unreadable 5xx is worded the same; a refusal without a sentence keeps the plain one", () => {
+    expect(locationSaveFallback(502)).toBe(LOCATION_MESSAGES.saveLost);
+    expect(locationSaveFallback(500)).toBe(LOCATION_MESSAGES.saveLost);
+    expect(locationSaveFallback(400)).toBe(LOCATION_MESSAGES.saveFailed);
+    expect(save).toMatch(/locationFailure\(data, locationSaveFallback\(response\.status\), workspaceId\)/);
+  });
+});

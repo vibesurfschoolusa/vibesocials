@@ -26,6 +26,8 @@ vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null }), signOut:
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
 import {
+  CLIENT_LINKS_MAYBE_OFF_MESSAGE,
+  CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
   CLIENT_LINKS_REPLACED_EVENT,
   clientLinksButtonShown,
   clientLinksTurnOffShown,
@@ -111,10 +113,11 @@ describe("Make new client links", () => {
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     });
+    // R28 NN2: the links may be new, so the page reads them again (team-section.answerLost.test.ts).
     await expect(requestClientLinksReplace(offline as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow(
-      "Couldn't reach the server. The old client links still work. Check your connection and try again.",
+      CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
     );
-    expect(announce).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledTimes(1);
     expect(CLIENT_LINKS_REPLACED_EVENT).toBe("vibe:client-links-replaced");
   });
 
@@ -281,9 +284,9 @@ describe("Turn off client links", () => {
       throw new TypeError("Failed to fetch");
     });
     await expect(requestClientLinksTurnOff(offline as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow(
-      "Couldn't reach the server. The client links are unchanged. Check your connection and try again.",
+      CLIENT_LINKS_MAYBE_OFF_MESSAGE,
     );
-    expect(announce).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledTimes(1);
   });
 });
 

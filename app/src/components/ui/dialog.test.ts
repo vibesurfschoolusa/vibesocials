@@ -7,6 +7,7 @@ import { NoAnswerError } from "@/lib/requestNoAnswer";
 
 import {
   CONFIRM_FAILED_MESSAGE,
+  CONFIRM_NOTHING_SENT_MESSAGE,
   CONFIRM_UNREACHABLE_MESSAGE,
   ConfirmFailureShown,
   confirmFailureText,
@@ -83,11 +84,33 @@ describe("ConfirmDialog failures", () => {
     expect(new ConfirmFailureShown("REMOVE_FAILED")).toBeInstanceOf(Error);
   });
 
-  it("a request that got no answer (lib/requestNoAnswer): nothing changed, check the connection", () => {
+  // R28 NN2: the request may have reached the server before the answer was lost.
+  it("a request that got no answer (lib/requestNoAnswer): it may have gone through, reload to see", () => {
     expect(confirmFailureText(new NoAnswerError(new TypeError("Failed to fetch")))).toBe(CONFIRM_UNREACHABLE_MESSAGE);
     expect(CONFIRM_UNREACHABLE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials, so nothing changed. Check your connection and try again.",
+      "Vibe Socials' answer didn't reach you, so this may have gone through. If your connection dropped, reconnect first. Then reload the page to see.",
     );
+  });
+
+  it("only a browser offline at the press says nothing was sent, whatever the caller's wording", () => {
+    const lost = new NoAnswerError(new TypeError("Failed to fetch"));
+    expect(confirmFailureText(lost, undefined, false)).toBe(CONFIRM_NOTHING_SENT_MESSAGE);
+    expect(confirmFailureText(lost, "Check Activity.", false)).toBe(CONFIRM_NOTHING_SENT_MESSAGE);
+    expect(CONFIRM_NOTHING_SENT_MESSAGE).toBe("You're offline, so nothing was sent. Reconnect, then try again.");
+    // Online at the press, or not known: the answer may have been lost on the way back.
+    expect(confirmFailureText(lost, undefined, true)).toBe(CONFIRM_UNREACHABLE_MESSAGE);
+    // A server's answer is never "nothing was sent".
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(confirmFailureText(new Error("X"), undefined, false)).toBe(CONFIRM_FAILED_MESSAGE);
+    log.mockRestore();
+  });
+
+  it("the dialog reads navigator.onLine at the press, before the request", () => {
+    const handler = confirmDialog.slice(confirmDialog.indexOf("const handleConfirm"));
+    const readAt = handler.indexOf("navigator.onLine");
+    expect(readAt).toBeGreaterThan(-1);
+    expect(readAt).toBeLessThan(handler.indexOf("await onConfirm()"));
+    expect(handler).toMatch(/confirmFailureText\(error, unreachableText, onLineAtPress\)/);
   });
 
   it("a caller can word the unreachable case itself (Queue's Publish)", () => {
@@ -123,7 +146,7 @@ describe("ConfirmDialog failures", () => {
   const confirmDialog = source.slice(source.indexOf("export function ConfirmDialog"));
 
   it("the dialog shows its sentence in itself, as an alert, and stays open", () => {
-    expect(confirmDialog).toMatch(/confirmFailureText\(error, unreachableText\)/);
+    expect(confirmDialog).toMatch(/confirmFailureText\(error, unreachableText, onLineAtPress\)/);
     expect(confirmDialog).toMatch(/role="alert"/);
     expect(confirmDialog).not.toMatch(/catch \{/);
   });
@@ -186,7 +209,8 @@ describe("ConfirmDialog callers", () => {
     it(`${path}: Create link says a failure through the same texts`, () => {
       const caller = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
       const body = caller.slice(caller.indexOf("async function handleCreate("), caller.indexOf("async function copyUrl()"));
-      expect(body).toMatch(/catch \(error\) \{\s+const text = confirmFailureText\(error\);\s+if \(text\) toast\.error\(text\);/);
+      // R28 NN2: with the link's own may-have-been-made sentence.
+      expect(body).toMatch(/catch \(error\) \{\s+const text = confirmFailureText\(error, [A-Z_]+_LINK_MAYBE_MADE_MESSAGE\);\s+if \(text\) toast\.error\(text\);/);
     });
   }
 });

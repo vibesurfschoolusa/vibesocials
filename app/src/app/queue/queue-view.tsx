@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  CONFIRM_NOTHING_SENT_MESSAGE,
   ConfirmDialog,
   ConfirmFailureShown,
   confirmFailureText,
@@ -24,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { answerLostText } from "@/lib/answerLost";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { CaptionCounter } from "@/components/caption-counter";
@@ -94,6 +96,37 @@ import {
   localTimeZoneLabel,
   toDateTimeLocalValue,
 } from "@/lib/scheduling";
+
+/*
+ * R28 NN2 (publishing L3, pages L1): Cancel and Delete may have gone through
+ * when the answer is lost or a gateway answers 5xx. The Queue reloads, as
+ * after a lost Publish (lib/queueActions.ts queueMayHaveGoneThroughText).
+ */
+export const QUEUE_CANCEL_MAYBE_MESSAGE = answerLostText(
+  "the post may have been cancelled",
+  "We're reloading the Queue: check it before you cancel again.",
+);
+export const QUEUE_CANCEL_SERIES_MAYBE_MESSAGE = answerLostText(
+  "the posts may have been cancelled",
+  "We're reloading the Queue: check it before you cancel again.",
+);
+export const QUEUE_DELETE_MAYBE_MESSAGE = answerLostText(
+  "the draft may have been deleted",
+  "We're reloading the Queue: check it before you delete again.",
+);
+
+/*
+ * R28 NN2 (client-journey L1, pages L1): the route turns the old review link
+ * off before it answers, so a lost answer may leave a new link, or none.
+ */
+export const REVIEW_LINK_MAYBE_MADE_MESSAGE = answerLostText(
+  "a new review link may have been made, which turns any old one off",
+  "Reload this page and copy the link before you send it.",
+);
+export const REVIEW_LINK_MAYBE_OFF_MESSAGE = answerLostText(
+  "the review link may have been turned off",
+  "Reload this page to see.",
+);
 
 /** A card patch from the edit dialog, which may also carry the saved per-platform captions. */
 type EditPatch = JobPatch & Partial<Pick<PostJobDTO, "platformCaptions">>;
@@ -634,7 +667,7 @@ function QueueEditDialog({
         setSaving(false);
         return;
       }
-      const pairFetch = pairAwareFetch(job, (url, init) => fetch(url, init));
+      const pairFetch = pairAwareFetch(job, (url, init) => fetchOrNoAnswer(url, init));
       const result = await scheduleDraft({
         fetchFn: pairFetch.fetchFn,
         jobId: job.id,
@@ -788,39 +821,78 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
     };
   }, [workspaceId]);
 
+  // client-journey L1: after a lost answer the panel reads the link again, so
+  // it shows the one that works. A failed read keeps what is shown; the
+  // sentence says to reload.
+  const readLink = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/workspaces/review-link?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const data = (await response.json().catch(() => null)) as { link?: ReviewLinkDto | null } | null;
+      if (response.ok && data && "link" in data) setLink(data.link ?? null);
+    } catch {
+      // Still no connection: the sentence already says to reload.
+    }
+  }, [workspaceId]);
+
   // Create and Replace are the same call: the server revokes any old link.
   const makeLink = useCallback(async () => {
-    const response = await fetchOrNoAnswer("/api/workspaces/review-link", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    let response: Response;
+    try {
+      response = await fetchOrNoAnswer("/api/workspaces/review-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+    } catch (error) {
+      if (isNoAnswer(error)) void readLink();
+      throw error;
+    }
     const data = (await response.json().catch(() => null)) as
       | { link?: ReviewLinkDto; error?: string }
       | null;
     if (!response.ok || !data?.link) {
-      toast.error(data?.error ?? "Couldn't make the link. Try again.");
+      if (data?.error) {
+        toast.error(data.error);
+      } else if (response.status >= 500 || response.ok) {
+        toast.error(REVIEW_LINK_MAYBE_MADE_MESSAGE);
+        void readLink();
+      } else {
+        toast.error("Couldn't make the link. Try again.");
+      }
       throw new ConfirmFailureShown("CREATE_FAILED");
     }
     setLink(data.link);
     toast.success("New link ready. Copy it and send it to your client.");
-  }, [toast, workspaceId]);
+  }, [readLink, toast, workspaceId]);
 
   const turnOff = useCallback(async () => {
-    const response = await fetchOrNoAnswer("/api/workspaces/review-link", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
-    });
+    let response: Response;
+    try {
+      response = await fetchOrNoAnswer("/api/workspaces/review-link", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+    } catch (error) {
+      if (isNoAnswer(error)) void readLink();
+      throw error;
+    }
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       // A 409 carries the library's "switched workspace" sentence: shown as is.
-      toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
+      if (data?.error) {
+        toast.error(data.error);
+      } else if (response.status >= 500) {
+        toast.error(REVIEW_LINK_MAYBE_OFF_MESSAGE);
+        void readLink();
+      } else {
+        toast.error("Couldn't turn the link off. Try again.");
+      }
       throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setLink(null);
     toast.success("The link is off. It no longer works.");
-  }, [toast, workspaceId]);
+  }, [readLink, toast, workspaceId]);
 
   async function handleCreate(event?: React.MouseEvent<HTMLButtonElement>) {
     const pressed = event?.currentTarget ?? null;
@@ -830,7 +902,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
       // R27 MM4 (pages L1): Create link is replaced by the new link; focus goes to its Copy button.
       focusAfterPress(pressed, () => copyRef.current);
     } catch (error) {
-      const text = confirmFailureText(error);
+      const text = confirmFailureText(error, REVIEW_LINK_MAYBE_MADE_MESSAGE);
       if (text) toast.error(text);
     } finally {
       setBusy(false);
@@ -882,6 +954,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
           confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
           destructive
           onConfirm={confirm === "replace" ? makeLink : turnOff}
+          unreachableText={confirm === "replace" ? REVIEW_LINK_MAYBE_MADE_MESSAGE : REVIEW_LINK_MAYBE_OFF_MESSAGE}
         />
       }
     />
@@ -1106,6 +1179,9 @@ export function QueueView({
     return () => clearInterval(id);
   }, []);
 
+  // R28 NN2: the calendar reads the Queue again after a lost answer.
+  const reloadSilently = useCallback(() => void load({ silent: true }), [load]);
+
   const handleReload = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -1242,7 +1318,17 @@ export function QueueView({
   const confirmCancel = useCallback(async () => {
     if (!cancelTarget) return;
     const request = cancelRequest(cancelTarget, cancelScope);
-    const response = await fetchOrNoAnswer(request.url, request.init);
+    const answer = await sendActionRequest(request.url, request.init);
+    if (answer.kind === "not_sent") {
+      toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
+      throw new ConfirmFailureShown("CANCEL_NOT_SENT");
+    }
+    if (answer.kind === "no_answer") {
+      void load({ silent: true });
+      toast.error(request.series ? QUEUE_CANCEL_SERIES_MAYBE_MESSAGE : QUEUE_CANCEL_MAYBE_MESSAGE);
+      return;
+    }
+    const { response } = answer;
     const data = (await response.json().catch(() => null)) as
       | { error?: string; cancelled?: number; notCancelled?: number }
       | null;
@@ -1267,7 +1353,17 @@ export function QueueView({
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
-    const response = await fetchOrNoAnswer(`/api/posts/${deleteTarget.id}`, cardRequest(deleteTarget, "DELETE"));
+    const answer = await sendActionRequest(`/api/posts/${deleteTarget.id}`, cardRequest(deleteTarget, "DELETE"));
+    if (answer.kind === "not_sent") {
+      toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
+      throw new ConfirmFailureShown("DELETE_NOT_SENT");
+    }
+    if (answer.kind === "no_answer") {
+      void load({ silent: true });
+      toast.error(QUEUE_DELETE_MAYBE_MESSAGE);
+      return;
+    }
+    const { response } = answer;
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't delete this draft.");
@@ -1275,7 +1371,7 @@ export function QueueView({
     }
     applyAnswer(deleteTarget, data, { kind: "remove" });
     toast.success(withPairNote("Draft deleted.", data));
-  }, [applyAnswer, deleteTarget, toast]);
+  }, [applyAnswer, deleteTarget, load, toast]);
 
   const viewer: QueueViewer = {
     role: workspaceRole,
@@ -1408,6 +1504,7 @@ export function QueueView({
             onShowList={() => setView("list")}
             onEdit={setEditTarget}
             onRescheduled={applyReschedule}
+            onReload={reloadSilently}
           />
         ) : (
           <>
@@ -1417,6 +1514,7 @@ export function QueueView({
                 onShowList={() => setView("list")}
                 onEdit={setEditTarget}
                 onRescheduled={applyReschedule}
+                onReload={reloadSilently}
               />
             ) : (
               <div className="space-y-3">

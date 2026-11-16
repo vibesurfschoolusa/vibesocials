@@ -4,10 +4,12 @@ import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { CONFIRM_NOTHING_SENT_MESSAGE } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { answerLostText } from "@/lib/answerLost";
 import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
-import { editOutcome, type JobPatch } from "@/lib/queueActions";
+import { editOutcome, sendActionRequest, type JobPatch } from "@/lib/queueActions";
 import {
   buildCalendarMonth,
   groupJobsByDay,
@@ -52,6 +54,8 @@ interface QueueCalendarProps {
    * pair's other half moved too.
    */
   onRescheduled: (card: QueueCardPost, patch: JobPatch, answer: unknown) => void;
+  /** Reads the Queue again without a spinner, after an answer that was lost. */
+  onReload?: () => void;
 }
 
 /**
@@ -88,7 +92,16 @@ export function clientChangeLine(
     : `${n} posts: your client asked for a change. They are in the list view.`;
 }
 
-export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList }: QueueCalendarProps) {
+/**
+ * R28 NN2 (publishing L3): the move may have been saved when the answer is
+ * lost or a gateway answers 5xx; the Queue reads itself again.
+ */
+export const RESCHEDULE_MAYBE_MOVED_MESSAGE = answerLostText(
+  "the post may have moved",
+  "We're reloading the Queue: check its day before you move it again.",
+);
+
+export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList, onReload = () => {} }: QueueCalendarProps) {
   const toast = useToast();
   const [monthCursor, setMonthCursor] = useState(() => {
     const now = new Date();
@@ -131,7 +144,17 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList }: Queue
     setSavingId(job.id);
     try {
       // A Feed and Story chip moves both halves (R3-client-journey M1).
-      const response = await fetch(`/api/posts/${job.id}`, cardRequest(job, "PATCH", { scheduledFor: nextIso }));
+      const answer = await sendActionRequest(`/api/posts/${job.id}`, cardRequest(job, "PATCH", { scheduledFor: nextIso }));
+      if (answer.kind === "not_sent") {
+        toast.error(CONFIRM_NOTHING_SENT_MESSAGE);
+        return;
+      }
+      if (answer.kind === "no_answer") {
+        onReload();
+        toast.error(RESCHEDULE_MAYBE_MOVED_MESSAGE);
+        return;
+      }
+      const { response } = answer;
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         toast.error(data?.error ?? "Couldn't reschedule this post.");
