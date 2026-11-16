@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +12,7 @@ import type { Platform } from "@prisma/client";
 
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
+import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 
 import {
   ByName,
@@ -22,7 +26,11 @@ import {
   retryAllToast,
   retryRequestBody,
   SEND_AGAIN_FAILED,
+  SEND_AGAIN_NO_ANSWER,
+  SEND_AGAIN_NOT_SENT,
 } from "./post-job-card";
+
+const cardSource = readFileSync(fileURLToPath(new URL("./post-job-card.tsx", import.meta.url)), "utf8");
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
 // builds no link from a Facebook Story's id.
@@ -241,13 +249,43 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       expect(fetcher).toHaveBeenCalledTimes(2);
     });
 
-    it("says it could not send when the answer has no sentence or the network fails", async () => {
-      const noBody = createSendAgain("job-9", vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => { throw new Error("x"); } }));
+    it("a refusal with no sentence says it could not send", async () => {
+      const noBody = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response("", { status: 400 })), () => true);
       await expect(noBody()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });
-
-      const offline = createSendAgain("job-9", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
-      await expect(offline()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });
       expect(SEND_AGAIN_FAILED).toBe("Couldn't send this post again. Please try again.");
+    });
+
+    // R27 publishing-flow L1: Send again after a failed start.
+    it("publishing couldn't start: the shared DISPATCH_FAILED sentence for Send again, and the list is read again", async () => {
+      for (const resultsMarked of [true, false]) {
+        const body = { code: "DISPATCH_FAILED", error: "Couldn't start publishing. Please try again.", postJobId: "job-9", resultsMarked };
+        const press = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 503 })), () => true);
+        await expect(press()).resolves.toEqual({ ok: false, error: dispatchFailedText(body, "Send again"), refetch: true });
+      }
+    });
+
+    it("no answer or a gateway's page: it may have gone through, check before pressing again", async () => {
+      expect(SEND_AGAIN_NO_ANSWER).toBe(
+        "We didn't get an answer, so the post may have started sending. Wait for this card to update and check it before you press Send again.",
+      );
+      const lost = createSendAgain("job-9", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")), () => true);
+      await expect(lost()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NO_ANSWER, refetch: true });
+      const gateway = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response("<html>504</html>", { status: 504 })), () => true);
+      await expect(gateway()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NO_ANSWER, refetch: true });
+    });
+
+    it("offline: nothing is sent and it says to check the connection", async () => {
+      expect(SEND_AGAIN_NOT_SENT).toBe(
+        "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.",
+      );
+      const fetcher = vi.fn();
+      const press = createSendAgain("job-9", fetcher, () => false);
+      await expect(press()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NOT_SENT });
+      expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it("the card reads the list again when the outcome asks", () => {
+      expect(cardSource).toMatch(/if \(outcome\.refetch\) onRetryAccepted\(job\.id\)/);
     });
   });
 });
@@ -405,5 +443,15 @@ describe("PostJobCard - the by line", () => {
       ),
     );
     expect(html.replace(/<!-- -->/g, "")).toContain(` · by <span class="break-words">${LONG}</span>`);
+  });
+});
+
+// R27 pages L2: Retry all failed keeps focus while it runs.
+const NL = String.fromCharCode(10);
+describe("PostJobCard - Retry all failed while it runs", () => {
+  it("is loading, never disabled, so focus stays on it", () => {
+    const tag = cardSource.slice(cardSource.lastIndexOf("<Button", cardSource.indexOf("Retry all failed" + NL)), cardSource.indexOf("Retry all failed" + NL));
+    expect(tag).toContain("loading={retryAllPlatforms.some((platform) => pending.has(platform))}");
+    expect(tag).not.toContain("disabled=");
   });
 });

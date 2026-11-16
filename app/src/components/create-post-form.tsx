@@ -2531,7 +2531,8 @@ function CreatePostFormInner({
                 <span>Generate a caption when media is added</span>
               </label>
             </div>
-            <div className="flex items-center gap-2">
+            {/* R27 pages L12: at 375 px the two buttons don't fit on one line. */}
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
@@ -2822,11 +2823,10 @@ function CreatePostFormInner({
               {control.label}
             </Button>
             </span>
-            {untouchedMessage ? (
-              <p className="text-sm text-muted-foreground" role="status">
-                {untouchedMessage}
-              </p>
-            ) : null}
+            {/* R27 pages L9: on the page from the first render, so the text is announced. */}
+            <p className="text-sm text-muted-foreground" role="status">
+              {untouchedMessage}
+            </p>
             {tiktokBlock ? (
               <p className="text-sm text-muted-foreground" role="status">
                 TikTok: {tiktokBlock}

@@ -1209,13 +1209,16 @@ export function BulkPostsForm({
         </div>
       ) : null}
 
-      {done ? (
-        <Alert variant="success" title="Every post is created.">
-          <Link href="/queue" className={buttonVariants({ variant: "primary", size: "lg", className: "mt-2" })}>
-            Open the Queue
-          </Link>
-        </Alert>
-      ) : null}
+      {/* R27 pages L9: the region is on the page from the first render; only what is in it changes. */}
+      <div role="status">
+        {done ? (
+          <Alert variant="success" role={undefined} title="Every post is created.">
+            <Link href="/queue" className={buttonVariants({ variant: "primary", size: "lg", className: "mt-2" })}>
+              Open the Queue
+            </Link>
+          </Alert>
+        ) : null}
+      </div>
     </div>
   );
 }

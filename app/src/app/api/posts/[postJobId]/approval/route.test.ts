@@ -818,11 +818,11 @@ describe("POST /api/posts/[postJobId]/approval — dispatch failure (2026-11-01 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const html = sendEmailMock.mock.calls[0][0].html as string;
     expect(html).toContain(
-      "Approved, but nothing was sent: publishing couldn&#39;t start. Open the post in Activity and send it again.",
+      "Approved, but nothing was sent: publishing couldn&#39;t start. Open the post in Activity and retry it there.",
     );
     expect(html).not.toMatch(/publishing now/i);
     expect(htmlToPlainText(html)).toContain(
-      "Approved, but nothing was sent: publishing couldn't start. Open the post in Activity and send it again.",
+      "Approved, but nothing was sent: publishing couldn't start. Open the post in Activity and retry it there.",
     );
     consoleSpy.mockRestore();
   });
@@ -849,9 +849,9 @@ describe("POST /api/posts/[postJobId]/approval — dispatch failure (2026-11-01 
     // send again a post that shows as publishing for about two hours.
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const html = sendEmailMock.mock.calls[0][0].html as string;
-    expect(html).toContain("Approved, but publishing didn&#39;t start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don&#39;t send it again until it shows as failed; then send it again from there.");
-    expect(html).not.toContain("Open the post in Activity and send it again.");
-    expect(htmlToPlainText(html)).toContain("Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't send it again until it shows as failed; then send it again from there.");
+    expect(html).toContain("Approved, but publishing didn&#39;t start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don&#39;t retry it until it shows as failed; then retry it there.");
+    expect(html).not.toContain("Open the post in Activity and retry it there.");
+    expect(htmlToPlainText(html)).toContain("Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't retry it until it shows as failed; then retry it there.");
     consoleSpy.mockRestore();
   });
 });

@@ -5,6 +5,7 @@ import {
   COMPOSER_DISPATCH_FAILED_MESSAGE,
   COMPOSER_DISPATCH_UNMARKED_MESSAGE,
   composerSubmitOutcome,
+  dispatchFailedText,
   type ComposerSubmitOutcome,
 } from "./composerSubmitOutcome";
 import { WORKSPACE_CHANGED_MESSAGE } from "./workspaceChanged";
@@ -205,5 +206,21 @@ describe("postDestination", () => {
     ["a member's Schedule held for approval", "schedule", true, "queue"],
   ] as const)("%s (%s, held %s) -> %s", (_name, mode, held, page) => {
     expect(postDestination(mode, held)).toBe(page);
+  });
+});
+
+// R27 publishing-flow L1: Activity's Send again reads the same 503 rule, worded
+// for the card it was pressed on (the post is already in Activity).
+describe("dispatchFailedText for Send again", () => {
+  it("marked: the post now shows as failed; retry it on its card", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: true }, "Send again")).toBe(
+      "Publishing couldn't start, so the post now shows as failed. Retry it on its card.",
+    );
+  });
+
+  it("not marked: it can show as publishing for about two hours, then retry it there", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false }, "Send again")).toBe(
+      "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.",
+    );
   });
 });

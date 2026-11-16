@@ -116,7 +116,8 @@ export function MediaPickerDialog({ open, onOpenChange, addedIds, room, onAdd }:
           </div>
         ) : items.length === 0 && !error ? (
           <p className="text-sm text-muted-foreground">
-            Nothing in Media yet. Upload files here, or on the Media page.
+            Nothing in Media yet. Close this and choose photos and videos on this page, or upload them on the
+            Media page.
           </p>
         ) : (
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">

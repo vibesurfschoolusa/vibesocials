@@ -151,7 +151,7 @@ export function buildApprovalRequestedEmail(params: {
 
 /** R26 LL3 follow-up: Activity can show it publishing until the stuck-job reconciler fails it. */
 const START_UNCONFIRMED_TEXT =
-  "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't send it again until it shows as failed; then send it again from there.";
+  "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't retry it until it shows as failed; then retry it there.";
 
 /** Sent to the submitting member once an owner approves or rejects. */
 export function buildApprovalDecisionEmail(params: {

@@ -33,7 +33,7 @@ export class PostConnectionLostError extends Error {
  * A gateway's 502/504 page is not one, and it can come after the post was
  * created (the function timed out while the hand-off or an email hung).
  */
-async function isRouteAnswer(response: Response): Promise<boolean> {
+export async function isRouteAnswer(response: Response): Promise<boolean> {
   try {
     const parsed: unknown = JSON.parse(await response.clone().text());
     if (typeof parsed !== "object" || parsed === null) return false;

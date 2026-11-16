@@ -53,6 +53,11 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
  * every 10 minutes, later when a batch is waiting. Retry is offered from then on.
  */
 function dispatchUnmarkedText(button: DispatchFailedButton): string {
+  // R27 publishing-flow L1: Send again is pressed on the Activity card itself,
+  // and that card has no Send again while the post shows as publishing.
+  if (button === "Send again") {
+    return "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.";
+  }
   const done = button === "Approve" ? "approved" : "saved";
   return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
 }
@@ -60,15 +65,18 @@ function dispatchUnmarkedText(button: DispatchFailedButton): string {
 export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post");
 
 /** The button a second press of which would only make things worse. */
-export type DispatchFailedButton = "Post" | "Publish" | "Approve";
+export type DispatchFailedButton = "Post" | "Publish" | "Approve" | "Send again";
 
 /**
  * R26 LL3: the one rule for a `DISPATCH_FAILED` 503 (Create, and the Queue's
  * Publish now and Approve): retry from Activity, or, when the results could
  * not be marked, the "about two hours" sentence naming the pressed button.
+ * Activity's Send again (R27 publishing-flow L1) is worded for its card: once
+ * the list is read again the card shows the failed platforms' Retry buttons.
  */
 export function dispatchFailedText(body: unknown, button: DispatchFailedButton = "Post"): string {
   if (field(body, "resultsMarked") === false) return dispatchUnmarkedText(button);
+  if (button === "Send again") return "Publishing couldn't start, so the post now shows as failed. Retry it on its card.";
   // R26 LL3 follow-up: an approval is what stood, so Approve says so.
   return button === "Approve" ? "Approved, but publishing couldn't start — retry it from Activity." : COMPOSER_DISPATCH_FAILED_MESSAGE;
 }

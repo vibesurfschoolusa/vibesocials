@@ -1161,3 +1161,19 @@ describe("Create's AI buttons and connections line", () => {
     expect(source).toContain("{connectionsError ?? CONNECTIONS_FAILED_TEXT}");
   });
 });
+
+// R27 pages L12 and L9 (non-TikTok parts of Create).
+describe("Create at phone width and its status line", () => {
+  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+
+  it("the AI caption buttons' row wraps", () => {
+    const at = source.indexOf("Caption from media\n");
+    const row = source.slice(source.lastIndexOf("<div", source.lastIndexOf("<Button", at)), at);
+    expect(row).toMatch(/<div className="flex flex-wrap items-center gap-2">/);
+  });
+
+  it("the line by the button for an untouched form is a region from the first render", () => {
+    expect(source).toMatch(/<p className="text-sm text-muted-foreground" role="status">\s*\{untouchedMessage\}\s*<\/p>/);
+    expect(source).not.toContain("{untouchedMessage ? (");
+  });
+});

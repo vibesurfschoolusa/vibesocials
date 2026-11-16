@@ -172,7 +172,8 @@ describe("ConfirmDialog callers", () => {
         expect(at, handler).toBeGreaterThan(-1);
         while (at !== -1) {
           const body = caller.slice(at, caller.indexOf("}, [", at));
-          expect(body, handler).toMatch(/await fetchOrNoAnswer\(/);
+          // R27: sendActionRequest (lib/queueActions.ts) wraps fetchOrNoAnswer for a press that may have gone through.
+          expect(body, handler).toMatch(/await (fetchOrNoAnswer|sendActionRequest)\(/);
           expect(body, handler).not.toMatch(/await fetch\(/);
           at = caller.indexOf(`const ${handler} = useCallback`, at + 1);
         }

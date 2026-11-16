@@ -67,6 +67,7 @@ import {
   applyJobPatch,
   approveHint,
   checkScheduleTime,
+  decisionButtonState,
   decisionOutcome,
   editDialogModel,
   editOutcome,
@@ -77,6 +78,9 @@ import {
   publishOutcome,
   queueStatusBadge,
   queueFailureText,
+  queueMayHaveGoneThroughText,
+  queueNotSentText,
+  sendActionRequest,
   shouldRefetchAfterError,
   type JobPatch,
   type QueueViewer,
@@ -119,13 +123,6 @@ function hasClientChangeRequest(job: PostJobDTO): boolean {
 export type QueueViewMode = "list" | "calendar";
 
 const QUEUE_VIEW_KEY = "vibe.queueView";
-
-/**
- * R25 publishing-flow L2: Publish's request may have reached the server before
- * the connection dropped, so the dialog doesn't say "nothing changed".
- */
-export const PUBLISH_UNREACHABLE_MESSAGE =
-  "We couldn't reach Vibe Socials. Check Activity to see whether it went out before you press Publish again.";
 
 type ViewStorage = Partial<Pick<Storage, "getItem" | "setItem">>;
 
@@ -240,8 +237,8 @@ interface QueueCardProps {
   onDelete: (job: QueueCardPost) => void;
   /** Approval workflow — decide a pending submission (owners only). */
   onDecide: (job: QueueCardPost, decision: "approve" | "reject") => void;
-  /** Approval workflow — a decision is in flight for this job. */
-  deciding: boolean;
+  /** Approval workflow — the decision in flight for this job, if any. */
+  deciding: "approve" | "reject" | null;
 }
 
 /** Longest caption start a button's name carries, in characters. */
@@ -380,7 +377,7 @@ function QueueCard({
             <>
               <Button
                 size="sm"
-                loading={deciding}
+                {...decisionButtonState(deciding, "approve")}
                 aria-label={`Approve "${name}"`}
                 onClick={() => onDecide(job, "approve")}
               >
@@ -390,7 +387,7 @@ function QueueCard({
                 size="sm"
                 variant="ghost"
                 className="text-muted-foreground hover:text-destructive"
-                disabled={deciding}
+                {...decisionButtonState(deciding, "reject")}
                 aria-label={`Reject "${name}"`}
                 onClick={() => onDecide(job, "reject")}
               >
@@ -586,7 +583,7 @@ function QueueEditDialog({
     try {
       if (isScheduled || scheduledIso === null) {
         // Plain save: scheduled posts send caption + time, drafts just the caption.
-        const response = await fetch(
+        const answer = await sendActionRequest(
           `/api/posts/${job.id}`,
           cardRequest(job, "PATCH", {
             baseCaption: trimmed,
@@ -594,6 +591,19 @@ function QueueEditDialog({
             ...(overridesEdited ? { perPlatformOverrides: overridesToSend } : {}),
           }),
         );
+        if (answer.kind === "not_sent") {
+          toast.error(queueNotSentText("edit"));
+          setSaving(false);
+          return;
+        }
+        if (answer.kind === "no_answer") {
+          // R27 pages L10: the save may stand. The dialog keeps what was typed.
+          onStale();
+          toast.error(queueMayHaveGoneThroughText("edit"));
+          setSaving(false);
+          return;
+        }
+        const { response } = answer;
         if (!response.ok) {
           const errorData = (await response.json().catch(() => null)) as { error?: string } | null;
           toast.error(errorData?.error ?? "Couldn't save your changes.");
@@ -1006,7 +1016,7 @@ export function QueueView({
   // Refreshed on an interval so the hint can't promise a time that has since
   // passed, and kept out of render so the component stays pure.
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [decidingId, setDecidingId] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState<{ id: string; decision: "approve" | "reject" } | null>(null);
   // Activity pagination (Task C2) — the Queue fetches independently (its own
   // ?status= filter), so it tracks the cursor locally rather than via
   // usePostJobs. nextCursor is the next (older) page's ?cursor= token from the
@@ -1156,13 +1166,24 @@ export function QueueView({
   // to the version the owner is looking at (409 CHANGED_SINCE_REVIEW otherwise).
   const handleDecide = useCallback(
     async (job: QueueCardPost, decision: "approve" | "reject") => {
-      if (decidingId) return;
-      setDecidingId(job.id);
+      if (deciding) return;
+      setDeciding({ id: job.id, decision });
       try {
-        const response = await fetch(
+        const answer = await sendActionRequest(
           `/api/posts/${job.id}/approval`,
           cardRequest(job, "POST", { decision, reviewedUpdatedAt: job.updatedAt }),
         );
+        if (answer.kind === "not_sent") {
+          toast.error(queueNotSentText(decision));
+          return;
+        }
+        if (answer.kind === "no_answer") {
+          // R27 publishing-flow L3: the decision may stand; show the Queue as it is.
+          void load({ silent: true });
+          toast.error(queueMayHaveGoneThroughText(decision));
+          return;
+        }
+        const { response } = answer;
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         if (!response.ok) {
           toast.error(
@@ -1183,10 +1204,10 @@ export function QueueView({
       } catch {
         toast.error("Couldn't save that decision.");
       } finally {
-        setDecidingId(null);
+        setDeciding(null);
       }
     },
-    [applyAnswer, decidingId, load, toast],
+    [applyAnswer, deciding, load, toast],
   );
 
   // Calendar drag-to-reschedule already PATCHed the server; mirror the change
@@ -1238,12 +1259,30 @@ export function QueueView({
     toast.success(withPairNote("Draft deleted.", data));
   }, [applyAnswer, deleteTarget, toast]);
 
+  const viewer: QueueViewer = {
+    role: workspaceRole,
+    requireApproval: workspaceRequireApproval,
+  };
+  const publishKind =
+    publishTarget && getQueueCardActions(publishTarget, viewer).primary?.kind === "submit" ? "submit" : "publish";
+
   // "Publish now" - or, for a member under approval, "Submit for approval"
   // (same endpoint; the server decides). publishOutcome reads the answer: a
   // submission keeps the card as a pending draft, publishing removes it.
   const confirmPublish = useCallback(async () => {
     if (!publishTarget) return;
-    const response = await fetchOrNoAnswer(`/api/posts/${publishTarget.id}/publish`, cardRequest(publishTarget, "POST"));
+    const answer = await sendActionRequest(`/api/posts/${publishTarget.id}/publish`, cardRequest(publishTarget, "POST"));
+    if (answer.kind === "not_sent") {
+      toast.error(queueNotSentText(publishKind));
+      throw new ConfirmFailureShown("PUBLISH_NOT_SENT");
+    }
+    if (answer.kind === "no_answer") {
+      // R27 publishing-flow L3: it may have started; close and show the Queue as it is.
+      void load({ silent: true });
+      toast.error(queueMayHaveGoneThroughText(publishKind));
+      return;
+    }
+    const { response } = answer;
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
       toast.error(queueFailureText(data, "Couldn't publish this post.", "Publish"));
@@ -1258,14 +1297,8 @@ export function QueueView({
     const outcome = publishOutcome(data);
     applyAnswer(publishTarget, data, outcome.kind === "remove" ? { kind: "remove" } : { kind: "update", patch: outcome.patch });
     toast.success(withPairNote(outcome.message, data));
-  }, [applyAnswer, load, publishTarget, toast]);
+  }, [applyAnswer, load, publishKind, publishTarget, toast]);
 
-  const viewer: QueueViewer = {
-    role: workspaceRole,
-    requireApproval: workspaceRequireApproval,
-  };
-  const publishKind =
-    publishTarget && getQueueCardActions(publishTarget, viewer).primary?.kind === "submit" ? "submit" : "publish";
   const publishCopy = publishConfirmCopy(publishKind);
   // R3-client-journey M1: on a Feed and Story card the Story goes with it.
   const publishLine = publishTarget ? pairDialogLine(publishTarget, publishKind) : null;
@@ -1384,7 +1417,7 @@ export function QueueView({
                     onPublish={setPublishTarget}
                     onDelete={setDeleteTarget}
                     onDecide={handleDecide}
-                    deciding={decidingId === card.id}
+                    deciding={deciding?.id === card.id ? deciding.decision : null}
                   />
                 ))}
               </div>
@@ -1477,7 +1510,6 @@ export function QueueView({
         title={publishCopy.title}
         description={publishLine ? `${publishCopy.description} ${publishLine}` : publishCopy.description}
         confirmText={publishCopy.confirmText}
-        unreachableText={publishKind === "publish" ? PUBLISH_UNREACHABLE_MESSAGE : undefined}
         onConfirm={confirmPublish}
       />
 

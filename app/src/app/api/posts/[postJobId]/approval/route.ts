@@ -59,7 +59,7 @@ const CHANGED_SINCE_REVIEW_BODY = {
  */
 const NOT_SENT_NOTHING_CONNECTED =
   "none of this post's platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.";
-const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and send it again.";
+const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and retry it there.";
 
 /** What happened to the submitter's decision email (R23-client-journey L4). */
 type AuthorEmail = "sent" | "removed" | "failed";

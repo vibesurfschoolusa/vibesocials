@@ -306,8 +306,15 @@ export function BulkPostRow({
           </p>
         ) : null}
 
-        {row.sending ? <p className="text-sm text-muted-foreground">Sending...</p> : null}
-        {row.result ? <Alert variant="success">{row.result}</Alert> : null}
+        {/* R27 pages L9: one region from the first render; only what is in it changes. */}
+        <div role="status" id={`bulk-row-${row.id}-send`}>
+          {row.sending ? <p className="text-sm text-muted-foreground">Sending...</p> : null}
+          {row.result ? (
+            <Alert variant="success" role={undefined}>
+              {row.result}
+            </Alert>
+          ) : null}
+        </div>
         {row.sendError ? <Alert variant="danger">{row.sendError}</Alert> : null}
         {row.uncertain ? (
           <Alert variant="warning">

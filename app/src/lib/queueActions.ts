@@ -1,5 +1,7 @@
 import { approvalOutcome } from "./approval";
 import { dispatchFailedText } from "./composerSubmitOutcome";
+import { isRouteAnswer } from "./postSubmitFailure";
+import { fetchOrNoAnswer, isNoAnswer } from "./requestNoAnswer";
 import type { PostJobDTO } from "./postsDto";
 import { localDateTimeToUtcIso } from "./scheduling";
 
@@ -265,6 +267,82 @@ export function queueFailureText(data: unknown, fallback: string, button: "Publi
   const r = asRecord(data);
   if (r.code === "DISPATCH_FAILED") return dispatchFailedText(data, button);
   return typeof r.error === "string" && r.error ? r.error : fallback;
+}
+
+/* ----- a press whose answer may be lost ----- */
+
+/**
+ * R27 publishing-flow L3 = pages L10: what came of an action request.
+ * - `not_sent`: the browser was offline, so nothing left; it is safe to press again.
+ * - `no_answer`: the fetch rejected, or a 5xx that isn't the route's own JSON
+ *   (a gateway's 502/504 page) came back. The server may have done it, so the
+ *   person checks before pressing again (postSubmitFailure's isRouteAnswer).
+ * - `answer`: the route's answer, to be read as usual.
+ */
+export type ActionAnswer = { kind: "answer"; response: Response } | { kind: "not_sent" } | { kind: "no_answer" };
+
+function browserOnline(): boolean {
+  return typeof navigator === "undefined" || navigator.onLine !== false;
+}
+
+export async function sendActionRequest(
+  url: string,
+  init: RequestInit,
+  deps: { fetchImpl?: typeof fetch; online?: () => boolean } = {},
+): Promise<ActionAnswer> {
+  if (!(deps.online ?? browserOnline)()) return { kind: "not_sent" };
+  let response: Response;
+  try {
+    response = await fetchOrNoAnswer(url, init, deps.fetchImpl ?? fetch);
+  } catch (error) {
+    if (isNoAnswer(error)) return { kind: "no_answer" };
+    throw error;
+  }
+  if (response.status >= 500 && !(await isRouteAnswer(response))) return { kind: "no_answer" };
+  return { kind: "answer", response };
+}
+
+/** The Queue's presses that change a post. */
+export type QueueAction = "approve" | "reject" | "publish" | "submit" | "edit";
+
+const NOT_SENT: Record<QueueAction, [what: string, next: string]> = {
+  approve: ["the post wasn't approved", "press Approve again"],
+  reject: ["the post wasn't rejected", "press Reject again"],
+  publish: ["the post wasn't published", "press Publish now again"],
+  submit: ["the post wasn't sent for approval", "press Submit for approval again"],
+  edit: ["your changes weren't saved", "save again"],
+};
+
+/** Offline, nothing sent: the connection sentence. */
+export function queueNotSentText(action: QueueAction): string {
+  const [what, next] = NOT_SENT[action];
+  return `We couldn't reach Vibe Socials, so ${what}. Check your connection and ${next}.`;
+}
+
+const MAY_HAVE: Record<QueueAction, [what: string, check: string]> = {
+  approve: ["the post may have been approved", "check it and Activity before you press Approve again"],
+  reject: ["the post may have been rejected", "check it before you press Reject again"],
+  publish: ["the post may have started publishing", "check Activity before you press Publish now again"],
+  submit: ["the post may have been sent for approval", "check it before you press Submit for approval again"],
+  edit: ["your changes may have been saved", "check the post before you save again"],
+};
+
+/** No answer: it may have gone through; the caller reloads the Queue. */
+export function queueMayHaveGoneThroughText(action: QueueAction): string {
+  const [what, check] = MAY_HAVE[action];
+  return `We didn't get an answer, so ${what}. The Queue has been reloaded: ${check}.`;
+}
+
+/**
+ * R27 publishing-flow L2 = pages L2: Approve and Reject each show their own
+ * press. The pressed one spins (Button's loading keeps focus on it); the other
+ * is aria-disabled, never disabled, so focus never drops.
+ */
+export function decisionButtonState(
+  deciding: "approve" | "reject" | null,
+  button: "approve" | "reject",
+): { loading: boolean; "aria-disabled": true | undefined } {
+  return { loading: deciding === button, "aria-disabled": deciding !== null || undefined };
 }
 
 /* ----- the Edit dialog ----- */

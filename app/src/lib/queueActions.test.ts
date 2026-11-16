@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   applyJobPatch,
@@ -14,7 +14,11 @@ import {
   publishConfirmCopy,
   publishNeedsApproval,
   publishOutcome,
+  decisionButtonState,
   queueFailureText,
+  queueMayHaveGoneThroughText,
+  queueNotSentText,
+  sendActionRequest,
   queueStatusBadge,
   shouldRefetchAfterError,
   type QueueViewer,
@@ -429,5 +433,98 @@ describe("queueFailureText", () => {
     expect(queueFailureText({ error: "Refused." }, "Couldn't publish this post.", "Publish")).toBe("Refused.");
     expect(queueFailureText(null, "Couldn't approve this post.", "Approve")).toBe("Couldn't approve this post.");
     expect(queueFailureText({ error: "" }, "Couldn't publish this post.", "Publish")).toBe("Couldn't publish this post.");
+  });
+});
+
+// R27 publishing-flow L3 = pages L10: a Queue action whose answer was lost may
+// have gone through; one that never left says to check the connection.
+describe("sendActionRequest", () => {
+  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" };
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  it("offline: sends nothing and says so", async () => {
+    const fetchImpl = vi.fn();
+    await expect(sendActionRequest("/api/x", init, { fetchImpl, online: () => false })).resolves.toEqual({ kind: "not_sent" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a rejected fetch: no answer, it may have gone through", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(sendActionRequest("/api/x", init, { fetchImpl, online: () => true })).resolves.toEqual({ kind: "no_answer" });
+  });
+
+  it("a gateway's 502 or 504 page: no answer", async () => {
+    for (const status of [502, 504]) {
+      const fetchImpl = vi.fn().mockResolvedValue(new Response("<html>Gateway</html>", { status }));
+      await expect(sendActionRequest("/api/x", init, { fetchImpl, online: () => true })).resolves.toEqual({ kind: "no_answer" });
+    }
+  });
+
+  it("the route's own 5xx and every other answer come back to be read", async () => {
+    const dispatch = json(503, { code: "DISPATCH_FAILED", error: "Couldn't start publishing." });
+    const fetchImpl = vi.fn().mockResolvedValueOnce(dispatch).mockResolvedValueOnce(json(409, { error: "Changed." }));
+    const first = await sendActionRequest("/api/x", init, { fetchImpl, online: () => true });
+    expect(first.kind).toBe("answer");
+    if (first.kind === "answer") await expect(first.response.json()).resolves.toMatchObject({ code: "DISPATCH_FAILED" });
+    const second = await sendActionRequest("/api/x", init, { fetchImpl, online: () => true });
+    expect(second.kind === "answer" && second.response.status).toBe(409);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/x", init);
+  });
+});
+
+describe("queueNotSentText and queueMayHaveGoneThroughText", () => {
+  it("nothing was sent: the connection sentence, naming the button", () => {
+    expect(queueNotSentText("approve")).toBe(
+      "We couldn't reach Vibe Socials, so the post wasn't approved. Check your connection and press Approve again.",
+    );
+    expect(queueNotSentText("reject")).toBe(
+      "We couldn't reach Vibe Socials, so the post wasn't rejected. Check your connection and press Reject again.",
+    );
+    expect(queueNotSentText("publish")).toBe(
+      "We couldn't reach Vibe Socials, so the post wasn't published. Check your connection and press Publish now again.",
+    );
+    expect(queueNotSentText("submit")).toBe(
+      "We couldn't reach Vibe Socials, so the post wasn't sent for approval. Check your connection and press Submit for approval again.",
+    );
+    expect(queueNotSentText("edit")).toBe(
+      "We couldn't reach Vibe Socials, so your changes weren't saved. Check your connection and save again.",
+    );
+  });
+
+  it("no answer: it may have gone through, the Queue is reloaded, check before pressing again", () => {
+    expect(queueMayHaveGoneThroughText("approve")).toBe(
+      "We didn't get an answer, so the post may have been approved. The Queue has been reloaded: check it and Activity before you press Approve again.",
+    );
+    expect(queueMayHaveGoneThroughText("reject")).toBe(
+      "We didn't get an answer, so the post may have been rejected. The Queue has been reloaded: check it before you press Reject again.",
+    );
+    expect(queueMayHaveGoneThroughText("publish")).toBe(
+      "We didn't get an answer, so the post may have started publishing. The Queue has been reloaded: check Activity before you press Publish now again.",
+    );
+    expect(queueMayHaveGoneThroughText("submit")).toBe(
+      "We didn't get an answer, so the post may have been sent for approval. The Queue has been reloaded: check it before you press Submit for approval again.",
+    );
+    expect(queueMayHaveGoneThroughText("edit")).toBe(
+      "We didn't get an answer, so your changes may have been saved. The Queue has been reloaded: check the post before you save again.",
+    );
+    for (const action of ["approve", "reject", "publish", "submit", "edit"] as const) {
+      expect(queueMayHaveGoneThroughText(action)).not.toMatch(/nothing changed/i);
+    }
+  });
+});
+
+// R27 publishing-flow L2 = pages L2: Reject no longer spins Approve.
+describe("decisionButtonState", () => {
+  it("the pressed button spins; the other is aria-disabled, never disabled", () => {
+    expect(decisionButtonState("reject", "reject")).toEqual({ loading: true, "aria-disabled": true });
+    expect(decisionButtonState("reject", "approve")).toEqual({ loading: false, "aria-disabled": true });
+    expect(decisionButtonState("approve", "approve")).toEqual({ loading: true, "aria-disabled": true });
+    expect(decisionButtonState("approve", "reject")).toEqual({ loading: false, "aria-disabled": true });
+  });
+
+  it("nothing in flight: neither", () => {
+    expect(decisionButtonState(null, "approve")).toEqual({ loading: false, "aria-disabled": undefined });
+    expect(decisionButtonState(null, "reject")).toEqual({ loading: false, "aria-disabled": undefined });
   });
 });

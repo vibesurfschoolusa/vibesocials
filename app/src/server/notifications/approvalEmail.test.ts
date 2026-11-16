@@ -419,9 +419,14 @@ describe("approved, publishing not confirmed as stopped", () => {
   });
 
   it("says it may still go out and not to send it again until it shows as failed (HTML and plain text)", () => {
-    expect(email.html).toContain("<p>Approved, but publishing didn&#39;t start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don&#39;t send it again until it shows as failed; then send it again from there.</p>");
+    expect(email.html).toContain("<p>Approved, but publishing didn&#39;t start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don&#39;t retry it until it shows as failed; then retry it there.</p>");
     expect(email.html).not.toMatch(/publishing now/i);
-    expect(htmlToPlainText(email.html)).toContain("Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't send it again until it shows as failed; then send it again from there.");
+    expect(htmlToPlainText(email.html)).toContain("Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't retry it until it shows as failed; then retry it there.");
     expect(email.subject).toBe("Your post in Acme was approved, but publishing may not have started");
+  });
+
+  // R27 pages L7: the card offers Retry, never "send it again", for a post with results.
+  it("names the card's Retry, not a send-again control", () => {
+    expect(email.html).not.toMatch(/send it again/i);
   });
 });

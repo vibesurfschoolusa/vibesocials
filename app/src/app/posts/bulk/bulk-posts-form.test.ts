@@ -195,3 +195,14 @@ describe("Schedule all and Save all as drafts while sending", () => {
     );
   });
 });
+
+// R27 pages L9: "Every post is created." goes into a status region that is on
+// the page from the first render.
+describe("Add many: the all-created line", () => {
+  const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+
+  it("is a region that is always rendered, filled when done", () => {
+    expect(source).toMatch(/<div role="status"[^>]*>\s*\{done \? \(\s*<Alert variant="success" role=\{undefined\} title="Every post is created\."/);
+    expect(source).not.toMatch(/\{done \? \(\s*<Alert variant="success" title="Every post is created\."/);
+  });
+});

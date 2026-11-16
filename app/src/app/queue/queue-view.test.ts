@@ -14,7 +14,6 @@ import {
   isTextPost,
   labelName,
   pairLabel,
-  PUBLISH_UNREACHABLE_MESSAGE,
   queueLoadErrorText,
   readQueueView,
   saveQueueView,
@@ -265,24 +264,65 @@ describe("queueLoadErrorText", () => {
 });
 
 // R25 publishing-flow L2: Cancel, Delete and Publish said nothing when the
-// request never left. The dialog now says it (ui/dialog.tsx); Publish words it
-// so nobody presses Publish twice without checking whether it went out.
+// request never left. Cancel and Delete leave it to the dialog (ui/dialog.tsx);
+// R27 publishing-flow L3: Publish words a lost answer itself (sendActionRequest).
 describe("the Queue's confirm dialogs when Vibe Socials can't be reached", () => {
   const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
 
-  it("Publish points at Activity before another press", () => {
-    expect(PUBLISH_UNREACHABLE_MESSAGE).toBe(
-      "We couldn't reach Vibe Socials. Check Activity to see whether it went out before you press Publish again.",
-    );
-    expect(queueSource).toMatch(
-      /unreachableText=\{publishKind === "publish" \? PUBLISH_UNREACHABLE_MESSAGE : undefined\}\s+onConfirm=\{confirmPublish\}/,
-    );
-  });
-
   it("a refusal it already toasted is not shown twice", () => {
-    for (const code of ["CANCEL_FAILED", "DELETE_FAILED", "PUBLISH_FAILED"]) {
+    for (const code of ["CANCEL_FAILED", "DELETE_FAILED", "PUBLISH_FAILED", "PUBLISH_NOT_SENT"]) {
       expect(queueSource).toContain(`throw new ConfirmFailureShown("${code}")`);
     }
+  });
+});
+
+// R27 publishing-flow L3 = pages L10: Approve, Reject, Publish and the Edit
+// dialog's save tell "never sent" from "may have gone through".
+describe("Queue actions whose answer may be lost", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+  const body = (start: string, end: string) => queueSource.slice(queueSource.indexOf(start), queueSource.indexOf(end));
+
+  it("send through sendActionRequest, never a plain fetch", () => {
+    const decide = body("const handleDecide = useCallback(", "const applyReschedule");
+    const publish = body("const confirmPublish = useCallback(", "const publishCopy = publishConfirmCopy");
+    const save = body("if (isScheduled || scheduledIso === null) {", "// Schedule a draft");
+    for (const part of [decide, publish, save]) {
+      expect(part).toContain("sendActionRequest(");
+      expect(part).not.toMatch(/(^|[^.\w])fetch\(/);
+      expect(part).toMatch(/kind === "not_sent"/);
+      expect(part).toMatch(/kind === "no_answer"/);
+    }
+    expect(decide).toContain("queueMayHaveGoneThroughText(decision)");
+    expect(decide).toContain("queueNotSentText(decision)");
+    expect(publish).toContain("queueMayHaveGoneThroughText(publishKind)");
+    expect(publish).toContain("queueNotSentText(publishKind)");
+    expect(save).toContain('queueMayHaveGoneThroughText("edit")');
+    expect(save).toContain('queueNotSentText("edit")');
+  });
+
+  it("a lost answer reloads the Queue", () => {
+    const decide = body("const handleDecide = useCallback(", "const applyReschedule");
+    const publish = body("const confirmPublish = useCallback(", "const publishCopy = publishConfirmCopy");
+    const save = body("if (isScheduled || scheduledIso === null) {", "// Schedule a draft");
+    expect(decide).toMatch(/no_answer"\) \{[^}]*load\(\{ silent: true \}\)/);
+    expect(publish).toMatch(/no_answer"\) \{[^}]*load\(\{ silent: true \}\)/);
+    expect(save).toMatch(/no_answer"\) \{[^}]*onStale\(\)/);
+  });
+
+  it("the dialog's own unreachable sentence for Publish is gone (no copy of the rule)", () => {
+    expect(queueSource).not.toContain("PUBLISH_UNREACHABLE_MESSAGE");
+  });
+});
+
+// R27 publishing-flow L2 = pages L2: each decision has its own busy state.
+describe("Approve and Reject", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("each takes its state from decisionButtonState; Reject is never disabled", () => {
+    expect(queueSource).toContain('{...decisionButtonState(deciding, "approve")}');
+    expect(queueSource).toContain('{...decisionButtonState(deciding, "reject")}');
+    expect(queueSource).not.toContain("disabled={deciding}");
+    expect(queueSource).not.toContain("loading={deciding}");
   });
 });
 

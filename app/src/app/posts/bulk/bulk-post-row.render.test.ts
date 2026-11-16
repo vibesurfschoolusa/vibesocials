@@ -227,3 +227,20 @@ describe("Add many row: platforms skipped for this file", () => {
     expect(render(row())).not.toContain("Skips ");
   });
 });
+
+// R27 pages L9: the row's send line is a status region from the first render;
+// only its text changes, so "Sending..." and the result are announced.
+describe("Add many row: the send status line", () => {
+  it("is on the page before anything is sent, empty", () => {
+    const html = render(row());
+    expect(html).toContain('<div role="status" id="bulk-row-r1-send"');
+  });
+
+  it("the same region carries Sending... and then the result", () => {
+    expect(render(row({ sending: true }))).toMatch(/<div role="status" id="bulk-row-r1-send"[^>]*><p[^>]*>Sending\.\.\.<\/p>/);
+    const done = render(row({ result: "Scheduled for Sat 14 Nov, 10:00." }));
+    expect(done).toMatch(/<div role="status" id="bulk-row-r1-send"[^>]*><div[^>]*>[\s\S]*Scheduled for Sat 14 Nov, 10:00\./);
+    // The result box inside is not a second live region.
+    expect(done.match(/role="status"/g)?.length).toBe(1);
+  });
+});

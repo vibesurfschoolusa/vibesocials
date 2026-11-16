@@ -16,6 +16,8 @@ import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
+import { sendActionRequest } from "@/lib/queueActions";
 import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
 import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
@@ -178,41 +180,62 @@ export function cardTime(job: {
   return job.createdAt ? { label: null, iso: job.createdAt } : null;
 }
 
-/** What Send again says when the server gave no sentence or could not be reached. */
+/** What Send again says when the server refused without a sentence. */
 export const SEND_AGAIN_FAILED = "Couldn't send this post again. Please try again.";
+/** R27 publishing-flow L1: offline, so the request never left. */
+export const SEND_AGAIN_NOT_SENT =
+  "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.";
+/** R27 publishing-flow L1: no answer, or a gateway's page; the server may have taken it. */
+export const SEND_AGAIN_NO_ANSWER =
+  "We didn't get an answer, so the post may have started sending. Wait for this card to update and check it before you press Send again.";
 
-/** The answer to one press of Send again; `null` when a press is already under way or done. */
-export type SendAgainOutcome = { ok: true } | { ok: false; error: string } | null;
+/**
+ * The answer to one press of Send again; `null` when a press is already under
+ * way or done. `refetch`: the post may have changed, so the list is read again.
+ */
+export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetch?: true } | null;
 
 /**
  * F1 follow-up: Send again on a failed post that no platform was tried for
  * (no results; the publish route accepts exactly that). A press while one is
  * in flight, or after the server took the post, does nothing, so a double
  * press can never send it twice; a refusal lets the user press again.
+ * R27 publishing-flow L1: a DISPATCH_FAILED 503 is read by the shared rule
+ * (dispatchFailedText); the post then has failed results or shows as
+ * publishing, so this card's press stays used up and the list is read again.
  */
 export function createSendAgain(
   postJobId: string,
   fetcher: (input: string, init: RequestInit) => Promise<Response> = fetch,
+  online?: () => boolean,
 ): () => Promise<SendAgainOutcome> {
   let locked = false;
   return async () => {
     if (locked) return null;
     locked = true;
-    try {
-      const response = await fetcher(`/api/posts/${postJobId}/publish`, { method: "POST" });
-      if (response.ok) return { ok: true };
-      let body: { error?: unknown } = {};
-      try {
-        body = (await response.json()) as { error?: unknown };
-      } catch {
-        // Not JSON: the generic sentence below.
-      }
+    const answer = await sendActionRequest(`/api/posts/${postJobId}/publish`, { method: "POST" }, {
+      fetchImpl: fetcher as typeof fetch,
+      ...(online ? { online } : {}),
+    });
+    if (answer.kind === "not_sent") {
       locked = false;
-      return { ok: false, error: typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED };
-    } catch {
-      locked = false;
-      return { ok: false, error: SEND_AGAIN_FAILED };
+      return { ok: false, error: SEND_AGAIN_NOT_SENT };
     }
+    if (answer.kind === "no_answer") {
+      locked = false;
+      return { ok: false, error: SEND_AGAIN_NO_ANSWER, refetch: true };
+    }
+    const { response } = answer;
+    if (response.ok) return { ok: true };
+    let body: { error?: unknown; code?: unknown } = {};
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      // Not JSON: the generic sentence below.
+    }
+    if (body.code === "DISPATCH_FAILED") return { ok: false, error: dispatchFailedText(body, "Send again"), refetch: true };
+    locked = false;
+    return { ok: false, error: typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED };
   };
 }
 
@@ -375,6 +398,7 @@ export function PostJobCard({
       return;
     }
     toast.error(outcome.error);
+    if (outcome.refetch) onRetryAccepted(job.id);
   }, [job.id, onRetryAccepted, pressSendAgain, toast]);
 
   // R7-security L1 and its review: what "Retry all failed" sends, by the rule
@@ -607,7 +631,7 @@ export function PostJobCard({
             <Button
               size="sm"
               variant="outline"
-              disabled={retryAllPlatforms.some((platform) => pending.has(platform))}
+              loading={retryAllPlatforms.some((platform) => pending.has(platform))}
               onClick={() => retry("all", retryAllPlatforms)}
             >
               Retry all failed
