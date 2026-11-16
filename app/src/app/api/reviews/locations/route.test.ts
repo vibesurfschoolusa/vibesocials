@@ -187,7 +187,7 @@ describe("GET /api/reviews/locations", () => {
   // R12 L1: a member reads who can reconnect, and the page gets no Settings link.
   it("a member: who can reconnect when Google refuses the token", async () => {
     getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
-    findFirstMock.mockResolvedValue(CONNECTION);
+    findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/1/locations/9" } });
     vi.spyOn(console, "error").mockImplementation(() => {});
     global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
 
@@ -465,5 +465,23 @@ describe("GET /api/reviews/locations rate limit", () => {
     expect(checkRateLimitMock).toHaveBeenCalledWith({ userId: "user-1", route: "reviews/locations", limit: 60, windowMs: 300_000 });
     expect(global.fetch).not.toHaveBeenCalled();
     expect(findFirstMock).not.toHaveBeenCalled();
+  });
+});
+
+// R25 lead review: a member with no saved location is answered without asking Google.
+describe("GET /api/reviews/locations for a member with no saved location", () => {
+  it("lists nothing and asks Google nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
+    findFirstMock.mockResolvedValue(CONNECTION);
+    global.fetch = vi.fn() as unknown as typeof fetch;
+
+    const body = await (await GET()).json();
+
+    expect(body).toEqual({
+      locations: [],
+      connected: true,
+      notice: "The workspace owner hasn't chosen this workspace's Google location yet. Its reviews show here once they have.",
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

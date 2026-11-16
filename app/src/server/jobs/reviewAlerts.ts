@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planIncludes } from "@/lib/planFeatures";
 import { utcDayKey } from "@/lib/usageLimits";
+import { flagIfTokenRejected } from "@/server/googleFailure";
 import { fetchReviews, refreshAccessToken, type GoogleReview } from "@/server/googleReviews";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
@@ -288,8 +289,11 @@ export async function checkReviewConnections(
     }
 
     result.checked++;
+    // The tokens this check sends, from the row already loaded (a Google refresh keeps the refresh token).
+    let used: { id: string; accessToken: string; refreshToken: string | null } | null = null;
     try {
       const accessToken = await accessTokenOf(connection);
+      used = { id: connection.id, accessToken, refreshToken: connection.refreshToken };
       const reviews = await fetchReviews(accessToken, locationName, { newestFirst: true });
       const found = findNewReviews(reviews, seenThroughFor(metadata, locationName), now);
 
@@ -311,6 +315,10 @@ export async function checkReviewConnections(
       });
     } catch (error) {
       result.failed++;
+      // R25: one rule on every Google call. A token Google refused flags the row
+      // (guarded by the tokens sent); the health sweep's notices step emails the
+      // owners once for that flag, and tomorrow's check skips the row.
+      await flagIfTokenRejected(error, used);
       // The error kind only: a message could quote a URL.
       logger.warn("[reviews] Review check failed for a Google connection; carrying on", {
         connectionId: id,

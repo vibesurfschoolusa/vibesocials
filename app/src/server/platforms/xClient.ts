@@ -288,7 +288,7 @@ async function uploadMedia(
   const imageLimited = await classifyRateLimit("x", uploadResponse);
   if (imageLimited) throw imageLimited;
 
-  await assertOk(uploadResponse, {
+  await assertXOk(uploadResponse, {
     code: "X_IMAGE_UPLOAD_FAILED",
     prefix: "X media upload failed",
   });
@@ -353,7 +353,7 @@ async function uploadVideoChunked(
   const initLimited = await classifyRateLimit("x", initResponse);
   if (initLimited) throw initLimited;
 
-  await assertOk(initResponse, {
+  await assertXOk(initResponse, {
     code: "X_VIDEO_INIT_FAILED",
     prefix: "X video upload initialization failed",
   });
@@ -403,7 +403,7 @@ async function uploadVideoChunked(
     const appendLimited = await classifyRateLimit("x", appendResponse);
     if (appendLimited) throw appendLimited;
 
-    await assertOk(appendResponse, {
+    await assertXOk(appendResponse, {
       code: "X_VIDEO_APPEND_FAILED",
       prefix: `X video APPEND failed (segment ${segmentIndex})`,
     });
@@ -440,7 +440,7 @@ async function uploadVideoChunked(
   const finalizeLimited = await classifyRateLimit("x", finalizeResponse);
   if (finalizeLimited) throw finalizeLimited;
 
-  await assertOk(finalizeResponse, {
+  await assertXOk(finalizeResponse, {
     code: "X_VIDEO_FINALIZE_FAILED",
     prefix: "X video upload finalization failed",
   });
@@ -581,7 +581,7 @@ async function waitForVideoProcessing(
     const statusLimited = await classifyRateLimit("x", statusResponse);
     if (statusLimited) throw statusLimited;
 
-    await assertOk(statusResponse, {
+    await assertXOk(statusResponse, {
       code: "X_VIDEO_STATUS_CHECK_FAILED",
       prefix: "X video processing status check failed",
     });
@@ -837,10 +837,12 @@ async function postTweet(args: {
 
   // v1Response's status/body are already logged above; assertOk
   // additionally logs tweetResponse's own status + body server-side.
-  await assertOk(tweetResponse, {
-    code: "X_TWEET_FAILED",
-    prefix: "X tweet creation failed",
-  });
+  // R25 lead review: the v1.1 answer is the one that names the token (code 89).
+  await assertXOk(
+    tweetResponse,
+    { code: "X_TWEET_FAILED", prefix: "X tweet creation failed" },
+    v1Response.status === 401 && xBodyNamesTheToken(v1ErrorBody),
+  );
 
   // v2 answered 2xx, so the tweet may be live: an unreadable body is
   // PUBLISH_UNCONFIRMED (final review F4), and so is a body that parsed but has
@@ -1108,7 +1110,7 @@ async function initChunkedMedia(args: {
   const limited = await classifyRateLimit("x", response);
   if (limited) throw limited;
 
-  await assertOk(response, {
+  await assertXOk(response, {
     code: "X_VIDEO_INIT_FAILED",
     prefix: "X video upload initialization failed",
   });
@@ -1309,7 +1311,7 @@ async function publishChunked(args: {
       return await unanswered(attempt.failure);
     }
 
-    await assertOk(attempt.response, {
+    await assertXOk(attempt.response, {
       code: "X_VIDEO_STATUS_CHECK_FAILED",
       prefix: "X video processing status check failed",
     });
@@ -1379,7 +1381,7 @@ async function publishChunked(args: {
             );
           }
 
-          await assertOk(attempt.response, {
+          await assertXOk(attempt.response, {
             code: "X_VIDEO_APPEND_FAILED",
             prefix: `X video APPEND failed (segment ${index})`,
           });
@@ -1411,7 +1413,7 @@ async function publishChunked(args: {
             ),
           );
         }
-        await assertOk(attempt.response, {
+        await assertXOk(attempt.response, {
           code: "X_VIDEO_FINALIZE_FAILED",
           prefix: "X video upload finalization failed",
         });
@@ -1577,6 +1579,39 @@ async function publishPhotos(args: {
   return postTweet({ oauth, token, tweetText: computeTweetText(caption), mediaIds, deadline });
 }
 
+/**
+ * X's error code for the person's own token: 89, "Invalid or expired token"
+ * (v1.1 `errors[].code`; the token was revoked or is no longer valid). Every X
+ * request is also signed with our consumer key (OAuth 1.0a), so a 401 without
+ * it (code 32, "Could not authenticate you", or no code) may be our own app
+ * credentials: flagging then would flag every X row and email every owner.
+ */
+const X_INVALID_TOKEN_CODE = 89;
+
+/** Does an X error body name the person's token as invalid, expired or revoked? */
+function xBodyNamesTheToken(body: string): boolean {
+  try {
+    const errors = (JSON.parse(body) as { errors?: unknown } | null)?.errors;
+    return Array.isArray(errors) && errors.some((entry) => (entry as { code?: unknown } | null)?.code === X_INVALID_TOKEN_CODE);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * assertOk for an X API answer, with `xTokenRejected` on the thrown error when
+ * a 401 names the person's token (or `tokenRejected` says an earlier answer
+ * did). Reads a clone, so assertOk still logs the body.
+ */
+async function assertXOk(response: Response, options: Parameters<typeof assertOk>[1], tokenRejected = false): Promise<void> {
+  if (response.ok) return;
+  const named =
+    tokenRejected || (response.status === 401 && xBodyNamesTheToken(await response.clone().text().catch(() => "")));
+  await assertOk(response, options).catch((error: unknown) => {
+    throw Object.assign(error as Error, { xTokenRejected: named });
+  });
+}
+
 /** The code a row is flagged with when X refuses its token (an API 401). */
 const X_RECONNECT_CODE = "X_RECONNECT_REQUIRED";
 
@@ -1587,15 +1622,25 @@ const X_RECONNECT_CODE = "X_RECONNECT_REQUIRED";
  * so Settings shows Reconnect, as for Facebook, Instagram, LinkedIn, TikTok and
  * Pinterest; if the stored tokens changed meanwhile nothing is flagged and the
  * retryable CONNECTION_TOKEN_CHANGED is thrown. A 401 from our own storage
- * (STORAGE_READ_CODES) says nothing about X and flags nothing.
+ * (STORAGE_READ_CODES) says nothing about X and flags nothing. R25 lead review:
+ * only a 401 that names the person's token (X_INVALID_TOKEN_CODE) flags; any
+ * other 401 may be our own consumer key or secret, so it is logged once as a
+ * possible app-credential problem and flags nothing.
  */
 async function flagRejectedXToken<T>(connection: SocialConnection, publish: () => Promise<T>): Promise<T> {
   try {
     return await publish();
   } catch (error) {
-    const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
+    const { status, code, xTokenRejected } = (error ?? {}) as { status?: unknown; code?: unknown; xTokenRejected?: unknown };
     const fromStorage = typeof code === "string" && STORAGE_READ_CODES.has(code);
     if (status !== 401 || fromStorage || !connection.accessToken) throw error;
+    if (xTokenRejected !== true) {
+      console.warn("[X OAuth 1.0a] X answered 401 without naming the user's token: the app credentials may be wrong", {
+        connectionId: connection.id,
+        code,
+      });
+      throw error;
+    }
     const snapshot = { id: connection.id, accessToken: connection.accessToken, refreshToken: connection.refreshToken };
     if ((await flagRejectedToken(snapshot, X_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();
     throw Object.assign(new Error("X no longer accepts this connection. Reconnect X in Settings."), {

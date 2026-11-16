@@ -3126,8 +3126,13 @@ describe("xClient: a token X refuses flags the row", () => {
     vi.unstubAllEnvs();
   });
 
+  // R25 lead review: X signs every request with our consumer key too, so only an
+  // answer naming the user's token (X code 89, "Invalid or expired token") flags.
+  const expired = () => json({ errors: [{ code: 89, message: "Invalid or expired token." }] }, 401);
+  const unauthenticated = () => json({ errors: [{ code: 32, message: "Could not authenticate you." }] }, 401);
+
   it("a 401 on the post flags the row and reads Reconnect", async () => {
-    stubX({ v1: () => json({}, 401), v2: () => json({}, 401) });
+    stubX({ v1: expired, v2: () => json({ title: "Unauthorized", status: 401, detail: "Unauthorized" }, 401) });
 
     const error = await failureOf(xClient.publishText!(textCtx()));
 
@@ -3137,7 +3142,7 @@ describe("xClient: a token X refuses flags the row", () => {
   });
 
   it("a 401 on the photo upload flags the row", async () => {
-    stubX({ upload: () => json({}, 401) });
+    stubX({ upload: expired });
 
     const error = await failureOf(xClient.publishVideo(photoCtx()));
 
@@ -3147,7 +3152,7 @@ describe("xClient: a token X refuses flags the row", () => {
 
   it("tokens that changed meanwhile: nothing flagged, a retryable failure", async () => {
     flagRejectedTokenMock.mockResolvedValue("superseded");
-    stubX({ v1: () => json({}, 401), v2: () => json({}, 401) });
+    stubX({ v1: expired, v2: expired });
 
     const error = await failureOf(xClient.publishText!(textCtx()));
 
@@ -3155,6 +3160,8 @@ describe("xClient: a token X refuses flags the row", () => {
   });
 
   it.each([
+    ["a 401 on the post that doesn't name the token (code 32: maybe our own keys)", { v1: unauthenticated, v2: unauthenticated }],
+    ["a 401 on the photo upload without X's token code", { upload: () => json({}, 401) }],
     ["a 429 on the post", { v1: () => json({}, 403), v2: () => json({}, 429) }],
     ["a 5xx on the photo upload", { upload: () => json({}, 503) }],
     ["a 401 from our own storage", { blob: () => new Response("no", { status: 401 }) }],
@@ -3168,5 +3175,36 @@ describe("xClient: a token X refuses flags the row", () => {
     expect(error).not.toBeNull();
     expect(error?.code).not.toBe("X_RECONNECT_REQUIRED");
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("xClient: a 401 that may be our own credentials", () => {
+  it("is logged once as a possible app-credential problem, and flags nothing", async () => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    flagRejectedTokenMock.mockReset();
+    const body = JSON.stringify({ errors: [{ code: 32, message: "Could not authenticate you." }] });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(body, { status: 401 })));
+
+    const error = await xClient
+      .publishText!({
+        user: { id: "user-1" } as unknown as User,
+        socialConnection: { id: "conn-x", platform: "x", accessToken: "t", refreshToken: "s" } as unknown as SocialConnection,
+        caption: "Hi",
+        baseCaption: "Hi",
+      })
+      .catch((e: unknown) => e as { status?: number });
+
+    expect(error).toMatchObject({ status: 401 });
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    const lines = warn.mock.calls.filter(([message]) => String(message).includes("app credentials"));
+    expect(lines).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain("consumer-secret");
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 });

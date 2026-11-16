@@ -283,6 +283,9 @@ describe("saveSocialConnection: Google Business Profile", () => {
 
     await expect(saveGbp()).resolves.toEqual({ ok: true });
     expect(String(h.fetch.mock.calls[2][0])).toContain("pageToken=loc-p2");
+    // The shared reader, with Google's storeCode filter.
+    expect(new URL(String(h.fetch.mock.calls[1][0])).searchParams.get("filter")).toBe('storeCode="STORE-7"');
+    expect(new URL(String(h.fetch.mock.calls[1][0])).searchParams.get("pageSize")).toBe("100");
     expect(h.updateMany.mock.calls[0][0].data).not.toHaveProperty("metadata");
   });
 
@@ -299,12 +302,14 @@ describe("saveSocialConnection: Google Business Profile", () => {
     expect(h.fetch).toHaveBeenCalledTimes(4);
   });
 
+  // R25 lead review: the shared paged reader (platforms/gbpLocation.ts), 50 pages at most.
   it("past the page cap: couldn't check; nothing written", async () => {
     h.findUnique.mockResolvedValue(withStoreCode);
-    h.fetch.mockImplementation(async () => answer(200, { accounts: [], nextPageToken: "more" }));
+    let page = 0;
+    h.fetch.mockImplementation(async () => answer(200, { accounts: [], nextPageToken: `more-${++page}` }));
 
     await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
-    expect(h.fetch).toHaveBeenCalledTimes(10);
+    expect(h.fetch).toHaveBeenCalledTimes(50);
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 

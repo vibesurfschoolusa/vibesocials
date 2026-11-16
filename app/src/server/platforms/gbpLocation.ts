@@ -60,6 +60,8 @@ export type GbpListing =
       complete: boolean;
       unread: UnreadAccounts;
       refusedOnly: boolean;
+      /** The failure of an account skipped for a reason other than access (Google's status), else null. */
+      skippedFailure: unknown;
     }
   | { ok: false; kind: GoogleFailureKind; failure: unknown };
 
@@ -171,6 +173,11 @@ interface ReadOptions {
   used: () => TokenSnapshot | null;
   /** Errors `get` throws that end the reading as they are (a rate limit, the step's time budget). */
   rethrow?: (error: unknown) => boolean;
+  /**
+   * Google's own `filter` on each account's locations (e.g. `storeCode="X"`):
+   * a lookup of one location then costs a call or two per account, not every page.
+   */
+  locationsFilter?: string;
   /** The failure to sort: the picker sorts a 401 after a failed refresh by what the refresh said. */
   effective?: (failure: unknown) => unknown;
 }
@@ -201,6 +208,7 @@ export async function readGbpLocations(options: ReadOptions): Promise<GbpListing
   let accountsRead = 0;
   let accountsNamed = 0;
   let lastSkipped: unknown = null;
+  let skippedFailure: unknown = null;
   const allLocations: ListedGbpLocation[] = [];
 
   // 2. Every location of each account.
@@ -212,6 +220,7 @@ export async function readGbpLocations(options: ReadOptions): Promise<GbpListing
     const url = new URL(`${BUSINESS_INFO_BASE}/${accountName}/locations`);
     url.searchParams.set("readMask", "name,title,storeCode,storefrontAddress");
     url.searchParams.set("pageSize", String(LOCATIONS_PAGE_SIZE));
+    if (options.locationsFilter) url.searchParams.set("filter", options.locationsFilter);
 
     const locations = await readAllPages<GbpLocation>(url, "locations", get, rethrow);
     if (!locations.ok) {
@@ -224,6 +233,7 @@ export async function readGbpLocations(options: ReadOptions): Promise<GbpListing
       } else {
         unread.failed = true;
         partlyUnread = true;
+        skippedFailure = lastSkipped;
       }
       complete = false;
       continue;
@@ -246,7 +256,14 @@ export async function readGbpLocations(options: ReadOptions): Promise<GbpListing
     return { ok: false, kind: unread.failed ? "tryLater" : "access", failure: lastSkipped };
   }
 
-  return { ok: true, locations: allLocations, complete, unread, refusedOnly: !complete && !partlyUnread };
+  return {
+    ok: true,
+    locations: allLocations,
+    complete,
+    unread,
+    refusedOnly: !complete && !partlyUnread,
+    skippedFailure,
+  };
 }
 
 /** The store-code lookup's failure when the accounts call failed, or no account's locations could be read. */
@@ -319,6 +336,8 @@ export async function resolveGbpLocationName(
     // step's time budget, a timeout or no answer. Skipping that account would
     // end as a misleading not found.
     rethrow: () => true,
+    // R25 lead review: Google's own filter, so the lookup costs a call or two per account.
+    locationsFilter: `storeCode="${trimmed}"`,
   });
   if (!listing.ok) {
     // The token itself was refused (a 401, a missing scope), or the tokens changed meanwhile.
@@ -328,6 +347,13 @@ export async function resolveGbpLocationName(
   }
 
   const candidates = listing.locations.filter((location) => location.storeCode === trimmed);
+
+  // R25 lead review: an account that failed (not one that refused access, which
+  // can't be posted to anyway) may hold the code, so no match there is Google's
+  // failure, retried and worded "try later", never "choose the location again".
+  if (candidates.length === 0 && !listing.complete && !listing.refusedOnly) {
+    throw accountsListFailed(listing.skippedFailure);
+  }
 
   if (candidates.length === 0) {
     const error = new Error(

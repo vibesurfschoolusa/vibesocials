@@ -77,6 +77,13 @@ export async function GET() {
       return NextResponse.json(googleRefusedBody(role), { status: 500 });
     }
 
+    // R25 lead review: a member is served only the saved location, so with none
+    // saved there is nothing to ask Google for.
+    const savedName = savedLocationName(connection.metadata);
+    if (role === "member" && !savedName) {
+      return NextResponse.json({ locations: [], connected: true, notice: MEMBER_NO_LOCATION_NOTICE });
+    }
+
     // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
     // A failed early refresh of a still-valid token goes on with the stored one.
@@ -104,12 +111,10 @@ export async function GET() {
       return NextResponse.json(notice ? { locations, connected: true, notice } : { locations, connected: true });
     }
 
-    const savedName = savedLocationName(connection.metadata);
     const saved = savedLocationIn(listing.locations, savedName);
     if (saved) return NextResponse.json({ locations: [reviewsListedLocation(saved)], connected: true });
-    // Not found: maybe on an account that could not be read; else not chosen, or not this login's.
-    const memberNotice =
-      !listing.complete && notice ? notice : savedName ? MEMBER_SAVED_NOT_LISTED_NOTICE : MEMBER_NO_LOCATION_NOTICE;
+    // Not found: maybe on an account that could not be read; else not this login's.
+    const memberNotice = !listing.complete && notice ? notice : MEMBER_SAVED_NOT_LISTED_NOTICE;
     return NextResponse.json({ locations: [], connected: true, notice: memberNotice });
   } catch (error: unknown) {
     // R25 platform-clients L2: a token Google refused flags the row first.

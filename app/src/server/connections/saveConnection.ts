@@ -10,6 +10,7 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
+import { readGbpLocations } from "@/server/platforms/gbpLocation";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -100,8 +101,6 @@ function locationIdOf(resourceName: string): string | null {
   return match ? match[1] : null;
 }
 
-const ACCOUNT_MANAGEMENT_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
-
 /** What the new sign-in can do with the Business Profile location the connection posts to. */
 type GbpLocationCheck = "kept" | "unavailable" | "check_failed";
 
@@ -109,50 +108,24 @@ async function gbpGet(url: string | URL, accessToken: string): Promise<Response>
   return fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
 }
 
-/** Pages read of one list (the accounts, or one account's locations) before giving up. */
-const GBP_LIST_PAGE_CAP = 10;
-
-/**
- * Every item of a paged Google list (R6 fourth review 2), following
- * nextPageToken. Null when a page fails or the list is longer than the cap:
- * then it couldn't be told, which is never read as "not found".
- */
-async function gbpListAll<T>(baseUrl: string | URL, key: string, accessToken: string): Promise<T[] | null> {
-  const items: T[] = [];
-  let pageToken: string | null = null;
-  for (let page = 0; page < GBP_LIST_PAGE_CAP; page++) {
-    const url = new URL(baseUrl);
-    if (pageToken) url.searchParams.set("pageToken", pageToken);
-    const response = await gbpGet(url, accessToken);
-    if (!response.ok) return null;
-    const body = (await response.json()) as Record<string, unknown>;
-    const found = body[key];
-    if (Array.isArray(found)) items.push(...(found as T[]));
-    pageToken = typeof body.nextPageToken === "string" && body.nextPageToken ? body.nextPageToken : null;
-    if (!pageToken) return items;
-  }
-  return null;
-}
-
 /**
  * A store code is found only among the locations the signed-in account
  * manages: exactly one match keeps it; none, or more than one, makes it
- * unavailable. Any failed or over-long list (an account's 5xx included) is
- * check_failed, never "not found" (the shared resolver skips such an account).
+ * unavailable. R25 lead review: read with the shared paged listing
+ * (platforms/gbpLocation.ts) and Google's storeCode filter. Any list that
+ * failed or was not read in full (an account's 5xx or refusal included) is
+ * check_failed, never "not found". Nothing is flagged here: the token was
+ * just granted, and the row is being saved.
  */
 async function checkGbpStoreCode(storeCode: string, accessToken: string): Promise<GbpLocationCheck> {
-  const accounts = await gbpListAll<{ name?: string }>(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, "accounts", accessToken);
-  if (!accounts) return "check_failed";
-  let matches = 0;
-  for (const account of accounts) {
-    if (!account.name) continue;
-    const url = new URL(`${BUSINESS_INFO_BASE}/${account.name}/locations`);
-    url.searchParams.set("readMask", "name,storeCode");
-    url.searchParams.set("filter", `storeCode="${storeCode}"`);
-    const locations = await gbpListAll<{ name?: string; storeCode?: string }>(url, "locations", accessToken);
-    if (!locations) return "check_failed";
-    matches += locations.filter((location) => location.name && location.storeCode === storeCode).length;
-  }
+  const listing = await readGbpLocations({
+    where: "GBP sign-in store code check",
+    get: (url) => gbpGet(url, accessToken),
+    used: () => null,
+    locationsFilter: `storeCode="${storeCode}"`,
+  });
+  if (!listing.ok || !listing.complete) return "check_failed";
+  const matches = listing.locations.filter((location) => location.storeCode === storeCode).length;
   return matches === 1 ? "kept" : "unavailable";
 }
 

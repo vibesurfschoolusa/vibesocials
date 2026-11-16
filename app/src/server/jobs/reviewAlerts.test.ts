@@ -33,6 +33,11 @@ vi.mock("@/server/googleReviews", () => ({
   refreshAccessToken: refreshMock,
 }));
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
+const { flagRejectedTokenMock } = vi.hoisted(() => ({ flagRejectedTokenMock: vi.fn() }));
+vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/connectionHealth")>()),
+  flagRejectedToken: flagRejectedTokenMock,
+}));
 
 import { RetryAfterError } from "inngest";
 
@@ -742,5 +747,43 @@ describe("sendReviewAlerts", () => {
     await sendWithTimers([alert()]);
 
     expect(sendEmailMock.mock.calls[0][0].html).toContain(`href="https://app.example/go?w=${alert().workspaceId}&amp;to=%2Freviews"`);
+  });
+});
+
+// R25 lead review: one rule on every Google call. A 401 in the daily review
+// check flags the row from the row already loaded (the next connection-notices
+// run emails the owners once); a 5xx flags nothing.
+describe("checkReviewConnections and a token Google refuses", () => {
+  beforeEach(() => {
+    // The token check reads the clock: it stands at the run's NOW.
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    flagRejectedTokenMock.mockReset();
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("a 401 flags the row with the tokens the check sent, adding no read", async () => {
+    useRows([row()]);
+    fetchReviewsMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
+
+    const result = await checkReviewConnections(["conn-1"], NOW);
+
+    expect(result.failed).toBe(1);
+    expect(flagRejectedTokenMock).toHaveBeenCalledWith(
+      { id: "conn-1", accessToken: "gbp-access", refreshToken: "gbp-refresh" },
+      "GOOGLE_API_TOKEN_REJECTED",
+    );
+    // The load and the failure's marker stamp, as for any failure: no read added for the flag.
+    expect(db.connectionFindUnique).toHaveBeenCalledTimes(2);
+  });
+
+  it("a 5xx flags nothing, with the same reads", async () => {
+    useRows([row()]);
+    fetchReviewsMock.mockRejectedValue(Object.assign(new Error("Failed (status 503)"), { status: 503 }));
+
+    await checkReviewConnections(["conn-1"], NOW);
+
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(db.connectionFindUnique).toHaveBeenCalledTimes(2);
   });
 });

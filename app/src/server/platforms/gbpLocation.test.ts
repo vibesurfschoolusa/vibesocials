@@ -180,13 +180,35 @@ describe("resolveGbpLocationName", () => {
       expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 500 });
     });
 
-    it("an account failing while another answers is still skipped softly (store code not found)", async () => {
+    // R25 lead review: the code may be in the account that failed, so this is
+    // Google's failure to retry ("try later"), never "choose the location again".
+    it("an account failing while another answers, and no match: Google's failure with its status", async () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.stubGlobal(
         "fetch",
         vi.fn((input: string | URL) => {
           const url = input.toString();
           if (url.includes("accounts/111/locations")) return Promise.resolve(new Response("", { status: 500 }));
+          if (url.includes("/locations")) return Promise.resolve(jsonResponse({ locations: [] }));
+          return Promise.resolve(jsonResponse({ accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] }));
+        }),
+      );
+
+      const error = await resolveGbpLocationName("token-abc", "STORE-1").then(
+        () => null,
+        (e: unknown) => e as LimitedError,
+      );
+
+      expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 500 });
+    });
+
+    it("an account refusing access while another answers, and no match: not found (it can't be posted to)", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL) => {
+          const url = input.toString();
+          if (url.includes("accounts/111/locations")) return Promise.resolve(new Response("{}", { status: 403 }));
           if (url.includes("/locations")) return Promise.resolve(jsonResponse({ locations: [] }));
           return Promise.resolve(jsonResponse({ accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] }));
         }),
@@ -235,6 +257,8 @@ describe("resolveGbpLocationName reads every page", () => {
     await expect(resolveGbpLocationName("token-abc", "STORE-1")).resolves.toBe("accounts/111/locations/2");
     const locationCalls = fetchMock.mock.calls.map(([u]) => new URL(u.toString())).filter((u) => u.pathname.endsWith("/locations"));
     expect(locationCalls.map((u) => u.searchParams.get("pageSize"))).toEqual(["100", "100"]);
+    // R25 lead review: Google's own storeCode filter, so a large account costs one or two calls.
+    expect(locationCalls.map((u) => u.searchParams.get("filter"))).toEqual(['storeCode="STORE-1"', 'storeCode="STORE-1"']);
   });
 
   it("finds a store code in an account on the second page of accounts", async () => {
