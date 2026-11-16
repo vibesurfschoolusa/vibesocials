@@ -4,11 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, MessageSquare } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { canRetry, readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
@@ -53,6 +54,17 @@ import { ReviewLinkPanel } from "./review-link-panel";
 const LOCATIONS_FAILED = "Couldn't load your Google locations. Try again in a minute.";
 const REVIEWS_FAILED = "Couldn't load your Google reviews. Try again in a minute.";
 const REPLY_FAILED = "Couldn't post your reply. Try again in a minute.";
+export const REPLY_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so your reply wasn't posted. Check your connection and try again.";
+
+/**
+ * KK3: what a failed reply says, in its toast and its form's status line. A
+ * request that got no answer (lib/requestNoAnswer) says so; anything else is
+ * the route's sentence or REPLY_FAILED (api-error shownError).
+ */
+export function replyFailureShown(error: unknown): ShownError {
+  return isNoAnswer(error) ? { message: REPLY_OFFLINE_MESSAGE, settingsLink: false } : shownError(error, REPLY_FAILED);
+}
 const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
 
 const HEADING_CLASS = "text-2xl font-bold tracking-tight text-foreground outline-none";
@@ -291,8 +303,9 @@ export function ReviewsView({
   };
 
   // Posts the reply. Invoked from the ConfirmDialog's onConfirm — on failure
-  // it toasts and then re-throws, which (per the dialog's contract) keeps the
-  // dialog open so the user can retry, unless a retry can't change the answer;
+  // it toasts, notes it in the form, then throws ConfirmFailureShown, which
+  // keeps the dialog open for a retry without a second message (the dialog's
+  // contract), unless a retry can't change the answer;
   // on success it updates local state and lets the dialog close.
   const performReply = async (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
@@ -304,7 +317,7 @@ export function ReviewsView({
       setSubmitting(review.reviewId);
       setReplyRefusal((prev) => replyRefusalCleared(prev, review.reviewId));
 
-      const response = await fetch(`/api/reviews/${review.reviewId}/reply`, {
+      const response = await fetchOrNoAnswer(`/api/reviews/${review.reviewId}/reply`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -347,11 +360,11 @@ export function ReviewsView({
       });
     } catch (err: unknown) {
       console.error("Error posting reply:", err);
-      const shown = shownError(err, REPLY_FAILED);
+      const shown = replyFailureShown(err);
       toast.error(shown.message);
       setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
       // A reply a retry can't change (a 403) lets the dialog close; its form keeps the sentence.
-      if (canRetry(shown)) throw err;
+      if (canRetry(shown)) throw new ConfirmFailureShown("REPLY_FAILED");
     } finally {
       setSubmitting(null);
     }

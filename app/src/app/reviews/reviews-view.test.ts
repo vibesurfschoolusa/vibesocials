@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { canRetry, ReviewsApiError } from "@/components/reviews/api-error";
+import { NoAnswerError } from "@/lib/requestNoAnswer";
+
+vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
+vi.mock("./review-link-panel", () => ({ ReviewLinkPanel: () => null }));
+
+import { REPLY_OFFLINE_MESSAGE, replyFailureShown } from "./reviews-view";
 
 const source = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
 const at = (needle: string) => {
@@ -137,7 +145,7 @@ describe("ReviewsView and an answer a retry can't change", () => {
 
   it("does not keep the confirm dialog open for a reply a retry can't change", () => {
     const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
-    expect(perform).toContain("if (canRetry(shown)) throw err;");
+    expect(perform).toContain('if (canRetry(shown)) throw new ConfirmFailureShown("REPLY_FAILED");');
   });
 });
 
@@ -200,5 +208,44 @@ describe("ReviewsView when a draft lands while another review is open", () => {
   it("picks the open box from the current state through openAfterDraft", () => {
     expect(source).toContain("setReplyingTo((open) => openAfterDraft(open, review.reviewId))");
     expect(source).not.toContain("if (replyingTo !== review.reviewId)");
+  });
+});
+
+// KK3 after KK2: a reply whose request got no answer says so (not "Couldn't
+// post your reply"), and a failure the page already toasted and put in the
+// form's status line is thrown as ConfirmFailureShown, so the confirm dialog
+// adds no second message. Final failures still close it (canRetry).
+describe("ReviewsView when a reply fails", () => {
+  it("no answer: the offline sentence, and the dialog stays open for a retry", () => {
+    const shown = replyFailureShown(new NoAnswerError(new TypeError("Failed to fetch")));
+    expect(shown.message).toBe(REPLY_OFFLINE_MESSAGE);
+    expect(REPLY_OFFLINE_MESSAGE).toBe(
+      "We couldn't reach Vibe Socials, so your reply wasn't posted. Check your connection and try again.",
+    );
+    expect(canRetry(shown)).toBe(true);
+  });
+
+  it("try later: the route's sentence, and it stays open", () => {
+    const shown = replyFailureShown(new ReviewsApiError("Google is busy. Try again in a minute.", false));
+    expect(shown.message).toBe("Google is busy. Try again in a minute.");
+    expect(canRetry(shown)).toBe(true);
+  });
+
+  it("reconnect, access or a review gone: final, so the dialog closes and the form keeps the sentence", () => {
+    const shown = replyFailureShown(new ReviewsApiError("This review is no longer on Google. Reload the page.", false, false, false));
+    expect(shown.message).toBe("This review is no longer on Google. Reload the page.");
+    expect(canRetry(shown)).toBe(false);
+  });
+
+  it("anything else (a coding TypeError): the plain sentence, never the offline one", () => {
+    const shown = replyFailureShown(new TypeError("Cannot read properties of undefined"));
+    expect(shown.message).toBe("Couldn't post your reply. Try again in a minute.");
+  });
+
+  it("sends through fetchOrNoAnswer and never rethrows the raw error", () => {
+    const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
+    expect(perform).toMatch(/await fetchOrNoAnswer\(`\/api\/reviews\/\$\{review\.reviewId\}\/reply`/);
+    expect(perform).toContain("const shown = replyFailureShown(err);");
+    expect(perform).not.toMatch(/throw err;/);
   });
 });

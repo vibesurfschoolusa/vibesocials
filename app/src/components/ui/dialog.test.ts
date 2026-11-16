@@ -133,7 +133,6 @@ describe("ConfirmDialog failures", () => {
  * Every ConfirmDialog caller follows the contract: a failure it already
  * toasted is thrown as ConfirmFailureShown, never a bare code like
  * "REMOVE_FAILED" or the error it caught (which the dialog would show again).
- * reviews-view.tsx is KK2's file in round 25 and is checked once merged.
  */
 describe("ConfirmDialog callers", () => {
   const callers = [
@@ -142,6 +141,7 @@ describe("ConfirmDialog callers", () => {
     "../connection-actions.tsx",
     "../media-library.tsx",
     "../team-section.tsx",
+    "../../app/reviews/reviews-view.tsx",
   ];
   for (const path of callers) {
     it(`${path} throws ConfirmFailureShown after it has told the person`, () => {
