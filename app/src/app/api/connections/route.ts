@@ -31,11 +31,8 @@ export async function GET(request: Request) {
   }
 
   // R32 publishing L1: the page's workspace, so a page left on another one never
-  // shows this one's connections. Create's read (useConnections in
-  // create-post-form.tsx, outside R32's RR2 brief) sends no id yet, so a missing
-  // one still reads the active workspace; the lead makes it required with that line.
-  const sent = sentWorkspaceId(request);
-  const workspaceRefusal = sent === undefined ? null : renderedWorkspaceRefusal(sent, context.workspace.id);
+  // shows this one's connections; a missing id is the reload sentence, as for the writes.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), context.workspace.id);
   if (workspaceRefusal) return workspaceRefusal;
 
   try {

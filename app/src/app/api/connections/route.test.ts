@@ -70,10 +70,12 @@ describe("GET /api/connections - the page's workspace", () => {
     expect(findManyMock).not.toHaveBeenCalled();
   });
 
-  // Create's own read (create-post-form.tsx, outside R32's brief) sends none yet.
-  it("still answers a read that sent no id, for the active workspace", async () => {
+  // R32 lead follow-up: Create sends its id too, so a missing one is the reload sentence, as for the writes.
+  it("400s a page that sent no id and reads nothing", async () => {
     const res = await GET(req(null));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_WORKSPACE_ID");
+    expect(findManyMock).not.toHaveBeenCalled();
   });
 });
 

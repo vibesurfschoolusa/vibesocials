@@ -126,6 +126,16 @@ describe("isMediaDeletable (pure 409 predicate)", () => {
 });
 
 describe("GET /api/media/[id]", () => {
+  // R32 lead follow-up: Create's reuse-a-file read names the page's workspace.
+  it.each([
+    ["another workspace's id", "?workspaceId=ws-2", 409],
+    ["no id", "", 400],
+  ])("%s: refused before any read", async (_name, query, status) => {
+    const response = await GET({ url: `http://localhost/api/media/media-1${query}` } as NextRequest, ctx("media-1"));
+    expect(response.status).toBe(status);
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
   it("returns 401 and never touches the database when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 

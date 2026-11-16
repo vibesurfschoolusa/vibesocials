@@ -8,7 +8,7 @@ import { deletedMediaData } from "@/server/jobs/deletedMediaData";
 import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
 import { signedOutResponse } from "@/lib/signedOutResponse";
-import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 
 interface MediaItemRouteContext {
   params: Promise<{ id: string }> | { id: string };
@@ -44,12 +44,16 @@ export function isMediaDeletable(nonTerminalJobCount: number): boolean {
  * library, not just their own uploads (see assertMediaItemReusable in
  * server/jobs/posting.ts).
  */
-export async function GET(_request: NextRequest, context: MediaItemRouteContext) {
+export async function GET(request: NextRequest, context: MediaItemRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
     return signedOutResponse();
   }
+
+  // R32: the page's workspace, so Create's reuse-a-file read never opens another one's file.
+  const workspaceRefusal = renderedWorkspaceRefusal(sentWorkspaceId(request), workspaceContext.workspace.id);
+  if (workspaceRefusal) return workspaceRefusal;
 
   const { id } = await Promise.resolve(context.params);
 

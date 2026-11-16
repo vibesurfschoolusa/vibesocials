@@ -20,7 +20,7 @@ let latest: UseConnectionsResult;
 let root: Root | null = null;
 const fetchMock = vi.fn();
 
-let probeWorkspaceId: string | null | undefined = "ws-1";
+let probeWorkspaceId: string | null = "ws-1";
 
 function Probe() {
   const result = useConnections(probeWorkspaceId);
@@ -110,8 +110,8 @@ describe("useConnections and the page's workspace", () => {
     expect(String(fetchMock.mock.calls[0][0])).toBe("/api/connections?workspaceId=ws-1");
   });
 
-  it("sends none when called without one (Create, until it passes its own)", async () => {
-    probeWorkspaceId = undefined;
+  it("sends none for a page that couldn't read its workspace (the route's reload sentence)", async () => {
+    probeWorkspaceId = null;
     fetchMock.mockResolvedValue(Response.json({ connections: [] }));
     await mount();
     expect(String(fetchMock.mock.calls[0][0])).toBe("/api/connections");

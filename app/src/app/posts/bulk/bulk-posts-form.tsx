@@ -324,7 +324,7 @@ export function BulkPostsForm({
     objectUrlsRef.current.delete(id);
   }
 
-  const { connections, loading: connectionsLoading, error: connectionsError, reload } = useConnections();
+  const { connections, loading: connectionsLoading, error: connectionsError, reload } = useConnections(workspaceId);
   // TikTok is never offered here: it needs choices for each video.
   const offeredPlatforms = useMemo(
     () =>

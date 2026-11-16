@@ -32,11 +32,10 @@ export interface UseConnectionsResult {
  *
  * R32 publishing L1: `workspaceId` is the workspace the page was drawn for,
  * and the read sends it, so a tab left on it after another tab switched gets
- * the switch sentence, not the other workspace's connections. Create calls it
- * without one for now (its call is outside R32's RR2 brief); the route then
- * reads the active workspace.
+ * the switch sentence, not the other workspace's connections. Null (a page
+ * that couldn't read its workspace) sends none: the route's reload sentence.
  */
-export function useConnections(workspaceId?: string | null): UseConnectionsResult {
+export function useConnections(workspaceId: string | null): UseConnectionsResult {
   const [connections, setConnections] = useState<ConnectionStatus[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +44,7 @@ export function useConnections(workspaceId?: string | null): UseConnectionsResul
     setLoading(true);
     setError(null);
     try {
-      const response = await fetchOrNoAnswer(withWorkspaceId("/api/connections", workspaceId ?? null));
+      const response = await fetchOrNoAnswer(withWorkspaceId("/api/connections", workspaceId));
       const refusal = await readWorkspaceRefusalText(response);
       if (refusal) {
         setError(refusal);

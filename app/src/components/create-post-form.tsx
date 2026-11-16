@@ -131,6 +131,7 @@ import {
 } from "@/lib/repeatSchedule";
 import { nextFreeSlots } from "@/lib/postingSlots";
 import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 interface UploadedBlobInfo {
   url: string;
@@ -1126,7 +1127,7 @@ function CreatePostFormInner({
     loading: connectionsLoading,
     error: connectionsError,
     reload: reloadConnections,
-  } = useConnections();
+  } = useConnections(workspaceId);
 
   // Roadmap Phase 7 — platforms to show a live preview card for: connected
   // platforms only, in the app's standard display order.
@@ -1298,7 +1299,8 @@ function CreatePostFormInner({
 
     (async () => {
       try {
-        const response = await fetch(`/api/media/${encodeURIComponent(reuseMediaItemId)}`);
+        // R32: the workspace this page was drawn for; a refusal's sentence is toasted below.
+        const response = await fetch(withWorkspaceId(`/api/media/${encodeURIComponent(reuseMediaItemId)}`, workspaceId));
         const data = (await response.json().catch(() => null)) as
           | { item?: MediaItemDto; error?: string }
           | null;
@@ -1338,7 +1340,7 @@ function CreatePostFormInner({
     return () => {
       cancelled = true;
     };
-  }, [reuseMediaItemId, toast]);
+  }, [reuseMediaItemId, toast, workspaceId]);
 
   // Build (and clean up) an object URL for the attached file so we can render
   // an inline media preview without touching the upload flow.
