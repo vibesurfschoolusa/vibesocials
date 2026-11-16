@@ -22,8 +22,24 @@ const WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
  */
 export const WORKSPACE_CHECK_EXCEPTIONS: Record<string, string> = {
   "[...path]/route.ts": "the catch-all answers every method with the same 404",
-  "admin/": "operator routes: they act on the workspace named in the URL, behind the operator gate",
-  "auth/": "sign-in, registration, password and email changes act on the signed-in person's own account (or no one's yet)",
+  // Lead review: named one by one, so a new route under admin/ or auth/ must be judged.
+  ...Object.fromEntries(
+    ["end-trial", "exempt", "limits", "pause", "resume", "trial"].map((action) => [
+      `admin/workspaces/[id]/${action}/route.ts`,
+      "an operator route: it acts on the workspace named in the URL, behind the operator gate",
+    ]),
+  ),
+  "auth/[...nextauth]/route.ts": "next-auth's sign-in and sign-out: no workspace yet",
+  "auth/register/route.ts": "makes a new account: no workspace yet",
+  "auth/forgot-password/route.ts": "signed out: emails a reset link to an address",
+  "auth/reset-password/route.ts": "signed out: its token names the account",
+  "auth/verify-email/route.ts": "its token names the account whose address is confirmed",
+  "auth/resend-verification/route.ts": "the signed-in person's own confirmation email",
+  "auth/change-password/route.ts": "the signed-in person's own password",
+  "auth/change-email/route.ts": "the signed-in person's own email address",
+  "auth/change-email/confirm/route.ts": "its token names the account whose address changes",
+  "auth/change-email/undo/route.ts": "its token names the account whose change is undone",
+  "auth/account/route.ts": "deletes the signed-in person's own account",
   "inngest/route.ts": "Inngest calls it, signed with its key",
   "webhooks/": "Stripe and Meta call them, signed with their secrets",
   "connect-link/[token]/": "the public /c page: its token names the workspace",
@@ -80,17 +96,35 @@ function isNotFoundAlias(code: string, method: string): boolean {
   return new RegExp(`^export\\s+const\\s+${method}\\s*=\\s*adminOtherMethods\\.${method}\\s*;`, "m").test(code);
 }
 
+/**
+ * What a route file exports, by exported name: the same-file function or
+ * constant that answers it, or null when it is re-exported from another file
+ * (which can't be judged here). Covers `export async function POST`, `export
+ * const POST`, `export { POST }`, `export { handler as PATCH }` and
+ * `export { POST } from "./x"`.
+ */
+function exportedNames(code: string): Map<string, string | null> {
+  const names = new Map<string, string | null>();
+  for (const match of code.matchAll(/^export\s+(?:async\s+)?(?:function|const)\s+(\w+)/gm)) names.set(match[1], match[1]);
+  for (const match of code.matchAll(/\bexport\s*\{([^}]*)\}\s*(from\s*["'][^"']+["'])?/g)) {
+    for (const part of match[1].split(",")) {
+      const [local, exported = local] = part.trim().split(/\s+as\s+/).map((name) => name.trim());
+      if (local) names.set(exported, match[2] ? null : local);
+    }
+  }
+  return names;
+}
+
 /** The write methods a route file exports, and those that skip the check. */
 export function uncheckedWriteHandlers(source: string): string[] {
   const code = stripComments(source);
   const chunks = topLevelChunks(code);
+  const names = exportedNames(code);
   const unchecked: string[] = [];
   for (const method of WRITE_METHODS) {
-    const exported =
-      new RegExp(`^export\\s+(?:async\\s+)?(?:function|const)\\s+${method}\\b`, "m").test(code) ||
-      new RegExp(`\\bas\\s+${method}\\b`).test(code);
-    if (!exported || isNotFoundAlias(code, method)) continue;
-    if (!checksWorkspace(method, chunks)) unchecked.push(method);
+    if (!names.has(method) || isNotFoundAlias(code, method)) continue;
+    const local = names.get(method);
+    if (local === null || local === undefined || !checksWorkspace(local, chunks)) unchecked.push(method);
   }
   return unchecked;
 }
@@ -121,6 +155,24 @@ describe("every signed-in write route checks the page's workspace id", () => {
     expect(uncheckedWriteHandlers("const handler = NextAuth(options);\nexport { handler as GET, handler as POST };\n")).toEqual([
       "POST",
     ]);
+  });
+
+  // Lead review: handlers declared without `export` and exported in a list, or re-exported from another file.
+  it("sees handlers exported in a list, renamed, or re-exported from another file", () => {
+    const unchecked = "async function POST(request: Request) {\n  return save();\n}\n";
+    const checked = "async function POST(request: Request) {\n  const refusal = renderedWorkspaceRefusal(body.workspaceId, id);\n}\n";
+    expect(uncheckedWriteHandlers(`${unchecked}export { POST };\n`)).toEqual(["POST"]);
+    expect(uncheckedWriteHandlers(`${checked}export { POST };\n`)).toEqual([]);
+    expect(uncheckedWriteHandlers(`${unchecked}export { POST as PATCH };\n`)).toEqual(["PATCH"]);
+    expect(uncheckedWriteHandlers(`${checked}export { POST as PATCH, POST as DELETE };\n`)).toEqual([]);
+    expect(uncheckedWriteHandlers(`${unchecked}export { POST as GET };\n`)).toEqual([]);
+    // Another file's handler can't be judged here: it must be checked where it is written, or named.
+    expect(uncheckedWriteHandlers('export { POST } from "./x";\n')).toEqual(["POST"]);
+    expect(uncheckedWriteHandlers('export { handler as PUT } from "../shared";\n')).toEqual(["PUT"]);
+  });
+
+  it("names auth and admin routes one by one, so a new route there must be judged", () => {
+    expect(Object.keys(WORKSPACE_CHECK_EXCEPTIONS).filter((key) => /^(auth|admin)\//.test(key) && key.endsWith("/"))).toEqual([]);
   });
 
   it("holds for every route under src/app/api, except the named ones", () => {
