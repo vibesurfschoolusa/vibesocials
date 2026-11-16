@@ -5,7 +5,9 @@ import {
   GOOGLE_TOKEN_EXPIRY_BUFFER_MS,
   googleTokenExpiresSoon,
   refreshGoogleToken,
+  refreshGoogleTokenEarly,
 } from "@/server/platforms/googleTokens";
+import { logger } from "@/lib/logger";
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest; refreshGoogleToken
@@ -535,5 +537,59 @@ describe("googleTokenExpiresSoon", () => {
     const expiresAt = new Date(Date.now() + 10 * MINUTE);
     expect(googleTokenExpiresSoon({ expiresAt }, Date.now() + 20 * MINUTE)).toBe(true);
     expect(googleTokenExpiresSoon({ expiresAt }, Date.now() + 2 * MINUTE)).toBe(false);
+  });
+});
+
+// Lead review follow-up: an early refresh that fails while the stored token is
+// still valid serves the request with the stored token; only an expired token
+// fails as today. Every Google reader goes through this.
+describe("refreshGoogleTokenEarly", () => {
+  const MINUTE = 60 * 1000;
+  const refused = () =>
+    Object.assign(new Error("Failed to refresh Google access token (status 503)"), {
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      status: 503,
+    });
+
+  it("leaves a token with 10 minutes left alone", async () => {
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 10 * MINUTE) });
+    const refresh = vi.fn();
+    await expect(refreshGoogleTokenEarly(connection, refresh)).resolves.toBe(connection);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a token with 4 minutes left", async () => {
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 4 * MINUTE) });
+    const fresh = makeConnection({ accessToken: "fresh" });
+    const refresh = vi.fn().mockResolvedValue(fresh);
+    await expect(refreshGoogleTokenEarly(connection, refresh)).resolves.toBe(fresh);
+    expect(refresh).toHaveBeenCalledWith(connection);
+  });
+
+  it("a failed refresh with 4 minutes left serves the stored token and logs the failure", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 4 * MINUTE) });
+    const refresh = vi.fn().mockRejectedValue(refused());
+
+    await expect(refreshGoogleTokenEarly(connection, refresh)).resolves.toBe(connection);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("stored token"),
+      expect.objectContaining({ connectionId: "conn-1", code: "GOOGLE_TOKEN_REFRESH_FAILED" }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("old-access-token");
+  });
+
+  it("a failed refresh after expiry fails as today", async () => {
+    const connection = makeConnection({ expiresAt: new Date(Date.now() - MINUTE) });
+    const error = refused();
+    await expect(refreshGoogleTokenEarly(connection, vi.fn().mockRejectedValue(error))).rejects.toBe(error);
+  });
+
+  it("passes mustLastUntil to the check", async () => {
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 10 * MINUTE) });
+    const refresh = vi.fn().mockResolvedValue(connection);
+    await refreshGoogleTokenEarly(connection, refresh, { mustLastUntil: Date.now() + 20 * MINUTE });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

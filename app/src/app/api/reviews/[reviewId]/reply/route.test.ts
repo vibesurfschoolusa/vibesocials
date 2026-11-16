@@ -252,9 +252,24 @@ describe("POST /api/reviews/[reviewId]/reply and a token about to expire", () =>
     expect(listGbpLocationsMock.mock.calls[0][0]).toBe("tok");
   });
 
-  it("a refresh Google refuses keeps today's reconnect text", async () => {
-    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+  it("a failed refresh with 4 minutes left serves the request with the stored token", async () => {
     expiringIn(4 * MINUTE);
+    vi.mocked(refreshAccessToken).mockRejectedValue(
+      Object.assign(new Error("Failed to refresh Google access token (status 503)"), {
+        code: "GOOGLE_TOKEN_REFRESH_FAILED",
+        status: 503,
+      }),
+    );
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(200);
+    expect(listGbpLocationsMock.mock.calls[0][0]).toBe("tok");
+  });
+
+  it("a refresh Google refuses after expiry keeps today's reconnect text", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "owner" });
+    expiringIn(-MINUTE);
     vi.mocked(refreshAccessToken).mockRejectedValue(
       Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
         code: "GOOGLE_TOKEN_REFRESH_FAILED",

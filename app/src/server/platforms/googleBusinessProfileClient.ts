@@ -10,7 +10,7 @@ import { truncateGraphemes } from "@/lib/truncate";
 
 import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
-import { googleTokenExpiresSoon, refreshGoogleToken } from "./googleTokens";
+import { refreshGoogleToken, refreshGoogleTokenEarly } from "./googleTokens";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
@@ -42,7 +42,7 @@ import type {
 // may also be its caption, button or event/offer details, so the text names
 // them last.
 // R22 platform-clients L1: a token within 5 minutes of expiry is refreshed
-// first (googleTokenExpiresSoon), so a slow store-code lookup never sends a
+// first (refreshGoogleTokenEarly), so a slow store-code lookup never sends a
 // dead one (a 401 would read "Reconnect").
 
 const GBP_PHOTO_REFUSED_TEXT =
@@ -65,14 +65,9 @@ export const googleBusinessProfileClient: PlatformClient = {
     // The refresh runs under the per-connection lock (2026-11-01 scale audit,
     // jobs, token refresh), so a concurrent publish or the health sweep never
     // refreshes the same connection at once.
-    if (googleTokenExpiresSoon(socialConnection)) {
-      console.log("[GBP] Access token expired or about to, refreshing...");
-      socialConnection = await refreshConnectionToken(
-        socialConnection,
-        (current) => refreshGoogleToken(current, { deadline }),
-        { deadline },
-      );
-    }
+    socialConnection = await refreshGoogleTokenEarly(socialConnection, (stored) =>
+      refreshConnectionToken(stored, (current) => refreshGoogleToken(current, { deadline }), { deadline }),
+    );
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -196,14 +191,9 @@ export const googleBusinessProfileClient: PlatformClient = {
     const { deadline } = ctx;
 
     // As publishVideo: refresh under the per-connection lock when expired or about to.
-    if (googleTokenExpiresSoon(socialConnection)) {
-      console.log("[GBP] Access token expired or about to, refreshing...");
-      socialConnection = await refreshConnectionToken(
-        socialConnection,
-        (current) => refreshGoogleToken(current, { deadline }),
-        { deadline },
-      );
-    }
+    socialConnection = await refreshGoogleTokenEarly(socialConnection, (stored) =>
+      refreshConnectionToken(stored, (current) => refreshGoogleToken(current, { deadline }), { deadline }),
+    );
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {

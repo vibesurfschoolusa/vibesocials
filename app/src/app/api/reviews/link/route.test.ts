@@ -179,9 +179,19 @@ describe("GET /api/reviews/link", () => {
     expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access", LOCATION);
   });
 
-  it("a failed refresh of a token with 4 minutes left keeps today's reasons", async () => {
-    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+  it("a failed refresh with 4 minutes left serves the request with the stored token", async () => {
     mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() + 4 * 60 * 1000) }));
+    mocks.refreshAccessToken.mockRejectedValue(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }));
+    mocks.fetchNewReviewUri.mockResolvedValue(LINK);
+    mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
+
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK });
+    expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access", LOCATION);
+  });
+
+  it("a failed refresh after expiry keeps today's reasons", async () => {
+    mocks.getWorkspaceContext.mockResolvedValue(context("ws-1", "owner"));
+    mocks.findFirst.mockResolvedValue(connection({ expiresAt: new Date(Date.now() - 60 * 1000) }));
     mocks.refreshAccessToken.mockRejectedValueOnce(Object.assign(new Error("dead"), { code: "RECONNECT_REQUIRED" }));
     expect((await (await GET()).json()).reason).toMatch(/Reconnect/);
 

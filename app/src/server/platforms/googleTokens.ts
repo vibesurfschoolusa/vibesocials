@@ -48,6 +48,39 @@ export function googleTokenExpiresSoon(
 }
 
 /**
+ * The connection to read Google with: as stored, or refreshed first when its
+ * token expires soon (googleTokenExpiresSoon). `refresh` is the caller's path
+ * through refreshConnectionToken (lock and single flight).
+ *
+ * A refresh that fails while the stored token is still valid serves the request
+ * with the stored token, and the failure is logged: refreshing early is a
+ * precaution, so it never fails a request the stored token can still serve.
+ * Only an expired (or expiry-unknown-and-due) token fails as before.
+ */
+export async function refreshGoogleTokenEarly<T extends { id: string; platform?: string; expiresAt: Date | null }>(
+  connection: T,
+  refresh: (connection: T) => Promise<T>,
+  opts?: { mustLastUntil?: number },
+): Promise<T> {
+  if (!googleTokenExpiresSoon(connection, opts?.mustLastUntil)) return connection;
+  try {
+    return await refresh(connection);
+  } catch (error) {
+    const expiresAt = connection.expiresAt ? new Date(connection.expiresAt).getTime() : null;
+    if (expiresAt === null || expiresAt <= Date.now()) throw error;
+    // The error's code and status only; never a token.
+    logger.warn("[GoogleTokens] Early token refresh failed; using the stored token until it expires", {
+      connectionId: connection.id,
+      platform: connection.platform,
+      code: (error as { code?: unknown } | null)?.code,
+      status: (error as { status?: unknown } | null)?.status,
+      msLeft: expiresAt - Date.now(),
+    });
+    return connection;
+  }
+}
+
+/**
  * Refresh the Google OAuth access token for a connection and persist the new
  * access token + expiry. Returns the updated {@link SocialConnection}.
  *

@@ -701,12 +701,26 @@ describe("googleBusinessProfileClient — serialized token refresh", () => {
     expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
   });
 
-  it("a failed refresh of a token with 4 minutes left fails as an expired one does", async () => {
+  // Lead review (R23): a token still valid serves the post when the early
+  // refresh fails. Only an expired one fails.
+  it("a failed refresh of a token with 4 minutes left posts with the stored token", async () => {
+    posted();
+    refreshConnectionTokenMock.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" }));
+    const ctx = expiringIn(4 * 60_000);
+
+    await googleBusinessProfileClient.publishVideo(ctx);
+
+    const calls = vi.mocked(fetch).mock.calls;
+    const last = calls[calls.length - 1][1] as RequestInit;
+    expect((last.headers as Record<string, string>).Authorization).toBe(`Bearer ${ctx.socialConnection.accessToken}`);
+  });
+
+  it("a failed refresh of an expired token fails as today", async () => {
     posted();
     const failure = Object.assign(new Error("Reconnect Google"), { code: "RECONNECT_REQUIRED" });
     refreshConnectionTokenMock.mockRejectedValueOnce(failure);
 
-    await expect(googleBusinessProfileClient.publishVideo(expiringIn(4 * 60_000))).rejects.toBe(failure);
+    await expect(googleBusinessProfileClient.publishVideo(expiringIn(-60_000))).rejects.toBe(failure);
   });
 
   it("refreshToken (the health sweep's hook) forwards its deadline to the Google refresh", async () => {

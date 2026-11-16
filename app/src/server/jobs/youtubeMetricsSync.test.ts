@@ -46,7 +46,11 @@ vi.mock("@/server/platforms/connectionRefresh", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/platforms/connectionRefresh")>()),
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
-vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: refreshGoogleTokenMock }));
+// The early-refresh check and fallback stay real (googleTokens.ts).
+vi.mock("@/server/platforms/googleTokens", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/googleTokens")>()),
+  refreshGoogleToken: refreshGoogleTokenMock,
+}));
 
 import { METRICS_PAGE_SIZE } from "@/server/jobs/metricsScanner";
 import { METRICS_PAGE_BUDGET_MS, syncYouTubeMetricsPage } from "@/server/jobs/youtubeMetricsSync";
@@ -484,6 +488,33 @@ describe("syncYouTubeMetricsPage — connection resolve refreshes under the lock
 
     expect(fetchBatchMock).not.toHaveBeenCalled();
     expect(page).toMatchObject({ attempted: 1, updated: 0, errors: 1, unitsUsed: 0 });
+  });
+
+  // R23 client-journey L1 (lead review): a token in its last 5 minutes is
+  // refreshed first (real clock); a failed early refresh uses the stored token.
+  it("a token with 4 minutes left is refreshed; one with 10 minutes is used as is", async () => {
+    findUniqueMock.mockResolvedValue({ ...expired, accessToken: "soon-token", expiresAt: new Date(Date.now() + 4 * 60_000) });
+    refreshConnectionTokenMock.mockResolvedValue({ ...expired, accessToken: "fresh-token" });
+    await syncYouTubeMetricsPage({ unitsLeft: 300, now: NOW });
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(fetchBatchMock).toHaveBeenCalledWith(["A-v0"], "fresh-token");
+
+    refreshConnectionTokenMock.mockClear();
+    fetchBatchMock.mockClear();
+    findUniqueMock.mockResolvedValue({ ...expired, accessToken: "later-token", expiresAt: new Date(Date.now() + 10 * 60_000) });
+    await syncYouTubeMetricsPage({ unitsLeft: 300, now: NOW });
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    expect(fetchBatchMock).toHaveBeenCalledWith(["A-v0"], "later-token");
+  });
+
+  it("a failed refresh with 4 minutes left uses the stored token", async () => {
+    findUniqueMock.mockResolvedValue({ ...expired, accessToken: "soon-token", expiresAt: new Date(Date.now() + 4 * 60_000) });
+    refreshConnectionTokenMock.mockRejectedValue(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY", status: 503 }));
+
+    const page = await syncYouTubeMetricsPage({ unitsLeft: 300, now: NOW });
+
+    expect(fetchBatchMock).toHaveBeenCalledWith(["A-v0"], "soon-token");
+    expect(page.errors).toBe(0);
   });
 
   it("a connection lookup that throws skips the workspace instead of failing the page", async () => {

@@ -1,5 +1,5 @@
 import type { SocialConnection } from "@prisma/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   findManyMock,
@@ -34,7 +34,9 @@ vi.mock("@/server/platforms/connectionRefresh", () => ({
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
-vi.mock("@/server/platforms/googleTokens", () => ({
+// The early-refresh check and fallback stay real (googleTokens.ts).
+vi.mock("@/server/platforms/googleTokens", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/platforms/googleTokens")>()),
   refreshGoogleToken: vi.fn(),
 }));
 
@@ -82,8 +84,14 @@ function useRows(rows: SocialConnection[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The token check reads the clock: it stands at the run's NOW.
+  vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
   updateMock.mockResolvedValue({});
   resolveGbpLocationNameMock.mockImplementation(async (_token: string, name: string) => name);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // 2026-11-09 (PR #64): Settings names a Business Profile connection by its
@@ -95,7 +103,7 @@ describe("backfillGbpLocationTitles", () => {
     useRows([connection()]);
     fetchMock.mockResolvedValue(json({ title: "  Vibe Surf School  " }));
 
-    const result = await backfillGbpLocationTitles(NOW);
+    const result = await backfillGbpLocationTitles();
 
     expect(result).toEqual({ named: 1, failed: 0, flagged: [] });
     const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
@@ -112,7 +120,7 @@ describe("backfillGbpLocationTitles", () => {
   it("only looks at working Business Profile connections, oldest first", async () => {
     useRows([]);
 
-    await backfillGbpLocationTitles(NOW);
+    await backfillGbpLocationTitles();
 
     expect(findManyMock).toHaveBeenCalledWith({
       where: { platform: "google_business_profile", needsReconnect: false },
@@ -127,7 +135,7 @@ describe("backfillGbpLocationTitles", () => {
       connection({ id: "c", metadata: null }),
     ]);
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 0, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 0, flagged: [] });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(updateMock).not.toHaveBeenCalled();
   });
@@ -138,11 +146,37 @@ describe("backfillGbpLocationTitles", () => {
     refreshConnectionTokenMock.mockResolvedValue({ ...expired, accessToken: "gbp-access-2" });
     fetchMock.mockResolvedValue(json({ title: "Vibe Surf School" }));
 
-    await backfillGbpLocationTitles(NOW);
+    await backfillGbpLocationTitles();
 
     expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
     const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
     expect(init.headers.Authorization).toBe("Bearer gbp-access-2");
+  });
+
+  // R23 client-journey L1 (lead review): a token in its last 5 minutes is
+  // refreshed first; a failed early refresh still reads with the stored token.
+  it("refreshes a token with 4 minutes left, and leaves one with 10 minutes alone", async () => {
+    const soon = connection({ id: "soon", expiresAt: new Date(NOW.getTime() + 4 * 60_000) });
+    const later = connection({ id: "later", expiresAt: new Date(NOW.getTime() + 10 * 60_000) });
+    useRows([soon, later]);
+    refreshConnectionTokenMock.mockResolvedValue({ ...soon, accessToken: "gbp-access-2" });
+    fetchMock.mockResolvedValue(json({ title: "Vibe Surf School" }));
+
+    await backfillGbpLocationTitles();
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(refreshConnectionTokenMock.mock.calls[0][0].id).toBe("soon");
+  });
+
+  it("a failed refresh with 4 minutes left reads the title with the stored token", async () => {
+    const soon = connection({ expiresAt: new Date(NOW.getTime() + 4 * 60_000) });
+    useRows([soon]);
+    refreshConnectionTokenMock.mockRejectedValue(new Error("503"));
+    fetchMock.mockResolvedValue(json({ title: "Vibe Surf School" }));
+
+    expect(await backfillGbpLocationTitles()).toMatchObject({ named: 1, failed: 0 });
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe("Bearer gbp-access");
   });
 
   it("resolves a location saved as a store code before asking for its title", async () => {
@@ -150,7 +184,7 @@ describe("backfillGbpLocationTitles", () => {
     resolveGbpLocationNameMock.mockResolvedValue("accounts/9/locations/77");
     fetchMock.mockResolvedValue(json({ title: "Fort Lauderdale" }));
 
-    await backfillGbpLocationTitles(NOW);
+    await backfillGbpLocationTitles();
 
     expect(resolveGbpLocationNameMock).toHaveBeenCalledWith("gbp-access", "FTL-01");
     expect(String(fetchMock.mock.calls[0][0])).toContain("/v1/locations/77?readMask=title");
@@ -169,7 +203,7 @@ describe("backfillGbpLocationTitles", () => {
     fetchMock.mockResolvedValueOnce(json({ error: { status: "PERMISSION_DENIED" } }, 403));
     fetchMock.mockResolvedValueOnce(json({ title: "Second" }));
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 1, failed: 1, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 1, failed: 1, flagged: [] });
     expect(updateMock).toHaveBeenCalledTimes(1);
     expect(updateMock.mock.calls[0][0].where).toEqual({ id: "b" });
   });
@@ -178,7 +212,7 @@ describe("backfillGbpLocationTitles", () => {
     useRows([connection()]);
     fetchMock.mockResolvedValueOnce(json({}));
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 1, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 1, flagged: [] });
     expect(updateMock).not.toHaveBeenCalled();
   });
 
@@ -189,7 +223,7 @@ describe("backfillGbpLocationTitles", () => {
     findUniqueMock.mockResolvedValue({ metadata: { locationName: "accounts/1/locations/99" } });
     fetchMock.mockResolvedValue(json({ title: "Old Shop" }));
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 1, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 1, flagged: [] });
     expect(updateMock).not.toHaveBeenCalled();
   });
 
@@ -200,7 +234,7 @@ describe("backfillGbpLocationTitles", () => {
     });
     fetchMock.mockResolvedValue(json({ title: "From Google" }));
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 1, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 1, flagged: [] });
     expect(updateMock).not.toHaveBeenCalled();
   });
 
@@ -209,7 +243,7 @@ describe("backfillGbpLocationTitles", () => {
     findUniqueMock.mockResolvedValue(null);
     fetchMock.mockResolvedValue(json({ title: "From Google" }));
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 1, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 1, flagged: [] });
     expect(updateMock).not.toHaveBeenCalled();
   });
 
@@ -220,7 +254,7 @@ describe("backfillGbpLocationTitles", () => {
     });
     fetchMock.mockResolvedValue(json({ title: "Vibe Surf School" }));
 
-    await backfillGbpLocationTitles(NOW);
+    await backfillGbpLocationTitles();
 
     expect(updateMock.mock.calls[0][0].data.metadata).toEqual({
       locationName: "accounts/1/locations/22",
@@ -237,7 +271,7 @@ describe("backfillGbpLocationTitles", () => {
     refreshConnectionTokenMock.mockRejectedValue(new Error("invalid_grant"));
     findUniqueMock.mockResolvedValue({ needsReconnect: true });
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 1, flagged: ["dead"] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 1, flagged: ["dead"] });
     expect(updateMock).not.toHaveBeenCalled();
   });
 
@@ -247,7 +281,7 @@ describe("backfillGbpLocationTitles", () => {
     refreshConnectionTokenMock.mockRejectedValue(new Error("503"));
     findUniqueMock.mockResolvedValue({ needsReconnect: false });
 
-    expect(await backfillGbpLocationTitles(NOW)).toEqual({ named: 0, failed: 1, flagged: [] });
+    expect(await backfillGbpLocationTitles()).toEqual({ named: 0, failed: 1, flagged: [] });
   });
 
   it("tries a bounded number of connections per run", async () => {
@@ -256,7 +290,7 @@ describe("backfillGbpLocationTitles", () => {
     );
     fetchMock.mockImplementation(async () => json({ title: "Name" }));
 
-    const result = await backfillGbpLocationTitles(NOW);
+    const result = await backfillGbpLocationTitles();
 
     expect(result.named).toBe(GBP_TITLE_BACKFILL_MAX_PER_RUN);
     expect(fetchMock).toHaveBeenCalledTimes(GBP_TITLE_BACKFILL_MAX_PER_RUN);
@@ -269,7 +303,7 @@ describe("backfillGbpLocationTitles", () => {
     const times = [0, 0, GBP_TITLE_BACKFILL_BUDGET_MS + 1];
     const clock = () => times.shift() ?? GBP_TITLE_BACKFILL_BUDGET_MS + 1;
 
-    const result = await backfillGbpLocationTitles(NOW, clock);
+    const result = await backfillGbpLocationTitles(clock);
 
     expect(result.named).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);

@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { planIncludes } from "@/lib/planFeatures";
 import { utcDayKey } from "@/lib/usageLimits";
 import { fetchReviews, refreshAccessToken, type GoogleReview } from "@/server/googleReviews";
-import { googleTokenExpiresSoon } from "@/server/platforms/googleTokens";
+import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import {
   buildNewReviewsEmail,
@@ -238,16 +238,13 @@ export interface ReviewCheckResult {
 
 /**
  * A usable access token: the stored one, or a refreshed one (saved by the shared
- * refresh path). R23 client-journey L1: judged by googleTokenExpiresSoon (5
+ * refresh path). R23 client-journey L1: judged by refreshGoogleTokenEarly (5
  * minutes early, real clock), not a run's collect-time `now`: a step runs for up
  * to its time budget and the send step after the check, so a token fine at
  * collect time can die mid-run. listingMetrics.ts uses it too.
  */
 export async function accessTokenOf(connection: SocialConnection): Promise<string> {
-  if (googleTokenExpiresSoon(connection)) {
-    return (await refreshAccessToken(connection)).accessToken;
-  }
-  return connection.accessToken;
+  return (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
 }
 
 /**

@@ -644,12 +644,29 @@ describe("youtubeClient — serialized token refresh", () => {
     expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
   });
 
-  it("a failed refresh of a token with 4 minutes left fails as an expired one does", async () => {
+  // Lead review (R23): refreshing early is a precaution; a token still valid
+  // serves the upload when the refresh fails. Only an expired one fails.
+  it("a failed refresh of a token with 4 minutes left publishes with the stored token", async () => {
+    stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+    refreshConnectionTokenMock.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY" }));
+    const ctx = expiringIn(4 * 60_000);
+
+    await youtubeClient.publishVideo(ctx);
+
+    const insertCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+      String(c[0]).includes(INSERT_URL_FRAGMENT),
+    );
+    expect(((insertCall?.[1] as RequestInit).headers as Record<string, string>).Authorization).toBe(
+      `Bearer ${ctx.socialConnection.accessToken}`,
+    );
+  });
+
+  it("a failed refresh of an expired token fails as today", async () => {
     stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
     const failure = Object.assign(new Error("Reconnect YouTube"), { code: "RECONNECT_REQUIRED" });
     refreshConnectionTokenMock.mockRejectedValueOnce(failure);
 
-    await expect(youtubeClient.publishVideo(expiringIn(4 * 60_000))).rejects.toBe(failure);
+    await expect(youtubeClient.publishVideo(expiringIn(-60_000))).rejects.toBe(failure);
   });
 
   it("refreshToken (the health sweep's hook) forwards its deadline to the Google refresh", async () => {

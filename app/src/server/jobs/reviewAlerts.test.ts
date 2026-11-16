@@ -308,6 +308,16 @@ describe("checkReviewConnections", () => {
     expect(fetchReviewsMock.mock.calls.map((call) => call[0])).toEqual(["gbp-access-2", "gbp-access"]);
   });
 
+  it("a failed refresh with 4 minutes left checks with the stored token", async () => {
+    useRows([row({ expiresAt: new Date(NOW.getTime() + 4 * 60_000) })]);
+    refreshMock.mockRejectedValue(Object.assign(new Error("down"), { code: "GOOGLE_TOKEN_REFRESH_FAILED", status: 503 }));
+
+    const result = await checkReviewConnections(["conn-1"], NOW);
+
+    expect(fetchReviewsMock.mock.calls[0][0]).toBe("gbp-access");
+    expect(result.failed).toBe(0);
+  });
+
   it("judges the token by the clock, not the run's collect-time now", async () => {
     // Fine at collect time (10 minutes left), 4 minutes left when the check reaches it.
     const expiring = row({ expiresAt: new Date(NOW.getTime() + 10 * 60_000) });

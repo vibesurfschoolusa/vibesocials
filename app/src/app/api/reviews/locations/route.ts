@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
-import { googleTokenExpiresSoon } from "@/server/platforms/googleTokens";
+import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { listGbpLocations, refreshAccessToken, reviewsErrorBody, type ReviewsReader } from "@/server/googleReviews";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -42,22 +42,12 @@ export async function GET() {
       return NextResponse.json({ locations: [], connected: false });
     }
 
-    let accessToken = connection.accessToken;
 
     // R23 client-journey L1: a token in its last 5 minutes is refreshed too,
     // so a long listing never runs past expiry (Google's 401 reads "Reconnect").
-    if (googleTokenExpiresSoon(connection)) {
-      console.log("[GBP Locations] Access token expired, refreshing...");
-      const refreshedConnection = await refreshAccessToken(connection);
-      await prisma.socialConnection.update({
-        where: { id: connection.id },
-        data: {
-          accessToken: refreshedConnection.accessToken,
-          expiresAt: refreshedConnection.expiresAt,
-        },
-      });
-      accessToken = refreshedConnection.accessToken!;
-    }
+    // A failed early refresh of a still-valid token goes on with the stored one.
+    // The shared refresh saves the new token itself.
+    const accessToken = (await refreshGoogleTokenEarly(connection, refreshAccessToken)).accessToken;
 
     // The listing the reply route checks a review's location against (googleReviews.ts).
     const { locations } = await listGbpLocations(accessToken!);

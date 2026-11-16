@@ -5,7 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
-import { refreshGoogleToken } from "@/server/platforms/googleTokens";
+import { refreshGoogleToken, refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 
 /**
  * Naming a Business Profile connection whose location has no title (2026-11-10).
@@ -60,12 +60,12 @@ function locationIdOf(resourceName: string): string | null {
 async function readLocationTitle(
   connection: SocialConnection,
   locationName: string,
-  now: Date,
 ): Promise<string | null> {
-  let current = connection;
-  if (current.expiresAt && new Date(current.expiresAt).getTime() <= now.getTime()) {
-    current = await refreshConnectionToken(current, (stored) => refreshGoogleToken(stored));
-  }
+  // R23 client-journey L1: a token in its last 5 minutes is refreshed too
+  // (real clock); a failed early refresh goes on with the stored token.
+  const current = await refreshGoogleTokenEarly(connection, (row) =>
+    refreshConnectionToken(row, (stored) => refreshGoogleToken(stored)),
+  );
 
   // A store code is resolved to its resource name first (one or more requests).
   const resourceName = await resolveGbpLocationName(current.accessToken, locationName);
@@ -132,9 +132,11 @@ export interface GbpTitleBackfillResult {
   flagged: string[];
 }
 
-/** Saves the missing location titles. `clock` is the real clock, for the time budget. */
+/**
+ * Saves the missing location titles. `clock` is the real clock, for the time
+ * budget; the token check reads the real clock too (refreshGoogleTokenEarly).
+ */
 export async function backfillGbpLocationTitles(
-  now: Date = new Date(),
   clock: () => number = Date.now,
 ): Promise<GbpTitleBackfillResult> {
   const startedAt = clock();
@@ -158,7 +160,7 @@ export async function backfillGbpLocationTitles(
     attempted += 1;
 
     try {
-      const title = await readLocationTitle(row, locationName, now);
+      const title = await readLocationTitle(row, locationName);
       if (title && (await saveTitleIfUnchanged(row.id, locationName, title))) {
         named += 1;
       } else {

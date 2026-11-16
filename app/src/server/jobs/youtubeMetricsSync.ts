@@ -9,7 +9,7 @@ import {
   type EligibleMetricResult,
 } from "@/server/jobs/metricsScanner";
 import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
-import { refreshGoogleToken } from "@/server/platforms/googleTokens";
+import { refreshGoogleToken, refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { fetchYouTubeVideoStatisticsBatch, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
 
 // Server-only: touches prisma.
@@ -88,8 +88,9 @@ async function resolveConnection(
     // Skip a gone (disconnected) or `needsReconnect`-flagged connection - do NOT
     // push a known-bad token through refresh.
     if (connection && !connection.needsReconnect) {
-      let active = connection;
-      if (active.expiresAt && active.expiresAt.getTime() < Date.now()) {
+      // R23 client-journey L1: a token in its last 5 minutes is refreshed too
+      // (real clock); a failed early refresh goes on with the stored token.
+      const active = await refreshGoogleTokenEarly(connection, (stored) => {
         // Shared Google refresh: writes ONLY accessToken/expiry, NEVER
         // refreshToken (see googleTokens.ts). May throw + mark needsReconnect on
         // invalid_grant - caught here so the token stays null.
@@ -97,8 +98,8 @@ async function resolveConnection(
         // lock, so a publish or the health sweep refreshing the same connection
         // at once is serialized, and a refresh that finished first is reused
         // instead of repeated.
-        active = await refreshConnectionToken(active, (current) => refreshGoogleToken(current));
-      }
+        return refreshConnectionToken(stored, (current) => refreshGoogleToken(current));
+      });
       if (active.accessToken) {
         resolved = { accessToken: active.accessToken, connectorUserId: active.userId };
       }

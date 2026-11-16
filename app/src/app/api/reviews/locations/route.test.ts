@@ -229,10 +229,28 @@ describe("GET /api/reviews/locations and a token about to expire", () => {
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer token-abc");
   });
 
-  it("a refresh Google refuses keeps today's reconnect text", async () => {
+  it("a failed refresh with 4 minutes left serves the request with the stored token", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expiringIn(4 * MINUTE);
+    refreshAccessTokenMock.mockRejectedValue(
+      Object.assign(new Error("Failed to refresh Google access token (status 503)"), {
+        code: "GOOGLE_TOKEN_REFRESH_FAILED",
+        status: 503,
+      }),
+    );
+    noAccounts();
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer token-abc");
+  });
+
+  it("a refresh Google refuses after expiry keeps today's reconnect text", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expiringIn(4 * MINUTE);
+    expiringIn(-MINUTE);
     refreshAccessTokenMock.mockRejectedValue(
       Object.assign(new Error("Failed to refresh Google access token (status 400)"), {
         code: "GOOGLE_TOKEN_REFRESH_FAILED",

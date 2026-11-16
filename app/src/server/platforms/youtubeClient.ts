@@ -18,7 +18,7 @@ import {
   requireCommitId,
 } from "./commitCall";
 import { refreshConnectionToken } from "./connectionRefresh";
-import { googleTokenExpiresSoon, refreshGoogleToken } from "./googleTokens";
+import { refreshGoogleToken, refreshGoogleTokenEarly } from "./googleTokens";
 import {
   blobInterruptionDetails,
   isBlobStreamInterrupted,
@@ -993,16 +993,15 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: str
   // died mid-step would fail the upload with a 401 on a chunk.
   // R22 platform-clients L1: as LinkedIn, TikTok and Pinterest, a token in its
   // last 5 minutes is refreshed too, so a slow download never sends a dead one
-  // (the shared googleTokenExpiresSoon, as every Google reader uses).
+  // (the shared refreshGoogleTokenEarly, as every Google reader uses: a failed
+  // early refresh of a still-valid token goes on with the stored one).
   const tokenMustLastUntil = resumable && deadline !== undefined ? deadline : undefined;
-  if (googleTokenExpiresSoon(socialConnection, tokenMustLastUntil)) {
-    console.log("[YouTube] Access token expired, refreshing...");
-    socialConnection = await refreshConnectionToken(
-      socialConnection,
-      (current) => refreshGoogleToken(current, { deadline }),
-      { deadline },
-    );
-  }
+  socialConnection = await refreshGoogleTokenEarly(
+    socialConnection,
+    (stored) =>
+      refreshConnectionToken(stored, (current) => refreshGoogleToken(current, { deadline }), { deadline }),
+    { mustLastUntil: tokenMustLastUntil },
+  );
 
   const accessToken = socialConnection.accessToken;
   if (!accessToken) {
