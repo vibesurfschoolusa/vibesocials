@@ -950,7 +950,7 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sent(0).html).not.toContain("<li>Instagram: Succeeded</li>");
     expect(sent(0).html).toContain(
-      "<li>Instagram Story: Not sent — publishing stopped before it reached Instagram. Open the post in Activity to send it again.</li>",
+      "<li>Instagram Story: Not sent — publishing stopped before it reached Instagram. Activity has no retry for it, so post it again from Create.</li>",
     );
     expect(keyOf(0)).toBe("post-outcome/job-story/first");
   });

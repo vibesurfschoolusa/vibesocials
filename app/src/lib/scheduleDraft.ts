@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
-import { captionChanged, publishOutcome, type JobPatch } from "./queueActions";
+import { isRouteBody } from "./postSubmitFailure";
+import { captionChanged, publishOutcome, queueMayHaveGoneThroughText, type JobPatch } from "./queueActions";
 
 /**
  * "Schedule a draft" from the Queue's Edit dialog (2026-11-01 audit, Task 2),
@@ -15,7 +16,10 @@ import { captionChanged, publishOutcome, type JobPatch } from "./queueActions";
  *   4. the publish response must be one of those two shapes — anything else is
  *      an ERROR (`unreadable_response`), never a success.
  *
- * It never throws: a network failure becomes a `network_error` result. Every
+ * It never throws. A request with no answer (the fetch threw, or a 5xx that
+ * isn't the route's own JSON, such as a gateway's page) becomes `no_answer`:
+ * it may have gone through, so the text says so and the caller reloads the
+ * Queue (R27 MM4 review). Every
  * failure says whether the caption PATCH landed (`captionSaved`), so the
  * component can patch the card's caption without closing the dialog.
  */
@@ -47,7 +51,7 @@ export type ScheduleDraftResult =
         | "caption_save_failed" // the PATCH was refused; publish never called
         | "publish_failed" // the publish call was refused (non-2xx)
         | "unreadable_response" // publish answered 2xx but not with a recognisable body
-        | "network_error"; // fetch threw (before or after the PATCH landed)
+        | "no_answer"; // no answer, or a gateway's 5xx page: it may have gone through
       /** User-facing text: the server's own error when it sent one. */
       error: string;
       /** The caption PATCH landed in this call (so the card's caption changed). */
@@ -58,8 +62,10 @@ export const SAVE_FALLBACK_ERROR = "Couldn't save your changes.";
 export const UNREADABLE_PUBLISH_ERROR =
   "Couldn't confirm what happened to this post. Check the Queue before trying again.";
 
-async function readServerError(response: FetchResponseLike, fallback: string): Promise<string> {
+/** A refused request's answer: the route's sentence, or null for a 5xx that isn't the route's (no answer). */
+async function readRefusal(response: FetchResponseLike, fallback: string): Promise<string | null> {
   const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  if (response.status >= 500 && !isRouteBody(data)) return null;
   return typeof data?.error === "string" && data.error ? data.error : fallback;
 }
 
@@ -100,6 +106,14 @@ export async function scheduleDraft(input: {
     perPlatformOverrides,
   } = input;
   let captionSaved = false;
+  // Which request a lost answer belongs to, for what may have happened.
+  let lost: "edit" | "schedule" | "submit" = "edit";
+  const noAnswer = (): ScheduleDraftResult => ({
+    kind: "failed",
+    reason: "no_answer",
+    error: queueMayHaveGoneThroughText(lost),
+    captionSaved,
+  });
 
   try {
     if (captionChanged(originalCaption, caption) || perPlatformOverrides !== undefined) {
@@ -112,33 +126,26 @@ export async function scheduleDraft(input: {
         }),
       });
       if (!patchResponse.ok) {
-        return {
-          kind: "failed",
-          reason: "caption_save_failed",
-          error: await readServerError(patchResponse, SAVE_FALLBACK_ERROR),
-          captionSaved: false,
-        };
+        const error = await readRefusal(patchResponse, SAVE_FALLBACK_ERROR);
+        if (error === null) return noAnswer();
+        return { kind: "failed", reason: "caption_save_failed", error, captionSaved: false };
       }
       captionSaved = true;
     }
 
+    lost = submitsForApproval ? "submit" : "schedule";
     const publishResponse = await fetchFn(`/api/posts/${jobId}/publish`, {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({ scheduledFor: scheduledForIso }),
     });
     if (!publishResponse.ok) {
-      return {
-        kind: "failed",
-        reason: "publish_failed",
-        error: await readServerError(
-          publishResponse,
-          submitsForApproval
-            ? "Couldn't submit this post for approval."
-            : "Couldn't schedule this post.",
-        ),
-        captionSaved,
-      };
+      const error = await readRefusal(
+        publishResponse,
+        submitsForApproval ? "Couldn't submit this post for approval." : "Couldn't schedule this post.",
+      );
+      if (error === null) return noAnswer();
+      return { kind: "failed", reason: "publish_failed", error, captionSaved };
     }
 
     // A schedule request has exactly two successful answers: 200 scheduled (with
@@ -160,6 +167,6 @@ export async function scheduleDraft(input: {
       captionSaved,
     };
   } catch {
-    return { kind: "failed", reason: "network_error", error: SAVE_FALLBACK_ERROR, captionSaved };
+    return noAnswer();
   }
 }

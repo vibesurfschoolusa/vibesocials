@@ -25,10 +25,9 @@ describe("answerLostText", () => {
         return statSync(full).isDirectory() ? walk(full) : /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : [];
       });
     // Every wording this lead-in has had, and the current one, outside answerLost.ts.
-    // queue-view.tsx is MM4's: it adopts the helper after its rebase.
     const leadIns = [/The answer was lost/, /We lost the connection before Vibe Socials answered/, /answer didn.t reach you/];
     const offenders = walk(join(__dirname, ".."))
-      .filter((file) => !/[\\/]lib[\\/]answerLost\.ts$/.test(file) && !/[\\/]queue-view\.tsx$/.test(file))
+      .filter((file) => !/[\\/]lib[\\/]answerLost\.ts$/.test(file))
       .filter((file) => leadIns.some((leadIn) => leadIn.test(readFileSync(file, "utf8"))));
     expect(offenders).toEqual([]);
   });

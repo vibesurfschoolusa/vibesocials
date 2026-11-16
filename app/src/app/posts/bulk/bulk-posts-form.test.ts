@@ -202,7 +202,19 @@ describe("Add many: the all-created line", () => {
   const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
 
   it("is a region that is always rendered, filled when done", () => {
-    expect(source).toMatch(/<div role="status"[^>]*>\s*\{done \? \(\s*<Alert variant="success" role=\{undefined\} title="Every post is created\."/);
+    expect(source).toMatch(/<div role="status" className="empty:sr-only">\s*\{done \? \(\s*<Alert variant="success" role=\{undefined\} title="Every post is created\."/);
     expect(source).not.toMatch(/\{done \? \(\s*<Alert variant="success" title="Every post is created\."/);
+  });
+});
+
+// R27 MM4 item 8: the last row created removes "Schedule all"; focus goes to Open the Queue.
+describe("Add many: focus when the last row is created", () => {
+  const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+
+  it("the finish buttons pass themselves; the last created row moves focus to Open the Queue", () => {
+    expect(source).toContain('onClick={(event) => void finish("schedule", event.currentTarget)}');
+    expect(source).toContain('onClick={(event) => void finish("draft", event.currentTarget)}');
+    expect(source).toMatch(/if \(rowsRef\.current\.every\(\(r\) => r\.id === id \|\| r\.postId !== null\)\) focusAfterPress\(pressed, \(\) => queueLinkRef\.current\);\s*updateRow\(id, \{\s*sending: false,/);
+    expect(source).toMatch(/<Link ref=\{queueLinkRef\} href="\/queue"/);
   });
 });

@@ -115,8 +115,12 @@ describe("PublishBar", () => {
     expect(render(control)).not.toContain("publish-bar-reason");
   });
 
-  it("hidden while a confirm dialog is open", () => {
-    expect(render(control, true)).toBe("");
+  // R27 MM4 item 9: hidden, not removed, so the dialog's trigger is still on
+  // the page when it closes and focus goes back to the bar's button.
+  it("hidden while a confirm dialog is open, but still mounted", () => {
+    const html = render(control, true);
+    expect(html).toMatch(/^<div hidden=""/);
+    expect(html).toContain('type="submit"');
   });
 });
 
@@ -241,8 +245,10 @@ describe("PublishBar: hidden while any dialog is open", () => {
     expect(dialog).toMatch(/export function ConfirmDialog[\s\S]*?<Dialog open=/);
   });
 
-  it("the publish confirm still removes it outright", () => {
-    expect(render(submitControl({ ...base, buttonLabel: "Publish post" }), true)).toBe("");
+  // R27 MM4 item 9: hidden (display none, out of the accessibility tree), not
+  // removed, so focus can go back to its button when the confirm closes.
+  it("the publish confirm hides it with the hidden attribute", () => {
+    expect(render(submitControl({ ...base, buttonLabel: "Publish post" }), true)).toMatch(/^<div hidden=""/);
   });
 });
 

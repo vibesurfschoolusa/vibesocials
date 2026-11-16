@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { queueMayHaveGoneThroughText } from "./queueActions";
 import { scheduleDraft, type FetchLike, type ScheduleDraftResult } from "./scheduleDraft";
 
 const SCHEDULED_AT = "2026-12-01T10:00:00.000Z";
@@ -83,8 +84,9 @@ describe("scheduleDraft — (b) a failed PATCH never reaches publish", () => {
     });
   });
 
-  it("falls back to a generic message when the error body is unreadable", async () => {
-    const { result, calls } = await run([new Response("<html>oops</html>", { status: 500 })]);
+  // An unreadable 5xx is no answer (see "no answer" below); a 4xx without a sentence gets the fallback.
+  it("falls back to a generic message when a refusal's body is unreadable", async () => {
+    const { result, calls } = await run([new Response("<html>oops</html>", { status: 400 })]);
     expect(calls).toHaveLength(1);
     expect(result).toEqual({
       kind: "failed",
@@ -132,7 +134,7 @@ describe("scheduleDraft — (c)/(d) a failed publish reports the server error an
     ],
     [
       "no error text, plain scheduling: generic schedule fallback",
-      [json(200, { ok: true }), new Response("nope", { status: 500 })],
+      [json(200, { ok: true }), new Response("nope", { status: 400 })],
       { submitsForApproval: false },
       {
         kind: "failed",
@@ -143,7 +145,7 @@ describe("scheduleDraft — (c)/(d) a failed publish reports the server error an
     ],
     [
       "no error text, held member: approval-flavoured fallback",
-      [json(200, { ok: true }), new Response("nope", { status: 500 })],
+      [json(200, { ok: true }), new Response("nope", { status: 400 })],
       { submitsForApproval: true },
       {
         kind: "failed",
@@ -190,33 +192,46 @@ describe("scheduleDraft — (e) success maps the publish response onto the card"
   });
 });
 
-describe("scheduleDraft — network failures", () => {
-  it("throw before the PATCH lands: error, caption NOT saved, publish never attempted", async () => {
+// R27 MM4 review: a lost answer may have gone through. The caller reloads the
+// Queue (reason "no_answer") and the text says to check before pressing again.
+describe("scheduleDraft — no answer", () => {
+  it("throw before the PATCH lands: the changes may have been saved, caption NOT reported saved, publish never attempted", async () => {
     const { result, calls } = await run([new TypeError("Failed to fetch")]);
     expect(calls).toEqual([PATCH_CALL]);
     expect(result).toEqual({
       kind: "failed",
-      reason: "network_error",
-      error: "Couldn't save your changes.",
+      reason: "no_answer",
+      error: queueMayHaveGoneThroughText("edit"),
       captionSaved: false,
     });
   });
 
-  it("throw on publish after the PATCH landed: error, caption reported saved", async () => {
+  it("throw on publish after the PATCH landed: it may have been scheduled, caption reported saved", async () => {
     const { result, calls } = await run([json(200, { ok: true }), new TypeError("Failed to fetch")]);
     expect(calls).toEqual([PATCH_CALL, PUBLISH_CALL]);
     expect(result).toEqual({
       kind: "failed",
-      reason: "network_error",
-      error: "Couldn't save your changes.",
+      reason: "no_answer",
+      error: queueMayHaveGoneThroughText("schedule"),
       captionSaved: true,
     });
   });
 
-  it("throw on publish when there was no PATCH: caption not reported saved", async () => {
-    const { result, calls } = await run([new TypeError("Failed to fetch")], { originalCaption: "New caption" });
-    expect(calls).toEqual([PUBLISH_CALL]);
-    expect(result).toMatchObject({ kind: "failed", reason: "network_error", captionSaved: false });
+  it("a member's submission says it may have been sent for approval", async () => {
+    const { result } = await run([new TypeError("Failed to fetch")], { originalCaption: "New caption", submitsForApproval: true });
+    expect(result).toMatchObject({ kind: "failed", reason: "no_answer", error: queueMayHaveGoneThroughText("submit"), captionSaved: false });
+  });
+
+  it("a gateway's 502/504 page is no answer too, on either step", async () => {
+    const onPatch = await run([new Response("<html>bad gateway</html>", { status: 504 })]);
+    expect(onPatch.result).toMatchObject({ reason: "no_answer", error: queueMayHaveGoneThroughText("edit") });
+    const onPublish = await run([json(200, { ok: true }), new Response("<html>bad gateway</html>", { status: 502 })]);
+    expect(onPublish.result).toMatchObject({ reason: "no_answer", error: queueMayHaveGoneThroughText("schedule"), captionSaved: true });
+  });
+
+  it("the route's own 5xx stays a refusal with its sentence", async () => {
+    const { result } = await run([json(200, { ok: true }), json(503, { code: "DISPATCH_FAILED", error: "Couldn't start." })]);
+    expect(result).toMatchObject({ kind: "failed", reason: "publish_failed", error: "Couldn't start." });
   });
 });
 
@@ -241,8 +256,8 @@ describe("scheduleDraft — an unreadable publish response is an ERROR, never a 
     });
   });
 
-  it("is distinct from a non-2xx unreadable body, which stays a plain publish failure", async () => {
-    const { result } = await run([SAVED_STEP, new Response("<html>bad gateway</html>", { status: 502 })]);
+  it("is distinct from a 4xx unreadable body, which stays a plain publish failure", async () => {
+    const { result } = await run([SAVED_STEP, new Response("<html>refused</html>", { status: 400 })]);
     expect(result).toMatchObject({ kind: "failed", reason: "publish_failed" });
   });
 });

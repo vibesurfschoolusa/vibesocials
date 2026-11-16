@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { createElement } from "react";
 import type { Platform } from "@prisma/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -233,7 +235,7 @@ describe("Add many row: platforms skipped for this file", () => {
 describe("Add many row: the send status line", () => {
   it("is on the page before anything is sent, empty", () => {
     const html = render(row());
-    expect(html).toContain('<div role="status" id="bulk-row-r1-send"');
+    expect(html).toMatch(/<div role="status" id="bulk-row-r1-send" class="empty:sr-only"><\/div>/);
   });
 
   it("the same region carries Sending... and then the result", () => {
@@ -241,6 +243,28 @@ describe("Add many row: the send status line", () => {
     const done = render(row({ result: "Scheduled for Sat 14 Nov, 10:00." }));
     expect(done).toMatch(/<div role="status" id="bulk-row-r1-send"[^>]*><div[^>]*>[\s\S]*Scheduled for Sat 14 Nov, 10:00\./);
     // The result box inside is not a second live region.
-    expect(done.match(/role="status"/g)?.length).toBe(1);
+    expect(done).not.toMatch(/<div role="status" class="flex gap-3/);
+  });
+});
+
+// R27 MM4 item 8: Write again removes its own button; focus goes to the caption
+// box and the row says it is writing.
+describe("Add many row: Write again", () => {
+  const source = readFileSync(new URL("./bulk-post-row.tsx", import.meta.url), "utf8");
+
+  it("focuses the caption box after the press", () => {
+    expect(source).toMatch(/onClick=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => captionRef\.current\);\s*onWriteAgain\(\);/);
+    expect(source).toMatch(/<Textarea\s+ref=\{captionRef\}\s+id=\{captionId\}/);
+  });
+
+  it("a status line under the caption, there from the first render, says a new caption is being written", () => {
+    const idle = render(row());
+    expect(idle).toMatch(/<p role="status" id="bulk-row-r1-caption-status" class="[^"]*empty:sr-only[^"]*"><\/p>/);
+    for (const captionStatus of ["waiting", "writing"] as const) {
+      expect(render(row({ captionStatus, captionOverwrite: true }))).toMatch(
+        /<p role="status" id="bulk-row-r1-caption-status" class="[^"]*">Writing a new caption\.\.\.<\/p>/,
+      );
+    }
+    expect(render(row({ captionStatus: "done", captionOverwrite: true }))).toMatch(/id="bulk-row-r1-caption-status" class="[^"]*"><\/p>/);
   });
 });

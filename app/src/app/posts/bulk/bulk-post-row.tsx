@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import type { Platform } from "@prisma/client";
 import { Film, Image as ImageIcon } from "lucide-react";
 
@@ -11,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VideoCoverPicker } from "@/components/video-cover-picker";
 import { ALT_TEXT_MAX } from "@/lib/altText";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
 import { skippedForMediaLine } from "@/lib/postTargets";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
@@ -142,6 +144,9 @@ export function BulkPostRow({
   const isPhoto = row.mimeType.startsWith("image/");
   const isVideo = row.mimeType.startsWith("video/");
   const status = uploadText(row);
+  const captionRef = useRef<HTMLTextAreaElement>(null);
+  // R27 MM4: Write again hides both caption buttons and the old text stays, so this line says it is working.
+  const rewriting = row.captionOverwrite && (row.captionStatus === "waiting" || row.captionStatus === "writing");
 
   return (
     <li>
@@ -199,6 +204,7 @@ export function BulkPostRow({
         <div className="flex flex-col gap-1">
           <Label htmlFor={captionId}>Caption</Label>
           <Textarea
+            ref={captionRef}
             id={captionId}
             rows={3}
             value={row.caption}
@@ -208,6 +214,9 @@ export function BulkPostRow({
             placeholder={aiCaptions && row.captionStatus === "writing" ? "Writing a caption..." : "Write a caption"}
             onChange={(event) => onCaptionChange(event.target.value)}
           />
+          <p role="status" id={`bulk-row-${row.id}-caption-status`} className="text-sm text-muted-foreground empty:sr-only">
+            {rewriting ? "Writing a new caption..." : ""}
+          </p>
           {row.captionStatus === "failed" ? (
             <p className="text-sm text-muted-foreground">
               {row.captionError ?? captionFailedText(null, undefined)}
@@ -217,7 +226,15 @@ export function BulkPostRow({
           {editable && row.upload === "done" && (row.captionStatus === "done" || row.captionStatus === "failed") ? (
             <div className="flex flex-wrap gap-2">
               {aiCaptions ? (
-                <Button variant="outline" size="md" disabled={row.improving} onClick={onWriteAgain}>
+                <Button
+                  variant="outline"
+                  size="md"
+                  disabled={row.improving}
+                  onClick={(event) => {
+                    focusAfterPress(event.currentTarget, () => captionRef.current);
+                    onWriteAgain();
+                  }}
+                >
                   Write again
                 </Button>
               ) : null}
@@ -307,7 +324,7 @@ export function BulkPostRow({
         ) : null}
 
         {/* R27 pages L9: one region from the first render; only what is in it changes. */}
-        <div role="status" id={`bulk-row-${row.id}-send`}>
+        <div role="status" id={`bulk-row-${row.id}-send`} className="empty:sr-only">
           {row.sending ? <p className="text-sm text-muted-foreground">Sending...</p> : null}
           {row.result ? (
             <Alert variant="success" role={undefined}>

@@ -156,7 +156,9 @@ function buildHeadline(results: readonly PostOutcomeResultSummary[]): string {
 function renderResultRow(result: PostOutcomeResultSummary): string {
   const label = escapeHtml(`${platformLabel(result.platform)}${result.story ? " Story" : ""}`);
   if (result.notSent) {
-    return `<li>${label}: Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}. Open the post in Activity to send it again.</li>`;
+    // R27 MM4 review: the Activity card offers Retry only for a failed result and
+    // Send again only for a post with none; a row still pending gets neither.
+    return `<li>${label}: Not sent — publishing stopped before it reached ${escapeHtml(platformLabel(result.platform))}. Activity has no retry for it, so post it again from Create.</li>`;
   }
   if (result.status === "success") {
     return `<li>${label}: Succeeded</li>`;

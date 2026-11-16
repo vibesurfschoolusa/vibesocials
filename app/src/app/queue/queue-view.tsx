@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { CalendarClock, Copy, PlusCircle } from "lucide-react";
 
@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { CaptionCounter } from "@/components/caption-counter";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
@@ -66,6 +67,7 @@ import { appendJobsPage } from "@/lib/postsPagination";
 import {
   applyJobPatch,
   approveHint,
+  browserOnline,
   checkScheduleTime,
   decisionButtonState,
   decisionOutcome,
@@ -236,7 +238,7 @@ interface QueueCardProps {
   onPublish: (job: QueueCardPost) => void;
   onDelete: (job: QueueCardPost) => void;
   /** Approval workflow — decide a pending submission (owners only). */
-  onDecide: (job: QueueCardPost, decision: "approve" | "reject") => void;
+  onDecide: (job: QueueCardPost, decision: "approve" | "reject", pressed: HTMLElement | null) => void;
   /** Approval workflow — the decision in flight for this job, if any. */
   deciding: "approve" | "reject" | null;
 }
@@ -379,7 +381,7 @@ function QueueCard({
                 size="sm"
                 {...decisionButtonState(deciding, "approve")}
                 aria-label={`Approve "${name}"`}
-                onClick={() => onDecide(job, "approve")}
+                onClick={(event) => onDecide(job, "approve", event.currentTarget)}
               >
                 Approve
               </Button>
@@ -389,7 +391,7 @@ function QueueCard({
                 className="text-muted-foreground hover:text-destructive"
                 {...decisionButtonState(deciding, "reject")}
                 aria-label={`Reject "${name}"`}
-                onClick={() => onDecide(job, "reject")}
+                onClick={(event) => onDecide(job, "reject", event.currentTarget)}
               >
                 Reject
               </Button>
@@ -627,6 +629,11 @@ function QueueEditDialog({
 
       // Schedule a draft (lib/scheduleDraft.ts owns the sequence and its tests).
       // A Feed and Story card's two requests both ask for the Story too.
+      if (!browserOnline()) {
+        toast.error(queueNotSentText(publishNeedsApproval(job, viewer) ? "submit" : "schedule"));
+        setSaving(false);
+        return;
+      }
       const pairFetch = pairAwareFetch(job, (url, init) => fetch(url, init));
       const result = await scheduleDraft({
         fetchFn: pairFetch.fetchFn,
@@ -652,7 +659,8 @@ function QueueEditDialog({
           onPartialSave({ caption: trimmed, ...overridesPatch }, pairFetch.lastAnswer());
         }
         toast.error(result.error);
-        if (result.reason === "unreadable_response") onStale();
+        // R27 MM4 review: a lost answer may have scheduled it, so the Queue is read again too.
+        if (result.reason === "unreadable_response" || result.reason === "no_answer") onStale();
         setSaving(false);
         return;
       }
@@ -745,6 +753,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [link, setLink] = useState<ReviewLinkDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
+  const copyRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -813,10 +822,13 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
     toast.success("The link is off. It no longer works.");
   }, [toast, workspaceId]);
 
-  async function handleCreate() {
+  async function handleCreate(event?: React.MouseEvent<HTMLButtonElement>) {
+    const pressed = event?.currentTarget ?? null;
     setBusy(true);
     try {
       await makeLink();
+      // R27 MM4 (pages L1): Create link is replaced by the new link; focus goes to its Copy button.
+      focusAfterPress(pressed, () => copyRef.current);
     } catch (error) {
       const text = confirmFailureText(error);
       if (text) toast.error(text);
@@ -850,6 +862,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
       busy={busy}
       onCreate={handleCreate}
       onCopy={copyUrl}
+      copyRef={copyRef}
       onReplace={() => setConfirm("replace")}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
@@ -878,8 +891,10 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
 export interface ReviewLinkPanelViewProps {
   link: ReviewLinkDto | null;
   busy: boolean;
-  onCreate: () => void;
+  onCreate: (event?: React.MouseEvent<HTMLButtonElement>) => void;
   onCopy: () => void;
+  /** The new link's Copy button, which takes focus after Create link. */
+  copyRef?: React.Ref<HTMLButtonElement>;
   onReplace: () => void;
   onTurnOff: () => void;
   /** The confirm dialog, rendered inside the card. */
@@ -896,6 +911,7 @@ export function ReviewLinkPanelView({
   busy,
   onCreate,
   onCopy,
+  copyRef,
   onReplace,
   onTurnOff,
   dialog = null,
@@ -938,7 +954,7 @@ export function ReviewLinkPanelView({
                   aria-label="Client review link"
                   onFocus={(event) => event.currentTarget.select()}
                 />
-                <Button type="button" variant="outline" onClick={onCopy}>
+                <Button ref={copyRef} type="button" variant="outline" onClick={onCopy}>
                   <Copy className="h-4 w-4" aria-hidden />
                   Copy
                 </Button>
@@ -1165,7 +1181,7 @@ export function QueueView({
   // this scheduled/draft-filtered list. `reviewedUpdatedAt` pins the decision
   // to the version the owner is looking at (409 CHANGED_SINCE_REVIEW otherwise).
   const handleDecide = useCallback(
-    async (job: QueueCardPost, decision: "approve" | "reject") => {
+    async (job: QueueCardPost, decision: "approve" | "reject", pressed: HTMLElement | null) => {
       if (deciding) return;
       setDeciding({ id: job.id, decision });
       try {
@@ -1173,6 +1189,8 @@ export function QueueView({
           `/api/posts/${job.id}/approval`,
           cardRequest(job, "POST", { decision, reviewedUpdatedAt: job.updatedAt }),
         );
+        // R27 MM4: whatever comes next can remove the card or its decision row; focus moves on, never to the body.
+        focusAfterPress(pressed);
         if (answer.kind === "not_sent") {
           toast.error(queueNotSentText(decision));
           return;

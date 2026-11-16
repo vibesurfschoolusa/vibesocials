@@ -346,3 +346,33 @@ describe("Queue's publish and approve failures", () => {
     expect(queueSource).toMatch(/queueFailureText\(\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\)/);
   });
 });
+
+// R27 MM4 review: the Edit dialog's draft-scheduling path follows the same rule.
+describe("Edit dialog: scheduling a draft when the answer may be lost", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+  const draftPath = queueSource.slice(queueSource.indexOf("// Schedule a draft"), queueSource.indexOf("toast.success(withPairNote(result.message"));
+
+  it("offline sends nothing and says so; a lost answer reloads the Queue", () => {
+    expect(draftPath).toMatch(/if \(!browserOnline\(\)\) \{\s*toast\.error\(queueNotSentText\(publishNeedsApproval\(job, viewer\) \? "submit" : "schedule"\)\);/);
+    expect(draftPath).toMatch(/if \(result\.reason === "unreadable_response" \|\| result\.reason === "no_answer"\) onStale\(\);/);
+  });
+});
+
+// R27 MM4 item 8: focus never drops to the page body after these presses.
+describe("Queue focus after a press", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("a decision watches its pressed button once the answer is in (the card may go, or lose its decision row)", () => {
+    expect(queueSource).toMatch(/onClick=\{\(event\) => onDecide\(job, "approve", event\.currentTarget\)\}/);
+    expect(queueSource).toMatch(/onClick=\{\(event\) => onDecide\(job, "reject", event\.currentTarget\)\}/);
+    const decide = queueSource.slice(queueSource.indexOf("const handleDecide = useCallback("), queueSource.indexOf("const applyReschedule"));
+    expect(decide).toMatch(/async \(job: QueueCardPost, decision: "approve" \| "reject", pressed: HTMLElement \| null\)/);
+    expect(decide).toMatch(/cardRequest\(job, "POST", \{ decision, reviewedUpdatedAt: job\.updatedAt \}\),\s*\);\s*\/\/[^\n]*\n\s*focusAfterPress\(pressed\);/);
+  });
+
+  it("Create link focuses the new link's Copy button", () => {
+    expect(queueSource).toMatch(/async function handleCreate\(event\?: React\.MouseEvent<HTMLButtonElement>\) \{\s*const pressed = event\?\.currentTarget \?\? null;/);
+    expect(queueSource).toMatch(/await makeLink\(\);\s*\/\/[^\n]*\n\s*focusAfterPress\(pressed, \(\) => copyRef\.current\);/);
+    expect(queueSource).toMatch(/<Button ref=\{copyRef\} type="button" variant="outline" onClick=\{onCopy\}>/);
+  });
+});

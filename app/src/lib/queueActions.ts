@@ -1,3 +1,4 @@
+import { answerLostText } from "./answerLost";
 import { approvalOutcome } from "./approval";
 import { dispatchFailedText } from "./composerSubmitOutcome";
 import { isRouteAnswer } from "./postSubmitFailure";
@@ -281,7 +282,8 @@ export function queueFailureText(data: unknown, fallback: string, button: "Publi
  */
 export type ActionAnswer = { kind: "answer"; response: Response } | { kind: "not_sent" } | { kind: "no_answer" };
 
-function browserOnline(): boolean {
+/** False only when the browser says it is offline: then nothing is sent. */
+export function browserOnline(): boolean {
   return typeof navigator === "undefined" || navigator.onLine !== false;
 }
 
@@ -303,13 +305,14 @@ export async function sendActionRequest(
 }
 
 /** The Queue's presses that change a post. */
-export type QueueAction = "approve" | "reject" | "publish" | "submit" | "edit";
+export type QueueAction = "approve" | "reject" | "publish" | "submit" | "schedule" | "edit";
 
 const NOT_SENT: Record<QueueAction, [what: string, next: string]> = {
   approve: ["the post wasn't approved", "press Approve again"],
   reject: ["the post wasn't rejected", "press Reject again"],
   publish: ["the post wasn't published", "press Publish now again"],
   submit: ["the post wasn't sent for approval", "press Submit for approval again"],
+  schedule: ["the post wasn't scheduled", "press Save and schedule again"],
   edit: ["your changes weren't saved", "save again"],
 };
 
@@ -324,13 +327,18 @@ const MAY_HAVE: Record<QueueAction, [what: string, check: string]> = {
   reject: ["the post may have been rejected", "check it before you press Reject again"],
   publish: ["the post may have started publishing", "check Activity before you press Publish now again"],
   submit: ["the post may have been sent for approval", "check it before you press Submit for approval again"],
+  schedule: ["the post may have been scheduled", "check it before you press Save and schedule again"],
   edit: ["your changes may have been saved", "check the post before you save again"],
 };
 
-/** No answer: it may have gone through; the caller reloads the Queue. */
+/**
+ * No answer: it may have gone through. The caller starts a reload of the
+ * Queue, so the text says it is reloading (true whether or not that reload
+ * succeeds) rather than that it has.
+ */
 export function queueMayHaveGoneThroughText(action: QueueAction): string {
   const [what, check] = MAY_HAVE[action];
-  return `We didn't get an answer, so ${what}. The Queue has been reloaded: ${check}.`;
+  return answerLostText(what, `We're reloading the Queue: ${check}.`);
 }
 
 /**

@@ -16,6 +16,7 @@ import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 import { sendActionRequest } from "@/lib/queueActions";
 import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
@@ -186,14 +187,19 @@ export const SEND_AGAIN_FAILED = "Couldn't send this post again. Please try agai
 export const SEND_AGAIN_NOT_SENT =
   "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.";
 /** R27 publishing-flow L1: no answer, or a gateway's page; the server may have taken it. */
-export const SEND_AGAIN_NO_ANSWER =
-  "We didn't get an answer, so the post may have started sending. Wait for this card to update and check it before you press Send again.";
+export const SEND_AGAIN_NO_ANSWER = answerLostText(
+  "the post may have started sending",
+  "Wait for this card to update and check it before you press Send again.",
+);
+/** R27 MM4 review: after a failed start the post couldn't be read again, so Send again is offered back. */
+export const SEND_AGAIN_STALE_NOTE =
+  "This list couldn't refresh, so this card may be out of date. Reload the page to see the post as it is before you press Send again.";
 
 /**
  * The answer to one press of Send again; `null` when a press is already under
  * way or done. `refetch`: the post may have changed, so the list is read again.
  */
-export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetch?: true } | null;
+export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetch?: true; note?: string } | null;
 
 /**
  * F1 follow-up: Send again on a failed post that no platform was tried for
@@ -203,6 +209,8 @@ export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetc
  * R27 publishing-flow L1: a DISPATCH_FAILED 503 is read by the shared rule
  * (dispatchFailedText); the post then has failed results or shows as
  * publishing, so this card's press stays used up and the list is read again.
+ * The post itself is read again first: if that fails, the card can't show
+ * the truth, so the press is offered back with SEND_AGAIN_STALE_NOTE.
  */
 export function createSendAgain(
   postJobId: string,
@@ -233,7 +241,16 @@ export function createSendAgain(
     } catch {
       // Not JSON: the generic sentence below.
     }
-    if (body.code === "DISPATCH_FAILED") return { ok: false, error: dispatchFailedText(body, "Send again"), refetch: true };
+    if (body.code === "DISPATCH_FAILED") {
+      const error = dispatchFailedText(body, "Send again");
+      const read = await sendActionRequest(`/api/posts/${postJobId}`, { method: "GET" }, {
+        fetchImpl: fetcher as typeof fetch,
+        ...(online ? { online } : {}),
+      });
+      if (read.kind === "answer" && read.response.ok) return { ok: false, error, refetch: true };
+      locked = false;
+      return { ok: false, error, refetch: true, note: SEND_AGAIN_STALE_NOTE };
+    }
     locked = false;
     return { ok: false, error: typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED };
   };
@@ -307,6 +324,7 @@ export function PostJobCard({
   // server took the post, until the refetch it triggers brings the real status.
   const [sendingAgain, setSendingAgain] = useState(false);
   const [sentAgain, setSentAgain] = useState(false);
+  const [sendAgainNote, setSendAgainNote] = useState("");
   const pressSendAgain = useMemo(() => createSendAgain(job.id), [job.id]);
 
   const [prevJob, setPrevJob] = useState(job);
@@ -314,6 +332,7 @@ export function PostJobCard({
     setPrevJob(job);
     setPending(new Set());
     setSentAgain(false);
+    setSendAgainNote("");
   }
 
   const status = JOB_STATUS_META[displayedJobStatus(job.status, sentAgain)];
@@ -398,6 +417,7 @@ export function PostJobCard({
       return;
     }
     toast.error(outcome.error);
+    setSendAgainNote(outcome.note ?? "");
     if (outcome.refetch) onRetryAccepted(job.id);
   }, [job.id, onRetryAccepted, pressSendAgain, toast]);
 
@@ -569,6 +589,9 @@ export function PostJobCard({
           <Button size="sm" variant="outline" loading={sendingAgain} onClick={() => void sendAgain()}>
             Send again
           </Button>
+          <p role="status" className="mt-1.5 text-xs text-muted-foreground empty:sr-only">
+            {sendAgainNote}
+          </p>
         </div>
       ) : null}
 

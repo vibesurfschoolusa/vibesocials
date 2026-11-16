@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ImagePlus, Sparkles, X } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ALT_TEXT_MAX, cleanAltText } from "@/lib/altText";
 import { cn } from "@/lib/cn";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 
@@ -438,6 +439,8 @@ function PhotoTile({
   onRetry(): void;
 }) {
   const [url, setUrl] = useState<string | null>(null);
+  const earlierRef = useRef<HTMLButtonElement>(null);
+  const laterRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const objectUrl = URL.createObjectURL(photo.file);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- same object-URL pattern as create-post-form.tsx's preview: created and revoked with the file
@@ -469,18 +472,27 @@ function PhotoTile({
       </div>
       <div className="flex items-center justify-between gap-1">
         <button
+          ref={earlierRef}
           type="button"
           className={ICON_BUTTON}
-          onClick={() => onMove(-1)}
+          onClick={(event) => {
+            // R27 MM4: at an end the pressed arrow is disabled; focus goes to the other one.
+            focusAfterPress(event.currentTarget, () => laterRef.current);
+            onMove(-1);
+          }}
           disabled={isFirst}
           aria-label={`Move photo ${position} earlier`}
         >
           <ChevronLeft className="h-4 w-4" aria-hidden />
         </button>
         <button
+          ref={laterRef}
           type="button"
           className={ICON_BUTTON}
-          onClick={() => onMove(1)}
+          onClick={(event) => {
+            focusAfterPress(event.currentTarget, () => earlierRef.current);
+            onMove(1);
+          }}
           disabled={isLast}
           aria-label={`Move photo ${position} later`}
         >

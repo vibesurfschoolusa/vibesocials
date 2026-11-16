@@ -23,7 +23,17 @@ import {
   shouldRefetchAfterError,
   type QueueViewer,
 } from "./queueActions";
+import { answerLostText } from "./answerLost";
 import { toDateTimeLocalValue } from "./scheduling";
+
+const MAY_HAVE_CLAUSE = {
+  approve: "the post may have been approved",
+  reject: "the post may have been rejected",
+  publish: "the post may have started publishing",
+  submit: "the post may have been sent for approval",
+  schedule: "the post may have been scheduled",
+  edit: "your changes may have been saved",
+} as const;
 import type { PostJobDTO } from "./postsDto";
 
 const OWNER: QueueViewer = { role: "owner", requireApproval: true };
@@ -487,29 +497,40 @@ describe("queueNotSentText and queueMayHaveGoneThroughText", () => {
     expect(queueNotSentText("submit")).toBe(
       "We couldn't reach Vibe Socials, so the post wasn't sent for approval. Check your connection and press Submit for approval again.",
     );
+    expect(queueNotSentText("schedule")).toBe(
+      "We couldn't reach Vibe Socials, so the post wasn't scheduled. Check your connection and press Save and schedule again.",
+    );
     expect(queueNotSentText("edit")).toBe(
       "We couldn't reach Vibe Socials, so your changes weren't saved. Check your connection and save again.",
     );
   });
 
-  it("no answer: it may have gone through, the Queue is reloaded, check before pressing again", () => {
+  it("no answer: the shared lead-in, what may have happened, the Queue is being reloaded, check before pressing again", () => {
+    const lead = "Vibe Socials' answer didn't reach you, so ";
+    const reconnect = " If your connection dropped, reconnect first. ";
     expect(queueMayHaveGoneThroughText("approve")).toBe(
-      "We didn't get an answer, so the post may have been approved. The Queue has been reloaded: check it and Activity before you press Approve again.",
+      `${lead}the post may have been approved.${reconnect}We're reloading the Queue: check it and Activity before you press Approve again.`,
     );
     expect(queueMayHaveGoneThroughText("reject")).toBe(
-      "We didn't get an answer, so the post may have been rejected. The Queue has been reloaded: check it before you press Reject again.",
+      `${lead}the post may have been rejected.${reconnect}We're reloading the Queue: check it before you press Reject again.`,
     );
     expect(queueMayHaveGoneThroughText("publish")).toBe(
-      "We didn't get an answer, so the post may have started publishing. The Queue has been reloaded: check Activity before you press Publish now again.",
+      `${lead}the post may have started publishing.${reconnect}We're reloading the Queue: check Activity before you press Publish now again.`,
     );
     expect(queueMayHaveGoneThroughText("submit")).toBe(
-      "We didn't get an answer, so the post may have been sent for approval. The Queue has been reloaded: check it before you press Submit for approval again.",
+      `${lead}the post may have been sent for approval.${reconnect}We're reloading the Queue: check it before you press Submit for approval again.`,
+    );
+    expect(queueMayHaveGoneThroughText("schedule")).toBe(
+      `${lead}the post may have been scheduled.${reconnect}We're reloading the Queue: check it before you press Save and schedule again.`,
     );
     expect(queueMayHaveGoneThroughText("edit")).toBe(
-      "We didn't get an answer, so your changes may have been saved. The Queue has been reloaded: check the post before you save again.",
+      `${lead}your changes may have been saved.${reconnect}We're reloading the Queue: check the post before you save again.`,
     );
-    for (const action of ["approve", "reject", "publish", "submit", "edit"] as const) {
-      expect(queueMayHaveGoneThroughText(action)).not.toMatch(/nothing changed/i);
+    for (const action of ["approve", "reject", "publish", "submit", "schedule", "edit"] as const) {
+      expect(queueMayHaveGoneThroughText(action)).toBe(
+        answerLostText(MAY_HAVE_CLAUSE[action], queueMayHaveGoneThroughText(action).split("reconnect first. ")[1]),
+      );
+      expect(queueMayHaveGoneThroughText(action)).not.toMatch(/nothing changed|has been reloaded/i);
     }
   });
 });

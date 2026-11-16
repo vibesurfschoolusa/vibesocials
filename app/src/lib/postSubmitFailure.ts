@@ -35,13 +35,17 @@ export class PostConnectionLostError extends Error {
  */
 export async function isRouteAnswer(response: Response): Promise<boolean> {
   try {
-    const parsed: unknown = JSON.parse(await response.clone().text());
-    if (typeof parsed !== "object" || parsed === null) return false;
-    const { error, code } = parsed as Record<string, unknown>;
-    return (typeof error === "string" && error !== "") || (typeof code === "string" && code !== "");
+    return isRouteBody(JSON.parse(await response.clone().text()));
   } catch {
     return false;
   }
+}
+
+/** The same test on a body already read (lib/scheduleDraft.ts reads it once). */
+export function isRouteBody(parsed: unknown): boolean {
+  if (typeof parsed !== "object" || parsed === null) return false;
+  const { error, code } = parsed as Record<string, unknown>;
+  return (typeof error === "string" && error !== "") || (typeof code === "string" && code !== "");
 }
 
 /**

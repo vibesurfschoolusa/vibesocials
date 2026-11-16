@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { sendPostRequest, submitErrorText } from "@/lib/postSubmitFailure";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
@@ -789,6 +790,7 @@ function CreatePostFormInner({
 
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
+  const connectionsRetryRef = useRef<HTMLButtonElement>(null);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
   // 07d: the description (alt text) of a single photo, uploaded or reused. With
   // several photos each one keeps its own on its AttachedPhoto.
@@ -2207,7 +2209,16 @@ function CreatePostFormInner({
               {connectionsError ?? CONNECTIONS_FAILED_TEXT} We need them to know which
               platforms you can post to.
             </p>
-            <Button size="sm" variant="outline" onClick={reloadConnections}>
+            {/* R27 MM4: the loading skeleton replaces this button; focus goes to the next Retry or on, never the body. */}
+            <Button
+              ref={connectionsRetryRef}
+              size="sm"
+              variant="outline"
+              onClick={(event) => {
+                focusAfterPress(event.currentTarget, () => connectionsRetryRef.current);
+                reloadConnections();
+              }}
+            >
               Retry
             </Button>
           </div>
@@ -2824,7 +2835,7 @@ function CreatePostFormInner({
             </Button>
             </span>
             {/* R27 pages L9: on the page from the first render, so the text is announced. */}
-            <p className="text-sm text-muted-foreground" role="status">
+            <p className="text-sm text-muted-foreground empty:sr-only" role="status">
               {untouchedMessage}
             </p>
             {tiktokBlock ? (

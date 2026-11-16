@@ -12,6 +12,7 @@ import type { Platform } from "@prisma/client";
 
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
+import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 
 import {
@@ -28,6 +29,7 @@ import {
   SEND_AGAIN_FAILED,
   SEND_AGAIN_NO_ANSWER,
   SEND_AGAIN_NOT_SENT,
+  SEND_AGAIN_STALE_NOTE,
 } from "./post-job-card";
 
 const cardSource = readFileSync(fileURLToPath(new URL("./post-job-card.tsx", import.meta.url)), "utf8");
@@ -256,17 +258,58 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
     });
 
     // R27 publishing-flow L1: Send again after a failed start.
-    it("publishing couldn't start: the shared DISPATCH_FAILED sentence for Send again, and the list is read again", async () => {
+    const dispatchBody = (resultsMarked: boolean) => ({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-9",
+      resultsMarked,
+    });
+    const fresh = () => new Response(JSON.stringify({ postJob: { id: "job-9" }, results: [] }), { status: 200 });
+
+    it("publishing couldn't start: the shared DISPATCH_FAILED sentence for Send again; the post is read again and the press stays used", async () => {
       for (const resultsMarked of [true, false]) {
-        const body = { code: "DISPATCH_FAILED", error: "Couldn't start publishing. Please try again.", postJobId: "job-9", resultsMarked };
-        const press = createSendAgain("job-9", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 503 })), () => true);
+        const body = dispatchBody(resultsMarked);
+        const fetcher = vi
+          .fn()
+          .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+          .mockResolvedValueOnce(fresh());
+        const press = createSendAgain("job-9", fetcher, () => true);
         await expect(press()).resolves.toEqual({ ok: false, error: dispatchFailedText(body, "Send again"), refetch: true });
+        expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9", { method: "GET" });
+        await expect(press()).resolves.toBeNull();
       }
+    });
+
+    // R27 MM4 review: a refresh that fails must not leave Send again used up and silent.
+    it("publishing couldn't start and the post couldn't be read again: Send again comes back with a line saying so", async () => {
+      expect(SEND_AGAIN_STALE_NOTE).toBe(
+        "This list couldn't refresh, so this card may be out of date. Reload the page to see the post as it is before you press Send again.",
+      );
+      for (const failedRead of [new Response("<html>502</html>", { status: 502 }), new TypeError("Failed to fetch")]) {
+        const body = dispatchBody(true);
+        const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }));
+        if (failedRead instanceof Error) fetcher.mockRejectedValueOnce(failedRead);
+        else fetcher.mockResolvedValueOnce(failedRead);
+        fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 202 }));
+        const press = createSendAgain("job-9", fetcher, () => true);
+        await expect(press()).resolves.toEqual({
+          ok: false,
+          error: dispatchFailedText(body, "Send again"),
+          refetch: true,
+          note: SEND_AGAIN_STALE_NOTE,
+        });
+        await expect(press()).resolves.toEqual({ ok: true });
+      }
+    });
+
+    it("the card shows the note in a status line by Send again, on the page from the first render", () => {
+      expect(cardSource).toMatch(/<p role="status" className="[^"]*empty:sr-only[^"]*">\s*\{sendAgainNote\}\s*<\/p>/);
+      expect(cardSource).toMatch(/setSendAgainNote\(outcome\.note \?\? ""\)/);
     });
 
     it("no answer or a gateway's page: it may have gone through, check before pressing again", async () => {
       expect(SEND_AGAIN_NO_ANSWER).toBe(
-        "We didn't get an answer, so the post may have started sending. Wait for this card to update and check it before you press Send again.",
+        answerLostText("the post may have started sending", "Wait for this card to update and check it before you press Send again."),
       );
       const lost = createSendAgain("job-9", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")), () => true);
       await expect(lost()).resolves.toEqual({ ok: false, error: SEND_AGAIN_NO_ANSWER, refetch: true });

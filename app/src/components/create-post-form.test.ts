@@ -1173,7 +1173,22 @@ describe("Create at phone width and its status line", () => {
   });
 
   it("the line by the button for an untouched form is a region from the first render", () => {
-    expect(source).toMatch(/<p className="text-sm text-muted-foreground" role="status">\s*\{untouchedMessage\}\s*<\/p>/);
+    expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" role="status">\s*\{untouchedMessage\}\s*<\/p>/);
     expect(source).not.toContain("{untouchedMessage ? (");
+  });
+});
+
+// R27 MM4 item 8 and review: the connections Retry, and the status line's gap.
+describe("Create: connections Retry and the status line", () => {
+  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+
+  it("Retry, which the loading skeleton replaces, keeps focus off the page body", () => {
+    expect(source).toMatch(
+      /<Button\s+ref=\{connectionsRetryRef\}\s+size="sm"\s+variant="outline"\s+onClick=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => connectionsRetryRef\.current\);\s*reloadConnections\(\);/,
+    );
+  });
+
+  it("the empty status line takes no room in the row", () => {
+    expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" role="status">\s*\{untouchedMessage\}/);
   });
 });

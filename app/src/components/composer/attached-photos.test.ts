@@ -635,3 +635,14 @@ describe("Write it for me while busy", () => {
     expect(source).toContain("loading={writing} disabled={!onWrite}");
   });
 });
+
+// R27 MM4 item 8: moving a photo to an end disables the pressed arrow; focus
+// goes to the same photo's other arrow, never the page body.
+describe("Move photo earlier or later at an end", () => {
+  const source = readFileSync(new URL("./attached-photos.tsx", import.meta.url), "utf8");
+
+  it("each arrow hands focus to its partner", () => {
+    expect(source).toMatch(/ref=\{earlierRef\}\s+type="button"\s+className=\{ICON_BUTTON\}\s+onClick=\{\(event\) => \{\s*(\/\/.*\s*)?focusAfterPress\(event\.currentTarget, \(\) => laterRef\.current\);\s*onMove\(-1\);/);
+    expect(source).toMatch(/ref=\{laterRef\}\s+type="button"\s+className=\{ICON_BUTTON\}\s+onClick=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => earlierRef\.current\);\s*onMove\(1\);/);
+  });
+});

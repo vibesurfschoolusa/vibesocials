@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
+import { focusAfterPress } from "@/lib/focusAfter";
 import {
   BULK_DRAFTS_NOTE,
   BULK_MAX_FILES,
@@ -237,6 +238,7 @@ export function BulkPostsForm({
   // The latest rows, for the async upload/caption/send loops (state read inside
   // them would be the value from when they started).
   const rowsRef = useRef<BulkRow[]>([]);
+  const queueLinkRef = useRef<HTMLAnchorElement>(null);
   const filesRef = useRef(new Map<string, File>());
   const workingRef = useRef(false);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -685,7 +687,7 @@ export function BulkPostsForm({
   const googleShown = selectedPlatforms.includes("google_business_profile");
   const googleError = googleShown ? bulkGoogleMetadataError(googleMetadata) : null;
 
-  async function finish(mode: BulkFinishMode) {
+  async function finish(mode: BulkFinishMode, pressed: HTMLElement | null) {
     if (sendingMode) return;
     setSendingMode(mode);
     try {
@@ -768,6 +770,8 @@ export function BulkPostsForm({
         }
         const result = classifySendResponse(response, mode);
         if (result.outcome === "created") {
+          // R27 MM4: the last row created removes Schedule all; focus goes to Open the Queue.
+          if (rowsRef.current.every((r) => r.id === id || r.postId !== null)) focusAfterPress(pressed, () => queueLinkRef.current);
           updateRow(id, {
             sending: false,
             // With a post id the row's time is locked (rowTimeLocked): it shows the time sent.
@@ -1182,7 +1186,7 @@ export function BulkPostsForm({
             className="w-full sm:w-auto"
             disabled={busy || sendingMode === "draft" || selectedPlatforms.length === 0}
             loading={sendingMode === "schedule"}
-            onClick={() => void finish("schedule")}
+            onClick={(event) => void finish("schedule", event.currentTarget)}
           >
             Schedule all
           </Button>
@@ -1192,7 +1196,7 @@ export function BulkPostsForm({
             className="w-full sm:w-auto"
             disabled={busy || sendingMode === "schedule" || selectedPlatforms.length === 0}
             loading={sendingMode === "draft"}
-            onClick={() => void finish("draft")}
+            onClick={(event) => void finish("draft", event.currentTarget)}
           >
             Save all as drafts
           </Button>
@@ -1210,10 +1214,10 @@ export function BulkPostsForm({
       ) : null}
 
       {/* R27 pages L9: the region is on the page from the first render; only what is in it changes. */}
-      <div role="status">
+      <div role="status" className="empty:sr-only">
         {done ? (
           <Alert variant="success" role={undefined} title="Every post is created.">
-            <Link href="/queue" className={buttonVariants({ variant: "primary", size: "lg", className: "mt-2" })}>
+            <Link ref={queueLinkRef} href="/queue" className={buttonVariants({ variant: "primary", size: "lg", className: "mt-2" })}>
               Open the Queue
             </Link>
           </Alert>

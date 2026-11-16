@@ -82,9 +82,11 @@ export function PublishBar({
     };
   }, [dialogOpen]);
 
-  if (dialogOpen) return null;
+  // R27 MM4 (pages L8): hidden, not unmounted, while a dialog is open, so the
+  // button that opened it is still there to take focus back when it closes.
   return (
     <div
+      hidden={dialogOpen}
       ref={barRef}
       className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden [body:has([role=dialog][aria-modal=true])_&]:hidden">
       {tiktokDeclaration ? (
