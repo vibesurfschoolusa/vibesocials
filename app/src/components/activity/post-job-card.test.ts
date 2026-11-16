@@ -566,3 +566,28 @@ describe("PostJobCard - Retry all failed while it runs", () => {
     expect(tag).not.toContain("disabled=");
   });
 });
+
+// R28 NN2 step 3: a retry whose answer is lost may have started on the
+// server; the card says so and reads the post again. Offline at the press,
+// nothing was sent.
+describe("Retry when the answer is lost", () => {
+  const card = readFileSync(fileURLToPath(new URL("./post-job-card.tsx", import.meta.url)), "utf8");
+  const retry = card.slice(card.indexOf("const retry = useCallback("), card.indexOf("[job.id, onRetryAccepted, toast, viewerRole]"));
+
+  it("says what may have happened and where to check", async () => {
+    const { retryNoAnswerText, retryNotSentText } = await import("./post-job-card");
+    expect(retryNoAnswerText("Instagram")).toBe(
+      "Vibe Socials' answer didn't reach you, so the retry of Instagram may have started. If your connection dropped, reconnect first. We're reloading Activity: check the post before you retry again.",
+    );
+    expect(retryNotSentText("the failed platforms")).toBe(
+      "You're offline, so the retry of the failed platforms wasn't sent. Reconnect, then retry again.",
+    );
+  });
+
+  it("sends through sendActionRequest; no answer rolls back, says so and reads the post again", () => {
+    expect(retry).toMatch(/await sendActionRequest\(`\/api\/posts\/\$\{job\.id\}\/retry`/);
+    expect(retry).not.toMatch(/await fetch\(/);
+    expect(retry).toMatch(/answer\.kind === "not_sent"\) \{\s+rollBack\(\);\s+toast\.error\(retryNotSentText\(label\)\);\s+return;/);
+    expect(retry).toMatch(/answer\.kind === "no_answer"\) \{\s+rollBack\(\);\s+toast\.error\(retryNoAnswerText\(label\)\);\s+onRetryAccepted\(job\.id\);\s+return;/);
+  });
+});

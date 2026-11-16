@@ -35,29 +35,6 @@ import { describe, expect, it } from "vitest";
 const SRC = __dirname;
 
 /**
- * Findings let through for now, as a count per file, so a new site in a
- * listed file still fails, and a fixed one must come off the list.
- * NN3 owns the Reviews reply text; it is fixed on its own branch.
- */
-const TEMPORARY_ALLOWLIST: Record<"fetch" | "wording", Record<string, number>> = {
-  fetch: {},
-  wording: {
-    "app/reviews/reviews-view.tsx": 1, // NN3: remove after rebase
-  },
-};
-
-/**
- * Sites in files no R28 brief gives NN2 (post-job-card.tsx is NN4's): the lead
- * decides who converts them, then they come off this list.
- */
-const OUTSIDE_NN2_FILES: Record<"fetch" | "wording", Record<string, number>> = {
-  fetch: {
-    "components/activity/post-job-card.tsx": 1, // NN4's file: converted after the rebase
-  },
-  wording: {},
-};
-
-/**
  * Sentences that are true whatever reached the server, named one by one.
  * CAPTION_OFFLINE_MESSAGE, CAPTION_FAILED_MESSAGE: asking for an AI caption
  * saves nothing on the server, and the caption box changes only from an
@@ -511,17 +488,6 @@ function wordingFindings(files: string[]): Finding[] {
   return [...new Map(all.map((finding) => [`${finding.file}:${finding.line}`, finding])).values()];
 }
 
-/** What is left once the allowed counts per file are taken off; a new site in a listed file still fails. */
-function beyond(findings: Finding[], allowed: Record<string, number>): string[] {
-  const byFile = new Map<string, Finding[]>();
-  for (const finding of findings) byFile.set(finding.file, [...(byFile.get(finding.file) ?? []), finding]);
-  const out: string[] = [];
-  for (const [file, list] of byFile) {
-    if (list.length > (allowed[file] ?? 0)) out.push(...list.map((finding) => `${finding.file}:${finding.line} ${finding.text}`));
-  }
-  return out;
-}
-
 /** A source file the scan reads as if it were in src. */
 function fake(name: string, code: string): string {
   const file = path.join(SRC, "__guard_fixture__", name);
@@ -601,30 +567,17 @@ describe("requests that change data, and their no-answer wording", () => {
   });
 
   it("a request that changes data goes through fetchOrNoAnswer, never plain fetch", () => {
-    expect(beyond(fetchFindings(clientFiles), { ...TEMPORARY_ALLOWLIST.fetch, ...OUTSIDE_NN2_FILES.fetch })).toEqual([]);
+    expect(fetchFindings(clientFiles).map((finding) => `${finding.file}:${finding.line} ${finding.text}`)).toEqual([]);
   });
 
   it("a no-answer branch never says nothing changed", () => {
-    expect(beyond(wordingFindings(clientFiles), { ...TEMPORARY_ALLOWLIST.wording, ...OUTSIDE_NN2_FILES.wording })).toEqual([]);
+    expect(wordingFindings(clientFiles).map((finding) => `${finding.file}:${finding.line} ${finding.text}`)).toEqual([]);
   });
 
   it("each documented exception names a constant that exists, by name, not by count", () => {
     for (const entry of TRUE_WHATEVER_ARRIVED) {
       const source = readFileSync(path.join(SRC, entry.file), "utf8");
       expect(source, entry.constant).toMatch(new RegExp(`export const ${entry.constant}\\b`));
-    }
-  });
-
-  it("each allowance is still needed, so a fixed file comes off the list", () => {
-    const fetchByFile = new Map<string, number>();
-    for (const finding of fetchFindings(clientFiles)) fetchByFile.set(finding.file, (fetchByFile.get(finding.file) ?? 0) + 1);
-    const wordingByFile = new Map<string, number>();
-    for (const finding of wordingFindings(clientFiles)) wordingByFile.set(finding.file, (wordingByFile.get(finding.file) ?? 0) + 1);
-    for (const [file, count] of Object.entries({ ...TEMPORARY_ALLOWLIST.fetch, ...OUTSIDE_NN2_FILES.fetch })) {
-      expect(fetchByFile.get(file) ?? 0, file).toBe(count);
-    }
-    for (const [file, count] of Object.entries({ ...TEMPORARY_ALLOWLIST.wording, ...OUTSIDE_NN2_FILES.wording })) {
-      expect(wordingByFile.get(file) ?? 0, file).toBe(count);
     }
   });
 });

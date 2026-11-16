@@ -184,6 +184,19 @@ export function cardTime(job: {
 /** What Send again says when the server refused without a sentence. */
 export const SEND_AGAIN_FAILED = "Couldn't send this post again. Please try again.";
 /** R27 publishing-flow L1: offline, so the request never left. */
+/**
+ * R28 NN2: a retry whose answer is lost (or a gateway's 5xx) may have started
+ * on the server; the card reads the post again. Offline at the press, nothing
+ * was sent.
+ */
+export function retryNoAnswerText(label: string): string {
+  return answerLostText(`the retry of ${label} may have started`, "We're reloading Activity: check the post before you retry again.");
+}
+
+export function retryNotSentText(label: string): string {
+  return `You're offline, so the retry of ${label} wasn't sent. Reconnect, then retry again.`;
+}
+
 export const SEND_AGAIN_NOT_SENT =
   "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.";
 /** R27 publishing-flow L1: no answer, or a gateway's page; the server may have taken it. */
@@ -483,11 +496,23 @@ export function PostJobCard({
         });
 
       try {
-        const response = await fetch(`/api/posts/${job.id}/retry`, {
+        const answer = await sendActionRequest(`/api/posts/${job.id}/retry`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(retryRequestBody(target)),
         });
+        if (answer.kind === "not_sent") {
+          rollBack();
+          toast.error(retryNotSentText(label));
+          return;
+        }
+        if (answer.kind === "no_answer") {
+          rollBack();
+          toast.error(retryNoAnswerText(label));
+          onRetryAccepted(job.id);
+          return;
+        }
+        const { response } = answer;
 
         if (response.ok) {
           if (target === "all") {
