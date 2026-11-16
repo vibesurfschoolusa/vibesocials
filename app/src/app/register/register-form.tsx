@@ -20,6 +20,7 @@ import { beforeSignIn } from "@/lib/staleSignOut";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 import { FormHeading, SignedInNotice, showSignedInNotice } from "../login/signed-in-notice";
+import { REGISTER_SIGN_IN_UNFINISHED_MESSAGE, signInReachable } from "../login/signInWithPassword";
 
 /**
  * What the page says under the button, as plain strings from the server page:
@@ -100,6 +101,13 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
     // land in the block above and show the misleading "no account was
     // created" — it should just fall through to the friendly login
     // handoff below, same as the "signed in but not ok" case.
+    // R30: unreachable, signIn would leave for /api/auth/error instead of
+    // throwing; the form stays with what was typed and says to log in.
+    if (!(await signInReachable())) {
+      setError(REGISTER_SIGN_IN_UNFINISHED_MESSAGE);
+      setLoading(false);
+      return;
+    }
     try {
       // EE1 review: waits for a stale sign-out this page already sent, so it can't clear the new cookie.
       const result = await beforeSignIn(() => signIn("credentials", { redirect: false, email, password }));

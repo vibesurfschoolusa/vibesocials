@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getProviders, signIn } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
+import { GOOGLE_NOT_SENT_MESSAGE, signInReachable } from "@/app/login/signInWithPassword";
 
 /**
  * "Continue with Google" for the login/register cards. Renders NOTHING unless
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
   const [available, setAvailable] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,8 +58,15 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
         variant="outline"
         loading={loading}
         className="mt-4 w-full gap-2"
-        onClick={() => {
+        onClick={async () => {
           setLoading(true);
+          setError(null);
+          // R30: unreachable, signIn would leave for /api/auth/error instead of throwing.
+          if (!(await signInReachable())) {
+            setError(GOOGLE_NOT_SENT_MESSAGE);
+            setLoading(false);
+            return;
+          }
           // Full-page redirect to Google; NextAuth lands back on callbackUrl.
           // If the pre-redirect fetch fails (offline, CSRF endpoint down) the
           // promise rejects with no navigation — unstick the button.
@@ -67,6 +76,11 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
         <GoogleMark />
         Continue with Google
       </Button>
+      {error ? (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
