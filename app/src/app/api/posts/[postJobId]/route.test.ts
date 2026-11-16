@@ -315,7 +315,7 @@ describe("PATCH /api/posts/[postJobId]", () => {
   it.each([
     ["in_progress", "This post has started publishing, so it can't be edited. Check Activity to see how it goes."],
     ["completed", "This post has already gone out, so it can't be edited. Check Activity to see it."],
-    ["failed", "This post was already sent and failed, so it can't be edited. Check Activity to see what happened."],
+    ["failed", "This post failed, so it can't be edited. Check Activity for what to do next."],
   ])("a %s post: the 409 says so", async (status, sentence) => {
     findFirstMock.mockResolvedValue({ status });
     const res = await PATCH(req({ baseCaption: "new" }), ctx("job-1"));

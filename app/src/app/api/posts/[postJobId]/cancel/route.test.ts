@@ -176,7 +176,7 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
   it.each([
     ["in_progress", "This post has started publishing, so it can't be cancelled. Check Activity to see how it goes."],
     ["completed", "This post has already gone out, so it can't be cancelled. Check Activity to see it."],
-    ["failed", "This post was already sent and failed, so it can't be cancelled. Check Activity to see what happened."],
+    ["failed", "This post failed, so it can't be cancelled. Check Activity for what to do next."],
   ])("a %s post: the 409 says so", async (status, sentence) => {
     findFirstMock.mockResolvedValue(jobRow({ status }));
 
