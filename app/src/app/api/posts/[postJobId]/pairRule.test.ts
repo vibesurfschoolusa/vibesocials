@@ -307,6 +307,45 @@ describe("dispatchNow - the sends of a failed hand-over", () => {
     expect(withdrawSendMock).not.toHaveBeenCalled();
   });
 
+  // R26 LL3 item 1: the create route's rule. Marking is per job and never
+  // throws out of dispatchNow; a job left pending keeps its send (it may still
+  // publish), and the answer says whether every job was marked.
+  it("the hand-over and the marking both fail: no throw, resultsMarked false, only marked sends taken back", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id, { postJobIds: [id], day: DAY }));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+    failPendingMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("db blip");
+      return { failedCount: 1, unconfirmedCount: 0, status: "failed" };
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+
+    expect(result.sendFailed).toBe(true);
+    expect(result.resultsMarked).toBe(false);
+    expect(failPendingMock.mock.calls.map(([id]) => id)).toEqual(["feed-1", "story-1"]);
+    expect(withdrawSendMock).toHaveBeenCalledTimes(1);
+    expect(withdrawSendMock).toHaveBeenCalledWith({ postJobIds: ["feed-1"], day: DAY });
+  });
+
+  it("the hand-over fails and every job is marked: resultsMarked true", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+    expect(result.sendFailed).toBe(true);
+    expect(result.resultsMarked).toBe(true);
+  });
+
+  it("prepare throws and the marking fails too: resultsMarked false", async () => {
+    prepareMock.mockRejectedValue(new Error("pool timeout"));
+    failPendingMock.mockRejectedValue(new Error("db blip"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+    expect(result.sendFailed).toBe(true);
+    expect(result.resultsMarked).toBe(false);
+  });
+
   it("a hand-over that succeeds takes nothing back", async () => {
     prepareMock.mockImplementation(async (id: string) => ok(id, { postJobIds: [id], day: DAY }));
     sendMock.mockResolvedValue({ ids: [] });
@@ -456,6 +495,7 @@ describe("partialSendMessage and notSentNote - worded for the viewer's role", ()
     whyNotSent: why,
     limitRefusals: new Map(),
     sendFailed: false,
+    resultsMarked: true,
   });
   const reconnect = new Map([["story-1", { errorMessage: "Reconnect Facebook Page in Settings, then retry.", platform: "facebook_page" as const }]]);
 

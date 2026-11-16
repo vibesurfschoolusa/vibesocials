@@ -183,3 +183,15 @@ describe("Add many, which line it shows with nothing to offer", () => {
     expect(source).not.toContain("Set your posting times");
   });
 });
+
+// R26 LL3 item 5: the send button that is working keeps keyboard focus
+// (Button's loading ignores the press); the other one waits, disabled.
+describe("Schedule all and Save all as drafts while sending", () => {
+  const source = readFileSync(path.join(__dirname, "bulk-posts-form.tsx"), "utf8");
+  it.each(["schedule", "draft"])("the %s button is loading, not disabled", (mode) => {
+    const other = mode === "schedule" ? "draft" : "schedule";
+    expect(source).toContain(
+      `disabled={busy || sendingMode === "${other}" || selectedPlatforms.length === 0}\n            loading={sendingMode === "${mode}"}`,
+    );
+  });
+});

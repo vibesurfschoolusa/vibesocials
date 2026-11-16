@@ -52,8 +52,23 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
  * stuck-job reconciler fails it: it takes jobs untouched for 2 hours, on a scan
  * every 10 minutes, later when a batch is waiting. Retry is offered from then on.
  */
-export const COMPOSER_DISPATCH_UNMARKED_MESSAGE =
-  "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Post again.";
+function dispatchUnmarkedText(button: DispatchFailedButton): string {
+  return `The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
+}
+
+export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post");
+
+/** The button a second press of which would only make things worse. */
+export type DispatchFailedButton = "Post" | "Publish" | "Approve";
+
+/**
+ * R26 LL3: the one rule for a `DISPATCH_FAILED` 503 (Create, and the Queue's
+ * Publish now and Approve): retry from Activity, or, when the results could
+ * not be marked, the "about two hours" sentence naming the pressed button.
+ */
+export function dispatchFailedText(body: unknown, button: DispatchFailedButton = "Post"): string {
+  return field(body, "resultsMarked") === false ? dispatchUnmarkedText(button) : COMPOSER_DISPATCH_FAILED_MESSAGE;
+}
 
 const FALLBACK_ERROR = "Failed to create post.";
 
@@ -123,12 +138,7 @@ export function composerSubmitOutcome(input: {
   }
 
   if (field(body, "code") === "DISPATCH_FAILED") {
-    const unmarked = field(body, "resultsMarked") === false;
-    return {
-      kind: "dispatch_failed",
-      resetForm: true,
-      toast: unmarked ? COMPOSER_DISPATCH_UNMARKED_MESSAGE : COMPOSER_DISPATCH_FAILED_MESSAGE,
-    };
+    return { kind: "dispatch_failed", resetForm: true, toast: dispatchFailedText(body) };
   }
 
   const message = field(body, "message");

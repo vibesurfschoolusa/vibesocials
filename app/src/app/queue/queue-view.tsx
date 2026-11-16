@@ -24,11 +24,12 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { CaptionCounter } from "@/components/caption-counter";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { PlatformCaptionEditor } from "@/components/composer/platform-caption-editor";
 import { useConnections } from "@/hooks/useConnections";
+import { loadMoreFailureText } from "@/hooks/usePostJobs";
 import { ByName, isTextPost, TextPostTile } from "@/components/activity/post-job-card";
 import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
@@ -75,6 +76,7 @@ import {
   publishNeedsApproval,
   publishOutcome,
   queueStatusBadge,
+  queueFailureText,
   shouldRefetchAfterError,
   type JobPatch,
   type QueueViewer,
@@ -1012,6 +1014,8 @@ export function QueueView({
   // the button. The Queue has no background poll, so no page-1 merge is needed.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // R26 LL3: why the last Load more failed, said under the button.
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   const [editTarget, setEditTarget] = useState<QueueCardPost | null>(null);
   const [cancelTarget, setCancelTarget] = useState<QueueCardPost | null>(null);
@@ -1053,6 +1057,7 @@ export function QueueView({
       const data: PostsResponse = await response.json();
       setJobs(sortQueue(data.jobs));
       setNextCursor(data.nextCursor);
+      setLoadMoreError(null);
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole);
       setWorkspaceRequireApproval(data.workspaceRequireApproval);
@@ -1087,13 +1092,16 @@ export function QueueView({
     // either value changes.
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
-      const response = await fetch(
+      const response = await fetchOrNoAnswer(
         `/api/posts?status=scheduled,draft&cursor=${encodeURIComponent(nextCursor)}`,
       );
       if (!response.ok) {
-        // Silent — the full-width error state belongs to the initial load /
-        // Retry only. Leave nextCursor intact so the button stays for a retry.
+        // The full-width error state belongs to the initial load / Retry only;
+        // R26 LL3: a line under the button says why. nextCursor stays, so the
+        // next press asks for the same page.
+        setLoadMoreError(loadMoreFailureText(response.status));
         return;
       }
       const data: PostsResponse = await response.json();
@@ -1103,8 +1111,9 @@ export function QueueView({
       // land mid-list at its scheduledFor position — expected for the Queue.
       setJobs((prev) => (prev ? sortQueue(appendJobsPage(prev, data.jobs)) : sortQueue(data.jobs)));
       setNextCursor(data.nextCursor);
-    } catch {
+    } catch (error) {
       // Keep the loaded list + cursor for a retry.
+      setLoadMoreError(loadMoreFailureText(isNoAnswer(error) ? "offline" : 0));
     } finally {
       setLoadingMore(false);
     }
@@ -1157,10 +1166,11 @@ export function QueueView({
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         if (!response.ok) {
           toast.error(
-            data?.error ??
-              (decision === "approve"
-                ? "Couldn't approve this post."
-                : "Couldn't reject this post."),
+            queueFailureText(
+              data,
+              decision === "approve" ? "Couldn't approve this post." : "Couldn't reject this post.",
+              "Approve",
+            ),
           );
           // Stale card (already decided, changed since review, publish couldn't
           // start, gone): re-sync so no dead Approve/Reject buttons remain.
@@ -1236,7 +1246,7 @@ export function QueueView({
     const response = await fetchOrNoAnswer(`/api/posts/${publishTarget.id}/publish`, cardRequest(publishTarget, "POST"));
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
-      toast.error(data?.error ?? "Couldn't publish this post.");
+      toast.error(queueFailureText(data, "Couldn't publish this post.", "Publish"));
       if (shouldRefetchAfterError(response.status)) {
         // The card is stale (already awaiting approval, changed, gone, or the
         // dispatch failed): re-sync and close rather than offer a dead retry.
@@ -1382,10 +1392,11 @@ export function QueueView({
             {/* Older pages may hold scheduled posts too — keep Load more in
                 BOTH views. */}
             {nextCursor !== null ? (
-              <div className="mt-4 flex justify-center">
+              <div className="mt-4 flex flex-col items-center gap-2">
                 <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
                   Load more
                 </Button>
+                <p role="status" className="text-center text-sm text-destructive">{loadMoreError}</p>
               </div>
             ) : null}
           </>

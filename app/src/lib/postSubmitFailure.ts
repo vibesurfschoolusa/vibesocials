@@ -27,10 +27,30 @@ export class PostConnectionLostError extends Error {
   }
 }
 
-/** POST /api/posts with `body`; any answer comes back as it is. */
-export async function sendPostRequest(body: string, fetchImpl: typeof fetch = fetch): Promise<Response> {
+/**
+ * R26 LL3: a 5xx carrying the route's own JSON (an `error` or `code` string).
+ * A gateway's 502/504 page is not one, and it can come after the post was
+ * created (the function timed out while the hand-off or an email hung).
+ */
+async function isRouteAnswer(response: Response): Promise<boolean> {
   try {
-    return await fetchImpl("/api/posts", {
+    const parsed: unknown = JSON.parse(await response.clone().text());
+    if (typeof parsed !== "object" || parsed === null) return false;
+    const { error, code } = parsed as Record<string, unknown>;
+    return (typeof error === "string" && error !== "") || (typeof code === "string" && code !== "");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * POST /api/posts with `body`; any answer comes back as it is, except a 5xx
+ * that isn't the route's JSON: like no answer at all, the post may exist.
+ */
+export async function sendPostRequest(body: string, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetchImpl("/api/posts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
@@ -38,6 +58,8 @@ export async function sendPostRequest(body: string, fetchImpl: typeof fetch = fe
   } catch {
     throw new PostConnectionLostError();
   }
+  if (response.status >= 500 && !(await isRouteAnswer(response))) throw new PostConnectionLostError();
+  return response;
 }
 
 /** An explained upload failure or a lost post request says why; anything else, today's text. */

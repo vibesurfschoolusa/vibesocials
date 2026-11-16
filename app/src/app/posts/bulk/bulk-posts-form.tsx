@@ -1180,7 +1180,7 @@ export function BulkPostsForm({
           <Button
             size="lg"
             className="w-full sm:w-auto"
-            disabled={busy || sendingMode !== null || selectedPlatforms.length === 0}
+            disabled={busy || sendingMode === "draft" || selectedPlatforms.length === 0}
             loading={sendingMode === "schedule"}
             onClick={() => void finish("schedule")}
           >
@@ -1190,7 +1190,7 @@ export function BulkPostsForm({
             size="lg"
             variant="outline"
             className="w-full sm:w-auto"
-            disabled={busy || sendingMode !== null || selectedPlatforms.length === 0}
+            disabled={busy || sendingMode === "schedule" || selectedPlatforms.length === 0}
             loading={sendingMode === "draft"}
             onClick={() => void finish("draft")}
           >

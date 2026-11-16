@@ -516,7 +516,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // was prepared, a failed send is still "try again", not "reconnect".
   if (dispatch.sendFailed) {
     return NextResponse.json(
-      { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
+      // R26 LL3: as Create's 503, so the Queue can say where to retry it and
+      // whether it shows as publishing first.
+      {
+        code: DISPATCH_FAILURE.errorCode,
+        error: DISPATCH_FAILURE.errorMessage,
+        postJobId,
+        resultsMarked: dispatch.resultsMarked,
+      },
       { status: 503 },
     );
   }

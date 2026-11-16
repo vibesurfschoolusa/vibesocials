@@ -152,7 +152,9 @@ describe("buildApprovalDecisionEmail", () => {
     expect(approved.html).toContain("Fri, Jul 31, 2026, 7:30 AM PDT");
   });
 
-  it("links a rejection to the Queue through /go", () => {
+  // R26 LL3 item 6: a rejected post is cancelled, so it is no longer in the
+  // Queue; the email sends the member to Create and says where the post is.
+  it("links a rejection to Create through /go, and names Activity", () => {
     const rejected = buildApprovalDecisionEmail({
       approved: false,
       workspaceId: "ws_2",
@@ -162,7 +164,27 @@ describe("buildApprovalDecisionEmail", () => {
       scheduledFor: null,
       appBaseUrl: "https://vibesocials.wtf",
     });
-    expect(rejected.html).toContain('href="https://vibesocials.wtf/go?w=ws_2&amp;to=%2Fqueue"');
+    expect(rejected.html).toContain('href="https://vibesocials.wtf/go?w=ws_2&amp;to=%2Fposts%2Fnew"');
+    expect(rejected.html).toContain(">Create a new version</a>");
+    expect(rejected.html).toContain("You can still find this post in Activity.");
+    expect(rejected.html).not.toMatch(/queue/i);
+  });
+
+  it("without a base URL, a rejection says where to go in words", () => {
+    const rejected = buildApprovalDecisionEmail({
+      approved: false,
+      workspaceId: "ws_2",
+      workspaceName: "Acme",
+      timeZone: null,
+      caption: "x",
+      scheduledFor: null,
+      appBaseUrl: null,
+    });
+    expect(rejected.html).not.toContain("<a ");
+    expect(rejected.html).toContain(
+      "<p>Open Create in Vibe Socials to start a new version. You can still find this post in Activity.</p>",
+    );
+    expect(rejected.html).not.toMatch(/queue/i);
   });
 
   it("says publishing now when an approved post had no scheduled time", () => {

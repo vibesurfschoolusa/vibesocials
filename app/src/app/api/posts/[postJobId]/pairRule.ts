@@ -185,6 +185,12 @@ export type DispatchResult = {
   /** Review of T1, item 1: posts a daily limit refused as they went out, with the sentence and code. */
   limitRefusals: Map<string, { error: string; code: string }>;
   sendFailed: boolean;
+  /**
+   * R26 LL3: when the send failed, whether every claimed post's results were
+   * marked failed. False: one is left pending and shows as publishing until
+   * the stuck-job reconciler fails it (as the create route's 503 says).
+   */
+  resultsMarked: boolean;
 };
 
 function noPlatformConnected(role: ViewerRole): string {
@@ -260,6 +266,7 @@ export async function dispatchNow(
     whyNotSent: new Map(),
     limitRefusals: new Map(),
     sendFailed: false,
+    resultsMarked: true,
   };
   const prepared: string[] = [];
   const events: ReturnType<typeof buildPublishEvent>[] = [];
@@ -275,6 +282,7 @@ export async function dispatchNow(
         await failPendingPostJobResults(id, DISPATCH_FAILURE);
       } catch (failError) {
         logger.error(`[${log.route}] Couldn't fail a claimed post (the stuck-job sweep will)`, { error: failError, postJobId: id });
+        result.resultsMarked = false;
       }
     }
     for (const written of sendsWritten) await withdrawSend(written);
@@ -315,9 +323,26 @@ export async function dispatchNow(
     await inngest.send(events.length === 1 ? events[0] : events);
   } catch (error) {
     logger.error(`[${log.route}] Couldn't dispatch the publish event`, { error, postJobId: prepared[0] });
-    for (const id of prepared) await failPendingPostJobResults(id, DISPATCH_FAILURE);
-    // Not handed to publishing: a send already there from earlier that day was never reported, so it stays.
-    for (const written of sendsWritten) await withdrawSend(written);
+    // R26 LL3, the create route's rule (KK4): the posts exist, so marking is
+    // per post and best-effort; a throw here must not become a bare 500. One
+    // left pending is failed by the stuck-job reconciler (scheduledScanner.ts).
+    const marked: string[] = [];
+    for (const id of prepared) {
+      try {
+        await failPendingPostJobResults(id, DISPATCH_FAILURE);
+        marked.push(id);
+      } catch (markError) {
+        logger.error(`[${log.route}] Couldn't mark the undispatched results failed`, { error: markError, postJobId: id });
+        result.resultsMarked = false;
+      }
+    }
+    // Not handed to publishing: a send already there from earlier that day was
+    // never reported, so it stays. A post left pending may still publish (the
+    // send may have arrived), so its count stays too, as on Create.
+    for (const written of sendsWritten) {
+      const withdrawn = written.postJobIds.filter((id) => marked.includes(id));
+      if (withdrawn.length > 0) await withdrawSend({ ...written, postJobIds: withdrawn });
+    }
     result.sendFailed = true;
     return result;
   }

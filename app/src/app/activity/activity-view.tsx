@@ -51,6 +51,7 @@ function ActivityViewInner() {
     workspaceRole,
     loadMore,
     loadingMore,
+    loadMoreError,
     hasMore,
     watchRetry,
     pollingStopped,
@@ -160,10 +161,12 @@ function ActivityViewInner() {
               ))}
             </div>
             {hasMore ? (
-              <div className="mt-4 flex justify-center">
+              <div className="mt-4 flex flex-col items-center gap-2">
                 <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
                   Load more
                 </Button>
+                {/* R26 LL3: why the last Load more failed; the next press retries. */}
+                <p role="status" className="text-center text-sm text-destructive">{loadMoreError}</p>
               </div>
             ) : null}
           </>

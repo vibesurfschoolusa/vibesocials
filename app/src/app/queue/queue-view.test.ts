@@ -285,3 +285,24 @@ describe("the Queue's confirm dialogs when Vibe Socials can't be reached", () =>
     }
   });
 });
+
+// R26 LL3 item 3: a failed Load more says why under the button.
+describe("Load more in the Queue", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("words its failure with the shared sentence and shows it under the button", () => {
+    expect(queueSource).toMatch(/loadMoreFailureText\(\s*isNoAnswer\(error\) \? "offline"/);
+    expect(queueSource).toMatch(/loadMoreFailureText\(response\.status\)/);
+    expect(queueSource).toMatch(/role="status"[^>]*>\s*\{loadMoreError\}/);
+  });
+});
+
+// R26 LL3 item 1: Publish now and Approve say Create's sentences when publishing couldn't start.
+describe("Queue's publish and approve failures", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("go through queueFailureText", () => {
+    expect(queueSource).toContain('queueFailureText(data, "Couldn\'t publish this post.", "Publish")');
+    expect(queueSource).toMatch(/queueFailureText\(\s*data,\s*decision === "approve" \? "Couldn't approve this post\." : "Couldn't reject this post\.",\s*"Approve",?\s*\)/);
+  });
+});

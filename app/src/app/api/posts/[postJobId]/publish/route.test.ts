@@ -568,10 +568,33 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     await expect(res.json()).resolves.toEqual({
       code: "DISPATCH_FAILED",
       error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-1",
+      resultsMarked: true,
     });
     expect(failPendingMock).toHaveBeenCalledWith("job-1", {
       errorCode: "DISPATCH_FAILED",
       errorMessage: "Couldn't start publishing. Please try again.",
+    });
+    consoleSpy.mockRestore();
+  });
+
+  // R26 LL3 item 1: the database blips while Inngest refuses the send. The
+  // post exists and may show as publishing, so the answer is the 503 that
+  // says so, never a bare 500.
+  it("503s with resultsMarked false when the hand-off and the marking both fail", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue(jobRow());
+    inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+    failPendingMock.mockRejectedValue(new Error("db blip"));
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-1",
+      resultsMarked: false,
     });
     consoleSpy.mockRestore();
   });

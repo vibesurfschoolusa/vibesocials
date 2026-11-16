@@ -14,6 +14,7 @@ import {
   publishConfirmCopy,
   publishNeedsApproval,
   publishOutcome,
+  queueFailureText,
   queueStatusBadge,
   shouldRefetchAfterError,
   type QueueViewer,
@@ -394,5 +395,32 @@ describe("checkScheduleTime", () => {
     const tooSoon = { ok: false, error: "Scheduled time must be at least a minute in the future." };
     expect(checkScheduleTime(local(-60 * 60 * 1000), NOW, BUFFER)).toEqual(tooSoon);
     expect(checkScheduleTime(local(0), NOW, BUFFER)).toEqual(tooSoon);
+  });
+});
+
+// R26 LL3 item 1: Queue's Publish now and Approve say Create's two sentences
+// (composerSubmitOutcome's rule) when publishing couldn't start.
+describe("queueFailureText", () => {
+  const DISPATCH = { code: "DISPATCH_FAILED", error: "Couldn't start publishing. Please try again.", postJobId: "job-1" };
+
+  it("marked: retry it from Activity", () => {
+    expect(queueFailureText({ ...DISPATCH, resultsMarked: true }, "Couldn't publish this post.", "Publish")).toBe(
+      "Saved, but publishing couldn't start — retry it from Activity.",
+    );
+  });
+
+  it("not marked: it can show as publishing for about two hours; don't press the button again", () => {
+    expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't publish this post.", "Publish")).toBe(
+      "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Publish again.",
+    );
+    expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toMatch(
+      /Don't press Approve again\.$/,
+    );
+  });
+
+  it("any other refusal: the route's sentence, else the fallback", () => {
+    expect(queueFailureText({ error: "Refused." }, "Couldn't publish this post.", "Publish")).toBe("Refused.");
+    expect(queueFailureText(null, "Couldn't approve this post.", "Approve")).toBe("Couldn't approve this post.");
+    expect(queueFailureText({ error: "" }, "Couldn't publish this post.", "Publish")).toBe("Couldn't publish this post.");
   });
 });

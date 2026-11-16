@@ -174,9 +174,11 @@ export function buildApprovalDecisionEmail(params: {
   const base = normalizeBase(params.appBaseUrl);
 
   if (!params.approved) {
+    // R26 LL3: a rejected post is cancelled, so the Queue no longer lists it;
+    // the link starts a new version on Create, and Activity still shows it.
     const cta = base
-      ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/queue", base))}">Open the Queue</a></p>`
-      : `<p>Open the Queue to start another post.</p>`;
+      ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/posts/new", base))}">Create a new version</a></p>\n<p>You can still find this post in Activity.</p>`
+      : `<p>Open Create in Vibe Socials to start a new version. You can still find this post in Activity.</p>`;
     return {
       // R2-pages L5: the subject names the workspace, for a member of several.
       subject: `Your post in ${subjectText(params.workspaceName)} wasn't approved`,

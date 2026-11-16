@@ -2,7 +2,13 @@ import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { usePostJobs, type UsePostJobsResult } from "./usePostJobs";
+import {
+  LOAD_MORE_FAILED_TEXT,
+  LOAD_MORE_OFFLINE_TEXT,
+  loadMoreFailureText,
+  usePostJobs,
+  type UsePostJobsResult,
+} from "./usePostJobs";
 
 /**
  * 2026-11-01 scale audit (W5): hook-level pins for the feed poll - backoff,
@@ -515,5 +521,83 @@ describe("usePostJobs signed out", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(latest.error).toBe("You were signed out. Sign in again.");
+  });
+});
+
+// R26 LL3 item 3: a Load more that fails says so under the button, and keeps
+// the cursor so the next press asks for the same page again.
+describe("usePostJobs Load more failure", () => {
+  const firstPage = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ jobs: payloadJobs, nextCursor: "c1", workspaceMemberCount: 1 }),
+  });
+
+  async function pressLoadMore() {
+    await act(async () => {
+      latest.loadMore();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it.each([
+    [
+      "offline",
+      async () => {
+        throw new TypeError("Failed to fetch");
+      },
+      LOAD_MORE_OFFLINE_TEXT,
+    ],
+    ["a server error", async () => ({ ok: false, status: 500, json: async () => ({}) }), LOAD_MORE_FAILED_TEXT],
+    [
+      "a 200 that isn't JSON",
+      async () => ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      }),
+      LOAD_MORE_FAILED_TEXT,
+    ],
+    ["signed out", async () => ({ ok: false, status: 401, json: async () => ({}) }), "You were signed out. Sign in again."],
+  ])("%s: a status line, the list and cursor kept; the next press retries and clears it", async (_name, failing, text) => {
+    fetchMock.mockImplementation(firstPage);
+    await mount();
+    fetchMock.mockImplementationOnce(failing);
+    await pressLoadMore();
+
+    expect(latest.loadMoreError).toBe(text);
+    expect(latest.hasMore).toBe(true);
+    expect(latest.jobs).toHaveLength(1);
+    expect(latest.error).toBeNull();
+
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jobs: [jobFixture({ id: "j2", status: "succeeded" })], nextCursor: null, workspaceMemberCount: 1 }),
+    }));
+    await pressLoadMore();
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(urls.filter((url) => url.includes("cursor=c1"))).toHaveLength(2);
+    expect(latest.loadMoreError).toBeNull();
+    expect(latest.jobs).toHaveLength(2);
+  });
+
+  it("is null before any Load more", async () => {
+    await mount();
+    expect(latest.loadMoreError).toBeNull();
+  });
+});
+
+describe("loadMoreFailureText", () => {
+  it("words offline, signed out and anything else", () => {
+    expect(loadMoreFailureText("offline")).toBe(LOAD_MORE_OFFLINE_TEXT);
+    expect(loadMoreFailureText(401)).toBe("You were signed out. Sign in again.");
+    expect(loadMoreFailureText(500)).toBe(LOAD_MORE_FAILED_TEXT);
+    expect(LOAD_MORE_OFFLINE_TEXT).toBe(
+      "Couldn't load more posts: there's no connection. Check your connection, then press Load more again.",
+    );
+    expect(LOAD_MORE_FAILED_TEXT).toBe("Couldn't load more posts. Press Load more to try again.");
   });
 });

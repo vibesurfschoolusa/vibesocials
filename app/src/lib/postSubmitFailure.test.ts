@@ -47,6 +47,33 @@ describe("Create's submit failure", () => {
     }
   });
 
+  // R26 LL3 item 2: a gateway's own 502/504 page can come after the post was
+  // created (a timeout while the hand-off or the email hangs), so an error
+  // answer that isn't the route's JSON reads like a lost connection.
+  it.each([
+    ["a 504 HTML page", () => new Response("<html>Gateway Timeout</html>", { status: 504 })],
+    ["an empty 502", () => new Response(null, { status: 502 })],
+    ["a 500 with JSON that isn't the route's", () => Response.json({ hello: 1 }, { status: 500 })],
+  ])("%s: the post may exist, check before trying again", async (_name, make) => {
+    const fetchImpl = (async () => make()) as unknown as typeof fetch;
+    const error = await sendPostRequest("{}", fetchImpl).catch((err: unknown) => err);
+    expect(submitErrorText(error, NOW)).toBe(
+      "We lost the connection before Vibe Socials answered. Check Activity to see whether the post was saved before you try again.",
+    );
+  });
+
+  it("the route's own 5xx JSON and a 4xx page come back as they are, still readable", async () => {
+    for (const answer of [
+      Response.json({ code: "DISPATCH_FAILED", error: "Couldn't start publishing. Please try again." }, { status: 503 }),
+      Response.json({ error: "Failed to create post" }, { status: 500 }),
+      new Response("<html>Not found</html>", { status: 404 }),
+    ]) {
+      const got = await sendPostRequest("{}", (async () => answer) as unknown as typeof fetch);
+      expect(got).toBe(answer);
+      await expect(got.text()).resolves.toBeTruthy();
+    }
+  });
+
   it("anything else keeps today's text", () => {
     expect(submitErrorText(new Error("boom"), NOW)).toBe("Unexpected error while creating post.");
     expect(submitErrorText(new TypeError("x is undefined"), NOW)).toBe("Unexpected error while creating post.");

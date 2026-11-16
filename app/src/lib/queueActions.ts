@@ -1,4 +1,5 @@
 import { approvalOutcome } from "./approval";
+import { dispatchFailedText } from "./composerSubmitOutcome";
 import type { PostJobDTO } from "./postsDto";
 import { localDateTimeToUtcIso } from "./scheduling";
 
@@ -252,6 +253,18 @@ export function editOutcome(data: unknown): { patch: JobPatch; message: string }
  */
 export function shouldRefetchAfterError(httpStatus: number): boolean {
   return httpStatus === 409 || httpStatus === 503 || httpStatus === 404;
+}
+
+/**
+ * R26 LL3: what a failed Publish now or Approve says. Publishing couldn't
+ * start after the post was claimed: Create's sentences (dispatchFailedText),
+ * so the person retries from Activity rather than pressing again. Anything
+ * else: the route's sentence, or `fallback`.
+ */
+export function queueFailureText(data: unknown, fallback: string, button: "Publish" | "Approve"): string {
+  const r = asRecord(data);
+  if (r.code === "DISPATCH_FAILED") return dispatchFailedText(data, button);
+  return typeof r.error === "string" && r.error ? r.error : fallback;
 }
 
 /* ----- the Edit dialog ----- */

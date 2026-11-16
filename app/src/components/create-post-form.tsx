@@ -44,7 +44,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { useConnections } from "@/hooks/useConnections";
+import { CONNECTIONS_FAILED_TEXT, useConnections } from "@/hooks/useConnections";
 import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
@@ -2204,7 +2204,7 @@ function CreatePostFormInner({
         <Alert variant="danger" title="Couldn't load your connections">
           <div className="flex flex-col items-start gap-3">
             <p>
-              {connectionsError ?? "Failed to load connections."} We need them to know which
+              {connectionsError ?? CONNECTIONS_FAILED_TEXT} We need them to know which
               platforms you can post to.
             </p>
             <Button size="sm" variant="outline" onClick={reloadConnections}>
@@ -2544,7 +2544,7 @@ function CreatePostFormInner({
                   )
                 }
                 loading={autoCaptionLoading}
-                disabled={autoCaptionLoading || !(photoSet.length > 0 ? photoSet[0].blob : uploadedBlob)}
+                disabled={!(photoSet.length > 0 ? photoSet[0].blob : uploadedBlob)}
               >
                 {!autoCaptionLoading && <Sparkles className="h-4 w-4" aria-hidden />}
                 Caption from media
@@ -2555,7 +2555,7 @@ function CreatePostFormInner({
                 size="sm"
                 onClick={handleEnhanceCaption}
                 loading={enhancingCaption}
-                disabled={enhancingCaption || !uploadCaption.trim()}
+                disabled={!uploadCaption.trim()}
               >
                 {!enhancingCaption && <Sparkles className="h-4 w-4" aria-hidden />}
                 Improve caption

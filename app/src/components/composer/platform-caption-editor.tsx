@@ -170,7 +170,7 @@ export function PlatformCaptionEditor({
                       size="sm"
                       onClick={() => handleAdapt(platform)}
                       loading={adapting === platform}
-                      disabled={disabled || adapting !== null}
+                      disabled={disabled || (adapting !== null && adapting !== platform)}
                     >
                       {adapting !== platform && <Sparkles className="h-4 w-4" aria-hidden />}
                       Adapt for {label}

@@ -411,7 +411,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     if (dispatch.sendFailed) {
       await tellSubmitter(NOT_SENT_SEND_FAILED);
       return NextResponse.json(
-        { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
+        // R26 LL3: as Create's 503, so the Queue can say where to retry it and
+        // whether it shows as publishing first.
+        {
+          code: DISPATCH_FAILURE.errorCode,
+          error: DISPATCH_FAILURE.errorMessage,
+          postJobId,
+          resultsMarked: dispatch.resultsMarked,
+        },
         { status: 503 },
       );
     }

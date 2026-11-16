@@ -1145,3 +1145,19 @@ describe("the Publishing didn't start banner", () => {
     expect(source).not.toContain("COMPOSER_DISPATCH_FAILED_MESSAGE");
   });
 });
+
+// R26 LL3 item 5: the AI buttons keep keyboard focus while busy (Button's
+// loading ignores the press), and item 4: the connections line says the
+// hook's own sentence, never the browser's.
+describe("Create's AI buttons and connections line", () => {
+  const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  it("Caption from media and Improve caption are loading, not disabled, while busy", () => {
+    expect(source).toContain(
+      "loading={autoCaptionLoading}\n                disabled={!(photoSet.length > 0 ? photoSet[0].blob : uploadedBlob)}",
+    );
+    expect(source).toContain("loading={enhancingCaption}\n                disabled={!uploadCaption.trim()}");
+  });
+  it("the connections line falls back to the hook's sentence", () => {
+    expect(source).toContain("{connectionsError ?? CONNECTIONS_FAILED_TEXT}");
+  });
+});

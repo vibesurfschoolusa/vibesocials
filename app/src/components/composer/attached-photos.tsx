@@ -169,7 +169,7 @@ export function PhotoDescriptionField({
           aria-describedby={`${id}-count`}
           className="h-9"
         />
-        <Button type="button" variant="outline" size="sm" onClick={write} loading={writing} disabled={writing || !onWrite}>
+        <Button type="button" variant="outline" size="sm" onClick={write} loading={writing} disabled={!onWrite}>
           {!writing && <Sparkles className="h-4 w-4" aria-hidden />}
           Write it for me
         </Button>

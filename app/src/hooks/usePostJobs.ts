@@ -14,7 +14,23 @@ import {
   shouldPollPostJobs,
 } from "@/lib/postJobPolling";
 import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+
+/** R26 LL3: a Load more that got no answer. */
+export const LOAD_MORE_OFFLINE_TEXT =
+  "Couldn't load more posts: there's no connection. Check your connection, then press Load more again.";
+/** R26 LL3: a Load more the server refused or answered with something unreadable. */
+export const LOAD_MORE_FAILED_TEXT = "Couldn't load more posts. Press Load more to try again.";
+
+/**
+ * What the line under Load more says (Activity and the Queue): no answer, the
+ * answer's status, or 0 for an answer that couldn't be read.
+ */
+export function loadMoreFailureText(failure: "offline" | number): string {
+  if (failure === "offline") return LOAD_MORE_OFFLINE_TEXT;
+  return failure === 401 ? SIGNED_OUT_ERROR : LOAD_MORE_FAILED_TEXT;
+}
 
 export interface UsePostJobsResult {
   jobs: PostJobDTO[] | null;
@@ -45,6 +61,11 @@ export interface UsePostJobsResult {
   loadMore: () => void;
   /** True while a `loadMore()` fetch is in flight — drives the button spinner. */
   loadingMore: boolean;
+  /**
+   * R26 LL3: why the last `loadMore()` failed (loadMoreFailureText), shown
+   * under the button; null before a press, while one runs and after a success.
+   */
+  loadMoreError: string | null;
   /**
    * True while the last successful load reported a `nextCursor` (an older page
    * exists). Gates the Load more button; the background poll never changes it,
@@ -144,6 +165,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   // tail's cursor survives a refresh. `loadingMore` guards + spins the button.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   // Job ids whose retry request was accepted and whose outcome we haven't seen
   // yet (2026-11-01 audit). Keeps the poll armed when the list itself shows
   // nothing in flight — see `shouldPollPostJobs`.
@@ -165,6 +187,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     if (!background) {
       setLoading(true);
       setError(null);
+      setLoadMoreError(null);
     }
     try {
       const response = await fetch(postJobsUrl(show));
@@ -224,12 +247,14 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     // every change, and the Button is `disabled` while `loadingMore` is true.
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
-      const response = await fetch(postJobsUrl(show, nextCursor));
+      const response = await fetchOrNoAnswer(postJobsUrl(show, nextCursor));
       if (!response.ok) {
-        // Silent: the full-width error state is owned by the initial load /
-        // reload only (Finding 1). Leave the list AND nextCursor intact so the
-        // button stays for a retry; the spinner stops in `finally`.
+        // The full-width error state is owned by the initial load / reload
+        // only (Finding 1); R26 LL3: a line under the button says why. The list
+        // AND nextCursor stay, so the next press retries the same page.
+        if (show === showRef.current) setLoadMoreError(loadMoreFailureText(response.status));
         return;
       }
       const data: PostsResponse = await response.json();
@@ -239,8 +264,9 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
       // rendered list never has a duplicate key.
       setJobs((prev) => (prev ? appendJobsPage(prev, data.jobs) : data.jobs));
       setNextCursor(data.nextCursor);
-    } catch {
+    } catch (error) {
       // Same as a non-ok response — keep the loaded list + cursor for a retry.
+      if (show === showRef.current) setLoadMoreError(loadMoreFailureText(isNoAnswer(error) ? "offline" : 0));
     } finally {
       setLoadingMore(false);
     }
@@ -346,6 +372,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     workspaceRole,
     loadMore,
     loadingMore,
+    loadMoreError,
     hasMore: rowsMatchFilter && nextCursor !== null,
     watchRetry,
     // Derived: a stale `stopped` (set in an earlier run, jobs since settled)

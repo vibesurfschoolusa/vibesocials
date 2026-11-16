@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -623,5 +624,14 @@ describe("whereDescriptionGoes", () => {
     expect(whereDescriptionGoes(file, { single: other, set: [] })).toBeNull();
     expect(whereDescriptionGoes(file, { single: null, set: [photo("p2")] })).toBeNull();
     expect(whereDescriptionGoes(file, { single: null, set: [] })).toBeNull();
+  });
+});
+
+// R26 LL3 item 5: a busy "Write it for me" keeps keyboard focus: Button's
+// loading ignores the press, so the busy flag stays out of disabled.
+describe("Write it for me while busy", () => {
+  const source = readFileSync(new URL("./attached-photos.tsx", import.meta.url), "utf8");
+  it("is loading, not disabled, while writing", () => {
+    expect(source).toContain("loading={writing} disabled={!onWrite}");
   });
 });
