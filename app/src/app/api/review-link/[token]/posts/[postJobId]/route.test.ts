@@ -609,3 +609,75 @@ describe("a Feed and Story pair", () => {
     expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// R29 client-journey L2: the client asks for a change, the answer is lost, and
+// Send again found no scheduled row: "This post can no longer be changed here",
+// though the request was saved and the owners emailed. A request that already
+// stands (still a draft held for this same note) answers `already`, as an
+// approval that already stood does; nothing is written or emailed again.
+describe("asking for the same change again", () => {
+  it("first request: saved as before, without `already`", async () => {
+    const response = await call({ decision: "change", note: "Use the other photo" });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, state: "change_requested", note: "Use the other photo" });
+    expect(postFindFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("a repeat of the same request: 200 marked `already`, nothing written or emailed", async () => {
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+    postFindFirstMock.mockResolvedValue({ id: "post-1" });
+
+    const response = await call({ decision: "change", note: "  Use the other photo " });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      state: "change_requested",
+      note: "Use the other photo",
+      already: true,
+    });
+    // Read with the link's workspace, held as a draft for this very note.
+    expect(postFindFirstMock).toHaveBeenCalledWith({
+      where: {
+        id: "post-1",
+        workspaceId: "ws-1",
+        status: "draft",
+        scheduledFor: { lte: expect.any(Date) },
+        clientChangeRequestedAt: { not: null },
+        clientNote: "Use the other photo",
+      },
+      select: { id: true },
+    });
+    expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).not.toHaveBeenCalled();
+    expect(linkUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("after the owner already acted (published, rescheduled, approved, or another note): still refused with its text", async () => {
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+    postFindFirstMock.mockResolvedValue(null);
+    const response = await call({ decision: "change", note: "Use the other photo" });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: REVIEW_POST_LOCKED_MESSAGE });
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed read is the plain refusal, never a crash", async () => {
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+    postFindFirstMock.mockRejectedValue(new Error("db down"));
+    const response = await call({ decision: "change", note: "Use the other photo" });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: REVIEW_POST_LOCKED_MESSAGE });
+  });
+
+  it("approval paths unchanged: the approval read keeps its own scope and select", async () => {
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+    postFindFirstMock.mockResolvedValue({ updatedAt: new Date("2026-11-10T11:00:00.500Z"), clientApprovedAt: new Date() });
+    const response = await call({ decision: "approve", version: VERSION });
+    expect(response.status).toBe(200);
+    expect(postFindFirstMock).toHaveBeenCalledWith({
+      where: expectedWhere(),
+      select: { updatedAt: true, clientApprovedAt: true },
+    });
+  });
+});

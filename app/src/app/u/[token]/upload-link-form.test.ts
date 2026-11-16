@@ -2,8 +2,16 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ClientFileError, type ClientFileFailure } from "./send-file";
-import { UploadSummary, failureOf } from "./upload-link-form";
+import { CLIENT_FILE_MAYBE_ARRIVED_MESSAGE, ClientFileError, type ClientFileFailure } from "./send-file";
+import {
+  UploadLinkForm,
+  UploadSummary,
+  failureOf,
+  filesToSend,
+  pressWatchTarget,
+  retryOffer,
+  type SummaryFailure,
+} from "./upload-link-form";
 
 const network: ClientFileFailure = {
   kind: "network",
@@ -12,8 +20,9 @@ const network: ClientFileFailure = {
 const linkOff: ClientFileFailure = { kind: "refused", message: "This link is no longer active. Ask for a new one." };
 const full: ClientFileFailure = { kind: "refused", message: "This workspace's storage is full. Ask them to make room." };
 
-function render(sent: number, failures: ClientFileFailure[], total = sent + failures.length): string {
-  return renderToStaticMarkup(createElement(UploadSummary, { sentCount: sent, failures, total }));
+function render(sent: number, failures: (ClientFileFailure & { name?: string })[], total = sent + failures.length): string {
+  const named: SummaryFailure[] = failures.map((failure, at) => ({ name: `file-${at + 1}.jpg`, ...failure }));
+  return renderToStaticMarkup(createElement(UploadSummary, { sentCount: sent, failures: named, total }));
 }
 
 describe("UploadSummary, after the files were sent", () => {
@@ -76,11 +85,148 @@ describe("failureOf, what a failed file says", () => {
   });
 
   // Lead review 3 (R28 NN2): not a lost answer (send-file.ts words those), and it may have arrived.
-  it("treats anything else as a network failure, in plain words", () => {
+  // R29 client-journey L1: so it is a "maybe", never one the summary says didn't arrive.
+  it("treats anything else as a file that may have arrived, in plain words", () => {
     expect(failureOf(new TypeError("Failed to fetch"))).toEqual({
-      kind: "network",
+      kind: "maybe",
       message: "Something went wrong while sending this file. It may have arrived: if you send it again, it may arrive twice.",
     });
+  });
+});
+
+// R29 client-journey L1 = pages L1: a file whose last step's answer was lost
+// may have arrived. The summary never says "Nothing was sent" for it, names it,
+// and the retry button leaves it out (or warns when only such files are left).
+describe("UploadSummary: files that may have arrived", () => {
+  const maybe: ClientFileFailure = { kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE };
+
+  it("all sent: no maybe sentence", () => {
+    const html = render(2, []);
+    expect(html).toContain("2 files arrived. Thank you.");
+    expect(html).not.toContain("may have arrived");
+  });
+
+  it("one failed before the upload: not sent, tried again", () => {
+    const html = render(0, [network]);
+    expect(html).toContain("Nothing was sent");
+    expect(html).not.toContain("may have arrived");
+  });
+
+  it("one maybe: not 'Nothing was sent'; names the file and warns about a second copy", () => {
+    const html = render(0, [{ ...maybe, name: "beach.jpg" }]);
+    expect(html).toContain('role="alert"');
+    expect(html).not.toContain("Nothing was sent");
+    expect(html).not.toContain("didn&#x27;t arrive");
+    expect(html).toContain("The file may have arrived");
+    expect(html).toContain("beach.jpg may have arrived");
+    expect(html).toContain("may arrive twice");
+  });
+
+  it("maybe and not sent, nothing confirmed: says which may have arrived and which didn't", () => {
+    const html = render(0, [{ ...maybe, name: "a.jpg" }, { ...network, name: "b.jpg" }]);
+    expect(html).not.toContain("Nothing was sent");
+    expect(html).toContain("a.jpg may have arrived");
+    expect(html).toContain("b.jpg didn&#x27;t arrive");
+    expect(html).toContain("The button below tries only b.jpg again.");
+  });
+
+  it("mixed with sent files: a status naming the file that may have arrived", () => {
+    const html = render(2, [{ ...maybe, name: "a.jpg" }, { ...network, name: "b.jpg" }], 4);
+    expect(html).toMatch(/<div role="alert" class="empty:sr-only"><\/div><div role="status"/);
+    expect(html).toContain("2 of 4 files arrived.");
+    expect(html).toContain("a.jpg may have arrived");
+    expect(html).toContain("b.jpg didn&#x27;t arrive");
+  });
+
+  it("offline at the press (the token step): not sent, with the connection advice", () => {
+    const html = render(0, [network, network]);
+    expect(html).toContain("Nothing was sent");
+    expect(html).toContain("Check your connection, then try again with the button below.");
+  });
+});
+
+describe("filesToSend and retryOffer: the retry leaves out files that may have arrived", () => {
+  const item = (key: string, status: "waiting" | "sent" | "failed") => ({ key, status });
+
+  it("first press: every file", () => {
+    expect(filesToSend([item("a", "waiting"), item("b", "waiting")], {})).toEqual(["a", "b"]);
+    expect(retryOffer([item("a", "waiting")], {})).toBeNull();
+  });
+
+  it("all sent: nothing to retry", () => {
+    expect(filesToSend([item("a", "sent")], {})).toEqual([]);
+    expect(retryOffer([item("a", "sent")], {})).toBeNull();
+  });
+
+  it("one not sent: tried again, with the usual button", () => {
+    expect(filesToSend([item("a", "sent"), item("b", "failed")], { b: "network" })).toEqual(["b"]);
+    expect(retryOffer([item("a", "sent"), item("b", "failed")], { b: "network" })).toEqual({
+      label: "Try the file that didn't send",
+      warning: null,
+    });
+  });
+
+  it("mixed: the maybe file is left out", () => {
+    const files = [item("a", "failed"), item("b", "failed"), item("c", "failed")];
+    const kinds = { a: "maybe", b: "network", c: "refused" } as const;
+    expect(filesToSend(files, kinds)).toEqual(["b", "c"]);
+    expect(retryOffer(files, kinds)).toEqual({ label: "Try the 2 files that didn't send", warning: null });
+  });
+
+  it("only maybe files left: sent again only on a button that warns first", () => {
+    expect(filesToSend([item("a", "sent"), item("b", "failed")], { b: "maybe" })).toEqual(["b"]);
+    expect(retryOffer([item("b", "failed")], { b: "maybe" })).toEqual({
+      label: "Send the file again anyway",
+      warning: "It may already have arrived: sending it again may make a second copy.",
+    });
+    expect(retryOffer([item("b", "failed"), item("c", "failed")], { b: "maybe", c: "maybe" })).toEqual({
+      label: "Send the 2 files again anyway",
+      warning: "They may already have arrived: sending them again may make second copies.",
+    });
+  });
+});
+
+// R29 pages L2: Enter in the name field submits with Send as the submitter;
+// the field is disabled at once and nothing watched it, so the page-wide
+// keeper moved focus to Terms. The press watch covers the focused field.
+describe("pressWatchTarget: one watch for the press", () => {
+  const send = { id: "send" } as unknown as HTMLElement;
+  const field = { id: "name" } as unknown as HTMLElement;
+  const retry = { id: "retry" } as unknown as HTMLElement;
+  const outside = { id: "terms" } as unknown as HTMLElement;
+  const form = { contains: (node: unknown) => node === send || node === field || node === retry };
+
+  it("Enter in a field: the field", () => {
+    expect(pressWatchTarget(field, send, form, send)).toBe(field);
+  });
+
+  it("Send pressed itself: none (the end-of-send watch covers it)", () => {
+    expect(pressWatchTarget(send, send, form, send)).toBeNull();
+  });
+
+  it("the retry button: the retry button, focused or not (Safari does not focus a clicked button)", () => {
+    expect(pressWatchTarget(retry, retry, form, send)).toBe(retry);
+    expect(pressWatchTarget(null, retry, form, send)).toBe(retry);
+    expect(pressWatchTarget(outside, retry, form, send)).toBe(retry);
+  });
+});
+
+describe("UploadLinkForm: the press's watch starts before sending", () => {
+  it("registers the watch from the focused field before setPhase(\"sending\")", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(
+      /const watched = pressWatchTarget\(document\.activeElement, submitter, event\.currentTarget, sendRef\.current\);\s+const stopPressWatch = watched \? focusAfterPress\(watched, \(\) => sendRef\.current\) : \(\) => \{\};\s+setPhase\("sending"\);/,
+    );
+  });
+});
+
+// R29 client-journey L5: the dropped-files note appeared already filled.
+describe("UploadLinkForm: the dropped-files note", () => {
+  it("is on the page from the first render, empty and visually hidden", () => {
+    const html = renderToStaticMarkup(createElement(UploadLinkForm, { token: "t" }));
+    expect(html).toMatch(/<p role="status" class="empty:sr-only text-sm text-muted-foreground"><\/p>/);
   });
 });
 
@@ -106,7 +252,7 @@ describe("UploadSummary before anything was sent", () => {
     const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
     expect(source).not.toMatch(/phase === "done" \? \(\s+<UploadSummary/);
     expect(source).toMatch(/<div ref=\{summaryRef\} tabIndex=\{-1\}[^>]*>\s+<UploadSummary/);
-    expect(source).toMatch(/focusAfterPress\(submitter, \(\) => sendRef\.current\)/);
+    expect(source).toMatch(/focusAfterPress\(watched, \(\) => sendRef\.current\)/);
     expect(source).toMatch(/focusAfterPress\(sendRef\.current, \(\) => summaryRef\.current\);\s+setPhase\("done"\);/);
   });
 });
@@ -121,9 +267,8 @@ describe("UploadLinkForm: one focus watch per change", () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
-    expect(source).toMatch(
-      /const submitter = \(event\.nativeEvent as SubmitEvent\)\.submitter;\s+const stopPressWatch =\s+submitter !== sendRef\.current \? focusAfterPress\(submitter, \(\) => sendRef\.current\) : \(\) => \{\};/,
-    );
+    // R29 pages L2: pressWatchTarget gives none for Send itself (tested above).
+    expect(source).toMatch(/const submitter = \(event\.nativeEvent as SubmitEvent\)\.submitter;\s+const watched = pressWatchTarget\(/);
     // Lead review: a fast failure ends sending before the press-time watch runs; it is stopped first.
     expect(source).toMatch(/stopPressWatch\(\);\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(sendRef\.current, \(\) => summaryRef\.current\);\s+setPhase\("done"\);/);
   });

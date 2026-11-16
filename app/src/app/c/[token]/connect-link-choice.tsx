@@ -25,6 +25,61 @@ export type ConnectLinkChoiceState =
 /** R28 NN2: the account may have been connected before the answer was lost. */
 export const CHOICE_MAYBE_CONNECTED_MESSAGE = answerLostText("the account may have been connected", "Reload this page to see.");
 
+const LOAD_FAILED_MESSAGE = "Couldn't load the accounts. Reload this page.";
+const CHOOSE_FAILED_MESSAGE = "Couldn't connect that account. Try again.";
+
+/**
+ * R29 client-journey L3: the platform the choice was for, kept for this tab,
+ * so after a reload a gone choice can still be asked about with it (the route
+ * then says the platform is connected instead of naming a button). A
+ * convenience only: without storage the route answers a neutral sentence.
+ */
+function platformKey(pendingId: string): string {
+  return `vs-connect-choice:${pendingId}`;
+}
+
+function rememberedPlatform(pendingId: string): string | null {
+  try {
+    return window.sessionStorage.getItem(platformKey(pendingId));
+  } catch {
+    return null;
+  }
+}
+
+function rememberPlatform(pendingId: string, platform: string): void {
+  try {
+    window.sessionStorage.setItem(platformKey(pendingId), platform);
+  } catch {
+    // Private mode or blocked storage: the neutral sentence still reads true.
+  }
+}
+
+/** The choice's address, with the platform it was for once known. */
+export function choiceAddress(base: string, platform: string | null): string {
+  return platform ? `${base}?platform=${encodeURIComponent(platform)}` : base;
+}
+
+type ChoiceAnswer = { platform?: string; candidates?: Candidate[]; error?: string; connected?: boolean } | null;
+
+/** What the load answered: the accounts, or why there are none (the route's sentence, else reload). */
+export function loadOutcome(ok: boolean, data: ChoiceAnswer): ConnectLinkChoiceState {
+  if (ok && data?.platform && data.candidates) {
+    return { status: "ready", platform: data.platform, candidates: data.candidates };
+  }
+  return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
+}
+
+/**
+ * A choice that didn't come back connected. `gone`: the choice ended and its
+ * platform is connected, so the buttons give way to that sentence. With no
+ * sentence of ours, a 2xx or 5xx may have come after the save; a 4xx did not.
+ */
+export function chooseFailure(status: number, data: ChoiceAnswer): { gone: boolean; message: string } {
+  if (data?.error) return { gone: data.connected === true, message: data.error };
+  const maySaved = status < 300 || status >= 500;
+  return { gone: false, message: maySaved ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE };
+}
+
 export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {
   const router = useRouter();
   const [state, setState] = useState<ConnectLinkChoiceState>({ status: "loading" });
@@ -37,44 +92,44 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(base, { cache: "no-store" });
-        const data = (await response.json().catch(() => null)) as
-          | { platform?: string; candidates?: Candidate[]; error?: string }
-          | null;
+        const response = await fetch(choiceAddress(base, rememberedPlatform(pendingId)), { cache: "no-store" });
+        const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
-        if (!response.ok || !data?.platform || !data.candidates) {
-          setState({ status: "gone", message: data?.error ?? "This choice expired. Connect again." });
-          return;
-        }
-        setState({ status: "ready", platform: data.platform, candidates: data.candidates });
+        const outcome = loadOutcome(response.ok, data);
+        if (outcome.status === "ready") rememberPlatform(pendingId, outcome.platform);
+        setState(outcome);
       } catch {
-        if (!cancelled) setState({ status: "gone", message: "Couldn't load the accounts. Reload this page." });
+        if (!cancelled) setState({ status: "gone", message: LOAD_FAILED_MESSAGE });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [base]);
+  }, [base, pendingId]);
 
   async function choose(candidateId: string) {
     if (busy !== null) return;
     setBusy(candidateId);
     setError(null);
     try {
-      const response = await fetchOrNoAnswer(base, {
+      const response = await fetchOrNoAnswer(choiceAddress(base, state.status === "ready" ? state.platform : null), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId }),
       });
-      const data = (await response.json().catch(() => null)) as { ok?: boolean; platform?: string; error?: string; sameEnd?: boolean } | null;
+      const data = (await response.json().catch(() => null)) as
+        | (NonNullable<ChoiceAnswer> & { ok?: boolean; sameEnd?: boolean })
+        | null;
       if (response.ok && data?.ok && data.platform) {
         // R7 review 4: with same_end when the saved LinkedIn sign-in still ends within a week.
         router.push(`${page}?${connectedSuccessQuery(data.platform, data.sameEnd === true)}`);
         return;
       }
-      setError(data?.error ?? "Couldn't connect that account. Try again.");
+      const failure = chooseFailure(response.status, data);
+      if (failure.gone) setState({ status: "gone", message: failure.message });
+      else setError(failure.message);
     } catch (caught) {
-      setError(isNoAnswer(caught) ? CHOICE_MAYBE_CONNECTED_MESSAGE : "Couldn't connect that account. Try again.");
+      setError(isNoAnswer(caught) ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE);
     }
     setBusy(null);
   }

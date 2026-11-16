@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // from useCallback (the first one it makes).
 const forced = vi.hoisted(() => ({
   error: undefined as string | undefined,
+  posts: undefined as unknown[] | undefined,
   calls: 0,
   setError: undefined as ((value: unknown) => void) | undefined,
   load: undefined as (() => Promise<void>) | undefined,
@@ -18,6 +19,7 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useState: (initial: unknown) => {
       forced.calls += 1;
+      if (forced.calls === 1 && forced.posts !== undefined) return [forced.posts, () => {}];
       if (forced.calls === 3) {
         return [forced.error !== undefined ? forced.error : initial, (value: unknown) => forced.setError?.(value)];
       }
@@ -40,6 +42,7 @@ function view(): string {
 
 afterEach(() => {
   forced.error = undefined;
+  forced.posts = undefined;
   forced.setError = undefined;
   vi.unstubAllGlobals();
 });
@@ -71,5 +74,14 @@ describe("ReviewLinkView, a failed load", () => {
 
   it("with no error and no posts yet: Loading", () => {
     expect(view()).toContain("Loading the posts…");
+  });
+});
+
+// R29 client-journey L5: the "already approved" notice after a reload appeared
+// already filled. Its region is on the list from the first render.
+describe("ReviewLinkView, the notice above the list", () => {
+  it("is an empty, visually hidden status region before anything happened", () => {
+    forced.posts = [];
+    expect(view()).toMatch(/<p role="status" class="empty:sr-only rounded-\[var\(--radius\)\] border border-border bg-muted\/60 p-3 text-sm"><\/p>/);
   });
 });

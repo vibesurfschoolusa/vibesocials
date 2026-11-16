@@ -39,8 +39,27 @@ interface RouteContext {
   params: Promise<{ token: string; id: string }>;
 }
 
-function notFound(): NextResponse {
-  return NextResponse.json({ error: "This choice expired. Connect again." }, { status: 404 });
+/**
+ * R29 client-journey L3: the choice is gone (expired, or already made, maybe
+ * on a press whose answer was lost). Its row is deleted either way, so only
+ * the page knows the platform: it passes `?platform=`. When the link offers
+ * it and its place is taken, say it is connected; otherwise a sentence true
+ * either way that names no button (the row shows Connect, Reconnect or
+ * Connected). Only this link's workspace is read, which /c shows anyway.
+ */
+async function notFound(request: Request, link: ActiveConnectLink): Promise<NextResponse> {
+  const hint = new URL(request.url).searchParams.get("platform");
+  const platform = link.platforms.find((offered) => offered === hint);
+  if (platform && (await placeTaken(link.workspaceId, platform))) {
+    return NextResponse.json(
+      { error: `${PLATFORM_LABELS[platform]} is connected. There is nothing more to choose here.`, connected: true },
+      { status: 404 },
+    );
+  }
+  return NextResponse.json(
+    { error: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected." },
+    { status: 404 },
+  );
 }
 
 /** The error's kind only: a save failure's message can quote its arguments (the tokens). */
@@ -79,10 +98,10 @@ async function resolve(request: Request, context: RouteContext): Promise<Resolve
   }
 
   const stamp = await prisma.pendingConnection.findUnique({ where: { id }, select: { connectLinkId: true } });
-  if (!stamp || stamp.connectLinkId !== link.id) return { ok: false, response: notFound() };
+  if (!stamp || stamp.connectLinkId !== link.id) return { ok: false, response: await notFound(request, link) };
 
   const pending = await loadPendingConnection(id, { workspaceId: link.workspaceId, userId: link.createdById });
-  if (!pending) return { ok: false, response: notFound() };
+  if (!pending) return { ok: false, response: await notFound(request, link) };
   return { ok: true, link, pending };
 }
 

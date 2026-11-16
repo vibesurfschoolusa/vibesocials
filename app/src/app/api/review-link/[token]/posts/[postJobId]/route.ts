@@ -173,6 +173,31 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
         already: true,
       });
     }
+    // R29 client-journey L2: a change request that missed. Still held as a
+    // draft for this very note (Send again after a lost answer, or two
+    // phones): it stands, so it answers `already`, with nothing written or
+    // emailed again. An owner's action (publish, schedule again, approve)
+    // ends the hold, and another note was not this request: both refused.
+    if (decision.decision === "change") {
+      let stands = false;
+      try {
+        stands =
+          (await prisma.postJob.findFirst({
+            where: {
+              ...where,
+              status: "draft",
+              clientChangeRequestedAt: { not: null },
+              clientNote: decision.note,
+            },
+            select: { id: true },
+          })) !== null;
+      } catch (error) {
+        logger.error("[review-link] Couldn't tell why a change request missed", { error, linkId: link.id });
+      }
+      if (stands) {
+        return NextResponse.json({ ok: true, state: "change_requested", note: decision.note, already: true });
+      }
+    }
     return NextResponse.json(
       { error: current ? REVIEW_POST_CHANGED_MESSAGE : REVIEW_POST_LOCKED_MESSAGE },
       { status: 409 },

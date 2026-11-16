@@ -139,11 +139,11 @@ describe("GET: the accounts to choose from", () => {
     ["another user's choice", pendingRow({ userId: "user-other" })],
     ["another workspace's choice", pendingRow({ workspaceId: "ws-2" })],
     ["no row", null],
-  ])("%s is a 404 with the owner route's sentence", async (_name, row) => {
+  ])("%s is a 404 with the gone sentence (R29: no button named)", async (_name, row) => {
     h.pendingFind.mockResolvedValue(row);
     const res = await GET(request("GET"), context());
     expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "This choice expired. Connect again." });
+    expect(await res.json()).toEqual({ error: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected." });
   });
 
   it("an inactive link is a 404 that says so", async () => {
@@ -365,5 +365,72 @@ describe("POST: the same-end flag on a LinkedIn choice", () => {
     expect(await res.json()).toEqual({ ok: true, platform: "linkedin", sameEnd: true });
     // R10-client-journey L2: and the owners' email says LinkedIn kept the end date.
     expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "linkedin", sameEnd: true });
+  });
+});
+
+// R29 client-journey L3: after a lost answer the reloaded page (?choose= still
+// in the address) said "This choice expired. Connect again." while the row
+// showed "Connected: Acme" and no Connect button. A gone choice never names a
+// button; when the page says which platform it was for (?platform=, only one
+// the link offers) and that place is taken, it says the platform is connected.
+describe("a choice that is gone", () => {
+  function hinted(method: string, platform: string, body?: unknown): Request {
+    return new Request(`${ORIGIN}/api/connect-link/${TOKEN}/pending/pending-1?platform=${platform}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+
+  beforeEach(() => {
+    // The first submit deleted it.
+    h.pendingFind.mockResolvedValue(null);
+  });
+
+  it("platform named and connected: says it is connected, on GET and POST", async () => {
+    h.connectionFind.mockResolvedValue({ platform: "facebook_page", needsReconnect: false, expiresAt: null, refreshToken: null });
+    for (const res of [
+      await GET(hinted("GET", "facebook_page"), context()),
+      await POST(hinted("POST", "facebook_page", { candidateId: "page-2" }), context()),
+    ]) {
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({
+        error: "Facebook Page is connected. There is nothing more to choose here.",
+        connected: true,
+      });
+    }
+    expect(h.saveFacebookPage).not.toHaveBeenCalled();
+    expect(h.notifyConnect).not.toHaveBeenCalled();
+  });
+
+  it("no platform named, or not connected: the neutral sentence, naming no button", async () => {
+    const neutral = {
+      error: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected.",
+    };
+    const none = await GET(request("GET"), context());
+    expect(none.status).toBe(404);
+    expect(await none.json()).toEqual(neutral);
+
+    h.connectionFind.mockResolvedValue(null);
+    const notConnected = await GET(hinted("GET", "facebook_page"), context());
+    expect(await notConnected.json()).toEqual(neutral);
+    expect(JSON.stringify(neutral)).not.toContain("Connect again");
+  });
+
+  it("a platform the link does not offer is not looked up", async () => {
+    h.connectionFind.mockResolvedValue({ platform: "linkedin", needsReconnect: false, expiresAt: null, refreshToken: null });
+    const res = await GET(hinted("GET", "linkedin"), context());
+    expect((await res.json()).connected).toBeUndefined();
+    expect(h.connectionFind).not.toHaveBeenCalled();
+  });
+
+  it("reads only the link's own workspace (what /c shows anyway)", async () => {
+    h.pendingFind.mockResolvedValue(pendingRow({ connectLinkId: "link-other" }));
+    h.connectionFind.mockResolvedValue({ platform: "facebook_page", needsReconnect: false, expiresAt: null, refreshToken: null });
+    const res = await GET(hinted("GET", "facebook_page"), context());
+    expect(res.status).toBe(404);
+    expect(h.connectionFind.mock.calls[0][0].where).toEqual({
+      workspaceId_platform: { workspaceId: "ws-1", platform: "facebook_page" },
+    });
   });
 });

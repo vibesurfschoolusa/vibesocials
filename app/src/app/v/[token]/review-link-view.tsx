@@ -18,6 +18,14 @@ import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 
 /** Shown over a list on screen when reloading it failed. */
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
+/** R29 client-journey L2: Send again found the same change request already standing. */
+export const REVIEW_CHANGE_ALREADY_SAVED_MESSAGE = "Your change request was already saved. The list was loaded again.";
+
+/** The route's `already`: this request wrote nothing, as an earlier one had. */
+export function alreadyStood(data: unknown): boolean {
+  return Boolean(data && typeof data === "object" && (data as { already?: unknown }).already === true);
+}
+
 /** Shown when the first load failed. */
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
 
@@ -131,11 +139,14 @@ export function ReviewPostCard({
           body: JSON.stringify(body),
         },
       );
-      const outcome = reviewDecisionOutcome(response.status, await response.json().catch(() => null));
+      const data: unknown = await response.json().catch(() => null);
+      const outcome = reviewDecisionOutcome(response.status, data);
       if (outcome.kind === "saved") {
         focusAfterPress(pressed, () => stateRef.current);
         setAsking(false);
         onDecided(outcome.patch);
+        // A change request that already stood: the post may have been edited since, so reload.
+        if (alreadyStood(data)) onStale(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE);
         return;
       }
       if (outcome.kind === "stands") {
@@ -371,11 +382,10 @@ export function ReviewLinkView({ token }: { token: string }) {
           </Button>
         </div>
       ) : null}
-      {notice ? (
-        <p role="status" className="rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
-          {notice}
-        </p>
-      ) : null}
+      {/* R29 client-journey L5: on the list from its first render; only the text changes. */}
+      <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
+        {notice}
+      </p>
       {posts.length === 0 ? (
         <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
       ) : (

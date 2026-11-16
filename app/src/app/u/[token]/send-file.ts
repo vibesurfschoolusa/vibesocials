@@ -42,12 +42,15 @@ export const CLIENT_FILE_MAYBE_ARRIVED_MESSAGE = answerLostText("the file may ha
 
 /**
  * Why a file did not arrive. "network": the request or the upload never got a
- * usable answer, so retrying on a working connection may help. "refused": the
- * server (link off, storage full, today's limit) or the file itself said no,
- * and the sentence says why. Set where the failure is detected, so the upload
- * page decides from the kind and never from a sentence's words.
+ * usable answer before the file was in storage, so nothing arrived and
+ * retrying on a working connection may help. "refused": the server (link off,
+ * storage full, today's limit) or the file itself said no, and the sentence
+ * says why. "maybe" (R29 client-journey L1): the last step's answer was lost
+ * or unreadable, so the file may have arrived and sending it again may make a
+ * copy. Set where the failure is detected, so the upload page decides from the
+ * kind and never from a sentence's words.
  */
-export type ClientFileFailureKind = "network" | "refused";
+export type ClientFileFailureKind = "network" | "refused" | "maybe";
 
 export interface ClientFileFailure {
   kind: ClientFileFailureKind;
@@ -64,15 +67,19 @@ export class ClientFileError extends Error implements ClientFileFailure {
   }
 }
 
-/** A refused answer: the server's sentence; a network failure when it gave none (a gateway error). */
-async function failureOf(response: Response, fallback: string): Promise<ClientFileError> {
+type Lost = { kind: ClientFileFailureKind; message: string };
+const NOTHING_ARRIVED: Lost = { kind: "network", message: UPLOAD_FAILED_MESSAGE };
+const MAYBE_ARRIVED: Lost = { kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE };
+
+/** A refused answer: the server's sentence; `fallback` when it gave none (a gateway error). */
+async function failureOf(response: Response, fallback: Lost): Promise<ClientFileError> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
   return typeof body?.error === "string" && body.error
     ? new ClientFileError("refused", body.error)
-    : new ClientFileError("network", fallback);
+    : new ClientFileError(fallback.kind, fallback.message);
 }
 
-async function postJson(deps: SendFileDeps, url: string, body: unknown, lost = UPLOAD_FAILED_MESSAGE): Promise<Response> {
+async function postJson(deps: SendFileDeps, url: string, body: unknown, lost: Lost = NOTHING_ARRIVED): Promise<Response> {
   try {
     return await deps.fetch(url, {
       method: "POST",
@@ -80,8 +87,9 @@ async function postJson(deps: SendFileDeps, url: string, body: unknown, lost = U
       body: JSON.stringify(body),
     });
   } catch {
-    // fetch throws only when no answer came back (offline, dropped connection).
-    throw new ClientFileError("network", lost);
+    // fetch throws only when no answer came back (offline, dropped connection,
+    // or an unreadable 5xx once requestNoAnswer counts that as none).
+    throw new ClientFileError(lost.kind, lost.message);
   }
 }
 
@@ -117,7 +125,7 @@ export async function sendClientFile(
     },
   });
   if (!tokenResponse.ok) {
-    throw await failureOf(tokenResponse, UPLOAD_FAILED_MESSAGE);
+    throw await failureOf(tokenResponse, NOTHING_ARRIVED);
   }
   const issued = (await tokenResponse.json().catch(() => null)) as
     | { clientToken?: unknown; pathname?: unknown }
@@ -143,12 +151,14 @@ export async function sendClientFile(
     filename: prepared.name,
     senderName: input.senderName,
     note: input.note,
-  }, CLIENT_FILE_MAYBE_ARRIVED_MESSAGE);
+  }, MAYBE_ARRIVED);
   if (!mediaResponse.ok) {
     // Lead review: an unreadable 5xx may come after the file was registered.
     throw await failureOf(
       mediaResponse,
-      mediaResponse.status >= 500 ? CLIENT_FILE_MAYBE_ARRIVED_MESSAGE : "Couldn't save the file. Check your connection and try again.",
+      mediaResponse.status >= 500
+        ? MAYBE_ARRIVED
+        : { kind: "network", message: "Couldn't save the file. Check your connection and try again." },
     );
   }
 }

@@ -6,7 +6,14 @@ import type { ReviewCardDTO } from "@/server/reviewLink";
 
 import { REVIEW_DECISION_MAYBE_SAVED_MESSAGE } from "@/lib/reviewLink";
 
-import { REVIEW_MORE_SENTENCE, ReviewListMore, ReviewPostCard, changeNoteHint } from "./review-link-view";
+import {
+  REVIEW_CHANGE_ALREADY_SAVED_MESSAGE,
+  REVIEW_MORE_SENTENCE,
+  ReviewListMore,
+  ReviewPostCard,
+  alreadyStood,
+  changeNoteHint,
+} from "./review-link-view";
 
 type ReviewPostDTO = ReviewCardDTO;
 
@@ -174,5 +181,26 @@ describe("ReviewPostCard: focus in Ask for a change", () => {
     expect(source).toMatch(/focusAfterPress\(event\.currentTarget, \(\) => askRef\.current\);\s+setAsking\(false\);/);
     expect(source).toMatch(/<Textarea\s+ref=\{noteRef\}/);
     expect(source).toMatch(/ref=\{askRef\}/);
+  });
+});
+
+// R29 client-journey L2: Send again after a lost answer finds the request
+// standing; the route answers `already`. The card shows it saved, and the list
+// reloads with a notice, as for an approval that already stood.
+describe("ReviewPostCard: a change request that already stood", () => {
+  it("marks the card saved, then reloads the list with the notice", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE).toBe("Your change request was already saved. The list was loaded again.");
+    expect(source).toMatch(
+      /onDecided\(outcome\.patch\);\s+(\/\/[^\n]*\n\s+)*if \(alreadyStood\(data\)\) onStale\(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE\);\s+return;/,
+    );
+  });
+
+  it("alreadyStood reads only the route's flag", () => {
+    expect(alreadyStood({ ok: true, state: "change_requested", note: "x", already: true })).toBe(true);
+    expect(alreadyStood({ ok: true, state: "change_requested", note: "x" })).toBe(false);
+    expect(alreadyStood(null)).toBe(false);
   });
 });

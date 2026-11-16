@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UPLOAD_LINK_STORAGE_FULL_MESSAGE } from "@/lib/uploadLink";
 
-import { ClientFileError, sendClientFile, type SendFileDeps } from "./send-file";
+import { NoAnswerError } from "@/lib/requestNoAnswer";
+
+import { CLIENT_FILE_MAYBE_ARRIVED_MESSAGE, ClientFileError, sendClientFile, type SendFileDeps } from "./send-file";
 
 const TOKEN = "T".repeat(43);
 
@@ -123,11 +125,35 @@ describe("sendClientFile", () => {
       expect((await failure()).kind).toBe("network");
     });
 
-    it("network when registering cannot reach the server", async () => {
+    // R29 client-journey L1: the file is in storage by then, so it may have arrived.
+    it("maybe when registering got no answer: the file may have arrived", async () => {
       deps.fetch
         .mockResolvedValueOnce(jsonResponse(200, { clientToken: "ct", pathname: "ul/link-1/a.jpg" }))
-        .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        .mockRejectedValueOnce(new NoAnswerError(new TypeError("Failed to fetch")));
+      expect(await failure()).toMatchObject({ kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
+    });
+
+    it("maybe when registering got an unreadable 5xx (a gateway page)", async () => {
+      deps.fetch
+        .mockResolvedValueOnce(jsonResponse(200, { clientToken: "ct", pathname: "ul/link-1/a.jpg" }))
+        .mockResolvedValueOnce(new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } }));
+      expect(await failure()).toMatchObject({ kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
+    });
+
+    it("refused when registering got our own 5xx sentence", async () => {
+      deps.fetch
+        .mockResolvedValueOnce(jsonResponse(200, { clientToken: "ct", pathname: "ul/link-1/a.jpg" }))
+        .mockResolvedValueOnce(jsonResponse(500, { error: "server sentence" }));
+      expect(await failure()).toMatchObject({ kind: "refused", message: "server sentence" });
+    });
+
+    // Before the upload nothing can have arrived: never "maybe".
+    it("network, not maybe, when the token step got no answer or an unreadable 5xx", async () => {
+      deps.fetch.mockRejectedValueOnce(new NoAnswerError(new TypeError("Failed to fetch")));
       expect((await failure()).kind).toBe("network");
+      deps.fetch.mockResolvedValueOnce(new Response("", { status: 504 }));
+      expect((await failure()).kind).toBe("network");
+      expect(deps.put).not.toHaveBeenCalled();
     });
 
     it("refused, with the server's sentence, when the token is refused", async () => {

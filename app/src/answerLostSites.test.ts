@@ -63,7 +63,7 @@ describe("lost answers outside the first list", () => {
         throw new TypeError("Failed to fetch");
       },
     };
-    await expect(sendClientFile(input, deps)).rejects.toMatchObject({ kind: "network", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
+    await expect(sendClientFile(input, deps)).rejects.toMatchObject({ kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
     const tokenLost = { ...deps, fetch: async () => Promise.reject(new TypeError("Failed to fetch")) };
     const error = await sendClientFile(input, tokenLost).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ClientFileError);
@@ -118,7 +118,7 @@ describe("lost answers outside the first list", () => {
           : new Response("<html>Bad gateway</html>", { status: 502 });
       },
     };
-    await expect(sendClientFile(input, deps)).rejects.toMatchObject({ kind: "network", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
+    await expect(sendClientFile(input, deps)).rejects.toMatchObject({ kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE });
   });
 
   // Lead review 3: Add many's caption and Create's Adapt are AI writes too.
