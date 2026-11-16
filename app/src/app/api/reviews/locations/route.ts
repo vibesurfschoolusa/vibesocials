@@ -12,6 +12,8 @@ import {
   reviewsErrorBody,
   reviewsKindBody,
   reviewsListedLocation,
+  savedCodeShared,
+  savedCodeSharedNotice,
   savedLocationIn,
   savedLocationName,
   type ReviewsReader,
@@ -19,6 +21,7 @@ import {
 import {
   googleRouteRateLimit,
   listGbpLocationsWithToken,
+  listingNotice,
   unreadAccountsNotice,
 } from "@/app/api/connections/google_business_profile/gbpLocations";
 import { signedOutResponse } from "@/lib/signedOutResponse";
@@ -105,15 +108,22 @@ export async function GET() {
       });
     }
 
-    const notice = unreadAccountsNotice(listing.unread, "reviews");
+    // R26 client-journey L2: a saved store code two listed locations share names neither.
+    const shared = savedCodeShared(listing.locations, savedName) ? savedCodeSharedNotice(role) : null;
     if (role === "owner") {
       const locations = listing.locations.map(reviewsListedLocation);
-      return NextResponse.json(notice ? { locations, connected: true, notice } : { locations, connected: true });
+      // R26 client-journey L3: the picker's notices, from the same helper (an
+      // empty list says to sign in again, never to create a listing).
+      const listed = listingNotice(listing, "reviews");
+      const notice = [listed.notice, shared].filter(Boolean).join(" ");
+      return NextResponse.json({ locations, connected: true, ...listed, ...(notice ? { notice } : {}) });
     }
 
+    if (shared) return NextResponse.json({ locations: [], connected: true, notice: shared });
     const saved = savedLocationIn(listing.locations, savedName);
     if (saved) return NextResponse.json({ locations: [reviewsListedLocation(saved)], connected: true });
     // Not found: maybe on an account that could not be read; else not this login's.
+    const notice = unreadAccountsNotice(listing.unread, "reviews", role);
     const memberNotice = !listing.complete && notice ? notice : MEMBER_SAVED_NOT_LISTED_NOTICE;
     return NextResponse.json({ locations: [], connected: true, notice: memberNotice });
   } catch (error: unknown) {

@@ -69,6 +69,12 @@ export const GBP_ACCOUNTS_NOT_SENT_MESSAGE =
 /** Shown with the list when some accounts' locations could not be read: access refused. */
 export const GBP_SOME_ACCOUNTS_REFUSED_NOTICE =
   "Google refused access to some of your Business Profile accounts, so their locations aren't listed. Check in Google Business Profile that this Google account still manages them.";
+/**
+ * R26 client-journey L2: the same for a member of the workspace (the Reviews
+ * page): only the owner can check what the connected Google account manages.
+ */
+export const GBP_SOME_ACCOUNTS_REFUSED_MEMBER_NOTICE =
+  "Google refused access to some of the connected Google account's Business Profile accounts, so their locations aren't listed. The workspace owner can check in Google Business Profile that the account still manages them.";
 /** The same, when Google failed for them instead (the picker's step). */
 export const GBP_SOME_ACCOUNTS_FAILED_NOTICE =
   "Google didn't send the locations of some of your Business Profile accounts. Press Fetch locations from Google again in a minute to see them all.";
@@ -90,11 +96,16 @@ export type GbpLocationList = Extract<GbpListing, { ok: true }> | { ok: false; r
 
 /**
  * The line about skipped accounts, each reason with its own step; null when
- * none were skipped. The failed step names the surface's own control.
+ * none were skipped. The failed step names the surface's own control; the
+ * refused step names who can take it (a member reads the owner can).
  */
-export function unreadAccountsNotice(unread: UnreadAccounts, surface: "picker" | "reviews" = "picker"): string | null {
+export function unreadAccountsNotice(
+  unread: UnreadAccounts,
+  surface: "picker" | "reviews" = "picker",
+  role: "owner" | "member" = "owner",
+): string | null {
   const parts = [
-    unread.access ? GBP_SOME_ACCOUNTS_REFUSED_NOTICE : null,
+    unread.access ? (role === "member" ? GBP_SOME_ACCOUNTS_REFUSED_MEMBER_NOTICE : GBP_SOME_ACCOUNTS_REFUSED_NOTICE) : null,
     unread.failed
       ? surface === "reviews"
         ? GBP_SOME_ACCOUNTS_FAILED_REVIEWS_NOTICE
@@ -102,6 +113,22 @@ export function unreadAccountsNotice(unread: UnreadAccounts, surface: "picker" |
       : null,
   ].filter((part): part is string => part !== null);
   return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/**
+ * What an owner's location list adds to the locations (the picker and, since
+ * R26 client-journey L3, the Reviews page): the skipped accounts' notice, or,
+ * when nothing was skipped and nothing is listed, the no-listing notice with
+ * the in-place sign-in (another Google account may manage the listing).
+ */
+export function listingNotice(
+  listing: { locations: readonly unknown[]; unread: UnreadAccounts },
+  surface: "picker" | "reviews",
+): { notice?: string; signIn?: true } {
+  const notice = unreadAccountsNotice(listing.unread, surface);
+  if (notice) return { notice };
+  if (listing.locations.length === 0) return { notice: GBP_NO_LISTING_NOTICE, signIn: true };
+  return {};
 }
 
 function refused(body: { error: string; code?: string; signIn?: true }, init: { status: number }): GbpLocationList {

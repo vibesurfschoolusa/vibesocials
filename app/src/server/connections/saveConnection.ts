@@ -110,12 +110,14 @@ async function gbpGet(url: string | URL, accessToken: string): Promise<Response>
 
 /**
  * A store code is found only among the locations the signed-in account
- * manages: exactly one match keeps it; none, or more than one, makes it
- * unavailable. R25 lead review: read with the shared paged listing
- * (platforms/gbpLocation.ts) and Google's storeCode filter. Any list that
- * failed or was not read in full (an account's 5xx or refusal included) is
- * check_failed, never "not found". Nothing is flagged here: the token was
- * just granted, and the row is being saved.
+ * manages, read with the shared paged listing (platforms/gbpLocation.ts) and
+ * Google's storeCode filter. R26 platform-clients L2: the store-code lookup's
+ * own rule, so a sign-in keeps what publishing would post to. Exactly one
+ * match keeps it; more than one is unavailable. None is unavailable when the
+ * list is complete or only accounts that refused access are missing (they
+ * can't be posted to either); none while an account failed, or the list ran
+ * past its page cap, is check_failed, never "not found". Nothing is flagged
+ * here: the token was just granted, and the row is being saved.
  */
 async function checkGbpStoreCode(storeCode: string, accessToken: string): Promise<GbpLocationCheck> {
   const listing = await readGbpLocations({
@@ -124,9 +126,11 @@ async function checkGbpStoreCode(storeCode: string, accessToken: string): Promis
     used: () => null,
     locationsFilter: storeCodeFilter(storeCode),
   });
-  if (!listing.ok || !listing.complete) return "check_failed";
+  if (!listing.ok) return "check_failed";
   const matches = exactStoreCodeMatches(listing.locations, storeCode).length;
-  return matches === 1 ? "kept" : "unavailable";
+  if (matches === 1) return "kept";
+  if (matches > 1) return "unavailable";
+  return listing.complete || listing.refusedOnly ? "unavailable" : "check_failed";
 }
 
 /**

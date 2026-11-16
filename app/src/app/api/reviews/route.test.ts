@@ -60,6 +60,22 @@ beforeEach(() => {
 
 const OWNER = { user: { id: "u1" }, workspace: { id: "ws-1" }, role: "owner" };
 
+const listed = (resourceName: string, storeCode: string | null = null) => ({
+  resourceName,
+  title: "Shop",
+  storeCode,
+  address: null,
+  accountName: "A",
+});
+const listing = (locations: ReturnType<typeof listed>[]) => ({
+  ok: true,
+  locations,
+  complete: true,
+  unread: { access: false, failed: false },
+  refusedOnly: false,
+  skippedFailure: null,
+});
+
 describe("GET /api/reviews", () => {
   it("returns every review read and whether the list was cut short", async () => {
     fetchAllReviewsMock.mockResolvedValue({ reviews: [{ reviewId: "a" }, { reviewId: "b" }], truncated: true });
@@ -252,7 +268,8 @@ describe("GET /api/reviews for a member", () => {
 
   // JJ3 lead review: the chosen location was removed from Google Business Profile,
   // worded by whether ?location= is the saved one (the page's picker is not saved).
-  it("a 404 on the saved location's reviews: owner chooses another in Settings, a member picks one above", async () => {
+  // R26 client-journey L1: members have no picker, so theirs names the owner and Settings.
+  it("a 404 on the saved location's reviews: owner chooses another in Settings, a member reads the owner can", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     findFirstMock.mockResolvedValue({
       id: "c1",
@@ -262,7 +279,9 @@ describe("GET /api/reviews for a member", () => {
     });
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
 
-    await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one." });
+    await expect((await get()).json()).resolves.toEqual({
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+    });
 
     getWorkspaceContextMock.mockResolvedValue(OWNER);
     await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).", reconnect: true });
@@ -276,10 +295,51 @@ describe("GET /api/reviews for a member", () => {
       expiresAt: null,
       metadata: { locationName: "accounts/1/locations/9" },
     });
+    listMock.mockResolvedValue(listing([listed("accounts/1/locations/9"), listed("accounts/1/locations/3")]));
     fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
 
     getWorkspaceContextMock.mockResolvedValue(OWNER);
     await expect((await get()).json()).resolves.toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
+  });
+
+  // R26 client-journey L1 / pages L5: "picked" is decided by the resolved
+  // resource name, and said only where the page shows a picker.
+  it("a 404 on the saved store code's own location, asked for by its resource name: the saved wording", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    findFirstMock.mockResolvedValue({ id: "c1", accessToken: "tok", expiresAt: null, metadata: { locationName: "FTL-01" } });
+    // The listing read afterwards still has it (Google removes it from one list before the other).
+    listMock.mockResolvedValue(listing([listed("accounts/1/locations/2", "FTL-01"), listed("accounts/1/locations/3")]));
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
+
+    await expect((await get()).json()).resolves.toEqual({
+      error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).",
+      reconnect: true,
+    });
+  });
+
+  it("a 404 on a location the owner picked, with one location listed (no picker shown): the Settings wording", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue(OWNER);
+    findFirstMock.mockResolvedValue({ id: "c1", accessToken: "tok", expiresAt: null, metadata: { locationName: "accounts/1/locations/9" } });
+    listMock.mockResolvedValue(listing([listed("accounts/1/locations/9")]));
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
+
+    await expect((await get()).json()).resolves.toEqual({
+      error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).",
+      reconnect: true,
+    });
+  });
+
+  it("a member's saved store code gone: the owner can choose another in Settings, never 'pick above'", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue({ id: "c1", accessToken: "tok", expiresAt: null, metadata: { locationName: "FTL-01" } });
+    listMock.mockResolvedValue(listing([listed("accounts/1/locations/2", "FTL-01"), listed("accounts/1/locations/3")]));
+    fetchAllReviewsMock.mockRejectedValue(Object.assign(new Error("404"), { status: 404, code: "GBP_REVIEWS_FETCH_FAILED" }));
+
+    await expect((await get()).json()).resolves.toEqual({
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+    });
   });
 
   it("Google down: the same try-later sentence as an owner's", async () => {

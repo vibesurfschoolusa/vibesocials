@@ -6,6 +6,8 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform, Prisma } from "@prisma/client";
 
+import { STORE_CODE_NOT_UNIQUE_MESSAGE, exactStoreCodeMatches } from "@/server/platforms/gbpLocation";
+
 import { GOOGLE_NO_ANSWER_MESSAGE, googleRouteRateLimit, listGbpLocations } from "../gbpLocations";
 
 export const runtime = "nodejs";
@@ -89,10 +91,14 @@ export async function POST(request: Request) {
   if (!listed.ok) {
     return listed.response;
   }
-  const isListed = listed.locations.some(
-    (location) => location.resourceName === locationName || location.storeCode === locationName,
-  );
-  if (!isListed) {
+  const byName = listed.locations.some((location) => location.resourceName === locationName);
+  const byCode = byName ? 0 : exactStoreCodeMatches(listed.locations, locationName).length;
+  // R26 platform-clients L3: a store code several locations share names none of
+  // them, so every post to it would fail (gbpLocation.ts resolveGbpLocationName).
+  if (byCode > 1) {
+    return NextResponse.json({ error: STORE_CODE_NOT_UNIQUE_MESSAGE }, { status: 400 });
+  }
+  if (!byName && byCode === 0) {
     // Found nowhere, but an account's list could not all be read: the
     // location may be on the part that is missing, so this is Google's
     // failure, not a refusal. Found in an account that answered, it saves.

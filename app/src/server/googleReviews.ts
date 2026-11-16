@@ -306,14 +306,18 @@ const STORE_CODE_STALE_MEMBER_MESSAGE =
   "The saved store code no longer matches one Google Business Profile location. The workspace owner can choose the location again.";
 /** reviewGone (R25 pages L5): the review was deleted on Google, so no reply can be posted. */
 const REVIEW_GONE_MESSAGE = "This review is no longer on Google. Reload the page.";
-/** notFound, for a location picked on the Reviews page (not saved): the page's own picker. */
+/**
+ * notFound, for a location an owner picked on the Reviews page (not saved):
+ * the page's own picker, which shows only with two or more locations listed.
+ */
 const LOCATION_GONE_PICKED_MESSAGE =
   "This location is no longer in Google Business Profile. Pick another location above.";
 /** notFound, for the saved location (Settings, where Google posts go too). */
 const LOCATION_GONE_SAVED_MESSAGE =
   "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).";
-const LOCATION_GONE_SAVED_MEMBER_MESSAGE =
-  "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one.";
+/** R26 client-journey L1: a member has no picker (they read the saved location only). */
+const LOCATION_GONE_MEMBER_MESSAGE =
+  "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.";
 /** Google or our own setup failed, not the person: the same words for everyone. */
 export const GOOGLE_NOT_ANSWERING_MESSAGE =
   "Google Business Profile isn't answering for Vibe Socials right now. Try again later.";
@@ -418,9 +422,9 @@ export function reviewsKindBody(
       return role === "owner" ? { ...body, signIn: true } : body;
     }
     case "notFound":
-      return options.location === "picked"
+      return options.location === "picked" && role === "owner"
         ? { error: LOCATION_GONE_PICKED_MESSAGE }
-        : ownerStep(role, LOCATION_GONE_SAVED_MESSAGE, LOCATION_GONE_SAVED_MEMBER_MESSAGE);
+        : ownerStep(role, LOCATION_GONE_SAVED_MESSAGE, LOCATION_GONE_MEMBER_MESSAGE);
     case "chooseAgain":
       return ownerStep(role, storeCodeStaleMessage("owner"), storeCodeStaleMessage("member"));
     case "reviewGone":
@@ -452,6 +456,8 @@ export interface GbpListedLocation {
   locationName: string;
   title: string;
   storeCode?: string;
+  /** One-line address: the picker tells same-named branches apart by it (components/reviews/location-labels.ts). */
+  address?: string;
 }
 
 /** The fields of a listed location the Reviews routes read (gbpLocations.ts ListedGbpLocation). */
@@ -459,9 +465,10 @@ interface ListedLocationFields {
   resourceName: string;
   title: string | null;
   storeCode: string | null;
+  address?: string | null;
 }
 
-/** A listed location in the shape the Reviews page reads. */
+/** A listed location in the shape the Reviews page reads (R26 client-journey L4: with its address). */
 export function reviewsListedLocation(location: ListedLocationFields): GbpListedLocation {
   const title = location.title || "Unknown Location";
   return {
@@ -469,7 +476,29 @@ export function reviewsListedLocation(location: ListedLocationFields): GbpListed
     locationName: title,
     title,
     ...(location.storeCode ? { storeCode: location.storeCode } : {}),
+    ...(location.address ? { address: location.address } : {}),
   };
+}
+
+/**
+ * True when the saved location is a store code more than one listed location
+ * has (R26 client-journey L2): savedLocationIn names none of them, and every
+ * post to it fails as not unique.
+ */
+export function savedCodeShared(locations: ListedLocationFields[], saved: string | null | undefined): boolean {
+  const name = typeof saved === "string" ? saved.trim() : "";
+  if (!name || locations.some((location) => location.resourceName === name)) return false;
+  return locations.filter((location) => location.storeCode === name).length > 1;
+}
+
+const SAVED_CODE_SHARED_NOTICE =
+  "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. Choose the location from the list in Settings.";
+const SAVED_CODE_SHARED_MEMBER_NOTICE =
+  "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. The workspace owner can choose the location from the list in Settings.";
+
+/** The shared-store-code sentence, for whoever reads it. */
+export function savedCodeSharedNotice(role: ReviewsReader): string {
+  return role === "member" ? SAVED_CODE_SHARED_MEMBER_NOTICE : SAVED_CODE_SHARED_NOTICE;
 }
 
 /**

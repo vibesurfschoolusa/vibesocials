@@ -276,6 +276,14 @@ export function storeCodeFilter(storeCode: string): string | undefined {
   return /["\\]/.test(storeCode) ? undefined : `storeCode="${storeCode}"`;
 }
 
+/**
+ * A store code more than one location has: posting to it fails, so the
+ * location save refuses it too (R26 platform-clients L3). publishFailureText.ts
+ * holds the member wording of the same words.
+ */
+export const STORE_CODE_NOT_UNIQUE_MESSAGE =
+  "This store code matches more than one Google Business Profile location. In Settings, choose the location from the list under Google Business Profile, or paste its full resource name under Advanced, then retry.";
+
 /** The locations whose store code is exactly `storeCode` (the comparison used before the filter). */
 export function exactStoreCodeMatches<T extends { storeCode: string | null }>(locations: T[], storeCode: string): T[] {
   return locations.filter((location) => location.storeCode === storeCode);
@@ -379,9 +387,7 @@ export async function resolveGbpLocationName(
   }
 
   if (candidates.length > 1) {
-    const error = new Error(
-      "This store code matches more than one Google Business Profile location. In Settings, choose the location from the list under Google Business Profile, or paste its full resource name under Advanced, then retry.",
-    ) as Error & { code: string };
+    const error = new Error(STORE_CODE_NOT_UNIQUE_MESSAGE) as Error & { code: string };
     error.code = "GBP_STORE_CODE_NOT_UNIQUE";
     throw error;
   }

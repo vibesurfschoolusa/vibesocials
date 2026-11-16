@@ -41,6 +41,8 @@ import {
   GOOGLE_NO_ANSWER_MESSAGE,
   GBP_MAX_PAGES,
   listGbpLocations,
+  listingNotice,
+  unreadAccountsNotice,
 } from "./gbpLocations";
 import { POST } from "./location/route";
 import { GET } from "./locations/route";
@@ -679,5 +681,55 @@ describe("rate limit", () => {
       { userId: "user-1", route: "google_business_profile/locations", limit: 60, windowMs: 300_000 },
       { userId: "user-1", route: "google_business_profile/location", limit: 60, windowMs: 300_000 },
     ]);
+  });
+});
+
+// R26 client-journey L3: the picker and the Reviews list say the same about an
+// empty listing, from one helper: the no-listing notice with the in-place sign-in.
+describe("listingNotice: what both location lists add to their list", () => {
+  const none = { access: false, failed: false };
+  const one = [{ resourceName: "accounts/1/locations/2", title: "A", storeCode: null, address: null, accountName: "A" }];
+
+  it("no locations at all: the no-listing notice with the in-place sign-in", () => {
+    expect(listingNotice({ locations: [], unread: none }, "reviews")).toEqual({ notice: GBP_NO_LISTING_NOTICE, signIn: true });
+    expect(listingNotice({ locations: [], unread: none }, "picker")).toEqual({ notice: GBP_NO_LISTING_NOTICE, signIn: true });
+  });
+
+  it("accounts that could not be read: their notice, worded for the surface", () => {
+    expect(listingNotice({ locations: [], unread: { access: false, failed: true } }, "picker")).toEqual({
+      notice: GBP_SOME_ACCOUNTS_FAILED_NOTICE,
+    });
+    expect(listingNotice({ locations: one, unread: { access: true, failed: false } }, "reviews")).toEqual({
+      notice: GBP_SOME_ACCOUNTS_REFUSED_NOTICE,
+    });
+  });
+
+  it("locations and nothing skipped: nothing to add", () => {
+    expect(listingNotice({ locations: one, unread: none }, "reviews")).toEqual({});
+  });
+
+  it("the picker route answers an empty listing with it", async () => {
+    h.requireOwnerContext.mockResolvedValue({ user: { id: "u1" }, workspace: { id: "ws-1" }, role: "owner" });
+    h.findFirst.mockResolvedValue({ id: "conn-1", accessToken: "tok", refreshToken: "ref", needsReconnect: false });
+    h.checkRateLimit.mockResolvedValue({ allowed: true });
+    google({ [`${ACCOUNTS}|`]: { body: { accounts: [] } } });
+
+    await expect((await GET()).json()).resolves.toEqual({ locations: [], notice: GBP_NO_LISTING_NOTICE, signIn: true });
+  });
+});
+
+// R26 client-journey L2 / security-billing L2: a member can't check what the
+// connected Google account manages, so the refused part says who can.
+describe("unreadAccountsNotice for a member", () => {
+  it("names the workspace owner for the access step", () => {
+    expect(unreadAccountsNotice({ access: true, failed: false }, "reviews", "member")).toBe(
+      "Google refused access to some of the connected Google account's Business Profile accounts, so their locations aren't listed. The workspace owner can check in Google Business Profile that the account still manages them.",
+    );
+  });
+
+  it("the failed part needs no owner: the same reload step", () => {
+    expect(unreadAccountsNotice({ access: false, failed: true }, "reviews", "member")).toBe(
+      unreadAccountsNotice({ access: false, failed: true }, "reviews"),
+    );
   });
 });

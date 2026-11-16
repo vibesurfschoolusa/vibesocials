@@ -126,6 +126,34 @@ describe("POST /api/connections/google_business_profile/location", () => {
     expect(updateMock.mock.calls[0][0].data.metadata.locationName).toBe("STORE-42");
   });
 
+  // R26 platform-clients L3: every post to a shared code fails GBP_STORE_CODE_NOT_UNIQUE.
+  it("400s a store code more than one listed location has, with the not-unique sentence, and saves nothing", async () => {
+    listMock.mockResolvedValue({
+      ok: true,
+      complete: true,
+      locations: [...LISTED, { ...LISTED[1], resourceName: "accounts/2/locations/8", title: "Client Y" }],
+    });
+
+    const res = await post({ locationName: "STORE-42" });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error:
+        "This store code matches more than one Google Business Profile location. In Settings, choose the location from the list under Google Business Profile, or paste its full resource name under Advanced, then retry.",
+    });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a resource name is saved even when its store code is shared", async () => {
+    listMock.mockResolvedValue({
+      ok: true,
+      complete: true,
+      locations: [...LISTED, { ...LISTED[1], resourceName: "accounts/2/locations/8", title: "Client Y" }],
+    });
+
+    expect((await post({ locationName: "accounts/2/locations/8" })).status).toBe(200);
+  });
+
   it("passes on Google's failure to list, and saves nothing", async () => {
     listMock.mockResolvedValue({
       ok: false,

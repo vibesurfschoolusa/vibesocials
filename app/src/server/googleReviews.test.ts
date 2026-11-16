@@ -333,19 +333,24 @@ describe("reviewsErrorBody: each kind, worded for the Reviews page", () => {
   });
 
   // JJ3 lead review: the Reviews page can pick a location that is not the saved one.
-  it("notFound, the saved location: the owner chooses another in Settings; a member picks one above", () => {
+  // R26 client-journey L1: a member has no picker, so theirs names the owner and Settings.
+  it("notFound, the saved location: the owner chooses another in Settings; a member reads the owner can", () => {
     const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
     expect(reviewsErrorBody(error, "Fallback.", "owner", { location: "saved" })).toEqual({
       error: "This location is no longer in Google Business Profile. Choose another location in Settings (it's also where your Google posts go).",
       reconnect: true,
     });
-    expect(reviewsErrorBody(error, "Fallback.", "member", { location: "saved" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above to see its reviews; the workspace owner can change the saved one." });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { location: "saved" })).toEqual({
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+    });
   });
 
-  it("notFound, a location picked on the Reviews page: pick another above, for everyone", () => {
+  it("notFound, a location an owner picked on the Reviews page: pick another above; a member never reads it", () => {
     const error = failing({ status: 404, code: "GBP_REVIEWS_FETCH_FAILED" });
     expect(reviewsErrorBody(error, "Fallback.", "owner", { location: "picked" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
-    expect(reviewsErrorBody(error, "Fallback.", "member", { location: "picked" })).toEqual({ error: "This location is no longer in Google Business Profile. Pick another location above." });
+    expect(reviewsErrorBody(error, "Fallback.", "member", { location: "picked" })).toEqual({
+      error: "This location is no longer in Google Business Profile. The workspace owner can choose another location in Settings.",
+    });
   });
 
   // R25 client-journey L1: the in-place sign-in with the account that manages

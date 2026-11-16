@@ -102,8 +102,15 @@ describe("GET /api/reviews/locations", () => {
     const response = await GET();
     const body = await response.json();
 
+    // R26 client-journey L3: the picker's notice, with the owner's in-place sign-in.
     expect(response.status).toBe(200);
-    expect(body).toEqual({ locations: [], connected: true });
+    expect(body).toEqual({
+      locations: [],
+      connected: true,
+      notice:
+        "Google found no locations for this Google account. If your business has a listing, sign in to Google again with the account that manages it. If it doesn't have one yet, create or verify it in Google Business Profile first.",
+      signIn: true,
+    });
   });
 
   it("reports connected:true alongside the locations it found", async () => {
@@ -483,5 +490,104 @@ describe("GET /api/reviews/locations for a member with no saved location", () =>
       notice: "The workspace owner hasn't chosen this workspace's Google location yet. Its reviews show here once they have.",
     });
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// R26 client-journey L2 / security-billing L2: a member reads who can fix it.
+describe("GET /api/reviews/locations for a member whose saved location isn't listed", () => {
+  const MEMBER = { ...CONTEXT, role: "member" as const };
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkspaceContextMock.mockResolvedValue(MEMBER);
+  });
+
+  it("a complete list without it: the saved-not-listed notice", async () => {
+    findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/9/locations/9" } });
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [shop(1)] } },
+    });
+
+    expect(await (await GET()).json()).toEqual({
+      locations: [],
+      connected: true,
+      notice:
+        "This workspace's saved Google location isn't one the connected Google account manages. The workspace owner can choose the location again.",
+    });
+  });
+
+  it("an account refusing access, the saved one not found: the member's wording of the notice", async () => {
+    findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "accounts/9/locations/9" } });
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 403 },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [shop(2)] } },
+    });
+
+    const body = await (await GET()).json();
+
+    expect(body.locations).toEqual([]);
+    expect(body.notice).toBe(
+      "Google refused access to some of the connected Google account's Business Profile accounts, so their locations aren't listed. The workspace owner can check in Google Business Profile that the account still manages them.",
+    );
+    expect(body.notice).not.toMatch(/Check in Google Business Profile that this Google account/);
+  });
+});
+
+// R26 client-journey L2: a saved store code two listed locations share names neither.
+describe("GET /api/reviews/locations and a saved store code two locations share", () => {
+  function sharedCode() {
+    findFirstMock.mockResolvedValue({ ...CONNECTION, metadata: { locationName: "001" } });
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] } },
+      [`${INFO}/accounts/1/locations|`]: { body: { locations: [{ ...shop(1), storeCode: "001" }] } },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [{ ...shop(2), storeCode: "001" }] } },
+    });
+  }
+
+  it("the owner: every location, and to choose it from the list in Settings", async () => {
+    sharedCode();
+
+    const body = await (await GET()).json();
+
+    expect(body.locations).toHaveLength(2);
+    expect(body.notice).toBe(
+      "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. Choose the location from the list in Settings.",
+    );
+  });
+
+  it("a member: none, and that the owner can choose it", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ ...CONTEXT, role: "member" });
+    sharedCode();
+
+    expect(await (await GET()).json()).toEqual({
+      locations: [],
+      connected: true,
+      notice:
+        "This workspace's saved store code matches more than one Google location, so its reviews can't be told apart. The workspace owner can choose the location from the list in Settings.",
+    });
+  });
+});
+
+// R26 client-journey L4: same-named branches are told apart by their address.
+describe("GET /api/reviews/locations sends each location's address and store code", () => {
+  it("both pass through from the shared listing", async () => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
+      [`${INFO}/accounts/1/locations|`]: {
+        body: {
+          locations: [
+            { name: "locations/1", title: "Joe's Pizza", storeCode: "J1", storefrontAddress: { addressLines: ["1 Main St"], locality: "Dania" } },
+            { name: "locations/2", title: "Joe's Pizza", storefrontAddress: { addressLines: ["9 Beach Rd"], locality: "Hollywood" } },
+          ],
+        },
+      },
+    });
+
+    expect((await (await GET()).json()).locations).toEqual([
+      { name: "accounts/1/locations/1", locationName: "Joe's Pizza", title: "Joe's Pizza", storeCode: "J1", address: "1 Main St, Dania" },
+      { name: "accounts/1/locations/2", locationName: "Joe's Pizza", title: "Joe's Pizza", address: "9 Beach Rd, Hollywood" },
+    ]);
   });
 });

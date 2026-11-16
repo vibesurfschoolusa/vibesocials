@@ -273,6 +273,34 @@ describe("saveSocialConnection: Google Business Profile", () => {
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 
+  // R26 platform-clients L2: the store-code lookup's rule (gbpLocation.ts). An
+  // account that refuses its location list can't be posted to, so it never
+  // blocks the sign-in: one exact match elsewhere is kept, and none is
+  // unavailable (cleared for the chooser), never "try again in a minute".
+  it("one account refusing its list (403), the code found once on another: kept", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+      .mockResolvedValueOnce(answer(403))
+      .mockResolvedValueOnce(answer(200, { locations: [{ name: "locations/555", storeCode: "STORE-7" }] }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true });
+    expect(h.updateMany.mock.calls[0][0].data).not.toHaveProperty("metadata");
+  });
+
+  it("one account refusing its list (403), the code found nowhere else: cleared for the chooser", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+      .mockResolvedValueOnce(answer(403))
+      .mockResolvedValueOnce(answer(200, { locations: [] }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+    expect(h.updateMany.mock.calls[0][0].data.metadata).toEqual({ locationName: null, locationTitle: null });
+  });
+
   // R25 lead review: Google's filter can return near matches (case-insensitive).
   it("a near match beside the exact code is ignored: kept", async () => {
     h.findUnique.mockResolvedValue(withStoreCode);

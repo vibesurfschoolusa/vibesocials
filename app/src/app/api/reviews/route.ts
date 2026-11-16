@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
-import { flagIfTokenRejected } from "@/server/googleFailure";
+import { flagIfTokenRejected, googleFailureKind } from "@/server/googleFailure";
 import {
   MEMBER_OTHER_LOCATION_MESSAGE,
   googleRefusedBody,
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   // R12 L1: who reads the answer. Until the context is read, nobody is offered a reconnect.
   let role: ReviewsReader = "member";
   // JJ3 lead review: a removed location is worded by whether it is the saved one.
-  let location: "saved" | "picked" = "saved";
+  let asked: { locationName: string; saved: string | null } | null = null;
   // The row whose token the Google calls send: a token Google refuses is flagged with it.
   let used: SocialConnection | null = null;
   try {
@@ -90,7 +90,6 @@ export async function GET(request: Request) {
     // Get location name from query param or metadata
     const saved = savedLocationName(connection.metadata);
     const locationName = locationParam || saved;
-    if (locationName !== saved) location = "picked";
 
     if (!locationName) {
       return NextResponse.json(
@@ -118,6 +117,7 @@ export async function GET(request: Request) {
       if (!allowed) return NextResponse.json({ error: MEMBER_OTHER_LOCATION_MESSAGE }, { status: 403 });
     }
 
+    asked = { locationName, saved };
     // Fetch reviews from Google Business Profile API
     const { fetchAllReviews } = await import("@/server/googleReviews");
     const { reviews, truncated } = await fetchAllReviews(accessToken, locationName);
@@ -126,8 +126,38 @@ export async function GET(request: Request) {
   } catch (error: unknown) {
     // R25 platform-clients L2: a token Google refused flags the row first.
     const settled = await flagIfTokenRejected(error, used);
+    const location =
+      asked && used && googleFailureKind(settled) === "notFound" ? await removedLocationWas(role, asked, used) : "saved";
     // Classified once, by kind (classifyGoogleFailure, via reviewsErrorBody).
     const body = reviewsErrorBody(settled, REVIEWS_FAILED_MESSAGE, role, { where: WHERE, location });
     return NextResponse.json(body, { status: 500 });
+  }
+}
+
+/**
+ * R26 client-journey L1 / pages L5: whether a removed location is worded as
+ * one picked on the page ("Pick another location above") or as the saved one
+ * (Settings). Saved is decided by the resolved resource name, so a store code
+ * saved under Advanced is the saved one when its listed match was asked for;
+ * picked is said only to an owner, and only when the page shows its picker
+ * (two or more locations listed). Read only on this failure; when the listing
+ * can't be read, Settings is the step that always exists.
+ */
+async function removedLocationWas(
+  role: ReviewsReader,
+  asked: { locationName: string; saved: string | null },
+  used: SocialConnection,
+): Promise<"saved" | "picked"> {
+  if (role === "member" || !used.accessToken || asked.locationName === asked.saved) return "saved";
+  try {
+    const listing = await listGbpLocationsWithToken(
+      { id: used.id, accessToken: used.accessToken, refreshToken: used.refreshToken ?? null },
+      WHERE,
+    );
+    if (!listing.ok) return "saved";
+    if (savedLocationIn(listing.locations, asked.saved)?.resourceName === asked.locationName) return "saved";
+    return listing.locations.length >= 2 ? "picked" : "saved";
+  } catch {
+    return "saved";
   }
 }
