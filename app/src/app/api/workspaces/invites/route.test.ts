@@ -327,7 +327,7 @@ describe("POST /api/workspaces/invites", () => {
     const response = await POST(inviteRequest("POST"));
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to create invite" });
+    await expect(response.json()).resolves.toEqual({ error: "Couldn't create an invite link. Try again in a minute." });
 
     consoleSpy.mockRestore();
   });

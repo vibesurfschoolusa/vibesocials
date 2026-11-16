@@ -13,6 +13,8 @@ import {
   preparePhotos,
   removeAllClearsCaption,
   removeAllTitle,
+  PHOTO_DESCRIPTION_FAILED_MESSAGE,
+  PHOTO_DESCRIPTION_OFFLINE_MESSAGE,
   requestPhotoDescription,
   uploadPhotosInOrder,
   whereDescriptionGoes,
@@ -499,6 +501,48 @@ describe("requestPhotoDescription", () => {
 
     await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
       "Your workspace has reached today's AI limit. Try again tomorrow.",
+    );
+  });
+
+  // R25 new-customer L3 / publishing-flow L1: offline it showed the browser's
+  // own "Failed to fetch". A failed request, an answer that is not JSON and an
+  // empty answer each get a sentence, as captionRequest gives them.
+  it("a request that never left (Chrome and Safari): our sentence, not the browser's", async () => {
+    for (const message of ["Failed to fetch", "Load failed"]) {
+      const fetchImpl = vi.fn(async () => {
+        throw new TypeError(message);
+      });
+      await expect(requestPhotoDescription(blob, fetchImpl as unknown as typeof fetch)).rejects.toThrow(
+        PHOTO_DESCRIPTION_OFFLINE_MESSAGE,
+      );
+    }
+    expect(PHOTO_DESCRIPTION_OFFLINE_MESSAGE).toBe(
+      "We couldn't reach Vibe Socials, so no description was written. Check your connection and try again.",
+    );
+  });
+
+  it("an error answer that is not JSON, or JSON with no text: a plain sentence", async () => {
+    for (const response of [
+      new Response("<html>Bad gateway</html>", { status: 502 }),
+      new Response("{}", { status: 500 }),
+    ]) {
+      const fetchImpl = vi.fn(async () => response);
+      await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
+    }
+    expect(PHOTO_DESCRIPTION_FAILED_MESSAGE).toBe(
+      "Something went wrong on our side, so no description was written. Please try again in a minute.",
+    );
+  });
+
+  it("a success answer that is not JSON: the plain sentence", async () => {
+    const fetchImpl = vi.fn(async () => new Response("not json", { status: 200 }));
+    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(PHOTO_DESCRIPTION_FAILED_MESSAGE);
+  });
+
+  it("a blank description: the empty sentence", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ altText: "   " }));
+    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
+      "The AI didn't write a description. Try again or write it yourself.",
     );
   });
 

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   ConfirmDialog,
+  ConfirmFailureShown,
   Dialog,
   DialogBody,
   DialogDescription,
@@ -241,7 +242,7 @@ export function ConnectionActions({
     } catch (err) {
       console.error("[Disconnect] Error:", err);
       toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
-      throw err;
+      throw new ConfirmFailureShown("DISCONNECT_FAILED");
     }
     toast.success(
       isLinkedIn
@@ -260,7 +261,7 @@ export function ConnectionActions({
     } catch (err) {
       console.error("[Switch Account] Error:", err);
       toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
-      throw err;
+      throw new ConfirmFailureShown("DISCONNECT_FAILED");
     }
   }
 
@@ -273,7 +274,7 @@ export function ConnectionActions({
     } catch (err) {
       console.error("[Switch Account] Error:", err);
       toast.error(err instanceof Error ? err.message : DISCONNECT_FAILED_MESSAGE);
-      throw err;
+      throw new ConfirmFailureShown("DISCONNECT_FAILED");
     }
     window.location.href = authUrl;
   }

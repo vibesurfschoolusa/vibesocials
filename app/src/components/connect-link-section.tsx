@@ -6,7 +6,7 @@ import type { Platform } from "@prisma/client";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
@@ -224,9 +224,9 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     async (method: "POST" | "DELETE", body: object) => {
       try {
         return await changeConnectLink(fetch, method, body);
-      } catch (error) {
+      } catch {
         toast.error("Couldn't reach Vibe Socials. Check your connection and try again.");
-        throw error;
+        throw new ConfirmFailureShown("UNREACHABLE");
       }
     },
     [toast],
@@ -240,7 +240,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       const result = await send("POST", { workspaceId, platforms });
       if (!result.ok || !result.link) {
         toast.error((!result.ok && result.error) || "Couldn't make the link. Try again.");
-        throw new Error("CREATE_FAILED");
+        throw new ConfirmFailureShown("CREATE_FAILED");
       }
       setLink(result.link);
       toast.success("New link ready. Copy it and send it to your client.");
@@ -252,7 +252,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     const result = await send("DELETE", { workspaceId });
     if (!result.ok) {
       toast.error(result.error ?? "Couldn't turn the link off. Try again.");
-      throw new Error("REVOKE_FAILED");
+      throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setLink(null);
     setSelected([]);

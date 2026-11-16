@@ -12,6 +12,7 @@ import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import {
   ConfirmDialog,
+  ConfirmFailureShown,
   Dialog,
   DialogBody,
   DialogDescription,
@@ -163,6 +164,14 @@ export interface ClientLinksState {
   workspaceBlocked?: string;
   /** II1 review: what blocks it; an ended trial or plan comes back only on Growth or Pro. */
   workspaceBlockedBy?: ClientLinkBlockKind;
+}
+
+/**
+ * R25 new-customer L2: the members route answers 404 with `gone: true` when
+ * the person is no longer in the workspace, so the card can drop their row.
+ */
+export function memberIsGone(status: number, body: unknown): boolean {
+  return status === 404 && typeof body === "object" && body !== null && (body as { gone?: unknown }).gone === true;
 }
 
 /**
@@ -494,7 +503,7 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't leave the workspace.");
-      throw new Error("LEAVE_FAILED");
+      throw new ConfirmFailureShown("LEAVE_FAILED");
     }
     toast.success("Left the workspace.");
     // The route moved the active workspace; R15: a full load of this page, so the
@@ -687,7 +696,7 @@ function OwnerView({
       // A 409 says another tab switched workspace; show the route's sentence.
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't revoke the invite link.");
-      throw new Error("REVOKE_FAILED");
+      throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setInvite(null);
     setFreshUrl(null);
@@ -753,7 +762,14 @@ function OwnerView({
     };
   }, []);
 
-  // ConfirmDialog contract: throw to keep the dialog open on failure.
+  // R25 new-customer L2: someone who already left (another owner removed them,
+  // or they left) goes from the list; the route's answer says so.
+  const dropMember = useCallback((userId: string) => {
+    setMembers((prev) => (prev ? prev.filter((m) => m.userId !== userId) : prev));
+  }, []);
+
+  // ConfirmDialog contract: a refusal it toasted is thrown as
+  // ConfirmFailureShown; a request that never left is said by the dialog.
   const confirmRemove = useCallback(async () => {
     if (!removeTarget) return;
     const response = await fetch(`/api/workspaces/members/${removeTarget.userId}`, {
@@ -764,7 +780,11 @@ function OwnerView({
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't remove that member.");
-      throw new Error("REMOVE_FAILED");
+      if (memberIsGone(response.status, data)) {
+        dropMember(removeTarget.userId);
+        return;
+      }
+      throw new ConfirmFailureShown("REMOVE_FAILED");
     }
     setMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
     toast.success(`Removed ${personLabel(removeTarget, true)}.`);
@@ -780,7 +800,7 @@ function OwnerView({
     if (outcome.notice) {
       toast.info(outcome.notice);
     }
-  }, [removeTarget, toast, workspaceId]);
+  }, [dropMember, removeTarget, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Promote
   // member -> owner only ever ADDS an owner, so patch local state in place
@@ -796,7 +816,11 @@ function OwnerView({
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't update that member's role.");
-      throw new Error("PROMOTE_FAILED");
+      if (memberIsGone(response.status, data)) {
+        dropMember(promoteTarget.userId);
+        return;
+      }
+      throw new ConfirmFailureShown("PROMOTE_FAILED");
     }
     setMembers((prev) =>
       prev
@@ -804,7 +828,7 @@ function OwnerView({
         : prev,
     );
     toast.success("Role updated.");
-  }, [promoteTarget, toast, workspaceId]);
+  }, [dropMember, promoteTarget, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Demote
   // owner -> member. Demoting YOURSELF drops you out of OwnerView, so on that
@@ -822,7 +846,11 @@ function OwnerView({
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't update that member's role.");
-      throw new Error("DEMOTE_FAILED");
+      if (memberIsGone(response.status, data)) {
+        dropMember(demoteTarget.userId);
+        return;
+      }
+      throw new ConfirmFailureShown("DEMOTE_FAILED");
     }
     if (demoteTarget.userId === currentUserId) {
       toast.success(demotedMessage(null, true));
@@ -848,7 +876,7 @@ function OwnerView({
         ? prev.map((m): Member => (m.userId === demoteTarget.userId ? { ...m, role: "member" } : m))
         : prev,
     );
-  }, [demoteTarget, currentUserId, router, toast, workspaceId]);
+  }, [demoteTarget, currentUserId, dropMember, router, toast, workspaceId]);
 
   // R5-security L1: one press, after a confirm (R6 L2), replaces every client
   // link that is on. ConfirmDialog contract: throw to keep the dialog open.
@@ -858,7 +886,7 @@ function OwnerView({
       made = await requestClientLinksReplace(fetch, workspaceId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't make new client links. The old ones still work. Try again.");
-      throw error;
+      throw new ConfirmFailureShown("REPLACE_FAILED");
     }
     setClientLinks((prev) =>
       prev
@@ -878,7 +906,7 @@ function OwnerView({
       await requestClientLinksTurnOff(fetch, workspaceId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't turn off the client links. Nothing changed. Try again.");
-      throw error;
+      throw new ConfirmFailureShown("TURN_OFF_FAILED");
     }
     setClientLinks((prev) =>
       prev ? { ...prev, on: { upload: false, review: false, connect: false }, connectStopped: false } : prev,
@@ -899,7 +927,7 @@ function OwnerView({
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't leave the workspace.");
-      throw new Error("LEAVE_FAILED");
+      throw new ConfirmFailureShown("LEAVE_FAILED");
     }
     toast.success("Left the workspace.");
     // The route moved the active workspace; R15: a full load of this page, so the
@@ -1010,7 +1038,7 @@ function OwnerView({
         ) : members && members.length > 0 ? (
           <ul className="divide-y divide-border">
             {members.map((member) => (
-              <li key={member.userId} className="flex items-center justify-between gap-3 py-3">
+              <li key={member.userId} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">
                     {teamMemberLines(member).label}
@@ -1019,7 +1047,7 @@ function OwnerView({
                     <p className="truncate text-xs text-muted-foreground">{member.email}</p>
                   ) : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
                   <Badge variant={member.role === "owner" ? "default" : "secondary"}>
                     {member.role === "owner" ? "Owner" : "Member"}
                   </Badge>

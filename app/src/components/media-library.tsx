@@ -27,7 +27,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -423,7 +423,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       | null;
     if (!response.ok || !data?.link) {
       toast.error(data?.error ?? "Couldn't make the link. Try again.");
-      throw new Error("CREATE_FAILED");
+      throw new ConfirmFailureShown("CREATE_FAILED");
     }
     setLink(data.link);
     toast.success("New link ready. Copy it and send it to your client.");
@@ -439,7 +439,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       // A 409 carries the library's "switched workspace" sentence: shown as is.
       toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
-      throw new Error("REVOKE_FAILED");
+      throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setLink(null);
     toast.success("The link is off. It no longer works.");
@@ -817,7 +817,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       response = await fetch(`/api/media/${target.id}`, { method: "DELETE" });
     } catch {
       toast.error(MEDIA_MESSAGES.deleteNetwork);
-      throw new Error("DELETE_FAILED");
+      throw new ConfirmFailureShown("DELETE_FAILED");
     }
 
     if (!response.ok) {
@@ -825,7 +825,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       // Covers the 409 "still referenced by an active post" case: the
       // server's message already states the reason, so it's shown as-is.
       toast.error(data?.error ?? MEDIA_MESSAGES.deleteFailed);
-      throw new Error("DELETE_FAILED");
+      throw new ConfirmFailureShown("DELETE_FAILED");
     }
 
     // No re-fetch of the list — just remove it client-side. nextCursor stays

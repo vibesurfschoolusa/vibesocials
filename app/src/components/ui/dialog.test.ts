@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { CONFIRM_FAILED_MESSAGE, CONFIRM_UNREACHABLE_MESSAGE, ConfirmFailureShown, confirmFailureText } from "./dialog";
+
 /**
  * Live check 2026-11-14: Add many's "Choose from Media" listed a real library
  * taller than the window, and the dialog grew past both edges (top -202 px,
@@ -59,4 +61,76 @@ describe("ConfirmDialog confirmDisabled", () => {
     expect(confirmDialog).toMatch(/<Button variant=\{confirmVariant\} onClick=\{handleConfirm\} loading=\{busy\} disabled=\{confirmDisabled\}>/);
     expect(confirmDialog).toMatch(/<Button variant="outline" onClick=\{\(\) => onOpenChange\(false\)\} disabled=\{busy\}>/);
   });
+});
+
+/**
+ * R25 new-customer L1 / publishing-flow L2: ConfirmDialog swallowed a thrown
+ * error, so a Team or Queue confirm whose request never left said nothing. One
+ * contract now: an onConfirm that already told the person throws
+ * ConfirmFailureShown, which the dialog ignores; anything else the dialog says
+ * itself, in the dialog, so a failure is never silent and never shown twice.
+ */
+describe("ConfirmDialog failures", () => {
+  it("a failure the caller already showed is not shown again", () => {
+    expect(confirmFailureText(new ConfirmFailureShown("REMOVE_FAILED"))).toBeNull();
+    expect(new ConfirmFailureShown("REMOVE_FAILED")).toBeInstanceOf(Error);
+  });
+
+  it("a request that never left (Chrome, Safari, Firefox): nothing changed, check the connection", () => {
+    for (const message of ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."]) {
+      expect(confirmFailureText(new TypeError(message)), message).toBe(CONFIRM_UNREACHABLE_MESSAGE);
+    }
+    expect(CONFIRM_UNREACHABLE_MESSAGE).toBe(
+      "We couldn't reach Vibe Socials, so nothing changed. Check your connection and try again.",
+    );
+  });
+
+  it("a caller can word the unreachable case itself (Queue's Publish)", () => {
+    expect(confirmFailureText(new TypeError("Failed to fetch"), "Check Activity.")).toBe("Check Activity.");
+  });
+
+  it("anything else: a plain sentence, never the raw error", () => {
+    for (const error of [new Error("REMOVE_FAILED"), "oops", null, undefined]) {
+      const text = confirmFailureText(error);
+      expect(text).toBe(CONFIRM_FAILED_MESSAGE);
+    }
+    expect(CONFIRM_FAILED_MESSAGE).not.toMatch(/REMOVE_FAILED|undefined/);
+  });
+
+  const confirmDialog = source.slice(source.indexOf("export function ConfirmDialog"));
+
+  it("the dialog shows its sentence in itself, as an alert, and stays open", () => {
+    expect(confirmDialog).toMatch(/confirmFailureText\(error, unreachableText\)/);
+    expect(confirmDialog).toMatch(/role="alert"/);
+    expect(confirmDialog).not.toMatch(/catch \{/);
+  });
+
+  it("takes the unreachable wording as an optional prop", () => {
+    const props = source.slice(source.indexOf("export interface ConfirmDialogProps"), source.indexOf("export function ConfirmDialog"));
+    expect(props).toMatch(/unreachableText\?: string;/);
+  });
+});
+
+/**
+ * Every ConfirmDialog caller follows the contract: a failure it already
+ * toasted is thrown as ConfirmFailureShown, never a bare code like
+ * "REMOVE_FAILED" or the error it caught (which the dialog would show again).
+ * reviews-view.tsx is KK2's file in round 25 and is checked once merged.
+ */
+describe("ConfirmDialog callers", () => {
+  const callers = [
+    "../../app/queue/queue-view.tsx",
+    "../connect-link-section.tsx",
+    "../connection-actions.tsx",
+    "../media-library.tsx",
+    "../team-section.tsx",
+  ];
+  for (const path of callers) {
+    it(`${path} throws ConfirmFailureShown after it has told the person`, () => {
+      const caller = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+      expect(caller).not.toMatch(/throw new Error\("[A-Z_]+"\)/);
+      expect(caller).not.toMatch(/throw (err|error);/);
+      expect(caller).toMatch(/ConfirmFailureShown/);
+    });
+  }
 });

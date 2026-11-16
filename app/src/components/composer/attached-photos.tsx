@@ -71,29 +71,39 @@ export function whereDescriptionGoes(
   return now.single === photo ? { to: "single" } : null;
 }
 
+export const PHOTO_DESCRIPTION_OFFLINE_MESSAGE =
+  "We couldn't reach Vibe Socials, so no description was written. Check your connection and try again.";
+export const PHOTO_DESCRIPTION_FAILED_MESSAGE =
+  "Something went wrong on our side, so no description was written. Please try again in a minute.";
+const PHOTO_DESCRIPTION_EMPTY_MESSAGE = "The AI didn't write a description. Try again or write it yourself.";
+
 /**
  * 07d: "Write it for me". Asks the AI caption route to describe the uploaded
- * photo (same quota as a caption). Rejects with the sentence to show.
+ * photo (same quota as a caption). Rejects with the sentence to show: the
+ * route's own refusal, or ours when the request never left or the answer is
+ * not JSON (R25 new-customer L3, as requestCaption does it).
  */
 export async function requestPhotoDescription(
   blob: UploadedBlob,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
-  const response = await fetchImpl("/api/posts/auto-caption", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ blobUrl: blob.url, mimeType: blob.mimeType, purpose: "altText" }),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl("/api/posts/auto-caption", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blobUrl: blob.url, mimeType: blob.mimeType, purpose: "altText" }),
+    });
+  } catch {
+    throw new Error(PHOTO_DESCRIPTION_OFFLINE_MESSAGE);
+  }
   const data = (await response.json().catch(() => null)) as { altText?: unknown; error?: unknown } | null;
   if (!response.ok) {
-    throw new Error(
-      typeof data?.error === "string" && data.error
-        ? data.error
-        : "The AI couldn't describe this photo. Try again or write it yourself.",
-    );
+    throw new Error(typeof data?.error === "string" && data.error ? data.error : PHOTO_DESCRIPTION_FAILED_MESSAGE);
   }
-  if (typeof data?.altText !== "string" || !data.altText.trim()) {
-    throw new Error("The AI didn't write a description. Try again or write it yourself.");
+  if (data === null || typeof data !== "object") throw new Error(PHOTO_DESCRIPTION_FAILED_MESSAGE);
+  if (typeof data.altText !== "string" || !data.altText.trim()) {
+    throw new Error(PHOTO_DESCRIPTION_EMPTY_MESSAGE);
   }
   return data.altText;
 }

@@ -300,6 +300,38 @@ export function DialogClose({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Thrown by a ConfirmDialog `onConfirm` that has already told the person what
+ * went wrong (a toast, a line on the page). The dialog stays open and says
+ * nothing more, so a failure is never shown twice.
+ */
+export class ConfirmFailureShown extends Error {
+  constructor(reason = "CONFIRM_FAILURE_SHOWN") {
+    super(reason);
+    this.name = "ConfirmFailureShown";
+  }
+}
+
+export const CONFIRM_UNREACHABLE_MESSAGE =
+  "We couldn't reach Vibe Socials, so nothing changed. Check your connection and try again.";
+export const CONFIRM_FAILED_MESSAGE =
+  "Something went wrong, so this may not have finished. Reload the page to see what changed, then try again.";
+
+/**
+ * What ConfirmDialog says when `onConfirm` throws (R25 new-customer L1): nothing
+ * for a ConfirmFailureShown; for a request that never left (fetch rejects with
+ * a TypeError: "Failed to fetch", "Load failed", ...) `unreachableText`; for
+ * anything else a plain sentence, never the raw error.
+ */
+export function confirmFailureText(
+  error: unknown,
+  unreachableText: string = CONFIRM_UNREACHABLE_MESSAGE,
+): string | null {
+  if (error instanceof ConfirmFailureShown) return null;
+  if (error instanceof TypeError) return unreachableText;
+  return CONFIRM_FAILED_MESSAGE;
+}
+
 export interface ConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -316,11 +348,18 @@ export interface ConfirmDialogProps {
    * Story post). Off by default.
    */
   confirmDisabled?: boolean;
+  /**
+   * What the dialog says when the request never left, if "nothing changed"
+   * isn't sure (Queue's Publish may have gone out).
+   */
+  unreachableText?: string;
 }
 
 /**
  * Convenience confirmation modal — the accessible replacement for `confirm()`.
- * Awaits `onConfirm` (showing a loading state) and closes on success.
+ * Awaits `onConfirm` (showing a loading state) and closes on success. On a
+ * throw it stays open for a retry: a ConfirmFailureShown was already shown by
+ * the caller; anything else the dialog says itself (confirmFailureText).
  */
 export function ConfirmDialog({
   open,
@@ -332,22 +371,30 @@ export function ConfirmDialog({
   onConfirm,
   destructive = false,
   confirmDisabled = false,
+  unreachableText,
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  // A sentence from the last try belongs to that opening only.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (!open) setFailure(null);
+  }
 
   const handleConfirm = useCallback(async () => {
     setBusy(true);
+    setFailure(null);
     try {
       await onConfirm();
       onOpenChange(false);
-    } catch {
-      // Keep the dialog open on failure so the user can retry. The caller's
-      // onConfirm is responsible for surfacing the error (e.g. via toast);
-      // we swallow here only to avoid an unhandled promise rejection.
+    } catch (error) {
+      // Stays open for a retry, and never silent (R25 new-customer L1).
+      setFailure(confirmFailureText(error, unreachableText));
     } finally {
       setBusy(false);
     }
-  }, [onConfirm, onOpenChange]);
+  }, [onConfirm, onOpenChange, unreachableText]);
 
   const confirmVariant: ButtonVariant = destructive ? "destructive" : "primary";
   const resolvedConfirmText = confirmText ?? (destructive ? "Delete" : "Confirm");
@@ -357,6 +404,11 @@ export function ConfirmDialog({
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
         {description ? <DialogDescription>{description}</DialogDescription> : null}
+        {failure ? (
+          <p role="alert" className="text-sm text-destructive">
+            {failure}
+          </p>
+        ) : null}
       </DialogHeader>
       <DialogFooter className="pt-6">
         <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>

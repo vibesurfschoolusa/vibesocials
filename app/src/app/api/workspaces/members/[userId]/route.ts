@@ -9,6 +9,21 @@ import { payerRefusal } from "@/server/billing/payerRefusal";
 
 import { noticeOwnersOfFormerOwner } from "../formerOwnerNotice";
 
+/**
+ * R25 new-customer L2: the target is no longer in the workspace (removed by
+ * another owner, left, or changed meanwhile). `gone` lets the Team card drop
+ * the row; the 404 still says nothing about other workspaces.
+ */
+function memberGone() {
+  return NextResponse.json(
+    {
+      error: "This person is no longer in the workspace. Reload the page to see the current members.",
+      gone: true,
+    },
+    { status: 404 },
+  );
+}
+
 interface MemberRouteContext {
   params: Promise<{ userId: string }>;
 }
@@ -72,7 +87,7 @@ export async function DELETE(request: Request, { params }: MemberRouteContext) {
   });
 
   if (!membership) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return memberGone();
   }
 
   if (membership.role === "owner") {
@@ -102,7 +117,7 @@ export async function DELETE(request: Request, { params }: MemberRouteContext) {
   });
 
   if (!outcome) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return memberGone();
   }
 
   return NextResponse.json({ ok: true, invitesRevoked: outcome.invitesRevoked }, { status: 200 });
@@ -177,7 +192,7 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     select: { role: true },
   });
   if (!membership) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return memberGone();
   }
 
   // Idempotent: already the requested role — write nothing.
@@ -195,7 +210,7 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
       data: { role: "owner" },
     });
     if (count === 0) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return memberGone();
     }
     return NextResponse.json({ ok: true, role }, { status: 200 });
   }
@@ -230,7 +245,7 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     return NextResponse.json({ error: "Promote another owner first." }, { status: 400 });
   }
   if (outcome === "not_found") {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return memberGone();
   }
 
   // R5-security L1: as an owner they could copy the client links, which keep

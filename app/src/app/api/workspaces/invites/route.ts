@@ -117,7 +117,7 @@ export async function POST(request: Request) {
       workspaceId: context.workspace.id,
       userId: context.user.id,
     });
-    return NextResponse.json({ error: "Failed to create invite" }, { status: 500 });
+    return NextResponse.json({ error: "Couldn't create an invite link. Try again in a minute." }, { status: 500 });
   }
 
   const url = `${process.env.NEXTAUTH_URL ?? ""}/join/${raw}`;

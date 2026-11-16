@@ -10,6 +10,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ConfirmDialog,
+  ConfirmFailureShown,
   Dialog,
   DialogBody,
   DialogFooter,
@@ -114,6 +115,13 @@ function hasClientChangeRequest(job: PostJobDTO): boolean {
 export type QueueViewMode = "list" | "calendar";
 
 const QUEUE_VIEW_KEY = "vibe.queueView";
+
+/**
+ * R25 publishing-flow L2: Publish's request may have reached the server before
+ * the connection dropped, so the dialog doesn't say "nothing changed".
+ */
+export const PUBLISH_UNREACHABLE_MESSAGE =
+  "We couldn't reach Vibe Socials. Check Activity to see whether it went out before you press Publish again.";
 
 type ViewStorage = Partial<Pick<Storage, "getItem" | "setItem">>;
 
@@ -769,7 +777,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
       | null;
     if (!response.ok || !data?.link) {
       toast.error(data?.error ?? "Couldn't make the link. Try again.");
-      throw new Error("CREATE_FAILED");
+      throw new ConfirmFailureShown("CREATE_FAILED");
     }
     setLink(data.link);
     toast.success("New link ready. Copy it and send it to your client.");
@@ -785,7 +793,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       // A 409 carries the library's "switched workspace" sentence: shown as is.
       toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
-      throw new Error("REVOKE_FAILED");
+      throw new ConfirmFailureShown("REVOKE_FAILED");
     }
     setLink(null);
     toast.success("The link is off. It no longer works.");
@@ -1176,8 +1184,9 @@ export function QueueView({
     [applyAnswer],
   );
 
-  // Cancel a scheduled post (ConfirmDialog onConfirm: throw to keep it open on
-  // failure, per the dialog's contract).
+  // Cancel a scheduled post (ConfirmDialog onConfirm: a refusal it toasted is
+  // thrown as ConfirmFailureShown, which keeps the dialog open; a request that
+  // never left is said by the dialog).
   const confirmCancel = useCallback(async () => {
     if (!cancelTarget) return;
     const request = cancelRequest(cancelTarget, cancelScope);
@@ -1187,7 +1196,7 @@ export function QueueView({
       | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't cancel this post.");
-      throw new Error("CANCEL_FAILED");
+      throw new ConfirmFailureShown("CANCEL_FAILED");
     }
     if (!request.series) {
       applyAnswer(cancelTarget, data, { kind: "remove" });
@@ -1210,7 +1219,7 @@ export function QueueView({
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't delete this draft.");
-      throw new Error("DELETE_FAILED");
+      throw new ConfirmFailureShown("DELETE_FAILED");
     }
     applyAnswer(deleteTarget, data, { kind: "remove" });
     toast.success(withPairNote("Draft deleted.", data));
@@ -1231,7 +1240,7 @@ export function QueueView({
         void load({ silent: true });
         return;
       }
-      throw new Error("PUBLISH_FAILED");
+      throw new ConfirmFailureShown("PUBLISH_FAILED");
     }
     const outcome = publishOutcome(data);
     applyAnswer(publishTarget, data, outcome.kind === "remove" ? { kind: "remove" } : { kind: "update", patch: outcome.patch });
@@ -1454,6 +1463,7 @@ export function QueueView({
         title={publishCopy.title}
         description={publishLine ? `${publishCopy.description} ${publishLine}` : publishCopy.description}
         confirmText={publishCopy.confirmText}
+        unreachableText={publishKind === "publish" ? PUBLISH_UNREACHABLE_MESSAGE : undefined}
         onConfirm={confirmPublish}
       />
 

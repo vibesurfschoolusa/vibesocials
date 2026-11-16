@@ -14,6 +14,7 @@ import {
   isTextPost,
   labelName,
   pairLabel,
+  PUBLISH_UNREACHABLE_MESSAGE,
   queueLoadErrorText,
   readQueueView,
   saveQueueView,
@@ -260,5 +261,27 @@ describe("queueLoadErrorText", () => {
 
   it("any other failure is as before", () => {
     expect(queueLoadErrorText(500)).toBe("Failed to load your queue.");
+  });
+});
+
+// R25 publishing-flow L2: Cancel, Delete and Publish said nothing when the
+// request never left. The dialog now says it (ui/dialog.tsx); Publish words it
+// so nobody presses Publish twice without checking whether it went out.
+describe("the Queue's confirm dialogs when Vibe Socials can't be reached", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("Publish points at Activity before another press", () => {
+    expect(PUBLISH_UNREACHABLE_MESSAGE).toBe(
+      "We couldn't reach Vibe Socials. Check Activity to see whether it went out before you press Publish again.",
+    );
+    expect(queueSource).toMatch(
+      /unreachableText=\{publishKind === "publish" \? PUBLISH_UNREACHABLE_MESSAGE : undefined\}\s+onConfirm=\{confirmPublish\}/,
+    );
+  });
+
+  it("a refusal it already toasted is not shown twice", () => {
+    for (const code of ["CANCEL_FAILED", "DELETE_FAILED", "PUBLISH_FAILED"]) {
+      expect(queueSource).toContain(`throw new ConfirmFailureShown("${code}")`);
+    }
   });
 });

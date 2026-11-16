@@ -72,6 +72,14 @@ vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: payerRefusalMock
 
 import { DELETE, PATCH } from "./route";
 
+// R25 new-customer L2: "Not found" told the owner nothing. Every answer for a
+// person who is no longer in the workspace says so, and `gone` lets the Team
+// card drop their row.
+const MEMBER_GONE_ANSWER = {
+  error: "This person is no longer in the workspace. Reload the page to see the current members.",
+  gone: true,
+};
+
 const OWNER_CONTEXT = {
   user: { id: "user-1", email: "owner@example.com", name: "Owner" },
   workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
@@ -181,7 +189,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     const response = await DELETE(deleteReq(), ctx("user-ghost"));
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-ghost" },
       select: { role: true },
@@ -225,7 +233,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
     expect(inviteUpdateManyMock).not.toHaveBeenCalled();
   });
 
@@ -374,7 +382,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("owner"), ctx("user-ghost"));
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: "user-ghost" },
       select: { role: true },
@@ -429,7 +437,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("owner"), ctx("user-2"));
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
   });
 
   it("demote: takes the ws-owners advisory lock FIRST, then re-reads the owner count INSIDE the transaction", async () => {
@@ -578,7 +586,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-2"));
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual(MEMBER_GONE_ANSWER);
   });
 });
 

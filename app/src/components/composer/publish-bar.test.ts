@@ -50,7 +50,7 @@ describe("submitControl: the one source for the form's button and the bar", () =
           expect(control.loading).toBe(loading);
           const html = render(control);
           expect(html).toContain(control.label);
-          if (loading) expect(html).toContain("disabled");
+          if (loading) expect(html).toContain('aria-disabled="true"');
         }
       }
     }
