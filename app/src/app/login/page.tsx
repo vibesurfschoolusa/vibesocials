@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -18,7 +18,7 @@ import { loginOAuthErrorMessage } from "@/lib/loginOAuthError";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 import { FormHeading, SignedInNotice, showSignedInNotice } from "./signed-in-notice";
-import { LOGIN_CSRF_MESSAGE, addressWithoutCsrf, signInWithPassword } from "./signInWithPassword";
+import { signInWithPassword } from "./signInWithPassword";
 
 function LoginPageInner() {
   const router = useRouter();
@@ -33,13 +33,6 @@ function LoginPageInner() {
   // its own code. Rendered without the code itself — see
   // lib/loginOAuthError.ts for the copy and why it leaks nothing.
   const oauthErrorMessage = loginOAuthErrorMessage(searchParams.get("error"));
-  // R31 follow-up: next-auth's own csrf read failed and it landed here. Read
-  // once, so dropping the param below keeps the sentence and what was typed.
-  const [csrfRefused] = useState(() => searchParams.get("csrf") === "true");
-  useEffect(() => {
-    const next = addressWithoutCsrf(window.location.pathname, window.location.search);
-    if (next) window.history.replaceState(window.history.state, "", next);
-  }, []);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -118,11 +111,6 @@ function LoginPageInner() {
             {oauthErrorMessage && !error ? (
               <Alert variant="danger" className="mb-4">
                 {oauthErrorMessage}
-              </Alert>
-            ) : null}
-            {csrfRefused && !oauthErrorMessage && !error ? (
-              <Alert variant="danger" className="mb-4">
-                {LOGIN_CSRF_MESSAGE}
               </Alert>
             ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">

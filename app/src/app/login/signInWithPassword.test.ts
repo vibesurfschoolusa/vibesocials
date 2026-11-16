@@ -203,7 +203,9 @@ describe("every sign-in entry point goes through signInChecked", () => {
 
   it("Continue with Google: a failed press shows GOOGLE_NOT_SENT_MESSAGE, never only stops the spinner", async () => {
     const source = await read("../../components/google-sign-in-button.tsx");
-    expect(source).toContain("googleSignInChecked(signIn, callbackUrl)");
+    expect(source).toContain("googleSignInChecked(callbackUrl)");
+    // R31 lead review: no next-auth signIn for Google (its second csrf read failed silently).
+    expect(source).not.toMatch(/\bsignIn\b/);
     expect(source).toMatch(/if \(!result\.ok\) \{\s+setError\(GOOGLE_NOT_SENT_MESSAGE\);\s+setLoading\(false\);/);
     expect(source).not.toMatch(/signIn\("google"/);
     expect(source).toMatch(/<p role="alert"[^>]*>\s*\{error\}/);

@@ -70,15 +70,3 @@ export async function signInAfterRegister(
   if (check.reason === "refused") return { ok: false, toLogin: true };
   return { ok: false, error: check.reason === "lost" ? REGISTER_SIGN_IN_LOST_MESSAGE : REGISTER_SIGN_IN_UNFINISHED_MESSAGE };
 }
-
-/** next-auth lands on the login page as ?csrf=true when its own csrf read failed (R31 follow-up). */
-export const LOGIN_CSRF_MESSAGE = "Signing in didn't finish. Press the button again.";
-
-/** The address without `csrf`, or null when it has none (a reload then shows no stale sentence). */
-export function addressWithoutCsrf(pathname: string, search: string): string | null {
-  const params = new URLSearchParams(search);
-  if (!params.has("csrf")) return null;
-  params.delete("csrf");
-  const rest = params.toString();
-  return rest ? `${pathname}?${rest}` : pathname;
-}

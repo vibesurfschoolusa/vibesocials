@@ -110,24 +110,63 @@ describe("credentialsSignInChecked", () => {
   });
 });
 
+// R31 lead review: with pages.signIn set, next-auth turns /signin?csrf=true
+// into /login?callbackUrl=... with no sign of it, so the Google press can't
+// leave it to next-auth's signIn (whose own second csrf read could fail).
+// The helper makes the same POST itself with the token it just read.
 describe("googleSignInChecked", () => {
-  it("calls signIn after both reads and counts the redirect as started", async () => {
-    const signIn = vi.fn(async () => undefined);
-    await expect(googleSignInChecked(signIn, "/dashboard", server())).resolves.toEqual({ ok: true });
-    expect(signIn).toHaveBeenCalledWith("google", { callbackUrl: "/dashboard" });
-  });
+  type Answer = () => Promise<Response>;
+  function google(answer: Answer, answers: Answers = {}) {
+    const fetchImpl = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input === "/api/auth/signin/google") return answer();
+      const name = input.replace("/api/auth/", "") as keyof Answers;
+      void init;
+      return ({ ...ok, ...answers })[name]();
+    }) as unknown as typeof fetch & ReturnType<typeof vi.fn>;
+    const navigate = vi.fn();
+    return { fetchImpl, navigate, run: () => googleSignInChecked("/queue", fetchImpl, navigate) };
+  }
+  const toGoogle = "https://accounts.google.com/o/oauth2/v2/auth?client_id=x&state=y";
 
-  it("unreachable: not sent, and signIn is never called", async () => {
-    const signIn = vi.fn(async () => undefined);
-    await expect(googleSignInChecked(signIn, "/", server({ csrf: offline }))).resolves.toEqual({ ok: false, reason: "not_sent" });
-    expect(signIn).not.toHaveBeenCalled();
-  });
-
-  // R31 new-customer L2: the redirect request failed (offline, a gateway's 5xx): nothing reached Google.
-  it("a failed redirect request is not sent", async () => {
-    const signIn = vi.fn(async () => {
-      throw new SyntaxError("Unexpected token <");
+  it("success: posts next-auth's own request with the token it read, then leaves for the answer's url", async () => {
+    const { fetchImpl, navigate, run } = google(async () => Response.json({ url: toGoogle }));
+    await expect(run()).resolves.toEqual({ ok: true });
+    const post = fetchImpl.mock.calls.find(([input]) => input === "/api/auth/signin/google");
+    expect(post?.[1]).toMatchObject({
+      method: "post",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
-    await expect(googleSignInChecked(signIn, "/", server())).resolves.toEqual({ ok: false, reason: "not_sent" });
+    const body = new URLSearchParams(String(post?.[1]?.body));
+    expect(Object.fromEntries(body)).toEqual({ callbackUrl: "/queue", csrfToken: "token-1", json: "true" });
+    expect(navigate).toHaveBeenCalledWith(toGoogle);
+  });
+
+  it("an answer whose url says csrf=true, or has an error: not sent, and the page stays", async () => {
+    for (const url of ["http://localhost/api/auth/signin?csrf=true", "http://localhost/login?callbackUrl=%2Fqueue&error=OAuthSignin"]) {
+      const { navigate, run } = google(async () => Response.json({ url }));
+      await expect(run()).resolves.toEqual({ ok: false, reason: "not_sent" });
+      expect(navigate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a lost answer, a gateway's 5xx, our own 5xx, or no url: not sent, and the page stays", async () => {
+    const answers: Answer[] = [
+      offline,
+      gateway,
+      async () => Response.json({ error: "x" }, { status: 500 }),
+      async () => Response.json({}),
+    ];
+    for (const answer of answers) {
+      const { navigate, run } = google(answer);
+      await expect(run()).resolves.toEqual({ ok: false, reason: "not_sent" });
+      expect(navigate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("unreachable before the press: nothing is posted", async () => {
+    const { fetchImpl, navigate, run } = google(async () => Response.json({ url: toGoogle }), { csrf: offline });
+    await expect(run()).resolves.toEqual({ ok: false, reason: "not_sent" });
+    expect(fetchImpl.mock.calls.some(([input]) => input === "/api/auth/signin/google")).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

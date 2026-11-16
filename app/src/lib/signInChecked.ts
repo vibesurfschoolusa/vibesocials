@@ -28,23 +28,26 @@ async function readJson(path: string, fetchImpl: typeof fetch): Promise<Record<s
   return typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
 }
 
+/** The csrf token when the providers list and the token both come back, else null. */
+async function readyCsrfToken(fetchImpl: typeof fetch): Promise<string | null> {
+  try {
+    if (!(await readJson("/api/auth/providers", fetchImpl))) return null;
+    const csrf = await readJson("/api/auth/csrf", fetchImpl);
+    return typeof csrf?.csrfToken === "string" && csrf.csrfToken !== "" ? csrf.csrfToken : null;
+  } catch {
+    return null;
+  }
+}
+
 /** True when the providers list and a csrf token both come back, so signIn's own reads should too. */
 export async function signInReachable(fetchImpl: typeof fetch = fetch): Promise<boolean> {
-  try {
-    if (!(await readJson("/api/auth/providers", fetchImpl))) return false;
-    const csrf = await readJson("/api/auth/csrf", fetchImpl);
-    return typeof csrf?.csrfToken === "string" && csrf.csrfToken !== "";
-  } catch {
-    return false;
-  }
+  return (await readyCsrfToken(fetchImpl)) !== null;
 }
 
 type CredentialsSignIn = (
   provider: "credentials",
   options: { redirect: false; email: string; password: string },
 ) => Promise<unknown>;
-
-type GoogleSignIn = (provider: "google", options: { callbackUrl: string }) => Promise<unknown>;
 
 /** next-auth's answer to a refused csrf token: the sign-in page with ?csrf=true. */
 function saysCsrf(url: unknown): boolean {
@@ -53,6 +56,15 @@ function saysCsrf(url: unknown): boolean {
     return new URL(url, "http://localhost").searchParams.get("csrf") === "true";
   } catch {
     return false;
+  }
+}
+
+/** next-auth's answer to a sign-in that failed to start: its url carries ?error=. */
+function saysError(url: string): boolean {
+  try {
+    return new URL(url, "http://localhost").searchParams.has("error");
+  } catch {
+    return true;
   }
 }
 
@@ -86,21 +98,47 @@ export async function credentialsSignInChecked(
   }
 }
 
+/** Leaves the page, as next-auth's signIn does (a #fragment needs the reload). */
+function leaveFor(url: string): void {
+  window.location.href = url;
+  if (url.includes("#")) window.location.reload();
+}
+
 /**
- * Continue with Google: signIn leaves the page for Google when it works. A
- * throw means its redirect request failed (offline, a gateway's 5xx page),
- * and nothing reached Google.
+ * Continue with Google. R31 lead review: next-auth's signIn reads the csrf
+ * token a second time, and when that read fails the server's ?csrf=true
+ * answer becomes /login?callbackUrl=... with no sign of it (pages.signIn,
+ * core/index.js). So this makes signIn's own request itself, with the token
+ * just read: POST /api/auth/signin/google, form-encoded { callbackUrl,
+ * csrfToken, json: true } (react/index.js), and leaves for the answer's url
+ * only when it has no csrf=true and no error. Anything else: nothing reached
+ * Google, and the page stays.
  */
 export async function googleSignInChecked(
-  signIn: GoogleSignIn,
   callbackUrl: string,
   fetchImpl: typeof fetch = fetch,
+  navigate: (url: string) => void = leaveFor,
 ): Promise<{ ok: true } | { ok: false; reason: "not_sent" }> {
-  if (!(await signInReachable(fetchImpl))) return { ok: false, reason: "not_sent" };
+  const csrfToken = await readyCsrfToken(fetchImpl);
+  if (!csrfToken) return { ok: false, reason: "not_sent" };
+  let url: unknown;
   try {
-    await signIn("google", { callbackUrl });
-    return { ok: true };
+    const response = await fetchOrNoAnswer(
+      "/api/auth/signin/google",
+      {
+        method: "post",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ callbackUrl, csrfToken, json: "true" }),
+      },
+      fetchImpl,
+    );
+    if (!response.ok) return { ok: false, reason: "not_sent" };
+    const data: unknown = await response.json().catch(() => null);
+    url = typeof data === "object" && data !== null ? (data as { url?: unknown }).url : undefined;
   } catch {
     return { ok: false, reason: "not_sent" };
   }
+  if (typeof url !== "string" || url === "" || saysCsrf(url) || saysError(url)) return { ok: false, reason: "not_sent" };
+  navigate(url);
+  return { ok: true };
 }

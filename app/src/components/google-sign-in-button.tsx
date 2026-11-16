@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getProviders, signIn } from "next-auth/react";
+import { getProviders } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 import { GOOGLE_NOT_SENT_MESSAGE } from "@/app/login/signInWithPassword";
@@ -62,10 +62,10 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
         onClick={async () => {
           setLoading(true);
           setError(null);
-          // R30, R31: unreachable, or the redirect request failed: nothing
-          // reached Google, so the page says so instead of only stopping the
-          // spinner. On success the page leaves for Google.
-          const result = await googleSignInChecked(signIn, callbackUrl);
+          // R30, R31: unreachable, or the redirect request failed or was
+          // refused: nothing reached Google, so the page says so instead of
+          // only stopping the spinner. On success the page leaves for Google.
+          const result = await googleSignInChecked(callbackUrl);
           if (!result.ok) {
             setError(GOOGLE_NOT_SENT_MESSAGE);
             setLoading(false);
