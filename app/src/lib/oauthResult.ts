@@ -9,11 +9,21 @@ import { PLATFORM_LABELS } from "@/lib/platforms";
  * label-less phrasing in that case rather than pairing a fallback noun
  * with a template that already carries its own article.
  */
-function platformFromCode(code: string): Platform | null {
+export function platformFromCode(code: string): Platform | null {
   const match = (Object.keys(PLATFORM_LABELS) as Platform[])
     .filter((key) => code === key || code.startsWith(`${key}_`))
     .sort((a, b) => b.length - a.length)[0];
   return match ?? null;
+}
+
+/**
+ * R30 (platform-clients L1): the platform's own ?error= value (access_denied,
+ * server_error), for a callback to send after its platform name so the code
+ * names the platform. Only a short, plain code is passed on; anything else
+ * reads as a failure, never as a cancellation.
+ */
+export function providerErrorSuffix(raw: string): string {
+  return /^[a-z_]{1,40}$/.test(raw) ? raw : "provider_error";
 }
 
 function labelFromCode(code: string): string | null {

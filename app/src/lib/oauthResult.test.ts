@@ -17,7 +17,7 @@ describe("describeOAuthResult", () => {
   });
 
   it("maps a denied error to a 'you cancelled' message", () => {
-    const result = describeOAuthResult({ error: "tiktok_oauth_denied", success: null });
+    const result = describeOAuthResult({ error: "tiktok_access_denied", success: null });
     expect(result?.variant).toBe("danger");
     expect(result?.message).toContain("TikTok");
     expect(result?.message).toContain("cancelled");
@@ -25,7 +25,7 @@ describe("describeOAuthResult", () => {
 
   it("handles platforms whose key contains underscores", () => {
     const result = describeOAuthResult({
-      error: "google_business_profile_oauth_denied",
+      error: "google_business_profile_access_denied",
       success: null,
     });
     expect(result?.message).toContain("Google Business Profile");
@@ -39,7 +39,7 @@ describe("describeOAuthResult", () => {
 
   it("error wins when both params are present", () => {
     const result = describeOAuthResult({
-      error: "x_oauth_denied",
+      error: "x_auth_denied",
       success: "x_connected",
     });
     expect(result?.variant).toBe("danger");
@@ -236,14 +236,11 @@ describe("describeOAuthResult — real callback-route codes", () => {
     });
   });
 
-  // facebook_page, instagram, google_business_profile, and tiktok forward the
-  // OAuth provider's own `error` value verbatim and unprefixed (e.g. Google's
-  // and Facebook's callbacks redirect with `error=access_denied` when the
-  // user declines). google_business_profile and instagram additionally
-  // redirect a few internal failure branches (missing_code_or_state,
-  // invalid_state, token_exchange_failed) unprefixed. None
-  // of these carry a platform prefix, so the platform can't be identified and
-  // the "The account" fallback label is used instead of a platform name.
+  // Until R30 the Facebook Page, Instagram, Business Profile and TikTok
+  // callbacks sent the provider's own code (access_denied) and a few failures
+  // (missing_code_or_state, invalid_state, token_exchange_failed) without a
+  // platform name. They all name it now (app/api/auth/oauthErrorCodes.test.ts);
+  // an old code still in someone's address bar reads without a platform name.
   it("falls back to the generic account label for real unprefixed codes", () => {
     for (const error of ["missing_code_or_state", "token_exchange_failed"]) {
       const result = describeOAuthResult({ error, success: null });
@@ -369,7 +366,7 @@ describe("describeOAuthResult — which platform it was", () => {
 
   it("picks the longest matching platform key", () => {
     expect(
-      describeOAuthResult({ error: "google_business_profile_oauth_denied", success: null })
+      describeOAuthResult({ error: "google_business_profile_access_denied", success: null })
         ?.platform,
     ).toBe("google_business_profile");
   });
@@ -527,12 +524,12 @@ describe("describeOAuthResult — every sentence names only the button the row s
     "youtube_oauth_denied",
     "linkedin_auth_failed",
     "pinterest_access_denied",
-    "google_business_profile_oauth_denied",
-    "tiktok_oauth_denied",
+    "google_business_profile_access_denied",
+    "tiktok_access_denied",
     "x_invalid_state",
-    "instagram_missing_params",
+    "instagram_missing_code_or_state",
     "tiktok_not_workspace_owner",
-    "x_not_configured",
+    "youtube_not_configured",
     "youtube_connect_failed",
     "youtube_upload_not_allowed",
     "youtube_readonly_not_allowed",
@@ -550,6 +547,22 @@ describe("describeOAuthResult — every sentence names only the button the row s
     // A sign-in that fails or is cancelled saves nothing, so a row that had a
     // connection keeps it: never "nothing was connected" there.
     if (shown !== "connect") expect(message).not.toMatch(/nothing was connected|wasn't connected/);
+  });
+
+  it("R30: a cancelled Facebook Page or Business Profile Reconnect is a cancellation of that platform", () => {
+    expect(describe_("facebook_page_access_denied", "reconnect")).toBe(
+      "You cancelled the Facebook Page authorization — your Facebook Page connection is unchanged. Click Reconnect to try again.",
+    );
+    expect(describe_("google_business_profile_access_denied", "connected")).toBe(
+      "You cancelled the Google Business Profile authorization — your Google Business Profile connection is unchanged.",
+    );
+    expect(describe_("google_business_profile_invalid_state", "reconnect")).toBe(
+      "We couldn't reconnect Google Business Profile, so your Google Business Profile connection is unchanged. Click Reconnect to try again.",
+    );
+    // A provider code that isn't short and plain reads as a failure, never a cancellation.
+    expect(describe_("instagram_provider_error", "reconnect")).toBe(
+      "We couldn't reconnect Instagram, so your Instagram connection is unchanged. Click Reconnect to try again.",
+    );
   });
 
   it("a cancelled Reconnect: the existing connection is unchanged, and Reconnect tries again", () => {
@@ -590,12 +603,19 @@ describe("describeOAuthResult — every sentence names only the button the row s
     "youtube_oauth_denied",
     "linkedin_auth_failed",
     "pinterest_access_denied",
-    "google_business_profile_oauth_denied",
-    "tiktok_oauth_denied",
+    "google_business_profile_access_denied",
+    "tiktok_access_denied",
     "x_invalid_state",
-    "instagram_missing_params",
+    "instagram_missing_code_or_state",
     "youtube_connect_failed",
     "tiktok_token_exchange_failed",
+    // R30 (platform-clients L1): the callbacks' own codes, now with the platform in front.
+    "facebook_page_access_denied",
+    "instagram_access_denied",
+    "google_business_profile_invalid_state",
+    "google_business_profile_missing_code_or_state",
+    "google_business_profile_token_exchange_failed",
+    "tiktok_missing_code_or_state",
   ];
   it.each(FAILURE_CODES.flatMap((code) => (["reconnect", "connected"] as const).map((shown) => [code, shown] as const)))(
     "%s with a row showing %s: unchanged, and only the shown button",
@@ -614,8 +634,8 @@ describe("describeOAuthResult — every sentence names only the button the row s
     expect(describe_("x_invalid_state", "connected")).toBe("We couldn't reconnect X, so your X connection is unchanged.");
     // With no row, as before.
     expect(describe_("youtube_connect_failed", "connect")).toBe("YouTube couldn't be connected. Please try again.");
-    expect(describe_("instagram_missing_params", "connect")).toBe(
-      "The Instagram sign-in couldn't be completed securely. Please try connecting again.",
+    expect(describe_("linkedin_missing_params", "connect")).toBe(
+      "The LinkedIn sign-in couldn't be completed securely. Please try connecting again.",
     );
   });
 

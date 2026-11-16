@@ -4,6 +4,7 @@ import { saveSocialConnection } from "@/server/connections/saveConnection";
 import { LOCATION_CLEARED_PARAM, refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
+import { providerErrorSuffix } from "@/lib/oauthResult";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
@@ -29,18 +30,18 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
   const settingsUrl = new URL("/settings", url.origin);
 
   if (errorParam) {
-    settingsUrl.searchParams.set("error", errorParam);
+    settingsUrl.searchParams.set("error", `google_business_profile_${providerErrorSuffix(errorParam)}`);
     return NextResponse.redirect(settingsUrl);
   }
 
   if (!code || !state) {
-    settingsUrl.searchParams.set("error", "missing_code_or_state");
+    settingsUrl.searchParams.set("error", "google_business_profile_missing_code_or_state");
     return NextResponse.redirect(settingsUrl);
   }
 
   const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
-    settingsUrl.searchParams.set("error", "invalid_state");
+    settingsUrl.searchParams.set("error", "google_business_profile_invalid_state");
     return NextResponse.redirect(settingsUrl);
   }
 
@@ -96,7 +97,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         status: tokenResponse.status,
         statusText: tokenResponse.statusText,
       });
-      settingsUrl.searchParams.set("error", "token_exchange_failed");
+      settingsUrl.searchParams.set("error", "google_business_profile_token_exchange_failed");
       return NextResponse.redirect(settingsUrl);
     }
 

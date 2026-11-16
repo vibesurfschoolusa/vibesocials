@@ -334,6 +334,22 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // R30 (platform-clients L1): Settings names the row's button only when the
+  // code names the platform, so a cancelled Reconnect is told it is unchanged.
+  it("the platform's own ?error= (the user said no) comes back with the platform in front", async () => {
+    const url = new URL(`/api/auth/${platform}/callback`, ORIGIN);
+    url.searchParams.set("error", "access_denied");
+    url.searchParams.set("state", signedState());
+
+    const res = await GET(new NextRequest(url));
+
+    // LinkedIn and YouTube send one fixed code for every provider error.
+    const expected: Record<string, string> = { linkedin: "linkedin_auth_failed", youtube: "youtube_oauth_denied" };
+    expect(location(res).searchParams.get("error")).toBe(expected[platform] ?? `${platform}_access_denied`);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expectNoConnectionWrites();
+  });
+
   describe("unexpected errors redirect to <platform>_connect_failed instead of a 500", () => {
     it("session lookup (DB) failure", async () => {
       getCurrentUserMock.mockRejectedValue(new Error("db down"));

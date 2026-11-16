@@ -31,7 +31,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
   const settingsUrl = new URL("/settings", url.origin);
 
   if (errorParam) {
-    settingsUrl.searchParams.set("error", errorParam);
+    settingsUrl.searchParams.set("error", `tiktok_${errorParam}`);
     return NextResponse.redirect(settingsUrl);
   }
 

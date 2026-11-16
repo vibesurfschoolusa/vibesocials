@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
+import { providerErrorSuffix } from "@/lib/oauthResult";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
@@ -22,7 +23,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
   if (error) {
     console.error("[Instagram OAuth] Error from provider:", error);
     return NextResponse.redirect(
-      new URL(`/settings?error=${encodeURIComponent(error)}`, request.url),
+      new URL(`/settings?error=instagram_${providerErrorSuffix(error)}`, request.url),
     );
   }
 

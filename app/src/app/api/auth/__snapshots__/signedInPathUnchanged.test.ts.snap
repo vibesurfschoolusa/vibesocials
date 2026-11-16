@@ -63,7 +63,7 @@ exports[`'facebook_page' callback, signed in: unchanged > provider_error 1`] = `
     ],
   ],
   "headers": {
-    "location": "https://app.example.com/settings?error=access_denied",
+    "location": "https://app.example.com/settings?error=facebook_page_access_denied",
   },
   "status": 307,
 }
@@ -191,7 +191,7 @@ exports[`'google_business_profile' callback, signed in: unchanged > invalid_stat
 {
   "calls": [],
   "headers": {
-    "location": "https://app.example.com/settings?error=invalid_state",
+    "location": "https://app.example.com/settings?error=google_business_profile_invalid_state",
   },
   "status": 307,
 }
@@ -201,7 +201,7 @@ exports[`'google_business_profile' callback, signed in: unchanged > missing_para
 {
   "calls": [],
   "headers": {
-    "location": "https://app.example.com/settings?error=missing_code_or_state",
+    "location": "https://app.example.com/settings?error=google_business_profile_missing_code_or_state",
   },
   "status": 307,
 }
@@ -244,7 +244,7 @@ exports[`'google_business_profile' callback, signed in: unchanged > provider_err
 {
   "calls": [],
   "headers": {
-    "location": "https://app.example.com/settings?error=access_denied",
+    "location": "https://app.example.com/settings?error=google_business_profile_access_denied",
   },
   "status": 307,
 }
@@ -399,7 +399,7 @@ exports[`'instagram' callback, signed in: unchanged > provider_error 1`] = `
     ],
   ],
   "headers": {
-    "location": "https://app.example.com/settings?error=access_denied",
+    "location": "https://app.example.com/settings?error=instagram_access_denied",
   },
   "status": 307,
 }
@@ -1004,7 +1004,7 @@ exports[`'tiktok' callback, signed in: unchanged > provider_error 1`] = `
 {
   "calls": [],
   "headers": {
-    "location": "https://app.example.com/settings?error=access_denied",
+    "location": "https://app.example.com/settings?error=tiktok_access_denied",
   },
   "status": 307,
 }
