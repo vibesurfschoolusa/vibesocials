@@ -1612,6 +1612,30 @@ async function assertXOk(response: Response, options: Parameters<typeof assertOk
   });
 }
 
+/**
+ * R25 lead review: X answered 401 without naming the person's token, so it may
+ * be our own consumer key or secret. The row is not flagged, so the post says
+ * what is true instead of "Reconnect". Not retried in-step (it has no status):
+ * the same keys would be refused again at once.
+ */
+export const X_APP_AUTH_REFUSED_CODE = "X_APP_AUTH_REFUSED";
+export const X_APP_AUTH_REFUSED_MESSAGE =
+  "X refused Vibe Socials' request. This is a problem on our side, not your account. Try again later.";
+
+/** The app-credential warning goes out at most once an hour per process, not once per post. */
+const APP_CREDENTIALS_WARNING_INTERVAL_MS = 60 * 60 * 1000;
+let appCredentialsWarnedAt: number | null = null;
+
+function warnAppCredentialsAtMostHourly(connectionId: string, code: unknown): void {
+  const now = Date.now();
+  if (appCredentialsWarnedAt !== null && now - appCredentialsWarnedAt < APP_CREDENTIALS_WARNING_INTERVAL_MS) return;
+  appCredentialsWarnedAt = now;
+  console.warn("[X OAuth 1.0a] X answered 401 without naming the user's token: the app credentials may be wrong", {
+    connectionId,
+    code,
+  });
+}
+
 /** The code a row is flagged with when X refuses its token (an API 401). */
 const X_RECONNECT_CODE = "X_RECONNECT_REQUIRED";
 
@@ -1624,8 +1648,9 @@ const X_RECONNECT_CODE = "X_RECONNECT_REQUIRED";
  * retryable CONNECTION_TOKEN_CHANGED is thrown. A 401 from our own storage
  * (STORAGE_READ_CODES) says nothing about X and flags nothing. R25 lead review:
  * only a 401 that names the person's token (X_INVALID_TOKEN_CODE) flags; any
- * other 401 may be our own consumer key or secret, so it is logged once as a
- * possible app-credential problem and flags nothing.
+ * other 401 may be our own consumer key or secret, so it flags nothing, is
+ * logged at most once an hour as a possible app-credential problem, and
+ * fails as X_APP_AUTH_REFUSED.
  */
 async function flagRejectedXToken<T>(connection: SocialConnection, publish: () => Promise<T>): Promise<T> {
   try {
@@ -1635,11 +1660,9 @@ async function flagRejectedXToken<T>(connection: SocialConnection, publish: () =
     const fromStorage = typeof code === "string" && STORAGE_READ_CODES.has(code);
     if (status !== 401 || fromStorage || !connection.accessToken) throw error;
     if (xTokenRejected !== true) {
-      console.warn("[X OAuth 1.0a] X answered 401 without naming the user's token: the app credentials may be wrong", {
-        connectionId: connection.id,
-        code,
-      });
-      throw error;
+      warnAppCredentialsAtMostHourly(connection.id, code);
+      // Not the person's account, and the row isn't flagged: no Reconnect text.
+      throw Object.assign(new Error(X_APP_AUTH_REFUSED_MESSAGE), { code: X_APP_AUTH_REFUSED_CODE, cause: error });
     }
     const snapshot = { id: connection.id, accessToken: connection.accessToken, refreshToken: connection.refreshToken };
     if ((await flagRejectedToken(snapshot, X_RECONNECT_CODE)) === "superseded") throw connectionTokenChangedError();

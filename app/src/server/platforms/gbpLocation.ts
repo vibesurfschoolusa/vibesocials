@@ -266,6 +266,21 @@ export async function readGbpLocations(options: ReadOptions): Promise<GbpListing
   };
 }
 
+/**
+ * Google's filter for one store code (`storeCode="X"`), or undefined to list
+ * unfiltered: a code with a `"` or `\` would need escaping the guide doesn't
+ * describe. Google compares "case insensitive token comparisons", so the
+ * filter can return near matches: exactStoreCodeMatches keeps the exact ones.
+ */
+export function storeCodeFilter(storeCode: string): string | undefined {
+  return /["\\]/.test(storeCode) ? undefined : `storeCode="${storeCode}"`;
+}
+
+/** The locations whose store code is exactly `storeCode` (the comparison used before the filter). */
+export function exactStoreCodeMatches<T extends { storeCode: string | null }>(locations: T[], storeCode: string): T[] {
+  return locations.filter((location) => location.storeCode === storeCode);
+}
+
 /** The store-code lookup's failure when the accounts call failed, or no account's locations could be read. */
 function accountsListFailed(failure: unknown): Error {
   const status = (failure as { status?: unknown } | null)?.status;
@@ -337,7 +352,7 @@ export async function resolveGbpLocationName(
     // end as a misleading not found.
     rethrow: () => true,
     // R25 lead review: Google's own filter, so the lookup costs a call or two per account.
-    locationsFilter: `storeCode="${trimmed}"`,
+    locationsFilter: storeCodeFilter(trimmed),
   });
   if (!listing.ok) {
     // The token itself was refused (a 401, a missing scope), or the tokens changed meanwhile.
@@ -346,7 +361,7 @@ export async function resolveGbpLocationName(
     throw accountsListFailed(listing.failure);
   }
 
-  const candidates = listing.locations.filter((location) => location.storeCode === trimmed);
+  const candidates = exactStoreCodeMatches(listing.locations, trimmed);
 
   // R25 lead review: an account that failed (not one that refused access, which
   // can't be posted to anyway) may hold the code, so no match there is Google's

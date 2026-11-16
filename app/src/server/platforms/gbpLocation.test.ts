@@ -272,6 +272,44 @@ describe("resolveGbpLocationName reads every page", () => {
     await expect(resolveGbpLocationName("token-abc", "STORE-1")).resolves.toBe("accounts/222/locations/7");
   });
 
+  // Google's filter compares case-insensitively, by tokens: a near match it
+  // returns is not the saved code, so only the exact code counts.
+  it("a near match Google's filter returns is ignored, and doesn't make the code not unique", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/111" }] } },
+      [`${INFO}/accounts/111/locations|`]: {
+        body: {
+          locations: [
+            { name: "locations/1", storeCode: "store-1" },
+            { name: "locations/2", storeCode: "STORE-1" },
+          ],
+        },
+      },
+    });
+
+    await expect(resolveGbpLocationName("token-abc", "STORE-1")).resolves.toBe("accounts/111/locations/2");
+  });
+
+  it("only a near match: not found", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/111" }] } },
+      [`${INFO}/accounts/111/locations|`]: { body: { locations: [{ name: "locations/1", storeCode: "Store 1" }] } },
+    });
+
+    await expect(resolveGbpLocationName("token-abc", "STORE-1")).rejects.toMatchObject({ code: "GBP_STORE_CODE_NOT_FOUND" });
+  });
+
+  it.each(['A"B', "A\\B"])("a code with a quote or backslash (%s) is matched on the unfiltered list", async (code) => {
+    const fetchMock = google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/111" }] } },
+      [`${INFO}/accounts/111/locations|`]: { body: { locations: [{ name: "locations/3", storeCode: code }] } },
+    });
+
+    await expect(resolveGbpLocationName("token-abc", code)).resolves.toBe("accounts/111/locations/3");
+    const locationCalls = fetchMock.mock.calls.map(([u]) => new URL(u.toString())).filter((u) => u.pathname.endsWith("/locations"));
+    expect(locationCalls.map((u) => u.searchParams.has("filter"))).toEqual([false]);
+  });
+
   it("a store code on two pages is not unique", async () => {
     google({
       [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/111" }] } },

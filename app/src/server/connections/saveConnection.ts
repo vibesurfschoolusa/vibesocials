@@ -10,7 +10,7 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
-import { readGbpLocations } from "@/server/platforms/gbpLocation";
+import { exactStoreCodeMatches, readGbpLocations, storeCodeFilter } from "@/server/platforms/gbpLocation";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -122,10 +122,10 @@ async function checkGbpStoreCode(storeCode: string, accessToken: string): Promis
     where: "GBP sign-in store code check",
     get: (url) => gbpGet(url, accessToken),
     used: () => null,
-    locationsFilter: `storeCode="${storeCode}"`,
+    locationsFilter: storeCodeFilter(storeCode),
   });
   if (!listing.ok || !listing.complete) return "check_failed";
-  const matches = listing.locations.filter((location) => location.storeCode === storeCode).length;
+  const matches = exactStoreCodeMatches(listing.locations, storeCode).length;
   return matches === 1 ? "kept" : "unavailable";
 }
 

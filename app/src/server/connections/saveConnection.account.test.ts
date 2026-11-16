@@ -273,6 +273,35 @@ describe("saveSocialConnection: Google Business Profile", () => {
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 
+  // R25 lead review: Google's filter can return near matches (case-insensitive).
+  it("a near match beside the exact code is ignored: kept", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] }))
+      .mockResolvedValueOnce(
+        answer(200, {
+          locations: [
+            { name: "locations/554", storeCode: "store-7" },
+            { name: "locations/555", storeCode: "STORE-7" },
+          ],
+        }),
+      );
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true });
+  });
+
+  it("a code with a quote is matched on the unfiltered list", async () => {
+    h.findUnique.mockResolvedValue(
+      row({ platform: "google_business_profile", accountIdentifier: "google_business_profile", metadata: { locationName: 'ST"7' } }),
+    );
+    h.fetch
+      .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] }))
+      .mockResolvedValueOnce(answer(200, { locations: [{ name: "locations/555", storeCode: 'ST"7' }] }));
+
+    await expect(saveGbp()).resolves.toEqual({ ok: true });
+    expect(new URL(String(h.fetch.mock.calls[1][0])).searchParams.has("filter")).toBe(false);
+  });
+
   // R6 fourth review 2: the account and location lists are paged.
   it("a store code on page 2 of an account's locations: kept", async () => {
     h.findUnique.mockResolvedValue(withStoreCode);

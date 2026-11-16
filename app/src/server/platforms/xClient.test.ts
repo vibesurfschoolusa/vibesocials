@@ -3159,9 +3159,23 @@ describe("xClient: a token X refuses flags the row", () => {
     expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
   });
 
+  // R25 lead review: the row isn't flagged, so the text must not say Reconnect.
   it.each([
-    ["a 401 on the post that doesn't name the token (code 32: maybe our own keys)", { v1: unauthenticated, v2: unauthenticated }],
-    ["a 401 on the photo upload without X's token code", { upload: () => json({}, 401) }],
+    ["the post (code 32: maybe our own keys)", "text", { v1: unauthenticated, v2: unauthenticated }],
+    ["the photo upload, without X's token code", "photo", { upload: () => json({}, 401) }],
+  ] as const)("a 401 on %s that doesn't name the token: our side, try again later", async (_label, kind, answers) => {
+    stubX(answers);
+
+    const error = await failureOf(kind === "text" ? xClient.publishText!(textCtx()) : xClient.publishVideo(photoCtx()));
+
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    expect(error?.code).toBe("X_APP_AUTH_REFUSED");
+    const text = publishErrorMessage("x", error!);
+    expect(text).toBe("X refused Vibe Socials' request. This is a problem on our side, not your account. Try again later.");
+    expect(text).not.toMatch(/Reconnect/);
+  });
+
+  it.each([
     ["a 429 on the post", { v1: () => json({}, 403), v2: () => json({}, 429) }],
     ["a 5xx on the photo upload", { upload: () => json({}, 503) }],
     ["a 401 from our own storage", { blob: () => new Response("no", { status: 401 }) }],
@@ -3180,6 +3194,9 @@ describe("xClient: a token X refuses flags the row", () => {
 
 describe("xClient: a 401 that may be our own credentials", () => {
   it("is logged once as a possible app-credential problem, and flags nothing", async () => {
+    // A fresh hour for the hourly limit on this warning (earlier tests warned too).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2030-01-01T00:00:00Z"));
     vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
     vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -3197,13 +3214,55 @@ describe("xClient: a 401 that may be our own credentials", () => {
         caption: "Hi",
         baseCaption: "Hi",
       })
-      .catch((e: unknown) => e as { status?: number });
+      .catch((e: unknown) => e as { code?: string });
 
-    expect(error).toMatchObject({ status: 401 });
+    expect(error).toMatchObject({ code: "X_APP_AUTH_REFUSED" });
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
     const lines = warn.mock.calls.filter(([message]) => String(message).includes("app credentials"));
     expect(lines).toHaveLength(1);
     expect(JSON.stringify(lines)).not.toContain("consumer-secret");
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("xClient: the app-credential warning", () => {
+  it("is logged at most once an hour per process, not per post", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2031-11-16T10:00:00Z"));
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const body = JSON.stringify({ errors: [{ code: 32, message: "Could not authenticate you." }] });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(body, { status: 401 })));
+    const post = () =>
+      xClient
+        .publishText!({
+          user: { id: "user-1" } as unknown as User,
+          socialConnection: { id: "conn-x", platform: "x", accessToken: "t", refreshToken: "s" } as unknown as SocialConnection,
+          caption: "Hi",
+          baseCaption: "Hi",
+        })
+        .catch(() => null);
+    const lines = () => warn.mock.calls.filter(([message]) => String(message).includes("app credentials")).length;
+
+    // A later hour than any earlier test's warning, so this test starts clean.
+    vi.setSystemTime(Date.parse("2031-11-16T12:00:00Z"));
+    warn.mockClear();
+    await post();
+    await post();
+    vi.setSystemTime(Date.parse("2031-11-16T12:59:00Z"));
+    await post();
+    expect(lines()).toBe(1);
+
+    vi.setSystemTime(Date.parse("2031-11-16T13:00:01Z"));
+    await post();
+    expect(lines()).toBe(2);
+
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
