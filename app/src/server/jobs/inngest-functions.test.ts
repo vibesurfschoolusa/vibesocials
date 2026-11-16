@@ -4147,17 +4147,8 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
       });
       const cutoff = new Date(NOW - STALE_AFTER_MS);
       expect(failIfStaleMock).toHaveBeenCalledWith("stale-1", PUBLISH_STALLED_FAILURE, {
-        status: { in: ["pending", "in_progress"] },
-        updatedAt: { lt: cutoff },
-        // Also no row a run claimed since the cutoff: a claim lives inside one step.
-        results: {
-          none: {
-            OR: [
-              { status: "pending", deferredUntil: { gte: cutoff } },
-              { status: "pending", claimedAt: { gte: cutoff } },
-            ],
-          },
-        },
+        cutoff,
+        job: { status: { in: ["pending", "in_progress"] }, updatedAt: { lt: cutoff } },
       });
       expect(failPendingMock).not.toHaveBeenCalled();
       expect(finishSpy).not.toHaveBeenCalled();

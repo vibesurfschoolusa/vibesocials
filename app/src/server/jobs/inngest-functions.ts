@@ -2264,19 +2264,12 @@ export const stalePostJobSweep = inngest.createFunction(
         });
         let failed = 0;
         if (stillPending.length > 0) {
-          // R27 MM4 review: re-checked under the job's lock before marking (a run
-          // may have woken since the read above). A row claimed since the cutoff
-          // means a run is live: a claim lasts one step, a few minutes at most.
+          // R27 MM4 review: re-checked under locks before marking (a run may have
+          // woken since the read above): its pending rows, then the job, in a
+          // platform step's own lock order (failPendingResultsIfStillStale).
           const marked = await failPendingResultsIfStillStale(id, PUBLISH_STALLED_FAILURE, {
-            ...stale,
-            results: {
-              none: {
-                OR: [
-                  { status: "pending", deferredUntil: { gte: cutoff } },
-                  { status: "pending", claimedAt: { gte: cutoff } },
-                ],
-              },
-            },
+            cutoff,
+            job: { status: stale.status, updatedAt: stale.updatedAt },
           });
           failed = marked.marked && marked.failedCount + marked.unconfirmedCount > 0 && marked.status !== "in_progress" ? 1 : 0;
         } else {

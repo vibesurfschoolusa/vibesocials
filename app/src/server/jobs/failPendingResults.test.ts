@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vitest hoists vi.mock above imports. Only the Prisma methods the helper
@@ -19,6 +21,7 @@ const {
   executeRawMock,
   transactionMock,
   postJobCountMock,
+  queryRawMock,
 } = vi.hoisted(() => ({
   resultUpdateManyMock: vi.fn(),
   resultFindManyMock: vi.fn(),
@@ -28,6 +31,7 @@ const {
   executeRawMock: vi.fn(),
   transactionMock: vi.fn(),
   postJobCountMock: vi.fn(),
+  queryRawMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -60,6 +64,7 @@ import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/pub
 /** The transaction client `$transaction` hands to its callback. */
 const tx = {
   $executeRaw: executeRawMock,
+  $queryRaw: queryRawMock,
   postJobResult: { findMany: resultFindManyMock, updateMany: resultUpdateManyMock },
   postJob: { update: postJobUpdateMock, findUnique: postJobFindUniqueMock, count: postJobCountMock },
   mediaItem: { updateMany: mediaUpdateManyMock },
@@ -150,23 +155,28 @@ describe("PUBLISH_STALLED_FAILURE", () => {
 // woke up (claimed a row, or wrote its heartbeat) after the sweep read its
 // candidates keeps its rows, and no "may already be live" email goes out.
 describe("failPendingResultsIfStillStale", () => {
-  const stillStale = {
-    status: { in: ["pending" as const, "in_progress" as const] },
-    updatedAt: { lt: new Date("2026-11-02T04:30:00.000Z") },
-  };
+  const cutoff = new Date("2026-11-02T04:30:00.000Z");
+  const jobStillStale = { status: { in: ["pending" as const, "in_progress" as const] }, updatedAt: { lt: cutoff } };
+  const run = () => failPendingResultsIfStillStale("job-1", PUBLISH_STALLED_FAILURE, { cutoff, job: jobStillStale });
+  const sqlOf = (call: unknown[]) => (call[0] as TemplateStringsArray).join("?");
 
   beforeEach(() => {
     postJobCountMock.mockReset();
+    queryRawMock.mockReset();
+    postJobCountMock.mockResolvedValue(1);
+    queryRawMock.mockResolvedValue([{ id: "r1", claimedAt: null, deferredUntil: null }]);
   });
 
-  it("still stale: locks the job, re-checks, then marks and recomputes like failPendingPostJobResults", async () => {
-    postJobCountMock.mockResolvedValue(1);
-    const out = await failPendingResultsIfStillStale("job-1", PUBLISH_STALLED_FAILURE, stillStale);
+  it("still stale: locks the pending rows, then the job (a platform step's order), re-checks both, then marks and recomputes", async () => {
+    const out = await run();
 
-    expect(postJobCountMock).toHaveBeenCalledWith({ where: { id: "job-1", ...stillStale } });
-    const lockOrder = executeRawMock.mock.invocationCallOrder[0];
-    expect(lockOrder).toBeLessThan(postJobCountMock.mock.invocationCallOrder[0]);
+    expect(sqlOf(queryRawMock.mock.calls[0])).toMatch(/FROM "PostJobResult" WHERE "postJobId" = \? AND "status" = 'pending' FOR UPDATE/);
+    expect(sqlOf(executeRawMock.mock.calls[0])).toMatch(/FROM "PostJob" WHERE "id" = \? FOR UPDATE/);
+    // Rows before the job, then the job's re-check, then the writes.
+    expect(queryRawMock.mock.invocationCallOrder[0]).toBeLessThan(executeRawMock.mock.invocationCallOrder[0]);
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(postJobCountMock.mock.invocationCallOrder[0]);
     expect(postJobCountMock.mock.invocationCallOrder[0]).toBeLessThan(resultUpdateManyMock.mock.invocationCallOrder[0]);
+    expect(postJobCountMock).toHaveBeenCalledWith({ where: { id: "job-1", ...jobStillStale } });
     expect(resultUpdateManyMock).toHaveBeenCalledWith({
       where: { postJobId: "job-1", status: "pending", claimRunId: null },
       data: { status: "failed", ...PUBLISH_STALLED_FAILURE },
@@ -174,13 +184,34 @@ describe("failPendingResultsIfStillStale", () => {
     expect(out).toEqual({ marked: true, failedCount: 2, unconfirmedCount: 2, status: "failed" });
   });
 
-  it("touched since the candidate read (the race): nothing is marked or recomputed", async () => {
+  it.each([
+    ["claimed after the cutoff (a run woke)", { claimedAt: new Date("2026-11-02T09:00:00.000Z"), deferredUntil: null }],
+    ["waiting out a platform limit that ended after the cutoff", { claimedAt: null, deferredUntil: new Date("2026-11-02T05:00:00.000Z") }],
+  ])("a pending row %s: nothing is marked, the job is not even locked", async (_label, row) => {
+    queryRawMock.mockResolvedValue([{ id: "r1", claimedAt: null, deferredUntil: null }, { id: "r2", ...row }]);
+    const out = await run();
+
+    expect(out).toEqual({ marked: false });
+    expect(executeRawMock).not.toHaveBeenCalled();
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("the job was touched since the candidate read (status or heartbeat): nothing is marked or recomputed", async () => {
     postJobCountMock.mockResolvedValue(0);
-    const out = await failPendingResultsIfStillStale("job-1", PUBLISH_STALLED_FAILURE, stillStale);
+    const out = await run();
 
     expect(out).toEqual({ marked: false });
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
     expect(postJobUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("the source names the order and why", () => {
+    const source = readFileSync(new URL("./failPendingResults.ts", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("export async function failPendingResultsIfStillStale"));
+    expect(body.indexOf('FROM "PostJobResult"')).toBeGreaterThan(-1);
+    expect(body.indexOf('FROM "PostJobResult"')).toBeLessThan(body.indexOf('FROM "PostJob" WHERE'));
+    expect(source).toMatch(/Lock order: the job's pending result rows, then the job/);
   });
 });
 

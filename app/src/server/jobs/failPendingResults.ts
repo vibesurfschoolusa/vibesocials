@@ -257,27 +257,43 @@ async function markPendingAndRecompute(
 
 /**
  * R27 MM4 review: the 6-hour stale sweep's version of the rule above. The sweep
- * read its candidates earlier; a run that woke up since (claimed a row, or
- * wrote its heartbeat) must keep its rows, or the email would wrongly say "may
- * already be live". So the job's row is locked first and `stillStale` is checked
- * again under that lock, inside the marking transaction; only then are the rows
- * marked and the job recomputed.
+ * read its candidates earlier; a run that woke up since must keep its rows, or
+ * the email would wrongly say "may already be live". So everything is checked
+ * again under locks, inside the marking transaction, before anything is marked:
  *
- * Lock order: job, then its result rows, the reverse of a platform step's
- * finalize (result row, then the job's heartbeat). Both can meet only when a
- * run holds a claim, which `stillStale` refuses (no row claimed since the
- * cutoff), so in practice they don't; if they ever do, Postgres ends one of
- * the two and that write is retried (the sweep's step, or the run's step).
+ * 1. the job's pending result rows are locked, and none may have been claimed,
+ *    or still be waiting out a platform limit, since `cutoff` (a claim does not
+ *    bump the job's heartbeat, so its `claimedAt` is what shows a live run);
+ * 2. then the job's row is locked, and it must still match `job` (its status,
+ *    and a heartbeat older than the cutoff);
+ * 3. then the rows are marked and the job recomputed, as above.
+ *
+ * Lock order: the job's pending result rows, then the job. That is a platform
+ * step's own order (its result write, then the job's heartbeat). Taking the
+ * job first could deadlock with a step, and Postgres would then end one of the
+ * two: if it ended the step's transaction right after the platform accepted
+ * the post, that result would be lost. In this order a step either finishes
+ * before the sweep gets its rows, or waits for the sweep and then finds its row
+ * already marked.
  */
 export async function failPendingResultsIfStillStale(
   postJobId: string,
   failure: PendingResultFailure,
-  stillStale: Prisma.PostJobWhereInput,
+  stillStale: { cutoff: Date; job: Prisma.PostJobWhereInput },
 ): Promise<{ marked: false } | { marked: true; failedCount: number; unconfirmedCount: number; status: PostJobStatus }> {
+  const { cutoff, job } = stillStale;
   return prisma.$transaction(
     async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; claimedAt: Date | null; deferredUntil: Date | null }>>`
+        SELECT "id", "claimedAt", "deferredUntil" FROM "PostJobResult" WHERE "postJobId" = ${postJobId} AND "status" = 'pending' FOR UPDATE`;
+      const live = rows.some(
+        (row) =>
+          (row.claimedAt !== null && row.claimedAt.getTime() >= cutoff.getTime()) ||
+          (row.deferredUntil !== null && row.deferredUntil.getTime() >= cutoff.getTime()),
+      );
+      if (live) return { marked: false as const };
       await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
-      if ((await tx.postJob.count({ where: { id: postJobId, ...stillStale } })) === 0) return { marked: false as const };
+      if ((await tx.postJob.count({ where: { id: postJobId, ...job } })) === 0) return { marked: false as const };
       const marked = await markPendingAndRecompute(tx, postJobId, { postJobId, status: "pending" }, failure);
       return { marked: true as const, ...marked };
     },
