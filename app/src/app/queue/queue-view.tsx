@@ -481,6 +481,10 @@ function QueueCard({
   );
 }
 
+/** R30 publishing L1: the Edit dialog's line after a 409 or 404, so nothing typed is lost. */
+export const EDIT_COPY_YOUR_TEXT = "Copy your text if you want to keep it, then press Cancel.";
+const EDIT_MOVED_ON_FALLBACK = "This post can no longer be edited.";
+
 /**
  * Edit dialog for a scheduled/draft post. Remounted per target (keyed by job
  * id) so its local caption/time state always initializes from the current job.
@@ -575,6 +579,10 @@ function QueueEditDialog({
     isScheduled && job.scheduledFor ? toDateTimeLocalValue(new Date(job.scheduledFor)) : "",
   );
   const [saving, setSaving] = useState(false);
+  // R30 publishing L1: why this post can't be edited any more (the route's 409), or null.
+  const [movedOn, setMovedOn] = useState<string | null>(null);
+  const saveRef = useRef<HTMLButtonElement>(null);
+  const movedOnRef = useRef<HTMLDivElement>(null);
   // Picker `min` (now + buffer). Lazy useState initializer computes it once at
   // mount, keeping impure `Date.now()` off the render path; submit-time
   // validation is the authoritative future-time check.
@@ -642,13 +650,17 @@ function QueueEditDialog({
         const { response } = answer;
         if (!response.ok) {
           const errorData = (await response.json().catch(() => null)) as { error?: string } | null;
-          toast.error(errorData?.error ?? "Couldn't save your changes.");
           setSaving(false);
-          // R30 publishing L1: the card is stale (it started publishing or went out): re-sync and close.
           if (shouldRefetchAfterError(response.status)) {
+            // R30 publishing L1: the post moved on (started publishing, went out). The dialog
+            // stays open with the route's sentence and Save off, so what was typed can be
+            // copied; the list reloads behind it.
+            focusAfterPress(saveRef.current, () => movedOnRef.current);
+            setMovedOn(errorData?.error ?? EDIT_MOVED_ON_FALLBACK);
             onStale();
-            onClose();
+            return;
           }
+          toast.error(errorData?.error ?? "Couldn't save your changes.");
           return;
         }
         const data = await response.json().catch(() => null);
@@ -757,12 +769,17 @@ function QueueEditDialog({
         </div>
         {coverEditNote(job) ? <p className="text-sm text-muted-foreground">{coverEditNote(job)}</p> : null}
         {model.notice ? <p className="text-sm text-muted-foreground">{model.notice}</p> : null}
+        {movedOn ? (
+          <Alert ref={movedOnRef} tabIndex={-1} variant="danger" className="outline-none">
+            {movedOn} {EDIT_COPY_YOUR_TEXT}
+          </Alert>
+        ) : null}
       </DialogBody>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
-        <Button onClick={handleSave} loading={saving} disabled={captionOver}>
+        <Button ref={saveRef} onClick={handleSave} loading={saving} disabled={captionOver || movedOn !== null}>
           {editSaveLabel(job, viewer, scheduledForLocal !== "")}
         </Button>
       </DialogFooter>

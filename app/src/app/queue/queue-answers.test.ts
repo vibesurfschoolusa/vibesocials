@@ -10,6 +10,7 @@ import {
   QUEUE_DELETE_MAYBE_MESSAGE,
   REVIEW_LINK_MAYBE_MADE_MESSAGE,
   REVIEW_LINK_MAYBE_OFF_MESSAGE,
+  EDIT_COPY_YOUR_TEXT,
 } from "./queue-view";
 
 /**
@@ -100,11 +101,19 @@ describe("Queue: a stale card's 409 reloads the list", () => {
     );
   });
 
-  it("Edit: the route's sentence, a silent reload, and the dialog closes", () => {
-    const at = view.indexOf('toast.error(errorData?.error ?? "Couldn\'t save your changes.");');
-    expect(at).toBeGreaterThan(-1);
-    const after = view.slice(at, view.indexOf("return;", at) + 7);
-    expect(after).toMatch(/if \(shouldRefetchAfterError\(response\.status\)\) \{\s+onStale\(\);\s+onClose\(\);\s+\}\s+return;$/);
+  // Lead review: closing the dialog dropped what was typed. It stays open with
+  // the route's sentence, Save is off, and the list reloads behind it.
+  it("Edit: the dialog stays open with the route's sentence, Save off, and the list reloads behind it", () => {
+    const start = view.indexOf("const errorData = (await response.json()");
+    expect(start).toBeGreaterThan(-1);
+    const failed = view.slice(start, view.indexOf("const outcome = editOutcome(data);", start));
+    expect(failed).toMatch(
+      /if \(shouldRefetchAfterError\(response\.status\)\) \{\s+(\/\/[^\n]*\n\s+)*focusAfterPress\(saveRef\.current, \(\) => movedOnRef\.current\);\s+setMovedOn\(errorData\?\.error \?\? EDIT_MOVED_ON_FALLBACK\);\s+onStale\(\);\s+return;\s+\}/,
+    );
+    expect(failed).not.toContain("onClose()");
+    expect(view).toMatch(/<Button ref=\{saveRef\} onClick=\{handleSave\} loading=\{saving\} disabled=\{captionOver \|\| movedOn !== null\}>/);
+    expect(view).toMatch(/\{movedOn \? \(\s+<Alert ref=\{movedOnRef\} tabIndex=\{-1\} variant="danger" className="outline-none">\s+\{movedOn\} \{EDIT_COPY_YOUR_TEXT\}/);
+    expect(EDIT_COPY_YOUR_TEXT).toBe("Copy your text if you want to keep it, then press Cancel.");
   });
 
   it("the calendar drag: the route's sentence and a silent reload", () => {
