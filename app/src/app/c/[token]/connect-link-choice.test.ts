@@ -132,3 +132,18 @@ describe("the account choice's answers (R29)", () => {
     expect(source).not.toContain("Connect again");
   });
 });
+
+// R29 lead review: a POST 404 with `connected` replaces the choice section with
+// the alert; the pressed Connect is gone and focus fell to the Terms link.
+describe("the account choice: focus when it is gone after a press", () => {
+  it("the gone alert can take focus, and the press hands focus to it", async () => {
+    const html = view({ state: { status: "gone", message: "Facebook Page is connected." } });
+    expect(html).toMatch(/<p role="alert" tabindex="-1" class="[^"]*outline-none[^"]*">Facebook Page is connected.<\/p>/);
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./connect-link-choice.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/if \(failure\.gone\) \{\s+focusAfterPress\(pressed, \(\) => goneRef\.current\);\s+setState\(\{ status: "gone", message: failure\.message \}\);/);
+    expect(source).toMatch(/onClick=\{\(event\) => onChoose\(candidate\.id, event\.currentTarget\)\}/);
+    expect(source).toMatch(/<p ref=\{goneRef\} role="alert" tabIndex=\{-1\}/);
+  });
+});

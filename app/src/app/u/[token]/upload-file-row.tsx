@@ -1,12 +1,15 @@
 import { fileKind, formatFileSize, type PickedFile } from "@/lib/clientPage";
 
+import type { ClientFileFailureKind } from "./send-file";
+
 /**
  * One chosen file on the upload page: a thumbnail (photos) or a film icon
- * (videos), the name, the size, and where it is: waiting, a percentage, Sent or
- * Not sent. The preview address is made by the caller (it needs the browser).
+ * (videos), the name, the size, and where it is: waiting, a percentage, Sent,
+ * Not sent, or (R29) May have arrived. The preview address is made by the
+ * caller (it needs the browser).
  */
 
-function statusText(item: PickedFile): string {
+function statusText(item: PickedFile, maybe: boolean): string {
   switch (item.status) {
     case "waiting":
       return "Waiting";
@@ -15,7 +18,7 @@ function statusText(item: PickedFile): string {
     case "sent":
       return "Sent";
     case "failed":
-      return "Not sent";
+      return maybe ? "May have arrived" : "Not sent";
   }
 }
 
@@ -52,14 +55,24 @@ export function UploadFileRow({
   item,
   previewUrl,
   onRemove,
+  failureKind,
 }: {
   item: PickedFile;
   previewUrl: string | null;
   /** Given only before sending: the file can still be taken off the list. */
   onRemove?: () => void;
+  /**
+   * Why a failed file failed (send-file.ts). R29 lead review: a "maybe" file
+   * is not marked as not sent; a failure with no kind is read as maybe, as
+   * the form reads one it can't place.
+   */
+  failureKind?: ClientFileFailureKind;
 }) {
   const kind = fileKind(item.file);
   const progress = item.status === "failed" ? 100 : item.progress;
+  const failed = item.status === "failed";
+  const maybe = failed && (failureKind ?? "maybe") === "maybe";
+  const notSent = failed && !maybe;
   return (
     <li className="space-y-2 rounded-[var(--radius)] border border-border bg-card p-3">
       <div className="flex items-center gap-3">
@@ -76,7 +89,7 @@ export function UploadFileRow({
             {item.file.name}
           </p>
           <p className="text-xs text-muted-foreground">
-            {formatFileSize(item.file.size)} · <span className={item.status === "failed" ? "text-destructive" : undefined}>{statusText(item)}</span>
+            {formatFileSize(item.file.size)} · <span className={notSent ? "text-destructive" : maybe ? "text-foreground" : undefined}>{statusText(item, maybe)}</span>
           </p>
         </div>
         {onRemove ? (
@@ -100,14 +113,16 @@ export function UploadFileRow({
       >
         <div
           className={
-            item.status === "failed"
+            notSent
               ? "h-full rounded-full bg-destructive"
-              : "h-full rounded-full bg-primary transition-all duration-200"
+              : maybe
+                ? "h-full rounded-full bg-muted-foreground"
+                : "h-full rounded-full bg-primary transition-all duration-200"
           }
           style={{ width: `${progress}%` }}
         />
       </div>
-      {item.error ? <p className="text-sm text-destructive">{item.error}</p> : null}
+      {item.error ? <p className={maybe ? "text-sm text-foreground" : "text-sm text-destructive"}>{item.error}</p> : null}
     </li>
   );
 }

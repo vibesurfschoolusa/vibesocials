@@ -49,3 +49,20 @@ describe("Help: when something goes wrong", () => {
     expect(section).toContain("To use the other account instead, use Switch account.");
   });
 });
+
+// R29 lead review: "click Connect again" was wrong when the platform is
+// already connected and its card shows Reconnect.
+describe("Help: the retry step names both buttons", () => {
+  it("LinkedIn's and Pinterest's lines say Connect, or Reconnect when connected", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8").replace(/\s+/g, " ");
+    expect(source).toContain(
+      "Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect (or Reconnect, if the platform is already connected).",
+    );
+    expect(source).toContain(
+      "Create a board on Pinterest (not a secret one), then click Connect (or Reconnect, if the platform is already connected).",
+    );
+    expect(source).not.toContain("click Connect again");
+  });
+});

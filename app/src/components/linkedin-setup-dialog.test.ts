@@ -42,3 +42,15 @@ describe("LinkedInSetupDialog: first render is the same on the server and in the
     expect(firstRender("linkedin_setup=true", true)).toBe("");
   });
 });
+
+// R29 lead review: after a LinkedIn Reconnect the card shows Reconnect, not
+// Connect, so the step names no button the card may not show.
+describe("LinkedInSetupDialog: the wrong-account step", () => {
+  it("says to try again from the LinkedIn card, naming no button", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./linkedin-setup-dialog.tsx", import.meta.url)), "utf8");
+    expect(source).toContain(", then close this and try again from the LinkedIn card.");
+    expect(source).not.toContain("click Connect again");
+  });
+});

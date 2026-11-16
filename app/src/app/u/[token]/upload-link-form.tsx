@@ -21,7 +21,15 @@ import { UploadFileRow } from "./upload-file-row";
  */
 
 /** Makes and frees the preview address of a photo; the row shows an icon until it exists. */
-function FileRow({ item, onRemove }: { item: PickedFile; onRemove?: () => void }) {
+function FileRow({
+  item,
+  onRemove,
+  failureKind,
+}: {
+  item: PickedFile;
+  onRemove?: () => void;
+  failureKind?: ClientFileFailureKind;
+}) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const isPhoto = fileKind(item.file) === "photo";
   useEffect(() => {
@@ -31,7 +39,7 @@ function FileRow({ item, onRemove }: { item: PickedFile; onRemove?: () => void }
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [item.file, isPhoto]);
-  return <UploadFileRow item={item} previewUrl={previewUrl} onRemove={onRemove} />;
+  return <UploadFileRow item={item} previewUrl={previewUrl} onRemove={onRemove} failureKind={failureKind} />;
 }
 
 /**
@@ -384,6 +392,7 @@ export function UploadLinkForm({ token }: { token: string }) {
               key={item.key}
               item={item}
               onRemove={phase === "picking" ? () => removeFile(item.key) : undefined}
+              failureKind={failureKinds[item.key]}
             />
           ))}
         </ul>

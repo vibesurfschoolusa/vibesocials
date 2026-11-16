@@ -101,7 +101,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
           <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="font-medium underline underline-offset-2">
             Sign out of LinkedIn
           </ExternalLink>
-          , then close this and click Connect again.
+          , then close this and try again from the LinkedIn card.
         </Alert>
 
         <div className="flex flex-col gap-1.5">

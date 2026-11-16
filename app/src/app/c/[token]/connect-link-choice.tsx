@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { connectedSuccessQuery } from "@/lib/differentAccount";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { answerLostText } from "@/lib/answerLost";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
+import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
@@ -55,6 +56,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
   const [state, setState] = useState<ConnectLinkChoiceState>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const goneRef = useRef<HTMLParagraphElement>(null);
   const base = `/api/connect-link/${encodeURIComponent(token)}/pending/${encodeURIComponent(pendingId)}`;
   const page = `/c/${encodeURIComponent(token)}`;
 
@@ -77,7 +79,8 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     };
   }, [base, pendingId]);
 
-  async function choose(candidateId: string) {
+  /** `pressed`: the account's Connect, which a gone answer removes with the whole section. */
+  async function choose(candidateId: string, pressed: HTMLElement | null) {
     if (busy !== null) return;
     setBusy(candidateId);
     setError(null);
@@ -96,8 +99,10 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
         return;
       }
       const failure = chooseFailure(response.status, data);
-      if (failure.gone) setState({ status: "gone", message: failure.message });
-      else setError(failure.message);
+      if (failure.gone) {
+        focusAfterPress(pressed, () => goneRef.current);
+        setState({ status: "gone", message: failure.message });
+      } else setError(failure.message);
     } catch (caught) {
       setError(isNoAnswer(caught) ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE);
     }
@@ -115,7 +120,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
   }
 
   return (
-    <ConnectLinkChoiceView state={state} busy={busy} error={error} onChoose={choose} onCancel={cancel} />
+    <ConnectLinkChoiceView state={state} busy={busy} error={error} onChoose={choose} onCancel={cancel} goneRef={goneRef} />
   );
 }
 
@@ -124,15 +129,17 @@ export interface ConnectLinkChoiceViewProps {
   /** The account being connected, "cancel", or null. */
   busy: string | null;
   error: string | null;
-  onChoose: (candidateId: string) => void;
+  onChoose: (candidateId: string, pressed: HTMLElement | null) => void;
   onCancel: (platform: string) => void;
+  /** The gone sentence, which takes focus when a press removed the section (R29 lead review). */
+  goneRef?: React.Ref<HTMLParagraphElement>;
 }
 
 /**
  * The choice as it renders. R5-pages L9: what a press or the load answers comes
  * later, so it is announced (role="alert"), as is the loading line (status).
  */
-export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel }: ConnectLinkChoiceViewProps) {
+export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, goneRef }: ConnectLinkChoiceViewProps) {
   if (state.status === "loading") {
     return (
       <p role="status" className="text-sm text-muted-foreground">
@@ -142,7 +149,7 @@ export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel }
   }
   if (state.status === "gone") {
     return (
-      <p role="alert" className="text-sm">
+      <p ref={goneRef} role="alert" tabIndex={-1} className="text-sm outline-none">
         {state.message}
       </p>
     );
@@ -165,7 +172,7 @@ export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel }
               size="sm"
               loading={busy === candidate.id}
               aria-disabled={busy !== null || undefined}
-              onClick={() => onChoose(candidate.id)}
+              onClick={(event) => onChoose(candidate.id, event.currentTarget)}
             >
               Connect
             </Button>

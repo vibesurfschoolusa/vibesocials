@@ -115,14 +115,15 @@ export default function HelpPage() {
                 The LinkedIn account is not a Super admin of any company page.
               </span>{" "}
               Sign in to LinkedIn with an account that is a Super admin of your page, then click
-              Connect again.
+              Connect (or Reconnect, if the platform is already connected).
             </li>
             {advertised.includes("pinterest") ? (
               <li>
                 <span className="text-foreground">
                   The Pinterest account has no board we can post to.
                 </span>{" "}
-                Create a board on Pinterest (not a secret one), then click Connect again.
+                Create a board on Pinterest (not a secret one), then click Connect (or Reconnect, if the platform is
+                already connected).
               </li>
             ) : null}
           </ul>
