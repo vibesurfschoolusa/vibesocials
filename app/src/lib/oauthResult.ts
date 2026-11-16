@@ -89,6 +89,15 @@ function describeCode(params: {
     }
     // R27 platform-clients L3: the upload permission was unticked on Google's
     // screen (app/api/auth/youtube/callback/route.ts); nothing was saved.
+    // R27 lead review: the in-place sign-in came back without the Business
+    // Profile permission (server/connections/saveConnection.ts); nothing changed.
+    if (error === "google_business_profile_permission_missing") {
+      return {
+        variant: "danger",
+        message:
+          "Google didn't give Vibe Socials access to your Business Profile, so nothing changed. Sign in to Google again from the Google Business Profile card and, on Google's screen, allow access to your Business Profile.",
+      };
+    }
     if (error === "youtube_upload_not_allowed") {
       return {
         variant: "danger",

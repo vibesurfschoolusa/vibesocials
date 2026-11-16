@@ -300,6 +300,18 @@ describe("describeOAuthResult — YouTube without the upload permission", () => 
   });
 });
 
+// R27 lead review: the in-place sign-in came back without the Business Profile permission.
+describe("describeOAuthResult — Business Profile sign-in without the permission", () => {
+  it("says nothing changed and to allow access on Google's screen", () => {
+    expect(describeOAuthResult({ error: "google_business_profile_permission_missing", success: null })).toEqual({
+      variant: "danger",
+      platform: "google_business_profile",
+      message:
+        "Google didn't give Vibe Socials access to your Business Profile, so nothing changed. Sign in to Google again from the Google Business Profile card and, on Google's screen, allow access to your Business Profile.",
+    });
+  });
+});
+
 describe("describeOAuthResult — Pinterest", () => {
   it("an account with no board we can post to is told to create one", () => {
     expect(describeOAuthResult({ error: "pinterest_no_boards", success: null })).toMatchObject({

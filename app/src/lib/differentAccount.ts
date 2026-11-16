@@ -18,6 +18,8 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 
 const SUFFIX = "_different_account";
 const CHECK_FAILED_SUFFIX = "_account_check_failed";
+/** R27 lead review: worded by describeOAuthResult (Settings) and describeConnectLinkResult (/c). */
+const PERMISSION_MISSING_SUFFIX = "_permission_missing";
 
 export function differentAccountCode(platform: Platform): string {
   return `${platform}${SUFFIX}`;
@@ -168,11 +170,15 @@ export function accountCheckFailedMessage(locationTitle: string): string {
 }
 
 /** A save the shared save refused (server/connections/saveConnection.ts). */
-export type SaveRefusal = { reason: "different_account" } | { reason: "check_failed" };
+export type SaveRefusal = { reason: "different_account" } | { reason: "check_failed" } | { reason: "permission_missing" };
 
 /** Where a callback sends the owner when the save was refused (a link flow turns it into /c). */
 export function refusedSaveSettingsUrl(base: string | URL, platform: Platform, refusal: SaveRefusal): URL {
   const url = new URL("/settings", base);
+  if (refusal.reason === "permission_missing") {
+    url.searchParams.set("error", `${platform}${PERMISSION_MISSING_SUFFIX}`);
+    return url;
+  }
   if (refusal.reason === "check_failed") {
     url.searchParams.set("error", `${platform}${CHECK_FAILED_SUFFIX}`);
     return url;

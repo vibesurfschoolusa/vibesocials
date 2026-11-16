@@ -400,6 +400,27 @@ describe("saveSocialConnection: Google Business Profile", () => {
     },
   );
 
+  // R27 lead review: a missing permission is fixed on Google's screen, never by a retry.
+  it("a 403 for a missing permission on the location: its own outcome; the location and the old token kept", async () => {
+    h.findUnique.mockResolvedValue(withLocation);
+    h.fetch.mockResolvedValue(
+      answer(403, { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } }),
+    );
+
+    await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "permission_missing", connectedName: "Surf Co Dania" });
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("a 403 for a missing permission while a store code is looked up: the same outcome", async () => {
+    h.findUnique.mockResolvedValue(withStoreCode);
+    h.fetch.mockResolvedValue(
+      answer(403, { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } }),
+    );
+
+    await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "permission_missing", connectedName: "Surf Co Dania" });
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
   it("an access 403 with Google's reason on the location: cleared for the chooser", async () => {
     h.findUnique.mockResolvedValue(withLocation);
     h.fetch.mockResolvedValue(answer(403, { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "PERMISSION_DENIED" }] } }));

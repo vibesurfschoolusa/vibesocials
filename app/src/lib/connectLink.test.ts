@@ -127,6 +127,14 @@ describe("the sentence the visitor reads after a flow", () => {
     });
   });
 
+  it("Business Profile signed in without the permission: what to allow, in the visitor's words", () => {
+    expect(describe_({ error: "google_business_profile_permission_missing" })).toEqual({
+      variant: "danger",
+      message:
+        "Google didn't give Vibe Socials access to the Business Profile, so nothing changed. Press Reconnect and, on Google's screen, allow access to the Business Profile.",
+    });
+  });
+
   it("a place already taken", () => {
     expect(describe_({ error: "facebook_page_already_connected" })?.message).toBe(
       "Facebook Page is already connected. Ask the person who sent you this link if it should be changed.",
@@ -140,6 +148,7 @@ describe("the sentence the visitor reads after a flow", () => {
       linkedin_no_admin_pages: /Super admin/,
       pinterest_no_boards: /board/,
       youtube_upload_not_allowed: /Manage your YouTube videos/,
+      google_business_profile_permission_missing: /allow access/,
     };
     for (const [error, pattern] of Object.entries(causes)) {
       const message = describe_({ error })?.message ?? "";

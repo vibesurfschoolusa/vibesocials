@@ -5,10 +5,9 @@ import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
+import { YOUTUBE_UPLOAD_SCOPE } from "@/lib/oauthScopes";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { withConnectLink } from "@/server/connectLink/callback";
-
-const YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
 
 interface GoogleTokenResponse {
   access_token: string;

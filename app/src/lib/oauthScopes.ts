@@ -43,8 +43,11 @@ export const INSTAGRAM_SCOPES = [
  * youtube.readonly (channels.list mine=true at connect, videos.list statistics).
  * Not youtube.force-ssl: the app never edits, deletes or comments.
  */
+/** The upload permission ("Manage your YouTube videos"); the callback refuses a sign-in without it. */
+export const YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+
 export const YOUTUBE_SCOPES = [
-  "https://www.googleapis.com/auth/youtube.upload",
+  YOUTUBE_UPLOAD_SCOPE,
   "https://www.googleapis.com/auth/youtube.readonly",
 ] as const;
 

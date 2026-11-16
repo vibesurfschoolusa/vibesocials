@@ -10,7 +10,7 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
-import { googleFailureKind } from "@/server/googleFailure";
+import { googleFailureKind, isGoogleScopeRefusal } from "@/server/googleFailure";
 import { exactStoreCodeMatches, readGbpLocations, storeCodeFilter } from "@/server/platforms/gbpLocation";
 import { readGoogleErrorReasons } from "@/server/platforms/rateLimited";
 
@@ -83,7 +83,13 @@ export type SaveConnectionResult =
   /** A connection with another account is there; nothing was written. */
   | { ok: false; reason: "different_account"; connectedName: string; signedInName: string }
   /** Google Business Profile: the chosen location couldn't be checked with the new sign-in; nothing was written. */
-  | { ok: false; reason: "check_failed"; connectedName: string };
+  | { ok: false; reason: "check_failed"; connectedName: string }
+  /**
+   * Google Business Profile: the new sign-in lacks the Business Profile
+   * permission (a 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT); a retry can't help,
+   * allowing it on Google's screen does. Nothing was written.
+   */
+  | { ok: false; reason: "permission_missing"; connectedName: string };
 
 type StoredConnection = {
   id: string;
@@ -104,7 +110,13 @@ function locationIdOf(resourceName: string): string | null {
 }
 
 /** What the new sign-in can do with the Business Profile location the connection posts to. */
-type GbpLocationCheck = "kept" | "unavailable" | "check_failed";
+type GbpLocationCheck = "kept" | "unavailable" | "check_failed" | "permission_missing";
+
+/** Google's normalized 403 reasons on a listing failure (gbpLocation.ts), or none. */
+function reasonsOf(failure: unknown): string[] {
+  const reasons = (failure as { googleReasons?: unknown } | null)?.googleReasons;
+  return Array.isArray(reasons) ? reasons.filter((reason): reason is string => typeof reason === "string") : [];
+}
 
 async function gbpGet(url: string | URL, accessToken: string): Promise<Response> {
   return fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
@@ -128,7 +140,7 @@ async function checkGbpStoreCode(storeCode: string, accessToken: string): Promis
     used: () => null,
     locationsFilter: storeCodeFilter(storeCode),
   });
-  if (!listing.ok) return "check_failed";
+  if (!listing.ok) return isGoogleScopeRefusal(reasonsOf(listing.failure)) ? "permission_missing" : "check_failed";
   const matches = exactStoreCodeMatches(listing.locations, storeCode).length;
   if (matches === 1) return "kept";
   if (matches > 1) return "unavailable";
@@ -141,6 +153,7 @@ async function checkGbpStoreCode(storeCode: string, accessToken: string): Promis
  * NEW token (one Business Information call, readMask=name). 200: kept; an
  * access 403 or a 404 (another account, or the location deleted on Google):
  * unavailable, and the location is cleared so the chooser asks again;
+ * a 403 for a missing permission: permission_missing, nothing written;
  * anything else (a 403 for our own setup or quota, 429, 5xx, network): it
  * couldn't be told, and nothing is written. No location chosen yet: nothing
  * to check.
@@ -164,6 +177,8 @@ async function checkGbpLocation(existing: StoredConnection, accessToken: unknown
     if (response.status === 403) {
       const googleReasons = await readGoogleErrorReasons(response);
       if (googleFailureKind({ status: 403, googleReasons }) === "access") return "unavailable";
+      // R27 lead review: a missing permission is fixed on Google's screen, not by a retry.
+      if (isGoogleScopeRefusal(googleReasons)) return "permission_missing";
       logger.warn("[GBP] Couldn't check the location with the new sign-in", { connectionId: existing.id, status: 403, reasons: googleReasons });
       return "check_failed";
     }
@@ -253,7 +268,7 @@ export async function saveSocialConnection({
       // R6 third review: never refused as another account. The new token is
       // saved in place; a location it can't use is cleared for the chooser.
       const location = await checkGbpLocation(existing, create.accessToken);
-      if (location === "check_failed") return { ok: false, reason: "check_failed", connectedName };
+      if (location === "check_failed" || location === "permission_missing") return { ok: false, reason: location, connectedName };
       if (location === "unavailable") {
         const metadata = (existing.metadata ?? {}) as Record<string, unknown>;
         locationCleared = typeof metadata.locationTitle === "string" ? metadata.locationTitle : "";

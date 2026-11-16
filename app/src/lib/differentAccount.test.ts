@@ -138,6 +138,9 @@ describe("a reconnect that couldn't be checked", () => {
     expect(different.toString()).toBe("https://app.example.com/settings?error=linkedin_different_account");
     const unchecked = refusedSaveSettingsUrl("https://app.example.com", "google_business_profile", { reason: "check_failed" });
     expect(unchecked.toString()).toBe("https://app.example.com/settings?error=google_business_profile_account_check_failed");
+    // R27 lead review: a missing permission has its own code (worded in oauthResult.ts and connectLink.ts).
+    const permission = refusedSaveSettingsUrl("https://app.example.com", "google_business_profile", { reason: "permission_missing" });
+    expect(permission.toString()).toBe("https://app.example.com/settings?error=google_business_profile_permission_missing");
   });
 });
 
