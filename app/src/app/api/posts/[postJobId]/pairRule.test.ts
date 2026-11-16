@@ -8,10 +8,12 @@ const {
   failPendingMock,
   withdrawSendMock,
   resultFindFirstMock,
+  resultCountMock,
   reserveMock,
   canSendMock,
 } =
   vi.hoisted(() => ({
+    resultCountMock: vi.fn(),
     reserveMock: vi.fn(),
     canSendMock: vi.fn(),
     findFirstMock: vi.fn(),
@@ -28,7 +30,7 @@ const TX = { tx: true };
 vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock },
-    postJobResult: { findFirst: resultFindFirstMock },
+    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock },
     $transaction: transactionMock,
   },
 }));
@@ -421,6 +423,90 @@ describe("releaseReservation", () => {
   });
 });
 
+// R28 publishing L2: a start that fails inside prepare can leave a post with no
+// results at all. Its card then offers Send again, not Retry, so the answer
+// names the posts left that way and the sentences say "press Send again".
+describe("dispatchNow - posts left without results", () => {
+  const ok = (id: string) => ({
+    ok: true,
+    event: { postJobId: id, userId: "u", workspaceId: "ws", mediaItemId: null, baseCaption: "c", perPlatformOverrides: null },
+  });
+
+  beforeEach(() => {
+    prepareMock.mockReset();
+    sendMock.mockReset();
+    sendMock.mockResolvedValue({ ids: [] });
+    failPendingMock.mockReset();
+    failPendingMock.mockResolvedValue({ failedCount: 0, unconfirmedCount: 0, status: "failed" });
+    withdrawSendMock.mockReset();
+    withdrawSendMock.mockResolvedValue(undefined);
+    resultCountMock.mockReset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("prepare throws before writing any result: the post is reported as left without results", async () => {
+    prepareMock.mockRejectedValue(new Error("pool timeout"));
+    resultCountMock.mockResolvedValue(0);
+
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+
+    expect(result.sendFailed).toBe(true);
+    expect([...result.withoutResults]).toEqual(["feed-1"]);
+    expect(resultCountMock).toHaveBeenCalledWith({ where: { postJobId: "feed-1" } });
+  });
+
+  it("a pair where only the first half got its results: only the other half is reported", async () => {
+    prepareMock.mockImplementation(async (id: string) => {
+      if (id === "story-1") throw new Error("pool timeout");
+      return ok(id);
+    });
+    resultCountMock.mockImplementation(async ({ where }: { where: { postJobId: string } }) => (where.postJobId === "feed-1" ? 2 : 0));
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+
+    expect([...result.withoutResults]).toEqual(["story-1"]);
+  });
+
+  it("the count can't be read: nothing is reported, and the answer is still the 503", async () => {
+    prepareMock.mockRejectedValue(new Error("pool timeout"));
+    resultCountMock.mockRejectedValue(new Error("db down"));
+
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+
+    expect(result.sendFailed).toBe(true);
+    expect(result.withoutResults.size).toBe(0);
+  });
+
+  it("the marking fails too: a post with no results is still reported", async () => {
+    prepareMock.mockRejectedValue(new Error("pool timeout"));
+    failPendingMock.mockRejectedValue(new Error("db blip"));
+    resultCountMock.mockResolvedValue(0);
+
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+
+    expect(result.resultsMarked).toBe(false);
+    expect([...result.withoutResults]).toEqual(["feed-1"]);
+  });
+
+  it("the hand-over fails after prepare: every post has its results, so none is reported and none is counted", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    sendMock.mockRejectedValue(new Error("inngest down"));
+
+    const result = await dispatchNow(["feed-1", "story-1"], { route: "test" });
+
+    expect(result.sendFailed).toBe(true);
+    expect(result.withoutResults.size).toBe(0);
+    expect(resultCountMock).not.toHaveBeenCalled();
+  });
+
+  it("a hand-over that succeeds reports none", async () => {
+    prepareMock.mockImplementation(async (id: string) => ok(id));
+    const result = await dispatchNow(["feed-1"], { route: "test" });
+    expect(result.withoutResults.size).toBe(0);
+    expect(resultCountMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("dispatchNow - with the route's reservation", () => {
   const DAY = new Date("2026-11-14T15:00:00Z");
   const reserved = { postJobIds: ["feed-1", "story-1"], day: DAY };
@@ -496,6 +582,7 @@ describe("partialSendMessage and notSentNote - worded for the viewer's role", ()
     limitRefusals: new Map(),
     sendFailed: false,
     resultsMarked: true,
+    withoutResults: new Set<string>(),
   });
   const reconnect = new Map([["story-1", { errorMessage: "Reconnect Facebook Page in Settings, then retry.", platform: "facebook_page" as const }]]);
 

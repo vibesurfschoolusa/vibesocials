@@ -52,32 +52,43 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
  * stuck-job reconciler fails it: it takes jobs untouched for 2 hours, on a scan
  * every 10 minutes, later when a batch is waiting. Retry is offered from then on.
  */
-function dispatchUnmarkedText(button: DispatchFailedButton): string {
+function dispatchUnmarkedText(button: DispatchFailedButton, withoutResults: boolean): string {
   // R27 publishing-flow L1: Send again is pressed on the Activity card itself,
   // and that card has no Send again while the post shows as publishing.
   if (button === "Send again") {
-    return "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.";
+    return `Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then ${withoutResults ? "press Send again" : "retry it there"}.`;
   }
   const done = button === "Approve" ? "approved" : "saved";
-  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
+  const then = withoutResults ? "press Send again on its card" : "retry it there";
+  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then ${then}. Don't press ${button} again.`;
 }
 
-export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post");
+export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post", false);
 
 /** The button a second press of which would only make things worse. */
 export type DispatchFailedButton = "Post" | "Publish" | "Approve" | "Send again";
 
 /**
  * R26 LL3: the one rule for a `DISPATCH_FAILED` 503 (Create, and the Queue's
- * Publish now and Approve): retry from Activity, or, when the results could
- * not be marked, the "about two hours" sentence naming the pressed button.
+ * Publish now and Approve): retry from Activity (press Send again for a post
+ * left without results), or, when the results could not be marked, the
+ * "about two hours" sentence naming the pressed button.
  * Activity's Send again (R27 publishing-flow L1) is worded for its card: once
  * the list is read again the card shows the failed platforms' Retry buttons.
  */
 export function dispatchFailedText(body: unknown, button: DispatchFailedButton = "Post"): string {
-  if (field(body, "resultsMarked") === false) return dispatchUnmarkedText(button);
-  if (button === "Send again") return "Publishing couldn't start, so the post now shows as failed. Retry it on its card.";
+  // R28 publishing L2: `withoutResults` (dispatchNow) when the start failed
+  // before the post had any results: its card offers Send again, not Retry.
+  const withoutResults = field(body, "withoutResults") === true;
+  if (field(body, "resultsMarked") === false) return dispatchUnmarkedText(button, withoutResults);
+  if (button === "Send again") {
+    return withoutResults
+      ? "Publishing couldn't start, so nothing was sent. Press Send again to try once more."
+      : "Publishing couldn't start, so the post now shows as failed. Retry it on its card.";
+  }
   // R26 LL3 follow-up: an approval is what stood, so Approve says so.
+  const lead = button === "Approve" ? "Approved" : "Saved";
+  if (withoutResults) return `${lead}, but publishing couldn't start — press Send again on its card in Activity.`;
   return button === "Approve" ? "Approved, but publishing couldn't start — retry it from Activity." : COMPOSER_DISPATCH_FAILED_MESSAGE;
 }
 

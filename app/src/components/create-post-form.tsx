@@ -17,6 +17,7 @@ import {
   PhotoDescriptionField,
   photoSetReady,
   preparePhotos,
+  PreparingPhotosStatus,
   removeAllClearsCaption,
   requestPhotoDescription,
   uploadPhotosInOrder,
@@ -633,13 +634,23 @@ export function fileSubmitBlock(state: {
   return null;
 }
 
+/**
+ * R28 new-customer addendum L10: a platform's own caption makes the page a
+ * text post (composerPageState), but the post is sent with its main caption
+ * and the route refuses one without it, so the step is to write the Caption.
+ */
+export const TEXT_POST_MAIN_CAPTION_MESSAGE =
+  "Write your text in the Caption box too. A post without a photo needs it, even when a platform has its own caption.";
+
 /** Why a text post cannot be sent yet, or null. The file checks do not apply to it. */
 export function noFileSubmitError(state: {
   caption: string;
+  /** Some platform's own caption has text. */
+  ownCaptionWritten?: boolean;
   selectedCount: number;
   allDisabled: boolean;
 }): string | null {
-  if (!state.caption.trim()) return TEXT_POST_EMPTY_MESSAGE;
+  if (!state.caption.trim()) return state.ownCaptionWritten ? TEXT_POST_MAIN_CAPTION_MESSAGE : TEXT_POST_EMPTY_MESSAGE;
   if (state.selectedCount === 0) {
     return state.allDisabled
       ? "None of your connected platforms can publish a post without a photo or video. Add a photo or video."
@@ -2046,6 +2057,7 @@ function CreatePostFormInner({
     if (noFile) {
       const textError = noFileSubmitError({
         caption: uploadCaption,
+        ownCaptionWritten: Object.values(platformOverrides ?? {}).some((text) => (text ?? "").trim() !== ""),
         selectedCount: selectedPlatforms.length,
         allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
       });
@@ -2193,7 +2205,7 @@ function CreatePostFormInner({
   if (composerGate === "loading") {
     // Same placeholder the Suspense boundary below shows, so first paint and
     // connections-loading are visually indistinguishable.
-    return <CreatePostFormSkeleton />;
+    return <CreatePostFormSkeleton status="Loading your connections…" />;
   }
 
   // The connections request failed (2026-11-01 audit). The form can't help
@@ -2458,6 +2470,7 @@ function CreatePostFormInner({
                   onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
                 />
               )}
+              <PreparingPhotosStatus photos={photoSet} />
 
               {photoSet.length === 0 && uploadFile && previewUrl && (
                 <div className="mt-2 space-y-2">
@@ -2981,13 +2994,18 @@ function RepeatControls(props: {
  * requires — resolves near-instantly since this route is already dynamic
  * (the page reads the session via `getCurrentUser`), so this is rarely, if
  * ever, actually seen. */
-function CreatePostFormSkeleton() {
+export function CreatePostFormSkeleton({ status = "Loading…" }: { status?: string }) {
+  // R28 pages addendum L8: what is loading, for a screen reader (as
+  // ReviewsLoadingList); the textless skeletons are hidden from it.
   return (
-    <Card className="space-y-5 p-6">
-      <Skeleton className="h-5 w-40" />
-      <Skeleton className="h-24 w-full" />
-      <Skeleton className="h-20 w-full" />
-      <Skeleton className="h-10 w-32" />
+    <Card className="p-6">
+      <p role="status" className="sr-only">{status}</p>
+      <div className="space-y-5" aria-hidden>
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-10 w-32" />
+      </div>
     </Card>
   );
 }

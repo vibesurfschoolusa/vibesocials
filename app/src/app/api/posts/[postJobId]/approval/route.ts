@@ -60,6 +60,9 @@ const CHANGED_SINCE_REVIEW_BODY = {
 const NOT_SENT_NOTHING_CONNECTED =
   "none of this post's platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.";
 const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and retry it there.";
+/** R28 publishing L2: the failed start left the post with no results, so Activity offers Send again on it. */
+const NOT_SENT_SEND_FAILED_NO_RESULTS =
+  "publishing couldn't start. Open the post in Activity and press Send again on it.";
 
 /** What happened to the submitter's decision email (R23-client-journey L4). */
 type AuthorEmail = "sent" | "removed" | "failed";
@@ -340,7 +343,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // R23-client-journey L4: it says what happened to the email, so the Queue
   // claims "the author has been notified" only when Resend accepted it. The
   // send is awaited before the answer already, so this costs no extra time.
-  const tellSubmitter = async (notSent?: string, startUnconfirmed = false): Promise<AuthorEmail> => {
+  const tellSubmitter = async (notSent?: string, startUnconfirmed = false, withoutResults = false): Promise<AuthorEmail> => {
     try {
       // R7-client-journey L1: only a submitter who is still a member hears about
       // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
@@ -369,7 +372,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           appBaseUrl: process.env.NEXTAUTH_URL || null,
           ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
           ...(notSent ? { notSent } : {}),
-          ...(startUnconfirmed ? { startUnconfirmed: true } : {}),
+          ...(startUnconfirmed ? { startUnconfirmed: true, ...(withoutResults ? { withoutResults: true } : {}) } : {}),
         });
         const sent = await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
         return sent ? "sent" : "failed";
@@ -412,7 +415,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     if (dispatch.sendFailed) {
       // R26 LL3 follow-up: as the toast, a post that couldn't be marked
       // failed shows as publishing for a while, so no "send it again" yet.
-      await (dispatch.resultsMarked ? tellSubmitter(NOT_SENT_SEND_FAILED) : tellSubmitter(undefined, true));
+      // R28 publishing L2: a post left without results offers Send again, not Retry.
+      const withoutResults = dispatch.withoutResults.has(postJobId);
+      await (dispatch.resultsMarked
+        ? tellSubmitter(withoutResults ? NOT_SENT_SEND_FAILED_NO_RESULTS : NOT_SENT_SEND_FAILED)
+        : tellSubmitter(undefined, true, withoutResults));
       return NextResponse.json(
         // R26 LL3: as Create's 503, so the Queue can say where to retry it and
         // whether it shows as publishing first.
@@ -421,6 +428,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           error: DISPATCH_FAILURE.errorMessage,
           postJobId,
           resultsMarked: dispatch.resultsMarked,
+          ...(withoutResults ? { withoutResults: true } : {}),
         },
         { status: 503 },
       );

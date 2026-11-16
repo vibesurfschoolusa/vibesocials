@@ -25,9 +25,11 @@ const {
   memberFindUniqueMock,
   reserveSendNowMock,
   releaseMock,
+  resultCountMock,
 } = vi.hoisted(() => ({
   reserveSendNowMock: vi.fn(),
   releaseMock: vi.fn(),
+  resultCountMock: vi.fn(),
   memberFindUniqueMock: vi.fn(),
   transactionMock: vi.fn(),
   resultFindFirstMock: vi.fn(),
@@ -56,7 +58,7 @@ vi.mock("@/lib/db", () => ({
     // Second review, item 1: a reject ends the post through finishPostJob, which
     // stamps its media (read the post's media, then write lastUsedAt).
     mediaItem: { updateMany: mediaUpdateManyMock },
-    postJobResult: { findFirst: resultFindFirstMock },
+    postJobResult: { findFirst: resultFindFirstMock, count: resultCountMock },
     $transaction: transactionMock,
   },
 }));
@@ -852,6 +854,57 @@ describe("POST /api/posts/[postJobId]/approval — dispatch failure (2026-11-01 
     expect(html).toContain("Approved, but publishing didn&#39;t start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don&#39;t retry it until it shows as failed; then retry it there.");
     expect(html).not.toContain("Open the post in Activity and retry it there.");
     expect(htmlToPlainText(html)).toContain("Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't retry it until it shows as failed; then retry it there.");
+    consoleSpy.mockRestore();
+  });
+});
+
+// R28 publishing L2: the start failed inside prepare, before the post had any
+// results. Activity then offers Send again on it, not Retry, so the answer
+// says so (withoutResults) and the member's email names Send again.
+describe("POST /api/posts/[postJobId]/approval — the start failed before any result", () => {
+  beforeEach(() => {
+    resultCountMock.mockReset();
+    resultCountMock.mockResolvedValue(0);
+  });
+
+  it("503 with withoutResults, and the email says to press Send again", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    prepareDispatchMock.mockRejectedValue(new Error("pool timeout"));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+      postJobId: "job-1",
+      resultsMarked: true,
+      withoutResults: true,
+    });
+    const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
+    expect(text).toContain(
+      "Approved, but nothing was sent: publishing couldn't start. Open the post in Activity and press Send again on it.",
+    );
+    expect(text).not.toMatch(/retry/i);
+    consoleSpy.mockRestore();
+  });
+
+  it("not marked either: the email's two-hours sentence ends with Send again", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    prepareDispatchMock.mockRejectedValue(new Error("pool timeout"));
+    failPendingMock.mockRejectedValue(new Error("db blip"));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toMatchObject({ resultsMarked: false, withoutResults: true });
+    const text = htmlToPlainText(sendEmailMock.mock.calls[0][0].html as string);
+    expect(text).toContain(
+      "before it shows as failed. Once it does, press Send again on it there.",
+    );
+    expect(text).not.toMatch(/retry/i);
     consoleSpy.mockRestore();
   });
 });

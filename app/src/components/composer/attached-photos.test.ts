@@ -6,12 +6,14 @@ import { describe, expect, it, vi } from "vitest";
 import { movePhoto, removePhoto } from "@/lib/postMedia";
 
 import {
+  AddPhotosButton,
   AttachedPhotos,
   patchPhoto,
   PhotoDescriptionField,
   photoSetProgress,
   photoSetReady,
   preparePhotos,
+  PreparingPhotosStatus,
   removeAllClearsCaption,
   removeAllTitle,
   PHOTO_DESCRIPTION_FAILED_MESSAGE,
@@ -325,7 +327,6 @@ describe("AttachedPhotos", () => {
   it("marks photos still being prepared, and shows no upload bar for them", () => {
     const html = render([photo("a", { status: "preparing", blob: null }), photo("b", { status: "preparing", blob: null })]);
     expect(html.match(/>Preparing</g)).toHaveLength(2);
-    expect(html).toContain("Preparing photos");
     expect(html).not.toContain("Uploading photos");
   });
 
@@ -644,5 +645,36 @@ describe("Move photo earlier or later at an end", () => {
   it("each arrow hands focus to its partner", () => {
     expect(source).toMatch(/ref=\{earlierRef\}\s+type="button"\s+className=\{ICON_BUTTON\}\s+onClick=\{\(event\) => \{\s*(\/\/.*\s*)?focusAfterPress\(event\.currentTarget, \(\) => laterRef\.current\);\s*onMove\(-1\);/);
     expect(source).toMatch(/ref=\{laterRef\}\s+type="button"\s+className=\{ICON_BUTTON\}\s+onClick=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => earlierRef\.current\);\s*onMove\(1\);/);
+  });
+});
+
+// R28 new-customer addendum L9: the set and its line appear together, so the
+// line lives in the page around it, on the page before any photo is picked,
+// and only its text changes.
+describe("PreparingPhotosStatus", () => {
+  const html = (photos: AttachedPhoto[]) => renderToStaticMarkup(createElement(PreparingPhotosStatus, { photos }));
+
+  it("is an empty status line with no photos or none preparing, and says so while some are", () => {
+    expect(html([])).toBe('<p class="text-xs text-muted-foreground empty:sr-only" role="status"></p>');
+    expect(html([photo("a")])).toBe('<p class="text-xs text-muted-foreground empty:sr-only" role="status"></p>');
+    expect(html([photo("a"), photo("b", { status: "preparing", blob: null })])).toBe(
+      '<p class="text-xs text-muted-foreground empty:sr-only" role="status">Preparing photos…</p>',
+    );
+  });
+
+  it("Create draws it outside the attached set, so it is there before the first pick", () => {
+    const form = readFileSync(new URL("../create-post-form.tsx", import.meta.url), "utf8");
+    expect(form).toMatch(/\{photoSet\.length > 0 && \(\s*<AttachedPhotos[^]*?\/>\s*\)\}\s*<PreparingPhotosStatus photos=\{photoSet\} \/>/);
+    const own = readFileSync(new URL("./attached-photos.tsx", import.meta.url), "utf8");
+    expect(own).not.toMatch(/\{preparing && \(/);
+  });
+});
+
+// R28 new-customer addendum L8: the file input inside "Add photos" is hidden,
+// so the label shows the ring while it has keyboard focus.
+describe("AddPhotosButton", () => {
+  it("rings the label when its input has keyboard focus", () => {
+    const html = renderToStaticMarkup(createElement(AddPhotosButton, { onPick: () => {} }));
+    expect(html).toMatch(/<label class="[^"]*has-\[:focus-visible\]:ring-2 has-\[:focus-visible\]:ring-ring has-\[:focus-visible\]:ring-offset-2[^"]*"/);
   });
 });

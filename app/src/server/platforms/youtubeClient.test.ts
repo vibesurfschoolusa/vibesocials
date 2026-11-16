@@ -56,7 +56,7 @@ vi.mock("./connectionHealth", async (importOriginal) => ({
 }));
 
 const YOUTUBE_REFUSED =
-  "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then send it again.";
+  "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then retry.";
 const YOUTUBE_NOT_ALLOWED =
   "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.";
 
@@ -256,7 +256,7 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(owner).toBe(YOUTUBE_REFUSED);
     expect(owner).not.toMatch(/connect/i);
     expect(sentenceForRecipient(owner, "youtube", "member")).toBe(
-      "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then send it again.",
+      "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then retry.",
     );
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });

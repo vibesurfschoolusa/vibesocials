@@ -150,8 +150,11 @@ export function buildApprovalRequestedEmail(params: {
 }
 
 /** R26 LL3 follow-up: Activity can show it publishing until the stuck-job reconciler fails it. */
-const START_UNCONFIRMED_TEXT =
-  "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't retry it until it shows as failed; then retry it there.";
+const START_UNCONFIRMED_LEAD =
+  "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed.";
+const START_UNCONFIRMED_TEXT = `${START_UNCONFIRMED_LEAD} Don't retry it until it shows as failed; then retry it there.`;
+/** R28 publishing L2: a post with no results is failed with none, so its card offers Send again. */
+const START_UNCONFIRMED_NO_RESULTS_TEXT = `${START_UNCONFIRMED_LEAD} Once it does, press Send again on it there.`;
 
 /** Sent to the submitting member once an owner approves or rejects. */
 export function buildApprovalDecisionEmail(params: {
@@ -178,6 +181,11 @@ export function buildApprovalDecisionEmail(params: {
    * hours and may still go out. Replaces "publishing now"; `notSent` is unset.
    */
   startUnconfirmed?: boolean;
+  /**
+   * R28 publishing L2: with `startUnconfirmed`, the post has no results yet,
+   * so once it shows as failed its card offers Send again, not Retry.
+   */
+  withoutResults?: boolean;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const storyLine = decidedStoryLine(params.approved, params.alsoAsStory);
@@ -208,7 +216,7 @@ export function buildApprovalDecisionEmail(params: {
   const outcome = params.notSent
     ? `<p>Approved, but nothing was sent: ${escapeHtml(params.notSent)}</p>`
     : params.startUnconfirmed
-    ? `<p>${escapeHtml(START_UNCONFIRMED_TEXT)}</p>`
+    ? `<p>${escapeHtml(params.withoutResults ? START_UNCONFIRMED_NO_RESULTS_TEXT : START_UNCONFIRMED_TEXT)}</p>`
     : params.scheduledFor
     ? `<p>It is approved and <strong>scheduled</strong> for ${escapeHtml(
         emailDateTime(new Date(params.scheduledFor), params.timeZone),

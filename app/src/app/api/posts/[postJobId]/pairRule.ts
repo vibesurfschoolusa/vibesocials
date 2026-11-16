@@ -191,6 +191,13 @@ export type DispatchResult = {
    * the stuck-job reconciler fails it (as the create route's 503 says).
    */
   resultsMarked: boolean;
+  /**
+   * R28 publishing L2: claimed posts the failed start left with no results at
+   * all (prepare threw before it wrote them). Such a post reads "not sent" in
+   * Activity and offers Send again, not Retry, so the answers say to press Send
+   * again. A post whose results couldn't be counted is left out.
+   */
+  withoutResults: Set<string>;
 };
 
 function noPlatformConnected(role: ViewerRole): string {
@@ -267,6 +274,7 @@ export async function dispatchNow(
     limitRefusals: new Map(),
     sendFailed: false,
     resultsMarked: true,
+    withoutResults: new Set(),
   };
   const prepared: string[] = [];
   const events: ReturnType<typeof buildPublishEvent>[] = [];
@@ -286,6 +294,13 @@ export async function dispatchNow(
       }
     }
     for (const written of sendsWritten) await withdrawSend(written);
+    for (const id of postJobIds) {
+      try {
+        if ((await prisma.postJobResult.count({ where: { postJobId: id } })) === 0) result.withoutResults.add(id);
+      } catch (countError) {
+        logger.error(`[${log.route}] Couldn't count a failed post's results`, { error: countError, postJobId: id });
+      }
+    }
     result.sendFailed = true;
     return result;
   };

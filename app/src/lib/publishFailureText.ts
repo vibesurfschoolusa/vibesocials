@@ -54,7 +54,7 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
     ],
     [
       YOUTUBE_UPLOAD_REFUSED_TEXT,
-      "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then send it again.",
+      "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then retry.",
     ],
     [
       YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
@@ -91,9 +91,12 @@ export function googleSetupRefusedMessage(platform: Platform): string {
 /** YouTube, a 403 for the missing upload scope: the row is flagged too, so the card shows Reconnect. */
 export const YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT =
   "YouTube refused the upload, so nothing was posted: the upload permission wasn't granted when YouTube was connected. Reconnect YouTube in Settings and allow uploads, then retry.";
-/** YouTube, any other 403 that is not quota: nothing is flagged, so no control is named. */
+/**
+ * YouTube, any other 403 that is not quota: nothing is flagged, so no Settings
+ * step is named. R28 publishing addendum L5: the row offers "Retry YouTube".
+ */
 export const YOUTUBE_UPLOAD_REFUSED_TEXT =
-  "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then send it again.";
+  "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then retry.";
 
 /** googleBusinessProfileClient's sentence for a connection with no location chosen. */
 const GBP_NO_LOCATION = "Google Business Profile location is not configured. Choose the Business Profile location in Settings, then retry.";
@@ -112,6 +115,11 @@ const SUPERSEDED: ReadonlyMap<string, string> = new Map([
   ["Google Business Profile location is not configured. Set it from the Connections page.", GBP_NO_LOCATION],
   // R20 publishing L2: Meta's 2xx without a container id, in the words used before R20.
   ["Instagram container creation failed (no container id in the answer)", "Instagram didn't answer as expected, so nothing was posted. Try again."],
+  // R28 publishing addendum L5: the failed row has Retry, no "send it again".
+  [
+    "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then send it again.",
+    YOUTUBE_UPLOAD_REFUSED_TEXT,
+  ],
 ]);
 
 /** The clients' "Your <Platform> connection has expired / is no longer valid" sentences. */

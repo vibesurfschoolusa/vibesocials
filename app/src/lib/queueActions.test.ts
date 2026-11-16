@@ -439,6 +439,27 @@ describe("queueFailureText", () => {
     );
   });
 
+  // R28 publishing L2: the post was left with no results, so Activity offers
+  // Send again on its card, never a Retry.
+  it("left without results: press Send again on its card in Activity", () => {
+    const bare = { ...DISPATCH, withoutResults: true };
+    expect(queueFailureText({ ...bare, resultsMarked: true }, "Couldn't publish this post.", "Publish")).toBe(
+      "Saved, but publishing couldn't start — press Send again on its card in Activity.",
+    );
+    expect(queueFailureText({ ...bare, resultsMarked: true }, "Couldn't approve this post.", "Approve")).toBe(
+      "Approved, but publishing couldn't start — press Send again on its card in Activity.",
+    );
+    expect(queueFailureText({ ...bare, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toBe(
+      "The post was approved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then press Send again on its card. Don't press Approve again.",
+    );
+    for (const text of [
+      queueFailureText({ ...bare, resultsMarked: true }, "x", "Publish"),
+      queueFailureText({ ...bare, resultsMarked: false }, "x", "Publish"),
+    ]) {
+      expect(text).not.toMatch(/retry/i);
+    }
+  });
+
   it("any other refusal: the route's sentence, else the fallback", () => {
     expect(queueFailureText({ error: "Refused." }, "Couldn't publish this post.", "Publish")).toBe("Refused.");
     expect(queueFailureText(null, "Couldn't approve this post.", "Approve")).toBe("Couldn't approve this post.");

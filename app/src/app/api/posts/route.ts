@@ -731,6 +731,25 @@ function postTargetingErrorResponse(error: PostTargetingError) {
   );
 }
 
+/**
+ * R28 client-journey L6: a refused workspace (paused, plan ended, address
+ * unconfirmed) is the cookie's, so a tab drawn for another workspace hears
+ * about the switch first: the same 409 as below, before the refusal. Only that
+ * 409; an absent id or an unreadable body leaves the refusal as it was, and
+ * nothing else is read, throttled or written.
+ */
+async function staleTabRefusal(request: Request, workspaceId: string): Promise<NextResponse | null> {
+  if (!(request.headers.get("content-type") || "").includes("application/json")) return null;
+  const body = (await readJsonObject(request)) as CreatePostBody | null;
+  if (!body) return null;
+  return renderedWorkspaceRefusal(body.workspaceId, workspaceId)?.status === 409 ? workspaceChangedResponse() : null;
+}
+
+/** Create's own 409 for a tab drawn for another workspace ("before posting"). */
+function workspaceChangedResponse(): NextResponse {
+  return NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 });
+}
+
 export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
@@ -740,7 +759,7 @@ export async function POST(request: Request) {
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.
   const blocked = accessBlockResponse(context);
-  if (blocked) return blocked;
+  if (blocked) return (await staleTabRefusal(request, context.workspace.id)) ?? blocked;
 
   // Roadmap Phase 2 (spec §1.2): POST /api/posts triggers live
   // multi-platform publishing — the heaviest external action in the app —
@@ -796,9 +815,7 @@ export async function POST(request: Request) {
   // The 409 keeps Create's own sentence ("before posting").
   const workspaceRefusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
   if (workspaceRefusal) {
-    return workspaceRefusal.status === 409
-      ? NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 })
-      : workspaceRefusal;
+    return workspaceRefusal.status === 409 ? workspaceChangedResponse() : workspaceRefusal;
   }
 
   // Posts without a photo (2026-11-10). Only `true` turns it on, so every other

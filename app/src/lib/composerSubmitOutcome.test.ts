@@ -218,6 +218,17 @@ describe("dispatchFailedText for Send again", () => {
     );
   });
 
+  // R28 publishing L2: a start that failed inside prepare left the post with
+  // no results, so its card offers Send again, not Retry.
+  it("left without results: press Send again (marked and not marked)", () => {
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: true, withoutResults: true }, "Send again")).toBe(
+      "Publishing couldn't start, so nothing was sent. Press Send again to try once more.",
+    );
+    expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false, withoutResults: true }, "Send again")).toBe(
+      "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then press Send again.",
+    );
+  });
+
   it("not marked: it can show as publishing for about two hours, then retry it there", () => {
     expect(dispatchFailedText({ code: "DISPATCH_FAILED", resultsMarked: false }, "Send again")).toBe(
       "Publishing didn't start. This card can show the post as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there.",

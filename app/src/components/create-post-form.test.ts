@@ -19,6 +19,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildTextPostBody,
+  CreatePostFormSkeleton,
   NothingConnectedState,
   composerPageState,
   composerPageView,
@@ -194,6 +195,38 @@ describe("noFileSubmitError", () => {
 
   it("is null for a valid text post", () => {
     expect(noFileSubmitError({ caption: "hi", selectedCount: 2, allDisabled: false })).toBeNull();
+  });
+
+  // R28 new-customer addendum L10: a text post is sent with its main caption
+  // (the route refuses one without it), so text written only in a platform's
+  // own caption box gets the step that is true: write the Caption.
+  it("text only in a platform's own caption: asks for the Caption, not for something to post", () => {
+    expect(noFileSubmitError({ caption: " ", ownCaptionWritten: true, selectedCount: 1, allDisabled: false })).toBe(
+      "Write your text in the Caption box too. A post without a photo needs it, even when a platform has its own caption.",
+    );
+    expect(noFileSubmitError({ caption: " ", ownCaptionWritten: false, selectedCount: 1, allDisabled: false })).toBe(
+      "Write something to post, or add a photo or video.",
+    );
+    expect(noFileSubmitError({ caption: "hi", ownCaptionWritten: true, selectedCount: 1, allDisabled: false })).toBeNull();
+  });
+
+  it("the press passes whether a platform's own caption has text", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    expect(raw).toMatch(/noFileSubmitError\(\{\s*caption: uploadCaption,\s*ownCaptionWritten: Object\.values\(platformOverrides \?\? \{\}\)\.some\(/);
+  });
+});
+
+// R28 pages addendum L8: while the connections load, a screen reader hears it.
+describe("CreatePostFormSkeleton", () => {
+  it("says what is loading in a status line and hides the skeletons", () => {
+    const html = renderToStaticMarkup(createElement(CreatePostFormSkeleton, { status: "Loading your connections…" }));
+    expect(html).toMatch(/<p role="status" class="sr-only">Loading your connections…<\/p>/);
+    expect(html).toMatch(/<div[^>]*aria-hidden="true"[^>]*>(?:<div[^>]*><\/div>){4}<\/div>/);
+  });
+
+  it("the connections loading branch names the connections", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    expect(raw).toMatch(/if \(composerGate === "loading"\) \{[^}]*<CreatePostFormSkeleton status="Loading your connections…" \/>/);
   });
 });
 

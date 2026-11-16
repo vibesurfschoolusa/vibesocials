@@ -430,3 +430,28 @@ describe("approved, publishing not confirmed as stopped", () => {
     expect(email.html).not.toMatch(/send it again/i);
   });
 });
+
+// R28 publishing L2: the start failed before the post had any results, so its
+// Activity card offers Send again, not Retry.
+describe("approved, publishing not confirmed as stopped, and the post has no results", () => {
+  const email = buildApprovalDecisionEmail({
+    approved: true,
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    timeZone: null,
+    caption: "x",
+    scheduledFor: null,
+    appBaseUrl: "https://vibesocials.wtf",
+    startUnconfirmed: true,
+    withoutResults: true,
+  });
+
+  it("names Send again, never Retry (HTML and plain text)", () => {
+    const text = htmlToPlainText(email.html);
+    expect(text).toContain(
+      "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Once it does, press Send again on it there.",
+    );
+    expect(text).not.toMatch(/retry/i);
+    expect(email.subject).toBe("Your post in Acme was approved, but publishing may not have started");
+  });
+});

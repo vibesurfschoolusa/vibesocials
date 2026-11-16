@@ -211,6 +211,8 @@ export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetc
  * publishing, so this card's press stays used up and the list is read again.
  * The post itself is read again first: if that fails, the card can't show
  * the truth, so the press is offered back with SEND_AGAIN_STALE_NOTE.
+ * R28 publishing L1 and L2: a 409 or 429 is read the same way (it may come
+ * after the claim), and a post that is still unsent gets its press back.
  */
 export function createSendAgain(
   postJobId: string,
@@ -241,19 +243,42 @@ export function createSendAgain(
     } catch {
       // Not JSON: the generic sentence below.
     }
-    if (body.code === "DISPATCH_FAILED") {
-      const error = dispatchFailedText(body, "Send again");
+    const serverError = typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED;
+    const dispatchFailed = body.code === "DISPATCH_FAILED";
+    // R28 publishing L1: a 409 or 429 can come after the server claimed the
+    // post (nothing could be sent; prepare wrote failed rows), like a failed
+    // start, so the post is read again and the list with it.
+    if (dispatchFailed || response.status === 409 || response.status === 429) {
       const read = await sendActionRequest(`/api/posts/${postJobId}`, { method: "GET" }, {
         fetchImpl: fetcher as typeof fetch,
         ...(online ? { online } : {}),
       });
-      if (read.kind === "answer" && read.response.ok) return { ok: false, error, refetch: true };
-      locked = false;
-      return { ok: false, error, refetch: true, note: SEND_AGAIN_STALE_NOTE };
+      const post = read.kind === "answer" && read.response.ok ? await readStillUnsent(read.response) : "unread";
+      // R28 publishing L2: still unsent (a start that failed before any result
+      // was written, or a refusal before the claim): Send again is offered back.
+      const error = dispatchFailed
+        ? dispatchFailedText(post === "unsent" ? { ...body, withoutResults: true } : body, "Send again")
+        : serverError;
+      if (post === "unread") {
+        locked = false;
+        return { ok: false, error, refetch: true, note: SEND_AGAIN_STALE_NOTE };
+      }
+      if (post === "unsent") locked = false;
+      return { ok: false, error, refetch: true };
     }
     locked = false;
-    return { ok: false, error: typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED };
+    return { ok: false, error: serverError };
   };
+}
+
+/** The single-post GET's answer: still failed with no results ("unsent"), changed, or unreadable. */
+async function readStillUnsent(response: Response): Promise<"unsent" | "changed" | "unread"> {
+  try {
+    const data = (await response.json()) as { postJob?: { status?: unknown }; results?: unknown };
+    return data.postJob?.status === "failed" && Array.isArray(data.results) && data.results.length === 0 ? "unsent" : "changed";
+  } catch {
+    return "unread";
+  }
 }
 
 /** A failed post the server took again reads In progress until fresh data arrives. */

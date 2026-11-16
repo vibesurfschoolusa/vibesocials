@@ -237,18 +237,57 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       expect(displayedJobStatus("completed", true)).toBe("completed");
     });
 
-    it("turns a refusal into the server's plain sentence, and lets the user press again", async () => {
+    // R28 publishing L1: a 409 or 429 may come after the claim, so the post is
+    // read again; while it is still unsent the press is offered back.
+    const unsentPost = () => response(200, { postJob: { id: "job-9", status: "failed" }, results: [] });
+    const sentPost = () =>
+      response(200, { postJob: { id: "job-9", status: "failed" }, results: [{ platform: "x", status: "failed" }] });
+
+    it("turns a refusal into the server's plain sentence, and lets the user press again while the post is still unsent", async () => {
       const fetcher = vi
         .fn()
         .mockResolvedValueOnce(
-          response(409, { code: "NOT_PUBLISHABLE", error: "This post is no longer available to publish." }),
+          response(409, { code: "AWAITING_APPROVAL", error: "An owner needs to approve this post first." }),
         )
+        .mockResolvedValueOnce(unsentPost())
         .mockResolvedValueOnce(response(202, { ok: true }));
       const press = createSendAgain("job-9", fetcher);
 
-      await expect(press()).resolves.toEqual({ ok: false, error: "This post is no longer available to publish." });
+      await expect(press()).resolves.toEqual({ ok: false, error: "An owner needs to approve this post first.", refetch: true });
+      expect(fetcher).toHaveBeenNthCalledWith(2, "/api/posts/job-9", { method: "GET" });
       await expect(press()).resolves.toEqual({ ok: true });
-      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    });
+
+    it("a 409 or 429 given after the claim (e.g. NO_CONNECTIONS): the list is read again and the press stays used", async () => {
+      for (const answer of [
+        response(409, { code: "NO_CONNECTIONS", error: "Nothing was posted: none of its platforms is connected. Activity shows what to reconnect." }),
+        response(429, { code: "DAILY_LIMIT", error: "This workspace has reached its limit of 20 posts for today." }),
+      ]) {
+        const fetcher = vi.fn().mockResolvedValueOnce(answer).mockResolvedValueOnce(sentPost());
+        const press = createSendAgain("job-9", fetcher, () => true);
+        const outcome = await press();
+        expect(outcome).toMatchObject({ ok: false, refetch: true });
+        expect(outcome).not.toHaveProperty("note");
+        await expect(press()).resolves.toBeNull();
+        expect(fetcher).toHaveBeenCalledTimes(2);
+      }
+    });
+
+    it("publishing couldn't start and the reloaded post is still unsent: press Send again, and the press comes back", async () => {
+      const body = dispatchBody(true);
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 503 }))
+        .mockResolvedValueOnce(unsentPost())
+        .mockResolvedValueOnce(response(202, { ok: true }));
+      const press = createSendAgain("job-9", fetcher, () => true);
+      await expect(press()).resolves.toEqual({
+        ok: false,
+        error: "Publishing couldn't start, so nothing was sent. Press Send again to try once more.",
+        refetch: true,
+      });
+      await expect(press()).resolves.toEqual({ ok: true });
     });
 
     it("a refusal with no sentence says it could not send", async () => {

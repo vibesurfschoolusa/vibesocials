@@ -21,6 +21,7 @@ import {
   sentenceForRecipient,
   STORAGE_READ_CODES,
   storageReadFailedMessage,
+  YOUTUBE_UPLOAD_REFUSED_TEXT,
 } from "./publishFailureText";
 
 describe("dispatch sentences (F1 H1)", () => {
@@ -360,6 +361,26 @@ describe("notSentSentence", () => {
 
 // R9-client-journey L4: only an owner can connect or reconnect, so a member's
 // post emails never tell them to act in Settings.
+// R28 publishing addendum L5: the failed row offers "Retry YouTube", no
+// "send it again", so the sentence ends "then retry."; rows that failed
+// earlier carry the old words and read the new ones.
+describe("YouTube's upload-refused sentence", () => {
+  const OLD = "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then send it again.";
+  const NOW = "YouTube refused the upload, so nothing was posted. Check in YouTube Studio that this channel can upload videos, then retry.";
+  const MEMBER =
+    "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then retry.";
+
+  it("ends with retry for the owner and the member", () => {
+    expect(YOUTUBE_UPLOAD_REFUSED_TEXT).toBe(NOW);
+    expect(sentenceForRecipient(NOW, "youtube", "member")).toBe(MEMBER);
+  });
+
+  it("a row stored with the old words reads the new ones", () => {
+    expect(sentenceForRecipient(OLD, "youtube", "owner")).toBe(NOW);
+    expect(sentenceForRecipient(OLD, "youtube", "member")).toBe(MEMBER);
+  });
+});
+
 describe("sentenceForRecipient", () => {
   const PLATFORMS = Object.keys(PLATFORM_LABELS) as Platform[];
   // What a sentence says went wrong, beside the step it asks for.

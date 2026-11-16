@@ -341,7 +341,6 @@ export function AttachedPhotos({
   onDescribe,
 }: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
-  const preparing = photos.some((photo) => photo.status === "preparing");
   const [confirmOpen, setConfirmOpen] = useState(false);
   return (
     <div className="mt-2 space-y-2">
@@ -373,11 +372,6 @@ export function AttachedPhotos({
           </li>
         ))}
       </ol>
-      {preparing && (
-        <p className="text-xs text-muted-foreground" role="status">
-          Preparing photos&hellip;
-        </p>
-      )}
       {progress && (
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -524,6 +518,21 @@ function PhotoTile({
 }
 
 /**
+ * R28 new-customer addendum L9: "Preparing photos…", drawn by the page around
+ * the set (Create) so it is on the page before the first pick: the set mounts
+ * with its photos already preparing, and a status that appears filled may not
+ * be announced. Only its text changes.
+ */
+export function PreparingPhotosStatus({ photos }: { photos: readonly AttachedPhoto[] }) {
+  const preparing = photos.some((photo) => photo.status === "preparing");
+  return (
+    <p className="text-xs text-muted-foreground empty:sr-only" role="status">
+      {preparing ? "Preparing photos…" : ""}
+    </p>
+  );
+}
+
+/**
  * "Add photos": picks more images to add to the ones attached. The input is
  * cleared after each pick so the same photo can be picked again.
  */
@@ -538,7 +547,9 @@ export function AddPhotosButton({
     <label
       className={cn(
         buttonVariants({ variant: "outline", size: "sm" }),
-        "mt-2 cursor-pointer",
+        // R28 new-customer addendum L8: the real input is visually hidden, so
+        // the label shows the keyboard focus ring for it.
+        "mt-2 cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background",
         disabled && "pointer-events-none opacity-50",
       )}
     >

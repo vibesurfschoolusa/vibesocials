@@ -1833,6 +1833,22 @@ describe("POST /api/posts — workspace changed in another tab (2026-11-01 audit
     expectNothingWritten();
   });
 
+  // R28 client-journey L6: a tab drawn for W2 while the cookie points at a
+  // paused W1 hears about the switch (Reload), not W1's pause.
+  it("checks the page's workspace before the pause", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ workspaceId: "ws-1", pausedAt: new Date("2026-11-01T00:00:00Z"), pausedReason: "owner" }),
+    );
+
+    const stale = await POST(jsonRequest(blobBody({ workspaceId: "ws-2" })));
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toEqual({ error: MESSAGE, code: "WORKSPACE_CHANGED" });
+
+    const same = await POST(jsonRequest(blobBody({ workspaceId: "ws-1" })));
+    expect(same.status).toBe(403);
+    expectNothingWritten();
+  });
+
   it("an empty-string workspaceId is refused as missing (F6 item 5)", async () => {
     const response = await POST(jsonRequest(blobBody({ workspaceId: "" })));
 
