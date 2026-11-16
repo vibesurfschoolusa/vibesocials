@@ -26,6 +26,7 @@ import {
   replyRefusalAfterFailure,
   replyRefusalCleared,
   replyRefusalMessage,
+  replyRefusalWhileOpen,
   replySignInHref,
   type ReplyRefusal,
   replyBoxAfterDraft,
@@ -67,6 +68,19 @@ export function ReviewsLoadingList() {
         <Skeleton className="h-40 w-full" />
       </div>
     </>
+  );
+}
+
+/**
+ * R25 pages L4: the locations route's notice. Lead review: a live region that
+ * first appears already filled may not be announced, so it is drawn from the
+ * loading view on (same key under the same page element) and only its text changes.
+ */
+function LocationsNotice({ notice }: { notice: string | null }) {
+  return (
+    <p role="status" className="mb-6 text-sm text-muted-foreground empty:mb-0 empty:sr-only">
+      {notice}
+    </p>
   );
 }
 
@@ -155,6 +169,13 @@ export function ReviewsView({
   // JJ3 lead review: where focus was as a draft landed, decided once its box is
   // open (focusBoxAfterCardDraft): the card's Draft button leaves with it.
   const [boxFocusAfterDraft, setBoxFocusAfterDraft] = useState<{ reviewId: string; activeId: string } | null>(null);
+
+  // Every change of the open form but a draft landing (which opens one only
+  // when none is open) comes here, so a closed form's refusal never comes back.
+  const openReply = (next: string | null) => {
+    setReplyingTo(next);
+    setReplyRefusal((prev) => replyRefusalWhileOpen(prev, next));
+  };
 
   const loadLocations = useCallback(async () => {
     try {
@@ -315,7 +336,7 @@ export function ReviewsView({
 
       // Clear reply text and close reply box
       setReplyBoxes((prev) => replyBoxAfterPost(prev, review.reviewId));
-      setReplyingTo(null);
+      openReply(null);
 
       toast.success("Reply posted successfully!");
       setPendingFocus({
@@ -388,12 +409,11 @@ export function ReviewsView({
       isGeneratingAI={generatingAI.has(review.reviewId)}
       replyValue={replyText[review.reviewId] || ""}
       onOpenReply={() => {
-        setReplyingTo(review.reviewId);
+        openReply(review.reviewId);
         setBoxFocusOnOpen(review.reviewId);
       }}
       onCloseReply={() => {
-        setReplyingTo(null);
-        setReplyRefusal((prev) => replyRefusalCleared(prev, review.reviewId));
+        openReply(null);
         setPendingFocus({ reviewId: review.reviewId });
       }}
       onChangeReply={(value) => {
@@ -416,6 +436,7 @@ export function ReviewsView({
     return (
       <div className={APP_PAGE_CLASS}>
         <h1 className={cn(HEADING_CLASS, "mb-8")}>Google Reviews</h1>
+        <LocationsNotice key="locations-notice" notice={locationsNotice} />
         <ReviewsLoadingList />
       </div>
     );
@@ -466,10 +487,7 @@ export function ReviewsView({
         />
       )}
 
-      {/* R25 pages L4: stays on the page, so the sentence is announced when it arrives. */}
-      <p role="status" className="mb-6 text-sm text-muted-foreground empty:mb-0 empty:sr-only">
-        {locationsNotice}
-      </p>
+      <LocationsNotice key="locations-notice" notice={locationsNotice} />
 
       {/* Tabs */}
       {selectedLocation && !reviewsError && (

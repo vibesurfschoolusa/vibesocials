@@ -15,6 +15,7 @@ import {
   PickerStatusLine,
   locationFailure,
   locationsLoadedStatus,
+  saveFailureAt,
 } from "./google-business-location-form";
 import { SignInAgainLink } from "./gbp-sign-in-link";
 
@@ -123,12 +124,34 @@ describe("Google location form: what a loaded list says", () => {
 
 // R25 pages L4: the form's sentences stay on the page in one status region.
 describe("Google location form: where its sentences show", () => {
-  it("no info toast; the list's sentence and any failure go in a status region that stays on the page", () => {
+  it("no info toast; the list's sentence and a Fetch failure go in a status region right after Fetch", () => {
     expect(formSource).not.toContain("toast.info(");
-    expect(formSource).toMatch(/<div role="status"[^>]*empty:sr-only/);
-    const region = formSource.slice(formSource.indexOf('<div role="status"'), formSource.indexOf("Primary flow"));
-    expect(region).toContain("{failure ? <PickerStatusLine status={failure} /> : null}");
-    expect(region).toContain("{listNote ? <PickerStatusLine status={listNote} /> : null}");
+    const fetchButton = formSource.indexOf('"Fetch locations from Google"}');
+    const region = formSource.indexOf('<div id="gbp-fetch-status" role="status"');
+    expect(fetchButton).toBeGreaterThan(-1);
+    expect(region).toBeGreaterThan(fetchButton);
+    expect(region).toBeLessThan(formSource.indexOf('<Label htmlFor="gbp-location-select">'));
+    const body = formSource.slice(region, formSource.indexOf("</div>", region));
+    expect(body).toContain("{fetchFailure ? <PickerStatusLine status={fetchFailure} /> : null}");
+    expect(body).toContain("{listNote ? <PickerStatusLine status={listNote} /> : null}");
+  });
+
+  // Lead review: a Save failure shows by the control that saved (a phone may
+  // not show the top of the form), in its own status region the control names.
+  it("a save failure shows by the control that saved, which it describes", () => {
+    expect(formSource).toMatch(/<Select[^>]*id="gbp-location-select"[^>]*aria-describedby="gbp-pick-status"/);
+    expect(formSource).toMatch(/<div id="gbp-pick-status" role="status"[^>]*empty:sr-only/);
+    expect(formSource).toMatch(/<Input\s+id="gbp-location"[^>]*aria-describedby="gbp-save-status"/);
+    expect(formSource).toMatch(/<div id="gbp-save-status" role="status"[^>]*empty:sr-only/);
+    expect(formSource.indexOf('id="gbp-save-status"')).toBeGreaterThan(formSource.indexOf('"Save location"'));
+  });
+
+  it("each save failure is shown once, by its own control", () => {
+    const status = { message: "The location wasn't saved.", signInUrl: null };
+    expect(saveFailureAt({ from: "pick", status }, "pick")).toBe(status);
+    expect(saveFailureAt({ from: "pick", status }, "field")).toBeNull();
+    expect(saveFailureAt({ from: "field", status }, "field")).toBe(status);
+    expect(saveFailureAt(null, "field")).toBeNull();
   });
 
   // Lead follow-up: each failure is said once, in the region that stays, so a
@@ -136,7 +159,7 @@ describe("Google location form: where its sentences show", () => {
   it("no failure is also a toast", () => {
     expect(formSource).not.toContain("toast.error(");
     expect(formSource).toContain("toast.success(");
-    expect(formSource).toContain('setFailure({ message: "Enter a location resource name or store code.", signInUrl: null })');
+    expect(formSource).toContain('setSaveFailure({ from: "field", status: { message: "Enter a location resource name or store code.", signInUrl: null } })');
   });
 
   it("the access wording is the route's, not the form's own", () => {

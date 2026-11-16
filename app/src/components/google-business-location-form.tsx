@@ -84,6 +84,18 @@ export function locationsLoadedStatus(count: number, notice: unknown, workspaceI
   return count === 0 ? { message: LOCATION_MESSAGES.noLocations, signInUrl: gbpSignInUrl(workspaceId) } : null;
 }
 
+/** Lead review: which control a save came from, so its failure shows by that control. */
+export type SavePlace = "pick" | "field";
+
+export interface SaveFailure {
+  from: SavePlace;
+  status: PickerStatus;
+}
+
+export function saveFailureAt(failure: SaveFailure | null, place: SavePlace): PickerStatus | null {
+  return failure?.from === place ? failure.status : null;
+}
+
 /** R25 pages L4: one sentence of the status region, which stays until the next fetch or save. */
 export function PickerStatusLine({ status }: { status: PickerStatus }) {
   return (
@@ -102,19 +114,23 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
-  // R25 pages L4: the last fetch or save's failure, and what the loaded list
-  // says; shown in the status region, which stays, and only there (no toast),
-  // so a screen reader hears each once. A save's success is still a toast.
-  const [failure, setFailure] = useState<PickerStatus | null>(null);
+  // R25 pages L4: the last fetch's failure and what the loaded list says, by
+  // Fetch; the last save's failure, by the control that saved (lead review).
+  // Each shows in a status region that stays, and only there (no toast), so a
+  // screen reader hears it once. A save's success is still a toast.
+  const [fetchFailure, setFetchFailure] = useState<PickerStatus | null>(null);
   const [listNote, setListNote] = useState<PickerStatus | null>(null);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const pickFailure = saveFailureAt(saveFailure, "pick");
+  const fieldFailure = saveFailureAt(saveFailure, "field");
 
   // Saves a location: picked from Google's list (with its name, saved at once)
   // or typed in the Advanced field (no name). 2026-11-09 first-run check:
   // picking from the list only filled the Advanced field, so a new user's
   // choice was silently never saved.
-  async function saveLocation(name: string, title: string | null) {
+  async function saveLocation(name: string, title: string | null, from: SavePlace) {
     setSaving(true);
-    setFailure(null);
+    setSaveFailure(null);
 
     try {
       const response = await fetch("/api/connections/google_business_profile/location", {
@@ -131,7 +147,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
       if (!response.ok) {
         const failed = locationFailure(data, LOCATION_MESSAGES.saveFailed, workspaceId);
-        setFailure({ message: failed.message, signInUrl: failed.signInUrl });
+        setSaveFailure({ from, status: { message: failed.message, signInUrl: failed.signInUrl } });
         setSaving(false);
         if (failed.reconnect) router.refresh();
         return;
@@ -145,7 +161,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       // Settings' "Connected as" label is server-rendered from the saved name.
       router.refresh();
     } catch {
-      setFailure({ message: LOCATION_MESSAGES.saveOffline, signInUrl: null });
+      setSaveFailure({ from, status: { message: LOCATION_MESSAGES.saveOffline, signInUrl: null } });
       setSaving(false);
     }
   }
@@ -155,16 +171,17 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
 
     const trimmed = locationName.trim();
     if (!trimmed) {
-      setFailure({ message: "Enter a location resource name or store code.", signInUrl: null });
+      setSaveFailure({ from: "field", status: { message: "Enter a location resource name or store code.", signInUrl: null } });
       return;
     }
-    await saveLocation(trimmed, null);
+    await saveLocation(trimmed, null, "field");
   }
 
   async function handleFetchLocations() {
     setLoadingLocations(true);
-    setFailure(null);
+    setFetchFailure(null);
     setListNote(null);
+    setSaveFailure(null);
 
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
@@ -175,7 +192,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       if (!response.ok) {
         setLocations(null);
         const failed = locationFailure(data, LOCATION_MESSAGES.loadFailed, workspaceId);
-        setFailure({ message: failed.message, signInUrl: failed.signInUrl });
+        setFetchFailure({ message: failed.message, signInUrl: failed.signInUrl });
         setLoadingLocations(false);
         if (failed.reconnect) router.refresh();
         return;
@@ -188,7 +205,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       setLoadingLocations(false);
     } catch {
       setLocations(null);
-      setFailure({ message: LOCATION_MESSAGES.loadOffline, signInUrl: null });
+      setFetchFailure({ message: LOCATION_MESSAGES.loadOffline, signInUrl: null });
       setLoadingLocations(false);
     }
   }
@@ -200,17 +217,11 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
     }
     setLocationName(value);
     const picked = locations?.find((loc) => loc.resourceName === value);
-    void saveLocation(value, picked?.title ?? null);
+    void saveLocation(value, picked?.title ?? null, "pick");
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {/* A live region that stays on the page, so its sentences are announced when they appear.
-          The access wording is the route's own (its `error`), never this form's. */}
-      <div role="status" className="flex flex-col gap-3 empty:sr-only">
-        {failure ? <PickerStatusLine status={failure} /> : null}
-        {listNote ? <PickerStatusLine status={listNote} /> : null}
-      </div>
       {/* Primary flow: pull the account's locations from Google and pick one. */}
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -233,11 +244,23 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
             {loadingLocations ? "Loading…" : "Fetch locations from Google"}
           </Button>
         </div>
+        {/* Live regions that stay on the page, so their sentences are announced when they appear.
+            The access wording is the route's own (its `error`), never this form's. */}
+        <div id="gbp-fetch-status" role="status" className="flex flex-col gap-3 empty:sr-only">
+          {fetchFailure ? <PickerStatusLine status={fetchFailure} /> : null}
+          {listNote ? <PickerStatusLine status={listNote} /> : null}
+        </div>
 
         {locations && locations.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="gbp-location-select">Choose a location</Label>
-            <Select id="gbp-location-select" defaultValue="" onChange={handleSelectLocation} disabled={saving}>
+            <Select
+              id="gbp-location-select"
+              aria-describedby="gbp-pick-status"
+              defaultValue=""
+              onChange={handleSelectLocation}
+              disabled={saving}
+            >
               <option value="">Select a location</option>
               {locations.map((loc) => {
                 const parts: string[] = [];
@@ -254,6 +277,9 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
                 );
               })}
             </Select>
+            <div id="gbp-pick-status" role="status" className="empty:sr-only">
+              {pickFailure ? <PickerStatusLine status={pickFailure} /> : null}
+            </div>
           </div>
         ) : null}
       </div>
@@ -264,6 +290,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             id="gbp-location"
+            aria-describedby="gbp-save-status"
             name="locationName"
             className="font-mono text-xs"
             placeholder="accounts/{accountId}/locations/{locationId}, or a store code"
@@ -273,6 +300,9 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
           <Button type="submit" size="sm" loading={saving} className="shrink-0 sm:w-auto">
             {saving ? "Saving…" : "Save location"}
           </Button>
+        </div>
+        <div id="gbp-save-status" role="status" className="empty:sr-only">
+          {fieldFailure ? <PickerStatusLine status={fieldFailure} /> : null}
         </div>
         <p className="text-xs text-muted-foreground">
           Choosing a location above saves it right away. You can also paste a resource name or

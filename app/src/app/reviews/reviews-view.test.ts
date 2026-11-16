@@ -108,17 +108,29 @@ describe("ReviewsView when a card draft lands", () => {
 describe("ReviewsView when a reply is refused", () => {
   it("notes it on failure, clears it on typing, sending again and closing, and hands the form the sentence and link", () => {
     expect(source).toContain("setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember))");
-    expect(source.split("replyRefusalCleared(prev, review.reviewId)").length - 1).toBeGreaterThanOrEqual(3);
+    expect(source.split("replyRefusalCleared(prev, review.reviewId)").length - 1).toBeGreaterThanOrEqual(2);
     expect(source).toContain("replySignInUrl={replySignInHref(replyRefusal, review.reviewId, workspaceId)}");
     expect(source).toContain("replyRefusal={replyRefusalMessage(replyRefusal, review.reviewId)}");
     expect(source).toContain("toast.error(shown.message)");
   });
 });
 
+// Lead review: a form closes on Cancel, on a posted reply, or when Reply opens
+// another review's form; each way goes through openReply, which drops a
+// refusal whose form is no longer open.
+describe("ReviewsView when a reply form closes", () => {
+  it("changes the open form only through openReply, which keeps a refusal only for the open form", () => {
+    expect(source).toMatch(/const openReply = \(next: string \| null\) => \{\s*setReplyingTo\(next\);\s*setReplyRefusal\(\(prev\) => replyRefusalWhileOpen\(prev, next\)\);/);
+    // Only openReply and the draft landing (which opens only when none is open) set it.
+    expect(source.split("setReplyingTo(").length - 1).toBe(2);
+    expect(source).toContain("setReplyingTo((open) => openAfterDraft(open, review.reviewId))");
+  });
+});
+
 // R25 pages L1: Reply hands focus to the box; Cancel to that review's Reply button.
 describe("ReviewsView and focus when a reply form opens or closes", () => {
   it("asks for the box on Reply, and decides with focusBoxOnOpen once it is open", () => {
-    expect(source).toMatch(/onOpenReply=\{\(\) => \{\s*setReplyingTo\(review\.reviewId\);\s*setBoxFocusOnOpen\(review\.reviewId\);/);
+    expect(source).toMatch(/onOpenReply=\{\(\) => \{\s*openReply\(review\.reviewId\);\s*setBoxFocusOnOpen\(review\.reviewId\);/);
     expect(source).toMatch(/focusBoxOnOpen\(\s*boxFocusOnOpen,\s*replyingTo\s*\)/);
   });
 
@@ -141,10 +153,20 @@ describe("ReviewsView and accounts Google would not list", () => {
   });
 
   it("shows it in a status region above the tabs and the list", () => {
-    const region = at("{locationsNotice}");
-    expect(region).toBeGreaterThan(at("<LocationPicker"));
-    expect(region).toBeLessThan(at('aria-label="Review filter"'));
-    expect(source).toMatch(/<p role="status"[^>]*empty:sr-only[^>]*>\s*\{locationsNotice\}/);
+    const main = source.slice(at("{/* Location Selector */}"));
+    const region = main.indexOf('<LocationsNotice key="locations-notice"');
+    expect(region).toBeGreaterThan(main.indexOf("<LocationPicker"));
+    expect(region).toBeLessThan(main.indexOf('aria-label="Review filter"'));
+    expect(source).toMatch(/<p role="status"[^>]*empty:sr-only[^>]*>\s*\{notice\}/);
+  });
+
+  // Lead review: a live region that first appears already filled may not be
+  // announced, so it is on the page from the loading view on, with the same
+  // key under the same page element, and only its text changes.
+  it("keeps the region from the first render, the loading view included", () => {
+    const loading = source.slice(at("if (loadingLocations) {"), at("if (locationsError) {"));
+    expect(loading).toContain('<LocationsNotice key="locations-notice" notice={locationsNotice} />');
+    expect(source.split('<LocationsNotice key="locations-notice" notice={locationsNotice} />').length - 1).toBe(2);
   });
 
   it("does not also say there are no locations when the notice says some were not read", () => {

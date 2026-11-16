@@ -68,6 +68,14 @@ export function replyRefusalCleared(current: ReplyRefusal | null, reviewId: stri
   return current?.reviewId === reviewId ? null : current;
 }
 
+/**
+ * Lead review: whenever the open form changes (Cancel, a posted reply, or
+ * Reply on another review), a refusal stays only while its own form is open.
+ */
+export function replyRefusalWhileOpen(current: ReplyRefusal | null, openReview: string | null): ReplyRefusal | null {
+  return current?.reviewId === openReview ? current : null;
+}
+
 /** The sentence for a review's form, else undefined. */
 export function replyRefusalMessage(current: ReplyRefusal | null, reviewId: string): string | undefined {
   return current?.reviewId === reviewId ? current.message : undefined;

@@ -16,6 +16,7 @@ import {
   replyRefusalAfterFailure,
   replyRefusalCleared,
   replyRefusalMessage,
+  replyRefusalWhileOpen,
   replySignInHref,
   replyUndoStatus,
   settleDraftFocus,
@@ -504,6 +505,16 @@ describe("a reply Google refused", () => {
     expect(replyRefusalCleared(refused, "r1")).toBeNull();
     expect(replyRefusalCleared(refused, "r2")).toBe(refused);
     expect(replyRefusalCleared(null, "r1")).toBeNull();
+  });
+
+  // Lead review: Reply on another review closes this form without Cancel; any
+  // way a form closes clears its sentence and link, so reopening it is clean.
+  it("is kept only while its own review's form is the open one", () => {
+    const refused = replyRefusalAfterFailure("r1", signIn, false);
+    expect(replyRefusalWhileOpen(refused, "r1")).toBe(refused);
+    expect(replyRefusalWhileOpen(refused, "r2")).toBeNull();
+    expect(replyRefusalWhileOpen(refused, null)).toBeNull();
+    expect(replyRefusalWhileOpen(null, "r1")).toBeNull();
   });
 
   it("the form shows the sentence inside a status region, so it is announced, and stays on the page", () => {
