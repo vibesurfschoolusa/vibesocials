@@ -33,6 +33,7 @@ import {
   type PairHalf,
 } from "./pairRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { postMovedOnText } from "@/lib/postMovedOn";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -251,8 +252,9 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   }
 
   if (!MUTABLE_POST_JOB_STATUSES.includes(existing.status)) {
+    // R30 publishing L1: a post that moved on says what happened and to check Activity.
     return NextResponse.json(
-      { error: "Only scheduled or draft posts can be edited.", code: "NOT_EDITABLE" },
+      { error: postMovedOnText(existing.status, "edited") ?? "Only scheduled or draft posts can be edited.", code: "NOT_EDITABLE" },
       { status: 409 },
     );
   }
@@ -376,8 +378,10 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   });
 
   if (!result.ok) {
+    // Lost the race (the scanner claimed it): read the status again, for the sentence only.
+    const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
     return NextResponse.json(
-      { error: "This post can no longer be edited.", code: "NOT_EDITABLE" },
+      { error: postMovedOnText(now?.status, "edited") ?? "This post can no longer be edited.", code: "NOT_EDITABLE" },
       { status: 409 },
     );
   }

@@ -311,6 +311,43 @@ describe("PATCH /api/posts/[postJobId]", () => {
     expect(res.status).toBe(409);
   });
 
+  // R30 publishing L1: the 409 says what happened to the post and to check Activity.
+  it.each([
+    ["in_progress", "This post has started publishing, so it can't be edited. Check Activity to see how it goes."],
+    ["completed", "This post has already gone out, so it can't be edited. Check Activity to see it."],
+    ["failed", "This post was already sent and failed, so it can't be edited. Check Activity to see what happened."],
+  ])("a %s post: the 409 says so", async (status, sentence) => {
+    findFirstMock.mockResolvedValue({ status });
+    const res = await PATCH(req({ baseCaption: "new" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "NOT_EDITABLE", error: sentence });
+  });
+
+  it("a race the scanner won: the post is read again and the 409 says it started publishing", async () => {
+    findFirstMock.mockResolvedValueOnce({ status: "scheduled" }).mockResolvedValue({ status: "in_progress" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(
+      "This post has started publishing, so it can't be edited. Check Activity to see how it goes.",
+    );
+  });
+
+  it("a race on a post still a draft keeps the plain sentence", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    updateManyMock.mockResolvedValue({ count: 0 });
+    const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("This post can no longer be edited.");
+  });
+
+  it("a draft is still edited as before", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+
   it("cross-workspace isolation: a job in another workspace 404s (the ownership read is workspace-scoped, not user-scoped)", async () => {
     findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
     const res = await PATCH(req({ baseCaption: "x" }), ctx("foreign-job"));

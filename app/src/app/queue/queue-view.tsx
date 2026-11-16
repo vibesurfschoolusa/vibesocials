@@ -644,6 +644,11 @@ function QueueEditDialog({
           const errorData = (await response.json().catch(() => null)) as { error?: string } | null;
           toast.error(errorData?.error ?? "Couldn't save your changes.");
           setSaving(false);
+          // R30 publishing L1: the card is stale (it started publishing or went out): re-sync and close.
+          if (shouldRefetchAfterError(response.status)) {
+            onStale();
+            onClose();
+          }
           return;
         }
         const data = await response.json().catch(() => null);
@@ -1336,6 +1341,11 @@ export function QueueView({
       | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't cancel this post.");
+      if (shouldRefetchAfterError(response.status)) {
+        // R30 publishing L1: the card is stale (it started publishing or went out): re-sync and close.
+        void load({ silent: true });
+        return;
+      }
       throw new ConfirmFailureShown("CANCEL_FAILED");
     }
     if (!request.series) {

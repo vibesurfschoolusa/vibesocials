@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { answerLostText } from "@/lib/answerLost";
 import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
-import { editOutcome, sendActionRequest, type JobPatch } from "@/lib/queueActions";
+import { editOutcome, sendActionRequest, shouldRefetchAfterError, type JobPatch } from "@/lib/queueActions";
 import {
   buildCalendarMonth,
   groupJobsByDay,
@@ -158,6 +158,8 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList, onReloa
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         toast.error(data?.error ?? "Couldn't reschedule this post.");
+        // R30 publishing L1: the chip is stale (it started publishing or went out): re-sync.
+        if (shouldRefetchAfterError(response.status)) onReload();
         return;
       }
       const data = await response.json().catch(() => null);

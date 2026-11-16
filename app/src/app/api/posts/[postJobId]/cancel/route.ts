@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { PostJobStatus } from "@prisma/client";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { postMovedOnText } from "@/lib/postMovedOn";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
 
@@ -68,10 +70,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // The body is optional: no body, or one that is not an object, cancels this post alone.
   const includePair = wantsPair(await readJsonObject(request));
 
-  const notCancelable = () =>
+  // R30 publishing L1: a post that moved on says what happened and to check Activity.
+  const notCancelable = (status: PostJobStatus | null | undefined) =>
     NextResponse.json(
       {
-        error: "Only scheduled or draft posts can be cancelled.",
+        error: postMovedOnText(status, "cancelled") ?? "Only scheduled or draft posts can be cancelled.",
         code: "NOT_CANCELABLE",
       },
       { status: 409 },
@@ -91,7 +94,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   if (!MUTABLE_POST_JOB_STATUSES.includes(job.status)) {
-    return notCancelable();
+    return notCancelable(job.status);
   }
 
   const half = await readPairHalf(workspaceId, job, includePair);
@@ -115,7 +118,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!result.ok) {
-    return notCancelable();
+    // Lost the race (the scanner claimed it): read the status again, for the sentence only.
+    const now = await prisma.postJob.findFirst({ where: { id: postJobId, workspaceId }, select: { status: true } });
+    return notCancelable(now?.status);
   }
 
   return NextResponse.json(

@@ -172,6 +172,32 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
     expect((await res.json()).code).toBe("NOT_CANCELABLE");
   });
 
+  // R30 publishing L1: the 409 says what happened to the post and to check Activity.
+  it.each([
+    ["in_progress", "This post has started publishing, so it can't be cancelled. Check Activity to see how it goes."],
+    ["completed", "This post has already gone out, so it can't be cancelled. Check Activity to see it."],
+    ["failed", "This post was already sent and failed, so it can't be cancelled. Check Activity to see what happened."],
+  ])("a %s post: the 409 says so", async (status, sentence) => {
+    findFirstMock.mockResolvedValue(jobRow({ status }));
+
+    const res = await POST(req, ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "NOT_CANCELABLE", error: sentence });
+  });
+
+  it("a race the scanner won: the post is read again and the 409 says it started publishing", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow()).mockResolvedValue(jobRow({ status: "in_progress" }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req, ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(
+      "This post has started publishing, so it can't be cancelled. Check Activity to see how it goes.",
+    );
+  });
+
   it("cross-workspace isolation: a job in another workspace 404s via the workspace-scoped read (not 403 — no existence oracle)", async () => {
     findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
 

@@ -87,3 +87,30 @@ describe("Queue: a lost answer may have gone through", () => {
     expect(view).toMatch(/\} catch \{\s+(\/\/[^\n]*\s+)?toast\.error\(CONFIRM_FAILED_MESSAGE\);\s+setSaving\(false\);/);
   });
 });
+
+// R30 publishing L1: a card that started publishing while the page was open
+// still showed Scheduled; Cancel, Edit and the calendar drag got a 409, showed
+// it and left the stale card (and the Cancel dialog) as they were. Each now
+// reloads the list silently and closes, as Publish now and Approve do.
+describe("Queue: a stale card's 409 reloads the list", () => {
+  it("Cancel: the route's sentence, a silent reload, and the dialog closes", () => {
+    const body = view.slice(view.indexOf("const confirmCancel"), view.indexOf("}, [", view.indexOf("const confirmCancel")));
+    expect(body).toMatch(
+      /if \(!response\.ok\) \{\s+toast\.error\(data\?\.error \?\? "Couldn't cancel this post\."\);\s+if \(shouldRefetchAfterError\(response\.status\)\) \{\s+(\/\/[^\n]*\n\s+)*void load\(\{ silent: true \}\);\s+return;\s+\}\s+throw new ConfirmFailureShown\("CANCEL_FAILED"\);/,
+    );
+  });
+
+  it("Edit: the route's sentence, a silent reload, and the dialog closes", () => {
+    const at = view.indexOf('toast.error(errorData?.error ?? "Couldn\'t save your changes.");');
+    expect(at).toBeGreaterThan(-1);
+    const after = view.slice(at, view.indexOf("return;", at) + 7);
+    expect(after).toMatch(/if \(shouldRefetchAfterError\(response\.status\)\) \{\s+onStale\(\);\s+onClose\(\);\s+\}\s+return;$/);
+  });
+
+  it("the calendar drag: the route's sentence and a silent reload", () => {
+    const drop = handler(calendar, "async function handleDrop");
+    expect(drop).toMatch(
+      /toast\.error\(data\?\.error \?\? "Couldn't reschedule this post\."\);\s+(\/\/[^\n]*\n\s+)*if \(shouldRefetchAfterError\(response\.status\)\) onReload\(\);\s+return;/,
+    );
+  });
+});
