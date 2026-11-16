@@ -149,6 +149,10 @@ export function buildApprovalRequestedEmail(params: {
   };
 }
 
+/** R26 LL3 follow-up: Activity can show it publishing until the stuck-job reconciler fails it. */
+const START_UNCONFIRMED_TEXT =
+  "Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't send it again until it shows as failed; then send it again from there.";
+
 /** Sent to the submitting member once an owner approves or rejects. */
 export function buildApprovalDecisionEmail(params: {
   approved: boolean;
@@ -168,6 +172,12 @@ export function buildApprovalDecisionEmail(params: {
    * as a sentence. Replaces "publishing now".
    */
   notSent?: string;
+  /**
+   * R26 LL3 follow-up: approved to publish now, the hand-off failed and the
+   * post couldn't be marked failed, so it shows as publishing for about two
+   * hours and may still go out. Replaces "publishing now"; `notSent` is unset.
+   */
+  startUnconfirmed?: boolean;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const storyLine = decidedStoryLine(params.approved, params.alsoAsStory);
@@ -197,6 +207,8 @@ export function buildApprovalDecisionEmail(params: {
 
   const outcome = params.notSent
     ? `<p>Approved, but nothing was sent: ${escapeHtml(params.notSent)}</p>`
+    : params.startUnconfirmed
+    ? `<p>${escapeHtml(START_UNCONFIRMED_TEXT)}</p>`
     : params.scheduledFor
     ? `<p>It is approved and <strong>scheduled</strong> for ${escapeHtml(
         emailDateTime(new Date(params.scheduledFor), params.timeZone),
@@ -207,7 +219,9 @@ export function buildApprovalDecisionEmail(params: {
     : `<p>Track it in Activity.</p>`;
 
   return {
-    subject: `Your post in ${subjectText(params.workspaceName)} was approved${params.notSent ? ", but nothing was sent" : ""}`,
+    subject: `Your post in ${subjectText(params.workspaceName)} was approved${
+      params.notSent ? ", but nothing was sent" : params.startUnconfirmed ? ", but publishing may not have started" : ""
+    }`,
     html: [
       `<p>An owner of <strong>${workspace}</strong> approved your post.</p>`,
       captionBlock(params.caption),

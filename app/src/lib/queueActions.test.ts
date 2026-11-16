@@ -413,8 +413,15 @@ describe("queueFailureText", () => {
     expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't publish this post.", "Publish")).toBe(
       "The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Publish again.",
     );
-    expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toMatch(
-      /Don't press Approve again\.$/,
+    expect(queueFailureText({ ...DISPATCH, resultsMarked: false }, "Couldn't approve this post.", "Approve")).toBe(
+      "The post was approved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press Approve again.",
+    );
+  });
+
+  // R26 LL3 follow-up: Approve says "Approved", Publish and Create keep "Saved".
+  it("Approve, marked: Approved, but publishing couldn't start", () => {
+    expect(queueFailureText({ ...DISPATCH, resultsMarked: true }, "Couldn't approve this post.", "Approve")).toBe(
+      "Approved, but publishing couldn't start — retry it from Activity.",
     );
   });
 

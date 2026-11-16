@@ -53,7 +53,8 @@ export const COMPOSER_DISPATCH_FAILED_MESSAGE =
  * every 10 minutes, later when a batch is waiting. Retry is offered from then on.
  */
 function dispatchUnmarkedText(button: DispatchFailedButton): string {
-  return `The post was saved but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
+  const done = button === "Approve" ? "approved" : "saved";
+  return `The post was ${done} but didn't start. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed; then retry it there. Don't press ${button} again.`;
 }
 
 export const COMPOSER_DISPATCH_UNMARKED_MESSAGE = dispatchUnmarkedText("Post");
@@ -67,7 +68,9 @@ export type DispatchFailedButton = "Post" | "Publish" | "Approve";
  * not be marked, the "about two hours" sentence naming the pressed button.
  */
 export function dispatchFailedText(body: unknown, button: DispatchFailedButton = "Post"): string {
-  return field(body, "resultsMarked") === false ? dispatchUnmarkedText(button) : COMPOSER_DISPATCH_FAILED_MESSAGE;
+  if (field(body, "resultsMarked") === false) return dispatchUnmarkedText(button);
+  // R26 LL3 follow-up: an approval is what stood, so Approve says so.
+  return button === "Approve" ? "Approved, but publishing couldn't start — retry it from Activity." : COMPOSER_DISPATCH_FAILED_MESSAGE;
 }
 
 const FALLBACK_ERROR = "Failed to create post.";

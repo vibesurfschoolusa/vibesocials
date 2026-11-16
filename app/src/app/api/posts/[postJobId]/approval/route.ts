@@ -340,7 +340,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // R23-client-journey L4: it says what happened to the email, so the Queue
   // claims "the author has been notified" only when Resend accepted it. The
   // send is awaited before the answer already, so this costs no extra time.
-  const tellSubmitter = async (notSent?: string): Promise<AuthorEmail> => {
+  const tellSubmitter = async (notSent?: string, startUnconfirmed = false): Promise<AuthorEmail> => {
     try {
       // R7-client-journey L1: only a submitter who is still a member hears about
       // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
@@ -369,6 +369,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           appBaseUrl: process.env.NEXTAUTH_URL || null,
           ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
           ...(notSent ? { notSent } : {}),
+          ...(startUnconfirmed ? { startUnconfirmed: true } : {}),
         });
         const sent = await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
         return sent ? "sent" : "failed";
@@ -409,7 +410,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // item 5): when this post had nothing sendable but its other half was
     // prepared, a failed send is still "try again", not "reconnect".
     if (dispatch.sendFailed) {
-      await tellSubmitter(NOT_SENT_SEND_FAILED);
+      // R26 LL3 follow-up: as the toast, a post that couldn't be marked
+      // failed shows as publishing for a while, so no "send it again" yet.
+      await (dispatch.resultsMarked ? tellSubmitter(NOT_SENT_SEND_FAILED) : tellSubmitter(undefined, true));
       return NextResponse.json(
         // R26 LL3: as Create's 503, so the Queue can say where to retry it and
         // whether it shows as publishing first.

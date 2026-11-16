@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { htmlToPlainText } from "./plainText";
+
 import {
   buildApprovalDecisionEmail,
   buildApprovalRequestedEmail,
@@ -398,5 +400,28 @@ describe("the caption preview", () => {
   it("a caption of 240 characters or fewer is shown whole, with no ellipsis", () => {
     const caption = `${"a".repeat(238)}🏄‍♂️🌊`;
     expect(quoted(buildApprovalRequestedEmail({ ...params, caption }).html)).toBe(caption);
+  });
+});
+
+// R26 LL3 follow-up: approved to publish now, the hand-off failed and the
+// results couldn't be marked, so the post shows as publishing for about two
+// hours. The email says so instead of "send it again".
+describe("approved, publishing not confirmed as stopped", () => {
+  const email = buildApprovalDecisionEmail({
+    approved: true,
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    timeZone: null,
+    caption: "x",
+    scheduledFor: null,
+    appBaseUrl: "https://vibesocials.wtf",
+    startUnconfirmed: true,
+  });
+
+  it("says it may still go out and not to send it again until it shows as failed (HTML and plain text)", () => {
+    expect(email.html).toContain("<p>Approved, but publishing didn&#39;t start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don&#39;t send it again until it shows as failed; then send it again from there.</p>");
+    expect(email.html).not.toMatch(/publishing now/i);
+    expect(htmlToPlainText(email.html)).toContain("Approved, but publishing didn't start as it should, and the post may still go out. In Activity it can show as publishing for about two hours, sometimes a little longer, before it shows as failed. Don't send it again until it shows as failed; then send it again from there.");
+    expect(email.subject).toBe("Your post in Acme was approved, but publishing may not have started");
   });
 });
