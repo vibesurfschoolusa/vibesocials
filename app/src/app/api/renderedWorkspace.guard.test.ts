@@ -68,7 +68,7 @@ function stripComments(source: string): string {
 /** The file's top-level declarations: name -> its text (up to the next top-level line). */
 function topLevelChunks(code: string): Map<string, string> {
   const chunks = new Map<string, string>();
-  const starts = [...code.matchAll(/^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+))/gm)];
+  const starts = [...code.matchAll(/^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|(?:const|let|var)\s+(\w+))/gm)];
   starts.forEach((match, index) => {
     const name = match[1] ?? match[2];
     const end = index + 1 < starts.length ? starts[index + 1].index : code.length;
@@ -101,11 +101,21 @@ function isNotFoundAlias(code: string, method: string): boolean {
  * constant that answers it, or null when it is re-exported from another file
  * (which can't be judged here). Covers `export async function POST`, `export
  * const POST`, `export { POST }`, `export { handler as PATCH }` and
- * `export { POST } from "./x"`.
+ * `export { POST } from "./x"`, `export let` / `export var`, and (lead
+ * review 2) next-auth v5's `export const { GET, POST } = handlers`: a
+ * destructured handler comes from another object, so it is null too.
  */
 function exportedNames(code: string): Map<string, string | null> {
   const names = new Map<string, string | null>();
-  for (const match of code.matchAll(/^export\s+(?:async\s+)?(?:function|const)\s+(\w+)/gm)) names.set(match[1], match[1]);
+  for (const match of code.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|var)\s+(\w+)/gm)) names.set(match[1], match[1]);
+  for (const match of code.matchAll(/^export\s+(?:const|let|var)\s*\{([\s\S]*?)\}\s*\}*\s*=/gm)) {
+    // `{ handlers: { POST: PUT } }`: a key followed by `{` is a path, not a name.
+    const pattern = match[1].replace(/\w+\s*:\s*\{/g, "");
+    for (const part of pattern.split(/[,{}]/)) {
+      const bound = part.split("=")[0].split(":").pop()?.trim();
+      if (bound && /^\w+$/.test(bound)) names.set(bound, null);
+    }
+  }
   for (const match of code.matchAll(/\bexport\s*\{([^}]*)\}\s*(from\s*["'][^"']+["'])?/g)) {
     for (const part of match[1].split(",")) {
       const [local, exported = local] = part.trim().split(/\s+as\s+/).map((name) => name.trim());
@@ -169,6 +179,21 @@ describe("every signed-in write route checks the page's workspace id", () => {
     // Another file's handler can't be judged here: it must be checked where it is written, or named.
     expect(uncheckedWriteHandlers('export { POST } from "./x";\n')).toEqual(["POST"]);
     expect(uncheckedWriteHandlers('export { handler as PUT } from "../shared";\n')).toEqual(["PUT"]);
+  });
+
+  // Lead review 2: next-auth v5 destructures its handlers; let and var declare them too.
+  it("sees destructured handlers and export let / export var", () => {
+    // A destructured handler comes from another object, so it can't be judged here.
+    expect(uncheckedWriteHandlers("export const { GET, POST } = handlers;\n")).toEqual(["POST"]);
+    expect(uncheckedWriteHandlers("export const { handlers: { POST: PUT } } = NextAuth(config);\n")).toEqual(["PUT"]);
+    expect(uncheckedWriteHandlers("export const { GET } = handlers;\n")).toEqual([]);
+    expect(uncheckedWriteHandlers("export let POST = async () => save();\n")).toEqual(["POST"]);
+    expect(uncheckedWriteHandlers("export var DELETE = async () => save();\n")).toEqual(["DELETE"]);
+    expect(
+      uncheckedWriteHandlers(
+        "export let PATCH = async (request: Request) => {\n  const refusal = renderedWorkspaceRefusal(body.workspaceId, id);\n};\n",
+      ),
+    ).toEqual([]);
   });
 
   it("names auth and admin routes one by one, so a new route there must be judged", () => {
