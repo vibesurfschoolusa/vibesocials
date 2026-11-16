@@ -198,10 +198,20 @@ export function publishOutcome(data: unknown): QueueOutcome {
  * both leave the scheduled/draft Queue.
  */
 export function decisionOutcome(decision: "approve" | "reject", data: unknown): QueueOutcome {
-  if (decision === "reject") {
-    return { kind: "remove", message: "Post rejected — the author has been notified." };
-  }
   const r = asRecord(data);
+  if (decision === "reject") {
+    // R23-client-journey L4: the route's `authorEmail` says whether the email
+    // went out; without it nothing is claimed.
+    const message =
+      r.authorEmail === "sent"
+        ? "Post rejected — the author has been notified."
+        : r.authorEmail === "removed"
+          ? "Post rejected. The author is no longer in this workspace, so no email was sent."
+          : r.authorEmail === "failed"
+            ? "Post rejected. We couldn't email the author; let them know yourself."
+            : "Post rejected.";
+    return { kind: "remove", message };
+  }
   if (r.status === "scheduled") {
     const scheduledFor = isoOrNull(r.scheduledFor);
     return {

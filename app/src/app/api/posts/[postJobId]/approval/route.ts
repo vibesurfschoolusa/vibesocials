@@ -61,6 +61,9 @@ const NOT_SENT_NOTHING_CONNECTED =
   "none of this post's platforms is connected. The workspace owner can reconnect them in Settings; Activity shows which.";
 const NOT_SENT_SEND_FAILED = "publishing couldn't start. Open the post in Activity and send it again.";
 
+/** What happened to the submitter's decision email (R23-client-journey L4). */
+type AuthorEmail = "sent" | "removed" | "failed";
+
 const MUTATE_RATE_LIMIT = {
   route: "posts/mutate",
   limit: 60,
@@ -96,9 +99,10 @@ const MUTATE_RATE_LIMIT = {
  *    a mismatch 409s `CHANGED_SINCE_REVIEW` without deciding, and the decision
  *    write is also pinned to the `updatedAt` just read, so a member's edit
  *    landing mid-request can't be approved unseen.
- *  - 200 body: `{ ok, decision, status, approvalState, scheduledFor }`, where
- *    `scheduledFor` is the time the post is now scheduled for (only when
- *    `status` is `scheduled`, else null).
+ *  - 200 body: `{ ok, decision, status, approvalState, scheduledFor, authorEmail }`,
+ *    where `scheduledFor` is the time the post is now scheduled for (only when
+ *    `status` is `scheduled`, else null) and `authorEmail` is "sent" (Resend
+ *    accepted it), "removed" (the submitter left; no email) or "failed".
  *  - An `inngest.send` failure on approve-and-publish fails the job's pending
  *    results (`DISPATCH_FAILED`) and 503s instead of leaving it in_progress.
  */
@@ -333,7 +337,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Fire-and-forget: sendEmail never throws, and the extra try/catch documents
   // that a mail failure must not fail the decision. R9-client-journey L3:
   // `notSent` when it was approved to publish now and then nothing went out.
-  const tellSubmitter = async (notSent?: string) => {
+  // R23-client-journey L4: it says what happened to the email, so the Queue
+  // claims "the author has been notified" only when Resend accepted it. The
+  // send is awaited before the answer already, so this costs no extra time.
+  const tellSubmitter = async (notSent?: string): Promise<AuthorEmail> => {
     try {
       // R7-client-journey L1: only a submitter who is still a member hears about
       // it, as with the post-finished emails (postOutcomeEmail.ts); one who was
@@ -349,6 +356,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
             select: { email: true, timeZone: true },
           })
         : null;
+      if (!stillMember) return "removed";
       if (submitter?.email) {
         const email = buildApprovalDecisionEmail({
           approved: approving,
@@ -362,10 +370,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
           ...(notSent ? { notSent } : {}),
         });
-        await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
+        const sent = await sendEmail({ to: submitter.email, ...email }, { label: "approval-decision" });
+        return sent ? "sent" : "failed";
       }
+      return "failed";
     } catch {
       // Ignored on purpose — the decision is already committed.
+      return "failed";
     }
   };
 
@@ -429,7 +440,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
-  await tellSubmitter();
+  const authorEmail = await tellSubmitter();
 
   return NextResponse.json(
     {
@@ -438,6 +449,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       status: nextStatus,
       approvalState,
       scheduledFor: scheduledForIso,
+      authorEmail,
       ...(partial ? { message: `Approved. ${partial}` } : {}),
       // R2's answer, still read by a tab running the old Queue.
       ...(!approving && pairDecided ? { pairRejected: true } : {}),

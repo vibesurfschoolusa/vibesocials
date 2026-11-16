@@ -223,11 +223,30 @@ describe("publishOutcome (publish route response)", () => {
 });
 
 describe("decisionOutcome (approval route response)", () => {
-  it("reject removes the card", () => {
-    expect(decisionOutcome("reject", { ok: true, status: "cancelled", approvalState: "rejected", scheduledFor: null })).toEqual({
+  const REJECTED = { ok: true, status: "cancelled", approvalState: "rejected", scheduledFor: null };
+  // R23-client-journey L4: "notified" only when the route says the email went out.
+  it("reject removes the card and says the author was notified when the email went out", () => {
+    expect(decisionOutcome("reject", { ...REJECTED, authorEmail: "sent" })).toEqual({
       kind: "remove",
       message: "Post rejected — the author has been notified.",
     });
+  });
+  it("reject of a removed author says no email was sent", () => {
+    expect(decisionOutcome("reject", { ...REJECTED, authorEmail: "removed" })).toEqual({
+      kind: "remove",
+      message: "Post rejected. The author is no longer in this workspace, so no email was sent.",
+    });
+  });
+  it("reject whose email failed asks the owner to tell the author", () => {
+    expect(decisionOutcome("reject", { ...REJECTED, authorEmail: "failed" })).toEqual({
+      kind: "remove",
+      message: "Post rejected. We couldn't email the author; let them know yourself.",
+    });
+  });
+  it("reject with no word on the email claims nothing about it", () => {
+    for (const data of [REJECTED, null]) {
+      expect(decisionOutcome("reject", data)).toEqual({ kind: "remove", message: "Post rejected." });
+    }
   });
   it("approve -> scheduled updates the card in place (approved, scheduled, new time)", () => {
     expect(

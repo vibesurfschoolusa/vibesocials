@@ -175,7 +175,8 @@ beforeEach(() => {
   memberFindUniqueMock.mockReset();
   memberFindUniqueMock.mockResolvedValue({ id: "membership-1" });
   inngestSendMock.mockResolvedValue(undefined);
-  sendEmailMock.mockResolvedValue(undefined);
+  // sendEmail resolves whether Resend accepted the email (R23-client-journey L4).
+  sendEmailMock.mockResolvedValue(true);
   prepareDispatchMock.mockResolvedValue({
     ok: true,
     event: {
@@ -477,6 +478,63 @@ describe("POST /api/posts/[postJobId]/approval", () => {
   });
 });
 
+// R23-client-journey L4: the Queue says "the author has been notified" only
+// when the email went out, so the answer says what happened to it.
+describe("POST /api/posts/[postJobId]/approval - whether the author was emailed", () => {
+  for (const decision of ["approve", "reject"] as const) {
+    it(`${decision}: a member still in the workspace who was emailed -> authorEmail "sent"`, async () => {
+      findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+      const res = await POST(req({ decision }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      await expect(res.json()).resolves.toMatchObject({ authorEmail: "sent" });
+    });
+
+    it(`${decision}: a submitter who was removed -> authorEmail "removed", no email`, async () => {
+      findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+      memberFindUniqueMock.mockResolvedValue(null);
+
+      const res = await POST(req({ decision }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      await expect(res.json()).resolves.toMatchObject({ authorEmail: "removed" });
+    });
+
+    it(`${decision}: an email Resend did not accept -> authorEmail "failed"`, async () => {
+      findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+      sendEmailMock.mockResolvedValue(false);
+
+      const res = await POST(req({ decision }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({ authorEmail: "failed" });
+    });
+  }
+
+  it('a send that throws -> authorEmail "failed", the decision stands', async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    sendEmailMock.mockRejectedValue(new Error("smtp down"));
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ status: "cancelled", authorEmail: "failed" });
+  });
+
+  it('a member with no email address on file -> authorEmail "failed"', async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    userFindUniqueMock.mockResolvedValue({ email: null });
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toMatchObject({ authorEmail: "failed" });
+  });
+});
+
 describe("POST /api/posts/[postJobId]/approval — response contract (2026-11-01 audit)", () => {
   it("approve + time ahead → scheduled, approved, keeps the time", async () => {
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
@@ -490,6 +548,7 @@ describe("POST /api/posts/[postJobId]/approval — response contract (2026-11-01
       status: "scheduled",
       approvalState: "approved",
       scheduledFor: FUTURE.toISOString(),
+      authorEmail: "sent",
     });
   });
 
@@ -504,6 +563,7 @@ describe("POST /api/posts/[postJobId]/approval — response contract (2026-11-01
       status: "in_progress",
       approvalState: "approved",
       scheduledFor: null,
+      authorEmail: "sent",
     });
   });
 
@@ -518,6 +578,7 @@ describe("POST /api/posts/[postJobId]/approval — response contract (2026-11-01
       status: "cancelled",
       approvalState: "rejected",
       scheduledFor: null,
+      authorEmail: "sent",
     });
   });
 });
@@ -625,6 +686,7 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
       status: "scheduled",
       approvalState: "approved",
       scheduledFor: FUTURE.toISOString(),
+      authorEmail: "sent",
     });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: CLAIM_WHERE,
@@ -916,6 +978,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
       status: "cancelled",
       approvalState: "rejected",
       scheduledFor: null,
+      authorEmail: "sent",
       // Old tabs (R2) read this flag; the Queue reads otherHalf.
       pairRejected: true,
       otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was rejected too." },
