@@ -185,7 +185,7 @@ describe("Settings, Account: change password when the answer is lost", () => {
 
   it("no answer or an unreadable 5xx: it may have changed; a refusal: the route's own sentence", () => {
     expect(PASSWORD_MAYBE_CHANGED_MESSAGE).toBe(
-      "The answer was lost, so your password may have changed. Check your connection, then reload this page: if it asks you to sign in, use your new password.",
+      "We lost the connection before Vibe Socials answered, so your password may have changed. Check your connection, then reload this page: if it asks you to sign in, use your new password.",
     );
     expect(passwordFailureText(502, null)).toBe(PASSWORD_MAYBE_CHANGED_MESSAGE);
     expect(passwordFailureText(400, { error: "Your current password is wrong." })).toBe("Your current password is wrong.");
@@ -207,7 +207,7 @@ describe("Settings, Account: change email when the answer is lost", () => {
 
   it("no answer or an unreadable 5xx: it may have gone through, and where to check", () => {
     expect(EMAIL_CHANGE_MAYBE_SENT_MESSAGE).toBe(
-      "The answer was lost, so the change may have gone through. Check the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.",
+      "We lost the connection before Vibe Socials answered, so the change may have gone through. Check your connection, then look in the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.",
     );
     expect(emailChangeFailureText(502, null)).toBe(EMAIL_CHANGE_MAYBE_SENT_MESSAGE);
     expect(emailChangeFailureText(400, { error: "That is your current email." })).toBe("That is your current email.");

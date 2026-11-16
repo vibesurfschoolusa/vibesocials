@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { answerLostText } from "@/lib/answerLost";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { formatDisplayDate } from "@/lib/displayDate";
@@ -61,8 +62,10 @@ export function teamMemberLines(member: Pick<Member, "name" | "email">): { label
  * answers, so when the answer is lost a new link may exist and the old one be
  * dead. Never "nothing changed".
  */
-export const INVITE_MAYBE_MADE_MESSAGE =
-  "The answer was lost, so a new invite link may have been made, which turns the old one off. Reload this page and check Invite link before you send a link.";
+export const INVITE_MAYBE_MADE_MESSAGE = answerLostText(
+  "a new invite link may have been made, which turns the old one off",
+  "reload this page and check Invite link before you send a link",
+);
 
 /** What a failed Create invite link says, from the answer it got. */
 export function inviteFailureText(status: number, data: { error?: unknown } | null): string {

@@ -161,3 +161,18 @@ describe("ReviewPostCard: a decision that got no answer", () => {
     expect(decide).not.toContain("Couldn't save that. Check your connection");
   });
 });
+
+// R27 MM3 lead review (already on main): "Ask for a change" is replaced by the
+// form, and the form's Cancel by the buttons again. Focus goes to the note box,
+// and back to "Ask for a change".
+describe("ReviewPostCard: focus in Ask for a change", () => {
+  it("Ask for a change focuses the note box; Cancel returns to Ask for a change", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/focusAfterPress\(event\.currentTarget, \(\) => noteRef\.current\);\s+setAsking\(true\);/);
+    expect(source).toMatch(/focusAfterPress\(event\.currentTarget, \(\) => askRef\.current\);\s+setAsking\(false\);/);
+    expect(source).toMatch(/<Textarea\s+ref=\{noteRef\}/);
+    expect(source).toMatch(/ref=\{askRef\}/);
+  });
+});

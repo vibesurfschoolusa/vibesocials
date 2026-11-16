@@ -107,6 +107,8 @@ export function ReviewPostCard({
   const [error, setError] = useState<string | null>(null);
   const stateRef = useRef<HTMLParagraphElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const askRef = useRef<HTMLButtonElement>(null);
   const state = stateText(post);
   // Whole characters, as the server counts them (an emoji is one, not two).
   const noteLength = Array.from(note.trim()).length;
@@ -219,6 +221,7 @@ export function ReviewPostCard({
             >
               <Label htmlFor={`note-${post.id}`}>What would you like changed?</Label>
               <Textarea
+                ref={noteRef}
                 id={`note-${post.id}`}
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
@@ -234,7 +237,17 @@ export function ReviewPostCard({
                 <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={noteTooShort || noteTooLong}>
                   Send
                 </Button>
-                <Button type="button" size="lg" className="w-full sm:w-auto" variant="ghost" disabled={busy} onClick={() => setAsking(false)}>
+                <Button
+                  type="button"
+                  size="lg"
+                  className="w-full sm:w-auto"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={(event) => {
+                    focusAfterPress(event.currentTarget, () => askRef.current);
+                    setAsking(false);
+                  }}
+                >
                   Cancel
                 </Button>
               </div>
@@ -256,8 +269,13 @@ export function ReviewPostCard({
                 size="lg"
                 className="w-full sm:w-auto"
                 variant="outline"
+                ref={askRef}
                 disabled={busy}
-                onClick={() => setAsking(true)}
+                onClick={(event) => {
+                  // R27 MM3: the buttons are replaced by the form; focus goes to its note box.
+                  focusAfterPress(event.currentTarget, () => noteRef.current);
+                  setAsking(true);
+                }}
               >
                 Ask for a change
               </Button>

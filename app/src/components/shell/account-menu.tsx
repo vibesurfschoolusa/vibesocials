@@ -7,6 +7,7 @@ import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Mail, Plu
 import type { WorkspaceRole } from "@prisma/client";
 
 import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accountInitials";
+import { answerLostText } from "@/lib/answerLost";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
@@ -106,8 +107,10 @@ export function focusWhenPending(node: { focus(): void } | null, pending: { curr
  * may exist, and pressing Create again would make a second one. Never
  * "nothing changed".
  */
-export const WORKSPACE_MAYBE_MADE_MESSAGE =
-  "The answer was lost, so the workspace may have been made. Open this menu again and check the workspace list before you create it again.";
+export const WORKSPACE_MAYBE_MADE_MESSAGE = answerLostText(
+  "the workspace may have been made",
+  "open this menu again and check the workspace list before you create it again",
+);
 
 /** What a refused or unreadable Create workspace answer says. */
 export function createWorkspaceFailureText(status: number, data: { error?: unknown } | null): string {

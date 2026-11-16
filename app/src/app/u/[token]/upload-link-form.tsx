@@ -116,6 +116,7 @@ export function UploadLinkForm({ token }: { token: string }) {
   const [failureKinds, setFailureKinds] = useState<Record<string, ClientFileFailure["kind"]>>({});
   const sendRef = useRef<HTMLButtonElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   function update(key: string, change: Partial<PickedFile>) {
     setFiles((prev) => prev.map((item) => (item.key === key ? { ...item, ...change } : item)));
@@ -125,7 +126,9 @@ export function UploadLinkForm({ token }: { token: string }) {
     event.preventDefault();
     if (files.length === 0 || phase === "sending") return;
     // R27 MM3: "Try the files that didn't send" goes when sending starts; focus goes to Send.
-    focusAfterPress((event.nativeEvent as SubmitEvent).submitter, () => sendRef.current);
+    // Send itself stays (loading), and the watch at the end covers it: one watch at a time.
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    if (submitter !== sendRef.current) focusAfterPress(submitter, () => sendRef.current);
     setPhase("sending");
     for (const item of files) {
       if (item.status === "sent") continue;
@@ -150,7 +153,9 @@ export function UploadLinkForm({ token }: { token: string }) {
     setPhase("done");
   }
 
-  function startOver() {
+  /** `pressed`: Send more, which the form replaces; focus goes to its first field. */
+  function startOver(pressed: HTMLElement | null) {
+    focusAfterPress(pressed, () => nameRef.current);
     setFiles([]);
     setFailureKinds({});
     setPhase("picking");
@@ -192,6 +197,7 @@ export function UploadLinkForm({ token }: { token: string }) {
           <div className="space-y-1.5">
             <Label htmlFor="upload-link-name">Your name (optional)</Label>
             <Input
+              ref={nameRef}
               id="upload-link-name"
               value={senderName}
               maxLength={UPLOAD_LINK_TEXT_MAX}
@@ -285,7 +291,7 @@ export function UploadLinkForm({ token }: { token: string }) {
               Try the {failedCount === 1 ? "file" : `${failedCount} files`} that didn&apos;t send
             </Button>
           ) : null}
-          <Button type="button" variant="outline" size="lg" className="w-full" onClick={startOver}>
+          <Button type="button" variant="outline" size="lg" className="w-full" onClick={(event) => startOver(event.currentTarget)}>
             Send more
           </Button>
         </div>

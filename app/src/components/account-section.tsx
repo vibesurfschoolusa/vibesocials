@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { answerLostText } from "@/lib/answerLost";
 import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDate } from "@/lib/displayDate";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
@@ -41,8 +42,10 @@ const PASSWORD_NOT_CHANGED = "Could not change your password. Try again.";
  * R27 MM3 (new-customer L7): a change signs every device out on the server, so
  * when the answer is lost the password may have changed. Never "nothing changed".
  */
-export const PASSWORD_MAYBE_CHANGED_MESSAGE =
-  "The answer was lost, so your password may have changed. Check your connection, then reload this page: if it asks you to sign in, use your new password.";
+export const PASSWORD_MAYBE_CHANGED_MESSAGE = answerLostText(
+  "your password may have changed",
+  "reload this page: if it asks you to sign in, use your new password",
+);
 
 /** What a refused or unreadable change-password answer says. */
 export function passwordFailureText(status: number, data: { error?: unknown } | null): string {
@@ -248,8 +251,10 @@ const EMAIL_CHANGE_NOT_STARTED = "We couldn't start the change. Your email is un
  * R27 MM3 lead follow-up: with no answer the confirmation link may already be
  * on its way, so "unchanged" could be wrong. Say where to check instead.
  */
-export const EMAIL_CHANGE_MAYBE_SENT_MESSAGE =
-  "The answer was lost, so the change may have gone through. Check the new address's inbox for the confirmation email, or reload this page to see your current sign-in email.";
+export const EMAIL_CHANGE_MAYBE_SENT_MESSAGE = answerLostText(
+  "the change may have gone through",
+  "look in the new address's inbox for the confirmation email, or reload this page to see your current sign-in email",
+);
 
 /** What a refused or unreadable change-email answer says. */
 export function emailChangeFailureText(status: number, data: { error?: string; until?: string } | null): string {

@@ -105,7 +105,32 @@ describe("UploadSummary before anything was sent", () => {
     const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
     expect(source).not.toMatch(/phase === "done" \? \(\s+<UploadSummary/);
     expect(source).toMatch(/<div ref=\{summaryRef\} tabIndex=\{-1\}[^>]*>\s+<UploadSummary/);
-    expect(source).toMatch(/focusAfterPress\(\(event\.nativeEvent as SubmitEvent\)\.submitter, \(\) => sendRef\.current\);/);
+    expect(source).toMatch(/focusAfterPress\(submitter, \(\) => sendRef\.current\);/);
     expect(source).toMatch(/focusAfterPress\(sendRef\.current, \(\) => summaryRef\.current\);\s+setPhase\("done"\);/);
+  });
+});
+
+// R27 MM3 lead review: the press-time watch and the end-of-send watch both
+// watched Send, so the first could land focus on its fallback before the
+// summary. The press-time one is only for a submitter other than Send (the
+// retry button). "Send more" (already on main) replaced itself under the
+// focus: it hands focus to the form's first field.
+describe("UploadLinkForm: one focus watch per change", () => {
+  it("skips the press-time watch when Send itself was pressed", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(
+      /const submitter = \(event\.nativeEvent as SubmitEvent\)\.submitter;\s+if \(submitter !== sendRef\.current\) focusAfterPress\(submitter, \(\) => sendRef\.current\);/,
+    );
+  });
+
+  it("Send more hands focus to the name field", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./upload-link-form.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/function startOver\(pressed: HTMLElement \| null\) \{\s+focusAfterPress\(pressed, \(\) => nameRef\.current\);/);
+    expect(source).toMatch(/onClick=\{\(event\) => startOver\(event\.currentTarget\)\}/);
+    expect(source).toMatch(/<Input\s+ref=\{nameRef\}\s+id="upload-link-name"/);
   });
 });

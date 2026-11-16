@@ -166,7 +166,7 @@ describe("reviewDecisionOutcome", () => {
   // timeout) may come after the decision was saved, as no answer at all can.
   it("an unreadable 5xx may have been saved: reload to see; the route's own 5xx sentence stays", () => {
     expect(REVIEW_DECISION_MAYBE_SAVED_MESSAGE).toBe(
-      "The answer was lost, so your choice may have been saved. Reload the page to see.",
+      "We lost the connection before Vibe Socials answered, so your choice may have been saved. Check your connection, then reload the page to see.",
     );
     for (const data of [null, {}, { error: "" }, "<html>Bad gateway</html>"]) {
       expect(reviewDecisionOutcome(502, data)).toEqual({ kind: "refused", message: REVIEW_DECISION_MAYBE_SAVED_MESSAGE });

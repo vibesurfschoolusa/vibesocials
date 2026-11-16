@@ -8,6 +8,9 @@
  * account exists, so telling the user the request didn't go through leaks
  * nothing and stops them waiting for an email that was never sent.
  */
+
+import { answerLostText } from "./answerLost";
+
 export type ForgotPasswordOutcome = { kind: "sent" } | { kind: "error"; message: string };
 
 export function forgotPasswordOutcome(status: number | null): ForgotPasswordOutcome {
@@ -25,8 +28,10 @@ export function forgotPasswordOutcome(status: number | null): ForgotPasswordOutc
     // sentence is the same for every address, so it still reveals nothing.
     return {
       kind: "error",
-      message:
-        "The answer was lost, so we can't tell whether the request went through. Check your connection and try again. If an account exists for that address, a link may already be on its way.",
+      message: answerLostText(
+        "the request may have gone through",
+        "try again. If an account exists for that address, a link may already be on its way",
+      ),
     };
   }
   return { kind: "error", message: "Something went wrong. Please try again." };
