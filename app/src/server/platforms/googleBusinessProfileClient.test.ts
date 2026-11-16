@@ -1364,6 +1364,31 @@ describe("googleBusinessProfileClient: a 403 in the store-code lookup", () => {
       (reason: string) => (url: string) =>
         url.includes("/locations") ? googleError(reason) : Response.json({ accounts: [{ name: "accounts/111" }] }),
     ],
+  ])("%s missing the permission (row flagged): a coded reconnect error, never the post's rules", async (_label, answer) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockResolvedValue("flagged");
+    const reply = answer("ACCESS_TOKEN_SCOPE_INSUFFICIENT");
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => reply(String(input))));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_RECONNECT_REQUIRED", status: 403 });
+    expect(error!.message).toBe("Reconnect Google Business Profile in Settings and allow access, then retry.");
+    const owner = publishErrorMessage("google_business_profile", error!);
+    expect(owner).toBe("Reconnect Google Business Profile in Settings, then retry.");
+    expect(owner).not.toMatch(/rules/);
+    expect(sentenceForRecipient(owner, "google_business_profile", "member")).toBe(
+      "The workspace owner can reconnect Google Business Profile; then retry.",
+    );
+  });
+
+  it.each([
+    ["the accounts list", (reason: string) => () => googleError(reason)],
+    [
+      "every account's locations",
+      (reason: string) => (url: string) =>
+        url.includes("/locations") ? googleError(reason) : Response.json({ accounts: [{ name: "accounts/111" }] }),
+    ],
   ])("%s refused by our own setup: try later, code and status kept", async (_label, answer) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const reply = answer("SERVICE_DISABLED");

@@ -2,7 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { GBP_ACCESS_REFUSED_TEXT, googleSetupRefusedMessage } from "@/lib/publishFailureText";
-import { googlePublish403, isExpiredTokenRejection, withGoogleTokenRetry } from "@/server/googleFailure";
+import { googleFailureKind, googlePublish403, isExpiredTokenRejection, withGoogleTokenRetry } from "@/server/googleFailure";
 import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
@@ -59,6 +59,9 @@ const GBP_VIDEO_REFUSED_TEXT =
 
 /** The code a row is flagged with when Google refuses its token on a post (an API 401). */
 const GBP_RECONNECT_CODE = "GBP_RECONNECT_REQUIRED";
+
+/** The store-code lookup's 403 for a missing permission; read as the reconnect sentence (publishErrorMessage). */
+const GBP_LOOKUP_PERMISSION_TEXT = "Reconnect Google Business Profile in Settings and allow access, then retry.";
 
 /**
  * R25 platform-clients L2: Google answered the post with 401. The row is
@@ -496,6 +499,12 @@ async function ensureLocationName(
  */
 function lookupForbidden(error: unknown): unknown {
   const fields = (error ?? {}) as { code?: unknown; status?: unknown; googleReasons?: unknown };
+  // R28 platform-clients L1: the permission is missing (gbpLocation.ts has
+  // flagged the row, so the card shows Reconnect): the reconnect code, never
+  // the post's rules.
+  if (fields.status === 403 && fields.code === undefined && googleFailureKind(error) === "reconnect") {
+    return Object.assign(new Error(GBP_LOOKUP_PERMISSION_TEXT), { code: GBP_RECONNECT_CODE, status: 403, cause: error });
+  }
   if (fields.code !== "GBP_ACCOUNTS_LIST_FAILED" || fields.status !== 403 || !(error instanceof Error)) return null;
   const reasons = Array.isArray(fields.googleReasons)
     ? fields.googleReasons.filter((reason): reason is string => typeof reason === "string")
