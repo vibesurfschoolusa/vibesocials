@@ -125,6 +125,8 @@ export function LinkedInAccountDialog({
         </Button>
         <Button
           variant="outline"
+          // R27 MM3: with the new-tab hint it is too long for a 375 px dialog, so it wraps and grows.
+          className="h-auto min-h-10 flex-wrap gap-x-1 gap-y-0 whitespace-normal py-1.5"
           onClick={() => window.open(LINKEDIN_SIGN_OUT_URL, "_blank", "noopener,noreferrer")}
           disabled={busy}
         >

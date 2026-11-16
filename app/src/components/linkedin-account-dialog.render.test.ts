@@ -77,3 +77,20 @@ describe("LinkedIn Reconnect dialog", () => {
     expect(html).toContain("use the account that manages your company page.");
   });
 });
+
+// R27 MM3 (new-customer L4): Button is whitespace-nowrap, so "Open LinkedIn
+// sign-out (opens in a new tab)" ran past the dialog at 375-390 px. It wraps
+// and grows, as the Google sign-in link does (SignInAgainLinkView).
+describe("LinkedIn dialog: the sign-out button on a phone", () => {
+  it("wraps its text and grows instead of running past the dialog", () => {
+    for (const mode of ["connect", "switch", "reconnect"] as const) {
+      const html = renderToStaticMarkup(
+        createElement(LinkedInAccountDialog, { workspaceId: "ws-1", open: true, onOpenChange: () => {}, mode }),
+      );
+      const at = html.lastIndexOf("<button", html.indexOf(">Open LinkedIn sign-out "));
+      const classes = html.slice(at, html.indexOf(">", at)).match(/class="([^"]*)"/)![1].split(/\s+/);
+      for (const cls of ["h-auto", "min-h-10", "flex-wrap", "whitespace-normal", "py-1.5"]) expect(classes, mode).toContain(cls);
+      expect(classes, mode).not.toContain("whitespace-nowrap");
+    }
+  });
+});
