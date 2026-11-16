@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
+import { canRetry, readApiError, shownError, signInHref, type ShownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { ReviewsEmptyState } from "@/components/reviews/reviews-empty-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -106,7 +106,7 @@ export function ReviewsLoadFailedPage({
         settingsLink={error.settingsLink}
         signInUrl={signInHref(error, workspaceId)}
         isMember={isMember}
-        onRetry={onRetry}
+        onRetry={canRetry(error) ? onRetry : undefined}
       />
     </div>
   );
@@ -292,8 +292,8 @@ export function ReviewsView({
 
   // Posts the reply. Invoked from the ConfirmDialog's onConfirm — on failure
   // it toasts and then re-throws, which (per the dialog's contract) keeps the
-  // dialog open so the user can retry; on success it updates local state and
-  // lets the dialog close.
+  // dialog open so the user can retry, unless a retry can't change the answer;
+  // on success it updates local state and lets the dialog close.
   const performReply = async (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
     if (!comment || replyTooLong(comment)) {
@@ -350,7 +350,8 @@ export function ReviewsView({
       const shown = shownError(err, REPLY_FAILED);
       toast.error(shown.message);
       setReplyRefusal(replyRefusalAfterFailure(review.reviewId, shown, isMember));
-      throw err;
+      // A reply a retry can't change (a 403) lets the dialog close; its form keeps the sentence.
+      if (canRetry(shown)) throw err;
     } finally {
       setSubmitting(null);
     }
@@ -533,7 +534,7 @@ export function ReviewsView({
           settingsLink={reviewsError.settingsLink}
           signInUrl={signInHref(reviewsError, workspaceId)}
           isMember={isMember}
-          onRetry={loadReviews}
+          onRetry={canRetry(reviewsError) ? loadReviews : undefined}
         />
       ) : loading ? (
         <ReviewsLoadingList />

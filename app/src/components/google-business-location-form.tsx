@@ -30,10 +30,10 @@ interface RemoteLocation {
 
 /** What the form says when something didn't work (R5 new-customer L8, pages L8). */
 export const LOCATION_MESSAGES = {
-  // R25 client-journey L1: never the card's account switch, which deletes the listing's
-  // numbers; the in-place sign-in keeps the row (the link shows with this).
+  // R25 (KK1): the route words an empty list itself (its `notice`); this is only
+  // for an answer without one, and names no control.
   noLocations:
-    "This Google account has no business listing we can post to. Sign in to Google again with the Google account that manages your listing (an owner or manager in Google Business Profile), then fetch the locations again.",
+    "Google sent no locations for this Google account. Check in Google Business Profile that this account manages your listing.",
   saveFailed: "The location wasn't saved. Please try again in a minute.",
   saveOffline:
     "We couldn't reach Vibe Socials, so the location wasn't saved. Check your internet connection and try again.",
@@ -59,12 +59,15 @@ export function locationFailure(
   fallback: string,
   workspaceId: string,
 ): { message: string; reconnect: boolean; signInUrl: string | null } {
+  const reconnect = data?.code === LOCATION_RECONNECT_CODE;
   return {
     message: data?.error ?? fallback,
-    reconnect: data?.code === LOCATION_RECONNECT_CODE,
+    reconnect,
     // JJ3 lead review: the route only says to sign in again; the link names the
     // workspace this form was drawn for (lib/gbpSignIn.ts), never one from the answer.
-    signInUrl: data?.signIn === true ? gbpSignInUrl(workspaceId) : null,
+    // R25: a reconnect answer refreshes the card to its own Reconnect button (the
+    // same URL), so the form adds no second control for that step.
+    signInUrl: data?.signIn === true && !reconnect ? gbpSignInUrl(workspaceId) : null,
   };
 }
 
@@ -75,13 +78,21 @@ export interface PickerStatus {
 }
 
 /**
- * What a loaded list says (JJ3 lead review): the route's notice about accounts
- * whose locations could not be read, else, for an empty list, the sign-in step
- * with its link for this form's workspace; null when there is nothing to say.
+ * What a loaded list says (JJ3 lead review): the route's `notice` (accounts
+ * whose locations could not be read, or, R25 KK1, an empty list), else, for an
+ * empty list, the form's fallback; null when there is nothing to say. The
+ * in-place sign-in shows when the 200 answer says `signIn: true`, built from
+ * this form's workspace, never from the answer.
  */
-export function locationsLoadedStatus(count: number, notice: unknown, workspaceId: string): PickerStatus | null {
-  if (typeof notice === "string" && notice) return { message: notice, signInUrl: null };
-  return count === 0 ? { message: LOCATION_MESSAGES.noLocations, signInUrl: gbpSignInUrl(workspaceId) } : null;
+export function locationsLoadedStatus(
+  count: number,
+  data: { notice?: unknown; signIn?: unknown } | null,
+  workspaceId: string,
+): PickerStatus | null {
+  const notice = typeof data?.notice === "string" && data.notice ? data.notice : null;
+  const message = notice ?? (count === 0 ? LOCATION_MESSAGES.noLocations : null);
+  if (!message) return null;
+  return { message, signInUrl: data?.signIn === true ? gbpSignInUrl(workspaceId) : null };
 }
 
 /** Lead review: which control a save came from, so its failure shows by that control. */
@@ -201,7 +212,7 @@ export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, i
       const list: RemoteLocation[] =
         data && Array.isArray(data.locations) ? data.locations : [];
       setLocations(list);
-      setListNote(locationsLoadedStatus(list.length, data?.notice, workspaceId));
+      setListNote(locationsLoadedStatus(list.length, data, workspaceId));
       setLoadingLocations(false);
     } catch {
       setLocations(null);

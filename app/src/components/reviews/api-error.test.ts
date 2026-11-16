@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readApiError, shownError, signInHref } from "./api-error";
+import { canRetry, readApiError, shownError, signInHref } from "./api-error";
 
 // F7 (R1 M5): the Reviews page read every error body with response.json(), so
 // a non-JSON answer (a proxy's HTML page, an empty 502) showed a parse error.
@@ -45,6 +45,30 @@ describe("readApiError", () => {
     const error = await readApiError(new Response(body, { status: 502 }), "Fallback.");
 
     expect(shownError(error, "Other.")).toEqual({ message: "Fallback.", settingsLink: false });
+  });
+});
+
+// R25 (KK1): a member asking for another location than the workspace's own
+// gets a 403. Asking again gives the same answer, so the page offers no Retry.
+describe("an answer a retry can't change", () => {
+  it("a 403 is said plainly, with no retry", async () => {
+    const error = await readApiError(
+      new Response(JSON.stringify({ error: "Members read and answer the reviews of this workspace's own Google location only." }), { status: 403 }),
+      "F.",
+    );
+    const shown = shownError(error, "Other.");
+    expect(shown).toEqual({
+      message: "Members read and answer the reviews of this workspace's own Google location only.",
+      settingsLink: false,
+      retry: false,
+    });
+    expect(canRetry(shown)).toBe(false);
+  });
+
+  it("anything else keeps Retry", async () => {
+    const shown = shownError(await readApiError(new Response("", { status: 500 }), "F."), "Other.");
+    expect(canRetry(shown)).toBe(true);
+    expect(canRetry(shownError(new TypeError("Failed to fetch"), "F."))).toBe(true);
   });
 });
 

@@ -34,6 +34,14 @@ describe("ErrorState: signing in to Google again", () => {
     expect(html).toMatch(/<a [^>]*href="\/api\/auth\/google_business_profile\/start\?workspaceId=ws-1"[^>]*>Sign in to Google again <span[^>]*>\(opens in a new tab\)<\/span><\/a>/);
   });
 
+  // R25 (KK1): owners' reconnect and access answers carry both reconnect and
+  // signIn. Both controls would mean the same step, so only the sign-in shows.
+  it("an owner with the sign-in gets no second control for the same step", () => {
+    const html = render({ message: "Google refused the request.", settingsLink: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1" });
+    expect(html).not.toContain("Go to Settings");
+    expect(html).not.toContain('href="/settings');
+  });
+
   it("a member never does", () => {
     const html = render({ message: "x", settingsLink: true, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-1", isMember: true });
     expect(html).not.toContain("/api/auth/");
@@ -51,5 +59,14 @@ describe("ErrorState for a member", () => {
 
   it("still offers Retry", () => {
     expect(render({ message: "Couldn't load your Google reviews.", isMember: true })).toContain(">Retry<");
+  });
+
+  // R25 (KK1): a member's 403 for another location: the sentence, no Retry.
+  it("shows no Retry when there is nothing a retry could change", () => {
+    const html = renderToStaticMarkup(
+      createElement(ErrorState, { title: "Couldn't load reviews", message: "Members read only this workspace's location.", isMember: true }),
+    );
+    expect(html).toContain("Members read only this workspace&#x27;s location.");
+    expect(html).not.toContain(">Retry<");
   });
 });

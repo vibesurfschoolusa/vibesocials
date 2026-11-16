@@ -12,6 +12,8 @@ export class ReviewsApiError extends Error {
     readonly settingsLink: boolean,
     /** JJ3 lead review: the route asks an owner for the in-place Google sign-in (lib/gbpSignIn.ts). */
     readonly signIn = false,
+    /** R25 (KK1): false for a 403 (a member asking for another location): asking again can't change it. */
+    readonly retry = true,
   ) {
     super(message);
     this.name = "ReviewsApiError";
@@ -25,7 +27,7 @@ export async function readApiError(response: Response, fallback: string): Promis
     | null;
   const message = typeof body?.error === "string" && body.error.trim() !== "" ? body.error : fallback;
   // Only the flag is read: a URL in an answer is never followed.
-  return new ReviewsApiError(message, body?.reconnect === true, body?.signIn === true);
+  return new ReviewsApiError(message, body?.reconnect === true, body?.signIn === true, response.status !== 403);
 }
 
 /** The sentence to show for anything caught: a route's sentence, never a parse or network error's text. */
@@ -33,13 +35,21 @@ export interface ShownError {
   message: string;
   settingsLink: boolean;
   signIn?: true;
+  /** Set (false) only when asking again can't change the answer. */
+  retry?: false;
 }
 
 export function shownError(error: unknown, fallback: string): ShownError {
   if (!(error instanceof ReviewsApiError)) return { message: fallback, settingsLink: false };
-  return error.signIn
-    ? { message: error.message, settingsLink: error.settingsLink, signIn: true }
-    : { message: error.message, settingsLink: error.settingsLink };
+  const shown: ShownError = { message: error.message, settingsLink: error.settingsLink };
+  if (error.signIn) shown.signIn = true;
+  if (!error.retry) shown.retry = false;
+  return shown;
+}
+
+/** Whether the page offers Retry (or keeps a dialog open to send again) for this error. */
+export function canRetry(shown: ShownError): boolean {
+  return shown.retry !== false;
 }
 
 /**

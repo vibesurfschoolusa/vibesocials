@@ -127,6 +127,20 @@ describe("ReviewsView when a reply form closes", () => {
   });
 });
 
+// R25 (KK1): a member's 403 for another location says its sentence with no Retry,
+// and a refused reply that a retry can't change closes the confirm dialog.
+describe("ReviewsView and an answer a retry can't change", () => {
+  it("offers Retry on both error cards only through canRetry", () => {
+    expect(source).toContain("onRetry={canRetry(error) ? onRetry : undefined}");
+    expect(source).toContain("onRetry={canRetry(reviewsError) ? loadReviews : undefined}");
+  });
+
+  it("does not keep the confirm dialog open for a reply a retry can't change", () => {
+    const perform = source.slice(at("const performReply"), at("const handleDraftAI"));
+    expect(perform).toContain("if (canRetry(shown)) throw err;");
+  });
+});
+
 // R25 pages L1: Reply hands focus to the box; Cancel to that review's Reply button.
 describe("ReviewsView and focus when a reply form opens or closes", () => {
   it("asks for the box on Reply, and decides with focusBoxOnOpen once it is open", () => {

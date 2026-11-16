@@ -25,12 +25,13 @@ const signInLinkHtml = (href: string) => renderToStaticMarkup(createElement(Sign
 
 // R5 new-customer L8 and pages L8: each message says what happened and what to do.
 describe("Google location form messages", () => {
-  // R25 client-journey L1: Switch account deletes the listing's numbers; the
-  // in-place sign-in keeps them, so the empty list points at that instead.
-  it("an empty list says to sign in to Google again with the account that manages the listing", () => {
-    expect(LOCATION_MESSAGES.noLocations).toContain("no business listing");
-    expect(LOCATION_MESSAGES.noLocations).toContain("Sign in to Google again with the Google account that manages your listing");
-    expect(LOCATION_MESSAGES.noLocations).not.toContain("Switch account");
+  // R25 client-journey L1, after KK1: the route words the empty list itself
+  // (GBP_NO_LISTING_NOTICE); the form keeps only a short fallback, which names
+  // no control (Switch account deletes the listing's numbers).
+  it("an empty list's fallback, for an answer with no notice, names no control", () => {
+    expect(LOCATION_MESSAGES.noLocations).toBe(
+      "Google sent no locations for this Google account. Check in Google Business Profile that this account manages your listing.",
+    );
   });
 
   it("no sentence of the form names Switch account any more", () => {
@@ -57,6 +58,14 @@ describe("Google location form: a failed answer", () => {
     expect(LOCATION_RECONNECT_CODE).toBe(GBP_RECONNECT_CODE);
     expect(
       locationFailure({ error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE }, LOCATION_MESSAGES.loadFailed, "ws-1"),
+    ).toEqual({ message: GBP_RECONNECT_MESSAGE, reconnect: true, signInUrl: null });
+  });
+
+  // R25 (KK1): the reconnect answer carries signIn too, but the card refreshes
+  // to its own Reconnect button (the same URL), so the form adds no second control.
+  it("a reconnect answer with signIn: no link in the form, the card's Reconnect is the one control", () => {
+    expect(
+      locationFailure({ error: GBP_RECONNECT_MESSAGE, code: GBP_RECONNECT_CODE, signIn: true }, LOCATION_MESSAGES.loadFailed, "ws-1"),
     ).toEqual({ message: GBP_RECONNECT_MESSAGE, reconnect: true, signInUrl: null });
   });
 
@@ -105,20 +114,34 @@ describe("Google location form: what a loaded list says", () => {
   const notice = "Google refused access to some of your Business Profile accounts, so their locations aren't listed.";
 
   it("the route's notice, with or without locations", () => {
-    expect(locationsLoadedStatus(3, notice, "ws-1")).toEqual({ message: notice, signInUrl: null });
-    expect(locationsLoadedStatus(0, notice, "ws-1")).toEqual({ message: notice, signInUrl: null });
+    expect(locationsLoadedStatus(3, { notice }, "ws-1")).toEqual({ message: notice, signInUrl: null });
+    expect(locationsLoadedStatus(0, { notice }, "ws-1")).toEqual({ message: notice, signInUrl: null });
   });
 
-  it("an empty list without a notice: the sign-in step, with the link for the form's own workspace", () => {
-    expect(locationsLoadedStatus(0, undefined, "ws-A")).toEqual({
+  // KK1: an empty list answers { locations: [], notice, signIn: true } (200).
+  it("a 200 with signIn: the route's notice and the link for the form's own workspace, never one from the answer", () => {
+    expect(
+      locationsLoadedStatus(0, { notice, signIn: true, ...{ signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-B" } }, "ws-A"),
+    ).toEqual({ message: notice, signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-A" });
+    expect(locationsLoadedStatus(0, { notice, signIn: "yes" }, "ws-A")).toEqual({ message: notice, signInUrl: null });
+  });
+
+  it("an empty list with no notice: the form's fallback, and no link the route didn't ask for", () => {
+    expect(locationsLoadedStatus(0, {}, "ws-A")).toEqual({ message: LOCATION_MESSAGES.noLocations, signInUrl: null });
+    expect(locationsLoadedStatus(0, null, "ws-A")).toEqual({ message: LOCATION_MESSAGES.noLocations, signInUrl: null });
+    expect(locationsLoadedStatus(0, { signIn: true }, "ws-A")).toEqual({
       message: LOCATION_MESSAGES.noLocations,
       signInUrl: "/api/auth/google_business_profile/start?workspaceId=ws-A",
     });
   });
 
   it("a full list: nothing to say", () => {
-    expect(locationsLoadedStatus(2, undefined, "ws-1")).toBeNull();
-    expect(locationsLoadedStatus(2, 42, "ws-1")).toBeNull();
+    expect(locationsLoadedStatus(2, {}, "ws-1")).toBeNull();
+    expect(locationsLoadedStatus(2, { notice: 42 }, "ws-1")).toBeNull();
+  });
+
+  it("the form hands it the whole answer", () => {
+    expect(formSource).toContain("setListNote(locationsLoadedStatus(list.length, data, workspaceId))");
   });
 });
 

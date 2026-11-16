@@ -10,7 +10,8 @@ import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 interface ErrorStateProps {
   title: string;
   message: string;
-  onRetry: () => void;
+  /** Left out when asking again can't change the answer (api-error.ts canRetry). */
+  onRetry?: () => void;
   /** Google refused the request (F7): the way out is reconnecting in Settings. */
   settingsLink?: boolean;
   /**
@@ -29,18 +30,23 @@ interface ErrorStateProps {
  * connection management now lives).
  */
 export function ErrorState({ title, message, onRetry, settingsLink = false, isMember, signInUrl }: ErrorStateProps) {
-  const showConnectionsLink = !isMember && (settingsLink || message.includes("not configured"));
+  const showSignIn = Boolean(signInUrl) && !isMember;
+  // R25 (KK1): an owner's reconnect and access answers carry the sign-in as well
+  // as the Settings link; both mean the same step, so only the sign-in shows.
+  const showConnectionsLink = !isMember && !showSignIn && (settingsLink || message.includes("not configured"));
 
   return (
     <Alert variant="danger" title={title}>
       <div className="flex flex-col items-start gap-3">
         <p>{message}</p>
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" size="sm" variant="destructive" onClick={onRetry}>
-            <RefreshCw aria-hidden className="h-4 w-4" />
-            Retry
-          </Button>
-          {signInUrl && !isMember ? <SignInAgainLink href={signInUrl} /> : null}
+          {onRetry ? (
+            <Button type="button" size="sm" variant="destructive" onClick={onRetry}>
+              <RefreshCw aria-hidden className="h-4 w-4" />
+              Retry
+            </Button>
+          ) : null}
+          {showSignIn && signInUrl ? <SignInAgainLink href={signInUrl} /> : null}
           {showConnectionsLink && (
             <Link
               // JJ3 lead review: a Google failure goes straight to the Google
