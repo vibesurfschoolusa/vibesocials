@@ -13,6 +13,7 @@ import { Card } from "@/components/ui/card";
 import {
   ConfirmDialog,
   ConfirmFailureShown,
+  confirmFailureText,
   Dialog,
   DialogBody,
   DialogDescription,
@@ -613,7 +614,7 @@ function OwnerView({
     const trimmed = workspaceNameToSave(name);
     setSavingName(true);
     try {
-      const response = await fetch("/api/workspaces/active", {
+      const response = await fetchOrNoAnswer("/api/workspaces/active", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: trimmed, workspaceId }),
@@ -634,8 +635,9 @@ function OwnerView({
       // reads the new name.
       router.refresh();
       announceWorkspaceChange();
-    } catch {
-      toast.error("Couldn't rename workspace.");
+    } catch (error) {
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
     } finally {
       setSavingName(false);
     }
@@ -674,7 +676,7 @@ function OwnerView({
   const createInvite = useCallback(async () => {
     setInviteBusy(true);
     try {
-      const response = await fetch("/api/workspaces/invites", {
+      const response = await fetchOrNoAnswer("/api/workspaces/invites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId }),
@@ -689,8 +691,9 @@ function OwnerView({
       setFreshUrl(data.url);
       setInvite({ expiresAt: data.expiresAt, createdAt: new Date().toISOString() });
       toast.success("Invite link created.");
-    } catch {
-      toast.error("Couldn't create an invite link.");
+    } catch (error) {
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
     } finally {
       setInviteBusy(false);
     }

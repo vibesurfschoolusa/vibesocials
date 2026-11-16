@@ -9,9 +9,11 @@ import type { WorkspaceRole } from "@prisma/client";
 import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accountInitials";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { contactUsHref } from "@/lib/contactUs";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
+import { confirmFailureText } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
@@ -209,7 +211,7 @@ export function AccountMenu() {
     if (workspace.isActive || switchingId) return;
     setSwitchingId(workspace.id);
     try {
-      const response = await fetch("/api/workspaces/switch", {
+      const response = await fetchOrNoAnswer("/api/workspaces/switch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId: workspace.id }),
@@ -230,8 +232,9 @@ export function AccountMenu() {
       // a second switch from racing the navigation. The page loads without the
       // last workspace's one-time message (R16).
       afterWorkspaceChange();
-    } catch {
-      toast.error("Couldn't switch workspaces.");
+    } catch (error) {
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
       setSwitchingId(null);
     }
   }
@@ -242,7 +245,7 @@ export function AccountMenu() {
     if (!name || createBusy) return;
     setCreateBusy(true);
     try {
-      const response = await fetch("/api/workspaces", {
+      const response = await fetchOrNoAnswer("/api/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -257,8 +260,9 @@ export function AccountMenu() {
       // full navigation remounts every client view under it, like a switch;
       // Settings first, since a new workspace's first job is connecting accounts.
       afterWorkspaceChange("/settings");
-    } catch {
-      toast.error("Couldn't create the workspace.");
+    } catch (error) {
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
       setCreateBusy(false);
     }
   }

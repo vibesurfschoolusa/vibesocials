@@ -193,6 +193,34 @@ describe("ConfirmDialog callers", () => {
 });
 
 /**
+ * R26 new-customer L6: the failures outside the dialogs (Team rename and the
+ * invite link, the account menu's switch and New workspace) said only
+ * "Couldn't ..." offline. They send through fetchOrNoAnswer and say a failure
+ * through the dialogs' texts, as Create link does.
+ */
+describe("requests outside the dialogs", () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+  const failureSaid = /catch \(error\) \{\s+const text = confirmFailureText\(error\);\s+if \(text\) toast\.error\(text\);/;
+
+  for (const [path, start, end] of [
+    ["../team-section.tsx", "const handleSaveName = useCallback", "}, ["],
+    ["../team-section.tsx", "const createInvite = useCallback", "}, ["],
+    ["../shell/account-menu.tsx", "async function handleSwitch(", "async function handleCreateWorkspace("],
+    ["../shell/account-menu.tsx", "async function handleCreateWorkspace(", "const initials ="],
+  ] as const) {
+    it(`${path} ${start}: fetchOrNoAnswer, and the dialogs' sentences`, () => {
+      const caller = read(path);
+      const at = caller.indexOf(start);
+      expect(at).toBeGreaterThan(-1);
+      const body = caller.slice(at, caller.indexOf(end, at + start.length));
+      expect(body).toMatch(/await fetchOrNoAnswer\(/);
+      expect(body).not.toMatch(/await fetch\(/);
+      expect(body).toMatch(failureSaid);
+    });
+  }
+});
+
+/**
  * R26 pages L4: a confirmed action can remove the button that opened the
  * dialog (Team Remove and the "gone" drop, Queue Cancel/Delete/Publish,
  * "Create link"), and focus returned to a button no longer on the page lands
