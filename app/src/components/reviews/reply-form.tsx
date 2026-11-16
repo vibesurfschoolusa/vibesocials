@@ -6,6 +6,53 @@ import { Textarea } from "@/components/ui/textarea";
 import { REPLY_TOO_LONG_MESSAGE, replyCounter, replyTooLong } from "@/lib/reviewReplyLength";
 
 const DRAFTING_STATUS = "Writing a draft. You can edit it here as soon as it is ready.";
+const UNDO_STATUS = "Draft written. Undo to get your text back.";
+
+/**
+ * The reply boxes of the Reviews page, by review id: the text, and the person's
+ * own text an AI draft replaced (R23 client-journey L3, lead follow-up). Undo
+ * brings it back until they type again or post.
+ */
+export interface ReplyBoxes {
+  text: Record<string, string>;
+  undo: Record<string, string>;
+}
+
+export const EMPTY_REPLY_BOXES: ReplyBoxes = { text: {}, undo: {} };
+
+function withoutUndo(undo: Record<string, string>, id: string): Record<string, string> {
+  if (!(id in undo)) return undo;
+  const rest = { ...undo };
+  delete rest[id];
+  return rest;
+}
+
+export function replyBoxAfterTyping(boxes: ReplyBoxes, id: string, value: string): ReplyBoxes {
+  return { text: { ...boxes.text, [id]: value }, undo: withoutUndo(boxes.undo, id) };
+}
+
+/**
+ * The draft fills the box. Text the person wrote is kept for Undo; when the box
+ * holds an earlier, untouched draft, the person's own text kept then stays.
+ */
+export function replyBoxAfterDraft(boxes: ReplyBoxes, id: string, draft: string): ReplyBoxes {
+  const previous = boxes.text[id] ?? "";
+  const kept = boxes.undo[id] ?? (previous.trim() ? previous : undefined);
+  return {
+    text: { ...boxes.text, [id]: draft },
+    undo: kept === undefined ? withoutUndo(boxes.undo, id) : { ...boxes.undo, [id]: kept },
+  };
+}
+
+export function replyBoxAfterUndo(boxes: ReplyBoxes, id: string): ReplyBoxes {
+  const kept = boxes.undo[id];
+  if (kept === undefined) return boxes;
+  return { text: { ...boxes.text, [id]: kept }, undo: withoutUndo(boxes.undo, id) };
+}
+
+export function replyBoxAfterPost(boxes: ReplyBoxes, id: string): ReplyBoxes {
+  return { text: { ...boxes.text, [id]: "" }, undo: withoutUndo(boxes.undo, id) };
+}
 
 interface ReplyFormProps {
   value: string;
@@ -13,6 +60,8 @@ interface ReplyFormProps {
   onSubmit: () => void;
   onCancel: () => void;
   onDraftAI: () => void;
+  /** Given while a draft's replaced text can be restored. */
+  onUndoDraft?: () => void;
   submitting: boolean;
   generatingAI: boolean;
 }
@@ -27,6 +76,7 @@ export function ReplyForm({
   onSubmit,
   onCancel,
   onDraftAI,
+  onUndoDraft,
   submitting,
   generatingAI,
 }: ReplyFormProps) {
@@ -69,6 +119,16 @@ export function ReplyForm({
         <p id="review-reply-drafting" role="status" className="text-xs text-muted-foreground">
           {DRAFTING_STATUS}
         </p>
+      ) : null}
+      {onUndoDraft && !generatingAI ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="text-xs text-muted-foreground">
+            {UNDO_STATUS}
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={onUndoDraft} disabled={submitting}>
+            Undo
+          </Button>
+        </div>
       ) : null}
       {counter ? (
         <div id="review-reply-length" className={tooLong ? "space-y-1 text-xs text-destructive" : "text-xs text-muted-foreground"}>

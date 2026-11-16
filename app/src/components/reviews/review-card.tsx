@@ -32,6 +32,8 @@ interface ReviewCardProps {
   onChangeReply: (value: string) => void;
   onSubmitReply: () => void;
   onDraftAI: () => void;
+  /** Given while an AI draft's replaced text can be restored. */
+  onUndoDraft?: () => void;
 }
 
 /**
@@ -50,6 +52,7 @@ export function ReviewCard({
   onChangeReply,
   onSubmitReply,
   onDraftAI,
+  onUndoDraft,
 }: ReviewCardProps) {
   return (
     <Card className={cn("p-6", needsReply && "border-warning/30 bg-warning/5")}>
@@ -119,6 +122,7 @@ export function ReviewCard({
                   onSubmit={onSubmitReply}
                   onCancel={onCloseReply}
                   onDraftAI={onDraftAI}
+                  onUndoDraft={onUndoDraft}
                   submitting={isSubmitting}
                   generatingAI={isGeneratingAI}
                 />

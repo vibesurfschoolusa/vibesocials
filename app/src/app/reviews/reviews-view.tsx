@@ -16,6 +16,14 @@ import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
+import {
+  EMPTY_REPLY_BOXES,
+  replyBoxAfterDraft,
+  replyBoxAfterPost,
+  replyBoxAfterTyping,
+  replyBoxAfterUndo,
+  type ReplyBoxes,
+} from "@/components/reviews/reply-form";
 import { ReviewCard } from "@/components/reviews/review-card";
 import {
   focusAfterReply,
@@ -101,7 +109,9 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
   // Google had more than the page loads: only the latest are shown.
   const [truncated, setTruncated] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
-  const [replyText, setReplyText] = useState<Record<string, string>>({});
+  // The reply boxes and, after an AI draft replaced typed text, that text for Undo.
+  const [replyBoxes, setReplyBoxes] = useState<ReplyBoxes>(EMPTY_REPLY_BOXES);
+  const replyText = replyBoxes.text;
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [generatingAI, setGeneratingAI] = useState<string | null>(null);
   const [tab, setTab] = useState<"needs_reply" | "replied">("needs_reply");
@@ -248,7 +258,7 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       );
 
       // Clear reply text and close reply box
-      setReplyText((prev) => ({ ...prev, [review.reviewId]: "" }));
+      setReplyBoxes((prev) => replyBoxAfterPost(prev, review.reviewId));
       setReplyingTo(null);
 
       toast.success("Reply posted successfully!");
@@ -291,11 +301,9 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       const data = await response.json();
       const draftResponse = data.draftResponse;
 
-      // Populate the reply text box with AI-generated response
-      setReplyText((prev) => ({
-        ...prev,
-        [review.reviewId]: draftResponse,
-      }));
+      // Populate the reply text box with AI-generated response.
+      // Typed text it replaces is kept for Undo (reply-form.tsx).
+      setReplyBoxes((prev) => replyBoxAfterDraft(prev, review.reviewId, draftResponse));
 
       // Open the reply box if not already open
       if (replyingTo !== review.reviewId) {
@@ -323,11 +331,11 @@ export function ReviewsView({ savedLocation, isMember }: { savedLocation: string
       replyValue={replyText[review.reviewId] || ""}
       onOpenReply={() => setReplyingTo(review.reviewId)}
       onCloseReply={() => setReplyingTo(null)}
-      onChangeReply={(value) =>
-        setReplyText((prev) => ({
-          ...prev,
-          [review.reviewId]: value,
-        }))
+      onChangeReply={(value) => setReplyBoxes((prev) => replyBoxAfterTyping(prev, review.reviewId, value))}
+      onUndoDraft={
+        replyBoxes.undo[review.reviewId] !== undefined
+          ? () => setReplyBoxes((prev) => replyBoxAfterUndo(prev, review.reviewId))
+          : undefined
       }
       onSubmitReply={() => requestReply(review)}
       onDraftAI={() => handleDraftAI(review)}

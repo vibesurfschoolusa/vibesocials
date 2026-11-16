@@ -2,7 +2,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ReplyForm } from "./reply-form";
+import {
+  EMPTY_REPLY_BOXES,
+  ReplyForm,
+  replyBoxAfterDraft,
+  replyBoxAfterPost,
+  replyBoxAfterTyping,
+  replyBoxAfterUndo,
+} from "./reply-form";
 
 // R17-client-journey addendum L1: Google takes at most 4096 bytes, so the box
 // counts near the limit and will not post past it.
@@ -84,5 +91,79 @@ describe("ReplyForm while an AI draft is being written", () => {
     expect(textarea(html)).not.toMatch(/readOnly/i);
     expect(textarea(html)).not.toContain("aria-busy");
     expect(html).not.toContain(STATUS);
+  });
+});
+
+// Lead follow-up to R23 client-journey L3: a draft may replace typed text, but
+// the text is kept and Undo brings it back until the person types or posts.
+describe("ReplyForm: Undo after a draft replaces typed text", () => {
+  const UNDO_STATUS = "Draft written. Undo to get your text back.";
+  const typed = "Thanks Maria!\n  See you  soon ";
+
+  it("typed text -> Draft -> Undo restores it exactly", () => {
+    let boxes = replyBoxAfterTyping(EMPTY_REPLY_BOXES, "r1", typed);
+    boxes = replyBoxAfterDraft(boxes, "r1", "Thank you for the lovely review!");
+    expect(boxes.text.r1).toBe("Thank you for the lovely review!");
+    expect(boxes.undo.r1).toBe(typed);
+
+    boxes = replyBoxAfterUndo(boxes, "r1");
+    expect(boxes.text.r1).toBe(typed);
+    expect(boxes.undo.r1).toBeUndefined();
+  });
+
+  it("no text -> Draft -> no Undo", () => {
+    const boxes = replyBoxAfterDraft(EMPTY_REPLY_BOXES, "r1", "Thank you!");
+    expect(boxes.text.r1).toBe("Thank you!");
+    expect(boxes.undo.r1).toBeUndefined();
+  });
+
+  it("typing again or posting ends the Undo", () => {
+    const drafted = replyBoxAfterDraft(replyBoxAfterTyping(EMPTY_REPLY_BOXES, "r1", typed), "r1", "Draft");
+    const edited = replyBoxAfterTyping(drafted, "r1", "Draft!");
+    expect(edited.undo.r1).toBeUndefined();
+    expect(edited.text.r1).toBe("Draft!");
+
+    const posted = replyBoxAfterPost(drafted, "r1");
+    expect(posted.undo.r1).toBeUndefined();
+    expect(posted.text.r1).toBe("");
+  });
+
+  it("a second draft keeps the person's own text, not the first draft", () => {
+    let boxes = replyBoxAfterDraft(replyBoxAfterTyping(EMPTY_REPLY_BOXES, "r1", typed), "r1", "Draft one");
+    boxes = replyBoxAfterDraft(boxes, "r1", "Draft two");
+    expect(replyBoxAfterUndo(boxes, "r1").text.r1).toBe(typed);
+  });
+
+  it("another review's box is left alone", () => {
+    let boxes = replyBoxAfterTyping(EMPTY_REPLY_BOXES, "r2", "Mine");
+    boxes = replyBoxAfterDraft(replyBoxAfterTyping(boxes, "r1", typed), "r1", "Draft");
+    expect(replyBoxAfterUndo(boxes, "r1").text.r2).toBe("Mine");
+  });
+
+  function renderWith(onUndoDraft?: () => void): string {
+    return renderToStaticMarkup(
+      createElement(ReplyForm, {
+        value: "Draft",
+        onChange: () => {},
+        onSubmit: () => {},
+        onCancel: () => {},
+        onDraftAI: () => {},
+        onUndoDraft,
+        submitting: false,
+        generatingAI: false,
+      }),
+    );
+  }
+
+  it("shows the status and an Undo button while the text can be restored", () => {
+    const html = renderWith(() => {});
+    expect(html).toContain(UNDO_STATUS);
+    expect(html).toMatch(/<button[^>]*>Undo<\/button>/);
+  });
+
+  it("shows neither when there is nothing to restore", () => {
+    const html = renderWith(undefined);
+    expect(html).not.toContain(UNDO_STATUS);
+    expect(html).not.toMatch(/>Undo</);
   });
 });

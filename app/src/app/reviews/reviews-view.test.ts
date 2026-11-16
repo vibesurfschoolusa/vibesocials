@@ -69,3 +69,15 @@ describe("ReviewsView and Google's length limit", () => {
     expect(perform).toContain("replyTooLong(comment)");
   });
 });
+
+// Lead follow-up to R23 client-journey L3: the page keeps the replaced text
+// through the reply-box helpers, and the card offers Undo.
+describe("ReviewsView and the AI draft's Undo", () => {
+  it("fills, types, undoes and clears through the helpers", () => {
+    expect(source).toContain("replyBoxAfterDraft(");
+    expect(source).toContain("replyBoxAfterTyping(");
+    expect(source).toContain("replyBoxAfterUndo(");
+    expect(source).toContain("replyBoxAfterPost(");
+    expect(source).toMatch(/onUndoDraft=\{\s*replyBoxes\.undo\[review\.reviewId\] !== undefined/);
+  });
+});

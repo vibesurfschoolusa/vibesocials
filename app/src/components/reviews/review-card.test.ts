@@ -92,3 +92,37 @@ describe("ReviewCard: small screens and screen readers", () => {
     expect(card("Maria Lopez")).toMatch(/<div[^>]*role="img"[^>]*aria-label="5 out of 5 stars"|<div[^>]*aria-label="5 out of 5 stars"[^>]*role="img"/);
   });
 });
+
+describe("ReviewCard: Undo after an AI draft", () => {
+  function open(onUndoDraft?: () => void): string {
+    const noop = () => {};
+    return renderToStaticMarkup(
+      createElement(ReviewCard, {
+        review: {
+          name: "accounts/1/locations/2/reviews/r1",
+          reviewId: "r1",
+          reviewer: { displayName: "Maria", isAnonymous: false },
+          starRating: "FIVE",
+          createTime: "2026-11-01T00:00:00Z",
+          updateTime: "2026-11-01T00:00:00Z",
+        },
+        needsReply: true,
+        isReplyOpen: true,
+        isSubmitting: false,
+        isGeneratingAI: false,
+        replyValue: "Draft",
+        onOpenReply: noop,
+        onCloseReply: noop,
+        onChangeReply: noop,
+        onSubmitReply: noop,
+        onDraftAI: noop,
+        onUndoDraft,
+      }),
+    );
+  }
+
+  it("passes Undo to the open reply box", () => {
+    expect(open(() => {})).toMatch(/>Undo<\/button>/);
+    expect(open()).not.toMatch(/>Undo</);
+  });
+});
