@@ -605,7 +605,7 @@ exports[`'linkedin' callback, signed in: unchanged > provider_error 1`] = `
     ],
   ],
   "headers": {
-    "location": "https://app.example.com/settings?error=linkedin_auth_failed",
+    "location": "https://app.example.com/settings?error=linkedin_access_denied",
   },
   "status": 307,
 }
@@ -1430,7 +1430,7 @@ exports[`'youtube' callback, signed in: unchanged > provider_error 1`] = `
     ],
   ],
   "headers": {
-    "location": "https://app.example.com/settings?error=youtube_oauth_denied",
+    "location": "https://app.example.com/settings?error=youtube_access_denied",
   },
   "status": 307,
 }

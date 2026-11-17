@@ -28,7 +28,8 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
 
   if (error) {
     console.error("[YouTube OAuth] User denied access or error:", error);
-    return oauthErrorRedirect("youtube", "oauth_denied", request.url);
+    // Google's own code: access_denied is a cancel, any other a failure (R44 pages-a L7).
+    return oauthErrorRedirect("youtube", error, request.url);
   }
 
   if (!code || !encodedState) {

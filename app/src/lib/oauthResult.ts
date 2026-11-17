@@ -248,11 +248,11 @@ function describeCode(
       };
     }
     const label = labelFromCode(error);
-    // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
-    // code rather than a "*_denied" one — catch it too so it reads as a
-    // cancellation instead of a generic failure. R30 lead review: only
-    // LinkedIn's; pinterest_auth_failed is a provider code it won't pass on.
-    if (error.includes("denied") || error === "linkedin_auth_failed") {
+    // A "*_denied" code (Google's access_denied, X's auth_denied), or
+    // LinkedIn's own "no" (user_cancelled_login, user_cancelled_authorize),
+    // which its callback passes on (R44 pages-a L7). Any other provider code
+    // is a failure below, never a cancellation.
+    if (error.includes("denied") || error.startsWith("linkedin_user_cancelled_")) {
       return {
         variant: "danger",
         message: `You cancelled the ${label ? `${label} ` : ""}authorization — ${signInLeft(shown, label)}.${

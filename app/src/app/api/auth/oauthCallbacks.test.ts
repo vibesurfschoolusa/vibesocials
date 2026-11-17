@@ -70,6 +70,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { describeOAuthResult } from "@/lib/oauthResult";
 import { createOAuthState } from "@/lib/oauthState";
 import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
 import { openSecret } from "@/lib/tokenCrypto";
@@ -347,9 +348,8 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
 
     const res = await GET(new NextRequest(url));
 
-    // LinkedIn and YouTube send one fixed code for every provider error.
-    const expected: Record<string, string> = { linkedin: "linkedin_auth_failed", youtube: "youtube_oauth_denied" };
-    expect(location(res).searchParams.get("error")).toBe(expected[platform] ?? `${platform}_access_denied`);
+    // R44 pages-a L7: LinkedIn and YouTube pass the provider's code on too.
+    expect(location(res).searchParams.get("error")).toBe(`${platform}_access_denied`);
     expect(fetchMock).not.toHaveBeenCalled();
     expectNoConnectionWrites();
   });
@@ -361,11 +361,7 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
 
     const res = await GET(new NextRequest(url));
 
-    const fixed: Record<string, string> = {
-      linkedin: "linkedin_auth_failed",
-      youtube: "youtube_oauth_denied",
-    };
-    expect(location(res).searchParams.get("error")).toBe(fixed[platform] ?? `${platform}_provider_error`);
+    expect(location(res).searchParams.get("error")).toBe(`${platform}_provider_error`);
   });
 
   describe("unexpected errors redirect to <platform>_connect_failed instead of a 500", () => {
@@ -419,6 +415,47 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
 
       expect(res.status).toBe(307);
       expect(location(res).searchParams.get("error")).toBe(`${platform}_connect_failed`);
+    });
+  });
+});
+
+// R44 pages-a L7: LinkedIn and YouTube used to send one fixed code for every
+// provider error, and Settings read each as "You cancelled". Only the
+// provider's own "no" reads as a cancel now; any other error is a failure.
+describe("LinkedIn and YouTube provider errors: a cancel is a cancel, anything else a failure", () => {
+  const settingsSays = async (GET: (request: NextRequest) => Promise<Response>, platform: Platform, error: string) => {
+    const url = new URL(`/api/auth/${platform}/callback`, ORIGIN);
+    url.searchParams.set("error", error);
+    url.searchParams.set("state", signedState());
+    const code = location(await GET(new NextRequest(url))).searchParams.get("error");
+    return { code, message: describeOAuthResult({ error: code, success: null })?.message };
+  };
+
+  it.each(["user_cancelled_login", "user_cancelled_authorize"])("LinkedIn %s reads as a cancel", async (error) => {
+    await expect(settingsSays(linkedinGET, "linkedin", error)).resolves.toEqual({
+      code: `linkedin_${error}`,
+      message: "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
+    });
+  });
+
+  it("LinkedIn unauthorized_scope_error is a failure, with LinkedIn's code", async () => {
+    await expect(settingsSays(linkedinGET, "linkedin", "unauthorized_scope_error")).resolves.toEqual({
+      code: "linkedin_unauthorized_scope_error",
+      message: "LinkedIn couldn't be connected. Please try again.",
+    });
+  });
+
+  it("Google's access_denied on YouTube reads as a cancel", async () => {
+    await expect(settingsSays(youtubeGET, "youtube", "access_denied")).resolves.toEqual({
+      code: "youtube_access_denied",
+      message: "You cancelled the YouTube authorization — nothing was connected. Click Connect to try again.",
+    });
+  });
+
+  it("another Google error on YouTube is a failure, with Google's code", async () => {
+    await expect(settingsSays(youtubeGET, "youtube", "admin_policy_enforced")).resolves.toEqual({
+      code: "youtube_admin_policy_enforced",
+      message: "YouTube couldn't be connected. Please try again.",
     });
   });
 });

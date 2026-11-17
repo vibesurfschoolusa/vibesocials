@@ -222,18 +222,26 @@ describe("describeOAuthResult — real callback-route codes", () => {
     });
   });
 
-  // LinkedIn's own "user declined the authorization" redirect uses a fixed
-  // linkedin_auth_failed code (src/app/api/auth/linkedin/callback/route.ts)
-  // rather than a "*_denied" code. The denied-bucket condition also matches
-  // `error.endsWith("auth_failed")` so this still reads as a cancellation
-  // instead of a generic failure.
-  it("resolves LinkedIn's own denial code (linkedin_auth_failed) to a cancelled LinkedIn message", () => {
-    const result = describeOAuthResult({ error: "linkedin_auth_failed", success: null });
-    expect(result).toMatchObject({
-      variant: "danger",
-      message:
-        "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
-    });
+  // R44 pages-a L7: the LinkedIn callback passes LinkedIn's own code on.
+  // Only its user_cancelled_* codes are a "no"; any other is a failure.
+  it("resolves LinkedIn's own cancel codes to a cancelled LinkedIn message", () => {
+    for (const error of ["linkedin_user_cancelled_login", "linkedin_user_cancelled_authorize"]) {
+      expect(describeOAuthResult({ error, success: null }), error).toMatchObject({
+        variant: "danger",
+        message:
+          "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
+      });
+    }
+  });
+
+  it("any other LinkedIn or Google provider code is a failed sign-in, not a cancel", () => {
+    for (const [error, message] of [
+      ["linkedin_unauthorized_scope_error", "LinkedIn couldn't be connected. Please try again."],
+      ["linkedin_auth_failed", "LinkedIn couldn't be connected. Please try again."],
+      ["youtube_admin_policy_enforced", "YouTube couldn't be connected. Please try again."],
+    ]) {
+      expect(describeOAuthResult({ error, success: null })?.message, error).toBe(message);
+    }
   });
 
   // Until R30 the Facebook Page, Instagram, Business Profile and TikTok
@@ -566,7 +574,7 @@ describe("describeOAuthResult — every sentence names only the button the row s
   });
 
   // Lead review: the Pinterest callback sends pinterest_auth_failed for a
-  // provider code it won't pass on; only LinkedIn's auth_failed is a "no".
+  // provider code it won't pass on; LinkedIn's "no" is its user_cancelled_* code.
   it("R30: pinterest_auth_failed is a failed sign-in, not a cancel; pinterest_access_denied is a cancel", () => {
     expect(describe_("pinterest_auth_failed", "reconnect")).toBe(
       "We couldn't reconnect Pinterest, so your Pinterest connection is unchanged. Click Reconnect to try again.",
@@ -575,7 +583,7 @@ describe("describeOAuthResult — every sentence names only the button the row s
     expect(describe_("pinterest_access_denied", "connect")).toBe(
       "You cancelled the Pinterest authorization — nothing was connected. Click Connect to try again.",
     );
-    expect(describe_("linkedin_auth_failed", "connect")).toBe(
+    expect(describe_("linkedin_user_cancelled_login", "connect")).toBe(
       "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
     );
   });

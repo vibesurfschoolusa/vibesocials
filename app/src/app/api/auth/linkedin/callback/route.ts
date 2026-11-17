@@ -30,7 +30,9 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
 
   if (error) {
     console.error("[LinkedIn OAuth] Authorization error:", error);
-    return oauthErrorRedirect("linkedin", "auth_failed", process.env.NEXTAUTH_URL!);
+    // LinkedIn's own code (user_cancelled_login, unauthorized_scope_error), so
+    // Settings tells a cancel from a failure (R44 pages-a L7).
+    return oauthErrorRedirect("linkedin", error, process.env.NEXTAUTH_URL!);
   }
 
   if (!code || !state) {
