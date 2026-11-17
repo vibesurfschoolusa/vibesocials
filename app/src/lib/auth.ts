@@ -113,7 +113,7 @@ export async function authorizeCredentials(
     { userId: `email:${email}`, ...LOGIN_EMAIL_LIMIT },
   ];
   for (const limit of limits) {
-    const result = await checkRateLimit({ ...limit, failClosed: true, markUnavailable: true });
+    const result = await checkRateLimit({ ...limit, failClosed: true });
     if (!result.allowed) {
       if (result.unavailable) throw new Error(SIGN_IN_UNCHECKED);
       throw new Error(signInLimitedCode(await longestLoginWait(result.retryAfterSeconds, limits.filter((other) => other !== limit))));

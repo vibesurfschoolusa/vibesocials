@@ -16,6 +16,7 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 export const dynamic = "force-dynamic";
@@ -82,6 +83,7 @@ export async function POST(request: Request) {
       failClosed: true,
     });
 
+    if (rateLimit.unavailable) return limitUncheckedResponse();
     if (!rateLimit.allowed) {
       return NextResponse.json(
         {
@@ -121,6 +123,7 @@ export async function POST(request: Request) {
     // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
     // the request is valid and a provider is configured.
     const quota = await checkWorkspaceAiQuota(context.workspace.id);
+    if (quota.unavailable) return limitUncheckedResponse();
     if (!quota.allowed) {
       return aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget);
     }

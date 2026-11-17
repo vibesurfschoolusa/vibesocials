@@ -24,6 +24,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { ADAPT_MAX_LENGTH_MAX, ADAPT_MAX_LENGTH_MIN } from "@/lib/platformOverrides";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
@@ -141,6 +142,7 @@ export async function POST(request: Request) {
       failClosed: true,
     });
 
+    if (rateLimit.unavailable) return limitUncheckedResponse();
     if (!rateLimit.allowed) {
       return NextResponse.json(
         {
@@ -167,6 +169,7 @@ export async function POST(request: Request) {
     // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
     // the request is valid and a provider is configured.
     const quota = await checkWorkspaceAiQuota(context.workspace.id);
+    if (quota.unavailable) return limitUncheckedResponse();
     if (!quota.allowed) {
       return aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget);
     }

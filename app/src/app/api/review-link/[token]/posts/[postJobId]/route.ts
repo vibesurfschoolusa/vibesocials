@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import {
   DAY_MS,
   REVIEW_LINK_DAILY_LIMIT_MESSAGE,
@@ -78,6 +79,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (ipLimit.unavailable) return limitUncheckedResponse();
   if (!ipLimit.allowed) return tooMany(REVIEW_LINK_IP_LIMIT_MESSAGE, ipLimit.retryAfterSeconds);
 
   const { token, postJobId } = await context.params;
@@ -91,6 +93,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: DAY_MS,
     failClosed: true,
   });
+  if (dayLimit.unavailable) return limitUncheckedResponse();
   if (!dayLimit.allowed) return tooMany(REVIEW_LINK_DAILY_LIMIT_MESSAGE, dayLimit.retryAfterSeconds);
 
   const now = new Date();

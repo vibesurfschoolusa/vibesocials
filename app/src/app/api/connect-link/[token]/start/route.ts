@@ -14,6 +14,7 @@ import {
 } from "@/lib/connectLink";
 import { logger } from "@/lib/logger";
 import { createConnectLinkState } from "@/lib/oauthState";
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requestIp } from "@/lib/uploadLink";
 import { buildLinkAuthorizeUrl, startXLinkFlow } from "@/server/connectLink/authorize";
@@ -48,6 +49,14 @@ function tooMany(retryAfterSeconds: number | undefined, message = CONNECT_LINK_R
   });
 }
 
+/** R38 new-customer L1: a limit that couldn't be checked, in this form's plain-text shape. */
+function unchecked(): NextResponse {
+  return new NextResponse(LIMIT_UNCHECKED_MESSAGE, {
+    status: 503,
+    headers: { "content-type": "text/plain; charset=utf-8", "Retry-After": "60" },
+  });
+}
+
 export async function POST(request: Request, context: RouteContext): Promise<NextResponse> {
   if (!isSameOriginRequest(request)) {
     return new NextResponse("Open the link you were sent and press Connect there.", {
@@ -63,6 +72,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (limit.unavailable) return unchecked();
   if (!limit.allowed) return tooMany(limit.retryAfterSeconds);
 
   const { token } = await context.params;
@@ -91,6 +101,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
       windowMs: 60 * 60 * 1000,
       failClosed: true,
     });
+    if (linkLimit.unavailable) return unchecked();
     if (!linkLimit.allowed) return tooMany(linkLimit.retryAfterSeconds, CONNECT_LINK_USED_TOO_OFTEN_MESSAGE);
 
     if (!isPlatform(platformValue)) return backToPage(request, token, "connect_failed");

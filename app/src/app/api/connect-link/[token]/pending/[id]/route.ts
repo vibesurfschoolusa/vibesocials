@@ -15,6 +15,7 @@ import { logger } from "@/lib/logger";
 import { choiceFailedText } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { requestIp } from "@/lib/uploadLink";
 import { clearConnectCookie } from "@/server/connectLink/cookie";
 import { findActiveConnectLink, placeTaken, type ActiveConnectLink } from "@/server/connectLink/link";
@@ -86,6 +87,7 @@ async function resolve(request: Request, context: RouteContext): Promise<Resolve
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (limit.unavailable) return { ok: false, response: limitUncheckedResponse() };
   if (!limit.allowed) {
     return {
       ok: false,

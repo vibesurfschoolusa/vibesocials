@@ -89,7 +89,7 @@ describe("checkRateLimit", () => {
     upsertMock.mockRejectedValue(new Error("db down"));
     expect(
       await checkRateLimit({ userId: "u1", route: "r", limit: 5, windowMs: 1000, failClosed: true }),
-    ).toEqual({ allowed: false, retryAfterSeconds: 60 });
+    ).toEqual({ allowed: false, retryAfterSeconds: 60, unavailable: true });
   });
 
   it("sweeps expired rows on ~2% of calls without awaiting or surfacing a failure", async () => {
@@ -137,38 +137,36 @@ describe("consumeFixedWindow", () => {
     ).toEqual({ allowed: false, retryAfterSeconds: 1 });
   });
 
-  // R32 lead: a caller that asks (Log in) can tell a store error from a real
-  // limit; every other caller gets exactly the answers above.
-  it("markUnavailable: a fail-closed store error says unavailable; a real limit and a pass don't", async () => {
+  // R38 new-customer L1: every fail-closed store error is marked, so no caller
+  // can answer it as a used-up limit; a real limit and a pass never are.
+  it("failClosed: a store error always says unavailable; a real limit and a pass don't", async () => {
     upsertMock.mockRejectedValueOnce(new Error("db down"));
-    expect(
-      await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true, markUnavailable: true }),
-    ).toEqual({ allowed: false, retryAfterSeconds: 60, unavailable: true });
-    upsertMock.mockResolvedValueOnce({ count: 1 });
-    expect(await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true, markUnavailable: true })).toEqual({
-      allowed: true,
+    expect(await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true })).toEqual({
+      allowed: false,
+      retryAfterSeconds: 60,
+      unavailable: true,
     });
+    upsertMock.mockResolvedValueOnce({ count: 1 });
+    expect(await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true })).toEqual({ allowed: true });
     upsertMock.mockResolvedValueOnce({ count: 2 });
-    const limited = await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true, markUnavailable: true });
+    const limited = await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true });
     expect(limited.allowed).toBe(false);
     expect(limited).not.toHaveProperty("unavailable");
   });
 
-  it("checkRateLimit passes markUnavailable through", async () => {
+  it("checkRateLimit marks a fail-closed store error the same way", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
-    expect(
-      await checkRateLimit({ userId: "u1", route: "r", limit: 5, windowMs: 1000, failClosed: true, markUnavailable: true }),
-    ).toEqual({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    expect(await checkRateLimit({ userId: "u1", route: "r", limit: 5, windowMs: 1000, failClosed: true })).toEqual({
+      allowed: false,
+      retryAfterSeconds: 60,
+      unavailable: true,
+    });
   });
 
-  it("fails open on a store error, and closed with failClosed", async () => {
+  it("fails open on a store error without failClosed", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
 
     expect(await consumeFixedWindow({ key: "k", limit: 1, resetAt })).toEqual({ allowed: true });
-    expect(await consumeFixedWindow({ key: "k", limit: 1, resetAt, failClosed: true })).toEqual({
-      allowed: false,
-      retryAfterSeconds: 60,
-    });
   });
 });
 

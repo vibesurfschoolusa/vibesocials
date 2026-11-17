@@ -23,6 +23,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
@@ -153,32 +154,17 @@ export async function POST(request: Request) {
     // asks for its own counter. The workspace's daily AI quota still applies.
     // 07d: a description ("Write it for me", once per photo of up to ten) has its
     // own counter, so describing a set never uses up the caption's.
-    const rateLimit = await checkRateLimit(
-      wantsAltText
-        ? {
-            userId: context.user.id,
-            route: "posts/auto-caption-alt-text",
-            limit: 30,
-            windowMs: 15 * 60 * 1000,
-            failClosed: true,
-          }
+    const rateLimit = await checkRateLimit({
+      userId: context.user.id,
+      ...(wantsAltText
+        ? { route: "posts/auto-caption-alt-text", limit: 30, windowMs: 15 * 60 * 1000 }
         : body.bulk === true
-        ? {
-            userId: context.user.id,
-            route: "posts/auto-caption-bulk",
-            limit: 40,
-            windowMs: 15 * 60 * 1000,
-            failClosed: true,
-          }
-        : {
-            userId: context.user.id,
-            route: "posts/auto-caption",
-            limit: 10,
-            windowMs: 5 * 60 * 1000,
-            failClosed: true,
-          },
-    );
+        ? { route: "posts/auto-caption-bulk", limit: 40, windowMs: 15 * 60 * 1000 }
+        : { route: "posts/auto-caption", limit: 10, windowMs: 5 * 60 * 1000 }),
+      failClosed: true,
+    });
 
+    if (rateLimit.unavailable) return limitUncheckedResponse();
     if (!rateLimit.allowed) {
       return NextResponse.json(
         {
@@ -238,6 +224,7 @@ export async function POST(request: Request) {
     // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
     // the request is valid and a provider is configured.
     const quota = await checkWorkspaceAiQuota(context.workspace.id);
+    if (quota.unavailable) return limitUncheckedResponse();
     if (!quota.allowed) {
       return aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget);
     }

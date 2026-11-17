@@ -14,6 +14,7 @@ import { logger } from "@/lib/logger";
 import { FILENAME_MAX_LENGTH, MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { unsupportedTypeMessage } from "@/lib/prepareUploadFile";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import {
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
   UPLOAD_LINK_FILES_PER_DAY,
@@ -93,6 +94,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: HOUR_MS,
     failClosed: true,
   });
+  if (ipLimit.unavailable) return limitUncheckedResponse();
   if (!ipLimit.allowed) return tooMany(UPLOAD_LINK_IP_LIMIT_MESSAGE, ipLimit.retryAfterSeconds);
 
   const { token } = await context.params;
@@ -108,6 +110,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: DAY_MS,
     failClosed: true,
   });
+  if (dayLimit.unavailable) return limitUncheckedResponse();
   if (!dayLimit.allowed) return tooMany(UPLOAD_LINK_DAILY_LIMIT_MESSAGE, dayLimit.retryAfterSeconds);
 
   let stored: HeadBlobResult;

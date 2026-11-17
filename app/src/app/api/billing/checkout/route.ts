@@ -5,6 +5,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { isPlanKey } from "@/lib/plans";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { startCheckout } from "@/server/billing/checkout";
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Wait a few minutes and try again.", retryAfterSeconds: rateLimit.retryAfterSeconds },

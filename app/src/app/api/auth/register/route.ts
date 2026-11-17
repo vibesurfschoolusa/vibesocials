@@ -8,6 +8,7 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
 import { addressHeldUntil } from "@/server/auth/undoWindow";
 
@@ -35,6 +36,7 @@ export async function POST(request: Request) {
     ...REGISTER_RATE_LIMIT,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       {

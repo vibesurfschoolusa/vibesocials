@@ -4,6 +4,7 @@ import { stripeReachable } from "@/lib/billing";
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { getWorkspaceContext, requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { openPortal } from "@/server/billing/checkout";
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Wait a few minutes and try again.", retryAfterSeconds: rateLimit.retryAfterSeconds },

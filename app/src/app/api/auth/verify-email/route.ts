@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 
 /**
  * POST /api/auth/verify-email — the consume half of the email-verification flow
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
     ...RATE_LIMIT,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },

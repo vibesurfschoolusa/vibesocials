@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "./auth";
 import { normalizeEmail } from "./email";
-import { checkRateLimit } from "./rateLimit";
+import { limitUncheckedResponse } from "./limitUnchecked";
+import { checkRateLimit, type RateLimitResult } from "./rateLimit";
 
 /**
  * The app's operator (2026-11-10): the people who may open /admin. This file is
@@ -68,7 +69,7 @@ export type AdminRequestKind = keyof typeof ADMIN_RATE_LIMITS;
 export async function checkAdminRateLimit(
   operator: Operator,
   kind: AdminRequestKind,
-): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
+): Promise<RateLimitResult> {
   return checkRateLimit({ userId: operator.userId, ...ADMIN_RATE_LIMITS[kind], failClosed: true });
 }
 
@@ -82,6 +83,7 @@ export async function requireOperator(kind: AdminRequestKind): Promise<Operator 
   if (!operator) return adminNotFoundResponse();
 
   const limit = await checkAdminRateLimit(operator, kind);
+  if (limit.unavailable) return limitUncheckedResponse();
   if (!limit.allowed) {
     return NextResponse.json(
       { error: "Too many admin requests this hour. Wait and try again.", retryAfterSeconds: limit.retryAfterSeconds },

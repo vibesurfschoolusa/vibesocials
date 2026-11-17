@@ -8,6 +8,7 @@ import { addressHeldSentence, emailChangeLockedSentence } from "@/lib/displayDat
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { accountUndoWindowUntil, addressHeldUntil } from "@/server/auth/undoWindow";
 import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
 
@@ -75,6 +76,7 @@ type Outcome = { kind: "changed" } | { kind: "used" } | { kind: "locked"; until:
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
   const rateLimit = await checkRateLimit({ userId: `ip:${ip}`, ...RATE_LIMIT, failClosed: true });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       {

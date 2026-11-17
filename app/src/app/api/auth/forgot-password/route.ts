@@ -7,6 +7,7 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 
 /**
  * POST /api/auth/reset-password's sibling — the request half of the password
@@ -67,6 +68,7 @@ export async function POST(request: Request) {
     ...EMAIL_RATE_LIMIT,
     failClosed: true,
   });
+  if (emailLimit.unavailable) return limitUncheckedResponse();
   if (!emailLimit.allowed) {
     return tooManyRequests(emailLimit.retryAfterSeconds);
   }
@@ -77,6 +79,7 @@ export async function POST(request: Request) {
     ...IP_RATE_LIMIT,
     failClosed: true,
   });
+  if (ipLimit.unavailable) return limitUncheckedResponse();
   if (!ipLimit.allowed) {
     return tooManyRequests(ipLimit.retryAfterSeconds);
   }

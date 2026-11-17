@@ -183,7 +183,6 @@ describe("authorizeCredentials — rate limits", () => {
         limit: 10,
         windowMs: FIFTEEN_MINUTES,
         failClosed: true,
-        markUnavailable: true,
       },
       {
         userId: "ip:203.0.113.7",
@@ -191,7 +190,6 @@ describe("authorizeCredentials — rate limits", () => {
         limit: 30,
         windowMs: FIFTEEN_MINUTES,
         failClosed: true,
-        markUnavailable: true,
       },
       {
         userId: "email:victim@example.com",
@@ -199,7 +197,6 @@ describe("authorizeCredentials — rate limits", () => {
         limit: 100,
         windowMs: ONE_HOUR,
         failClosed: true,
-        markUnavailable: true,
       },
     ]);
   });

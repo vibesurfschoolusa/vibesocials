@@ -10,6 +10,7 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { accountUndoWindowUntil, addressHeldUntil, clearPassedUndoWindows } from "@/server/auth/undoWindow";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -44,6 +45,7 @@ export async function POST(request: Request) {
   }
 
   const rateLimit = await checkRateLimit({ userId: user.id, ...RATE_LIMIT, failClosed: true });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       {

@@ -15,21 +15,19 @@ export interface CheckRateLimitOptions {
    * where unlimited throughput during a DB outage is worse than a 429.
    * Product routes keep the default (fail open) so a limiter blip cannot take
    * publishing down.
+   *
+   * R38 new-customer L1: that denial is always marked `unavailable: true`, so
+   * no caller answers a store it couldn't read as a used-up limit. A route
+   * answers it with limitUncheckedResponse (src/lib/limitUnchecked.ts).
    */
   failClosed?: boolean;
-  /**
-   * R32 (Log in): with failClosed, mark a denial caused by a store error with
-   * `unavailable: true`, so the caller can tell it from a used-up limit.
-   * Opt-in, so every other caller's answers stay exactly as they were.
-   */
-  markUnavailable?: boolean;
 }
 
 export interface RateLimitResult {
   allowed: boolean;
   /** Seconds until the current window resets (only set when blocked). */
   retryAfterSeconds?: number;
-  /** Only with markUnavailable: the store failed, so nothing was counted or checked. */
+  /** Only with failClosed: the store failed, so nothing was counted or checked. */
   unavailable?: true;
 }
 
@@ -43,8 +41,6 @@ export interface ConsumeFixedWindowOptions {
   resetAt: Date;
   /** Same meaning as {@link CheckRateLimitOptions.failClosed}. */
   failClosed?: boolean;
-  /** Same meaning as {@link CheckRateLimitOptions.markUnavailable}. */
-  markUnavailable?: boolean;
 }
 
 /**
@@ -64,7 +60,7 @@ export interface ConsumeFixedWindowOptions {
 export async function consumeFixedWindow(
   opts: ConsumeFixedWindowOptions,
 ): Promise<RateLimitResult> {
-  const { key, limit, resetAt, failClosed = false, markUnavailable = false } = opts;
+  const { key, limit, resetAt, failClosed = false } = opts;
   const now = Date.now();
 
   try {
@@ -97,7 +93,7 @@ export async function consumeFixedWindow(
   } catch (error) {
     if (failClosed) {
       console.error("[rateLimit] store error, failing closed", error);
-      return markUnavailable ? { allowed: false, retryAfterSeconds: 60, unavailable: true } : { allowed: false, retryAfterSeconds: 60 };
+      return { allowed: false, retryAfterSeconds: 60, unavailable: true };
     }
     console.error("[rateLimit] store error, failing open", error);
     return { allowed: true };
@@ -144,11 +140,11 @@ export async function exhaustFixedWindow(opts: {
 export async function checkRateLimit(
   opts: CheckRateLimitOptions,
 ): Promise<RateLimitResult> {
-  const { userId, route, limit, windowMs, failClosed = false, markUnavailable = false } = opts;
+  const { userId, route, limit, windowMs, failClosed = false } = opts;
 
   const { key, resetAt } = rateLimitWindow(userId, route, windowMs);
 
-  return consumeFixedWindow({ key, limit, resetAt, failClosed, markUnavailable });
+  return consumeFixedWindow({ key, limit, resetAt, failClosed });
 }
 
 /** checkRateLimit's counter key and window end for `userId` + `route` right now. */

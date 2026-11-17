@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import {
   REVIEW_LINK_INACTIVE_MESSAGE,
   REVIEW_LINK_IP_LIMIT_MESSAGE,
@@ -29,6 +30,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Next
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (ipLimit.unavailable) return limitUncheckedResponse();
   if (!ipLimit.allowed) {
     return NextResponse.json(
       { error: REVIEW_LINK_IP_LIMIT_MESSAGE, retryAfterSeconds: ipLimit.retryAfterSeconds },

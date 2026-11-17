@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import {
@@ -61,6 +62,7 @@ async function gate(request: Request, upload = false): Promise<WorkspaceContext 
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (limit.unavailable) return limitUncheckedResponse();
   if (!limit.allowed) {
     return NextResponse.json(
       { error: LOGO_LIMIT_MESSAGE, retryAfterSeconds: limit.retryAfterSeconds },

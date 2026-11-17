@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE, COVER_IMAGE_TYPES } from "@/lib/videoCover";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
@@ -116,6 +117,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     windowMs: 15 * 60 * 1000,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       {

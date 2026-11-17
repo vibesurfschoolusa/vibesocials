@@ -181,4 +181,16 @@ describe("requireOperator", () => {
     expect(result.status).toBe(429);
     expect(result.headers.get("Retry-After")).toBe("12");
   });
+
+  // R38 new-customer L1: a counter store that couldn't answer is not a used-up hour.
+  it("answers 503 couldn't-check when the counter store couldn't answer", async () => {
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    getCurrentUserMock.mockResolvedValue(user("ops@example.com"));
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    const result = (await requireOperator("change")) as NextResponse;
+    expect(result.status).toBe(503);
+    await expect(result.json()).resolves.toEqual({
+      error: "We couldn't check that just now. Nothing was changed. Try again in a minute.",
+    });
+  });
 });

@@ -71,7 +71,8 @@ export function aiInputTooLongResponse(overlong: { field: string; max: number })
 /** Which budget refused: the workspace's, or one of its owners' across their workspaces. */
 export type AiBudget = "workspace" | "owner";
 
-export type AiQuotaResult = { allowed: boolean; retryAfterSeconds?: number; budget?: AiBudget };
+/** `unavailable`: a counter store that couldn't answer (fail closed); the caller answers limitUncheckedResponse. */
+export type AiQuotaResult = { allowed: boolean; retryAfterSeconds?: number; budget?: AiBudget; unavailable?: true };
 
 type BudgetCounter = { userId: string; route: string; limit: number; budget: AiBudget };
 

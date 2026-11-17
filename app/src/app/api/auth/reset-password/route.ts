@@ -7,6 +7,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { clearLoginLimitForNetwork } from "@/lib/loginLimit";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 
 /**
  * POST /api/auth/reset-password — the consume half of the password reset flow
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
     ...RATE_LIMIT,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
