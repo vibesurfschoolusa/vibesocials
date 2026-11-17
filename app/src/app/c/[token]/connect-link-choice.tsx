@@ -23,22 +23,31 @@ type Candidate = { id: string; name: string; detail?: string };
 export type ConnectLinkChoiceState =
   | { status: "loading" }
   | { status: "ready"; platform: string; candidates: Candidate[] }
-  | { status: "gone"; message: string };
+  | { status: "gone"; message: string }
+  /** R39 pages L2: the load failed but the choice may still wait, so Try again loads it again. */
+  | { status: "failed"; message: string };
 
 /** R28 NN2: the account may have been connected before the answer was lost. */
 export const CHOICE_MAYBE_CONNECTED_MESSAGE = answerLostText("the account may have been connected", "Reload this page to see.");
 
 const LOAD_FAILED_MESSAGE = "Couldn't load the accounts. Reload this page.";
+const LOAD_RETRY_MESSAGE = "Couldn't load the accounts. Press Try again.";
 const CHOOSE_FAILED_MESSAGE = "Couldn't connect that account. Try again.";
 
 type ChoiceAnswer = { platform?: string; candidates?: Candidate[]; error?: string; connected?: boolean } | null;
 
-/** What the load answered: the accounts, or why there are none (the route's sentence, else reload). */
-export function loadOutcome(ok: boolean, data: ChoiceAnswer): ConnectLinkChoiceState {
-  if (ok && data?.platform && data.candidates) {
+/**
+ * What the load answered: the accounts; for a 404, that the choice is gone
+ * (the route's sentence, else reload). R39 pages L2: any other failure (the
+ * limit couldn't be checked, too many tries, a server error) leaves the
+ * choice waiting, so it says so with Try again.
+ */
+export function loadOutcome(status: number, data: ChoiceAnswer): ConnectLinkChoiceState {
+  if (status >= 200 && status < 300 && data?.platform && data.candidates) {
     return { status: "ready", platform: data.platform, candidates: data.candidates };
   }
-  return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
+  if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
+  return { status: "failed", message: data?.error || LOAD_RETRY_MESSAGE };
 }
 
 const CHOICE_GONE_MESSAGE =
@@ -98,6 +107,8 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
   const base = `/api/connect-link/${encodeURIComponent(token)}/pending/${encodeURIComponent(pendingId)}`;
   const page = `/c/${encodeURIComponent(token)}`;
 
+  // R39 pages L2: Try again counts up, which loads the choice again.
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -105,17 +116,22 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
         const response = await fetch(choiceAddress(base, rememberedChoicePlatform(pendingId)), { cache: "no-store" });
         const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
-        const outcome = loadOutcome(response.ok, data);
+        const outcome = loadOutcome(response.status, data);
         if (outcome.status === "ready") rememberChoicePlatform(pendingId, outcome.platform);
         setState(outcome);
       } catch {
-        if (!cancelled) setState({ status: "gone", message: LOAD_FAILED_MESSAGE });
+        if (!cancelled) setState({ status: "failed", message: LOAD_RETRY_MESSAGE });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [base, pendingId]);
+  }, [base, pendingId, attempt]);
+
+  function retry() {
+    setState({ status: "loading" });
+    setAttempt((count) => count + 1);
+  }
 
   /** `pressed`: the account's Connect, which a gone answer removes with the whole section. */
   async function choose(candidateId: string, pressed: HTMLElement | null) {
@@ -169,7 +185,15 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
   }
 
   return (
-    <ConnectLinkChoiceView state={state} busy={busy} error={error} onChoose={choose} onCancel={cancel} goneRef={goneRef} />
+    <ConnectLinkChoiceView
+      state={state}
+      busy={busy}
+      error={error}
+      onChoose={choose}
+      onCancel={cancel}
+      onRetry={retry}
+      goneRef={goneRef}
+    />
   );
 }
 
@@ -180,6 +204,8 @@ export interface ConnectLinkChoiceViewProps {
   error: string | null;
   onChoose: (candidateId: string, pressed: HTMLElement | null) => void;
   onCancel: (platform: string) => void;
+  /** Loads the choice again after a failed load (R39 pages L2). */
+  onRetry?: () => void;
   /** The gone sentence, which takes focus when a press removed the section (R29 lead review). */
   goneRef?: React.Ref<HTMLParagraphElement>;
 }
@@ -188,7 +214,7 @@ export interface ConnectLinkChoiceViewProps {
  * The choice as it renders. R5-pages L9: what a press or the load answers comes
  * later, so it is announced (role="alert"); the loading line is read through the announcer.
  */
-export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, goneRef }: ConnectLinkChoiceViewProps) {
+export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, onRetry, goneRef }: ConnectLinkChoiceViewProps) {
   if (state.status === "loading") {
     // R30 lead review: this view comes and goes, so the line is read through the announcer.
     return <AnnouncedText className="text-sm text-muted-foreground" text="Loading the accounts…" />;
@@ -198,6 +224,18 @@ export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, 
       <p ref={goneRef} role="alert" tabIndex={-1} className="text-sm outline-none">
         {state.message}
       </p>
+    );
+  }
+  if (state.status === "failed") {
+    return (
+      <div className="space-y-3">
+        <p role="alert" className="text-sm">
+          {state.message}
+        </p>
+        <Button type="button" variant="outline" size="md" onClick={onRetry}>
+          Try again
+        </Button>
+      </div>
     );
   }
 

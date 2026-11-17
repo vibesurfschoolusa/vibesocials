@@ -89,17 +89,17 @@ describe("the account choice's answers (R29)", () => {
   });
 
   it("load: the accounts; the route's sentence when gone; an unreadable answer says to reload", () => {
-    expect(loadOutcome(true, { platform: "facebook_page", candidates: [{ id: "a", name: "A" }] })).toEqual({
+    expect(loadOutcome(200, { platform: "facebook_page", candidates: [{ id: "a", name: "A" }] })).toEqual({
       status: "ready",
       platform: "facebook_page",
       candidates: [{ id: "a", name: "A" }],
     });
-    expect(loadOutcome(false, { error: "Facebook Page is connected. There is nothing more to choose here.", connected: true })).toEqual({
+    expect(loadOutcome(404, { error: "Facebook Page is connected. There is nothing more to choose here.", connected: true })).toEqual({
       status: "gone",
       message: "Facebook Page is connected. There is nothing more to choose here.",
     });
     for (const data of [null, {}]) {
-      const outcome = loadOutcome(false, data);
+      const outcome = loadOutcome(404, data);
       expect(outcome).toEqual({ status: "gone", message: "Couldn't load the accounts. Reload this page." });
     }
   });
@@ -230,5 +230,29 @@ describe("the account choice after a lost Connect answer (R30)", () => {
     const text = await source();
     expect(text).toMatch(/fetchOrNoAnswer\(choiceAddress\(base, platform\), \{ method: "DELETE" \}\)/);
     expect(text).toMatch(/cancelOutcome\(response\.status, data, platform, page\)/);
+  });
+});
+
+// R39 pages L2: a failed load that isn't a 404 (the limit couldn't be
+// checked, too many tries, a server error) says so with a Try again button;
+// only a 404 means the choice is gone.
+describe("the account choice when the load fails but the choice may still wait (R39)", () => {
+  const unchecked = "We couldn't check that just now. Nothing was changed. Try again in a minute.";
+
+  it("load: a non-404 failure keeps a way back, with the route's sentence", () => {
+    expect(loadOutcome(503, { error: unchecked })).toEqual({ status: "failed", message: unchecked });
+    expect(loadOutcome(500, null)).toEqual({ status: "failed", message: "Couldn't load the accounts. Press Try again." });
+    expect(loadOutcome(429, { error: "Too many tries." })).toEqual({ status: "failed", message: "Too many tries." });
+  });
+
+  it("shows the sentence as an alert with a Try again button", () => {
+    const html = view({ state: { status: "failed", message: unchecked } });
+    expect(html).toContain("We couldn&#x27;t check that just now.");
+    expect(html).toMatch(/<p role="alert"[^>]*>We couldn&#x27;t check/);
+    expect(html).toMatch(/<button[^>]*>Try again<\/button>/);
+  });
+
+  it("a gone choice still has no button", () => {
+    expect(view({ state: { status: "gone", message: "This choice has ended." } })).not.toContain("<button");
   });
 });
