@@ -257,6 +257,22 @@ describe("the connect link page", () => {
     expect(html).not.toContain("Surf Co Dania");
   });
 
+  // R34 client-journey L1: the owner has since chosen the location, so a reload
+  // or a restored tab with the one-time flag says only that it is connected.
+  it("a location-cleared address after the owner chose a location: connected, nothing about choosing", async () => {
+    vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "g");
+    vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "s");
+    vi.stubEnv("GOOGLE_GBP_REDIRECT_URI", "r");
+    h.findLink.mockResolvedValue({ ...LINK, platforms: [...LINK.platforms, "google_business_profile"] });
+    h.listConnections.mockResolvedValue([
+      { platform: "google_business_profile", accountIdentifier: "", username: null, locationName: "Surf Co Dania", needsReconnect: false, reconnectSoon: false, ended: false },
+    ]);
+    const html = await render({ success: "google_business_profile_connected", location_cleared: "1" });
+    expect(html).not.toContain("The workspace owner will choose the location.");
+    expect(html).not.toContain("will choose the business location");
+    expect(html).toContain("Google Business Profile is connected.");
+  });
+
   it("a typed-in success is not told for a connection in its warning window", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false, reconnectSoon: true },

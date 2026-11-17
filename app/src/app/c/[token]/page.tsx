@@ -134,8 +134,12 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const uncheckedFrom = uncheckedPlatform ? byPlatform.get(uncheckedPlatform) : undefined;
   // R6 third review: a Business Profile reconnect whose location this Google
   // account can't use was saved with it cleared; the owner chooses it.
+  // R34 client-journey L1: said only while there is still no location, as
+  // Settings' gbpWithoutLocation, since a reload keeps the one-time flag.
   const locationCleared =
-    outcome.get("success") === "google_business_profile_connected" && first(query[LOCATION_CLEARED_PARAM]) !== null;
+    outcome.get("success") === "google_business_profile_connected" &&
+    first(query[LOCATION_CLEARED_PARAM]) !== null &&
+    !working?.locationName;
   const result = locationCleared
     ? { variant: "success" as const, message: LOCATION_CLEARED_LINK_MESSAGE }
     : sameEnd?.expiresAt && working
