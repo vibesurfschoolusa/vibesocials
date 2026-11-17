@@ -91,7 +91,12 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
   const now = new Date();
   const day = now.toISOString().slice(0, 10);
   await sendOncePer(
-    { key: `refused-connect-email:${found.id}:${day}`, resetAt: nextUtcMidnight(now), perRecipientKeys: true },
+    {
+      key: `refused-connect-email:${found.id}:${day}`,
+      resetAt: nextUtcMidnight(now),
+      keysFrom: new Date(`${day}T00:00:00.000Z`),
+      perRecipientKeys: true,
+    },
     async (sendStarted) => {
       const [workspace, owners] = await Promise.all([
         prisma.workspace.findUnique({ where: { id: params.workspaceId }, select: { name: true } }),

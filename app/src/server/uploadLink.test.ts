@@ -17,8 +17,14 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeFixedWindowMock }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+vi.mock("@/server/notifications/onceADay", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/notifications/onceADay")>();
+  return { ...actual, sendOncePer: vi.fn(actual.sendOncePer) };
+});
 
 import { generateInviteToken, hashInviteToken } from "@/lib/inviteToken";
+
+import { sendOncePer } from "@/server/notifications/onceADay";
 
 import { findActiveUploadLink, notifyOwnersOfClientUpload, resolveUploadLinkOwner } from "./uploadLink";
 
@@ -186,6 +192,15 @@ describe("notifyOwnersOfClientUpload", () => {
       "client-upload/link-1/2026-11-10T17/owner-2",
     ]);
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  // R40 lead: the hour's key can first be used when the hour begins.
+  it("claims the hour with its start as keysFrom", async () => {
+    await notifyOwnersOfClientUpload(args);
+    expect(vi.mocked(sendOncePer).mock.calls.at(-1)![0]).toMatchObject({
+      resetAt: new Date("2026-11-10T18:00:00.000Z"),
+      keysFrom: new Date("2026-11-10T17:00:00.000Z"),
+    });
   });
 
   it("does not email again within the hour", async () => {

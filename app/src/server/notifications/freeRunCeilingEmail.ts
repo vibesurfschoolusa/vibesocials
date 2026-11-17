@@ -65,7 +65,7 @@ export async function notifyOperatorOfFreeRunCeiling(input: {
   const dayKey = utcDayKey(input.day);
   const key = `free-run-ceiling-email:${dayKey}`;
   await sendOncePer(
-    { key, resetAt: utcDayRange(input.day).end, perRecipientKeys: true },
+    { key, resetAt: utcDayRange(input.day).end, keysFrom: utcDayRange(input.day).start, perRecipientKeys: true },
     async (sendStarted) => {
       const email = buildFreeRunCeilingEmail({ day: input.day, topOwners: await input.topOwners() });
       // sendToEach: one operator's failure never stops the next (R39 L3).

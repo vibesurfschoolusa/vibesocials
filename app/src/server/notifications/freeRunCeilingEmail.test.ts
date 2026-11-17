@@ -7,8 +7,13 @@ const { consumeMock, sendEmailMock, releaseMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeMock }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+vi.mock("@/server/notifications/onceADay", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/notifications/onceADay")>();
+  return { ...actual, sendOncePer: vi.fn(actual.sendOncePer) };
+});
 vi.mock("@/lib/db", () => ({ prisma: { rateLimitEntry: { deleteMany: releaseMock } } }));
 
+import { sendOncePer } from "./onceADay";
 import { buildFreeRunCeilingEmail, notifyOperatorOfFreeRunCeiling } from "./freeRunCeilingEmail";
 
 const DAY = new Date("2026-11-14T15:00:00Z");
@@ -119,6 +124,15 @@ describe("notifyOperatorOfFreeRunCeiling", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // R40 lead: the day's key can first be used when the UTC day begins.
+  it("claims the UTC day with its start as keysFrom", async () => {
+    await notifyOperatorOfFreeRunCeiling({ day: DAY, topOwners });
+    expect(vi.mocked(sendOncePer).mock.calls.at(-1)![0]).toMatchObject({
+      resetAt: new Date("2026-11-15T00:00:00.000Z"),
+      keysFrom: new Date("2026-11-14T00:00:00.000Z"),
+    });
   });
 
   it("a counter store that fails closed sends nothing and lets nothing go", async () => {

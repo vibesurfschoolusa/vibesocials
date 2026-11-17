@@ -135,6 +135,8 @@ export async function runBillingReminders(
         {
           key: `billing-owner:${kind}:${workspace.id}:${owner.userId}:${trialEndsAt.toISOString()}`,
           resetAt: kind === "trial-ending" ? trialEndsAt : new Date(now.getTime() + TRIAL_ENDED_CLAIM_MS),
+          // No per-recipient keys over this window, so a store error never sends.
+          keysFrom: null,
         },
         // sendStarted is not called: a failed owner is tried again the next day,
         // as before; only owners already reached are skipped.

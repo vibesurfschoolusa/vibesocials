@@ -19,8 +19,13 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: h.consumeFixedWindow }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: h.sendEmail }));
+vi.mock("@/server/notifications/onceADay", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/notifications/onceADay")>();
+  return { ...actual, sendOncePer: vi.fn(actual.sendOncePer) };
+});
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
+import { sendOncePer } from "./onceADay";
 import { buildRefusedConnectEmail, notifyOwnersOfRefusedConnect } from "./refusedConnectEmail";
 
 const BASE = "https://app.example.com";
@@ -113,6 +118,15 @@ describe("notifyOwnersOfRefusedConnect", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  // R40 lead: the UTC day's key can first be used when the day begins.
+  it("claims the UTC day with its start as keysFrom", async () => {
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws-1", platform: "facebook_page" });
+    expect(vi.mocked(sendOncePer).mock.calls.at(-1)![0]).toMatchObject({
+      resetAt: new Date("2026-11-15T00:00:00.000Z"),
+      keysFrom: new Date("2026-11-14T00:00:00.000Z"),
+    });
   });
 
   it("emails every owner once, keyed to the connection and the UTC day, ending at the next UTC midnight", async () => {

@@ -35,11 +35,11 @@ export type OncePerWindow = {
   perRecipientKeys?: boolean;
   /**
    * R40 security L1: the earliest time this window's key could be claimed, so
-   * its first email sent. Omitted: `resetAt` minus 24 hours (a window of a day
-   * or less, claimed only while it runs, such as the current hour or day).
-   * null: no bound, such as a day that can be filled days ahead.
+   * its first email sent: the window's start for one claimed only while it
+   * runs (the current hour, day or month). null: no bound, such as a day that
+   * can be filled days ahead. Required, so no window can leave it out.
    */
-  keysFrom?: Date | null;
+  keysFrom: Date | null;
 };
 
 /**
@@ -72,8 +72,7 @@ export async function sendOncePer(
   const { key, resetAt } = window;
   const now = Date.now();
   const keysCoverLater = window.perRecipientKeys === true && resetAt.getTime() - now <= IDEMPOTENCY_KEY_MS;
-  const keysFrom = window.keysFrom === undefined ? resetAt.getTime() - IDEMPOTENCY_KEY_MS : window.keysFrom?.getTime();
-  const keysCoverEarlier = keysFrom !== undefined && now - keysFrom <= IDEMPOTENCY_KEY_MS;
+  const keysCoverEarlier = window.keysFrom !== null && now - window.keysFrom.getTime() <= IDEMPOTENCY_KEY_MS;
   let storeDown = false;
   let claimed = false;
   try {
@@ -97,14 +96,18 @@ export async function sendOncePer(
   return "failed";
 }
 
-/** sendOncePer with a day's window: the name the daily emails already use. */
+/**
+ * sendOncePer with a day's window and no per-recipient keys: the name the
+ * daily emails already use. Without the keys a store error never sends, so
+ * the window's start is not needed.
+ */
 export function sendOnceADay(
   key: string,
   resetAt: Date,
   send: (sendStarted: () => void) => Promise<boolean>,
   onError: (error: unknown) => void,
 ): Promise<"sent" | "skipped" | "failed"> {
-  return sendOncePer({ key, resetAt }, send, onError);
+  return sendOncePer({ key, resetAt, keysFrom: null }, send, onError);
 }
 
 /**

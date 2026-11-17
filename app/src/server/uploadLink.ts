@@ -89,7 +89,12 @@ async function sendClientUploadEmails(args: ClientUploadNotice): Promise<void> {
   // R39 client-journey L2: through sendOncePer, so the hour is let go again
   // when the owners can't be read or no email went, and the next file tries.
   await sendOncePer(
-    { key: `client-upload-email:${linkId}:${hour.key}`, resetAt: hour.end, perRecipientKeys: true },
+    {
+      key: `client-upload-email:${linkId}:${hour.key}`,
+      resetAt: hour.end,
+      keysFrom: new Date(hour.end.getTime() - 60 * 60 * 1000),
+      perRecipientKeys: true,
+    },
     async (sendStarted) => {
       const owners = await prisma.workspaceMember.findMany({
         where: { workspaceId, role: "owner" },

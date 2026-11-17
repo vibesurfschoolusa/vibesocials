@@ -76,11 +76,15 @@ describe("sendOnceADay", () => {
 
 /** R39 client-journey L2: the same rule for any window (an hour, a day). */
 describe("sendOncePer", () => {
-  const HOUR = { key: "some-email:2026-11-17T09", resetAt: new Date("2026-11-17T10:00:00Z") };
+  const HOUR = {
+    key: "some-email:2026-11-17T09",
+    resetAt: new Date("2026-11-17T10:00:00Z"),
+    keysFrom: new Date("2026-11-17T09:00:00Z"),
+  };
 
   it("claims the window fail-closed and keeps it when an email went", async () => {
     await expect(sendOncePer(HOUR, async () => true, onError)).resolves.toBe("sent");
-    expect(consumeMock).toHaveBeenCalledWith({ ...HOUR, limit: 1, failClosed: true });
+    expect(consumeMock).toHaveBeenCalledWith({ key: HOUR.key, resetAt: HOUR.resetAt, limit: 1, failClosed: true });
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
@@ -101,7 +105,11 @@ describe("sendOncePer", () => {
 
   // Resend keeps an idempotency key 24 hours: past that, a reused key stops no second copy.
   it("a window longer than a day: a throw after a send started keeps the claim, while none sent still lets it go", async () => {
-    const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) };
+    const month = {
+      key: "some-email:2026-11",
+      resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      keysFrom: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    };
     await expect(
       sendOncePer(
         month,
@@ -121,7 +129,11 @@ describe("sendOncePer", () => {
 
   // R39 lead review L1+L2: nothing can have gone before a send started, whatever the window.
   it("a window longer than a day: a throw before any send started (a failed read) lets the claim go", async () => {
-    const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) };
+    const month = {
+      key: "some-email:2026-11",
+      resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      keysFrom: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    };
     await expect(
       sendOncePer(
         month,
@@ -179,7 +191,12 @@ describe("sendOncePer", () => {
 
   // R39 lead review L3: within 24 hours each recipient's key already stops a second copy.
   it("a store error on a short window with per-recipient keys: sends once, claims and lets go nothing", async () => {
-    const shortKeyed = { ...HOUR, resetAt: new Date(Date.now() + 30 * 60 * 1000), perRecipientKeys: true as const };
+    const shortKeyed = {
+      ...HOUR,
+      resetAt: new Date(Date.now() + 30 * 60 * 1000),
+      keysFrom: new Date(Date.now() - 30 * 60 * 1000),
+      perRecipientKeys: true as const,
+    };
     for (const store of [
       () => consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true }),
       () => consumeMock.mockRejectedValueOnce(new Error("store down")),
@@ -196,9 +213,10 @@ describe("sendOncePer", () => {
     const longKeyed = {
       key: "some-email:2026-11",
       resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      keysFrom: new Date(Date.now() - 60 * 60 * 1000),
       perRecipientKeys: true as const,
     };
-    const shortUnkeyed = { ...HOUR, resetAt: new Date(Date.now() + 30 * 60 * 1000) };
+    const shortUnkeyed = { ...HOUR, resetAt: new Date(Date.now() + 30 * 60 * 1000), keysFrom: new Date(Date.now() - 30 * 60 * 1000) };
     for (const window of [longKeyed, shortUnkeyed]) {
       consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true });
       const send = vi.fn(async () => true);
@@ -278,7 +296,7 @@ describe("sendToEach", () => {
     await expect(sendToEach(["a", "b"], sendOne)).rejects.toThrow("Resend rate limited the send");
     expect(sendOne.mock.calls.map(([to]) => to)).toEqual(["a", "b"]);
 
-    await expect(sendOncePer({ key: KEY, resetAt: RESET_AT }, () => sendToEach(["a", "b"], sendOne), onError)).resolves.toBe(
+    await expect(sendOncePer({ key: KEY, resetAt: RESET_AT, keysFrom: null }, () => sendToEach(["a", "b"], sendOne), onError)).resolves.toBe(
       "failed",
     );
     expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
@@ -286,7 +304,7 @@ describe("sendToEach", () => {
 
   it("all went: true, the window is kept", async () => {
     const sendOne = vi.fn(async () => true);
-    await expect(sendOncePer({ key: KEY, resetAt: RESET_AT }, () => sendToEach(["a", "b"], sendOne), onError)).resolves.toBe(
+    await expect(sendOncePer({ key: KEY, resetAt: RESET_AT, keysFrom: null }, () => sendToEach(["a", "b"], sendOne), onError)).resolves.toBe(
       "sent",
     );
     expect(sendOne).toHaveBeenCalledTimes(2);
