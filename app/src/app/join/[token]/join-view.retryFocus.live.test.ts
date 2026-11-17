@@ -105,6 +105,25 @@ describe("Join: focus after Try again", () => {
     expect(active().textContent).toBe("Join Surf Co?");
   });
 
+  // R43 new-customer L3: every result's heading, not only the card's and the failure's.
+  it("goes to the loading line, then to the already-a-member heading", async () => {
+    await failedThenTryAgain(Response.json({ workspaceId: "ws-1", workspaceName: "Surf Co", alreadyMember: true }));
+    expect(active().nodeName).toBe("H1");
+    expect(active().textContent).toBe("You're already in Surf Co");
+  });
+
+  it("goes to the loading line, then to the dead link's heading", async () => {
+    await failedThenTryAgain(Response.json({ error: "This invite has expired." }, { status: 404 }));
+    expect(active().nodeName).toBe("H1");
+    expect(active().textContent).toBe("This invite link isn't valid anymore.");
+  });
+
+  it("goes to the loading line, then to the signed-out heading", async () => {
+    await failedThenTryAgain(Response.json({ error: "Unauthorized" }, { status: 401 }));
+    expect(active().nodeName).toBe("H1");
+    expect(active().textContent).toBe("You weren't added to the workspace.");
+  });
+
   it("goes to the loading line, then to the new failure's heading", async () => {
     await failedThenTryAgain(Response.json({ error: "Internal" }, { status: 500 }));
     expect(active().nodeName).toBe("H1");

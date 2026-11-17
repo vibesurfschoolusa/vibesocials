@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type Ref, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { UserPlus } from "lucide-react";
 
@@ -144,11 +144,10 @@ export function joinPromise(requiresApproval: boolean): string {
 }
 
 /** R11-pages L5: the states the page can end on are the whole page, so each title is its h1. */
-export function JoinUnreachable({ onRetry, stateRef }: { onRetry: () => void; stateRef?: Ref<HTMLDivElement> }) {
+export function JoinUnreachable({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="mx-auto max-w-md px-4 py-16">
       <EmptyState
-        ref={stateRef}
         icon={<UserPlus />}
         headingLevel={1}
         title="We couldn't load this invite."
@@ -257,19 +256,19 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
 
   // R42 pages-a L2: Try again swaps the whole page, so focus fell to the page
   // body. It goes to the loading line while the invite is read, then to the
-  // card's h1 or the new failure's h1.
+  // result's h1. R43 new-customer L3: whichever result it is, so one rule:
+  // the first h1 under the result's root.
   const statusRef = useRef<HTMLParagraphElement>(null);
-  const joinHeadingRef = useRef<HTMLHeadingElement>(null);
-  const failureRef = useRef<HTMLDivElement>(null);
-  const failureHeadingRef = useMemo<RefObject<HTMLElement | null>>(
+  const resultRootRef = useRef<HTMLDivElement>(null);
+  const resultHeadingRef = useMemo<RefObject<HTMLElement | null>>(
     () => ({
       get current() {
-        return firstHeadingIn(failureRef.current);
+        return firstHeadingIn(resultRootRef.current);
       },
     }),
     [],
   );
-  const retried = useRetryFocus(load === null, statusRef, [joinHeadingRef, failureHeadingRef]);
+  const retried = useRetryFocus(load === null, statusRef, [resultHeadingRef]);
 
   async function handleJoin() {
     setJoining(true);
@@ -292,7 +291,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
       <p ref={statusRef} role="status" className="sr-only">
         {load ? "" : "Loading the invite…"}
       </p>
-      {joinBody()}
+      <div ref={resultRootRef}>{joinBody()}</div>
     </>
   );
 
@@ -313,7 +312,6 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
     if (load.kind === "unreachable") {
       return (
         <JoinUnreachable
-          stateRef={failureRef}
           onRetry={() => {
             retried();
             setLoad(null);
@@ -334,7 +332,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <Card className="flex flex-col items-center gap-3 p-6 text-center">
-          <h1 ref={joinHeadingRef} className="text-lg font-semibold text-foreground">
+          <h1 className="text-lg font-semibold text-foreground">
             Join {preview.workspaceName}?
           </h1>
           <p className="text-sm text-muted-foreground">{joinPromise(requiresApproval)}</p>
