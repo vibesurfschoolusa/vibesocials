@@ -67,6 +67,8 @@ vi.mock("@/lib/logger", () => ({
 
 import { sealSecret } from "@/lib/tokenCrypto";
 import type { PendingConnectionPayload } from "@/server/connections/pendingConnection";
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, headersNeverCome } from "@/lib/stallingFetch.testkit";
 import { DELETE, GET, POST } from "./route";
 
 const OWNER_CONTEXT = {
@@ -595,6 +597,64 @@ describe("POST /api/connections/pending/[id]", () => {
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalled();
     expect(JSON.stringify(vi.mocked(logger.error).mock.calls)).not.toContain("page-token-2");
+  });
+
+  // R36 review low 2: a failure before anything was saved says try again and
+  // keeps the choice; "may have been connected" is only for a failure after
+  // the save could have happened.
+  describe("before the save, nothing was connected", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("an Instagram that stalls on the chosen account's details: try again, the choice kept", async () => {
+      const actual = await vi.importActual<typeof import("@/server/connections/saveConnection")>(
+        "@/server/connections/saveConnection",
+      );
+      fetchInstagramAccountDetailsMock.mockImplementation(actual.fetchInstagramAccountDetails);
+      findUniqueMock.mockResolvedValue(row(INSTAGRAM));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      abortSignalTimeoutOnFakeClock();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.stubGlobal("fetch", vi.fn(headersNeverCome));
+
+      const pending = POST(postReq({ candidateId: "ig-2" }), ctx());
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      const response = await pending;
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error: "Couldn't load that account from the platform. Please try again.",
+      });
+      expectNothingSaved();
+      expect(deleteManyMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it("the choice itself can't be read: reload and try again, never 'may have been connected'", async () => {
+      findUniqueMock.mockRejectedValue(new Error("db down"));
+
+      const response = await POST(postReq({ candidateId: "ig-2" }), ctx());
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "Couldn't load your accounts. Reload the page to try again." });
+      expectNothingSaved();
+    });
+
+    it("the Instagram save itself failing is unchanged: it may have been connected", async () => {
+      findUniqueMock.mockResolvedValue(row(INSTAGRAM));
+      fetchInstagramAccountDetailsMock.mockResolvedValue({ username: "clientcafe", profilePicture: null });
+      saveInstagramConnectionMock.mockRejectedValue(new Error("db down"));
+
+      const response = await POST(postReq({ candidateId: "ig-2" }), ctx());
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error:
+          "Something went wrong on our side, so the account may have been connected. Press Cancel, then look for it in your connections before you connect again.",
+      });
+      expect(deleteManyMock).not.toHaveBeenCalled();
+    });
   });
 
   // R31 new-customer L3: the account is connected; a failed clean-up must not say it failed.

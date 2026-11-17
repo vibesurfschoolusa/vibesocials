@@ -337,34 +337,47 @@ export interface InstagramAccountDetails {
 
 /**
  * The Instagram account's username and picture, read with the linked Page's
- * token. `null` when Graph answers with an error (logged; it never holds the
- * token). A network failure throws, as does a Graph that stalls past
- * CONNECT_CALL_TIMEOUT_MS (headers or body: R36 platform-clients L1).
+ * token. `null` when Graph answers with an error, doesn't answer, or stalls
+ * past `CONNECT_CALL_TIMEOUT_MS` (headers or body). Logged without the token.
+ *
+ * R36 review low 2: it never throws. Every caller reads it before anything is
+ * saved, so a failure is "couldn't load that account, try again" (the choice
+ * kept), never the catch-all that says the account may have been connected.
  */
 export async function fetchInstagramAccountDetails(
   igAccountId: string,
   pageAccessToken: string,
+  signal?: AbortSignal,
 ): Promise<InstagramAccountDetails | null> {
   const igUrl = new URL(`${META_GRAPH_BASE_URL}/${igAccountId}`);
   igUrl.searchParams.set("fields", "username,profile_picture_url");
   igUrl.searchParams.set("access_token", pageAccessToken);
 
-  const igResponse = await fetchWithinLimit(igUrl.toString(), undefined, CONNECT_CALL_TIMEOUT_MS);
-  if (!igResponse.ok) {
-    const errorText = await igResponse.text();
-    console.error("[Instagram OAuth] Failed to fetch IG account:", errorText);
+  try {
+    const igResponse = await fetchWithinLimit(igUrl.toString(), signal ? { signal } : undefined, CONNECT_CALL_TIMEOUT_MS);
+    if (!igResponse.ok) {
+      const errorText = await igResponse.text();
+      console.error("[Instagram OAuth] Failed to fetch IG account:", errorText);
+      return null;
+    }
+
+    const igData = (await igResponse.json()) as {
+      username: string;
+      profile_picture_url?: string;
+    };
+
+    return {
+      username: igData.username,
+      profilePicture: igData.profile_picture_url || null,
+    };
+  } catch (error) {
+    // The error's kind only: a message could quote the address, which holds the token.
+    console.error("[Instagram OAuth] No answer reading the IG account", {
+      name: (error as Error | null)?.name,
+      code: (error as { code?: unknown } | null)?.code,
+    });
     return null;
   }
-
-  const igData = (await igResponse.json()) as {
-    username: string;
-    profile_picture_url?: string;
-  };
-
-  return {
-    username: igData.username,
-    profilePicture: igData.profile_picture_url || null,
-  };
 }
 
 export async function saveInstagramConnection({

@@ -9,9 +9,10 @@ import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "
 import { fetchInstagramAccountDetails } from "./saveConnection";
 
 /**
- * R36 platform-clients L1: the Instagram account read runs in the callback and
- * in the Settings or /c choice. A Graph that stalls throws within 15 s, as a
- * network failure does, so each caller's existing failure path runs.
+ * R36 platform-clients L1 and review low 2: the Instagram account read runs in
+ * the callback and in the Settings or /c choice, before anything is saved. A
+ * Graph that stalls, or no answer at all, answers null within 15 s, as a Graph
+ * error does: "couldn't load that account, try again", with the choice kept.
  */
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -28,19 +29,24 @@ describe("fetchInstagramAccountDetails when Graph stalls", () => {
     { kind: "no headers", fetch: headersNeverCome },
     { kind: "a body that never ends", fetch: bodyNeverEnds },
   ]) {
-    it(`throws after 15 seconds of ${stall.kind}`, async () => {
+    it(`answers null after 15 seconds of ${stall.kind}`, async () => {
       vi.useFakeTimers();
       abortSignalTimeoutOnFakeClock();
       const fetchMock = vi.fn(stall.fetch);
       vi.stubGlobal("fetch", fetchMock);
 
       const answer = fetchInstagramAccountDetails("ig-1", "page-token");
-      const settled = expect(answer).rejects.toBeDefined();
       await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
-      await settled;
+      await expect(answer).resolves.toBeNull();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   }
+
+  it("answers null when there is no answer at all, never logging the token", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("fetch failed"))));
+    await expect(fetchInstagramAccountDetails("ig-1", "page-token")).resolves.toBeNull();
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("page-token");
+  });
 
   it("still reads an account that answers in time", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ username: "brand", profile_picture_url: "https://x.test/p.jpg" })));

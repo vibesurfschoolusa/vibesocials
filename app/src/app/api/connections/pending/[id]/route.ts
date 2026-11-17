@@ -236,8 +236,21 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
   const { id } = await params;
   const owner = ownerOf(contextOrError);
 
+  // R36 review low 2: nothing is saved before the choice is read, so a failure
+  // here says to reload and try again; "may have been connected" (below) is
+  // only for a failure once the save could have happened.
+  let pending: Awaited<ReturnType<typeof loadPendingConnection>>;
   try {
-    const pending = await loadPendingConnection(id, owner);
+    pending = await loadPendingConnection(id, owner);
+  } catch (error) {
+    logger.error("[POST /api/connections/pending/[id]] Couldn't read the choice", {
+      error: errorKind(error),
+      pendingConnectionId: id,
+    });
+    return NextResponse.json({ error: await loadFailedText(request, owner.workspaceId) }, { status: 500 });
+  }
+
+  try {
     if (!pending) {
       return await notFound(request, id, ownerOf(contextOrError));
     }

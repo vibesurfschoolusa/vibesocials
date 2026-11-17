@@ -1519,7 +1519,7 @@ describe("a provider that stalls during the callback", () => {
     url.includes("oauth/v2/accessToken") ||
     url.includes("api.pinterest.com/v5/oauth/token") ||
     (url.includes("/oauth/access_token") && !url.includes("fb_exchange_token"));
-  const STALL_POINTS: Array<{ platform: Platform; call: string; stalls: (url: string) => boolean }> = [
+  const STALL_POINTS: Array<{ platform: Platform; call: string; stalls: (url: string) => boolean; code?: string }> = [
     ...CASES.filter((c) => c.platform !== "tiktok").map((c) => ({
       platform: c.platform,
       call: "the token exchange",
@@ -1527,7 +1527,13 @@ describe("a provider that stalls during the callback", () => {
     })),
     { platform: "facebook_page", call: "the long-lived token exchange", stalls: (url) => url.includes("fb_exchange_token") },
     { platform: "instagram", call: "the long-lived token exchange", stalls: (url) => url.includes("fb_exchange_token") },
-    { platform: "instagram", call: "the Instagram account read", stalls: (url) => url.includes("/ig-1") },
+    // Review low 2: the account read answers null, so this is its own failure code.
+    {
+      platform: "instagram",
+      call: "the Instagram account read",
+      stalls: (url) => url.includes("/ig-1"),
+      code: "instagram_failed_to_fetch_ig_account",
+    },
     { platform: "youtube", call: "the channel read", stalls: (url) => url.includes("youtube/v3/channels") },
   ];
   const stalls = [
@@ -1537,7 +1543,8 @@ describe("a provider that stalls during the callback", () => {
 
   for (const point of STALL_POINTS) {
     for (const stall of stalls) {
-      it(`${point.platform}: ${point.call} with ${stall.kind} is ${point.platform}_connect_failed after 15 seconds`, async () => {
+      const code = point.code ?? `${point.platform}_connect_failed`;
+      it(`${point.platform}: ${point.call} with ${stall.kind} is ${code} after 15 seconds`, async () => {
         const { GET, provider } = CASES.find((c) => c.platform === point.platform)!;
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         abortSignalTimeoutOnFakeClock();
@@ -1557,7 +1564,7 @@ describe("a provider that stalls during the callback", () => {
         const res = await pending;
 
         expect(stalled).toBe(1);
-        expect(location(res).searchParams.get("error")).toBe(`${point.platform}_connect_failed`);
+        expect(location(res).searchParams.get("error")).toBe(code);
         expectNoConnectionWrites();
       });
     }
