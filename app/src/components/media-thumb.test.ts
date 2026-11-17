@@ -41,3 +41,11 @@ describe("MediaThumb", () => {
     expect(renderToStaticMarkup(createElement(MediaThumb, { media: null, count: 3 }))).toBe("");
   });
 });
+
+// R45 pages-b L2: a name on a plain span is not allowed (aria-prohibited-attr),
+// so screen readers heard a bare "5". The badge is an image with its name.
+describe("MediaCountBadge for screen readers", () => {
+  it("names itself through role img", () => {
+    expect(render(5)).toMatch(/<span role="img" aria-label="5 photos"[^>]*>5<\/span>/);
+  });
+});

@@ -6,12 +6,13 @@ export function mediaCountBadge(count: number | undefined): string | null {
   return count !== undefined && count > 1 ? String(count) : null;
 }
 
-/** The small count badge over a thumbnail's corner. */
+/** The small count badge over a thumbnail's corner. R45 pages-b L2: an image with its name, so a screen reader says "5 photos". */
 export function MediaCountBadge({ count }: { count: number | undefined }) {
   const label = mediaCountBadge(count);
   if (!label) return null;
   return (
     <span
+      role="img"
       aria-label={`${label} photos`}
       className="absolute bottom-0.5 right-0.5 rounded-full bg-black/70 px-1.5 text-[10px] font-semibold leading-4 text-white"
     >

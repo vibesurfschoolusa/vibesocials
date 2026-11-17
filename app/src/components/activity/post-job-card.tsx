@@ -345,6 +345,7 @@ export function ByName({ name }: { name: string }) {
 export function TextPostTile() {
   return (
     <span
+      role="img"
       aria-label="Text post, no photo"
       className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border bg-muted text-[11px] font-medium text-muted-foreground"
     >
