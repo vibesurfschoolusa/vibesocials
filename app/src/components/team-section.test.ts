@@ -12,6 +12,7 @@ import {
   memberIsGone,
   memberRoleChanged,
   readTeamList,
+  soleOwnerKnown,
   teamMemberLines,
 } from "./team-section";
 
@@ -203,5 +204,30 @@ describe("Create invite link when the answer is lost", () => {
     const create = source.slice(source.indexOf("const createInvite = useCallback"), source.indexOf("}, [", source.indexOf("const createInvite = useCallback")));
     expect(create).toMatch(/toast\.error\(inviteFailureText\(response\.status, data\)\);/);
     expect(create).toMatch(/confirmFailureText\(error, INVITE_MAYBE_MADE_MESSAGE\)/);
+  });
+});
+
+// R33 new-customer L3: the "only owner" line and the disabled Leave only once
+// the members list has loaded and shows one owner. While it loads, or after a
+// failed read, the card says nothing about owners and Leave stays pressable:
+// the leave route refuses the last owner itself.
+describe("Team: the only-owner line and Leave", () => {
+  const owner = { role: "owner" };
+  const member = { role: "member" };
+
+  it("knows the person is the only owner only from a loaded list", () => {
+    expect(soleOwnerKnown([owner, member])).toBe(true);
+    expect(soleOwnerKnown([owner, owner, member])).toBe(false);
+    expect(soleOwnerKnown(null)).toBe(false);
+  });
+
+  it("the line and Leave's disabled state both follow it", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    expect(source).toContain("const soleOwner = soleOwnerKnown(members);");
+    const start = source.indexOf("{/* Leave —");
+    const leave = source.slice(start, source.indexOf("</div>", start));
+    expect(leave).toContain("disabled={soleOwner}");
+    expect(leave).toMatch(/\{soleOwner \? \(\s+<p[^>]*>\s+You&apos;re the only owner/);
+    expect(leave).not.toContain("ownerCount");
   });
 });

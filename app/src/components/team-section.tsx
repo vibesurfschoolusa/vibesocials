@@ -141,6 +141,14 @@ interface InviteMeta {
 }
 
 /** The Team card's own sentence when its list can't be read. */
+/**
+ * R33 new-customer L3: true only when the loaded members list shows at most
+ * one owner (the person themself). An unloaded or failed list says nothing.
+ */
+export function soleOwnerKnown(members: ReadonlyArray<{ role: string }> | null): boolean {
+  return members !== null && members.filter((m) => m.role === "owner").length < 2;
+}
+
 export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try reloading the page.";
 
 /**
@@ -1054,6 +1062,7 @@ function OwnerView({
   // Derived from the loaded roster each render, so it stays fresh after every
   // local-state role change above. Gates the last-owner demote/leave guards.
   const ownerCount = members?.filter((m) => m.role === "owner").length ?? 0;
+  const soleOwner = soleOwnerKnown(members);
 
   return (
     <Card className="flex flex-col gap-8 p-6">
@@ -1207,18 +1216,20 @@ function OwnerView({
       <ClientLinksPanel state={clientLinks} onReplace={replaceClientLinks} onTurnOff={turnOffClientLinks} />
 
       {/* Leave — an owner may step down once another owner exists. Disabled
-          with an explanation until then (the server backstops with a 400). */}
+          with an explanation once the loaded list shows one owner; while it
+          loads or after a failed read, the server decides (it refuses the
+          last owner with a 400). */}
       <div className="border-t border-border pt-6">
         <Button
           size="sm"
           variant="ghost"
           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-          disabled={ownerCount < 2}
+          disabled={soleOwner}
           onClick={() => setLeaveOpen(true)}
         >
           Leave workspace
         </Button>
-        {ownerCount < 2 ? (
+        {soleOwner ? (
           <p className="mt-2 text-sm text-muted-foreground">
             You&apos;re the only owner — promote someone first.
           </p>
