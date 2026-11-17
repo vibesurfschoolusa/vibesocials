@@ -72,6 +72,9 @@ vi.mock("@/server/notifications/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/notifications/email")>()),
   sendEmailOutcome: sendEmailMock,
 }));
+// R43 review: each owner's reconnect email is claimed (sendOncePer); every claim
+// is free here, and connectionNotices.test.ts covers the claims themselves.
+vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: async () => ({ allowed: true }) }));
 // The page logic has its own suite (youtubeMetricsSync.test.ts); the handler's
 // paging loop is what is under test here.
 vi.mock("@/server/jobs/youtubeMetricsSync", async (importOriginal) => ({

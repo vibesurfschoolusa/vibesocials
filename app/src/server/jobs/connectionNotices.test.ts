@@ -14,7 +14,11 @@ const {
   workspaceFindUniqueMock,
   membersFindManyMock,
   sendEmailMock,
+  claims,
+  consumeMock,
 } = vi.hoisted(() => ({
+    claims: new Map<string, Date>(),
+    consumeMock: vi.fn(),
     table: new Map<string, Record<string, unknown>>(),
     findManyMock: vi.fn(),
     findUniqueMock: vi.fn(),
@@ -33,8 +37,14 @@ vi.mock("@/lib/db", () => ({
     },
     workspace: { findUnique: workspaceFindUniqueMock },
     workspaceMember: { findMany: membersFindManyMock },
+    // sendOncePer lets a claim go through this.
+    rateLimitEntry: {
+      deleteMany: async ({ where }: { where: { key: string } }) => ({ count: claims.delete(where.key) ? 1 : 0 }),
+    },
   },
 }));
+// R43 review: each owner's claim (sendOncePer) is an in-memory set here.
+vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeMock }));
 vi.mock("@/server/notifications/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/notifications/email")>()),
   sendEmailOutcome: sendEmailMock,
@@ -107,6 +117,13 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   table.clear();
+  claims.clear();
+  consumeMock.mockReset();
+  consumeMock.mockImplementation(async ({ key, resetAt }: { key: string; resetAt: Date }) => {
+    if (claims.has(key)) return { allowed: false, retryAfterSeconds: 60 };
+    claims.set(key, resetAt);
+    return { allowed: true };
+  });
   for (const mock of [findManyMock, findUniqueMock, updateManyMock, workspaceFindUniqueMock, membersFindManyMock, sendEmailMock]) {
     mock.mockReset();
   }
@@ -311,6 +328,125 @@ describe("a notice that didn't go is not recorded", () => {
   });
 });
 
+// R43 review: an owner already reached is never emailed again for the same
+// notice, through a claim per owner (sendOncePer, as the trial emails do).
+describe("each owner is told once per notice", () => {
+  const TRY_LATER = { sent: false, reason: "try_later" } as const;
+  const REFUSED = { sent: false, reason: "refused" } as const;
+  const SENT = { sent: true } as const;
+  const run = (day = DAY) => sendConnectionNotices(NOW.toISOString(), day);
+  const recipients = () => sendEmailMock.mock.calls.map((call) => call[0].to);
+
+  describe("reconnect email", () => {
+    const FLAG = new Date(NOW.getTime() - DAY_MS);
+    beforeEach(() => row("conn-1", { needsReconnect: true, refreshFailedAt: FLAG }));
+
+    it("claims each owner by the flag's time, for 30 days", async () => {
+      await run();
+      expect([...claims.keys()]).toEqual([
+        `connection-reconnect-owner:conn-1:${FLAG.toISOString()}:user-a`,
+        `connection-reconnect-owner:conn-1:${FLAG.toISOString()}:user-b`,
+      ]);
+      expect(claims.get(`connection-reconnect-owner:conn-1:${FLAG.toISOString()}:user-a`)!.getTime()).toBe(
+        NOW.getTime() + 30 * DAY_MS,
+      );
+    });
+
+    it("A sent, B to try later: the next sweep (the next day) emails only B, then records it", async () => {
+      sendEmailMock.mockResolvedValueOnce(SENT).mockResolvedValueOnce(TRY_LATER);
+      expect(await run()).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 1 });
+      expect(table.get("conn-1")!.reconnectEmailedAt).toBeNull();
+
+      sendEmailMock.mockClear();
+      expect(await run("2026-11-15")).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 1 });
+      expect(recipients()).toEqual(["owner-b@example.com"]);
+      expect(time(table.get("conn-1")!.reconnectEmailedAt)).toBe(NOW.getTime());
+    });
+
+    it("an owner refused for good counts as done, and is not tried again", async () => {
+      sendEmailMock.mockResolvedValueOnce(REFUSED).mockResolvedValueOnce(TRY_LATER);
+      await run();
+      sendEmailMock.mockClear();
+      await run("2026-11-15");
+      expect(recipients()).toEqual(["owner-b@example.com"]);
+      expect(time(table.get("conn-1")!.reconnectEmailedAt)).toBe(NOW.getTime());
+    });
+
+    it("a new flag time emails both owners again", async () => {
+      await run();
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
+      table.get("conn-1")!.refreshFailedAt = new Date(NOW.getTime() + 60_000);
+      vi.setSystemTime(new Date(NOW.getTime() + 2 * 60_000));
+      sendEmailMock.mockClear();
+      await run();
+      expect(recipients()).toEqual(["owner-a@example.com", "owner-b@example.com"]);
+    });
+
+    it("a retryable error: the other owner is still tried, then it is thrown and nothing is recorded", async () => {
+      sendEmailMock
+        .mockRejectedValueOnce(new EmailRetryableError("Resend send failed (status 503)"))
+        .mockResolvedValueOnce(SENT);
+      await expect(run()).rejects.toBeInstanceOf(EmailRetryableError);
+      expect(recipients()).toEqual(["owner-a@example.com", "owner-b@example.com"]);
+      expect(table.get("conn-1")!.reconnectEmailedAt).toBeNull();
+
+      sendEmailMock.mockClear();
+      await run();
+      expect(recipients()).toEqual(["owner-a@example.com"]);
+      expect(time(table.get("conn-1")!.reconnectEmailedAt)).toBe(NOW.getTime());
+    });
+  });
+
+  describe("expiry warning", () => {
+    const expiresAt = new Date("2026-11-20T15:30:00.000Z");
+    beforeEach(() => row("conn-1", { expiresAt }));
+
+    it("claims each owner by the expiry, until it", async () => {
+      await run();
+      const key = `connection-expiry-owner:conn-1:${expiresAt.toISOString()}:user-a`;
+      expect(claims.get(key)!.getTime()).toBe(expiresAt.getTime());
+    });
+
+    it("A sent, B to try later: the next sweep emails only B, then records it", async () => {
+      sendEmailMock.mockResolvedValueOnce(SENT).mockResolvedValueOnce(TRY_LATER);
+      expect(await run()).toEqual({ warned: 1, lapsed: 0, reconnectEmails: 0 });
+      expect(table.get("conn-1")!.expiryWarnedFor).toBeNull();
+
+      sendEmailMock.mockClear();
+      await run("2026-11-15");
+      expect(recipients()).toEqual(["owner-b@example.com"]);
+      expect(time(table.get("conn-1")!.expiryWarnedFor)).toBe(expiresAt.getTime());
+    });
+
+    it("an owner refused for good counts as done", async () => {
+      sendEmailMock.mockResolvedValueOnce(REFUSED).mockResolvedValueOnce(SENT);
+      await run();
+      expect(time(table.get("conn-1")!.expiryWarnedFor)).toBe(expiresAt.getTime());
+    });
+
+    it("a new expiry (a reconnect) warns both owners again", async () => {
+      await run();
+      table.get("conn-1")!.expiresAt = new Date("2026-11-20T20:00:00.000Z");
+      sendEmailMock.mockClear();
+      await run();
+      expect(recipients()).toEqual(["owner-a@example.com", "owner-b@example.com"]);
+    });
+
+    it("a retryable error: the other owner is still tried, then it is thrown and nothing is recorded", async () => {
+      sendEmailMock
+        .mockRejectedValueOnce(new EmailRetryableError("Resend send failed (status 503)"))
+        .mockResolvedValueOnce(SENT);
+      await expect(run()).rejects.toBeInstanceOf(EmailRetryableError);
+      expect(recipients()).toEqual(["owner-a@example.com", "owner-b@example.com"]);
+      expect(table.get("conn-1")!.expiryWarnedFor).toBeNull();
+
+      sendEmailMock.mockClear();
+      await run();
+      expect(recipients()).toEqual(["owner-a@example.com"]);
+    });
+  });
+});
+
 describe("sendConnectionNotices", () => {
   const run = () => sendConnectionNotices(NOW.toISOString(), DAY);
 
@@ -469,10 +605,10 @@ describe("sendConnectionNotices", () => {
     sendEmailMock.mockReset();
     sendEmailMock.mockResolvedValue({ sent: true });
 
-    expect(await run()).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 2 });
+    // R43 review: owner-b of "b" was still tried and reached; only owner-a is left.
+    expect(await run()).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 1 });
     expect(sendEmailMock.mock.calls.map((call) => call[1].idempotencyKey)).toEqual([
       "reconnect/b/2026-11-14/user-a",
-      "reconnect/b/2026-11-14/user-b",
     ]);
   });
 

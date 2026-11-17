@@ -1,8 +1,10 @@
 import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { platformLabel } from "@/lib/platforms";
 import { clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
-import { sendEmailOutcome, type SendEmailOutcome } from "@/server/notifications/email";
+import { isRetryableEmailError, sendEmailOutcome, type SendEmailOutcome } from "@/server/notifications/email";
+import { sendOncePer } from "@/server/notifications/onceADay";
 import { buildExpiryWarningEmail, buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { expiryNoticeDue, expiryNoticeWhere } from "./connectionHealthSweep";
 
@@ -48,25 +50,56 @@ type Stamp = Date | string | null;
  */
 const WORKSPACE_SELECT = () => ({ name: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() }) as const;
 
+/** How long a reconnect owner's claim lasts: well past any flag's daily sweeps. */
+const RECONNECT_CLAIM_MS = 30 * 24 * 60 * 60 * 1000;
+
 /**
- * R43 platform L1: what one notice's sends add up to. `sent`: the owners it
- * reached. `done`: no owner is left to try, so the notice may be recorded: an
- * owner Resend refused for good is done (one bad address must not hold the
- * record back for ever), one whose send can still go (a quota answer, no or a
- * bad key) is not, and the next sweep tries the notice again. A rate limit or
- * a 5xx still throws out of the send (throwOnRetryable), and nothing is recorded.
+ * R43 platform L1 and review: one notice to each owner, each claimed once
+ * (sendOncePer, as the trial emails do), so an owner already reached is never
+ * emailed again for this notice, whatever day the next sweep runs.
+ *
+ * The send answers true when it went or Resend refused that owner for good
+ * (one bad address must not hold the record back for ever); a quota answer or
+ * no or a bad key lets the claim go, so the next sweep tries that owner. A
+ * rate limit or a 5xx throws out of the send (throwOnRetryable); sendOncePer
+ * lets that claim go, the other owners are still tried, and the first such
+ * error is thrown once all were, so the step is retried.
+ *
+ * `sent`: owners reached in this call. `done`: none is left to try, so the
+ * notice may be recorded.
  */
-async function sendToEach<T>(
+async function tellEachOwnerOnce<T extends { user: { id: string } }>(
   owners: readonly T[],
+  claim: { keyPrefix: string; resetAt: Date },
   send: (owner: T) => Promise<SendEmailOutcome>,
 ): Promise<{ sent: number; done: boolean }> {
   let sent = 0;
   let done = true;
+  let retryable: { error: unknown } | null = null;
   for (const owner of owners) {
-    const outcome = await send(owner);
-    if (outcome.sent) sent++;
-    else if (outcome.reason !== "refused") done = false;
+    let reached = false;
+    const outcome = await sendOncePer(
+      { key: `${claim.keyPrefix}:${owner.user.id}`, resetAt: claim.resetAt, keysFrom: null },
+      async () => {
+        const answer = await send(owner);
+        reached = answer.sent;
+        return answer.sent || answer.reason === "refused";
+      },
+      (error) => {
+        if (isRetryableEmailError(error)) {
+          retryable ??= { error };
+          return;
+        }
+        logger.error("[connection notices] Couldn't tell one owner (the next sweep tries again)", {
+          userId: owner.user.id,
+          error: error instanceof Error ? error.name : typeof error,
+        });
+      },
+    );
+    if (reached) sent++;
+    if (outcome === "failed") done = false;
   }
+  if (retryable) throw (retryable as { error: unknown }).error;
   return { sent, done };
 }
 
@@ -126,10 +159,15 @@ export async function notifyOwnersToReconnect(
     reason: connection.lastRefreshErrorCode === CONNECTION_EXPIRED_CODE ? "expired" : "rejected",
     clientLinks: workspace ? clientLinkPanelStatus(workspace) : {},
   });
-  // One reconnect email per owner per connection per UTC day: a retry of the step
-  // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
-  // owners already emailed (V18).
-  const { sent: emailed, done } = await sendToEach(owners, (owner) =>
+  // One reconnect email per owner per flag: the claim is keyed on the flag's
+  // time, so a new flag is a new email. Within a day a retry of the step (or a
+  // lost ack) re-sends with the same idempotency key, a no-op for Resend (V18).
+  const flaggedAt = connection.refreshFailedAt ? new Date(connection.refreshFailedAt).toISOString() : "unknown";
+  const claim = {
+    keyPrefix: `connection-reconnect-owner:${socialConnectionId}:${flaggedAt}`,
+    resetAt: new Date(Date.now() + RECONNECT_CLAIM_MS),
+  };
+  const { sent: emailed, done } = await tellEachOwnerOnce(owners, claim, (owner) =>
     sendEmailOutcome(
       { to: owner.user.email, ...email },
       {
@@ -165,7 +203,9 @@ async function warnOwnersOfExpiry(connection: {
   ]);
   const expiry = connection.expiresAt.toISOString();
   const clientLinks = workspace ? clientLinkPanelStatus(workspace) : {};
-  const { sent, done } = await sendToEach(owners, (owner) => {
+  // One warning per owner per expiry, claimed until the sign-in ends.
+  const claim = { keyPrefix: `connection-expiry-owner:${connection.id}:${expiry}`, resetAt: connection.expiresAt };
+  const { sent, done } = await tellEachOwnerOnce(owners, claim, (owner) => {
     const email = buildExpiryWarningEmail({
       platformLabel: platformLabel(connection.platform),
       workspaceId: connection.workspaceId,
