@@ -15,7 +15,9 @@ const {
   findOwnersMock,
   usageMock,
   membershipCountMock,
+  findLogoRowMock,
 } = vi.hoisted(() => ({
+  findLogoRowMock: vi.fn<(args?: unknown) => Promise<unknown>>(async () => null),
   membershipCountMock: vi.fn<(args?: unknown) => Promise<number>>(async () => 2),
   usageMock: vi.fn<(...args: unknown[]) => Promise<null>>(async () => null),
   getWorkspaceContextMock: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock("@/lib/workspace", () => ({
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: { findMany: findConnectionsMock },
-    workspace: { findUnique: async () => null },
+    workspace: { findUnique: findLogoRowMock },
     workspaceMember: { findMany: findOwnersMock, count: membershipCountMock },
     postJob: { count: async () => 0 },
   },
@@ -60,7 +62,11 @@ vi.mock("@/server/account/deleteWorkspace", () => ({
   workspaceDeletionRefusal: async () => null,
   isOnlyWorkspace: (memberships: number) => memberships <= 1,
 }));
-vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: usageMock }));
+// R43 security L2: the real rule for where a higher limit comes from runs here.
+vi.mock("@/server/usage/workspaceUsage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usage/workspaceUsage")>()),
+  getWorkspaceUsageOrNull: usageMock,
+}));
 vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [], getYearlyPlanOffers: async () => [] }));
 // The plan section shows for an owner with a plan and billing on; never for a member.
 vi.mock("@/components/planSectionView", () => ({
@@ -168,6 +174,8 @@ function headings(html: string): Array<[string | null, string]> {
 }
 
 beforeEach(() => {
+  findLogoRowMock.mockReset();
+  findLogoRowMock.mockResolvedValue(null);
   getWorkspaceContextMock.mockReset();
   billing.on = true;
   planActionsMock.mockReset();
@@ -307,11 +315,44 @@ describe("SettingsPage — Usage words", () => {
   // R9-pages L5: only the workspace's own limits are the operator's to raise.
   const SUPPORT = "What this workspace has used of its limits. For a higher limit on this workspace, write to ";
 
+  // A Starter workspace with every plan priced: a plan change raises each limit.
+  const STARTER = { billingExempt: false, plan: "starter", planStatus: "active", trialEndsAt: null, currentPeriodEnd: null };
+  async function renderOn(role: "owner" | "member", workspace: Record<string, unknown>): Promise<string> {
+    const base = context(role);
+    getWorkspaceContextMock.mockResolvedValue({ ...base, workspace: { ...base.workspace, ...workspace } });
+    return renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({}) })) as ReactElement);
+  }
+  const render = (role: "owner" | "member") => renderOn(role, STARTER);
+
   beforeEach(() => {
     vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_PRICE_STARTER", "price_example_starter");
+    vi.stubEnv("STRIPE_PRICE_GROWTH", "price_example_growth");
+    vi.stubEnv("STRIPE_PRICE_PRO", "price_example_pro");
   });
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  // R43 security L2: "change the plan" only where a plan change raises the limits.
+  it("a Pro owner the Plan section offers the portal to: the support sentence, no higher plan exists", async () => {
+    planActionsMock.mockReturnValue({ choose: [], manage: true });
+    const line = usageLine(await renderOn("owner", { ...STARTER, plan: "pro" }));
+    expect(line).toContain(SUPPORT);
+    expect(line).not.toContain("#plan");
+  });
+
+  it("a Pro workspace's member: the support sentence, never ask the owner", async () => {
+    planActionsMock.mockReturnValue({ choose: [], manage: true });
+    const line = usageLine(await renderOn("member", { ...STARTER, plan: "pro" }));
+    expect(line).toContain(SUPPORT);
+    expect(line).not.toContain("ask the workspace owner");
+  });
+
+  it("a Starter owner with limitPostsPerDay set by the operator: the support sentence", async () => {
+    planActionsMock.mockReturnValue({ choose: [], manage: true });
+    findLogoRowMock.mockResolvedValue({ logoUrl: null, limitPostsPerDay: 40 });
+    expect(usageLine(await render("owner"))).toContain(SUPPORT);
   });
 
   it("a paying owner the Plan section offers a change to: points to Plan", async () => {

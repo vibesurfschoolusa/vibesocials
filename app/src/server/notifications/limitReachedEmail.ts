@@ -83,8 +83,9 @@ export function buildLimitReachedEmail(params: {
   /** Posts per day only: the UTC day that is full. */
   day?: Date | null;
   /**
-   * Billing is on and this workspace has a plan to change (not exempt): the
-   * email points to Settings, Plan instead of to writing in (F4).
+   * A plan change raises this limit (workspaceUsage's planChangeRaisesLimit,
+   * R43 security L2): the email points to Settings, Plan instead of to
+   * writing in (F4). False on the top plan or with an override set.
    */
   planInSettings: boolean;
   /** `process.env.NEXTAUTH_URL`. Null names Settings, Plan without a link. */

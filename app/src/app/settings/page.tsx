@@ -29,11 +29,11 @@ import {
   planSectionActions,
   planSectionLabel,
 } from "@/components/planSectionView";
-import { billingEnabled, paymentsConfigured, stripeReachable } from "@/lib/billing";
+import { paymentsConfigured, stripeReachable } from "@/lib/billing";
 import { isOperatorUser } from "@/lib/operator";
 import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
-import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
+import { getWorkspaceUsageOrNull, LIMIT_OVERRIDES_SELECT, planChangeRaisesEveryLimit } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult, shownControl, type OAuthResult } from "@/lib/oauthResult";
 import {
@@ -213,9 +213,10 @@ export default async function SettingsPage({
   });
   const postingSlots = readPostingSlots(slotRow?.postingSlots);
   // The report logo (18b): its public address only, for every member to see.
+  // R43 security L2: with the limit override columns, for the usage line.
   const logo = await prisma.workspace.findUnique({
     where: { id: context.workspace.id },
-    select: { logoUrl: true },
+    select: { logoUrl: true, ...LIMIT_OVERRIDES_SELECT },
   });
 
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
@@ -244,12 +245,11 @@ export default async function SettingsPage({
     // R13-new-customer L1: the dates in the viewer's own zone, as the emails write them.
     planSectionLabel(context.role, planWorkspace, new Date(), process.env, context.user.timeZone ?? null) ??
     (planActions?.manage ? PLAN_PORTAL_ONLY_LABEL : null);
-  // Usage (F7): point to a plan change only where the Plan section offers one.
-  // A member's planActions is always null, so ask what the owner would be offered;
-  // the Stripe columns are read for owners only, so a member's answer rests on the plan.
-  const usagePlanChange =
-    billingEnabled() &&
-    (context.role === "owner" ? planActions : planSectionActions("owner", planWorkspace, new Date())) !== null;
+  // Usage (F7, R43 security L2): point to a plan change only where one raises
+  // the limits (workspaceUsage's rule, which the limit email uses too). It asks
+  // what the owner would be offered, so a member reads the same; the Stripe
+  // columns are read for owners only, so a member's answer rests on the plan.
+  const usagePlanChange = planChangeRaisesEveryLimit({ ...planWorkspace, ...logo }, new Date());
   const planOffers = planActions && planActions.choose.length > 0 ? await getPlanOffers(planActions.choose) : [];
   // P1: the same plans' yearly prices, where configured; none otherwise, and nothing is read.
   const yearlyPlanOffers =

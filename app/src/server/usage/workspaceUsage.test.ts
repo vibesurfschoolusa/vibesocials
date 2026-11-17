@@ -47,6 +47,8 @@ import {
   checkYoutubeDailyLimit,
   getWorkspaceLimits,
   getWorkspaceUsage,
+  planChangeRaisesEveryLimit,
+  planChangeRaisesLimit,
 } from "./workspaceUsage";
 
 const MB = 1024 * 1024;
@@ -751,6 +753,8 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
   it("billing on, a workspace in its trial or on a plan: Settings, Plan through /go", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_example");
+    // R43 security L2: a higher plan is on offer.
+    vi.stubEnv("STRIPE_PRICE_GROWTH", "price_example_growth");
     vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
     db.workspaceFindUnique.mockResolvedValue({
       ...workspaceRow(),
@@ -831,6 +835,8 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_example");
     vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_example");
     vi.stubEnv("STRIPE_PRICE_STARTER", "price_example_starter");
+    // R43 security L2: a trial has Starter's limits, so a higher plan must be on offer.
+    vi.stubEnv("STRIPE_PRICE_GROWTH", "price_example_growth");
     db.workspaceFindUnique.mockResolvedValue({
       ...workspaceRow(),
       billingExempt: false,
@@ -848,6 +854,92 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
     expect(html).toContain("change this workspace's plan");
     const selects = db.workspaceFindUnique.mock.calls.map((call) => (call[0] as { select: Record<string, boolean> }).select);
     expect(selects.some((select) => select.stripeCustomerId === true)).toBe(true);
+  });
+});
+
+// R43 security L2: a plan change is offered for a higher limit only where one
+// gives it: a plan on offer with a higher number for that limit, and no
+// operator override fixing it. Otherwise the owner writes in.
+describe("planChangeRaisesLimit (R43 security L2)", () => {
+  const ENV = {
+    BILLING_ENABLED: "true",
+    STRIPE_SECRET_KEY: "sk_test_example",
+    STRIPE_WEBHOOK_SECRET: "whsec_example",
+    STRIPE_PRICE_STARTER: "price_example_starter",
+    STRIPE_PRICE_GROWTH: "price_example_growth",
+    STRIPE_PRICE_PRO: "price_example_pro",
+  };
+  const onPlan = (plan: string, overrides: Record<string, number | null> = {}) => ({
+    ...workspaceRow(overrides),
+    billingExempt: false,
+    plan,
+    planStatus: "active",
+    trialEndsAt: null,
+    currentPeriodEnd: new Date("2026-12-01T00:00:00Z"),
+    stripeCustomerId: "cus_example",
+  });
+  const KINDS = ["postsPerDay", "xPostsPerMonth", "youtubeUploadsPerDay", "storage"] as const;
+
+  it("a Pro owner: no plan has a higher number, so never", () => {
+    for (const kind of KINDS) expect(planChangeRaisesLimit(onPlan("pro"), kind, NOW, ENV)).toBe(false);
+    expect(planChangeRaisesEveryLimit(onPlan("pro"), NOW, ENV)).toBe(false);
+  });
+
+  it("a Starter owner with no override: every limit", () => {
+    for (const kind of KINDS) expect(planChangeRaisesLimit(onPlan("starter"), kind, NOW, ENV)).toBe(true);
+    expect(planChangeRaisesEveryLimit(onPlan("starter"), NOW, ENV)).toBe(true);
+  });
+
+  it("a Starter owner with limitPostsPerDay set: not that limit, and not every limit", () => {
+    const workspace = onPlan("starter", { limitPostsPerDay: 50 });
+    expect(planChangeRaisesLimit(workspace, "postsPerDay", NOW, ENV)).toBe(false);
+    expect(planChangeRaisesLimit(workspace, "xPostsPerMonth", NOW, ENV)).toBe(true);
+    expect(planChangeRaisesEveryLimit(workspace, NOW, ENV)).toBe(false);
+  });
+
+  it("an override set to a low number still fixes the limit: an operator chose it", () => {
+    expect(planChangeRaisesLimit(onPlan("starter", { limitStorageMb: 10 }), "storage", NOW, ENV)).toBe(false);
+  });
+
+  it("only offered plans count: Growth unpriced leaves Pro as the higher one", () => {
+    const env = { ...ENV, STRIPE_PRICE_PRO: "", STRIPE_PRICE_GROWTH: "" };
+    expect(planChangeRaisesLimit(onPlan("starter"), "postsPerDay", NOW, env)).toBe(false);
+  });
+
+  it("billing off or no plan action: never", () => {
+    expect(planChangeRaisesLimit(onPlan("starter"), "postsPerDay", NOW, { ...ENV, BILLING_ENABLED: "" })).toBe(false);
+    expect(planChangeRaisesLimit(onPlan("starter"), "postsPerDay", NOW, { ...ENV, STRIPE_SECRET_KEY: "" })).toBe(false);
+  });
+
+  describe("the limit-reached email uses it", () => {
+    beforeEach(() => {
+      for (const [name, value] of Object.entries(ENV)) vi.stubEnv(name, value);
+      db.postJobCount.mockResolvedValue(1000);
+    });
+
+    it("a Pro owner: the support line", async () => {
+      db.workspaceFindUnique.mockResolvedValue(onPlan("pro"));
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+      expect(html).toContain("If you need a higher limit, write to hello@vibesocials.wtf");
+      expect(html).not.toContain("change this workspace's plan");
+    });
+
+    it("a Starter owner with limitPostsPerDay set: the support line", async () => {
+      db.workspaceFindUnique.mockResolvedValue(onPlan("starter", { limitPostsPerDay: 3 }));
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+      expect(html).toContain("If you need a higher limit, write to hello@vibesocials.wtf");
+    });
+
+    it("a Starter owner with no override: the plan line, and the override columns are read", async () => {
+      db.workspaceFindUnique.mockResolvedValue(onPlan("starter"));
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+      expect(html).toContain("change this workspace's plan");
+      const selects = db.workspaceFindUnique.mock.calls.map((call) => (call[0] as { select: Record<string, boolean> }).select);
+      expect(selects.some((select) => select.stripeCustomerId === true && select.limitPostsPerDay === true)).toBe(true);
+    });
   });
 });
 

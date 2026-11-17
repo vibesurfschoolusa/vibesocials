@@ -1,7 +1,15 @@
 import { planSectionActions } from "@/components/planSectionView";
-import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, type BillingFields } from "@/lib/billing";
+import {
+  BILLING_FIELDS_SELECT,
+  billingEnabled,
+  billingFieldsSelect,
+  offeredPlans,
+  type BillingEnv,
+  type BillingFields,
+} from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { PLANS, type PlanLimits } from "@/lib/plans";
 import {
   DAILY_POST_LIMIT_CODE,
   dailyPostLimitMessage,
@@ -19,6 +27,7 @@ import {
   youtubeWorkspaceDailyLimitMessage,
   type DailyPostLimitMode,
   type UsageLimitKind,
+  type WorkspaceLimitOverrides,
   type WorkspaceLimits,
 } from "@/lib/usageLimits";
 import { deferredPostCanSend } from "@/server/jobs/posting";
@@ -173,20 +182,79 @@ type LimitNotice = {
   day?: Date;
 };
 
+/** The Workspace columns an operator sets to fix a limit, for a select. */
+export const LIMIT_OVERRIDES_SELECT = {
+  limitPostsPerDay: true,
+  limitXPostsPerMonth: true,
+  limitYoutubeUploadsPerDay: true,
+  limitStorageMb: true,
+} as const;
+
+const LIMIT_KINDS: readonly UsageLimitKind[] = ["postsPerDay", "xPostsPerMonth", "youtubeUploadsPerDay", "storage"];
+
+const OVERRIDE_COLUMN = {
+  postsPerDay: "limitPostsPerDay",
+  xPostsPerMonth: "limitXPostsPerMonth",
+  youtubeUploadsPerDay: "limitYoutubeUploadsPerDay",
+  storage: "limitStorageMb",
+} as const satisfies Record<UsageLimitKind, keyof WorkspaceLimitOverrides>;
+
+/** A limit's number in one unit for both sides: storage in bytes. */
+function limitNumber(limits: WorkspaceLimits, kind: UsageLimitKind): number {
+  return kind === "storage" ? limits.storageBytes : limits[kind];
+}
+
+function planLimitNumber(limits: PlanLimits, kind: UsageLimitKind): number {
+  return kind === "storage" ? limits.storageMb * 1024 * 1024 : limits[kind];
+}
+
+export type PlanChangeWorkspace = BillingFields & WorkspaceLimitOverrides & { stripeCustomerId?: string | null };
+
 /**
- * F4: with billing on, the email points to Settings, Plan when that section
- * offers the owner a plan action; otherwise it keeps "write to us". R2-pages
- * L3: the same rule Settings uses for its usage line (billing on and
- * planSectionActions for an owner), so the email never sends an owner to a
- * section with no button. Read only once the email is going out.
+ * Whether changing the plan gives `kind` a higher number, the one rule for
+ * where a higher limit comes from: the limit-reached email and Settings' usage
+ * line say "change the plan" only when it does, and "write to us" otherwise.
+ * All of: billing on; the Plan section offers the owner a plan action (F4,
+ * R2-pages L3: never a section with no button); no override column fixes the
+ * limit (an operator set it; no plan moves it); and a plan on offer has a
+ * higher number than the workspace has now (R43 security L2: Pro, the top
+ * plan, was told to change plan too).
  */
-async function planInSettingsFor(workspaceId: string): Promise<boolean> {
+export function planChangeRaisesLimit(
+  workspace: PlanChangeWorkspace,
+  kind: UsageLimitKind,
+  now: Date,
+  env: BillingEnv = process.env,
+): boolean {
+  if (!billingEnabled(env)) return false;
+  if (planSectionActions("owner", workspace, now, env) === null) return false;
+  const override = workspace[OVERRIDE_COLUMN[kind]];
+  if (override !== null && override !== undefined) return false;
+  const current = limitNumber(resolveWorkspaceLimits(workspace, env, now), kind);
+  return offeredPlans(env).some((plan) => planLimitNumber(PLANS[plan].limits, kind) > current);
+}
+
+/**
+ * Settings' usage line covers every limit at once, so it points to the plan
+ * only when a plan change raises each of them; otherwise "write to us", which
+ * is true for any limit.
+ */
+export function planChangeRaisesEveryLimit(
+  workspace: PlanChangeWorkspace,
+  now: Date,
+  env: BillingEnv = process.env,
+): boolean {
+  return LIMIT_KINDS.every((kind) => planChangeRaisesLimit(workspace, kind, now, env));
+}
+
+/** planChangeRaisesLimit for the email, read only once the email is going out. */
+async function planInSettingsFor(workspaceId: string, kind: UsageLimitKind): Promise<boolean> {
   if (!billingEnabled()) return false;
   const row = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { ...BILLING_FIELDS_SELECT, stripeCustomerId: true },
+    select: { ...BILLING_FIELDS_SELECT, ...LIMIT_OVERRIDES_SELECT, stripeCustomerId: true },
   });
-  return row !== null && planSectionActions("owner", row, new Date()) !== null;
+  return row !== null && planChangeRaisesLimit(row, kind, new Date());
 }
 
 async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
@@ -206,7 +274,7 @@ async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
           where: { workspaceId, role: "owner" },
           select: { user: { select: { id: true, email: true, timeZone: true } } },
         }),
-        planInSettingsFor(workspaceId),
+        planInSettingsFor(workspaceId, kind),
       ]);
       // A lost reply throws (the window is let go); the next try reuses each key.
       return sendToEach(owners, (owner) => {
