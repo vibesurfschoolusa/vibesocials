@@ -41,10 +41,29 @@ async function markReached(key: string, resetAt: Date): Promise<void> {
   }
 }
 
-/** Whether the send under a held claim has answered. A store error reads as not yet. */
-async function wasReached(key: string): Promise<boolean> {
+/**
+ * R44 lead review: how old a held claim must be to have answered, mark or not
+ * (a claim from before the mark existed, a mark write that failed, a crash
+ * after the send). The longest send under a claim is about 2.6 s of waits plus
+ * two Resend calls, well inside an Inngest step; 15 minutes is far past that,
+ * and short enough that the notice is recorded at the next sweep.
+ */
+const CLAIM_ANSWERED_MS = 15 * 60 * 1000;
+
+/**
+ * Whether the send under a held claim has answered: its reached mark exists,
+ * or the claim is older than CLAIM_ANSWERED_MS. The age is this call's resetAt
+ * minus the stored claim's expiresAt, which reads true only for a window that
+ * ends a fixed time after its claim (now + 30 days); a window that ends at a
+ * set time (an hour, a day, a trial or expiry date) reads 0 and stays held
+ * until its mark. A store error, or a claim already let go, reads as not yet.
+ */
+async function wasReached(key: string, resetAt: Date): Promise<boolean> {
   try {
-    return (await prisma.rateLimitEntry.findUnique({ where: { key: reachedKey(key) } })) !== null;
+    if ((await prisma.rateLimitEntry.findUnique({ where: { key: reachedKey(key) } })) !== null) return true;
+    const claim = await prisma.rateLimitEntry.findUnique({ where: { key } });
+    if (!claim) return false;
+    return resetAt.getTime() - new Date(claim.expiresAt).getTime() >= CLAIM_ANSWERED_MS;
   } catch {
     return false;
   }
@@ -132,7 +151,7 @@ export async function sendOncePer(
   }
   if (!claimed && !(storeDown && keysCoverLater && keysCoverEarlier)) {
     if (storeDown) return "failed";
-    return (await wasReached(key)) ? "skipped" : "held";
+    return (await wasReached(key, resetAt)) ? "skipped" : "held";
   }
 
   let started = false;

@@ -27,7 +27,9 @@ beforeEach(() => {
   markMock.mockResolvedValue({});
   // An earlier send under a held key answered, unless a test says otherwise.
   readMarkMock.mockReset();
-  readMarkMock.mockResolvedValue({ key: "reached" });
+  readMarkMock.mockImplementation(async ({ where }: { where: { key: string } }) =>
+    where.key.endsWith(":reached") ? { key: where.key } : null,
+  );
   onError.mockReset();
 });
 
@@ -365,6 +367,42 @@ describe("sendOncePer", () => {
       await expect(sendOncePer(HOUR, send, onError)).resolves.toBe("held");
       expect(send).not.toHaveBeenCalled();
       expect(releaseMock).not.toHaveBeenCalled();
+    });
+
+    // R44 lead review: a claim older than any send can take has answered, marked
+    // or not (a claim from before the mark existed, a failed mark write, a crash
+    // after the send). Its age is this call's resetAt minus the stored expiresAt.
+    describe("an unmarked claim, by its age", () => {
+      const MIN = 60 * 1000;
+      const ROLLING = { key: "some-notice:conn-1:user-a", resetAt: new Date(Date.now() + 30 * 24 * 60 * MIN), keysFrom: null };
+      const unmarked = (expiresAt: Date) =>
+        readMarkMock.mockImplementation(async ({ where }: { where: { key: string } }) =>
+          where.key === ROLLING.key ? { key: ROLLING.key, count: 2, expiresAt } : null,
+        );
+
+      it("20 minutes old: skipped (reached)", async () => {
+        consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+        unmarked(new Date(ROLLING.resetAt.getTime() - 20 * MIN));
+        await expect(sendOncePer(ROLLING, vi.fn(), onError)).resolves.toBe("skipped");
+      });
+
+      it("1 minute old: held (still sending)", async () => {
+        consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+        unmarked(new Date(ROLLING.resetAt.getTime() - MIN));
+        await expect(sendOncePer(ROLLING, vi.fn(), onError)).resolves.toBe("held");
+      });
+
+      it("a due-date window (the stored end is this call's end): held, its age reads 0", async () => {
+        consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+        unmarked(ROLLING.resetAt);
+        await expect(sendOncePer(ROLLING, vi.fn(), onError)).resolves.toBe("held");
+      });
+
+      it("a claim already let go (no row): held", async () => {
+        consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+        readMarkMock.mockResolvedValue(null);
+        await expect(sendOncePer(ROLLING, vi.fn(), onError)).resolves.toBe("held");
+      });
     });
 
     it("a mark that can't be read: held, never skipped", async () => {

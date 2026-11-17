@@ -235,11 +235,20 @@ export const SENTRY_DATA_COLLECTION = {
   genAI: { inputs: false, outputs: false },
   databaseQueryData: false,
   stackFrameVariables: false,
+  // The source lines around each frame: code, not data. 7 is what the legacy
+  // sendDefaultPii bridge gave (DEFAULTS would give 5), so Sentry keeps the context it had.
+  frameContextLines: 7,
 } as const satisfies NonNullable<import("@sentry/nextjs").BrowserOptions["dataCollection"]>;
 
 /** Objects deeper than this are dropped, never passed on unredacted. */
 const MAX_DEPTH = 24;
 export const TOO_DEEP = "[too deep]";
+/**
+ * An object already on the path being walked. beforeBreadcrumb gets raw console
+ * arguments, and `a.prev = a.next = a` would otherwise be copied about 2^24
+ * times before the depth bound stops it.
+ */
+export const CIRCULAR = "[Circular]";
 
 /** Span and breadcrumb attributes that hold only a fragment. */
 const FRAGMENT_KEYS = new Set(["http.fragment", "url.fragment"]);
@@ -304,14 +313,21 @@ function redactRequest(request: { [key: string]: unknown }): { [key: string]: un
   return out;
 }
 
-function walk(value: unknown, depth: number): unknown {
+/** `path`: the arrays and objects from the root down to this value, so a cycle is cut, not copied. */
+function walk(value: unknown, depth: number, path: Set<object>): unknown {
   if (typeof value === "string") return redactString(value);
   if (Array.isArray(value)) {
+    if (path.has(value)) return CIRCULAR;
     if (depth >= MAX_DEPTH) return TOO_DEEP;
-    return value.map((item) => walk(item, depth + 1));
+    path.add(value);
+    const items = value.map((item) => walk(item, depth + 1, path));
+    path.delete(value);
+    return items;
   }
   if (!isPlainObject(value)) return value;
+  if (path.has(value)) return CIRCULAR;
   if (depth >= MAX_DEPTH) return TOO_DEEP;
+  path.add(value);
 
   const outgoing = applyOutgoingRules(value);
   const out: { [key: string]: unknown } = {};
@@ -323,8 +339,9 @@ function walk(value: unknown, depth: number): unknown {
       continue;
     }
     const next = depth === 0 && key === "request" && isPlainObject(item) ? redactRequest(item) : item;
-    out[key] = walk(next, depth + 1);
+    out[key] = walk(next, depth + 1, path);
   }
+  path.delete(value);
   return out;
 }
 
@@ -338,5 +355,5 @@ function walk(value: unknown, depth: number): unknown {
  * only its decoded form shows a token). The item it was given is not modified.
  */
 export function redactForSentry<T>(item: T): T {
-  return walk(item, 0) as T;
+  return walk(item, 0, new Set()) as T;
 }

@@ -584,6 +584,25 @@ describe("redactForSentry: nothing private in the whole event", () => {
     expect(JSON.stringify(redactForSentry({ extra: deep }))).not.toContain("DEEP-SECRET");
   });
 
+  // R44 lead review: beforeBreadcrumb gets raw console arguments, which can be cyclic.
+  it("a cyclic object with two back-references is walked quickly and gives [Circular]", () => {
+    const node: Record<string, unknown> = { url: "/c/CYCLE-SECRET" };
+    node.prev = node;
+    node.next = node;
+    const started = Date.now();
+    const out = redactForSentry({ category: "console", data: { arguments: [node] } });
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(out.data.arguments[0]).toEqual({ url: "/c/[token]", prev: "[Circular]", next: "[Circular]" });
+  });
+
+  it("the same object twice, side by side, is not circular", () => {
+    const shared = { a: "/v/SHARED-SECRET" };
+    expect(redactForSentry({ extra: { one: shared, two: shared } }).extra).toEqual({
+      one: { a: "/v/[token]" },
+      two: { a: "/v/[token]" },
+    });
+  });
+
   it("a browser fetch breadcrumb to a relative path keeps the path, token redacted", () => {
     const out = redactForSentry({ category: "fetch", data: { url: "/api/review-link/REL-SECRET/posts?page=2", method: "GET" } });
     expect(out.data).toEqual({ url: "/api/review-link/[token]/posts?page=2", method: "GET" });
@@ -601,6 +620,8 @@ describe("SENTRY_DATA_COLLECTION", () => {
       genAI: { inputs: false, outputs: false },
       databaseQueryData: false,
       stackFrameVariables: false,
+      // R44 lead review: the source context Sentry had before (the legacy default).
+      frameContextLines: 7,
     });
   });
 });

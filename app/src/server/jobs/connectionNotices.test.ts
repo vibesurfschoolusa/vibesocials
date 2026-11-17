@@ -44,7 +44,11 @@ vi.mock("@/lib/db", () => ({
       deleteMany: async ({ where }: { where: { key: string } }) => ({ count: claims.delete(where.key) ? 1 : 0 }),
       // R44: the mark a claim's send leaves once it answered.
       upsert: async ({ where }: { where: { key: string } }) => reached.add(where.key),
-      findUnique: async ({ where }: { where: { key: string } }) => (reached.has(where.key) ? { key: where.key } : null),
+      findUnique: async ({ where }: { where: { key: string } }) => {
+        if (reached.has(where.key)) return { key: where.key };
+        const expiresAt = claims.get(where.key);
+        return expiresAt ? { key: where.key, count: 1, expiresAt } : null;
+      },
     },
   },
 }));
@@ -550,6 +554,51 @@ describe("two paths at once under the same claim", () => {
       expect(sendEmailMock).not.toHaveBeenCalled();
       expect(time(table.get("conn-1")!.expiryWarnedFor)).toBe(expiresAt.getTime());
     });
+  });
+});
+
+// R44 lead review: an unmarked claim older than any send can take (one from
+// before the reached mark existed, a failed mark write, a crash after the send)
+// counts as reached; a young one is still sending.
+describe("an unmarked claim, by its age", () => {
+  const MIN = 60 * 1000;
+  const FLAG = new Date(NOW.getTime() - DAY_MS);
+  const ownerKey = `connection-reconnect-owner:conn-1:${FLAG.toISOString()}:user-a`;
+
+  beforeEach(() => {
+    membersFindManyMock.mockResolvedValue([OWNERS[0]]);
+    row("conn-1", { needsReconnect: true, refreshFailedAt: FLAG });
+  });
+
+  it("20 minutes old: reached, so the notice stamps and nobody is emailed", async () => {
+    claims.set(ownerKey, new Date(NOW.getTime() + 30 * DAY_MS - 20 * MIN));
+    await sendConnectionNotices(NOW.toISOString(), DAY);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(time(table.get("conn-1")!.reconnectEmailedAt)).toBe(NOW.getTime());
+  });
+
+  it("1 minute old: still sending, so nothing stamps", async () => {
+    claims.set(ownerKey, new Date(NOW.getTime() + 30 * DAY_MS - MIN));
+    await sendConnectionNotices(NOW.toISOString(), DAY);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(table.get("conn-1")!.reconnectEmailedAt).toBeNull();
+  });
+
+  it("a marked claim reads as reached", async () => {
+    claims.set(ownerKey, new Date(NOW.getTime() + 30 * DAY_MS - MIN));
+    reached.add(`${ownerKey}:reached`);
+    await sendConnectionNotices(NOW.toISOString(), DAY);
+    expect(time(table.get("conn-1")!.reconnectEmailedAt)).toBe(NOW.getTime());
+  });
+
+  it("the expiry warning's due-date window: an unmarked claim stays held, whatever its age", async () => {
+    const expiresAt = new Date("2026-11-20T15:30:00.000Z");
+    table.clear();
+    row("conn-1", { expiresAt });
+    claims.set(`connection-expiry-owner:conn-1:${expiresAt.toISOString()}:user-a`, expiresAt);
+    await sendConnectionNotices(NOW.toISOString(), DAY);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(table.get("conn-1")!.expiryWarnedFor).toBeNull();
   });
 });
 

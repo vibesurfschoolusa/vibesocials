@@ -86,7 +86,11 @@ vi.mock("@/lib/db", () => {
       rateLimitEntry: {
         deleteMany: async ({ where }: { where: { key: string } }) => ({ count: Number(m.claims.delete(where.key)) }),
         upsert: async ({ where }: { where: { key: string } }) => m.reached.add(where.key),
-        findUnique: async ({ where }: { where: { key: string } }) => (m.reached.has(where.key) ? { key: where.key } : null),
+        findUnique: async ({ where }: { where: { key: string } }) => {
+        if (m.reached.has(where.key)) return { key: where.key };
+        const claim = m.claims.get(where.key);
+        return claim ? { key: where.key, ...claim } : null;
+      },
       },
       workspace: {
         findMany: async (args: {
