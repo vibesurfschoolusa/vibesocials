@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   connectionFindUnique: vi.fn(),
   sendEmail: vi.fn(),
   consumeFixedWindow: vi.fn(),
+  releaseKey: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -13,6 +14,7 @@ vi.mock("@/lib/db", () => ({
     workspace: { findUnique: h.workspaceFindUnique },
     workspaceMember: { findMany: h.memberFindMany },
     socialConnection: { findUnique: h.connectionFindUnique },
+    rateLimitEntry: { deleteMany: h.releaseKey },
   },
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: h.consumeFixedWindow }));
@@ -104,7 +106,8 @@ describe("notifyOwnersOfRefusedConnect", () => {
       { user: { email: "owner-b@example.com" } },
     ]);
     h.consumeFixedWindow.mockResolvedValue({ allowed: true });
-    h.sendEmail.mockResolvedValue(undefined);
+    h.sendEmail.mockResolvedValue(true);
+    h.releaseKey.mockResolvedValue({ count: 1 });
   });
 
   afterEach(() => {
@@ -156,6 +159,32 @@ describe("notifyOwnersOfRefusedConnect", () => {
     await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
     expect(h.consumeFixedWindow).not.toHaveBeenCalled();
     expect(h.sendEmail).not.toHaveBeenCalled();
+  });
+
+  // R38 client-journey L2: the day's one email is let go unless one went, so a later try can still tell them.
+  it("an email went: the day's claim is kept", async () => {
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    expect(h.releaseKey).not.toHaveBeenCalled();
+  });
+
+  it("the workspace or owners can't be read: the day's claim is let go", async () => {
+    h.memberFindMany.mockRejectedValue(new Error("db blip"));
+    await expect(notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" })).resolves.toBeUndefined();
+    expect(h.sendEmail).not.toHaveBeenCalled();
+    expect(h.releaseKey).toHaveBeenCalledWith({ where: { key: "refused-connect-email:conn-1:2026-11-14" } });
+  });
+
+  it("no send went out: the day's claim is let go", async () => {
+    h.sendEmail.mockResolvedValue(false);
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    expect(h.sendEmail).toHaveBeenCalledTimes(2);
+    expect(h.releaseKey).toHaveBeenCalledWith({ where: { key: "refused-connect-email:conn-1:2026-11-14" } });
+  });
+
+  it("one owner's send went out: the claim is kept", async () => {
+    h.sendEmail.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    expect(h.releaseKey).not.toHaveBeenCalled();
   });
 
   it("never throws", async () => {

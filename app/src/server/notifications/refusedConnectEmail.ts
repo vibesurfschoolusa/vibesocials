@@ -5,9 +5,9 @@ import { prisma } from "@/lib/db";
 import { connectedAccountName, pageAccountLabel, signInTo } from "@/lib/differentAccount";
 import { logger } from "@/lib/logger";
 import { platformLabel } from "@/lib/platforms";
-import { consumeFixedWindow } from "@/lib/rateLimit";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
+import { sendOnceADay } from "@/server/notifications/onceADay";
 
 /**
  * R7-client-journey L4: a client's reconnect through the workspace's connect
@@ -65,49 +65,63 @@ function nextUtcMidnight(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 }
 
-/** Email every owner, once per connection per UTC day. Never throws: the page still renders. */
+/**
+ * Email every owner, once per connection per UTC day. Through sendOnceADay:
+ * a store error sends nothing rather than one email per page load, and the
+ * day is let go again when the reads fail or no email went (R38
+ * client-journey L2). Never throws: the page still renders.
+ */
 export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string; platform: Platform }): Promise<void> {
-  try {
-    const connection = await prisma.socialConnection.findUnique({
-      where: { workspaceId_platform: { workspaceId: params.workspaceId, platform: params.platform } },
-      select: { id: true, platform: true, accountIdentifier: true, metadata: true, needsReconnect: true },
-    });
-    if (!connection) return;
-
-    const now = new Date();
-    // Fail closed: a store error sends nothing rather than one email per page load.
-    const { allowed } = await consumeFixedWindow({
-      key: `refused-connect-email:${connection.id}:${now.toISOString().slice(0, 10)}`,
-      limit: 1,
-      resetAt: nextUtcMidnight(now),
-      failClosed: true,
-    });
-    if (!allowed) return;
-
-    const [workspace, owners] = await Promise.all([
-      prisma.workspace.findUnique({ where: { id: params.workspaceId }, select: { name: true } }),
-      prisma.workspaceMember.findMany({
-        where: { workspaceId: params.workspaceId, role: "owner" },
-        select: { user: { select: { email: true } } },
-      }),
-    ]);
-    if (!workspace) return;
-
-    const email = buildRefusedConnectEmail({
-      platform: params.platform,
-      workspaceId: params.workspaceId,
-      workspaceName: workspace.name,
-      connectedName: connectedAccountName(toConnectionSummary(connection)),
-      appBaseUrl: process.env.NEXTAUTH_URL || null,
-    });
-    for (const owner of owners) {
-      await sendEmail({ to: owner.user.email, ...email }, { label: "refused-connect" });
-    }
-  } catch (error) {
+  const onError = (error: unknown) =>
     logger.error("[connect-link] Couldn't email the owners about a refused client sign-in (ignored)", {
       workspaceId: params.workspaceId,
       platform: params.platform,
       error,
     });
+  let connection: Awaited<ReturnType<typeof findConnection>>;
+  try {
+    connection = await findConnection(params);
+  } catch (error) {
+    onError(error);
+    return;
   }
+  if (!connection) return;
+  const found = connection;
+
+  const now = new Date();
+  await sendOnceADay(
+    `refused-connect-email:${found.id}:${now.toISOString().slice(0, 10)}`,
+    nextUtcMidnight(now),
+    async () => {
+      const [workspace, owners] = await Promise.all([
+        prisma.workspace.findUnique({ where: { id: params.workspaceId }, select: { name: true } }),
+        prisma.workspaceMember.findMany({
+          where: { workspaceId: params.workspaceId, role: "owner" },
+          select: { user: { select: { email: true } } },
+        }),
+      ]);
+      if (!workspace) return false;
+
+      const email = buildRefusedConnectEmail({
+        platform: params.platform,
+        workspaceId: params.workspaceId,
+        workspaceName: workspace.name,
+        connectedName: connectedAccountName(toConnectionSummary(found)),
+        appBaseUrl: process.env.NEXTAUTH_URL || null,
+      });
+      let sent = false;
+      for (const owner of owners) {
+        if (await sendEmail({ to: owner.user.email, ...email }, { label: "refused-connect" })) sent = true;
+      }
+      return sent;
+    },
+    onError,
+  );
+}
+
+function findConnection(params: { workspaceId: string; platform: Platform }) {
+  return prisma.socialConnection.findUnique({
+    where: { workspaceId_platform: { workspaceId: params.workspaceId, platform: params.platform } },
+    select: { id: true, platform: true, accountIdentifier: true, metadata: true, needsReconnect: true },
+  });
 }

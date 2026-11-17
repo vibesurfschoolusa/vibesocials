@@ -18,7 +18,7 @@ beforeEach(() => {
   consumeMock.mockReset();
   consumeMock.mockResolvedValue({ allowed: true });
   sendEmailMock.mockReset();
-  sendEmailMock.mockResolvedValue(undefined);
+  sendEmailMock.mockResolvedValue(true);
   releaseMock.mockReset();
   releaseMock.mockResolvedValue({ count: 1 });
   vi.stubEnv("ADMIN_EMAILS", "ops@example.com, second@example.com");
@@ -87,6 +87,13 @@ describe("notifyOperatorOfFreeRunCeiling", () => {
 
     const logged = vi.mocked(console.error).mock.calls.map((call) => JSON.stringify(call)).join("\n");
     expect(logged).not.toContain("@example.com");
+  });
+
+  // R38 client-journey L2: a send that answered "not sent" for every operator is no email either.
+  it("no send went out: the day's key is let go", async () => {
+    sendEmailMock.mockResolvedValue(false);
+    await notifyOperatorOfFreeRunCeiling({ day: DAY, topOwners });
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
   });
 
   it("a counter store that fails closed sends nothing and lets nothing go", async () => {

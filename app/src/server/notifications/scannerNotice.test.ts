@@ -54,6 +54,12 @@ describe("notifyNotSentAtScan", () => {
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
+  it("a notice that went keeps the day's key", async () => {
+    await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
+    expect(deliverMock).toHaveBeenCalledTimes(1);
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
   it("sends nothing once the day's notice for that recipient and reason went", async () => {
     consumeMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     await notifyNotSentAtScan(NOTICE, NOW);

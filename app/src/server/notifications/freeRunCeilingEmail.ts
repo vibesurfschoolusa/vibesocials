@@ -1,9 +1,8 @@
 import { logger } from "@/lib/logger";
 import { parseAdminEmails } from "@/lib/operator";
-import { consumeFixedWindow } from "@/lib/rateLimit";
 import { FREE_RUNS_DAILY_CEILING, utcDayKey, utcDayRange } from "@/lib/usageLimits";
 import { sendEmail } from "@/server/notifications/email";
-import { releaseOnceADayKey } from "@/server/notifications/onceADay";
+import { sendOnceADay } from "@/server/notifications/onceADay";
 
 /**
  * R8-security M1: the operator hears the first time on a UTC day that free
@@ -51,8 +50,8 @@ export function buildFreeRunCeilingEmail(params: {
 
 /**
  * Emails every operator (ADMIN_EMAILS) once per UTC day. `topOwners` is read
- * only when the email goes. Fails closed on the counter store, like the
- * refused-connect email; when the owners cannot be read or a send fails, the
+ * only when the email goes. Through sendOnceADay, like the refused-connect
+ * email: when the owners cannot be read or no send went, the
  * day's key is let go again so a later refusal tries once more (review of T1,
  * item 2; the per-recipient idempotency key stops a second copy of one that
  * did go). Never throws: the refusal stands either way.
@@ -65,22 +64,25 @@ export async function notifyOperatorOfFreeRunCeiling(input: {
   if (operators.length === 0) return;
   const dayKey = utcDayKey(input.day);
   const key = `free-run-ceiling-email:${dayKey}`;
-  let claimed = false;
-  try {
-    claimed = (await consumeFixedWindow({ key, limit: 1, resetAt: utcDayRange(input.day).end, failClosed: true })).allowed;
-    if (!claimed) return;
-    const email = buildFreeRunCeilingEmail({ day: input.day, topOwners: await input.topOwners() });
-    for (const [index, to] of operators.entries()) {
-      await sendEmail(
-        { to, ...email },
-        { idempotencyKey: `free-run-ceiling/${dayKey}/${index}`, throwOnRetryable: true },
-      );
-    }
-  } catch (error) {
+  await sendOnceADay(
+    key,
+    utcDayRange(input.day).end,
+    async () => {
+      const email = buildFreeRunCeilingEmail({ day: input.day, topOwners: await input.topOwners() });
+      let sent = false;
+      for (const [index, to] of operators.entries()) {
+        const went = await sendEmail(
+          { to, ...email },
+          { idempotencyKey: `free-run-ceiling/${dayKey}/${index}`, throwOnRetryable: true },
+        );
+        if (went) sent = true;
+      }
+      return sent;
+    },
     // Only the error's name: a message could carry an address, and those are operator-only.
-    logger.error("[usage] Couldn't email the operator about the free-run ceiling (a later refusal tries again)", {
-      error: error instanceof Error ? error.name : "unknown",
-    });
-    if (claimed) await releaseOnceADayKey(key);
-  }
+    (error) =>
+      logger.error("[usage] Couldn't email the operator about the free-run ceiling (a later refusal tries again)", {
+        error: error instanceof Error ? error.name : "unknown",
+      }),
+  );
 }
