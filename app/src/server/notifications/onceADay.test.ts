@@ -5,7 +5,7 @@ vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeMock }));
 vi.mock("@/lib/db", () => ({ prisma: { rateLimitEntry: { deleteMany: releaseMock } } }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
-import { sendOnceADay } from "./onceADay";
+import { sendOnceADay, sendOncePer, sendToEach } from "./onceADay";
 
 const KEY = "some-email:2026-11-17";
 const RESET_AT = new Date("2026-11-18T00:00:00Z");
@@ -66,5 +66,89 @@ describe("sendOnceADay", () => {
     expect(send).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+});
+
+/** R39 client-journey L2: the same rule for any window (an hour, a day). */
+describe("sendOncePer", () => {
+  const HOUR = { key: "some-email:2026-11-17T09", resetAt: new Date("2026-11-17T10:00:00Z") };
+
+  it("claims the window fail-closed and keeps it when an email went", async () => {
+    await expect(sendOncePer(HOUR, async () => true, onError)).resolves.toBe("sent");
+    expect(consumeMock).toHaveBeenCalledWith({ ...HOUR, limit: 1, failClosed: true });
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed read or send lets the window go; none sent lets it go too", async () => {
+    await expect(
+      sendOncePer(
+        HOUR,
+        async () => {
+          throw new Error("db blip");
+        },
+        onError,
+      ),
+    ).resolves.toBe("failed");
+    await expect(sendOncePer(HOUR, async () => false, onError)).resolves.toBe("failed");
+    expect(releaseMock).toHaveBeenCalledTimes(2);
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: HOUR.key } });
+  });
+
+  // Resend keeps an idempotency key 24 hours: past that, a reused key stops no second copy.
+  it("a window longer than a day: a throw keeps the claim, while none sent still lets it go", async () => {
+    const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) };
+    await expect(
+      sendOncePer(
+        month,
+        async () => {
+          throw new Error("network error");
+        },
+        onError,
+      ),
+    ).resolves.toBe("failed");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(releaseMock).not.toHaveBeenCalled();
+
+    await expect(sendOncePer(month, async () => false, onError)).resolves.toBe("failed");
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: month.key } });
+  });
+
+  it("already claimed: nothing sent", async () => {
+    consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+    const send = vi.fn();
+    await expect(sendOncePer(HOUR, send, onError)).resolves.toBe("skipped");
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+/** R39 client-journey L3: one recipient's failure never stops the email to the next. */
+describe("sendToEach", () => {
+  it("the first recipient fails retryably: the second is still sent, and it throws so the window is let go", async () => {
+    const sendOne = vi.fn(async (to: string) => {
+      if (to === "a") throw new Error("Resend rate limited the send");
+      return true;
+    });
+    await expect(sendToEach(["a", "b"], sendOne)).rejects.toThrow("Resend rate limited the send");
+    expect(sendOne.mock.calls.map(([to]) => to)).toEqual(["a", "b"]);
+
+    await expect(sendOncePer({ key: KEY, resetAt: RESET_AT }, () => sendToEach(["a", "b"], sendOne), onError)).resolves.toBe(
+      "failed",
+    );
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
+  });
+
+  it("all went: true, the window is kept", async () => {
+    const sendOne = vi.fn(async () => true);
+    await expect(sendOncePer({ key: KEY, resetAt: RESET_AT }, () => sendToEach(["a", "b"], sendOne), onError)).resolves.toBe(
+      "sent",
+    );
+    expect(sendOne).toHaveBeenCalledTimes(2);
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("answers whether any went when none threw", async () => {
+    await expect(sendToEach(["a", "b"], async (to) => to === "b")).resolves.toBe(true);
+    await expect(sendToEach(["a", "b"], async () => false)).resolves.toBe(false);
+    await expect(sendToEach([], async () => true)).resolves.toBe(false);
   });
 });

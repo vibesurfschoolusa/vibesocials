@@ -208,10 +208,19 @@ describe("notifyOwnersOfRefusedConnect", () => {
     const keys = h.sendEmail.mock.calls.map(([, options]) => options.idempotencyKey);
     expect(keys).toEqual([
       "refused-connect/conn-1/2026-11-14/owner-a",
+      "refused-connect/conn-1/2026-11-14/owner-b",
       "refused-connect/conn-1/2026-11-14/owner-a",
       "refused-connect/conn-1/2026-11-14/owner-b",
     ]);
     expect(h.releaseKey).not.toHaveBeenCalled();
+  });
+
+  // R39 client-journey L3: one owner's retryable failure never stops the email to the others.
+  it("the first owner fails retryably: the second is still sent and the day is let go", async () => {
+    h.sendEmail.mockRejectedValueOnce(new Error("Resend rate limited the send")).mockResolvedValueOnce(true);
+    await expect(notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" })).resolves.toBeUndefined();
+    expect(h.sendEmail.mock.calls.map(([params]) => params.to)).toEqual(["owner-a@example.com", "owner-b@example.com"]);
+    expect(h.releaseKey).toHaveBeenCalledWith({ where: { key: "refused-connect-email:conn-1:2026-11-14" } });
   });
 
   it("never throws", async () => {

@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { platformLabel } from "@/lib/platforms";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
-import { sendOnceADay } from "@/server/notifications/onceADay";
+import { sendOnceADay, sendToEach } from "@/server/notifications/onceADay";
 
 /**
  * R7-client-journey L4: a client's reconnect through the workspace's connect
@@ -112,19 +112,17 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
       });
       // R38 lead review: a lost reply throws (so the day is let go) and the
       // next try that day reuses the key, so Resend sends no second copy.
-      let sent = false;
-      for (const owner of owners) {
-        const went = await sendEmail(
+      // sendToEach: one owner's failure never stops the next (R39 L3).
+      return sendToEach(owners, (owner) =>
+        sendEmail(
           { to: owner.user.email, ...email },
           {
             label: "refused-connect",
             idempotencyKey: `refused-connect/${found.id}/${day}/${owner.user.id}`,
             throwOnRetryable: true,
           },
-        );
-        if (went) sent = true;
-      }
-      return sent;
+        ),
+      );
     },
     onError,
   );

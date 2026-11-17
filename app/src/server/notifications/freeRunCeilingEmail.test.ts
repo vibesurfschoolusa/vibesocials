@@ -89,6 +89,14 @@ describe("notifyOperatorOfFreeRunCeiling", () => {
     expect(logged).not.toContain("@example.com");
   });
 
+  // R39 client-journey L3: one operator's retryable failure never stops the email to the next.
+  it("the first operator fails retryably: the second is still sent and the day is let go", async () => {
+    sendEmailMock.mockRejectedValueOnce(new Error("resend 429")).mockResolvedValueOnce(true);
+    await notifyOperatorOfFreeRunCeiling({ day: DAY, topOwners });
+    expect(sendEmailMock.mock.calls.map(([message]) => message.to)).toEqual(["ops@example.com", "second@example.com"]);
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
+  });
+
   // R38 client-journey L2: a send that answered "not sent" for every operator is no email either.
   it("no send went out: the day's key is let go", async () => {
     sendEmailMock.mockResolvedValue(false);

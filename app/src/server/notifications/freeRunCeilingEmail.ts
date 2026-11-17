@@ -2,7 +2,7 @@ import { logger } from "@/lib/logger";
 import { parseAdminEmails } from "@/lib/operator";
 import { FREE_RUNS_DAILY_CEILING, utcDayKey, utcDayRange } from "@/lib/usageLimits";
 import { sendEmail } from "@/server/notifications/email";
-import { sendOnceADay } from "@/server/notifications/onceADay";
+import { sendOnceADay, sendToEach } from "@/server/notifications/onceADay";
 
 /**
  * R8-security M1: the operator hears the first time on a UTC day that free
@@ -69,15 +69,10 @@ export async function notifyOperatorOfFreeRunCeiling(input: {
     utcDayRange(input.day).end,
     async () => {
       const email = buildFreeRunCeilingEmail({ day: input.day, topOwners: await input.topOwners() });
-      let sent = false;
-      for (const [index, to] of operators.entries()) {
-        const went = await sendEmail(
-          { to, ...email },
-          { idempotencyKey: `free-run-ceiling/${dayKey}/${index}`, throwOnRetryable: true },
-        );
-        if (went) sent = true;
-      }
-      return sent;
+      // sendToEach: one operator's failure never stops the next (R39 L3).
+      return sendToEach([...operators.entries()], ([index, to]) =>
+        sendEmail({ to, ...email }, { idempotencyKey: `free-run-ceiling/${dayKey}/${index}`, throwOnRetryable: true }),
+      );
     },
     // Only the error's name: a message could carry an address, and those are operator-only.
     (error) =>
