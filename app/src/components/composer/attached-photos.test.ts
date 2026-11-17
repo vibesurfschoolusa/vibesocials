@@ -22,6 +22,8 @@ import {
   uploadPhotosInOrder,
   whereDescriptionGoes,
   withPhotoDescriptions,
+  captionAfterMediaChange,
+  selectedMediaOf,
   type AttachedPhoto,
 } from "./attached-photos";
 
@@ -689,5 +691,43 @@ describe("requestPhotoDescription: another workspace", () => {
     const blob = { url: "https://b.public.blob.vercel-storage.com/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 1 };
     const fetchImpl = vi.fn(async () => Response.json({ error: "You switched workspace in another tab. Reload this page, then try again.", code: "WORKSPACE_CHANGED" }, { status: 409 }));
     await expect(requestPhotoDescription(blob, "ws-1", fetchImpl)).rejects.toThrow("You switched workspace in another tab. Reload this page, then try again.");
+  });
+});
+
+// R37 new-customer L1: the one "the media changed" rule, for every path that
+// replaces or drops the selected media.
+describe("captionAfterMediaChange", () => {
+  const ai = "Sunrise lesson at Dania Beach.";
+
+  it("an unedited AI caption goes, and lastAiCaption with it", () => {
+    expect(captionAfterMediaChange(ai, ai)).toEqual({ caption: "", lastAiCaption: null });
+  });
+
+  it("an edited or typed caption stays, as it was", () => {
+    expect(captionAfterMediaChange(`${ai} Book now!`, ai)).toEqual({ caption: `${ai} Book now!`, lastAiCaption: ai });
+    expect(captionAfterMediaChange("My own words", null)).toEqual({ caption: "My own words", lastAiCaption: null });
+    expect(captionAfterMediaChange("", ai)).toEqual({ caption: "", lastAiCaption: ai });
+  });
+});
+
+// R37 publishing L1: what a caption is asked about. "Add photos" moves the
+// single File into the set as its cover; that is still the same media.
+describe("selectedMediaOf", () => {
+  const file = new File(["x"], "single.jpg", { type: "image/jpeg" });
+
+  it("the single File, then the set whose cover is that File: the same media", () => {
+    const before = selectedMediaOf({ single: file, set: [] });
+    const after = selectedMediaOf({ single: null, set: [photo("p1", { file }), photo("p2")] });
+    expect(after).toBe(before);
+  });
+
+  it("a set whose cover is another File, or nothing selected: other media", () => {
+    expect(selectedMediaOf({ single: null, set: [photo("p2"), photo("p1", { file })] })).not.toBe(file);
+    expect(selectedMediaOf({ single: null, set: [] })).toBeNull();
+  });
+
+  it("a reused item is itself", () => {
+    const item = { id: "m1" };
+    expect(selectedMediaOf({ single: item, set: [] })).toBe(item);
   });
 });

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Platform } from "@prisma/client";
 import { deriveComposerPlatforms } from "@/lib/postTargets";
 import { REPEAT_X_NOTE } from "@/lib/repeatSchedule";
+import { selectedMediaOf } from "./composer/attached-photos";
 
 // The release switch (platformLimits.ts textPostsEnabled), overridden per test.
 const textPosts = vi.hoisted(() => ({ enabled: true }));
@@ -27,7 +28,6 @@ import {
   captionFromMediaSource,
   captionResultApplies,
   captionBusyTracker,
-  reuseAutoCaptionWanted,
   reusedItemBlob,
   NothingConnectedState,
   composerPageState,
@@ -38,7 +38,6 @@ import {
   fileSubmitBlock,
   hasNoFile,
   isTextPostMode,
-  lastPhotoRemovalClearsCaption,
   needsSubmitConfirm,
   nextFileLostNotice,
   nextPreparingPick,
@@ -638,12 +637,43 @@ describe("a file that went away leaves a notice that stays", () => {
   });
 });
 
-describe("removing the last photo", () => {
-  it("clears the caption only when it is still the unedited AI caption and no photo is left", () => {
-    expect(lastPhotoRemovalClearsCaption({ remaining: 0, caption: "AI wrote this", lastAiCaption: "AI wrote this" })).toBe(true);
-    expect(lastPhotoRemovalClearsCaption({ remaining: 0, caption: "I edited it", lastAiCaption: "AI wrote this" })).toBe(false);
-    expect(lastPhotoRemovalClearsCaption({ remaining: 1, caption: "AI wrote this", lastAiCaption: "AI wrote this" })).toBe(false);
-    expect(lastPhotoRemovalClearsCaption({ remaining: 0, caption: "mine", lastAiCaption: null })).toBe(false);
+// R37 new-customer L1: every path that replaces or drops the selected media
+// goes through forgetMediaCaption, which applies captionAfterMediaChange (an
+// unedited AI caption goes, typed or edited text stays; tested beside it).
+describe("the media changed: one caption rule for every path", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  const fn = (name: string) => {
+    const start = raw.search(new RegExp(`(function ${name}\\(|const ${name} = )`));
+    expect(start, name).toBeGreaterThan(-1);
+    return raw.slice(start, raw.indexOf("\n  }", start));
+  };
+
+  it("forgetMediaCaption applies the one rule, and clears only when it says so", () => {
+    const body = fn("forgetMediaCaption");
+    expect(body).toContain("captionAfterMediaChange(uploadCaption, lastAiCaption)");
+    expect(body).toContain("setUploadCaption(next.caption);");
+    expect(body).toContain("setLastAiCaption(next.lastAiCaption);");
+  });
+
+  it("a new single pick, a cleared pick and a replacing set go through it (attachPickedFile)", () => {
+    expect(fn("attachPickedFile")).toContain("forgetMediaCaption();");
+    expect(fn("attachPickedPhotos")).toContain("void attachPickedFile(null);");
+  });
+
+  it("Remove all and removing the last photo go through attachPickedFile, with no rule of their own", () => {
+    expect(fn("clearAttachedPhotos")).toContain("void attachPickedFile(null);");
+    for (const name of ["removeAllPhotos", "removeAttachedPhoto"]) {
+      const body = raw.slice(raw.indexOf(`function ${name}(`), raw.indexOf("\n  }\n", raw.indexOf(`function ${name}(`)));
+      expect(body, name).toContain("clearAttachedPhotos();");
+      expect(body, name).not.toContain("setUploadCaption(");
+      expect(body, name).not.toContain("setLastAiCaption(");
+    }
+    expect(raw).not.toContain("lastPhotoRemovalClearsCaption");
+  });
+
+  it("Use a different file instead goes through it, after the item's own captions are dropped", () => {
+    const body = raw.slice(raw.indexOf("function handleDismissReuse("), raw.indexOf("\n  }\n", raw.indexOf("function handleDismissReuse(")));
+    expect(body).toMatch(/setUploadCaption\(kept\.caption\);\s+forgetMediaCaption\(\);/);
   });
 });
 
@@ -1281,8 +1311,8 @@ describe("captionsAfterReuseDismissed", () => {
 
   it("the handler uses it", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
-    const start = raw.indexOf("const handleDismissReuse = useCallback(");
-    const body = raw.slice(start, raw.indexOf("}, [", start));
+    const start = raw.indexOf("function handleDismissReuse(");
+    const body = raw.slice(start, raw.indexOf("\n  }\n", start));
     expect(body).toContain("captionsAfterReuseDismissed(");
     expect(body).not.toContain('setUploadCaption("")');
     expect(body).not.toContain("setPlatformOverrides(null)");
@@ -1611,17 +1641,6 @@ describe("Caption from media for a file reused from Media", () => {
     expect(reusedItemBlob(item)).toEqual(BLOB);
   });
 
-  it("empty caption box and an item without a caption: the caption is written, if the setting is on", () => {
-    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "", itemCaption: "" })).toBe(true);
-    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "  ", itemCaption: null })).toBe(true);
-    expect(reuseAutoCaptionWanted({ enabled: false, typedCaption: "", itemCaption: "" })).toBe(false);
-  });
-
-  it("a caption of its own, or one typed: not written automatically", () => {
-    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "", itemCaption: "Sunset surf" })).toBe(false);
-    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "My words", itemCaption: "" })).toBe(false);
-  });
-
   it("the button is enabled with the reused item's blob, whatever its caption or type", () => {
     for (const mimeType of ["image/jpeg", "video/mp4", "application/pdf"]) {
       const source = captionFromMediaSource({ photoSet: [], uploadedBlob: null, reuseItem: { ...item, mimeType } });
@@ -1644,12 +1663,29 @@ describe("Caption from media for a file reused from Media", () => {
     expect(raw).toContain("disabled={!captionSource.blob}");
   });
 
-  it("the loaded item is captioned with its own blob, by the rule, with the setting and caption as they are now", () => {
-    const load = raw.slice(raw.indexOf("const item = data.item;"), raw.indexOf("setReuseLoading(false);", raw.indexOf("const item = data.item;")));
-    expect(load).toContain("captionReusedItem(item);");
-    const event = raw.slice(raw.indexOf("const captionReusedItem = useEffectEvent("), raw.indexOf("});", raw.indexOf("const captionReusedItem = useEffectEvent(")));
-    expect(event).toContain("reuseAutoCaptionWanted({ enabled: autoCaptionEnabled, typedCaption: uploadCaption, itemCaption: item.baseCaption })");
-    expect(event).toMatch(/runAutoCaptionFromMedia\(\{\s*overwrite: false,\s*blobOverride: reusedItemBlob\(item\),/);
+  // R37 pages L1: the item loads whatever Create shows (the form, "Connect a
+  // platform", the error), often before "Generate a caption when media is
+  // added" is on screen. Loading it sends nothing to the AI in any of those
+  // states, since the load itself makes no call; only a press of Caption from
+  // media does.
+  it("loading a reused item, with an empty caption, makes no automatic caption call", () => {
+    const start = raw.indexOf("if (!reuseMediaItemId) return;");
+    const effect = raw.slice(start, raw.indexOf("}, [reuseMediaItemId", start));
+    expect(effect).toContain("setReuseItem(item);");
+    expect(effect).not.toContain("runAutoCaptionFromMedia(");
+    expect(raw).not.toContain("captionReusedItem");
+    expect(raw).not.toContain("reuseAutoCaptionWanted");
+    // The automatic callers are a fresh pick and a fresh set, both made on the
+    // form; the third call is the button.
+    expect(raw.split("runAutoCaptionFromMedia({").length - 1).toBe(3);
+    expect(raw.slice(raw.indexOf("async function attachPickedFile("), raw.indexOf("async function uploadCoverImage("))).toContain("runAutoCaptionFromMedia({");
+    expect(raw.slice(raw.indexOf("function queuePhotoUploads("), raw.indexOf("async function attachPickedPhotos("))).toContain("runAutoCaptionFromMedia({");
+  });
+
+  it("the manual press still captions a reused item, with its own blob", () => {
+    const press = raw.slice(raw.indexOf("const captionSource = captionFromMediaSource("));
+    expect(press).toMatch(/runAutoCaptionFromMedia\(\{\s*overwrite: true,\s*blobOverride: captionSource\.blob \?\? undefined,/);
+    expect(captionFromMediaSource({ photoSet: [], uploadedBlob: null, reuseItem: item }).blob).toEqual(BLOB);
   });
 });
 
@@ -1699,8 +1735,35 @@ describe("a caption from media that comes back late", () => {
     expect(body).toContain("const captionAtPress = uploadCaption;");
     expect(body).toMatch(/captionResultApplies\(\{\s*askedAbout,\s*selectedNow: selectedMedia\(\),\s*captionAtPress,\s*captionNow: prev,\s*overwrite: options\.overwrite,?\s*\}\)/);
     expect(body).not.toContain("if (!options.overwrite && prev.trim())");
-    // The selected media: a set's cover, else the single file or reused item.
-    expect(raw).toContain("const selectedMedia = () => photoSetRef.current[0]?.key ?? singlePhotoRef.current;");
+    // The selected media: a set's cover File, else the single file or reused
+    // item (selectedMediaOf), so Add photos moving the File keeps it the same.
+    expect(raw).toContain("const selectedMedia = () => selectedMediaOf({ single: singlePhotoRef.current, set: photoSetRef.current });");
+  });
+
+  type SetOf = Parameters<typeof selectedMediaOf>[0]["set"];
+
+  // R37 publishing L1: the automatic caption is running, then Add photos moves
+  // the single File into a set as its cover; the answer still lands.
+  it("Add photos while the automatic caption runs: the caption lands on the cover", () => {
+    const askedAbout = selectedMediaOf({ single: fileA, set: [] });
+    const set = [{ key: "photo-1", file: fileA }, { key: "photo-2", file: fileB }] as unknown as SetOf;
+    const selectedNow = selectedMediaOf({ single: null, set });
+    expect(captionResultApplies({ askedAbout, selectedNow, captionAtPress: "", captionNow: "", overwrite: false })).toBe(true);
+  });
+
+  it("switching to a different file still drops it, and the edited-box rule is unchanged", () => {
+    const askedAbout = selectedMediaOf({ single: fileA, set: [] });
+    expect(
+      captionResultApplies({ askedAbout, selectedNow: selectedMediaOf({ single: fileB, set: [] }), captionAtPress: "", captionNow: "", overwrite: false }),
+    ).toBe(false);
+    const coverB = [{ key: "photo-1", file: fileB }] as unknown as SetOf;
+    expect(
+      captionResultApplies({ askedAbout, selectedNow: selectedMediaOf({ single: null, set: coverB }), captionAtPress: "", captionNow: "", overwrite: false }),
+    ).toBe(false);
+    const set = [{ key: "photo-1", file: fileA }] as unknown as SetOf;
+    expect(
+      captionResultApplies({ askedAbout, selectedNow: selectedMediaOf({ single: null, set }), captionAtPress: "", captionNow: "Typed meanwhile", overwrite: false }),
+    ).toBe(false);
   });
 });
 
@@ -1761,7 +1824,7 @@ describe("the caption busy state", () => {
     expect(pick).toContain("captionBusy.end(busy);");
     expect(pick).toContain("captionBusy.stop();");
     expect(pick).not.toContain("setAutoCaptionLoading(");
-    const dismiss = raw.slice(raw.indexOf("const handleDismissReuse"), raw.indexOf("}, [", raw.indexOf("const handleDismissReuse")));
+    const dismiss = raw.slice(raw.indexOf("function handleDismissReuse("), raw.indexOf("\n  }\n", raw.indexOf("function handleDismissReuse(")));
     expect(dismiss).toContain("captionBusy.stop();");
   });
 });

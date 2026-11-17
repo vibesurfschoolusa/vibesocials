@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useEffectEvent, useMemo, useRef, useCallback, Suspense } from "react";
+import { useState, useEffect, useEffectEvent, useMemo, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
@@ -19,6 +19,8 @@ import {
   preparePhotos,
   PreparingPhotosStatus,
   removeAllClearsCaption,
+  captionAfterMediaChange,
+  selectedMediaOf,
   requestPhotoDescription,
   uploadPhotosInOrder,
   whereDescriptionGoes,
@@ -182,19 +184,6 @@ export function reusedItemBlob(item: {
   sizeBytes: number;
 }): UploadedBlobInfo {
   return { url: item.storageLocation, filename: item.originalFilename, mimeType: item.mimeType, sizeBytes: item.sizeBytes };
-}
-
-/**
- * R36 new-customer L3: the automatic caption for a reused file follows a fresh
- * upload's rule (the setting is on, the caption box is empty), and only when
- * the item has no caption of its own (a client's /u upload is saved with "").
- */
-export function reuseAutoCaptionWanted(state: {
-  enabled: boolean;
-  typedCaption: string;
-  itemCaption: string | null;
-}): boolean {
-  return state.enabled && !state.typedCaption.trim() && !(state.itemCaption ?? "").trim();
 }
 
 /**
@@ -727,18 +716,6 @@ export function fileLostBlocksSubmit(state: FileLostNotice): boolean {
   return state === "fresh";
 }
 
-/**
- * Removing the last photo takes a caption the AI wrote for it, still unedited,
- * with it (as "Remove all" does), so it never goes out as a text post.
- */
-export function lastPhotoRemovalClearsCaption(state: {
-  remaining: number;
-  caption: string;
-  lastAiCaption: string | null;
-}): boolean {
-  return state.remaining === 0 && removeAllClearsCaption(state.caption, state.lastAiCaption);
-}
-
 /** The switch read once per page load, so rendering calls no function the compiler cannot see into. */
 const TEXT_POSTS_ON = textPostsEnabled();
 
@@ -1197,8 +1174,9 @@ function CreatePostFormInner({
   // change goes through changePhotoSet so the two never differ.
   const photoSetRef = useRef<AttachedPhoto[]>([]);
   // R36 lead review: the media a caption is asked about: a set's cover, else
-  // the single file or the reused item.
-  const selectedMedia = () => photoSetRef.current[0]?.key ?? singlePhotoRef.current;
+  // the single file or the reused item. R37: by File (selectedMediaOf), so
+  // "Add photos" moving the single File into the set keeps it the same media.
+  const selectedMedia = () => selectedMediaOf({ single: singlePhotoRef.current, set: photoSetRef.current });
   const changePhotoSet = (change: (prev: AttachedPhoto[]) => AttachedPhoto[]) => {
     const next = change(photoSetRef.current);
     photoSetRef.current = next;
@@ -1423,18 +1401,6 @@ function CreatePostFormInner({
     selectedPlatforms,
   );
 
-  // R36 new-customer L3: the automatic caption for the item just loaded, read
-  // with the setting and the caption box as they are when it arrives. A newer
-  // pick or "Use a different file" (singlePhotoRef moves on) drops the answer.
-  const captionReusedItem = useEffectEvent((item: MediaItemDto) => {
-    if (!reuseAutoCaptionWanted({ enabled: autoCaptionEnabled, typedCaption: uploadCaption, itemCaption: item.baseCaption })) return;
-    void runAutoCaptionFromMedia({
-      overwrite: false,
-      blobOverride: reusedItemBlob(item),
-      isStale: () => singlePhotoRef.current !== item || !mountedRef.current,
-    });
-  });
-
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
   // `reuseMediaItemId` (a fresh navigation from the media library always
   // remounts this component, so the realistic case of the param changing
@@ -1477,7 +1443,9 @@ function CreatePostFormInner({
         setPlatformOverrides((current) => captionsAfterReuseLoaded(item, "", current).overrides);
         // R31 publishing L7: a press while it loaded may have left a line about the file.
         setUploadError((current) => uploadErrorAfterLibraryLoad(current, "loaded"));
-        captionReusedItem(item);
+        // R37 pages L1: no automatic caption here. The item can arrive before
+        // "Generate a caption when media is added" is on screen, or while Create
+        // shows only "Connect a platform"; Caption from media captions it.
         setReuseLoading(false);
       } catch {
         if (cancelled) return;
@@ -1545,8 +1513,9 @@ function CreatePostFormInner({
   // fetch effect above only re-runs if that param's VALUE changes), but
   // clearing `reuseItem` is what actually drives the UI back to the file
   // input.
-  // R29 publishing L3: only captions still the item's own are cleared.
-  const handleDismissReuse = useCallback(() => {
+  // R29 publishing L3: only captions still the item's own are cleared, and
+  // (R37) an unedited AI caption, by the media-changed rule.
+  function handleDismissReuse() {
     const kept = reuseItem
       ? captionsAfterReuseDismissed(reuseItem, uploadCaption, platformOverrides)
       : { caption: uploadCaption, overrides: platformOverrides };
@@ -1558,7 +1527,18 @@ function CreatePostFormInner({
     captionBusy.stop();
     setPlatformOverrides(kept.overrides);
     setUploadCaption(kept.caption);
-  }, [captionBusy, reuseItem, uploadCaption, platformOverrides, setSingleAltText]);
+    forgetMediaCaption();
+  }
+
+  // R37 new-customer L1: the selected media is being replaced or dropped. A
+  // caption the AI wrote for it, still unedited, goes with it
+  // (captionAfterMediaChange); typed or edited text stays untouched.
+  function forgetMediaCaption() {
+    const next = captionAfterMediaChange(uploadCaption, lastAiCaption);
+    if (next.caption === uploadCaption) return;
+    setUploadCaption(next.caption);
+    setLastAiCaption(next.lastAiCaption);
+  }
 
   // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
   // for the SAME file (by reference) reuse the in-flight or already-resolved
@@ -1723,7 +1703,9 @@ function CreatePostFormInner({
     // "file went away" notice is left over from before. A pick that then fails
     // sets it again below.
     if (!pickedFile) setFileLost((current) => nextFileLostNotice(current, { type: "reset" }));
-    // A new pick (or none) replaces any attached photos too.
+    // A new pick (or none) replaces any attached photos too, and the caption
+    // the AI wrote for them (Remove all and the last photo removed come here).
+    forgetMediaCaption();
     changePhotoSet((prev) => (prev.length === 0 ? prev : []));
     setUploadFile(null);
     setVideoDurationSec(null);
@@ -2007,13 +1989,10 @@ function CreatePostFormInner({
   }
 
   // "Remove all": a caption the AI wrote for these photos, still unedited,
-  // goes with them so the next photos get their own. Per-platform captions stay.
+  // goes with them (attachPickedFile's forgetMediaCaption) so the next photos
+  // get their own; the question says so. Per-platform captions stay.
   const removeAllClearsTheCaption = removeAllClearsCaption(uploadCaption, lastAiCaption);
   function removeAllPhotos() {
-    if (removeAllClearsTheCaption) {
-      setUploadCaption("");
-      setLastAiCaption(null);
-    }
     setUploadError(null);
     clearAttachedPhotos();
   }
@@ -2021,12 +2000,8 @@ function CreatePostFormInner({
   function removeAttachedPhoto(key: string) {
     const current = photoSetRef.current;
     if (current.length === 1 && current[0].key === key) {
-      // The caption the AI wrote for it goes too, as "Remove all" does: it
-      // would otherwise go out as a text post.
-      if (lastPhotoRemovalClearsCaption({ remaining: 0, caption: uploadCaption, lastAiCaption })) {
-        setUploadCaption("");
-        setLastAiCaption(null);
-      }
+      // The caption the AI wrote for it goes too, as "Remove all" does
+      // (attachPickedFile): it would otherwise go out as a text post.
       clearAttachedPhotos();
       return;
     }

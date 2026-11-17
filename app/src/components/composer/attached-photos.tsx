@@ -75,6 +75,15 @@ export function whereDescriptionGoes(
   return now.single === photo ? { to: "single" } : null;
 }
 
+/**
+ * R37 publishing L1: the media a caption is asked about, by the rule above:
+ * a set's cover File, else the single File or the reused item. "Add photos"
+ * moves the single File into the set as its cover, which is the same media.
+ */
+export function selectedMediaOf(now: { single: object | null; set: readonly AttachedPhoto[] }): object | null {
+  return now.set[0]?.file ?? now.single;
+}
+
 /** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
 export const PHOTO_DESCRIPTION_OFFLINE_MESSAGE = answerLostText("the description isn't shown", "Nothing was saved; try again.");
 export const PHOTO_DESCRIPTION_FAILED_MESSAGE =
@@ -318,6 +327,19 @@ export async function uploadPhotosInOrder(
  */
 export function removeAllClearsCaption(caption: string, lastAiCaption: string | null): boolean {
   return caption !== "" && lastAiCaption !== null && caption === lastAiCaption;
+}
+
+/**
+ * R37 new-customer L1: the one "the media changed" rule. Whenever the selected
+ * media is replaced or dropped (a new pick, Remove all, the last photo removed,
+ * "Use a different file instead"), a caption the AI wrote for it, still
+ * unedited, goes with it, and lastAiCaption too. Typed or edited text stays.
+ */
+export function captionAfterMediaChange(
+  caption: string,
+  lastAiCaption: string | null,
+): { caption: string; lastAiCaption: string | null } {
+  return removeAllClearsCaption(caption, lastAiCaption) ? { caption: "", lastAiCaption: null } : { caption, lastAiCaption };
 }
 
 /** The question "Remove all" asks once before clearing the set. */
