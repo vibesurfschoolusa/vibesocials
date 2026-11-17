@@ -337,6 +337,12 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
       <DialogFooter>
         {load.status === "ready" ? (
           <>
+            {/* R43 pages-b L2: a visible way out while the cancel failure shows; Escape and the backdrop aren't on every screen. */}
+            {cancelError ? (
+              <Button variant="outline" onClick={handleClose} disabled={busy !== null}>
+                Close
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               onClick={handleCancel}
