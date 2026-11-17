@@ -8,6 +8,7 @@ import { Film, Image as ImageIcon } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { CharacterCount } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,6 +21,20 @@ import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
 import { formatCoverTime, type CoverChoice } from "@/lib/videoCover";
 import type { BulkRow } from "./bulk-posts-form";
+
+/**
+ * R45 pages-a L3: a photo description counted as POST /api/posts stores it
+ * (cleanAltText: line breaks as spaces, control characters gone, trimmed).
+ * The route would cut a longer one, so the row is not sent instead.
+ */
+export function altTextStoredLength(text: string): number {
+  return text
+    .replace(/\r\n|[\r\n\t\v\f\p{Zl}\p{Zp}]/gu, " ")
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+    .trim().length;
+}
+
+export const ALT_TEXT_TOO_LONG_TEXT = `This photo's description can be up to ${ALT_TEXT_MAX.toLocaleString("en-US")} characters. Shorten it, then press again.`;
 
 interface BulkPostRowProps {
   row: BulkRow;
@@ -281,11 +296,19 @@ export function BulkPostRow({
             <Input
               id={altId}
               className="h-11"
-              maxLength={ALT_TEXT_MAX}
+              aria-describedby={`bulk-description-count-${row.id}`}
               value={row.altText}
               disabled={!editable}
               placeholder={row.altTextWriting ? "Writing a description..." : "What the photo shows, for screen readers"}
               onChange={(event) => onAltTextChange(event.target.value)}
+            />
+            <CharacterCount
+              id={`bulk-description-count-${row.id}`}
+              label="Photo description"
+              text={row.altText}
+              max={ALT_TEXT_MAX}
+              count={altTextStoredLength}
+              action="save this photo"
             />
             {/* A Media photo keeps its saved description unless the user writes
                 a new one here: it is never described automatically. With "Write

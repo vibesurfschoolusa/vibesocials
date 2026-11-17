@@ -74,7 +74,8 @@ import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
-import { BulkPostRow, captionFailedText, captionLocked } from "./bulk-post-row";
+import { ALT_TEXT_TOO_LONG_TEXT, BulkPostRow, altTextStoredLength, captionFailedText, captionLocked } from "./bulk-post-row";
+import { ALT_TEXT_MAX } from "@/lib/altText";
 import { MediaPickerDialog } from "./media-picker-dialog";
 import { BatchSettingsFieldset } from "./batch-settings";
 import {
@@ -212,7 +213,7 @@ export interface BulkBatchCheck {
   googleError: string | null;
 }
 
-type RowCheck = Pick<BulkRow, "mimeType" | "durationSec" | "caption" | "when" | "blob">;
+type RowCheck = Pick<BulkRow, "mimeType" | "durationSec" | "caption" | "when" | "blob"> & Partial<Pick<BulkRow, "altText">>;
 
 /** Why a press would not send this row, judged against the clock `at` of the press, or null. */
 export function rowLocalBlock(row: RowCheck, mode: BulkFinishMode, at: Date, batch: BulkBatchCheck): string | null {
@@ -229,7 +230,9 @@ export function rowLocalBlock(row: RowCheck, mode: BulkFinishMode, at: Date, bat
       platforms,
       stories: batch.stories,
       googleError: batch.googleError,
-    })
+    }) ??
+    // R45 pages-a L3: the route would cut a longer description.
+    (row.mimeType.startsWith("image/") && altTextStoredLength(row.altText ?? "") > ALT_TEXT_MAX ? ALT_TEXT_TOO_LONG_TEXT : null)
   );
 }
 
