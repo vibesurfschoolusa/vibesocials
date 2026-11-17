@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
+import { soleOwnerDemoteRefusal } from "@/lib/leaveRefusals";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 
@@ -250,7 +251,12 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
       where: { workspaceId, role: "owner" },
     });
     if (ownerCount < 2) {
-      return "last_owner" as const;
+      // R36 lead review: the one owner left is the target (owners alone get
+      // here); worded by whether anyone else is here to make an owner.
+      const otherMembers = await tx.workspaceMember.count({
+        where: { workspaceId, userId: { not: targetUserId } },
+      });
+      return { lastOwner: soleOwnerDemoteRefusal(otherMembers) };
     }
 
     const { count } = await tx.workspaceMember.updateMany({
@@ -269,8 +275,8 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     });
     return { joinLinksRevoked: revoked.count };
   });
-  if (outcome === "last_owner") {
-    return NextResponse.json({ error: "Promote another owner first." }, { status: 400 });
+  if (typeof outcome === "object" && "lastOwner" in outcome) {
+    return NextResponse.json({ error: outcome.lastOwner }, { status: 400 });
   }
   if (outcome === "not_found") {
     return memberGone();

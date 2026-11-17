@@ -71,6 +71,7 @@ vi.mock("../formerOwnerNotice", () => ({ noticeOwnersOfFormerOwner: noticeMock }
 vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: payerRefusalMock }));
 
 import { DELETE, PATCH } from "./route";
+import { DEMOTE_ONLY_PERSON_MESSAGE, DEMOTE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
 
 // R25 new-customer L2: "Not found" told the owner nothing. Every answer for a
 // person who is no longer in the workspace says so, and `gone` lets the Team
@@ -483,14 +484,28 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
 
   it("refuses (400, no write) to demote the last owner — owner count 1 inside the lock", async () => {
     findFirstMock.mockResolvedValue({ role: "owner" });
-    countMock.mockResolvedValue(1);
+    // Owners, then the other members (R36 lead review: counted inside the lock).
+    countMock.mockResolvedValueOnce(1).mockResolvedValueOnce(2);
 
     const response = await PATCH(patchReq("member"), ctx("user-2"));
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Promote another owner first." });
+    await expect(response.json()).resolves.toEqual({ error: DEMOTE_SOLE_OWNER_MESSAGE });
+    expect(countMock).toHaveBeenNthCalledWith(2, { where: { workspaceId: "ws-1", userId: { not: "user-2" } } });
     // The lock was taken, but the guard tripped before any write.
     expect(executeRawMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  // R36 lead review: the last owner alone in the workspace stays its owner; no "promote" step.
+  it("the last owner with nobody else: says they stay its owner", async () => {
+    findFirstMock.mockResolvedValue({ role: "owner" });
+    countMock.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+
+    const response = await PATCH(patchReq("member"), ctx("user-2"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: DEMOTE_ONLY_PERSON_MESSAGE });
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
@@ -594,7 +609,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     const response = await PATCH(patchReq("member"), ctx("user-1"));
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Promote another owner first." });
+    await expect(response.json()).resolves.toEqual({ error: DEMOTE_SOLE_OWNER_MESSAGE });
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 

@@ -7,6 +7,9 @@ import {
   LEAVE_ONLY_PERSON_MESSAGE,
   LEAVE_ONLY_WORKSPACE_MESSAGE,
   LEAVE_SOLE_OWNER_MESSAGE,
+  DEMOTE_ONLY_PERSON_MESSAGE,
+  DEMOTE_SOLE_OWNER_MESSAGE,
+  soleOwnerDemoteRefusal,
   soleOwnerLeaveCase,
   soleOwnerLeaveRefusal,
   soleOwnerLeaveStep,
@@ -55,5 +58,21 @@ describe("a sole owner's way out of a workspace", () => {
     const card = readFileSync(join(__dirname, "../components/team-section.tsx"), "utf8");
     expect(card).toMatch(/>\s+Make owner\s+<\/Button>/);
     expect(card).toMatch(/>\s+Delete this workspace\s+<\/Button>/);
+  });
+});
+
+// R36 lead review: the last owner's own Make member, refused by the members
+// route, is worded by the same rule (no "promote" step).
+describe("the last owner's own Make member", () => {
+  it("other members: reload and make one an owner with Make owner", () => {
+    expect(soleOwnerDemoteRefusal(1)).toBe(DEMOTE_SOLE_OWNER_MESSAGE);
+    expect(DEMOTE_SOLE_OWNER_MESSAGE).toBe(
+      "You're the only owner. Reload the page, make another member an owner with Make owner, then try again.",
+    );
+  });
+
+  it("nobody else: they stay its owner", () => {
+    expect(soleOwnerDemoteRefusal(0)).toBe(DEMOTE_ONLY_PERSON_MESSAGE);
+    expect(DEMOTE_ONLY_PERSON_MESSAGE).toBe("You're the only person in this workspace, so you stay its owner.");
   });
 });

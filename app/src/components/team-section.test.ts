@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -350,8 +350,13 @@ describe("Team: the owner's own greyed Make member", () => {
     expect(source).toContain("title={makeMemberBlockedTitle(members, onlyWorkspace)}");
   });
 
-  it("no text a person reads on the Team card says promote", () => {
-    for (const file of ["team-section.tsx", "../lib/leaveRefusals.ts"]) {
+  it("no text a person reads on the Team card, or that a Team route sends, says promote", () => {
+    // R36 lead review: the routes' refusals are shown word for word (answerFailureText).
+    const routes = (readdirSync(join(__dirname, "../app/api/workspaces"), { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
+      .map((file) => join("../app/api/workspaces", file));
+    expect(routes.some((file) => file.includes("[userId]"))).toBe(true);
+    for (const file of ["team-section.tsx", "../lib/leaveRefusals.ts", ...routes]) {
       const source = readFileSync(join(__dirname, file), "utf8");
       const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
       // A word a person reads; identifiers such as promoteTarget and PROMOTE_FAILED are code.

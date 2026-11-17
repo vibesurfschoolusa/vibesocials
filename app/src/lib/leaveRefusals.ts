@@ -56,3 +56,20 @@ export const LEAVE_ONLY_WORKSPACE_MESSAGE = SOLE_OWNER_STEPS.only_workspace;
 
 /** The membership was already gone (left or removed in another tab). */
 export const LEAVE_NOT_MEMBER_MESSAGE = "You're no longer a member of this workspace. Reload the page.";
+
+/**
+ * R36 lead review: the members route's refusal of the last owner's own Make
+ * member (a co-owner left or stepped down in another tab), by the same rule:
+ * with others here, one of them can be made an owner; alone, nobody can.
+ * `otherMembers` leaves out the caller, counted inside the route's lock.
+ */
+export function soleOwnerDemoteRefusal(otherMembers: number): string {
+  return soleOwnerLeaveCase({ otherMembers, onlyWorkspace: false }) === "sole_owner"
+    ? DEMOTE_SOLE_OWNER_MESSAGE
+    : DEMOTE_ONLY_PERSON_MESSAGE;
+}
+
+export const DEMOTE_SOLE_OWNER_MESSAGE =
+  "You're the only owner. Reload the page, make another member an owner with Make owner, then try again.";
+
+export const DEMOTE_ONLY_PERSON_MESSAGE = "You're the only person in this workspace, so you stay its owner.";
