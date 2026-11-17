@@ -43,7 +43,7 @@ describe("CharacterCount", () => {
     await show(12);
     expect(container.textContent).toBe("12 of 60 characters");
     await show(66);
-    expect(container.textContent).toBe("66 of 60 characters (6 over). Shorten it.");
+    expect(container.textContent).toBe("66 of 60 characters (6 over). Shorten it to save.");
   });
 
   it("announces crossing the limit once each way", async () => {

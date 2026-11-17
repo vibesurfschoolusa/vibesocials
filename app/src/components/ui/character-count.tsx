@@ -51,7 +51,7 @@ export function CharacterCount({
       {isOver ? (
         <span className="text-destructive">
           {" "}
-          ({over.toLocaleString("en-US")} over). Shorten it.
+          ({over.toLocaleString("en-US")} over). Shorten it to save.
         </span>
       ) : null}
     </p>
