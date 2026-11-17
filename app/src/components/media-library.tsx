@@ -591,6 +591,14 @@ export function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       </Alert>
     );
   }
+  // After Retry, a status line in the card's place says it is loading, and takes focus (LoadError).
+  if (state === "loading" && attempt > 0) {
+    return (
+      <p role="status" className="sr-only">
+        Loading the client upload link…
+      </p>
+    );
+  }
   if (state !== "ready") return null;
 
   return (
