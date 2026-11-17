@@ -374,7 +374,10 @@ describe("Add many form: It is in the Queue", () => {
 
   it("the no-answer branch stores the pressed mode, and markInQueue uses it", () => {
     expect(formSource).toContain("updateRow(id, { sending: false, uncertain: true, uncertainMode: mode });");
-    expect(formSource).toMatch(/function markInQueue\(id: string\) \{\s*updateRow\(id, \(row\) => \(\{ \.\.\.confirmedInQueue\(row\), result: "In the Queue" \}\)\);/);
+    // R45 publishing L1: through respread, since the row's hold on a time changes.
+    expect(formSource).toMatch(
+      /function markInQueue\(id: string\) \{\s*respread\(\(current\) =>\s*current\.map\(\(row\) => \(row\.id === id \? \{ \.\.\.row, \.\.\.confirmedInQueue\(row\), result: "In the Queue" \} : row\)\),\s*\);/,
+    );
   });
 
   it("a draft confirmed in the Queue shows no time", () => {

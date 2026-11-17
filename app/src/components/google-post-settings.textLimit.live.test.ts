@@ -59,8 +59,9 @@ beforeEach(() => {
   container = made.container;
   validity = new Map();
   // Fields made from now on keep what setCustomValidity was given, by id.
-  const make = made.doc.createElement.bind(made.doc);
-  (made.doc as unknown as { createElement: (tag: string) => FakeNode }).createElement = (tag: string) => {
+  const doc = made.doc as unknown as { createElement: (tag: string) => FakeNode };
+  const make = doc.createElement.bind(doc);
+  doc.createElement = (tag: string) => {
     const element = make(tag) as FakeNode & { setCustomValidity?: (text: string) => void };
     element.setCustomValidity = (text: string) => validity.set(String(element.attributes.id), text);
     return element;

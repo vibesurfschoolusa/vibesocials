@@ -20,6 +20,7 @@ import {
   BULK_DRAFTS_NOTE,
   BULK_MAX_FILES,
   BULK_NO_TIME_MESSAGE,
+  BULK_PAST_TIME_MESSAGE,
   BULK_TIKTOK_NOTE,
   BULK_TOO_MANY_FILES_MESSAGE,
   BULK_YOUTUBE_PRIVACY_DEFAULT,
@@ -366,6 +367,9 @@ export function BulkPostsForm({
   // R32: `refused` when the read was refused for this page's workspace (another tab switched).
   const [slotData, setSlotData] = useState<ScheduledTimes | { refused: string } | "error" | null>(null);
   const slotDataRef = useRef<ScheduledTimes | null>(null);
+  // R45 publishing L2: rows the last press refused for a time that has passed.
+  // Each keeps that time, and its line, until the person edits it.
+  const timeHeldRef = useRef<ReadonlySet<string>>(new Set());
   // Raw text of the "every N days" box, so it can be cleared while typing.
   const [everyDaysText, setEveryDaysText] = useState("1");
   // Once the user picks a first day it is theirs; until then it follows "tomorrow".
@@ -436,13 +440,38 @@ export function BulkPostsForm({
     );
   }
 
+  /**
+   * R45 publishing L1, L2: the one rule for row times. It runs after every
+   * change in which rows hold a time (a row added, moved, removed, sent,
+   * confirmed in the Queue, sent again, or released from a hold). A row held
+   * for its refused time counts as locked here, so it is never moved without
+   * a word.
+   */
   function respread(change: (rows: BulkRow[]) => BulkRow[] = (r) => r) {
     const slotInfo = useSlotsRef.current ? slotDataRef.current : null;
-    updateRows((current) =>
-      slotInfo
-        ? applySlotSchedule(change(current), slotInfo.slots, slotInfo.taken, new Date())
-        : applySchedule(change(current), controlsRef.current),
-    );
+    const held = timeHeldRef.current;
+    updateRows((current) => {
+      const changed = change(current);
+      const marked = changed.map((row) => (held.has(row.id) && !row.whenSetByHand ? { ...row, whenSetByHand: true } : row));
+      const spread = slotInfo
+        ? applySlotSchedule(marked, slotInfo.slots, slotInfo.taken, new Date())
+        : applySchedule(marked, controlsRef.current);
+      return spread.map((row, index) => (marked[index] !== changed[index] ? { ...row, whenSetByHand: false } : row));
+    });
+  }
+
+  /** Ends a row's hold; true when it had one. */
+  function dropTimeHold(id: string): boolean {
+    if (!timeHeldRef.current.has(id)) return false;
+    const held = new Set(timeHeldRef.current);
+    held.delete(id);
+    timeHeldRef.current = held;
+    return true;
+  }
+
+  /** An edit to a held row: it joins the spread again. */
+  function releaseTimeHold(id: string) {
+    if (dropTimeHold(id)) respread();
   }
 
   useEffect(() => {
@@ -796,6 +825,7 @@ export function BulkPostsForm({
     filesRef.current.delete(id);
     revokeThumbnail(id);
     setTooMany(false);
+    dropTimeHold(id);
     respread((current) => current.filter((row) => row.id !== id));
   }
 
@@ -809,12 +839,15 @@ export function BulkPostsForm({
     void runWork();
   }
 
+  // R45 publishing L1: both change whether the row holds a time.
   function markInQueue(id: string) {
-    updateRow(id, (row) => ({ ...confirmedInQueue(row), result: "In the Queue" }));
+    respread((current) =>
+      current.map((row) => (row.id === id ? { ...row, ...confirmedInQueue(row), result: "In the Queue" } : row)),
+    );
   }
 
   function sendAgain(id: string) {
-    updateRow(id, { uncertain: false, uncertainMode: null });
+    respread((current) => current.map((row) => (row.id === id ? { ...row, uncertain: false, uncertainMode: null } : row)));
   }
 
   // Feed, Story, or Feed and Story for the batch. Every row is one file, so the
@@ -841,16 +874,19 @@ export function BulkPostsForm({
       const pressedAt = new Date();
       const ready: string[] = [];
       const refused = new Map<string, RefusedPress>();
+      const timeHeld = new Set<string>();
       for (const row of rowsToSend(rowsRef.current)) {
         const block = rowLocalBlock(row, mode, pressedAt, batchCheck);
         if (block) {
           refused.set(row.id, { mode, at: pressedAt.getTime() });
           updateRow(row.id, { sendError: null });
+          if (block === BULK_PAST_TIME_MESSAGE) timeHeld.add(row.id);
         } else {
           ready.push(row.id);
         }
       }
       setRefusedPresses(refused);
+      timeHeldRef.current = timeHeld;
 
       // One after another. A created row, or one whose post may exist, is never sent again here.
       for (const id of ready) {
@@ -1304,17 +1340,27 @@ export function BulkPostsForm({
                 // row's wait once its own media read is done.
                 if (caption.trim() !== "") rowRequests.letGo(row.id, "caption");
                 updateRow(row.id, { caption, sendError: null, improveError: null });
+                releaseTimeHold(row.id);
               }}
               onAltTextChange={(altText) => {
                 // R41 L1: an edit lets the description request go; the typed text stays.
                 const letGo = rowRequests.letGo(row.id, "altText");
                 updateRow(row.id, { altText, altTextError: null, ...(letGo ? { altTextWriting: false } : {}) });
+                releaseTimeHold(row.id);
               }}
               onImprove={() => void improveRow(row.id)}
               onWriteDescription={() => void writeDescription(row.id)}
               onCoverOpenChange={(open) => setCoverOpenId(open ? row.id : null)}
-              onCoverChange={(cover) => updateRow(row.id, { cover, sendError: null })}
-              onWhenChange={(when) => updateRow(row.id, { when, whenSetByHand: true, sendError: null })}
+              onCoverChange={(cover) => {
+                updateRow(row.id, { cover, sendError: null });
+                releaseTimeHold(row.id);
+              }}
+              onWhenChange={(when) => {
+                updateRow(row.id, { when, whenSetByHand: true, sendError: null });
+                // Set by hand now, so locked anyway: the hold just ends, and as
+                // with any hand-set time the other rows stay where they are.
+                dropTimeHold(row.id);
+              }}
               onMove={(delta) => respread((current) => moveRow(current, row.id, delta))}
               onRemove={() => removeRow(row.id)}
               onRetry={() => retryUpload(row.id)}
