@@ -2,12 +2,15 @@ import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { loadErrorAsksReload } from "@/components/load-error";
 import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
 import {
   LOAD_MORE_FAILED_TEXT,
   LOAD_MORE_OFFLINE_TEXT,
   loadMoreFailureText,
+  POSTS_FAILED_TEXT,
+  POSTS_OFFLINE_TEXT,
   usePostJobs,
   type UsePostJobsResult,
 } from "./usePostJobs";
@@ -674,5 +677,62 @@ describe("loadMoreFailureText", () => {
       "Couldn't load more posts: there's no connection. Check your connection, then press Load more again.",
     );
     expect(LOAD_MORE_FAILED_TEXT).toBe("Couldn't load more posts. Press Load more to try again.");
+  });
+});
+
+// R41 pages L2: the first load and Retry say the hook's own sentences, as
+// useConnections does, never the browser's ("Failed to fetch", "Load failed",
+// "Unexpected token '<'").
+describe("usePostJobs first load and Retry failures", () => {
+  async function settle() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it("offline: the connection sentence, on the first load and on Retry", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    await mount();
+    await settle();
+    expect(latest.error).toBe(POSTS_OFFLINE_TEXT);
+    await act(async () => {
+      latest.reload();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.error).toBe(POSTS_OFFLINE_TEXT);
+    expect(POSTS_OFFLINE_TEXT).toBe(
+      "We couldn't reach Vibe Socials to load your activity. Check your connection and try again.",
+    );
+  });
+
+  it("a gateway's HTML 5xx: the server-problem sentence", async () => {
+    fetchMock.mockResolvedValue(new Response("<html>bad gateway</html>", { status: 502, headers: { "content-type": "text/html" } }));
+    await mount();
+    await settle();
+    expect(latest.error).toBe(POSTS_FAILED_TEXT);
+    expect(POSTS_FAILED_TEXT).toBe("We couldn't load your activity. Try again in a moment.");
+  });
+
+  it("our own JSON 5xx: the server-problem sentence", async () => {
+    fetchMock.mockResolvedValue(Response.json({ error: "Internal error" }, { status: 500 }));
+    await mount();
+    await settle();
+    expect(latest.error).toBe(POSTS_FAILED_TEXT);
+  });
+
+  it("a 200 that isn't JSON: the server-problem sentence, not the parser's", async () => {
+    fetchMock.mockResolvedValue(new Response("<!doctype html><html></html>", { status: 200 }));
+    await mount();
+    await settle();
+    expect(latest.error).toBe(POSTS_FAILED_TEXT);
+  });
+
+  it("a workspace refusal: the switch sentence, whose step is Reload page", async () => {
+    fetchMock.mockImplementation(async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response);
+    await mount();
+    await settle();
+    expect(latest.error).toBe(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    expect(loadErrorAsksReload(latest.error)).toBe(true);
+    expect(loadErrorAsksReload(POSTS_FAILED_TEXT)).toBe(false);
   });
 });

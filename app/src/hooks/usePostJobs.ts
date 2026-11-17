@@ -18,6 +18,17 @@ import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { readWorkspaceRefusalText } from "@/lib/workspaceChanged";
 
+/**
+ * R41 pages L2: what the first load and Retry say, never the browser's own
+ * text ("Failed to fetch", "Load failed", "Unexpected token '<'..."). The
+ * same rule as useConnections: no answer at all, or anything else the page
+ * couldn't use. A workspace refusal keeps the shared switch sentence, whose
+ * step LoadError makes Reload page.
+ */
+export const POSTS_OFFLINE_TEXT =
+  "We couldn't reach Vibe Socials to load your activity. Check your connection and try again.";
+export const POSTS_FAILED_TEXT = "We couldn't load your activity. Try again in a moment.";
+
 /** R26 LL3: a Load more that got no answer. */
 export const LOAD_MORE_OFFLINE_TEXT =
   "Couldn't load more posts: there's no connection. Check your connection, then press Load more again.";
@@ -210,7 +221,7 @@ export function usePostJobs(workspaceId: string | null, options?: UsePostJobsOpt
       setLoadMoreError(null);
     }
     try {
-      const response = await fetch(postJobsUrl(show, undefined, workspaceId));
+      const response = await fetchOrNoAnswer(postJobsUrl(show, undefined, workspaceId));
       const refusal = await readWorkspaceRefusalText(response);
       if (refusal) {
         if (show !== showRef.current) return;
@@ -221,13 +232,13 @@ export function usePostJobs(workspaceId: string | null, options?: UsePostJobsOpt
         return;
       }
       if (!response.ok) {
-        throw new Error(
-          response.status === 401
-            ? SIGNED_OUT_ERROR
-            : "Failed to load posts.",
-        );
+        if (!background && show === showRef.current) {
+          setError(response.status === 401 ? SIGNED_OUT_ERROR : POSTS_FAILED_TEXT);
+        }
+        return;
       }
-      const data: PostsResponse = await response.json();
+      const data = (await response.json()) as PostsResponse | null;
+      if (!Array.isArray(data?.jobs)) throw new Error("unreadable answer");
       if (show !== showRef.current) return;
       if (background && epoch !== retryEpochRef.current) {
         // Stale relative to a retry accepted while this request was in flight;
@@ -256,7 +267,7 @@ export function usePostJobs(workspaceId: string | null, options?: UsePostJobsOpt
       // Background failures keep the stale list on screen silently — only a
       // foreground (initial or manual-reload) failure surfaces the error UI.
       if (!background && show === showRef.current) {
-        setError(err instanceof Error ? err.message : "Failed to load posts.");
+        setError(isNoConnection(err) ? POSTS_OFFLINE_TEXT : POSTS_FAILED_TEXT);
       }
     } finally {
       if (background) {
