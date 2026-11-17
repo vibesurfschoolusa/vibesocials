@@ -676,3 +676,23 @@ describe("redactForSentry: every query value is filtered, every name kept", () =
     },
   );
 });
+
+// R45 review L2: a value is filtered whole, whatever it decodes to.
+describe("redactForSentry: an encoded space never ends a filtered value", () => {
+  it.each([
+    ["/admin?q=jane%20doe%40gmail.com", "/admin?q=[Filtered]"],
+    ["/admin?q=jane+doe%40gmail.com", "/admin?q=[Filtered]"],
+    ["https://vibesocials.wtf/admin?q=jane%20doe%40gmail.com&page=2", "https://vibesocials.wtf/admin?q=[Filtered]&page=[Filtered]"],
+    ["%2Flogin%3Fq%3Djane%20doe%40gmail.com", "/login?q=[Filtered]"],
+    ["%2Flogin%3Fq%3Djane+doe%40gmail.com%26x%3D1", "/login?q=[Filtered]&x=[Filtered]"],
+  ])("%s becomes %s", (input, output) => {
+    const out = redactForSentry({ message: input, breadcrumbs: [{ category: "navigation", data: { to: input } }] });
+    expect(out.message).toBe(output);
+    expect(out.breadcrumbs[0].data.to).toBe(output);
+    expect(JSON.stringify(out)).not.toMatch(/jane|doe|gmail/);
+  });
+
+  it("a token hidden by encoding is still redacted", () => {
+    expect(redactForSentry({ message: "%2Fc%2FHIDDEN-SECRET" }).message).toBe("/c/[token]");
+  });
+});

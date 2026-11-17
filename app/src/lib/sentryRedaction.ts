@@ -174,6 +174,12 @@ const URL_FRAGMENT = /((?:https?:\/\/|\/)[^\s#]*)#\S*/gi;
 
 /** One query value: `?name=` or `&name=`, then the value up to "&", "#" or a space. */
 const QUERY_VALUE = /([?&][^=&#\s]+=)([^&#\s]*)/g;
+/**
+ * The same, in text that was decoded: a space there was a %20 or a "+" inside
+ * the value, so only "&" or "#" ends it (R45 review L2: "?q=jane%20doe" kept
+ * "doe" past the filter).
+ */
+const DECODED_QUERY_VALUE = /([?&][^=&#\s]+=)([^&#]*)/g;
 
 /**
  * A link page's dynamic segment in Next's router state (the Next-Router-State-Tree
@@ -198,8 +204,8 @@ export const FILTERED_VALUE = "[Filtered]";
  * carry whole queries (a search for an email address, a signed photo address,
  * a webhook's verify token, an OAuth code or verifier).
  */
-function redactQueryValues(text: string): string {
-  return text.replace(QUERY_VALUE, (match, name: string, value: string) => (value === "" ? match : `${name}${FILTERED_VALUE}`));
+function redactQueryValues(text: string, pattern: RegExp = QUERY_VALUE): string {
+  return text.replace(pattern, (match, name: string, value: string) => (value === "" ? match : `${name}${FILTERED_VALUE}`));
 }
 
 /**
@@ -210,6 +216,11 @@ function redactQueryValues(text: string): string {
  */
 export function redactLinkTokens(text: string): string {
   return redactLinkPaths(redactQueryValues(text.replace(URL_FRAGMENT, "$1")));
+}
+
+/** redactLinkTokens for text that was decoded (see {@link DECODED_QUERY_VALUE}). */
+function redactDecodedLinkTokens(text: string): string {
+  return redactLinkPaths(redactQueryValues(text.replace(URL_FRAGMENT, "$1"), DECODED_QUERY_VALUE));
 }
 
 // R44 (security M1, L1): one rule for the whole event. Redacting named fields
@@ -269,15 +280,17 @@ function redactString(text: string): string {
   // A bare query string (an event's request.query_string) has no "?" for QUERY_VALUE to start at.
   if (BARE_QUERY.test(text)) return redactQueryValues(`?${text}`).slice(1);
   const redacted = redactLinkTokens(text);
-  if (!text.includes("%")) return redacted;
+  // R45 review L2: the decoded form is the redacted text decoded, so a value
+  // filtered here stays filtered whole, whatever it would have decoded to.
+  if (!redacted.includes("%")) return redacted;
   let decoded: string;
   try {
-    decoded = decodeURIComponent(text);
+    decoded = decodeURIComponent(redacted);
   } catch {
     return redacted;
   }
-  if (decoded === text) return redacted;
-  const decodedRedacted = redactLinkTokens(decoded);
+  if (decoded === redacted) return redacted;
+  const decodedRedacted = redactDecodedLinkTokens(decoded);
   return decodedRedacted === decoded ? redacted : decodedRedacted;
 }
 
