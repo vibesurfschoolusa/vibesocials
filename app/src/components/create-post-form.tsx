@@ -1061,6 +1061,10 @@ function CreatePostFormInner({
   const [enhancingCaption, setEnhancingCaption] = useState(false);
 
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
+  // R38 publishing L1: an upload outlives the render that picked the file, so
+  // the automatic request reads the checkbox from here just before it goes out
+  // (as Add many reads aiCaptionsRef); unticking mid-upload then sends nothing.
+  const autoCaptionRef = useRef(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
   const [captionBusy] = useState(() => captionBusyTracker(setAutoCaptionLoading));
   const connectionsRetryRef = useRef<HTMLButtonElement>(null);
@@ -1724,7 +1728,7 @@ function CreatePostFormInner({
         return;
       }
 
-      if (autoCaptionEnabled) {
+      if (autoCaptionRef.current) {
         await runAutoCaptionFromMedia({
           overwrite: false,
           blobOverride: blobInfo,
@@ -1823,7 +1827,7 @@ function CreatePostFormInner({
     isStale: () => boolean,
     wantCaption: boolean,
   ) {
-    const writeCaption = wantCaption && autoCaptionEnabled;
+    const writeCaption = wantCaption && autoCaptionRef.current;
     photoQueueRef.current = photoQueueRef.current.then(() =>
       uploadPhotosInOrder(entries, {
         upload: uploadPhoto,
@@ -1833,6 +1837,11 @@ function CreatePostFormInner({
         onUpdate: (key, patch) => changePhotoSet((prev) => patchPhoto(prev, key, patch)),
         onCaption: writeCaption
           ? (key, blob, file) => {
+              // Unticked while the set uploaded: nothing is sent.
+              if (!autoCaptionRef.current) {
+                if (!isStale()) setAutoCaptionLoading(false);
+                return;
+              }
               void runAutoCaptionFromMedia({
                 overwrite: false,
                 blobOverride: blob,
@@ -1910,7 +1919,7 @@ function CreatePostFormInner({
     setUploadError(null);
     setShowSuccess(false);
     setPreparingPhotos(true);
-    if (replace && autoCaptionEnabled) setAutoCaptionLoading(true);
+    if (replace && autoCaptionRef.current) setAutoCaptionLoading(true);
 
     try {
       const prepared = await preparePhotos(placeholders, {
@@ -2235,6 +2244,9 @@ function CreatePostFormInner({
       setSubmittedToTikTok(tiktokSelected);
       setShowSuccess(true);
       setPostsSaved((count) => count + 1);
+      // R38 new-customer M1: answers pressed for this post (Improve, Adapt)
+      // must not land in the next one.
+      captionBox.formReset();
       setUploadCaption("");
       // A new post has not been tried yet (platformListAlert).
       setTriedSend(false);
@@ -2409,6 +2421,10 @@ function CreatePostFormInner({
       return;
     }
 
+    // R38 new-customer M1: the answer replaces the box only while it reads as
+    // it did here and the post hasn't been saved since (useCaptionBox); the box
+    // stays editable, and what is typed meanwhile is kept.
+    const press = captionBox.pressed(null);
     try {
       setEnhancingCaption(true);
       setUploadError(null);
@@ -2426,8 +2442,7 @@ function CreatePostFormInner({
         return;
       }
 
-      // Set the enhanced caption in the textarea
-      setUploadCaption(result.caption);
+      captionBox.answered(press, { caption: result.caption, selectedNow: null, overwrite: true, fromMedia: false });
     } catch (err: unknown) {
       console.error("Error enhancing caption:", err);
       toast.error(CAPTION_FAILED_MESSAGE);
@@ -2813,7 +2828,10 @@ function CreatePostFormInner({
                   type="checkbox"
                   className="h-3.5 w-3.5 rounded border-input accent-[var(--primary)]"
                   checked={autoCaptionEnabled}
-                  onChange={(event) => setAutoCaptionEnabled(event.target.checked)}
+                  onChange={(event) => {
+                    autoCaptionRef.current = event.target.checked;
+                    setAutoCaptionEnabled(event.target.checked);
+                  }}
                 />
                 <span>Generate a caption when media is added</span>
               </label>
@@ -2874,6 +2892,7 @@ function CreatePostFormInner({
           onChange={setPlatformOverrides}
           footer={footerSettings}
           workspaceId={workspaceId}
+          formGeneration={captionBox.formGeneration}
         />
 
         {tiktokSelected && activeMimeType && (

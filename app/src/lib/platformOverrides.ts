@@ -165,15 +165,18 @@ export function adaptMaxLength(
 }
 
 /**
- * Put an "Adapt" answer into the platform's caption, unless the user switched
- * that caption off while the request ran: then the answer is dropped.
+ * Put an "Adapt" answer into the platform's caption only while that caption
+ * still reads exactly as it did at the press (R38 new-customer M1, the rule
+ * useCaptionBox applies to the main caption). Typed meanwhile, switched off,
+ * or reset by a save: the answer is dropped and the text stays.
  */
 export function applyAdaptedCaption(
   prev: PlatformOverrides | null,
   platform: Platform,
   adapted: string,
+  textAtPress: string,
 ): PlatformOverrides {
-  if (typeof prev?.[platform] !== "string") return prev ?? {};
+  if (prev?.[platform] !== textAtPress) return prev ?? {};
   return { ...prev, [platform]: adapted };
 }
 

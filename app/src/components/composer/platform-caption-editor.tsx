@@ -41,6 +41,11 @@ export interface PlatformCaptionEditorProps {
   disabled?: boolean;
   /** R31: the workspace the page was drawn for, sent with Adapt (null: none yet, left out). */
   workspaceId: string | null;
+  /**
+   * R38: Create's form generation (useCaptionBox), read live; an Adapt answer
+   * pressed before the post was saved and the form reset is dropped.
+   */
+  formGeneration?: () => number;
 }
 
 function captionCountText(count: number): string {
@@ -64,6 +69,7 @@ export function PlatformCaptionEditor({
   footer,
   disabled = false,
   workspaceId,
+  formGeneration,
 }: PlatformCaptionEditorProps) {
   const toast = useToast();
   const [adapting, setAdapting] = useState<Platform | null>(null);
@@ -74,6 +80,9 @@ export function PlatformCaptionEditor({
 
   async function handleAdapt(platform: Platform) {
     const own = overrides?.[platform];
+    // What the answer must still find when it comes back (applyAdaptedCaption).
+    const ownAtPress = own ?? "";
+    const generationAtPress = formGeneration?.();
     // Adapt the platform's own text once it has some; otherwise the main caption.
     const source = own?.trim() ? own : caption;
     if (!source.trim()) {
@@ -105,7 +114,8 @@ export function PlatformCaptionEditor({
         return;
       }
       const adapted = data.enhancedCaption;
-      onChange((prev) => applyAdaptedCaption(prev, platform, adapted));
+      if (formGeneration && formGeneration() !== generationAtPress) return;
+      onChange((prev) => applyAdaptedCaption(prev, platform, adapted, ownAtPress));
     } catch (caught) {
       toast.error(isNoAnswer(caught) ? adaptLostText(platformLabel(platform)) : `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
     } finally {

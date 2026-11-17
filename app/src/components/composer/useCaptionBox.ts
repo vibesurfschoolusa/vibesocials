@@ -4,10 +4,11 @@ import { useCallback, useRef, useState, type SetStateAction } from "react";
 
 import { captionAfterMediaChange } from "./attached-photos";
 
-/** What a caption request noted at its press: the media, and the box as it was. */
+/** What a caption request noted at its press: the media, the box as it was, and the form's generation. */
 export interface CaptionPress {
   askedAbout: unknown;
   captionAtPress: string;
+  generation: number;
 }
 
 /**
@@ -39,6 +40,9 @@ export function useCaptionBox() {
   const [lastAiCaption, setLastAiState] = useState<string | null>(null);
   const captionRef = useRef("");
   const lastAiRef = useRef<string | null>(null);
+  // R38 new-customer M1: saving the post resets the form and bumps this, so
+  // every answer pressed for the old post is dropped, whatever the box says.
+  const generationRef = useRef(0);
 
   // Stable, so effects can name it as they name a state setter.
   const setCaption = useCallback((next: SetStateAction<string>) => {
@@ -62,12 +66,29 @@ export function useCaptionBox() {
     setLastAiCaption(next.lastAiCaption);
   }
 
-  function pressed(askedAbout: unknown): CaptionPress {
-    return { askedAbout, captionAtPress: captionRef.current };
+  // Stable and read live, so the per-platform captions (Adapt) can hold
+  // their answers to the same generation.
+  const formGeneration = useCallback(() => generationRef.current, []);
+
+  /** The form was saved and reset: answers pressed before now are dropped. */
+  function formReset() {
+    generationRef.current += 1;
   }
 
-  /** Writes the answer by captionResultApplies; it is remembered only when written. */
-  function answered(press: CaptionPress, answer: { caption: string; selectedNow: unknown; overwrite: boolean }): boolean {
+  function pressed(askedAbout: unknown): CaptionPress {
+    return { askedAbout, captionAtPress: captionRef.current, generation: generationRef.current };
+  }
+
+  /**
+   * Writes the answer by captionResultApplies, within the press's form
+   * generation. A caption from media (`fromMedia`, the default) is remembered
+   * as the AI's when written; Improve's rewrite is not, so a new pick keeps it.
+   */
+  function answered(
+    press: CaptionPress,
+    answer: { caption: string; selectedNow: unknown; overwrite: boolean; fromMedia?: boolean },
+  ): boolean {
+    if (press.generation !== generationRef.current) return false;
     const applies = captionResultApplies({
       askedAbout: press.askedAbout,
       selectedNow: answer.selectedNow,
@@ -77,9 +98,9 @@ export function useCaptionBox() {
     });
     if (!applies) return false;
     setCaption(answer.caption);
-    setLastAiCaption(answer.caption);
+    if (answer.fromMedia !== false) setLastAiCaption(answer.caption);
     return true;
   }
 
-  return { caption, setCaption, lastAiCaption, forgetMediaCaption, pressed, answered };
+  return { caption, setCaption, lastAiCaption, forgetMediaCaption, pressed, answered, formReset, formGeneration };
 }

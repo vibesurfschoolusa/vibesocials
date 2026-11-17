@@ -203,8 +203,8 @@ describe("adaptMaxLength", () => {
 });
 
 describe("applyAdaptedCaption", () => {
-  it("fills the platform's caption while it is switched on", () => {
-    expect(applyAdaptedCaption({ x: "old", linkedin: "keep" }, "x", "new")).toEqual({
+  it("fills the platform's caption while it reads as at the press", () => {
+    expect(applyAdaptedCaption({ x: "old", linkedin: "keep" }, "x", "new", "old")).toEqual({
       x: "new",
       linkedin: "keep",
     });
@@ -212,8 +212,13 @@ describe("applyAdaptedCaption", () => {
 
   it("drops the answer when that platform's caption was switched off meanwhile", () => {
     const prev = { linkedin: "keep" };
-    expect(applyAdaptedCaption(prev, "x", "new")).toBe(prev);
-    expect(applyAdaptedCaption(null, "x", "new")).toEqual({});
+    expect(applyAdaptedCaption(prev, "x", "new", "old")).toBe(prev);
+    expect(applyAdaptedCaption(null, "x", "new", "old")).toEqual({});
+  });
+
+  it("R38: drops the answer when that platform's caption was edited meanwhile", () => {
+    const prev = { x: "old, edited" };
+    expect(applyAdaptedCaption(prev, "x", "new", "old")).toBe(prev);
   });
 });
 

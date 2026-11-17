@@ -139,4 +139,32 @@ describe("Create's caption box: a press and its late answer", () => {
     expect(latest.caption).toBe("X, edited");
     expect(latest.lastAiCaption).toBe("X");
   });
+
+  it("R38: the form is saved and reset after the press: the answer is dropped, even on an unchanged box", async () => {
+    const box = await mount();
+    const press = box.pressed(null);
+    await step(() => box.formReset());
+    await step(() => box.answered(press, { caption: "X", selectedNow: null, overwrite: true }));
+    expect(latest.caption).toBe("");
+    // A press after the reset still writes.
+    const next = latest.pressed(null);
+    await step(() => latest.answered(next, { caption: "Y", selectedNow: null, overwrite: true }));
+    expect(latest.caption).toBe("Y");
+  });
+
+  it("R38: formGeneration moves on with each reset, read live", async () => {
+    const box = await mount();
+    const before = box.formGeneration();
+    await step(() => box.formReset());
+    expect(box.formGeneration()).toBe(before + 1);
+  });
+
+  it("R38: Improve's answer (not from media) writes the box but is not remembered as the media's caption", async () => {
+    const box = await mount();
+    await step(() => box.setCaption("My words"));
+    const press = latest.pressed(null);
+    await step(() => latest.answered(press, { caption: "Better words", selectedNow: null, overwrite: true, fromMedia: false }));
+    expect(latest.caption).toBe("Better words");
+    expect(latest.lastAiCaption).toBe(null);
+  });
 });
