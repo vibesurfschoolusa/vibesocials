@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { focusAfterPress } from "./focusAfter";
-import { installFocusKeeper, type KeeperEnv } from "./focusKeeper";
+import { installFocusKeeper, keeperStandAside, type KeeperEnv } from "./focusKeeper";
 
 /**
  * R28 NN1: one keeper for the whole app. Presses that remove, disable or move
@@ -277,6 +277,21 @@ describe("the focus keeper", () => {
     expect(buttons[2].focus).not.toHaveBeenCalled();
     expect(doc.activeElement).toBe(doc.body);
     stop();
+  });
+
+  // R40 pages L1: useRetryFocus moves focus itself, in an effect that runs after the keeper.
+  it("stands aside for an element a hook looks after, until the hook lets it go", () => {
+    const { buttons, rows, focusOn, remove, doc } = setup();
+    focusOn(buttons[1]);
+    const release = keeperStandAside(buttons[1] as never);
+    remove(rows[1]);
+    expect(buttons[2].focus).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(doc.body);
+    release();
+    release();
+    focusOn(buttons[2]);
+    remove(rows[2]);
+    expect(doc.activeElement).toBe(buttons[0]);
   });
 
   it("never acts while a dialog is open", () => {

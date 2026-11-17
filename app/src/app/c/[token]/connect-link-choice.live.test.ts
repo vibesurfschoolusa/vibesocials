@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: 
 import { html, makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { CONNECT_LINK_RATE_LIMIT_MESSAGE } from "@/lib/connectLink";
 import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
+import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
 
 import { ConnectLinkChoice } from "./connect-link-choice";
 
@@ -20,6 +21,8 @@ const UNCHECKED = "We couldn't check that just now. Nothing was changed. Try aga
 const READY = { platform: "facebook_page", candidates: [{ id: "a", name: "Surf Co" }, { id: "b", name: "Surf Co Kids" }] };
 
 let doc: FocusDoc;
+let made: ReturnType<typeof makeDocument>;
+let stopKeeper: (() => void) | null = null;
 
 let root: Root;
 let container: FakeNode;
@@ -55,7 +58,7 @@ const answer = (status: number, body: unknown) => Promise.resolve(Response.json(
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  const made = makeDocument();
+  made = makeDocument();
   container = made.container;
   doc = made.doc as unknown as FocusDoc;
   makeFocusable(doc);
@@ -68,6 +71,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount());
+  stopKeeper?.();
+  stopKeeper = null;
   vi.unstubAllGlobals();
 });
 
@@ -100,7 +105,22 @@ describe("the /c account choice after a failed load", () => {
   });
 
   // R39 lead's last look: the pending route's own 429 (body and header), one instruction, no button.
-  it("a 429 with Retry-After says to reload in N minutes, with nothing to press", async () => {
+  it("a 429 with a wait inside the choice's life says to reload in N minutes, with nothing to press", async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve(
+        Response.json(
+          { error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: 300 },
+          { status: 429, headers: { "Retry-After": "300" } },
+        ),
+      ),
+    );
+    await mount();
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 5 minutes.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+
+  // R40 client-journey L3: the choice lives 15 minutes, so reloading after 25 shows it ended.
+  it("a 429 whose wait outlasts the choice names Connect as the step after the wait", async () => {
     fetchMock.mockReturnValueOnce(
       Promise.resolve(
         Response.json(
@@ -110,8 +130,25 @@ describe("the /c account choice after a failed load", () => {
       ),
     );
     await mount();
-    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
+    expect(container.textContent).toBe(
+      "Too many requests from this network in the last hour. Wait 25 minutes, then press Connect beside the platform you were connecting again.",
+    );
     expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+
+  it("names the platform when the page remembers it", async () => {
+    const stored = new Map([["vs-connect-choice:p1", "facebook_page"]]);
+    (made.doc.defaultView as Record<string, unknown>).sessionStorage = {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    };
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve(Response.json({ error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: 1500 }, { status: 429 })),
+    );
+    await mount();
+    expect(container.textContent).toBe(
+      "Too many requests from this network in the last hour. Wait 25 minutes, then press Connect beside Facebook Page again.",
+    );
   });
 
   it("a 429 without a wait says to reload later", async () => {
@@ -141,7 +178,15 @@ describe("the /c account choice after a failed load", () => {
 });
 
 // R39 lead review: Try again removes itself, so focus fell to the page body.
-describe("the /c account choice: focus after Try again", () => {
+describe("the /c account choice: focus after Try again, with the page's focus keeper", () => {
+  // R40 pages L1: the keeper moved focus to the Terms link before the retry's own focus ran.
+  let terms: FakeNode;
+  beforeEach(() => {
+    const keeper = installKeeperOnFakePage(made as never);
+    terms = keeper.terms;
+    stopKeeper = keeper.stop;
+  });
+
   function deferred() {
     let resolve!: (value: Response) => void;
     const promise = new Promise<Response>((done) => {
@@ -181,5 +226,13 @@ describe("the /c account choice: focus after Try again", () => {
     const active = doc.activeElement as FakeNode;
     expect(active.attributes.role).toBe("alert");
     expect(active.textContent).toBe(UNCHECKED);
+  });
+
+  it("goes to the loading line, then to the gone sentence", async () => {
+    const gone = "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected.";
+    await failedThenRetry(Response.json({ error: gone }, { status: 404 }));
+    const active = doc.activeElement as FakeNode;
+    expect(active.textContent).toBe(gone);
+    expect(active).not.toBe(terms);
   });
 });

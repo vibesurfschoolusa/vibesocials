@@ -24,9 +24,10 @@ import {
  *   is on the body, and never while a dialog is open.
  * - Still on the page and usable (a keyed item React moved): focus it again.
  *   Otherwise: the first fallback still usable. Never with a scroll.
- * - It stands aside for a control a focusAfterPress or Dialog watch looks
- *   after (their target wins), for a control inside a dialog (the dialog's
- *   own restore), and for a control outside main (a toast, the sidebar).
+ * - It stands aside for a control a focusAfterPress or Dialog watch, or
+ *   useRetryFocus (keeperStandAside), looks after (their target wins), for
+ *   a control inside a dialog (the dialog's own restore), and for a control
+ *   outside main (a toast, the sidebar).
  * - A pointerdown outside the control (a click into the page on purpose) ends
  *   the watch until another control takes focus.
  * - Lead review: never on a navigation (the address changed since the
@@ -34,6 +35,27 @@ import {
  *   the fallbacks stop at the page's own root, so a banner's "Resend email"
  *   is never chosen.
  */
+
+/**
+ * R40 pages L1: elements whose drop a hook on the page looks after itself
+ * (useRetryFocus: the pressed Try again and the loading line). Their effect
+ * runs after the keeper's observer, so the keeper stands aside, as it does
+ * for a focusAfterPress watch. A count, so two holds on one element are safe.
+ */
+const standingAside = new Map<HTMLElement, number>();
+
+/** The keeper leaves `element`'s drop alone until the returned function is called. */
+export function keeperStandAside(element: HTMLElement): () => void {
+  standingAside.set(element, (standingAside.get(element) ?? 0) + 1);
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    const left = (standingAside.get(element) ?? 1) - 1;
+    if (left > 0) standingAside.set(element, left);
+    else standingAside.delete(element);
+  };
+}
 
 /** What the keeper needs from the browser; tests pass a fake one. */
 export interface KeeperEnv {
@@ -166,7 +188,7 @@ function start({ doc, MutationObserver: Observer }: KeeperEnv): () => void {
       element.focus({ preventScroll: true });
       return;
     }
-    if (isWatchedForFocus(element)) return;
+    if (isWatchedForFocus(element) || standingAside.has(element)) return;
     focusFirstOf(fallbacks, isUsable, doc);
   });
 

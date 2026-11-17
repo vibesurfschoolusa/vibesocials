@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
+import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
 
 import { ReviewLinkView } from "./review-link-view";
 
@@ -18,6 +19,7 @@ const UNCHECKED = "We couldn't check that just now. Nothing was changed. Try aga
 let root: Root;
 let container: FakeNode;
 let doc: FocusDoc;
+let stopKeeper: () => void;
 const fetchMock = vi.fn();
 
 function find(node: FakeNode, test: (n: FakeNode) => boolean): FakeNode | null {
@@ -56,6 +58,8 @@ beforeEach(() => {
   container = made.container;
   doc = made.doc as unknown as FocusDoc;
   makeFocusable(doc);
+  // R40: with the page's focus keeper, as on the live page.
+  stopKeeper = installKeeperOnFakePage(made as never).stop;
   vi.stubGlobal("window", made.doc.defaultView);
   vi.stubGlobal("document", made.doc);
   fetchMock.mockReset();
@@ -65,6 +69,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount());
+  stopKeeper();
   vi.unstubAllGlobals();
 });
 
@@ -109,5 +114,25 @@ describe("/v: focus after Try again", () => {
     const active = doc.activeElement as FakeNode;
     expect(active.attributes.role).toBe("alert");
     expect(active.textContent).toBe(UNCHECKED);
+  });
+});
+
+// R40 client-journey L2: a 429 lasts its window, so there is nothing to press.
+describe("/v: the network limit", () => {
+  it("shows one instruction from Retry-After and no button", async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve(
+        Response.json(
+          { error: "Too many requests from this network in the last hour. Try again later.", retryAfterSeconds: 1500 },
+          { status: 429, headers: { "Retry-After": "1500" } },
+        ),
+      ),
+    );
+    await act(async () => {
+      root.render(createElement(ReviewLinkView, { token: "tok" }));
+    });
+    await settle();
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
   });
 });

@@ -7,10 +7,12 @@ import { useRouter } from "next/navigation";
 import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { answerLostText } from "@/lib/answerLost";
-import { CONNECT_LINK_RATE_LIMIT_REASON } from "@/lib/connectLink";
+import { limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
+import { CONNECT_LINK_COOKIE_MAX_AGE_SECONDS } from "@/lib/connectLink";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUncheckedMessage";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { focusAfterPress } from "@/lib/focusAfter";
+import { PLATFORM_LABELS } from "@/lib/platforms";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { useRetryFocus } from "@/lib/useRetryFocus";
 
@@ -50,41 +52,43 @@ type ChoiceAnswer = {
 } | null;
 
 /**
- * R39 lead's last look: the network limit's 429, with one instruction that
- * says how, since the page offers no button: reload in N minutes (from the
- * answer's Retry-After), else later. The pending route answers only this
- * limit with a 429, so its reason is the route's own.
+ * The network limit's 429 (the pending route answers only this limit with
+ * one): the shared client-link instruction, with no button. R40 client-journey
+ * L3: the choice lives 15 minutes (as the sign-in cookie), so a longer wait
+ * names Connect beside the platform, the step that works after it.
  */
-function rateLimitedSentence(retryAfterSeconds: number | undefined): string {
-  if (!retryAfterSeconds || retryAfterSeconds <= 0) return `${CONNECT_LINK_RATE_LIMIT_REASON} Reload this page later.`;
-  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
-  return `${CONNECT_LINK_RATE_LIMIT_REASON} Reload this page in ${minutes === 1 ? "1 minute" : `${minutes} minutes`}.`;
+function rateLimitedSentence(retryAfterSeconds: number | undefined, platform: string | null | undefined): string {
+  const label =
+    platform && platform in PLATFORM_LABELS
+      ? PLATFORM_LABELS[platform as keyof typeof PLATFORM_LABELS]
+      : "the platform you were connecting";
+  return limitReachedSentence(retryAfterSeconds, {
+    lifeSeconds: CONNECT_LINK_COOKIE_MAX_AGE_SECONDS,
+    then: `press Connect beside ${label} again.`,
+  });
 }
 
 /**
  * What the load answered: the accounts; for a 404, that the choice is gone
  * (the route's sentence, else reload). R39 pages L2: any other failure leaves
- * the choice waiting. A 429 says to reload after its wait, with no button (pressing
- * within the hour can't work); the couldn't-check 503 keeps its sentence and
+ * the choice waiting. A 429 gives the one instruction above, with no button
+ * (pressing within the hour can't work); the couldn't-check 503 keeps its sentence and
  * Try again; anything else says only "Press Try again", so the page gives
  * one instruction (R39 lead review).
  */
-export function loadOutcome(status: number, data: ChoiceAnswer, retryAfterSeconds?: number): ConnectLinkChoiceState {
+export function loadOutcome(
+  status: number,
+  data: ChoiceAnswer,
+  retryAfterSeconds?: number,
+  platform?: string | null,
+): ConnectLinkChoiceState {
   if (status >= 200 && status < 300 && data?.platform && data.candidates) {
     return { status: "ready", platform: data.platform, candidates: data.candidates };
   }
   if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
-  if (status === 429) return { status: "failed", message: rateLimitedSentence(retryAfterSeconds), retry: false };
+  if (status === 429) return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, platform), retry: false };
   if (data?.error === LIMIT_UNCHECKED_MESSAGE) return { status: "failed", message: LIMIT_UNCHECKED_MESSAGE, retry: true };
   return { status: "failed", message: LOAD_RETRY_MESSAGE, retry: true };
-}
-
-/** The wait a refused load names: the body's `retryAfterSeconds`, else the Retry-After header. */
-function answerRetryAfter(response: Response, data: unknown): number | undefined {
-  const fromBody = (data as { retryAfterSeconds?: unknown } | null)?.retryAfterSeconds;
-  if (typeof fromBody === "number" && fromBody > 0) return fromBody;
-  const header = Number(response.headers.get("Retry-After"));
-  return Number.isFinite(header) && header > 0 ? header : undefined;
 }
 
 const CHOICE_GONE_MESSAGE =
@@ -150,10 +154,11 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(choiceAddress(base, rememberedChoicePlatform(pendingId)), { cache: "no-store" });
+        const remembered = rememberedChoicePlatform(pendingId);
+        const response = await fetch(choiceAddress(base, remembered), { cache: "no-store" });
         const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
-        const outcome = loadOutcome(response.status, data, answerRetryAfter(response, data));
+        const outcome = loadOutcome(response.status, data, limitWaitSeconds(response, data), remembered);
         if (outcome.status === "ready") rememberChoicePlatform(pendingId, outcome.platform);
         setState(outcome);
       } catch {

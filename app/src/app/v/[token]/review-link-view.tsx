@@ -6,6 +6,7 @@ import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { useRetryFocus } from "@/lib/useRetryFocus";
@@ -477,6 +478,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [more, setMore] = useState(false);
   // A failed load: the server's sentence, or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
+  // R40 client-journey L2: the error is the network limit's, which a press can't clear.
+  const [limited, setLimited] = useState(false);
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
   // List reloads that worked; a card's line set before one can go (shownCardLine).
@@ -490,6 +493,7 @@ export function ReviewLinkView({ token }: { token: string }) {
   const load = useCallback(async (): Promise<number | null> => {
     // R13-pages L2: Try again shows Loading (no posts yet) instead of the same failure.
     setError(null);
+    setLimited(false);
     try {
       const response = await fetch(`/api/review-link/${encodeURIComponent(token)}`, {
         cache: "no-store",
@@ -497,6 +501,11 @@ export function ReviewLinkView({ token }: { token: string }) {
       const data = (await response.json().catch(() => null)) as
         | { posts?: ReviewPostDTO[]; more?: boolean; error?: string }
         | null;
+      if (response.status === 429) {
+        setLimited(true);
+        setError(limitReachedSentence(limitWaitSeconds(response, data)));
+        return null;
+      }
       if (!response.ok || !data?.posts) {
         setError(data?.error ?? "");
         return null;
@@ -566,9 +575,11 @@ export function ReviewLinkView({ token }: { token: string }) {
           <p ref={failedRef} role="alert" className="text-sm outline-none">
             {error || LOAD_FAILED_MESSAGE}
           </p>
-          <Button type="button" variant="outline" size="md" onClick={retry}>
-            Try again
-          </Button>
+          {limited ? null : (
+            <Button type="button" variant="outline" size="md" onClick={retry}>
+              Try again
+            </Button>
+          )}
         </div>
       ) : null}
       <div className="space-y-4">
@@ -580,9 +591,11 @@ export function ReviewLinkView({ token }: { token: string }) {
             className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3 outline-none"
           >
             <p className="text-sm">{error || REFRESH_FAILED_MESSAGE}</p>
-            <Button type="button" variant="outline" size="md" onClick={retry}>
-              Reload the list
-            </Button>
+            {limited ? null : (
+              <Button type="button" variant="outline" size="md" onClick={retry}>
+                Reload the list
+              </Button>
+            )}
           </div>
         ) : null}
         {/* R29 client-journey L5: on the list from its first render; only the text changes. */}
