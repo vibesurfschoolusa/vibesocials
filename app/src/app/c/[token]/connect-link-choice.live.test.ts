@@ -297,6 +297,44 @@ describe("the /c account choice: a 429 on Connect or Cancel", () => {
     expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
   });
 
+  // R43 client-journey L1: the load's own time left wins over this tab's first sighting,
+  // which a second tab opened late would overstate.
+  describe("the time left the load answered", () => {
+    async function pressWithLifeLeft(text: string, lifeLeftSeconds: number, next: Promise<Response>) {
+      storage();
+      fetchMock.mockReturnValueOnce(answer(200, { ...READY, lifeLeftSeconds })).mockReturnValueOnce(next);
+      await mount({ facebook_page: "Connect" });
+      const pressed = button(text)!;
+      (pressed.focus as () => void)();
+      await act(async () => {
+        void props(pressed).onClick({ currentTarget: pressed });
+      });
+      await settle();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      });
+    }
+
+    it("Connect: 5 minutes left and an 8-minute wait says press again, though the tab first saw it just now", async () => {
+      await pressWithLifeLeft("Connect", 300, limited(480));
+      expect(container.textContent).toBe(
+        "Too many requests from this network in the last hour. Wait 8 minutes, then press Connect beside Facebook Page again.",
+      );
+    });
+
+    it("Cancel: 5 minutes left and an 8-minute wait says it ends by itself", async () => {
+      await pressWithLifeLeft("Cancel", 300, limited(480));
+      expect(container.textContent).toBe(
+        "Too many requests from this network in the last hour. Wait 8 minutes, then reload this page: the choice will have ended by itself, with no account connected.",
+      );
+    });
+
+    it("a wait well inside the time left still says reload", async () => {
+      await pressWithLifeLeft("Connect", 300, limited(120));
+      expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 2 minutes.");
+    });
+  });
+
   // R41 review: "ends by itself" only when the rounded wait reaches the choice's end; Connect keeps its margin.
   describe("the margin: Connect only", () => {
     const seenAgo = (seconds: number) => storage([["vs-connect-choice-seen:p1", String(Date.now() - seconds * 1000)]]);

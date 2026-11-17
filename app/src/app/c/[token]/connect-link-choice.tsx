@@ -115,12 +115,25 @@ export function limitedOutcome(
   return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, choice, cancel), retry: false };
 }
 
-/** The choice for a 429, as the page knows it: platform, its row's button, life left from first seen. */
-function limitedChoice(platform: string | null, firstSeen: number, buttons: Record<string, string>): LimitedChoice {
+/**
+ * The choice for a 429, as the page knows it: platform, its row's button, and
+ * life left. R43 client-journey L1: the end the load answered (`endsAt`) when
+ * there is one; this tab's first sighting only without it, since a tab opened
+ * late would overstate the life left.
+ */
+function limitedChoice(
+  platform: string | null,
+  firstSeen: number,
+  buttons: Record<string, string>,
+  endsAt?: number,
+): LimitedChoice {
   return {
     platform,
     button: platform ? buttons[platform] : null,
-    lifeLeftSeconds: CONNECT_LINK_COOKIE_MAX_AGE_SECONDS - (Date.now() - firstSeen) / 1000,
+    lifeLeftSeconds:
+      endsAt !== undefined
+        ? (endsAt - Date.now()) / 1000
+        : CONNECT_LINK_COOKIE_MAX_AGE_SECONDS - (Date.now() - firstSeen) / 1000,
   };
 }
 
@@ -274,7 +287,10 @@ export function ConnectLinkChoice({
   function showLimited(response: Response, data: ChoiceAnswer, platform: string | null, cancel = false) {
     const openedAt = openedAtRef.current ?? Date.now();
     const firstSeen = choiceFirstSeen(pendingId, openedAt) ?? openedAt;
-    setState(limitedOutcome(limitWaitSeconds(response, data), limitedChoice(platform, firstSeen, buttonsRef.current), cancel));
+    const endsAt = state.status === "ready" ? state.endsAt : undefined;
+    setState(
+      limitedOutcome(limitWaitSeconds(response, data), limitedChoice(platform, firstSeen, buttonsRef.current, endsAt), cancel),
+    );
   }
 
   function retry() {
