@@ -271,14 +271,15 @@ describe("checkWorkspaceAiQuota", () => {
 });
 
 describe("aiWorkspaceLimitResponse", () => {
-  it("is a 429 with the code, message, retryAfterSeconds and a Retry-After header", async () => {
+  it("is a 429 with the code, the budget, the message, retryAfterSeconds and a Retry-After header", async () => {
     const response = aiWorkspaceLimitResponse(777);
 
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("777");
     await expect(response.json()).resolves.toEqual({
       code: "AI_WORKSPACE_DAILY_LIMIT",
-      error: "Your workspace has reached today's AI limit. Try again tomorrow.",
+      budget: "workspace",
+      error: "This workspace has reached today's AI limit. It resets in 13 minutes.",
       retryAfterSeconds: 777,
     });
   });
@@ -289,9 +290,54 @@ describe("aiWorkspaceLimitResponse", () => {
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toEqual({
       code: "AI_WORKSPACE_DAILY_LIMIT",
+      budget: "owner",
       error:
-        "This workspace's owner has reached today's AI limit across all the workspaces they own. Try again tomorrow.",
+        "This workspace's owner has reached today's AI limit across all the workspaces they own. It resets in a minute.",
       retryAfterSeconds: 60,
+    });
+  });
+
+  // R45 pages-a L4: the budgets reset at midnight UTC, not at the reader's
+  // "tomorrow", so the sentence names the real wait, rounded up.
+  describe("the wait, from the refusal at the time it is made", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it.each([
+      ["02:30 UTC", "2026-11-14T02:30:00.000Z", "workspace", "This workspace has reached today's AI limit. It resets in 22 hours."],
+      [
+        "15:00 UTC",
+        "2026-11-14T15:00:00.000Z",
+        "owner",
+        "This workspace's owner has reached today's AI limit across all the workspaces they own. It resets in 9 hours.",
+      ],
+    ] as const)("at %s", async (_label, at, budget, sentence) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(at));
+      const bucket = Math.floor(Date.now() / DAY);
+      memberFindManyMock.mockResolvedValue([{ userId: "owner-1", user: { email: "one@example.com", emailVerifiedAt: null } }]);
+      entryFindManyMock.mockResolvedValue([
+        budget === "owner"
+          ? { key: `ai:owner:owner-1:ai/owner-daily:${bucket}`, count: 400 }
+          : { key: `ai:workspace:ws-1:ai/workspace-daily:${bucket}`, count: 200 },
+      ]);
+      const quota = await checkWorkspaceAiQuota("ws-1");
+      const body = await aiWorkspaceLimitResponse(quota.retryAfterSeconds, quota.budget).json();
+      expect(body).toMatchObject({ budget, error: sentence });
+    });
+
+    it.each([
+      [3600, "It resets in 1 hour."],
+      [3601, "It resets in 2 hours."],
+      [3599, "It resets in 1 hour."],
+      [3540, "It resets in 59 minutes."],
+      [1, "It resets in a minute."],
+      [undefined, "It resets at midnight UTC."],
+    ] as const)("%s seconds: %s", async (seconds, wait) => {
+      const body = await aiWorkspaceLimitResponse(seconds).json();
+      expect(body.error).toBe(`This workspace has reached today's AI limit. ${wait}`);
     });
   });
 });

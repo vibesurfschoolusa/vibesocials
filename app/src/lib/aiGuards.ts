@@ -167,15 +167,33 @@ export async function checkWorkspaceAiQuota(workspaceId: string): Promise<AiQuot
   return { allowed: true };
 }
 
-/** `429 { code: "AI_WORKSPACE_DAILY_LIMIT", error, retryAfterSeconds }` + `Retry-After`. */
+/**
+ * R45 pages-a L4: when the spent budget resets. The budgets are counted per UTC
+ * day, so "tomorrow" was untrue for most readers; the wait is rounded up, so
+ * trying again when it says never fails.
+ */
+function aiLimitResetsText(retryAfterSeconds: number | undefined): string {
+  if (retryAfterSeconds === undefined || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return "It resets at midnight UTC.";
+  }
+  const minutes = Math.ceil(retryAfterSeconds / 60);
+  if (minutes <= 1) return "It resets in a minute.";
+  if (minutes < 60) return `It resets in ${minutes} minutes.`;
+  const hours = Math.ceil(retryAfterSeconds / 3600);
+  return hours === 1 ? "It resets in 1 hour." : `It resets in ${hours} hours.`;
+}
+
+/** `429 { code: "AI_WORKSPACE_DAILY_LIMIT", budget, error, retryAfterSeconds }` + `Retry-After`. */
 export function aiWorkspaceLimitResponse(retryAfterSeconds?: number, budget: AiBudget = "workspace"): NextResponse {
+  const reason =
+    budget === "owner"
+      ? "This workspace's owner has reached today's AI limit across all the workspaces they own."
+      : "This workspace has reached today's AI limit.";
   return NextResponse.json(
     {
       code: "AI_WORKSPACE_DAILY_LIMIT",
-      error:
-        budget === "owner"
-          ? "This workspace's owner has reached today's AI limit across all the workspaces they own. Try again tomorrow."
-          : "Your workspace has reached today's AI limit. Try again tomorrow.",
+      budget,
+      error: `${reason} ${aiLimitResetsText(retryAfterSeconds)}`,
       retryAfterSeconds,
     },
     {

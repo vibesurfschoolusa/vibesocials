@@ -175,7 +175,7 @@ describe("POST /api/posts/auto-caption", () => {
       await expect(response.json()).resolves.toMatchObject({
         code: "AI_WORKSPACE_DAILY_LIMIT",
         error:
-          "This workspace's owner has reached today's AI limit across all the workspaces they own. Try again tomorrow.",
+          "This workspace's owner has reached today's AI limit across all the workspaces they own. It resets in a minute.",
       });
       expect(memberFindManyMock).toHaveBeenCalledWith(expect.objectContaining({ where: { workspaceId: "ws-1", role: "owner" } }));
       expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ userId: "ai:owner:owner-1" }));
@@ -194,7 +194,8 @@ describe("POST /api/posts/auto-caption", () => {
       expect(response.headers.get("Retry-After")).toBe("3600");
       await expect(response.json()).resolves.toEqual({
         code: "AI_WORKSPACE_DAILY_LIMIT",
-        error: "Your workspace has reached today's AI limit. Try again tomorrow.",
+        budget: "workspace",
+        error: "This workspace has reached today's AI limit. It resets in 1 hour.",
         retryAfterSeconds: 3600,
       });
       expect(fetchMock).not.toHaveBeenCalled();
