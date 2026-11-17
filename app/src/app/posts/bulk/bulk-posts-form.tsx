@@ -1052,9 +1052,11 @@ export function BulkPostsForm({
         <BatchSettingsFieldset locked={sendingMode !== null}>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2 text-sm font-medium text-foreground">Post every row to</legend>
-          {connectionsLoading && !connections ? (
-            <p className="text-sm text-muted-foreground">Loading your platforms...</p>
-          ) : connectionsError ? (
+          {/* R41: a status line on the page from the first render, so Try again's focus goes to it while loading. */}
+          <p role="status" className="text-sm text-muted-foreground empty:sr-only">
+            {connectionsLoading && !connections ? "Loading your platforms..." : ""}
+          </p>
+          {connectionsLoading && !connections ? null : connectionsError ? (
             <Alert variant="danger">
               <LoadError message={connectionsError} onRetry={reload} retryLabel="Try again" layout="inline" />
             </Alert>
