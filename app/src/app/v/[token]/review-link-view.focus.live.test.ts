@@ -142,9 +142,10 @@ describe("/v: the network limit", () => {
 // so every press within the window fails the same way: one instruction, no live button.
 describe("/v: a card decision's 429", () => {
   beforeEach(() => {
-    // focusAfterPress waits a frame for the page to change.
+    // focusAfterPress waits a frame for the page to change; a long one, so
+    // the render is in before it under a loaded run (press waits it out).
     const view = made.doc.defaultView as Record<string, unknown>;
-    view.requestAnimationFrame = (step: () => void) => setTimeout(step, 0);
+    view.requestAnimationFrame = (step: () => void) => setTimeout(step, 50);
     view.setTimeout = setTimeout;
   });
 
@@ -177,6 +178,9 @@ describe("/v: a card decision's 429", () => {
       void props(node).onClick({ currentTarget: node, preventDefault: () => {} });
     });
     await settle();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
   }
 
   it("Looks good: the card says when to reload, and no decision can be pressed on any card", async () => {

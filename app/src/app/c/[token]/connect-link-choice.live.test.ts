@@ -233,9 +233,10 @@ describe("the /c account choice after a failed load", () => {
 // so a press after the list loaded can get the same 429: one instruction, nothing to press.
 describe("the /c account choice: a 429 on Connect or Cancel", () => {
   beforeEach(() => {
-    // focusAfterPress waits a frame for the page to change.
+    // focusAfterPress waits a frame for the page to change; a long one, so
+    // the render is in before it under a loaded run (press waits it out).
     const view = made.doc.defaultView as Record<string, unknown>;
-    view.requestAnimationFrame = (step: () => void) => setTimeout(step, 0);
+    view.requestAnimationFrame = (step: () => void) => setTimeout(step, 50);
     view.setTimeout = setTimeout;
   });
   afterEach(() => {
@@ -251,6 +252,9 @@ describe("the /c account choice: a 429 on Connect or Cancel", () => {
       void props(pressed).onClick({ currentTarget: pressed });
     });
     await settle();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
   }
 
   it("Connect: a wait inside the choice's life says to reload in N minutes, with nothing to press", async () => {
