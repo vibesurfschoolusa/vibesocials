@@ -5,6 +5,7 @@ import { Film } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadMoreButton } from "@/components/load-error";
 import {
   Dialog,
   DialogBody,
@@ -202,9 +203,8 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
         )}
         {nextCursor !== null && !loading ? (
           <div className="mt-4 flex flex-col items-center gap-2 text-center">
-            <Button variant="outline" size="sm" loading={loadingMore} onClick={() => void loadMore()}>
-              Load more
-            </Button>
+            {/* R34 publishing L1: after a workspace refusal the shared button is Reload page. */}
+            <LoadMoreButton error={moreError} loading={loadingMore} onLoadMore={() => void loadMore()} />
             {moreError ? <p role="alert" className="text-sm text-destructive">{moreError}</p> : null}
           </div>
         ) : null}

@@ -73,7 +73,7 @@ describe("Media picker: a failed Load more is shown by the button", () => {
   });
 
   it("the line is under the Load more button; the top line shows only the first load's failure", () => {
-    const button = source.indexOf("Load more </Button>");
+    const button = source.indexOf("<LoadMoreButton ");
     expect(button).toBeGreaterThan(-1);
     const after = source.slice(button, source.indexOf("</DialogBody>"));
     expect(after).toContain('{moreError ? <p role="alert" className="text-sm text-destructive">{moreError}</p> : null}');
@@ -83,5 +83,21 @@ describe("Media picker: a failed Load more is shown by the button", () => {
   it("a new opening starts without an old Load more error", () => {
     const opening = source.slice(source.indexOf("if (!open) return;"), source.indexOf("}, [open, fetchPage]);"));
     expect(opening).toContain("setMoreError(null);");
+  });
+});
+
+// R34 publishing L1 / pages L1: after a stale-tab refusal Load more can only
+// be refused again, so the picker uses the shared button, which then reads
+// Reload page (as Queue, Activity and Media do).
+describe("Media picker Load more after a workspace refusal", () => {
+  const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("uses the shared LoadMoreButton with the kept error", () => {
+    expect(source).toContain('import { LoadMoreButton } from "@/components/load-error";');
+    expect(source).toContain("<LoadMoreButton error={moreError} loading={loadingMore} onLoadMore={() => void loadMore()} />");
+  });
+
+  it("has no Load more button of its own", () => {
+    expect(source).not.toContain("Load more </Button>");
   });
 });
