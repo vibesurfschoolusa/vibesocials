@@ -1,6 +1,7 @@
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { prisma } from "@/lib/db";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
+import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
 import { COVER_IMAGE_RULE } from "@/lib/videoCover";
 import {
   MISSING_WORKSPACE_ID_CODE,
@@ -34,7 +35,8 @@ export type UploadRefusalReason =
   | "cover-too-large"
   | "workspace-changed"
   | "workspace-missing"
-  | "limit-unchecked";
+  | "limit-unchecked"
+  | "rate-limited";
 
 const REASONS: Record<UploadRefusalReason, { number: number; error: string; code: string }> = {
   "out-of-date": { number: 1, error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE, code: "UPLOAD_PAGE_OUT_OF_DATE" },
@@ -47,21 +49,31 @@ const REASONS: Record<UploadRefusalReason, { number: number; error: string; code
   "workspace-missing": { number: 7, error: MISSING_WORKSPACE_ID_MESSAGE, code: MISSING_WORKSPACE_ID_CODE },
   // R38: the upload limit's store couldn't answer (lib/limitUnchecked.ts).
   "limit-unchecked": { number: 8, error: LIMIT_UNCHECKED_MESSAGE, code: "UPLOAD_LIMIT_UNCHECKED" },
+  // R44 new-customer L5: the upload token limit. Kept only until the limit's
+  // window ends (`until`), and its sentence is built from the wait left then.
+  "rate-limited": { number: 9, error: tooManyTriesSentence(undefined), code: "UPLOAD_RATE_LIMITED" },
 };
 
 function refusalKey(userId: string): string {
   return `${userId}:upload/refusal`;
 }
 
-/** Remember why this person's token was refused. Never throws: at worst the page says "wait". */
+/**
+ * Remember why this person's token was refused. Never throws: at worst the page says "wait".
+ * `until`: when the refusal stops being true (a limit's reset), if sooner than
+ * the 10 minutes; the remembered wait is then counted down to it.
+ */
 export async function recordUploadRefusal(
   userId: string,
   reason: UploadRefusalReason,
   now: number = Date.now(),
+  until?: Date,
 ): Promise<void> {
   const key = refusalKey(userId);
   const count = REASONS[reason].number;
-  const expiresAt = new Date(now + UPLOAD_REFUSAL_MEMORY_MS);
+  const expiresAt = new Date(
+    until ? Math.min(until.getTime(), now + UPLOAD_REFUSAL_MEMORY_MS) : now + UPLOAD_REFUSAL_MEMORY_MS,
+  );
   try {
     await prisma.rateLimitEntry.upsert({
       where: { key },
@@ -77,10 +89,14 @@ export async function recordUploadRefusal(
 export async function readUploadRefusal(
   userId: string,
   now: number = Date.now(),
-): Promise<{ error: string; code: string } | null> {
+): Promise<{ error: string; code: string; retryAfterSeconds?: number } | null> {
   try {
     const row = await prisma.rateLimitEntry.findUnique({ where: { key: refusalKey(userId) } });
     if (!row || new Date(row.expiresAt).getTime() <= now) return null;
+    if (row.count === REASONS["rate-limited"].number) {
+      const retryAfterSeconds = Math.ceil((new Date(row.expiresAt).getTime() - now) / 1000);
+      return { error: tooManyTriesSentence(retryAfterSeconds), code: REASONS["rate-limited"].code, retryAfterSeconds };
+    }
     const reason = Object.values(REASONS).find((entry) => entry.number === row.count);
     return reason ? { error: reason.error, code: reason.code } : null;
   } catch (error) {

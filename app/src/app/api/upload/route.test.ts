@@ -487,7 +487,58 @@ describe("a refused upload's sentence reaches the person", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(429);
     checkRateLimitMock.mockResolvedValue({ allowed: true });
-    await expect(GET(req()).then((r) => r.json())).resolves.toEqual({ storageFull: false });
+    await expect(shown()).resolves.not.toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+  });
+
+  // R44 new-customer L5: the 121st token in a 15-minute window. The page reads
+  // the limit's real wait, not "wait a few minutes".
+  it("the 121st upload in 15 minutes is told the real wait", async () => {
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 600 });
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    expect(res.status).toBe(429);
+    await expect(shown()).resolves.toBe("Too many tries. Wait 10 minutes, then try again.");
+    const body = await GET(req()).then((r) => r.json());
+    expect(body).toMatchObject({ refused: true, code: "UPLOAD_RATE_LIMITED" });
+    expect(body.retryAfterSeconds).toBeGreaterThan(590);
+    expect(body.retryAfterSeconds).toBeLessThanOrEqual(600);
+  });
+
+  it("the remembered wait ends when the limit's window does", async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 10, 17, 10, 0, 0), toFake: ["Date"] });
+    try {
+      checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 120 });
+      await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+      vi.setSystemTime(Date.UTC(2026, 10, 17, 10, 1, 0));
+      await expect(shown()).resolves.toBe("Too many tries. Wait a minute, then try again.");
+      vi.setSystemTime(Date.UTC(2026, 10, 17, 10, 2, 1));
+      await expect(GET(req()).then((r) => r.json())).resolves.toEqual({ storageFull: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // R44 pages-a L4: a paused workspace (or a trial or plan that ended) is
+  // refused before anything is remembered; the page reads the block's own sentence.
+  it("a paused workspace's upload shows the pause sentence", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ pausedAt: new Date("2026-11-01T00:00:00Z"), pausedReason: "owner" }),
+    );
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    expect(res.status).toBe(403);
+    const { error, code } = (await res.json()) as { error: string; code: string };
+    expect(code).toBe("WORKSPACE_PAUSED");
+    await expect(shown()).resolves.toBe(error);
+    await expect(GET(req()).then((r) => r.json())).resolves.toEqual({ storageFull: true, refused: true, error, code });
+  });
+
+  it("the block wins over an older remembered reason", async () => {
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ pausedAt: new Date("2026-11-01T00:00:00Z"), pausedReason: "owner" }),
+    );
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    const { error } = (await res.json()) as { error: string };
+    await expect(shown()).resolves.toBe(error);
   });
 
   it("is answered even when the storage question is rate limited, without summing storage", async () => {

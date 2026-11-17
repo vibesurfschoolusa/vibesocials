@@ -12,7 +12,7 @@ import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
-import { accessBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlock, accessBlockResponse } from "@/lib/workspaceStatus";
 import { MISSING_WORKSPACE_ID_CODE, renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
@@ -55,6 +55,13 @@ export async function GET(request: Request): Promise<Response> {
   // so it is answered before the throttle below. `storageFull: true` too,
   // because a tab opened before this release shows `error` only with it, and
   // such a tab is exactly the one told to reload.
+  // R44 pages-a L4: a paused or ended workspace (or, with billing on, an
+  // unconfirmed address) is refused by POST before anything is remembered or
+  // cleared, so its own sentence is answered here first.
+  const block = accessBlock(context);
+  if (block) {
+    return NextResponse.json({ storageFull: true, refused: true, error: block.message, code: block.code });
+  }
   const remembered = await readUploadRefusal(context.user.id);
   if (remembered) {
     return NextResponse.json({ storageFull: true, refused: true, ...remembered });
@@ -125,6 +132,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     return limitUncheckedResponse();
   }
   if (!rateLimit.allowed) {
+    // R44 new-customer L5: remembered until the window ends, so the page reads the real wait.
+    const retryAfterSeconds = rateLimit.retryAfterSeconds ?? 60;
+    await recordUploadRefusal(user.id, "rate-limited", Date.now(), new Date(Date.now() + retryAfterSeconds * 1000));
     return tooManyTriesResponse(rateLimit);
   }
 
