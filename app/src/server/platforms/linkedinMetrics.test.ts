@@ -94,7 +94,7 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toContain("&shares=List(urn%3Ali%3Ashare%3A1,urn%3Ali%3Ashare%3A2)");
-    expect(fetchMock.mock.calls[1][0]).toContain("&ugcPosts[0]=urn%3Ali%3AugcPost%3A3");
+    expect(fetchMock.mock.calls[1][0]).toContain("&ugcPosts=List(urn%3Ali%3AugcPost%3A3)");
     expect(out.byId.get("urn:li:share:1")?.counts.likes).toBe(4);
     expect(out.byId.get("urn:li:share:2")?.counts.comments).toBeNull();
     expect(out.byId.get("urn:li:ugcPost:3")?.counts.views).toBe(500);
@@ -129,8 +129,9 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
     expect([...timedOut.failed]).toEqual(["urn:li:share:1"]);
   });
 
-  // R41 platform L1: ugcPosts in the indexed form LinkedIn's share-statistics
-  // page shows (li-lms-2026-10, read 2026-11-17); shares stay List(...).
+  // R42 platform L1: both kinds in the Rest.li 2.0 List(...) form the
+  // X-Restli-Protocol-Version 2.0.0 header asks for (share-statistics page,
+  // li-lms-2026-10: the indexed ugcPosts[0]= form is its "Restli 1.0").
   it("sends the exact URL for each kind", async () => {
     fetchMock.mockResolvedValueOnce(answer([])).mockResolvedValueOnce(answer([]));
     await fetchLinkedInShareStatisticsBatch(
@@ -143,8 +144,49 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
       "&organizationalEntity=urn%3Ali%3Aorganization%3A42";
     expect(fetchMock.mock.calls[0][0]).toBe(`${base}&shares=List(urn%3Ali%3Ashare%3A1,urn%3Ali%3Ashare%3A2)`);
     expect(fetchMock.mock.calls[1][0]).toBe(
-      `${base}&ugcPosts[0]=urn%3Ali%3AugcPost%3A3&ugcPosts[1]=urn%3Ali%3AugcPost%3A4`,
+      `${base}&ugcPosts=List(urn%3Ali%3AugcPost%3A3,urn%3Ali%3AugcPost%3A4)`,
     );
+  });
+
+  describe("an answer without per-post rows", () => {
+    it("an aggregate element with no ugcPost field: one warn with counts only, and no post is counted as no activity", async () => {
+      fetchMock.mockResolvedValueOnce(
+        answer([{ organizationalEntity: ORG, totalShareStatistics: stats() }]),
+      );
+      const out = await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3", "urn:li:ugcPost:4"], "t");
+
+      expect(out.byId.size).toBe(0);
+      expect([...out.failed].sort()).toEqual(["urn:li:ugcPost:3", "urn:li:ugcPost:4"]);
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      expect(console.warn).toHaveBeenCalledWith("[PostMetrics] LinkedIn share statistics answered without per-post rows", {
+        param: "ugcPosts",
+        urnCount: 2,
+        elementsWithoutUrn: 1,
+      });
+      expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("urn:li:");
+    });
+
+    it("a post that came back with its own row keeps its numbers", async () => {
+      fetchMock.mockResolvedValueOnce(
+        answer([
+          { ugcPost: "urn:li:ugcPost:3", totalShareStatistics: stats() },
+          { organizationalEntity: ORG, totalShareStatistics: stats() },
+        ]),
+      );
+      const out = await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3", "urn:li:ugcPost:4"], "t");
+      expect(out.byId.get("urn:li:ugcPost:3")?.counts.views).toBe(500);
+      expect([...out.failed]).toEqual(["urn:li:ugcPost:4"]);
+      expect(console.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a normal answer logs no warning, and a post missing from it is still no activity", async () => {
+      fetchMock.mockResolvedValueOnce(answer([{ ugcPost: "urn:li:ugcPost:3", totalShareStatistics: stats() }]));
+      const out = await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3", "urn:li:ugcPost:4"], "t");
+      expect(out.byId.has("urn:li:ugcPost:3")).toBe(true);
+      expect(out.byId.has("urn:li:ugcPost:4")).toBe(false);
+      expect(out.failed.size).toBe(0);
+      expect(console.warn).not.toHaveBeenCalled();
+    });
   });
 
   describe("a refusal's log line", () => {

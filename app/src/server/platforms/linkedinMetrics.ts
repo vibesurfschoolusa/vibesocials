@@ -16,7 +16,7 @@ import { classifyRateLimit } from "./rateLimited";
  * socialPostMetricsSync with the member token the app already holds.
  *
  * GET /rest/organizationalEntityShareStatistics?q=organizationalEntity
- *   &organizationalEntity={organization URN}&shares=List(...) (or ugcPosts[0]=...&ugcPosts[1]=...)
+ *   &organizationalEntity={organization URN}&shares=List(...) (or ugcPosts=List(...))
  * "Permission: rw_organization_admin - Manage organizations pages and retrieve
  * reporting data", held (oauthScopes.ts). No r_organization_social endpoint is used.
  * Lifetime statistics (no timeIntervals; "Time-bound statistics is not supported
@@ -46,15 +46,16 @@ const KINDS = [
 ] as const;
 
 /**
- * Each URN encoded. shares as a Rest.li 2.0 List( , ), ugcPosts indexed
- * (ugcPosts[0]=...&ugcPosts[1]=...), each as the share-statistics page shows
- * it (li-lms-2026-10, read 2026-11-17; R41 platform L1).
+ * R42 platform L1: both kinds as a Rest.li 2.0 List(...) of percent-encoded
+ * URNs, the form the X-Restli-Protocol-Version 2.0.0 header (linkedinApi.ts)
+ * asks for. The share-statistics page (li-lms-2026-10, read 2026-11-17) labels
+ * the parenthesised form "Restli 2.0" and the dotted or indexed form
+ * (ugcPosts[0]=...) "Restli 1.0"; its shares sample is
+ * shares=List(urn%3Ali%3Ashare%3A...,...). Under 2.0 the indexed keys can be
+ * ignored, which answers the page's totals instead of each post's.
  */
 function statisticsUrl(organizationUrn: string, param: (typeof KINDS)[number]["param"], urns: string[]): string {
-  const list =
-    param === "shares"
-      ? `&shares=List(${urns.map(encodeURIComponent).join(",")})`
-      : urns.map((urn, index) => `&${param}[${index}]=${encodeURIComponent(urn)}`).join("");
+  const list = `&${param}=List(${urns.map(encodeURIComponent).join(",")})`;
   return `${STATISTICS_URL}?q=organizationalEntity&organizationalEntity=${encodeURIComponent(organizationUrn)}${list}`;
 }
 
@@ -151,10 +152,15 @@ export async function fetchLinkedInShareStatisticsBatch(
       }
       const body = (await response.json()) as { elements?: unknown } | null;
       const wanted = new Set(urns);
+      let elementsWithoutUrn = 0;
       for (const element of Array.isArray(body?.elements) ? body.elements : []) {
         const item = element as Record<string, unknown> | null;
         const urn = item?.[kind.field];
-        if (typeof urn !== "string" || !wanted.has(urn)) continue;
+        if (typeof urn !== "string") {
+          elementsWithoutUrn++;
+          continue;
+        }
+        if (!wanted.has(urn)) continue;
         const stats = (item?.totalShareStatistics ?? null) as Record<string, unknown> | null;
         const numbers = {
           impressionCount: countOf(stats?.impressionCount),
@@ -175,6 +181,17 @@ export async function fetchLinkedInShareStatisticsBatch(
           raw: rawCounts(numbers),
           asked: ["views", "clicks", "likes", "comments", "shares"],
         });
+      }
+      if (elementsWithoutUrn > 0) {
+        // R42 platform L1: a row with no post URN (the page's totals) means
+        // LinkedIn ignored the list, so a post missing here may have activity:
+        // tried again tomorrow, never "no activity". Counts only, no URN.
+        console.warn("[PostMetrics] LinkedIn share statistics answered without per-post rows", {
+          param: kind.param,
+          urnCount: urns.length,
+          elementsWithoutUrn,
+        });
+        for (const urn of urns) if (!batch.byId.has(urn)) batch.failed.add(urn);
       }
     } catch (error) {
       console.error("[PostMetrics] LinkedIn share statistics failed", {
