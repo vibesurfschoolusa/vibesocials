@@ -224,8 +224,11 @@ export async function runBillingReminders(
     }
 
     if (allSent) {
-      await prisma.workspace.update({
-        where: { id: workspace.id },
+      // R41 lead review: only for the date this run read. One the operator
+      // changed meanwhile (markers and claims cleared) keeps its marker clear,
+      // so the new date's email still goes.
+      await prisma.workspace.updateMany({
+        where: { id: workspace.id, trialEndsAt: workspace.trialEndsAt! },
         data: kind === "trial-ending" ? { trialReminderSentAt: now } : { trialEndedEmailSentAt: now },
       });
     }

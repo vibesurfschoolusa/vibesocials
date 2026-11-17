@@ -112,6 +112,11 @@ vi.mock("@/lib/db", () => {
           Object.assign(row, data);
           return row;
         },
+        updateMany: async ({ where, data }: { where: { id: string; trialEndsAt: Date }; data: Partial<Ws> }) => {
+          const rows = m.rows.filter((w) => w.id === where.id && w.trialEndsAt?.getTime() === where.trialEndsAt.getTime());
+          for (const row of rows) Object.assign(row, data);
+          return { count: rows.length };
+        },
       },
     },
   };
@@ -400,6 +405,37 @@ describe("runBillingReminders", () => {
     expect((await runBillingReminders(laterStill, { sleep })).sent).toBe(1);
     expect(m.sendEmail.mock.calls[0][1].idempotencyKey).toBe(`billing/trial-ending/x/owner-x/${a.toISOString()}`);
     expect(m.rows[0].trialReminderSentAt).toEqual(laterStill);
+  });
+
+  // R41 lead review: the marker is written for the date the run read.
+  it.each([
+    ["reminder", 2 * DAY, 2.5 * DAY, "trialReminderSentAt", "trial-ending"],
+    ["ended email", -DAY, -DAY / 2, "trialEndedEmailSentAt", "trial-ended"],
+  ] as const)(
+    "a date changed while the %s is sent leaves the marker clear, and the next run sends the new date's",
+    async (_name, aOffset, bOffset, marker, kind) => {
+      const a = new Date(NOW.getTime() + aOffset);
+      const b = new Date(NOW.getTime() + bOffset);
+      m.rows = [ws("x", { trialEndsAt: a })];
+      m.sendEmail.mockImplementationOnce(async () => {
+        operatorSets(m.rows[0], b);
+        return true;
+      });
+      expect((await run()).sent).toBe(1);
+      expect(m.rows[0][marker]).toBeNull();
+
+      m.sendEmail.mockClear();
+      const later = new Date(NOW.getTime() + 60 * 60 * 1000);
+      expect((await runBillingReminders(later, { sleep })).sent).toBe(1);
+      expect(m.sendEmail.mock.calls[0][1].idempotencyKey).toBe(`billing/${kind}/x/owner-x/${b.toISOString()}`);
+      expect(m.rows[0][marker]).toEqual(later);
+    },
+  );
+
+  it("an unchanged date gets its marker, written for the date read", async () => {
+    m.rows = [ws("x")];
+    await run();
+    expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
   });
 
   it("the claims released are this workspace's trial emails only", () => {
