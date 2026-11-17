@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   setters: [] as Array<{ initial: unknown; set: Mock }>,
   effects: [] as Array<() => void | (() => void)>,
   query: "",
+  getProviders: vi.fn(),
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -33,11 +34,13 @@ vi.mock("react", async (importOriginal) => {
     useCallback: (callback: unknown) => callback,
   };
 });
+vi.mock("next-auth/react", () => ({ getProviders: h.getProviders }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
   useSearchParams: () => new URLSearchParams(h.query),
 }));
 
+import { GoogleSignInButton } from "./google-sign-in-button";
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
 import { PendingConnectionDialog } from "./pending-connection-dialog";
@@ -83,8 +86,11 @@ describe("controls that leave the page reset their busy state on a return from t
     h.query = "";
     win = fakeWindow();
     vi.stubGlobal("window", { ...win, sessionStorage: { getItem: () => null, setItem: () => {} } });
-    // The pending choice loads its accounts on mount; that answer never comes here.
+    // The pending choice loads its accounts on mount, and the Google button its
+    // providers; neither answer comes here.
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    h.getProviders.mockReset();
+    h.getProviders.mockReturnValue(new Promise(() => {}));
   });
 
   afterEach(() => {
@@ -137,6 +143,12 @@ describe("controls that leave the page reset their busy state on a return from t
       unwrap: true, // PendingConnectionDialog returns the choice that holds the state
     },
     {
+      name: "Continue with Google (login and register)",
+      element: () => ({ type: GoogleSignInButton, props: { callbackUrl: "/dashboard" } }),
+      busyState: 1, // available, loading, error
+      idle: false,
+    },
+    {
       name: "plan buttons (checkout and portal)",
       element: () => ({ type: PlanActions, props: { workspaceId: "ws-1", offers: [], manage: true } }),
       busyState: 0, // busy, error, interval
@@ -159,4 +171,58 @@ describe("controls that leave the page reset their busy state on a return from t
       expect(calls()[0].set).toHaveBeenCalledWith(control.idle);
     });
   }
+});
+
+// The Google button otherwise behaves as before: nothing until NextAuth says
+// Google is set up, and a failed provider check never shows it.
+describe("Continue with Google, apart from the reset", () => {
+  beforeEach(() => {
+    h.setters.length = 0;
+    h.effects.length = 0;
+    h.getProviders.mockReset();
+    vi.stubGlobal("window", fakeWindow());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function shownAfterProviders(answer: () => Promise<unknown>): Promise<unknown[]> {
+    h.getProviders.mockImplementation(answer);
+    expect(GoogleSignInButton({ callbackUrl: "/dashboard" })).toBeNull();
+    for (const effect of h.effects) effect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return h.setters[0].set.mock.calls.map((call) => call[0]);
+  }
+
+  it("renders nothing first, then shows when Google is configured", async () => {
+    expect(await shownAfterProviders(async () => ({ google: { id: "google" } }))).toEqual([true]);
+  });
+
+  it("stays hidden without Google, or when the provider check fails", async () => {
+    expect(await shownAfterProviders(async () => ({ credentials: {} }))).toEqual([false]);
+    h.setters.length = 0;
+    h.effects.length = 0;
+    expect(await shownAfterProviders(async () => Promise.reject(new Error("offline")))).toEqual([false]);
+  });
+});
+
+// One reset rule: only this helper listens for pageshow.
+describe("the back-forward-cache reset lives in one place", () => {
+  it("no other client file listens for pageshow", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join, relative, sep } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const src = fileURLToPath(new URL("..", import.meta.url));
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) return files(path);
+        return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+      });
+    const listening = files(src)
+      .filter((path) => /["']pageshow["']/.test(readFileSync(path, "utf8")))
+      .map((path) => relative(src, path).split(sep).join("/"));
+    expect(listening).toEqual(["components/returnFromCache.ts"]);
+  });
 });

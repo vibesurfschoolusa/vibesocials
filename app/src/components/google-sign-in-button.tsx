@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getProviders } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
+import { useResetOnReturnFromCache } from "@/components/returnFromCache";
 import { GOOGLE_NOT_SENT_MESSAGE, GOOGLE_NOT_STARTED_MESSAGE } from "@/app/login/signInWithPassword";
 import { googleSignInChecked } from "@/lib/signInChecked";
 
@@ -33,15 +34,9 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
     };
   }, []);
 
-  useEffect(() => {
-    // Back-navigation from Google's consent screen can restore this page from
-    // the bfcache with `loading` still true — reset so the button is usable.
-    const onPageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) setLoading(false);
-    };
-    window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
+  // Back from Google's consent screen can restore this page from the cache
+  // with `loading` still true; the shared rule makes the button usable again.
+  useResetOnReturnFromCache(setLoading, false);
 
   if (!available) return null;
 
