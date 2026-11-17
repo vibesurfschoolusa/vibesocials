@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Label } from "@/components/ui/label";
 import {
@@ -33,7 +33,19 @@ const OPTIONS: Array<{ kind: CoverChoice["kind"]; label: string }> = [
 export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: VideoCoverPickerProps) {
   const frameRef = useRef<HTMLVideoElement>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadPreview, setUploadPreview] = useState<string | null>(null);
+  // R45 new-customer L2: the preview is made from the chosen file itself, so
+  // a picker opened again (Add many's cover panel) still shows it. Its object
+  // URL is freed when the file changes and when the picker goes.
+  const chosenFile = value.kind === "upload" ? value.file : null;
+  const [uploadPreview, setUploadPreview] = useState<{ file: File; url: string } | null>(null);
+  useEffect(() => {
+    if (!chosenFile) return;
+    const url = URL.createObjectURL(chosenFile);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is a browser resource made and freed with the file it shows
+    setUploadPreview({ file: chosenFile, url });
+    return () => URL.revokeObjectURL(url);
+  }, [chosenFile]);
+  const previewUrl = uploadPreview && uploadPreview.file === chosenFile ? uploadPreview.url : null;
   const durationMs = durationSec && Number.isFinite(durationSec) ? Math.floor(durationSec * 1000) : 0;
 
   function choose(kind: CoverChoice["kind"]) {
@@ -58,8 +70,6 @@ export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: Vid
       return;
     }
     setUploadError(null);
-    if (uploadPreview) URL.revokeObjectURL(uploadPreview);
-    setUploadPreview(URL.createObjectURL(file));
     onChange({ kind: "upload", file });
   }
 
@@ -128,12 +138,19 @@ export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: Vid
             type="file"
             accept="image/jpeg"
             onChange={(e) => pickFile(e.target.files?.[0])}
+            aria-describedby={chosenFile ? "video-cover-file-name" : undefined}
             className="block w-full text-sm"
           />
-          {value.kind === "upload" && uploadPreview && (
+          {/* The file field itself says "No file chosen" once the picker is opened again. */}
+          {chosenFile ? (
+            <p id="video-cover-file-name" className="text-xs text-foreground">
+              Chosen image: {chosenFile.name}
+            </p>
+          ) : null}
+          {previewUrl && (
             // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview, like the media preview above
             <img
-              src={uploadPreview}
+              src={previewUrl}
               alt="Chosen cover image"
               className="max-h-40 w-auto rounded-[var(--radius)] border border-border object-contain"
             />
