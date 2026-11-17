@@ -9,9 +9,9 @@ export const LOGIN_FAILED_MESSAGE = "Invalid email or password.";
  * the others name their limits too. R32 lead: the wait is the limiter's own
  * (the hourly per-address limit is not 15 minutes), and no number without one.
  */
-export function loginLimitedText(waitMinutes: number | null): string {
-  if (waitMinutes === null) return "Too many sign-in tries. Wait a while, then try again.";
-  return `Too many sign-in tries. Wait about ${waitMinutes} ${waitMinutes === 1 ? "minute" : "minutes"}, then try again.`;
+export function loginLimitedText(waitMinutes: number | null, then = "try again"): string {
+  if (waitMinutes === null) return `Too many sign-in tries. Wait a while, then ${then}.`;
+  return `Too many sign-in tries. Wait about ${waitMinutes} ${waitMinutes === 1 ? "minute" : "minutes"}, then ${then}.`;
 }
 /** R32 new-customer L1: authorize couldn't read the account or compare the password. */
 export const LOGIN_UNCHECKED_MESSAGE = "We couldn't check your password just now. Try again in a minute.";
@@ -31,6 +31,17 @@ export const GOOGLE_NOT_STARTED_MESSAGE = "Google sign-in didn't start. Press Co
  * it claims no new one.
  */
 export const REGISTER_SIGN_IN_UNFINISHED_MESSAGE = "Signing you in didn't finish. Log in with your email and password.";
+
+/**
+ * R33 pages L3: Register's automatic sign-in after its 201 hit the sign-in
+ * limit or couldn't check the password. The account is there either way, so
+ * the sentence says so, names the cause, and sends the person to Log in.
+ */
+export function registerSignInLimitedText(waitMinutes: number | null): string {
+  return `Your account is ready. ${loginLimitedText(waitMinutes, "log in")}`;
+}
+export const REGISTER_SIGN_IN_UNCHECKED_MESSAGE =
+  "Your account is ready. We couldn't check your password just now. Wait a minute, then log in.";
 
 /** R31 (new-customer L4): an answer came, but nobody is signed in (e.g. ?csrf=true). */
 export const LOGIN_UNFINISHED_MESSAGE = "Signing you in didn't finish, so you aren't signed in. Press Sign in again.";
@@ -73,7 +84,8 @@ export async function signInWithPassword(
  * Register's automatic sign-in after its 201. Only a refusal goes to Log in
  * (the email may have had an account with another password); a throw stays on
  * the form (R31 L1: a page change offline is the browser's error page). R32:
- * a used-up limit or an unchecked password is no refusal, so it stays too.
+ * a used-up limit or an unchecked password is no refusal, so it stays too,
+ * with its own sentence (R33 pages L3).
  */
 export async function signInAfterRegister(
   signIn: SignIn,
@@ -84,5 +96,7 @@ export async function signInAfterRegister(
   const check = await credentialsSignInChecked(signIn, email, password, fetchImpl);
   if (check.ok) return { ok: true };
   if (check.reason === "refused") return { ok: false, toLogin: true };
+  if (check.reason === "limited") return { ok: false, error: registerSignInLimitedText(check.waitMinutes) };
+  if (check.reason === "unchecked") return { ok: false, error: REGISTER_SIGN_IN_UNCHECKED_MESSAGE };
   return { ok: false, error: check.reason === "lost" ? REGISTER_SIGN_IN_LOST_MESSAGE : REGISTER_SIGN_IN_UNFINISHED_MESSAGE };
 }

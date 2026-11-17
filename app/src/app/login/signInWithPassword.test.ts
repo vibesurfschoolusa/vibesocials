@@ -14,6 +14,7 @@ import {
   LOGIN_UNFINISHED_MESSAGE,
   LOGIN_UNREACHABLE_MESSAGE,
   REGISTER_SIGN_IN_LOST_MESSAGE,
+  REGISTER_SIGN_IN_UNCHECKED_MESSAGE,
   REGISTER_SIGN_IN_UNFINISHED_MESSAGE,
   signInAfterRegister,
   signInWithPassword as signInWithPasswordUnder,
@@ -85,14 +86,22 @@ describe("signInWithPassword", () => {
     expect(LOGIN_UNCHECKED_MESSAGE).toBe("We couldn't check your password just now. Try again in a minute.");
   });
 
+  // R33 pages L3: the account exists, so the sentence says so and names the limit or the blip.
   it("Register's automatic sign-in stays on the form for both, never sending the person to Log in as refused", async () => {
-    for (const error of [SIGN_IN_LIMITED, SIGN_IN_UNCHECKED]) {
-      const signIn = vi.fn(async () => ({ ok: false, error, status: 401, url: null }));
-      await expect(signInAfterRegister(signIn, "a@example.test", "secret12", providersAnswer)).resolves.toEqual({
-        ok: false,
-        error: REGISTER_SIGN_IN_UNFINISHED_MESSAGE,
-      });
-    }
+    const said = async (error: string) =>
+      signInAfterRegister(vi.fn(async () => ({ ok: false, error, status: 401, url: null })), "a@example.test", "secret12", providersAnswer);
+    await expect(said(signInLimitedCode(14 * 60 + 5))).resolves.toEqual({
+      ok: false,
+      error: "Your account is ready. Too many sign-in tries. Wait about 15 minutes, then log in.",
+    });
+    await expect(said(SIGN_IN_LIMITED)).resolves.toEqual({
+      ok: false,
+      error: "Your account is ready. Too many sign-in tries. Wait a while, then log in.",
+    });
+    await expect(said(SIGN_IN_UNCHECKED)).resolves.toEqual({ ok: false, error: REGISTER_SIGN_IN_UNCHECKED_MESSAGE });
+    expect(REGISTER_SIGN_IN_UNCHECKED_MESSAGE).toBe(
+      "Your account is ready. We couldn't check your password just now. Wait a minute, then log in.",
+    );
   });
 
   it("gives a plain sentence when the call itself fails", async () => {
