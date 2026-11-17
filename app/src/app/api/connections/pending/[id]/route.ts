@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { shownControl, signInButton } from "@/lib/oauthResult";
+import { choiceFailedText, type ChoiceCardButton } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
@@ -109,17 +110,22 @@ async function cardButton(workspaceId: string, platform: Platform): Promise<"Con
  * the card's button is the other way.
  */
 async function loadFailedText(request: Request, workspaceId: string): Promise<string> {
-  const plain = "Couldn't load your accounts. Reload the page to try again.";
+  const card = await hintedCardButton(request, workspaceId);
+  return card
+    ? `Couldn't load your accounts. Reload the page to try again, or close this and press ${card.button} on ${card.label}.`
+    : "Couldn't load your accounts. Reload the page to try again.";
+}
+
+/** The button the dialog's platform (`?platform=`) shows on its card, or null when none is named or it can't be read. */
+async function hintedCardButton(request: Request, workspaceId: string): Promise<ChoiceCardButton | null> {
   const hint = new URL(request.url).searchParams.get("platform");
   const platform = CHOOSABLE.find((choosable) => choosable === hint);
-  if (!platform) return plain;
+  if (!platform) return null;
   try {
     const button = await cardButton(workspaceId, platform);
-    return button
-      ? `Couldn't load your accounts. Reload the page to try again, or close this and press ${button} on ${PLATFORM_LABELS[platform]}.`
-      : plain;
+    return button ? { button, label: PLATFORM_LABELS[platform] } : null;
   } catch {
-    return plain;
+    return null;
   }
 }
 
@@ -236,15 +242,17 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
   const { id } = await params;
   const owner = ownerOf(contextOrError);
 
-  // R36 review low 2 and second look: nothing is saved before the choice is
-  // read, nor when the save is refused, so a failure there says to reload and
-  // try again. "May have been connected" is only for the save and after it.
+  // R36 review low 2 and second look, R37 pages L2: nothing is saved before
+  // the choice is read, nor when the save is refused, so a failure there says
+  // the account wasn't connected. "May have been connected" is only for the
+  // save and after it (choiceFailedText).
   const failedBeforeSave = async (error: unknown) => {
     logger.error("[POST /api/connections/pending/[id]] Failed before anything was saved", {
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return NextResponse.json({ error: await loadFailedText(request, owner.workspaceId) }, { status: 500 });
+    const card = await hintedCardButton(request, owner.workspaceId);
+    return NextResponse.json({ error: choiceFailedText("before_save", "settings", card) }, { status: 500 });
   };
 
   let pending: Awaited<ReturnType<typeof loadPendingConnection>>;
@@ -266,13 +274,7 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
       pendingConnectionId: id,
     });
     // R31 new-customer L3: the save itself may have gone through.
-    return NextResponse.json(
-      {
-        error:
-          "Something went wrong on our side, so the account may have been connected. Press Cancel, then look for it in your connections before you connect again.",
-      },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: choiceFailedText("after_save", "settings") }, { status: 500 });
   }
 
   if (!result.ok) {

@@ -607,6 +607,30 @@ describe("POST /api/connections/pending/[id]", () => {
       vi.useRealTimers();
     });
 
+    // R37 pages L2: a Connect press, not a list load: it says the account wasn't connected.
+    const NOT_CONNECTED =
+      "That account wasn't connected: something went wrong on our side. Reload the page and choose it again.";
+
+    it("the choice can't be read, the platform named: keeps the card-button tail", async () => {
+      findUniqueMock.mockRejectedValue(new Error("db down"));
+      connectionFindUniqueMock.mockResolvedValue(null);
+
+      const response = await POST(
+        new Request("http://localhost/api/connections/pending/pending-1?platform=facebook_page", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ workspaceId: "ws-1", candidateId: "page-2" }),
+        }),
+        ctx(),
+      );
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error: `${NOT_CONNECTED.slice(0, -1)}, or close this and press Connect on Facebook Page.`,
+      });
+      expectNothingSaved();
+    });
+
     it("an Instagram that stalls on the chosen account's details: try again, the choice kept", async () => {
       const actual = await vi.importActual<typeof import("@/server/connections/saveConnection")>(
         "@/server/connections/saveConnection",
@@ -637,7 +661,7 @@ describe("POST /api/connections/pending/[id]", () => {
       const response = await POST(postReq({ candidateId: "ig-2" }), ctx());
 
       expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({ error: "Couldn't load your accounts. Reload the page to try again." });
+      await expect(response.json()).resolves.toEqual({ error: NOT_CONNECTED });
       expectNothingSaved();
     });
 
@@ -649,7 +673,7 @@ describe("POST /api/connections/pending/[id]", () => {
       const response = await POST(postReq({ candidateId: "ig-2" }), ctx());
 
       expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({ error: "Couldn't load your accounts. Reload the page to try again." });
+      await expect(response.json()).resolves.toEqual({ error: NOT_CONNECTED });
       expectNothingSaved();
     });
 

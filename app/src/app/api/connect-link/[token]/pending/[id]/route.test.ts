@@ -291,6 +291,24 @@ describe("POST: the visitor's choice", () => {
     });
   });
 
+  // R37 client-journey L1: nothing is saved before connectPendingCandidate, so
+  // a database error there never says "may have been connected".
+  const BEFORE_SAVE = {
+    error: "That account wasn't connected: something went wrong on our side. Reload this page and choose it again.",
+  };
+  it.each<[string, () => void]>([
+    ["the link", () => h.linkFind.mockRejectedValue(new Error("db down"))],
+    ["the choice's stamp", () => h.pendingFind.mockRejectedValueOnce(new Error("db down"))],
+    ["the choice itself", () => h.pendingFind.mockResolvedValueOnce(pendingRow()).mockRejectedValueOnce(new Error("db down"))],
+    ["whether the place is taken", () => h.connectionFind.mockRejectedValue(new Error("db down"))],
+  ])("a database error reading %s: the account wasn't connected, reload and choose again", async (_name, fail) => {
+    fail();
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual(BEFORE_SAVE);
+    expect(h.saveFacebookPage).not.toHaveBeenCalled();
+  });
+
   // R31 new-customer L3: the account is connected; a failed clean-up must not say it failed.
   it("a failure deleting the choice after the save still answers connected", async () => {
     h.pendingDeleteMany.mockRejectedValue(new Error("db blip"));

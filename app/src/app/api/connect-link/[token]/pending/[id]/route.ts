@@ -12,6 +12,7 @@ import {
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { choiceFailedText } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requestIp } from "@/lib/uploadLink";
@@ -131,6 +132,10 @@ export async function GET(request: Request, context: RouteContext) {
 
 /** POST { candidateId } → connects that account as the owner's route does, and answers `{ ok: true, platform }`. */
 export async function POST(request: Request, context: RouteContext) {
+  // R37 client-journey L1 (as the owner's route): nothing is saved before
+  // connectPendingCandidate, so a failure up to there says the account wasn't
+  // connected; "may have been connected" is only for the save and after it.
+  let chosen: { link: ActiveConnectLink; pending: LoadedPendingConnection; candidateId: string };
   try {
     const resolved = await resolve(request, context);
     if (!resolved.ok) return resolved.response;
@@ -159,7 +164,14 @@ export async function POST(request: Request, context: RouteContext) {
         { status: 409 },
       );
     }
+    chosen = { link, pending, candidateId };
+  } catch (error) {
+    logger.error("[POST /api/connect-link/pending] Failed before anything was saved", { error: errorKind(error) });
+    return NextResponse.json({ error: choiceFailedText("before_save", "link") }, { status: 500 });
+  }
 
+  try {
+    const { link, pending, candidateId } = chosen;
     const result = await connectPendingCandidate(pending, candidateId, {
       workspaceId: link.workspaceId,
       userId: link.createdById,
@@ -221,10 +233,7 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     logger.error("[POST /api/connect-link/pending] Unexpected error", { error: errorKind(error) });
     // R31 new-customer L3: the save itself may have gone through.
-    return NextResponse.json(
-      { error: "Something went wrong on our side, so the account may have been connected. Reload this page to see." },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: choiceFailedText("after_save", "link") }, { status: 500 });
   }
 }
 
