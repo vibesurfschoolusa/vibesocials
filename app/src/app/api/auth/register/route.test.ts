@@ -66,6 +66,8 @@ vi.mock("@/lib/accountEmails", () => ({
 
 vi.mock("@/server/auth/undoWindow", () => ({ addressHeldUntil: addressHeldUntilMock }));
 
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
+
 import { POST } from "./route";
 
 function jsonRequest(body: unknown): Request {
@@ -318,6 +320,33 @@ describe("POST /api/auth/register", () => {
 
     expect(response.status).toBe(429);
     expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  // R43 new-customer L2: the limit is 5 tries per network in a fixed hour, and
+  // every try counts, so the refusal says why and how long to wait.
+  it("over the limit: says the network reason and the wait, with Retry-After", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 40 * 60 });
+
+    const response = await POST(jsonRequest({ email: "user@example.com", password: "goodpassword" }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe(String(40 * 60));
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "This network has used its 5 sign-up tries for this hour, mistyped ones included. " +
+        "Too many tries. Wait 40 minutes, then try again.",
+      retryAfterSeconds: 40 * 60,
+    });
+  });
+
+  it("a limit store that couldn't be read: the couldn't-check 503, and nothing is created", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+
+    const response = await POST(jsonRequest({ email: "user@example.com", password: "goodpassword" }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
     expect(createMock).not.toHaveBeenCalled();
   });
 

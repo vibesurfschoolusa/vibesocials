@@ -38,6 +38,22 @@ describe("tooManyTriesResponse", () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
   });
+
+  it("R43 new-customer L2: a reason goes before the wait sentence", async () => {
+    const response = tooManyTriesResponse({ retryAfterSeconds: 1500 }, "This network used its tries.");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("1500");
+    await expect(response.json()).resolves.toEqual({
+      error: "This network used its tries. Too many tries. Wait 25 minutes, then try again.",
+      retryAfterSeconds: 1500,
+    });
+  });
+
+  it("with a reason, a store that couldn't be read still answers the couldn't-check 503", async () => {
+    const response = tooManyTriesResponse({ retryAfterSeconds: 60, unavailable: true }, "This network used its tries.");
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
+  });
 });
 
 /** Every non-test source file under src. */

@@ -8,7 +8,7 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { limitUncheckedResponse } from "@/lib/limitUnchecked";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
 import { addressHeldUntil } from "@/server/auth/undoWindow";
 
@@ -36,17 +36,12 @@ export async function POST(request: Request) {
     ...REGISTER_RATE_LIMIT,
     failClosed: true,
   });
-  if (rateLimit.unavailable) return limitUncheckedResponse();
+  // R43 new-customer L2: every try counts (typos too) against a fixed hour per
+  // network, so the refusal says so and names the wait.
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "Too many accounts created from this network. Please try again later.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) },
-      },
+    return tooManyTriesResponse(
+      rateLimit,
+      `This network has used its ${REGISTER_RATE_LIMIT.limit} sign-up tries for this hour, mistyped ones included.`,
     );
   }
 
