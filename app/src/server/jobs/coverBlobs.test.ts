@@ -25,7 +25,11 @@ vi.mock("@/lib/db", () => {
     coverImageUrl?: string | { not: null };
     status?: { in: string[] };
     updatedAt?: { lt: Date };
-    OR?: Array<{ results?: { none: { status: "failed" } }; mediaItem?: { deletedAt: { not: null } } }>;
+    OR?: Array<{
+      status?: { in: string[] };
+      results?: { none: { status: "failed" } };
+      mediaItem?: { deletedAt: { not: null } };
+    }>;
   };
   // Nothing left to retry: no failed result, or the video itself is gone.
   const nothingToRetry = (job: (typeof m.jobs)[number]) => !job.failedResults || job.mediaSwept === true;
@@ -37,8 +41,9 @@ vi.mock("@/lib/db", () => {
     if (where.OR) {
       const anyHolds = where.OR.some(
         (branch) =>
-          (branch.results !== undefined && !job.failedResults) ||
-          (branch.mediaItem !== undefined && job.mediaSwept === true),
+          (!branch.status || branch.status.in.includes(job.status)) &&
+          ((branch.results !== undefined && !job.failedResults) ||
+            (branch.mediaItem !== undefined && job.mediaSwept === true)),
       );
       if (!anyHolds) return false;
     }
@@ -68,11 +73,18 @@ vi.mock("@/lib/db", () => {
       const checksStatus = sql.includes('"status"');
       const checksAge = sql.includes('"updatedAt" <');
       const checksRetry = sql.includes('"PostJobResult"') && sql.includes('"MediaItem"');
+      // R42: a failed post passes only on the swept-video branch of the check.
+      const failedWhenSwept = sql.includes(
+        `"status"::text IN ('completed', 'cancelled', 'failed') AND EXISTS (SELECT 1 FROM "MediaItem"`,
+      );
+      const statusOk = (row: Job) =>
+        ["completed", "cancelled"].includes(row.status) ||
+        (failedWhenSwept && row.status === "failed" && row.mediaSwept === true);
       const job = m.jobs.find(
         (row) =>
           row.id === id &&
           row.coverImageUrl === url &&
-          (!checksStatus || ["completed", "cancelled"].includes(row.status)) &&
+          (!checksStatus || statusOk(row)) &&
           (!checksAge || (cutoff !== undefined && row.updatedAt < cutoff)) &&
           (!checksRetry || nothingToRetry(row)),
       );
@@ -179,6 +191,73 @@ describe("sweepOldCovers - a post with a platform still to retry", () => {
 
     expect(result).toEqual({ cleared: 1, queued: 1 });
     expect(m.queued).toEqual([cover("q")]);
+  });
+
+  // R42 (publishing L1, second half): a failed post whose video the media
+  // sweep deleted can never be retried, so its cover goes too.
+  it("lets an old failed post's cover go once its video was swept", async () => {
+    m.jobs.push({
+      id: "failed-swept",
+      status: "failed",
+      updatedAt: new Date(NOW - 40 * DAY),
+      coverImageUrl: cover("fs"),
+      failedResults: 1,
+      mediaSwept: true,
+    });
+
+    const result = await sweepOldCovers({ now: () => NOW });
+
+    expect(result).toEqual({ cleared: 1, queued: 1 });
+    expect(m.queued).toEqual([cover("fs")]);
+    expect(m.jobs[0].coverImageUrl).toBeNull();
+  });
+
+  it("keeps an old failed post's cover while its video is still there", async () => {
+    m.jobs.push({
+      id: "failed-present",
+      status: "failed",
+      updatedAt: new Date(NOW - 40 * DAY),
+      coverImageUrl: cover("fp"),
+      failedResults: 1,
+    });
+
+    const result = await sweepOldCovers({ now: () => NOW });
+
+    expect(result).toEqual({ cleared: 0, queued: 0 });
+    expect(m.jobs[0].coverImageUrl).toBe(cover("fp"));
+  });
+
+  it("keeps a recent failed post's cover even with its video swept", async () => {
+    m.jobs.push({
+      id: "failed-recent",
+      status: "failed",
+      updatedAt: new Date(NOW - 2 * DAY),
+      coverImageUrl: cover("fr"),
+      failedResults: 1,
+      mediaSwept: true,
+    });
+
+    expect(await sweepOldCovers({ now: () => NOW })).toEqual({ cleared: 0, queued: 0 });
+  });
+
+  it("the UPDATE lets a failed post through only on the swept-video branch", async () => {
+    m.jobs.push({
+      id: "failed-swept-race",
+      status: "failed",
+      updatedAt: new Date(NOW - 40 * DAY),
+      coverImageUrl: cover("fx"),
+      failedResults: 1,
+      mediaSwept: true,
+    });
+    await sweepOldCovers({ now: () => NOW });
+    const { prisma } = await import("@/lib/db");
+    const sql = (vi.mocked(prisma.$executeRaw).mock.calls.at(-1)![0] as unknown as TemplateStringsArray).join("?");
+    expect(sql).toContain(
+      `("status"::text IN ('completed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM "PostJobResult"`,
+    );
+    expect(sql).toContain(
+      `("status"::text IN ('completed', 'cancelled', 'failed') AND EXISTS (SELECT 1 FROM "MediaItem"`,
+    );
   });
 
   it("keeps the cover when a retry fails after the sweep read the post", async () => {
