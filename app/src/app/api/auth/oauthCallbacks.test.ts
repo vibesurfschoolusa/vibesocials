@@ -76,7 +76,7 @@ import { openSecret } from "@/lib/tokenCrypto";
 import { GET as facebookPageGET } from "./facebook_page/callback/route";
 import { GET as gbpGET } from "./google_business_profile/callback/route";
 import { GET as instagramGET } from "./instagram/callback/route";
-import { INSTAGRAM_DETAILS_BUDGET_MS } from "@/server/connections/saveConnection";
+import { CONNECT_READS_BUDGET_MS as INSTAGRAM_DETAILS_BUDGET_MS } from "@/lib/fetchWithTimeout";
 import { connectPendingCandidate, type PendingConnectionPayload } from "@/server/connections/pendingConnection";
 import { GET as linkedinGET } from "./linkedin/callback/route";
 import { GET as pinterestGET } from "./pinterest/callback/route";

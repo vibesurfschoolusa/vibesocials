@@ -337,13 +337,6 @@ export async function saveFacebookPageConnection({
   });
 }
 
-/**
- * R36 review low 3: the one budget for reading every account's details when
- * a connect finds several Instagram accounts. An account not read in time is
- * listed by its Page name and read when chosen.
- */
-export const INSTAGRAM_DETAILS_BUDGET_MS = 60_000;
-
 export interface InstagramAccountDetails {
   username: string;
   profilePicture: string | null;

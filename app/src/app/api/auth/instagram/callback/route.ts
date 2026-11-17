@@ -7,15 +7,11 @@ import { listMetaPages } from "@/server/connections/metaPages";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
-import {
-  fetchInstagramAccountDetails,
-  INSTAGRAM_DETAILS_BUDGET_MS,
-  saveInstagramConnection,
-} from "@/server/connections/saveConnection";
+import { fetchInstagramAccountDetails, saveInstagramConnection } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
-import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, connectReadsBudget, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 /**
  * R32 lead follow-up: a connect can list up to 1,000 Pages now, so their
@@ -171,18 +167,18 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // Each account's username is read for the list; one Graph error leaves
     // that row showing just its Page name.
     if (pagesWithInstagram.length > 1) {
-      // R36 review low 3: one budget for all the reads, so many accounts on a
-      // slow Graph stay inside the function's time limit. Once it is spent no
-      // read starts and those in flight end; an unread account is listed by
+      // R36 review low 3: one budget for all the reads (connectReadsBudget,
+      // shared with LinkedIn's page names), so many accounts on a slow Graph
+      // stay inside the function's time limit. An unread account is listed by
       // its Page name, and the choice reads its details when it is chosen.
-      const budget = AbortSignal.timeout(INSTAGRAM_DETAILS_BUDGET_MS);
+      const budget = connectReadsBudget();
       const accounts = await mapFewAtATime(
         pagesWithInstagram,
         INSTAGRAM_DETAILS_IN_FLIGHT,
         async ({ page, igAccountId }) => {
-          const details = budget.aborted
-            ? null
-            : await fetchInstagramAccountDetails(igAccountId, page.access_token, budget);
+          const details = await budget.run((signal) =>
+            fetchInstagramAccountDetails(igAccountId, page.access_token, signal),
+          );
           return {
             igAccountId,
             pageId: page.id,

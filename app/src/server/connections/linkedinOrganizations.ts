@@ -1,4 +1,4 @@
-import { fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { connectReadsBudget, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders } from "@/lib/linkedinApi";
 
 import type { LinkedInOrganization } from "./saveConnection";
@@ -109,16 +109,20 @@ function errorKind(error: unknown): { name?: string; code?: unknown } {
  */
 export const LINKEDIN_LOOKUP_TIMEOUT_MS = 15_000;
 
-/** `GET /rest/organizations/{id}`: the page's details, or null when LinkedIn refuses, times out or the call fails. */
+/**
+ * `GET /rest/organizations/{id}`: the page's details, or null when LinkedIn
+ * refuses, times out, the call fails or `signal` (a shared read budget) ends it.
+ */
 export async function lookupOrganization(
   accessToken: string,
   id: string,
+  signal?: AbortSignal,
 ): Promise<LinkedInOrganizationDetails | null> {
   try {
-    // The signal bounds the body too; fetchWithTimeout's own bound ends at the headers.
-    const response = await fetchWithTimeout(
+    // Bounded headers and body (fetchWithinLimit).
+    const response = await fetchWithinLimit(
       `${LINKEDIN_REST_BASE_URL}/organizations/${encodeURIComponent(id)}`,
-      { headers: linkedinRestHeaders(accessToken), signal: AbortSignal.timeout(LINKEDIN_LOOKUP_TIMEOUT_MS) },
+      { headers: linkedinRestHeaders(accessToken), ...(signal ? { signal } : {}) },
       LINKEDIN_LOOKUP_TIMEOUT_MS,
     );
     if (!response.ok) {
@@ -161,7 +165,9 @@ export async function lookupOrganizationByVanityName(
  * vanity name when `GET /rest/organizations/{id}` gives them (a page whose
  * lookup fails is kept with its id only: the access-control answer already
  * says the member administers it). Null when the very first organizationAcls
- * call fails; a later page that fails ends the list there.
+ * call fails; a later page that fails ends the list there. R37: the name
+ * reads share the connect's read budget (connectReadsBudget); a page not read
+ * in time keeps its id only.
  */
 export async function findAdministeredOrganizations(accessToken: string): Promise<LinkedInOrganization[] | null> {
   const ids: string[] = [];
@@ -193,8 +199,9 @@ export async function findAdministeredOrganizations(accessToken: string): Promis
   }
 
   const organizations: LinkedInOrganization[] = [];
+  const budget = connectReadsBudget();
   for (const id of ids) {
-    const details = await lookupOrganization(accessToken, id);
+    const details = await budget.run((signal) => lookupOrganization(accessToken, id, signal));
     organizations.push({
       id,
       ...(details?.name ? { name: details.name } : {}),

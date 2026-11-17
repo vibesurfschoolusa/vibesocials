@@ -105,3 +105,25 @@ export function fetchWithinLimit(
   const signal = init?.signal ? AbortSignal.any([init.signal, ours.signal]) : ours.signal;
   return fetchWithTimeout(url, { ...init, signal }, timeoutMs);
 }
+
+/**
+ * R37 platform-clients L2: the one budget for a connect's many small reads
+ * (each Instagram account's details, each LinkedIn page's name), so many of
+ * them on a slow platform stay inside the callback's time limit.
+ */
+export const CONNECT_READS_BUDGET_MS = 60_000;
+
+export interface ReadBudget {
+  /**
+   * `read` with the budget's signal, or null without starting it once the
+   * budget is spent; a read in flight when it runs out ends (its own null).
+   * The caller keeps what it already knows (a Page name, a page id).
+   */
+  run<T>(read: (signal: AbortSignal) => Promise<T | null>): Promise<T | null>;
+}
+
+/** A budget of `CONNECT_READS_BUDGET_MS`, starting now. */
+export function connectReadsBudget(): ReadBudget {
+  const signal = AbortSignal.timeout(CONNECT_READS_BUDGET_MS);
+  return { run: (read) => (signal.aborted ? Promise.resolve(null) : read(signal)) };
+}

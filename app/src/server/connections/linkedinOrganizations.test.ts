@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CONNECT_READS_BUDGET_MS } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_API_VERSION } from "@/lib/linkedinApi";
 import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
 
@@ -316,4 +317,50 @@ describe("connect reads when LinkedIn stalls", () => {
       });
     }
   }
+});
+
+// R37 platform-clients L2: up to 100 name reads, one after another at up to
+// 15 s each, could pass the callback's 300 s limit. They share one budget
+// with Instagram's account reads; a page not read in time keeps its id only.
+describe("findAdministeredOrganizations on a slow LinkedIn", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops reading names at the 60-second budget and still lists every page by id", async () => {
+    expect(CONNECT_READS_BUDGET_MS).toBe(60_000);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    abortSignalTimeoutOnFakeClock();
+    const ids = Array.from({ length: 100 }, (_, i) => i + 1);
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const page = /start=(\d+)/.exec(url);
+      if (url.startsWith(`${REST}/organizationAcls`)) {
+        const start = Number(page?.[1] ?? 0);
+        return Promise.resolve(json(aclPage(ids.slice(start, start + 10).map((id) => acl(id)), start + 10 < ids.length)));
+      }
+      const id = /organizations\/(\d+)$/.exec(url)?.[1];
+      // Each name answers in 14 s, inside its own 15-second limit.
+      return new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(json({ id: Number(id), localizedName: `Page ${id}` })), 14_000);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(init.signal?.reason);
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let settled: unknown = undefined;
+    const answer = findAdministeredOrganizations("li-access").then((orgs) => (settled = orgs));
+    await vi.advanceTimersByTimeAsync(CONNECT_READS_BUDGET_MS);
+    await answer;
+
+    const organizations = settled as Array<{ id: string; name?: string }>;
+    expect(organizations.map((o) => o.id)).toEqual(ids.map(String));
+    // 14, 28, 42 and 56 s fit; the fifth ends at the budget and none starts after it.
+    expect(organizations.filter((o) => o.name)).toHaveLength(4);
+    expect(organizations[99]).toEqual({ id: "100" });
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("/organizations/"))).toHaveLength(5);
+  });
 });
