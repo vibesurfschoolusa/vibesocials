@@ -125,6 +125,13 @@ describe("the connect link page", () => {
     );
     expect(html).not.toContain("<ul");
     expect(html).not.toContain("<form");
+    // Lead review: only the heading and the sentence; nothing to consent to.
+    expect(html).toMatch(/<h1[^>]*>Connect your accounts<\/h1>/);
+    expect(html).not.toContain("will be able to publish posts");
+    expect(html).not.toContain("remove this access");
+    expect(html).not.toMatch(/href="\/terms"|href="\/privacy"/);
+    expect(html).not.toContain('role="alert"');
+    expect(await render({ choose: "pending-1", error: "tiktok_cancelled" })).not.toMatch(/choice|You cancelled/);
   });
 
   it("something to connect: no such sentence", async () => {
@@ -158,6 +165,11 @@ describe("the connect link page", () => {
 
   // R28 new-customer L6: the sentence names the button the row shows.
   it("a missing Google permission: Reconnect for a row that shows it, Connect with no row", async () => {
+    // Both Google platforms configured, so their rows (and the outcome above them) show.
+    vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "g");
+    vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "s");
+    vi.stubEnv("YOUTUBE_REDIRECT_URI", "r");
+    vi.stubEnv("GOOGLE_GBP_REDIRECT_URI", "r");
     h.findLink.mockResolvedValue({ ...LINK, platforms: ["youtube", "google_business_profile"] });
     h.listConnections.mockResolvedValue([
       { platform: "youtube", accountIdentifier: "chan-1", username: "My Channel", locationName: null, needsReconnect: true },
