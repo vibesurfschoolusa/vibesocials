@@ -37,6 +37,8 @@ let container: FakeNode;
 /** The posting times the workspace has; none means the box is not offered. */
 let slots: { day: number; time: string }[];
 let posts: number;
+/** POSTs sent whose answer has not come yet. */
+let inFlight = 0;
 let sentBodies: { baseCaption?: string; altText?: string }[];
 
 const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
@@ -45,6 +47,10 @@ const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
   if (url === "/api/posts" && init?.method === "POST") {
     posts += 1;
     sentBodies.push(JSON.parse(String((init as { body?: string }).body)));
+    // An answer takes a turn, so the rows are locked (disabled) while it comes.
+    inFlight += 1;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    inFlight -= 1;
     return Response.json({ postJob: { id: `post-${posts}` } });
   }
   return Response.json({});
@@ -73,16 +79,6 @@ function button(label: string): FakeNode {
   return hit;
 }
 
-/** Each row's date and time as shown, or "none" for a draft's "no time yet" line. */
-function rowTimes(): string[] {
-  return findAll(container, (n) => n.nodeName === "LI" && findAll(n, (m) => m.nodeName === "TEXTAREA").length > 0).map(
-    (row) => {
-      const input = findAll(row, (n) => n.nodeName === "INPUT" && props(n)?.type === ("datetime-local" as never))[0];
-      return input ? String(props(input).value) : "none";
-    },
-  );
-}
-
 function rowInput(index: number, nodeName: "TEXTAREA" | "INPUT"): FakeNode {
   const rows = findAll(container, (n) => n.nodeName === "LI" && findAll(n, (m) => m.nodeName === "TEXTAREA").length > 0);
   return findAll(rows[index]!, (n) =>
@@ -90,11 +86,20 @@ function rowInput(index: number, nodeName: "TEXTAREA" | "INPUT"): FakeNode {
   )[0]!;
 }
 
+/** As a browser does: a field that is disabled loses the focus, to the body. */
+function dropFocusFromDisabled() {
+  const active = doc.activeElement as FakeNode | null;
+  if (active && active !== doc.body && (props(active) as { disabled?: unknown } | undefined)?.disabled) {
+    doc.activeElement = doc.body;
+  }
+}
+
 async function settle() {
   for (let i = 0; i < 8; i += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    dropFocusFromDisabled();
   }
 }
 
@@ -184,11 +189,33 @@ describe("Add many: a photo description longer than 1,000 characters", () => {
   it("its row is not sent, and says why; the other rows are sent", async () => {
     await mountWithThreePhotos();
     await run(() => props(altField(1)).onChange({ target: { value: LONG } }));
+    // When the focus moves: the rows are locked (their fields disabled) until
+    // every send has its answer, and a disabled field loses the focus.
+    const focusedAt: { posts: number; inFlight: number }[] = [];
+    const field = altField(1) as FakeNode & { focus: () => void };
+    const focus = field.focus;
+    field.focus = () => {
+      focusedAt.push({ posts, inFlight });
+      focus();
+    };
     await saveAllAsDrafts();
+    expect(focusedAt).toEqual([{ posts: 2, inFlight: 0 }]);
     expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Three"]);
     expect(container.textContent).toContain(ALT_TEXT_TOO_LONG_TEXT);
-    // R45 lead review: the press takes the person to the field to shorten.
+    // R45 lead review: the press takes the person to the field to shorten;
+    // second review: once the other rows' sends are done and the fields are
+    // enabled again, so the focus is not lost to a disabled field.
     expect(doc.activeElement).toBe(altField(1));
+  });
+
+  it("with nothing else to send, the description takes the focus at once", async () => {
+    await mountWithThreePhotos();
+    for (const index of [0, 1, 2]) {
+      await run(() => props(altField(index)).onChange({ target: { value: LONG } }));
+    }
+    await saveAllAsDrafts();
+    expect(posts).toBe(0);
+    expect(doc.activeElement).toBe(altField(0));
   });
 
   it("Schedule all too: the row is held and its description takes the focus", async () => {

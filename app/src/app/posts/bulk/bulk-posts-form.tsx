@@ -332,6 +332,19 @@ export function BulkPostsForm({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [duplicateNote, setDuplicateNote] = useState(0);
   const [sendingMode, setSendingMode] = useState<BulkFinishMode | null>(null);
+  // R45 second review: the description a refused press sends the focus to.
+  // The rows are locked (their fields disabled) while the press sends, and a
+  // disabled field loses the focus, so it moves once the press has ended and
+  // the fields are enabled again (the effect below); `altFocusAsked` makes
+  // that render happen even when nothing was sent.
+  const altFocusRef = useRef<string | null>(null);
+  const [altFocusAsked, setAltFocusAsked] = useState(0);
+  useEffect(() => {
+    if (sendingMode !== null || !altFocusRef.current) return;
+    const id = altFocusRef.current;
+    altFocusRef.current = null;
+    altFieldsRef.current.get(id)?.focus();
+  }, [sendingMode, altFocusAsked]);
   // R33 pages L7: the rows the last press's own checks refused (rowSendLine).
   const [refusedPresses, setRefusedPresses] = useState<ReadonlyMap<string, RefusedPress>>(() => new Map());
   // F7 (R1 M2): "Write captions with AI". Off, no file goes to the AI and rows
@@ -904,7 +917,7 @@ export function BulkPostsForm({
       timeHeldRef.current = timeHeld;
       // R45 lead review: a description over its limit is the person's to
       // shorten, so the press takes them to the first one (rows in order).
-      if (altTooLong) altFieldsRef.current.get(altTooLong)?.focus();
+      altFocusRef.current = altTooLong;
 
       // One after another. A created row, or one whose post may exist, is never sent again here.
       for (const id of ready) {
@@ -980,6 +993,7 @@ export function BulkPostsForm({
       respread();
     } finally {
       setSendingMode(null);
+      if (altFocusRef.current) setAltFocusAsked((count) => count + 1);
     }
   }
 
