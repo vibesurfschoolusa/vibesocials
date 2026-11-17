@@ -18,6 +18,8 @@ import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
 import { ConnectLinkChoice } from "./connect-link-choice";
 
 const UNCHECKED = "We couldn't check that just now. Nothing was changed. Try again in a minute.";
+const PRESS =
+  "Too many requests from this network in the last hour. Wait 12 minutes, then connect the account again from the list on this page.";
 const READY = { platform: "facebook_page", candidates: [{ id: "a", name: "Surf Co" }, { id: "b", name: "Surf Co Kids" }] };
 
 let doc: FocusDoc;
@@ -76,12 +78,30 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
+async function mount(buttons: Record<string, string> = {}) {
   await act(async () => {
-    root.render(createElement(ConnectLinkChoice, { token: "tok", pendingId: "p1" }));
+    root.render(createElement(ConnectLinkChoice, { token: "tok", pendingId: "p1", buttons }));
   });
   await settle();
 }
+
+/** The tab's storage, with what it already holds. */
+function storage(entries: [string, string][] = []): Map<string, string> {
+  const stored = new Map(entries);
+  (made.doc.defaultView as Record<string, unknown>).sessionStorage = {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+  };
+  return stored;
+}
+
+const limited = (seconds: number) =>
+  Promise.resolve(
+    Response.json(
+      { error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: seconds },
+      { status: 429, headers: { "Retry-After": String(seconds) } },
+    ),
+  );
 
 describe("the /c account choice after a failed load", () => {
   it("a 503 shows the sentence with Try again, and Try again loads the choice", async () => {
@@ -120,35 +140,67 @@ describe("the /c account choice after a failed load", () => {
   });
 
   // R40 client-journey L3: the choice lives 15 minutes, so reloading after 25 shows it ended.
-  it("a 429 whose wait outlasts the choice names Connect as the step after the wait", async () => {
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve(
-        Response.json(
-          { error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: 1500 },
-          { status: 429, headers: { "Retry-After": "1500" } },
-        ),
-      ),
-    );
+  it("a 429 whose wait outlasts the choice names the step after the wait", async () => {
+    fetchMock.mockReturnValueOnce(limited(1500));
     await mount();
     expect(container.textContent).toBe(
-      "Too many requests from this network in the last hour. Wait 25 minutes, then press Connect beside the platform you were connecting again.",
+      "Too many requests from this network in the last hour. Wait 25 minutes, then connect the account again from the list on this page.",
     );
     expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
   });
 
-  it("names the platform when the page remembers it", async () => {
-    const stored = new Map([["vs-connect-choice:p1", "facebook_page"]]);
-    (made.doc.defaultView as Record<string, unknown>).sessionStorage = {
-      getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => stored.set(key, value),
-    };
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve(Response.json({ error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: 1500 }, { status: 429 })),
+  // R40 review L: the row shows Connect, or Reconnect when it has a connection.
+  it("names the platform and the button its row shows", async () => {
+    storage([["vs-connect-choice:p1", "facebook_page"]]);
+    fetchMock.mockReturnValueOnce(limited(1500));
+    await mount({ facebook_page: "Reconnect" });
+    expect(container.textContent).toBe(
+      "Too many requests from this network in the last hour. Wait 25 minutes, then press Reconnect beside Facebook Page again.",
     );
-    await mount();
+  });
+
+  it("a new row names Connect", async () => {
+    storage([["vs-connect-choice:p1", "facebook_page"]]);
+    fetchMock.mockReturnValueOnce(limited(1500));
+    await mount({ facebook_page: "Connect" });
     expect(container.textContent).toBe(
       "Too many requests from this network in the last hour. Wait 25 minutes, then press Connect beside Facebook Page again.",
     );
+  });
+
+  // R40 review M: the wait is compared with the life the choice has left.
+  describe("the choice's life left", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("first seen 6 minutes ago, a 12-minute wait: press again", async () => {
+      storage([["vs-connect-choice-seen:p1", String(Date.now() - 6 * 60 * 1000)]]);
+      fetchMock.mockReturnValueOnce(limited(720));
+      await mount();
+      expect(container.textContent).toBe(PRESS);
+    });
+
+    it("first seen just now, a 12-minute wait: reload", async () => {
+      const stored = storage();
+      fetchMock.mockReturnValueOnce(limited(720));
+      await mount();
+      expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 12 minutes.");
+      expect(stored.has("vs-connect-choice-seen:p1")).toBe(true);
+    });
+
+    it("without storage, counts from when the page opened", async () => {
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      fetchMock.mockReturnValueOnce(answer(503, { error: UNCHECKED })).mockReturnValueOnce(limited(720));
+      await mount();
+      now += 6 * 60 * 1000;
+      await act(async () => {
+        void props(button("Try again")!).onClick();
+      });
+      await settle();
+      expect(container.textContent).toBe(PRESS);
+    });
   });
 
   it("a 429 without a wait says to reload later", async () => {

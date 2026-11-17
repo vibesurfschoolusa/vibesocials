@@ -280,10 +280,28 @@ describe("the connect link page", () => {
     expect(await render({ success: "instagram_connected" })).not.toContain("is connected");
   });
 
-  it("a waiting choice hands the list only the token and the choice id", async () => {
+  it("a waiting choice hands the list only the token, the choice id and the rows' button names", async () => {
     const html = await render({ choose: "pending-1" });
     expect(html).toContain("<section>choice</section>");
-    expect(h.choiceProps).toHaveBeenCalledWith({ token: TOKEN, pendingId: "pending-1" });
+    expect(h.choiceProps).toHaveBeenCalledWith({
+      token: TOKEN,
+      pendingId: "pending-1",
+      buttons: { instagram: "Connect", tiktok: "Connect", facebook_page: "Connect" },
+    });
+  });
+
+  // R40 review: the limit's "press ... again" names the button each row shows.
+  it("a row with a connection that needs it names Reconnect; a working one names none", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "facebook_page", accountIdentifier: "1", username: "Surf Co", locationName: null, needsReconnect: true },
+      { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false },
+    ]);
+    await render({ choose: "pending-1" });
+    expect(h.choiceProps).toHaveBeenCalledWith({
+      token: TOKEN,
+      pendingId: "pending-1",
+      buttons: { tiktok: "Connect", facebook_page: "Reconnect" },
+    });
   });
 
   it("says nothing of the workspace's ids", async () => {

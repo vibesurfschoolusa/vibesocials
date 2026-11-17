@@ -25,7 +25,7 @@ import {
   linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
-import { shownControl } from "@/lib/oauthResult";
+import { shownControl, signInButton } from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { utcDisplayDateTime } from "@/lib/usageLimits";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
@@ -155,6 +155,12 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           });
   const sameEndOn = sameEnd?.expiresAt && working ? { platform: working.platform, expiresAt: sameEnd.expiresAt } : null;
   const pendingId = first(query.choose);
+  // R40 review: the sign-in button each row below shows, for the choice's limit sentence.
+  const choiceButtons: Record<string, string> = {};
+  for (const platform of platforms) {
+    const shown = signInButton(shownControl(byPlatform.get(platform)));
+    if (shown) choiceButtons[platform] = shown;
+  }
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 
   return (
@@ -167,7 +173,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
         ) : null}
         {pendingId ? (
           <div className="mb-6">
-            <ConnectLinkChoice token={token} pendingId={pendingId} />
+            <ConnectLinkChoice token={token} pendingId={pendingId} buttons={choiceButtons} />
           </div>
         ) : null}
 

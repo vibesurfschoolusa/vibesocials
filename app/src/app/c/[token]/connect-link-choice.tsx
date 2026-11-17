@@ -10,7 +10,12 @@ import { answerLostText } from "@/lib/answerLost";
 import { limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
 import { CONNECT_LINK_COOKIE_MAX_AGE_SECONDS } from "@/lib/connectLink";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUncheckedMessage";
-import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
+import {
+  choiceAddress,
+  choiceFirstSeen,
+  rememberChoicePlatform,
+  rememberedChoicePlatform,
+} from "@/lib/choicePlatform";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
@@ -51,20 +56,34 @@ type ChoiceAnswer = {
   retryAfterSeconds?: number;
 } | null;
 
+/** What the page knows of the waiting choice when the load is refused (R40 review). */
+export interface LimitedChoice {
+  /** The platform the tab remembered for it, if any. */
+  platform?: string | null;
+  /** The sign-in button that platform's row shows ("Connect" or "Reconnect"), if any. */
+  button?: string | null;
+  /** The life the choice has left; the full 15 minutes when unknown. */
+  lifeLeftSeconds?: number;
+}
+
 /**
  * The network limit's 429 (the pending route answers only this limit with
  * one): the shared client-link instruction, with no button. R40 client-journey
- * L3: the choice lives 15 minutes (as the sign-in cookie), so a longer wait
- * names Connect beside the platform, the step that works after it.
+ * L3 and its review: a wait the choice won't outlive names the step that works
+ * after it, with the button its platform's row shows; without both, a wording
+ * that names no button.
  */
-function rateLimitedSentence(retryAfterSeconds: number | undefined, platform: string | null | undefined): string {
+function rateLimitedSentence(retryAfterSeconds: number | undefined, choice: LimitedChoice): string {
   const label =
-    platform && platform in PLATFORM_LABELS
-      ? PLATFORM_LABELS[platform as keyof typeof PLATFORM_LABELS]
-      : "the platform you were connecting";
+    choice.platform && choice.platform in PLATFORM_LABELS
+      ? PLATFORM_LABELS[choice.platform as keyof typeof PLATFORM_LABELS]
+      : null;
   return limitReachedSentence(retryAfterSeconds, {
-    lifeSeconds: CONNECT_LINK_COOKIE_MAX_AGE_SECONDS,
-    then: `press Connect beside ${label} again.`,
+    lifeSeconds: choice.lifeLeftSeconds ?? CONNECT_LINK_COOKIE_MAX_AGE_SECONDS,
+    then:
+      label && choice.button
+        ? `press ${choice.button} beside ${label} again.`
+        : "connect the account again from the list on this page.",
   });
 }
 
@@ -80,13 +99,13 @@ export function loadOutcome(
   status: number,
   data: ChoiceAnswer,
   retryAfterSeconds?: number,
-  platform?: string | null,
+  choice: LimitedChoice = {},
 ): ConnectLinkChoiceState {
   if (status >= 200 && status < 300 && data?.platform && data.candidates) {
     return { status: "ready", platform: data.platform, candidates: data.candidates };
   }
   if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
-  if (status === 429) return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, platform), retry: false };
+  if (status === 429) return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, choice), retry: false };
   if (data?.error === LIMIT_UNCHECKED_MESSAGE) return { status: "failed", message: LIMIT_UNCHECKED_MESSAGE, retry: true };
   return { status: "failed", message: LOAD_RETRY_MESSAGE, retry: true };
 }
@@ -139,7 +158,19 @@ export function cancelOutcome(
   return { error: data?.error || CANCEL_FAILED_MESSAGE };
 }
 
-export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {
+/**
+ * `buttons`: the sign-in button each platform's row shows (page.tsx), so the
+ * limit's sentence names the one the client will see. Strings only.
+ */
+export function ConnectLinkChoice({
+  token,
+  pendingId,
+  buttons = {},
+}: {
+  token: string;
+  pendingId: string;
+  buttons?: Record<string, string>;
+}) {
   const router = useRouter();
   const [state, setState] = useState<ConnectLinkChoiceState>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
@@ -150,15 +181,29 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
 
   // R39 pages L2: Try again counts up, which loads the choice again.
   const [attempt, setAttempt] = useState(0);
+  // R40 review: when this page opened, for a tab without storage (choiceFirstSeen).
+  const openedAtRef = useRef<number | null>(null);
+  // Read when the answer comes: a refresh hands a new object, which must not load again.
+  const buttonsRef = useRef(buttons);
+  useEffect(() => {
+    buttonsRef.current = buttons;
+  });
   useEffect(() => {
     let cancelled = false;
+    openedAtRef.current ??= Date.now();
+    const openedAt = openedAtRef.current;
     (async () => {
       try {
         const remembered = rememberedChoicePlatform(pendingId);
+        const firstSeen = choiceFirstSeen(pendingId, openedAt) ?? openedAt;
         const response = await fetch(choiceAddress(base, remembered), { cache: "no-store" });
         const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
-        const outcome = loadOutcome(response.status, data, limitWaitSeconds(response, data), remembered);
+        const outcome = loadOutcome(response.status, data, limitWaitSeconds(response, data), {
+          platform: remembered,
+          button: remembered ? buttonsRef.current[remembered] : null,
+          lifeLeftSeconds: CONNECT_LINK_COOKIE_MAX_AGE_SECONDS - (Date.now() - firstSeen) / 1000,
+        });
         if (outcome.status === "ready") rememberChoicePlatform(pendingId, outcome.platform);
         setState(outcome);
       } catch {

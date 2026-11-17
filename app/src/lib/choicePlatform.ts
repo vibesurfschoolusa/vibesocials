@@ -31,3 +31,20 @@ export function rememberChoicePlatform(pendingId: string, platform: string): voi
 export function choiceAddress(base: string, platform: string | null): string {
   return platform ? `${base}?platform=${encodeURIComponent(platform)}` : base;
 }
+
+/**
+ * R40 review: when this tab first saw the choice. The choice was made no
+ * later, so its life left is never overstated. Kept like the platform; null
+ * without storage (the page then counts from when it opened).
+ */
+export function choiceFirstSeen(pendingId: string, now: number): number | null {
+  try {
+    const seenKey = `vs-connect-choice-seen:${pendingId}`;
+    const stored = Number(window.sessionStorage.getItem(seenKey));
+    if (Number.isFinite(stored) && stored > 0) return stored;
+    window.sessionStorage.setItem(seenKey, String(now));
+    return now;
+  } catch {
+    return null;
+  }
+}
