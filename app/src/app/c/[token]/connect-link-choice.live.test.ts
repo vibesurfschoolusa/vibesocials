@@ -229,6 +229,71 @@ describe("the /c account choice after a failed load", () => {
   });
 });
 
+// R41 client-journey L1: the limit counts the list, Connect and Cancel together,
+// so a press after the list loaded can get the same 429: one instruction, nothing to press.
+describe("the /c account choice: a 429 on Connect or Cancel", () => {
+  beforeEach(() => {
+    // focusAfterPress waits a frame for the page to change.
+    const view = made.doc.defaultView as Record<string, unknown>;
+    view.requestAnimationFrame = (step: () => void) => setTimeout(step, 0);
+    view.setTimeout = setTimeout;
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function pressAfterLoad(text: string, next: Promise<Response>, buttons: Record<string, string> = {}) {
+    fetchMock.mockReturnValueOnce(answer(200, READY)).mockReturnValueOnce(next);
+    await mount(buttons);
+    const pressed = button(text)!;
+    (pressed.focus as () => void)();
+    await act(async () => {
+      void props(pressed).onClick({ currentTarget: pressed });
+    });
+    await settle();
+  }
+
+  it("Connect: a wait inside the choice's life says to reload in N minutes, with nothing to press", async () => {
+    await pressAfterLoad("Connect", limited(300));
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 5 minutes.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+    const active = doc.activeElement as FakeNode;
+    expect(active.attributes.role).toBe("alert");
+  });
+
+  it("Connect: a wait the choice won't outlive names the button its platform's row shows", async () => {
+    await pressAfterLoad("Connect", limited(1500), { facebook_page: "Reconnect" });
+    expect(container.textContent).toBe(
+      "Too many requests from this network in the last hour. Wait 25 minutes, then press Reconnect beside Facebook Page again.",
+    );
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+
+  it("Connect: the wait is weighed against the life the choice has left", async () => {
+    storage([["vs-connect-choice-seen:p1", String(Date.now() - 6 * 60 * 1000)]]);
+    await pressAfterLoad("Connect", limited(720), { facebook_page: "Connect" });
+    expect(container.textContent).toBe(
+      "Too many requests from this network in the last hour. Wait 12 minutes, then press Connect beside Facebook Page again.",
+    );
+  });
+
+  it("Cancel: a wait inside the choice's life says to reload in N minutes, with nothing to press", async () => {
+    await pressAfterLoad("Cancel", limited(300));
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 5 minutes.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+    const active = doc.activeElement as FakeNode;
+    expect(active.attributes.role).toBe("alert");
+  });
+
+  it("Cancel: a wait the choice won't outlive says it ends by itself meanwhile", async () => {
+    await pressAfterLoad("Cancel", limited(1500));
+    expect(container.textContent).toBe(
+      "Too many requests from this network in the last hour. Wait 25 minutes, then reload this page: the choice will have ended by itself, with no account connected.",
+    );
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+});
+
 // R39 lead review: Try again removes itself, so focus fell to the page body.
 describe("the /c account choice: focus after Try again, with the page's focus keeper", () => {
   // R40 pages L1: the keeper moved focus to the Terms link before the retry's own focus ran.

@@ -73,7 +73,7 @@ export interface LimitedChoice {
  * after it, with the button its platform's row shows; without both, a wording
  * that names no button.
  */
-function rateLimitedSentence(retryAfterSeconds: number | undefined, choice: LimitedChoice): string {
+function rateLimitedSentence(retryAfterSeconds: number | undefined, choice: LimitedChoice, then?: string): string {
   const label =
     choice.platform && choice.platform in PLATFORM_LABELS
       ? PLATFORM_LABELS[choice.platform as keyof typeof PLATFORM_LABELS]
@@ -81,10 +81,41 @@ function rateLimitedSentence(retryAfterSeconds: number | undefined, choice: Limi
   return limitReachedSentence(retryAfterSeconds, {
     lifeSeconds: choice.lifeLeftSeconds ?? CONNECT_LINK_COOKIE_MAX_AGE_SECONDS,
     then:
-      label && choice.button
+      then ??
+      (label && choice.button
         ? `press ${choice.button} beside ${label} again.`
-        : "connect the account again from the list on this page.",
+        : "connect the account again from the list on this page."),
   });
+}
+
+/**
+ * R41 client-journey L1: the limit counts the load, Connect and Cancel
+ * together, so a press after the list loaded can get the same 429. Cancel's
+ * step after a wait the choice won't outlive: it ends by itself meanwhile.
+ */
+export const CANCEL_AFTER_LIMIT_STEP =
+  "reload this page: the choice will have ended by itself, with no account connected.";
+
+/**
+ * The view for the network limit's 429 on the load, Connect or Cancel: one
+ * instruction and no button, since any press within the window fails the
+ * same way. `then`: the press's own step after a wait the choice won't outlive.
+ */
+export function limitedOutcome(
+  retryAfterSeconds: number | undefined,
+  choice: LimitedChoice,
+  then?: string,
+): ConnectLinkChoiceState {
+  return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, choice, then), retry: false };
+}
+
+/** The choice for a 429, as the page knows it: platform, its row's button, life left from first seen. */
+function limitedChoice(platform: string | null, firstSeen: number, buttons: Record<string, string>): LimitedChoice {
+  return {
+    platform,
+    button: platform ? buttons[platform] : null,
+    lifeLeftSeconds: CONNECT_LINK_COOKIE_MAX_AGE_SECONDS - (Date.now() - firstSeen) / 1000,
+  };
 }
 
 /**
@@ -105,7 +136,7 @@ export function loadOutcome(
     return { status: "ready", platform: data.platform, candidates: data.candidates };
   }
   if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
-  if (status === 429) return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, choice), retry: false };
+  if (status === 429) return limitedOutcome(retryAfterSeconds, choice);
   if (data?.error === LIMIT_UNCHECKED_MESSAGE) return { status: "failed", message: LIMIT_UNCHECKED_MESSAGE, retry: true };
   return { status: "failed", message: LOAD_RETRY_MESSAGE, retry: true };
 }
@@ -199,11 +230,12 @@ export function ConnectLinkChoice({
         const response = await fetch(choiceAddress(base, remembered), { cache: "no-store" });
         const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
-        const outcome = loadOutcome(response.status, data, limitWaitSeconds(response, data), {
-          platform: remembered,
-          button: remembered ? buttonsRef.current[remembered] : null,
-          lifeLeftSeconds: CONNECT_LINK_COOKIE_MAX_AGE_SECONDS - (Date.now() - firstSeen) / 1000,
-        });
+        const outcome = loadOutcome(
+          response.status,
+          data,
+          limitWaitSeconds(response, data),
+          limitedChoice(remembered, firstSeen, buttonsRef.current),
+        );
         if (outcome.status === "ready") rememberChoicePlatform(pendingId, outcome.platform);
         setState(outcome);
       } catch {
@@ -220,6 +252,13 @@ export function ConnectLinkChoice({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const failedRef = useRef<HTMLParagraphElement>(null);
   const retried = useRetryFocus(state.status === "loading", statusRef, [headingRef, failedRef, goneRef]);
+
+  /** A press's 429: the same view as the load's, weighed against the life the choice has left. */
+  function showLimited(response: Response, data: ChoiceAnswer, platform: string | null, then?: string) {
+    const openedAt = openedAtRef.current ?? Date.now();
+    const firstSeen = choiceFirstSeen(pendingId, openedAt) ?? openedAt;
+    setState(limitedOutcome(limitWaitSeconds(response, data), limitedChoice(platform, firstSeen, buttonsRef.current), then));
+  }
 
   function retry() {
     retried();
@@ -246,6 +285,13 @@ export function ConnectLinkChoice({
         router.push(`${page}?${connectedSuccessQuery(data.platform, data.sameEnd === true)}`);
         return;
       }
+      if (response.status === 429) {
+        // The section with every button goes; focus goes to the instruction.
+        focusAfterPress(pressed, () => failedRef.current);
+        showLimited(response, data, state.status === "ready" ? state.platform : null);
+        setBusy(null);
+        return;
+      }
       const failure = chooseFailure(response.status, data);
       if (failure.gone) {
         focusAfterPress(pressed, () => goneRef.current);
@@ -259,13 +305,19 @@ export function ConnectLinkChoice({
     setBusy(null);
   }
 
-  async function cancel(platform: string) {
+  async function cancel(platform: string, pressed: HTMLElement | null) {
     setBusy("cancel");
     setError(null);
     let outcome: { go: string } | { error: string };
     try {
       const response = await fetchOrNoAnswer(choiceAddress(base, platform), { method: "DELETE" });
       const data = (await response.json().catch(() => null)) as ChoiceAnswer;
+      if (response.status === 429) {
+        focusAfterPress(pressed, () => failedRef.current);
+        showLimited(response, data, platform, CANCEL_AFTER_LIMIT_STEP);
+        setBusy(null);
+        return;
+      }
       outcome = cancelOutcome(response.status, data, platform, page);
     } catch {
       outcome = { error: CANCEL_LOST_MESSAGE };
@@ -300,7 +352,7 @@ export interface ConnectLinkChoiceViewProps {
   busy: string | null;
   error: string | null;
   onChoose: (candidateId: string, pressed: HTMLElement | null) => void;
-  onCancel: (platform: string) => void;
+  onCancel: (platform: string, pressed: HTMLElement | null) => void;
   /** Loads the choice again after a failed load (R39 pages L2). */
   onRetry?: () => void;
   /** The gone sentence, which takes focus when a press removed the section (R29 lead review). */
@@ -345,7 +397,7 @@ export function ConnectLinkChoiceView({
   if (state.status === "failed") {
     return (
       <div className="space-y-3">
-        <p ref={failedRef} role="alert" className="text-sm outline-none">
+        <p ref={failedRef} role="alert" tabIndex={-1} className="text-sm outline-none">
           {state.message}
         </p>
         {state.retry ? (
@@ -394,7 +446,7 @@ export function ConnectLinkChoiceView({
         size="sm"
         className="mt-4"
         disabled={busy !== null}
-        onClick={() => onCancel(state.platform)}
+        onClick={(event) => onCancel(state.platform, event.currentTarget)}
       >
         Cancel
       </Button>
