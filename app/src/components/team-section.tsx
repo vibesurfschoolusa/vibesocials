@@ -921,11 +921,26 @@ function OwnerView({
     };
   }, [workspaceId]);
 
+  // R36 new-customer L1 + lead review: every change to the loaded list goes
+  // through here. Settings works out what Delete account and Delete this
+  // workspace would refuse on the server, so its server parts re-render with
+  // the new members (the card keeps its state, open dialogs their typing).
+  const changeMembers = useCallback(
+    (update: (prev: Member[] | null) => Member[] | null) => {
+      setMembers(update);
+      router.refresh();
+    },
+    [router],
+  );
+
   // R25 new-customer L2: someone who already left (another owner removed them,
   // or they left) goes from the list; the route's answer says so.
-  const dropMember = useCallback((userId: string) => {
-    setMembers((prev) => (prev ? prev.filter((m) => m.userId !== userId) : prev));
-  }, []);
+  const dropMember = useCallback(
+    (userId: string) => {
+      changeMembers((prev) => (prev ? prev.filter((m) => m.userId !== userId) : prev));
+    },
+    [changeMembers],
+  );
 
   // ConfirmDialog contract: a refusal it toasted is thrown as
   // ConfirmFailureShown; a request that never left is said by the dialog.
@@ -946,7 +961,7 @@ function OwnerView({
       if (memberRoleChanged(response.status, data)) return;
       throw new ConfirmFailureShown("REMOVE_FAILED");
     }
-    setMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
+    changeMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
     toast.success(`Removed ${personLabel(removeTarget, true)}.`);
 
     // The server revokes the workspace's active invite links on removal (so the
@@ -960,11 +975,7 @@ function OwnerView({
     if (outcome.notice) {
       toast.info(outcome.notice);
     }
-    // R36 new-customer L1: Settings works out what Delete account and Delete
-    // this workspace would refuse on the server; the server parts re-render
-    // with the new members (the card keeps its state, open dialogs their typing).
-    router.refresh();
-  }, [dropMember, removeTarget, router, toast, workspaceId]);
+  }, [changeMembers, dropMember, removeTarget, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Promote
   // member -> owner only ever ADDS an owner, so patch local state in place
@@ -987,15 +998,13 @@ function OwnerView({
       if (memberRoleChanged(response.status, data)) return;
       throw new ConfirmFailureShown("PROMOTE_FAILED");
     }
-    setMembers((prev) =>
+    changeMembers((prev) =>
       prev
         ? prev.map((m): Member => (m.userId === promoteTarget.userId ? { ...m, role: "owner" } : m))
         : prev,
     );
     toast.success("Role updated.");
-    // R36 new-customer L1: a second owner changes what the delete dialogs refuse.
-    router.refresh();
-  }, [dropMember, promoteTarget, router, toast, workspaceId]);
+  }, [changeMembers, dropMember, promoteTarget, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Demote
   // owner -> member. Demoting YOURSELF drops you out of OwnerView, so on that
@@ -1042,14 +1051,12 @@ function OwnerView({
     if (links) setClientLinks(links);
     toast.success(demotedMessage(links));
     if (revoked.notice) toast.info(revoked.notice);
-    setMembers((prev) =>
+    changeMembers((prev) =>
       prev
         ? prev.map((m): Member => (m.userId === demoteTarget.userId ? { ...m, role: "member" } : m))
         : prev,
     );
-    // R36 new-customer L1: one owner fewer changes what the delete dialogs refuse.
-    router.refresh();
-  }, [demoteTarget, currentUserId, dropMember, router, toast, workspaceId]);
+  }, [changeMembers, demoteTarget, currentUserId, dropMember, router, toast, workspaceId]);
 
   // R5-security L1: one press, after a confirm (R6 L2), replaces every client
   // link that is on. ConfirmDialog contract: throw to keep the dialog open.

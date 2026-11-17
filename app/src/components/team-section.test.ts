@@ -288,41 +288,51 @@ describe("Team: Leave's refusals", () => {
   });
 });
 
-// R36 new-customer L1: Remove, Make owner and Make member on someone else change
-// who Delete account and Delete this workspace would refuse. Settings works
-// those refusals out on the server, so a successful press refreshes the server
-// parts (the card keeps its state); a failed one, which changed nothing, doesn't.
-describe("Team: a member change refreshes the delete dialogs' refusals", () => {
+// R36 new-customer L1 + lead review: what Delete account and Delete this
+// workspace would refuse is worked out by the Settings server page, so one
+// rule: whenever the card's own member list changes (a success, or a "gone"
+// answer that drops the row), the server parts refresh (the card keeps its
+// state). A failure that leaves the list alone doesn't.
+describe("Team: a change to the member list refreshes the delete dialogs' refusals", () => {
   const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
   const handler = (name: string) => {
     const start = source.indexOf(`const ${name} = useCallback`);
     return source.slice(start, source.indexOf("}, [", start));
   };
   // The failure block: from the !response.ok check to its closing brace.
-  const failureEnd = (body: string) => body.indexOf("\n    }\n", body.indexOf("if (!response.ok) {"));
+  const failureBlock = (body: string) => {
+    const start = body.indexOf("if (!response.ok) {");
+    return body.slice(start, body.indexOf("\n    }\n", start));
+  };
+
+  it("changeMembers changes the list and refreshes, in one place", () => {
+    const change = handler("changeMembers");
+    expect(change).toContain("setMembers(update);");
+    expect(change).toContain("router.refresh();");
+    // Only the first read sets the list otherwise.
+    expect(source.match(/setMembers\(/g)).toHaveLength(2);
+    expect(source).toContain('if ("members" in read) setMembers(read.members);');
+  });
+
+  it('a "gone" answer drops the row through it, so it refreshes too', () => {
+    expect(handler("dropMember")).toContain("changeMembers(");
+  });
 
   for (const name of ["confirmRemove", "confirmPromote", "confirmDemote"]) {
-    it(`${name}: refreshes after a success, never in the failure block`, () => {
+    it(`${name}: a success changes the list through it; a failure only drops a gone row`, () => {
       const body = handler(name);
-      const end = failureEnd(body);
-      expect(end, name).toBeGreaterThan(0);
-      expect(body.slice(0, end), name).not.toContain("router.refresh()");
-      expect(body.slice(end), name).toContain("router.refresh();");
+      const failure = failureBlock(body);
+      expect(failure.length, name).toBeGreaterThan(0);
+      expect(failure, name).not.toContain("changeMembers(");
+      expect(failure, name).not.toContain("router.refresh()");
+      expect(body.slice(body.indexOf(failure) + failure.length), name).toContain("changeMembers(");
     });
   }
 
-  it("Make member on someone else refreshes, not only on yourself", () => {
-    const body = handler("confirmDemote");
-    const selfEnd = body.indexOf("return;", body.indexOf("if (demoteTarget.userId === currentUserId)"));
-    expect(body.slice(selfEnd)).toContain("router.refresh();");
-  });
-
-  it("each handler lists router in its dependencies", () => {
-    for (const name of ["confirmRemove", "confirmPromote"]) {
-      const start = source.indexOf(`const ${name} = useCallback`);
-      const deps = source.slice(source.indexOf("}, [", start), source.indexOf("]);", start));
-      expect(deps, name).toContain("router");
-    }
+  it("the handlers call router.refresh() only for yourself (the list is not changed then)", () => {
+    expect(handler("confirmRemove")).not.toContain("router.refresh()");
+    expect(handler("confirmPromote")).not.toContain("router.refresh()");
+    expect(handler("confirmDemote").match(/router\.refresh\(\)/g)).toHaveLength(1);
   });
 });
 
