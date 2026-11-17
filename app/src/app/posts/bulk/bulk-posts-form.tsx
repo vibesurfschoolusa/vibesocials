@@ -918,6 +918,9 @@ export function BulkPostsForm({
           updateRow(id, { sending: false, uncertain: true, uncertainMode: mode });
         }
       }
+      // R44 publishing L1: a draft gave up its place (createdRowWhen), so the
+      // rows still to send move up. Hand-set and created rows keep their times.
+      respread();
     } finally {
       setSendingMode(null);
     }
