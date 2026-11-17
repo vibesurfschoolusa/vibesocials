@@ -58,9 +58,17 @@ function statisticsUrl(organizationUrn: string, param: (typeof KINDS)[number]["p
   return `${STATISTICS_URL}?q=organizationalEntity&organizationalEntity=${encodeURIComponent(organizationUrn)}${list}`;
 }
 
-/** A code or field path as LinkedIn sends it; anything else (text, a URN) is left out. */
+/** A code as LinkedIn sends it; anything else (text, a URN) is left out. */
 function plainLabel(value: unknown): string | null {
   return typeof value === "string" && /^[A-Za-z0-9_.[\]-]{1,80}$/.test(value) ? value : null;
+}
+
+/**
+ * A field path as LinkedIn sends it ("ugcPosts[0]" or "/ugcPosts/0", R41 lead
+ * review). No colon or space, so a URN or message text is left out.
+ */
+function plainFieldPath(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_.[\]/-]{1,80}$/.test(value) ? value : null;
 }
 
 /**
@@ -91,7 +99,7 @@ async function refusalFields(response: Response) {
     code: plainLabel(body?.code),
     inputErrors: inputErrors.slice(0, 5).map((item) => {
       const entry = item as { code?: unknown; input?: { inputPath?: { fieldPath?: unknown } } } | null;
-      return { code: plainLabel(entry?.code), fieldPath: plainLabel(entry?.input?.inputPath?.fieldPath) };
+      return { code: plainLabel(entry?.code), fieldPath: plainFieldPath(entry?.input?.inputPath?.fieldPath) };
     }),
   };
 }

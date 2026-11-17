@@ -203,6 +203,32 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
       });
     });
 
+    // R41 lead review: LinkedIn's field paths can be slash paths.
+    it("a slash field path such as /ugcPosts/0 is logged", async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            errorDetails: {
+              inputErrors: [
+                { code: "INVALID_VALUE", input: { inputPath: { fieldPath: "/ugcPosts/0" } } },
+                { code: "INVALID_VALUE", input: { inputPath: { fieldPath: "/ugcPosts/urn:li:ugcPost:3" } } },
+                { code: "INVALID_VALUE", input: { inputPath: { fieldPath: "/ugcPosts/0 is not a post" } } },
+              ],
+            },
+          }),
+          { status: 400 },
+        ),
+      );
+      await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3"], "t");
+      expect(vi.mocked(console.warn).mock.calls[0][1]).toMatchObject({
+        inputErrors: [
+          { code: "INVALID_VALUE", fieldPath: "/ugcPosts/0" },
+          { code: "INVALID_VALUE", fieldPath: null },
+          { code: "INVALID_VALUE", fieldPath: null },
+        ],
+      });
+    });
+
     it("a code or path that names a URN or carries text is left out", async () => {
       fetchMock.mockResolvedValueOnce(
         new Response(
