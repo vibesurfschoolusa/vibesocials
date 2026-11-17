@@ -10,7 +10,7 @@ import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accou
 import { answerLostText } from "@/lib/answerLost";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { contactUsHref } from "@/lib/contactUs";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,24 @@ import { useSignedInAccount } from "@/components/signed-in-swap";
 import { signOutButtonFailureText, signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
 import { InstallInstructionsDialog, useInstallApp } from "./install-app";
 import { ThemeToggle } from "./theme-toggle";
+
+/**
+ * R41 pages L5: a switch only sets the active-workspace cookie, so asking
+ * again is always safe, and a failed one says to.
+ */
+export const SWITCH_FAILED_MESSAGE = "Couldn't switch workspaces. Try again.";
+
+/**
+ * What a failed switch says: a refusal's own sentence (not a member, too many
+ * requests); for a 5xx, no answer or anything unreadable, SWITCH_FAILED_MESSAGE.
+ */
+export function switchFailureText(failure: unknown, data?: { error?: unknown } | null): string {
+  if (typeof failure !== "number") {
+    return isNoAnswer(failure) ? SWITCH_FAILED_MESSAGE : (confirmFailureText(failure) ?? SWITCH_FAILED_MESSAGE);
+  }
+  if (failure >= 500) return SWITCH_FAILED_MESSAGE;
+  return typeof data?.error === "string" && data.error !== "" ? data.error : SWITCH_FAILED_MESSAGE;
+}
 
 /** GET /api/workspaces list item (design doc §4/§7) — the switcher's data. */
 interface WorkspaceSummary {
@@ -259,7 +277,7 @@ export function AccountMenu() {
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        toast.error(data?.error ?? "Couldn't switch workspaces.");
+        toast.error(switchFailureText(response.status, data));
         setSwitchingId(null);
         return;
       }
@@ -274,8 +292,7 @@ export function AccountMenu() {
       // last workspace's one-time message (R16).
       afterWorkspaceChange();
     } catch (error) {
-      const text = confirmFailureText(error);
-      if (text) toast.error(text);
+      toast.error(switchFailureText(error));
       setSwitchingId(null);
     }
   }

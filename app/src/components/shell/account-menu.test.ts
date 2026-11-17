@@ -16,6 +16,7 @@ import {
   SIGN_OUT_SERVER_PROBLEM_MESSAGE,
   SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
 } from "@/lib/signOutChecked";
+import { NoAnswerError } from "@/lib/requestNoAnswer";
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 import {
@@ -24,6 +25,8 @@ import {
   focusWhenPending,
   readWorkspaceListOnce,
   signOutFromMenu,
+  SWITCH_FAILED_MESSAGE,
+  switchFailureText,
   watchWorkspaceList,
   WORKSPACE_MAYBE_MADE_MESSAGE,
 } from "./account-menu";
@@ -298,5 +301,35 @@ describe("AccountMenu: Sign out", () => {
 
   it("the menu's Sign out button goes through it", () => {
     expect(source).toMatch(/signOutFromMenu\(signOutChecked, \(\) => setOpen\(false\), toast\.error\)/);
+  });
+});
+
+// R41 pages L5: a switch only sets a cookie, so asking again is safe and the
+// failure says so.
+describe("switchFailureText", () => {
+  it("a 5xx or an answer without a sentence: Couldn't switch workspaces. Try again.", () => {
+    expect(SWITCH_FAILED_MESSAGE).toBe("Couldn't switch workspaces. Try again.");
+    expect(switchFailureText(500, null)).toBe(SWITCH_FAILED_MESSAGE);
+    expect(switchFailureText(500, { error: "Internal error" })).toBe(SWITCH_FAILED_MESSAGE);
+    expect(switchFailureText(400, {})).toBe(SWITCH_FAILED_MESSAGE);
+  });
+
+  it("no answer, or an unreadable 5xx: the same sentence", () => {
+    expect(switchFailureText(new NoAnswerError(new TypeError("Failed to fetch")))).toBe(SWITCH_FAILED_MESSAGE);
+    expect(switchFailureText(new NoAnswerError(new Response("", { status: 502 }), true))).toBe(SWITCH_FAILED_MESSAGE);
+  });
+
+  it("a refusal keeps the route's own sentence", () => {
+    expect(switchFailureText(404, { error: "You're not a member of that workspace." })).toBe(
+      "You're not a member of that workspace.",
+    );
+  });
+
+  it("is what the switch uses for every failure", () => {
+    const source = readFileSync(fileURLToPath(new URL("./account-menu.tsx", import.meta.url)), "utf8");
+    const handler = source.slice(source.indexOf("async function handleSwitch"), source.indexOf("async function handleCreateWorkspace"));
+    expect(handler).toContain("switchFailureText(response.status, data)");
+    expect(handler).toContain("switchFailureText(error)");
+    expect(handler).not.toContain("Couldn't switch workspaces.");
   });
 });
