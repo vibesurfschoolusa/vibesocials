@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { FIRST_LOAD_FAILED_MESSAGE, LOAD_MORE_FAILED_MESSAGE, mediaPageUrl } from "./media-picker-dialog";
+import {
+  FIRST_LOAD_FAILED_MESSAGE,
+  LOAD_MORE_FAILED_MESSAGE,
+  mediaCountLine,
+  mediaPageUrl,
+} from "./media-picker-dialog";
 
 // R32 publishing L1: the picker lists the library of the workspace Add many
 // was drawn for; the route's refusal sentence is what it then says.
@@ -99,5 +104,22 @@ describe("Media picker Load more after a workspace refusal", () => {
 
   it("has no Load more button of its own", () => {
     expect(source).not.toContain("Load more </Button>");
+  });
+});
+
+// R43 pages-a L6: the skeletons are hidden from screen readers, so the picker
+// says it is loading, then what it found, through AnnouncedText.
+describe("Media picker says it is loading, then the result", () => {
+  const source = readFileSync(new URL("./media-picker-dialog.tsx", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  it("the loading line and both results go through AnnouncedText", () => {
+    expect(source).toContain('<AnnouncedText className="sr-only" text="Loading your media…" />');
+    expect(source).toContain("<AnnouncedText className=\"text-sm text-muted-foreground\" text=\"Nothing in Media yet.");
+    expect(source).toContain('<AnnouncedText className="sr-only" text={mediaCountLine(items.length)} />');
+  });
+
+  it("the list's line says how many are shown", () => {
+    expect(mediaCountLine(1)).toBe("Showing 1 photo or video.");
+    expect(mediaCountLine(12)).toBe("Showing 12 photos and videos.");
   });
 });
