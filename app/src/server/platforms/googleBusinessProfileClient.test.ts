@@ -1354,27 +1354,78 @@ describe("googleBusinessProfileClient: a 403 in the store-code lookup", () => {
   };
 
   // R37 platform-clients L1: an account whose 403 body can't be read failed
-  // (gbpLocation.ts), so the post fails before anything is sent, never as
-  // "store code not found", and nothing is flagged.
-  it.each([
-    ["the only account", { accounts: [{ name: "accounts/111" }] }],
-    ["one of two accounts, the code nowhere else", { accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] }],
-  ])("%s answering a 403 whose body can't be read: failed, never not found, nothing flagged", async (_label, accounts) => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    flagRejectedTokenMock.mockReset();
+  // (gbpLocation.ts), so the post fails before anything is sent with the
+  // try-again text, never "store code not found" or "access refused", and
+  // nothing is flagged. The failed post can be retried.
+  const TRY_AGAIN =
+    "Google Business Profile isn't answering for Vibe Socials right now, so nothing was posted. Try again later.";
+  const TWO_ACCOUNTS = { accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] };
+  const lookupAnswering = (accounts: unknown, first: () => Response, others: () => Response = () => Response.json({ locations: [] })) => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-      if (url.includes("accounts/111/locations")) return bodyBreaksOff(403);
-      if (url.includes("/locations")) return Response.json({ locations: [] });
+      if (url.includes("accounts/111/locations")) return first();
+      if (url.includes("/locations")) return others();
       return Response.json(accounts);
     });
     vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  };
+  const posted = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.some(([input]) => String(input).includes("localPosts"));
+
+  it.each([
+    ["the only account", { accounts: [{ name: "accounts/111" }] }],
+    ["the one of two holding the code", TWO_ACCOUNTS],
+  ])("%s answering a 403 whose body can't be read: the try-again text, nothing sent, nothing flagged", async (_label, accounts) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    const fetchMock = lookupAnswering(accounts, () => bodyBreaksOff(403));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
 
     expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("localPosts"))).toBe(false);
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(TRY_AGAIN);
+    expect(posted(fetchMock)).toBe(false);
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the same post retried once Google answers: posted", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    lookupAnswering(TWO_ACCOUNTS, () => bodyBreaksOff(403));
+    await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    const ctx = storeCodeCtx();
+    const fetchMock = lookupAnswering(
+      TWO_ACCOUNTS,
+      () => Response.json({ locations: [{ name: "locations/999", storeCode: "STORE-1" }] }),
+    );
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: string | URL | Request) =>
+      String(input).includes("localPosts") ? Response.json({ name: "accounts/111/locations/999/localPosts/1" }) : base(input),
+    );
+    await googleBusinessProfileClient.publishVideo(ctx).catch(() => undefined);
+    expect(posted(fetchMock)).toBe(true);
+  });
+
+  it("a readable access 403 on one of two accounts, the code nowhere else: unchanged (not found)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    const fetchMock = lookupAnswering(TWO_ACCOUNTS, () => googleError("PERMISSION_DENIED"));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_STORE_CODE_NOT_FOUND" });
+    expect(posted(fetchMock)).toBe(false);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the code in no readable account: unchanged (not found)", async () => {
+    const fetchMock = lookupAnswering(TWO_ACCOUNTS, () => Response.json({ locations: [] }));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_STORE_CODE_NOT_FOUND" });
+    expect(posted(fetchMock)).toBe(false);
   });
 
   it.each([

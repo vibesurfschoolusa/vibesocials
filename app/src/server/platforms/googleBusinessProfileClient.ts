@@ -494,11 +494,12 @@ async function ensureLocationName(
  * R27 platform-clients L2: a 403 while the store code is looked up follows the
  * post's 403 rule (googlePublish403, from the reasons gbpLocation.ts keeps):
  * our own setup or quota reads try-later, anything else access; never the
- * post's rules. The same error with that text, code and status kept; null for
- * any other failure.
+ * post's rules. R37: a 403 whose body couldn't be read (googleBodyUnreadable)
+ * says nothing about access, so it reads try-later too. The same error with
+ * that text, code and status kept; null for any other failure.
  */
 function lookupForbidden(error: unknown): unknown {
-  const fields = (error ?? {}) as { code?: unknown; status?: unknown; googleReasons?: unknown };
+  const fields = (error ?? {}) as { code?: unknown; status?: unknown; googleReasons?: unknown; googleBodyUnreadable?: unknown };
   // R28 platform-clients L1: the permission is missing (gbpLocation.ts has
   // flagged the row, so the card shows Reconnect): the reconnect code, never
   // the post's rules.
@@ -509,9 +510,7 @@ function lookupForbidden(error: unknown): unknown {
   const reasons = Array.isArray(fields.googleReasons)
     ? fields.googleReasons.filter((reason): reason is string => typeof reason === "string")
     : [];
-  error.message =
-    googlePublish403("google_business_profile", reasons) === "setup"
-      ? googleSetupRefusedMessage("google_business_profile")
-      : GBP_ACCESS_REFUSED_TEXT;
+  const tryLater = fields.googleBodyUnreadable === true || googlePublish403("google_business_profile", reasons) === "setup";
+  error.message = tryLater ? googleSetupRefusedMessage("google_business_profile") : GBP_ACCESS_REFUSED_TEXT;
   return error;
 }
