@@ -29,6 +29,8 @@ export const BULK_PAST_TIME_MESSAGE = "Pick a time in the future.";
 export const BULK_MAYBE_CREATED_MESSAGE =
   "This post may have been created. Check the Queue before sending it again.";
 export const BULK_DRAFTS_NOTE = "Drafts are saved without a time. Set each one's time in the Queue.";
+/** A created draft's row, in place of its date (rowHoldsNoTime). */
+export const BULK_DRAFT_NO_TIME_TEXT = "No time yet: set it in the Queue";
 
 /** How many of `picked` files fit in a batch that already has `current` rows. */
 export function filesThatFit(current: number, picked: number): { take: number; tooMany: boolean } {
@@ -90,18 +92,39 @@ export function rowTimeLocked(row: TimeLockState): boolean {
 }
 
 /**
+ * The time a row keeps once its post is created. A draft is saved without a
+ * time (R43 publishing-flow L1), so its row holds none: it shows none and
+ * takes no place in the spreads below.
+ */
+export function createdRowWhen(mode: BulkFinishMode, when: string): string {
+  return mode === "draft" ? "" : when;
+}
+
+/** A created row with no time: a draft, which holds no place in the schedule. */
+export function rowHoldsNoTime(row: { postId: string | null; when: string }): boolean {
+  return row.postId !== null && row.when === "";
+}
+
+/**
  * Give each row whose time is not locked (rowTimeLocked) the slot of its place
  * in the list. A locked row keeps its time (and its slot stays unused), so
- * changing one row never shifts the others. Rows are returned unchanged when
- * the controls are invalid.
+ * changing one row never shifts the others. A created draft (rowHoldsNoTime)
+ * has no place in the list. Rows are returned unchanged when the controls are
+ * invalid.
  */
 export function applySchedule<T extends { when: string } & TimeLockState>(
   rows: T[],
   controls: BulkScheduleControls,
 ): T[] {
-  const slots = spreadSchedule({ ...controls, count: rows.length });
-  if (slots.length !== rows.length) return rows;
-  return rows.map((row, i) => (rowTimeLocked(row) || row.when === slots[i] ? row : { ...row, when: slots[i] }));
+  const placed = rows.filter((row) => !rowHoldsNoTime(row)).length;
+  const slots = spreadSchedule({ ...controls, count: placed });
+  if (placed === 0 || slots.length !== placed) return rows;
+  let place = 0;
+  return rows.map((row) => {
+    if (rowHoldsNoTime(row)) return row;
+    const slot = slots[place++];
+    return rowTimeLocked(row) || row.when === slot ? row : { ...row, when: slot };
+  });
 }
 
 /**
@@ -116,8 +139,9 @@ export function applySlotSchedule<T extends { when: string } & TimeLockState>(
   taken: readonly Date[],
   now: Date,
 ): T[] {
+  // A created draft holds no time (rowHoldsNoTime), so it takes no slot.
   const lockedTimes = rows
-    .filter((row) => rowTimeLocked(row) && row.when)
+    .filter((row) => rowTimeLocked(row) && !rowHoldsNoTime(row) && row.when)
     .map((row) => new Date(row.when))
     .filter((date) => !Number.isNaN(date.getTime()));
   const open = rows.filter((row) => !rowTimeLocked(row)).length;

@@ -17,6 +17,7 @@ import {
   applySchedule,
   applySlotSchedule,
   captionProgressText,
+  createdRowWhen,
   classifySendResponse,
   filesThatFit,
   minFirstDay,
@@ -27,6 +28,7 @@ import {
   refreshedFirstDay,
   rowSendBlock,
   rowTimeLocked,
+  rowHoldsNoTime,
   rowsToSend,
   allRowsCreated,
   spreadSchedule,
@@ -210,6 +212,61 @@ describe("applySchedule keeps the sent time of a row whose post may exist", () =
     expect(rowTimeLocked({ whenSetByHand: true, postId: null, uncertain: false })).toBe(true);
     expect(rowTimeLocked({ whenSetByHand: false, postId: "job-1", uncertain: false })).toBe(true);
     expect(rowTimeLocked({ whenSetByHand: false, postId: null, uncertain: true })).toBe(true);
+  });
+});
+
+// R43 publishing-flow L1: a draft holds no time, so it takes no place in
+// either spread and pushes no later row past a day nothing holds.
+describe("a created draft holds no time", () => {
+  const draft = (r: TestRow): TestRow => ({ ...r, postId: "job-d", when: createdRowWhen("draft", r.when) });
+
+  it("a draft's time is cleared when it is created; a scheduled post keeps its own", () => {
+    expect(createdRowWhen("draft", "2026-11-18T18:00")).toBe("");
+    expect(createdRowWhen("schedule", "2026-11-18T18:00")).toBe("2026-11-18T18:00");
+  });
+
+  it("names the rule: created with no time", () => {
+    expect(rowHoldsNoTime({ postId: "job-d", when: "" })).toBe(true);
+    expect(rowHoldsNoTime({ postId: "job-1", when: "2026-11-18T18:00" })).toBe(false);
+    expect(rowHoldsNoTime({ postId: null, when: "" })).toBe(false);
+  });
+
+  it("applySchedule starts the new rows on the first day, past three drafts", () => {
+    const drafts = applySchedule(autoRows(3), CONTROLS).map(draft);
+    const added = [...drafts, ...autoRows(6).slice(3)];
+
+    const rows = applySchedule(added, CONTROLS);
+
+    expect(rows.map((r) => [r.id, r.when])).toEqual([
+      ["r1", ""],
+      ["r2", ""],
+      ["r3", ""],
+      ["r4", "2026-11-11T18:00"],
+      ["r5", "2026-11-12T18:00"],
+      ["r6", "2026-11-13T18:00"],
+    ]);
+  });
+
+  it("applySchedule still keeps a scheduled row's place and time", () => {
+    const start = applySchedule(autoRows(3), CONTROLS).map((r) =>
+      r.id === "r1" ? draft(r) : r.id === "r2" ? { ...r, postId: "job-2" } : r,
+    );
+    const rows = applySchedule(start, { ...CONTROLS, firstDay: "2026-11-20" });
+    expect(rows.map((r) => r.when)).toEqual(["", "2026-11-12T18:00", "2026-11-21T18:00"]);
+  });
+
+  it("applySlotSchedule gives the new rows the first free slots, past drafts", () => {
+    // Tuesday 10 November 2026, 08:00 local; slots Tuesday 09:00 and Thursday 18:00.
+    const now = new Date(2026, 10, 10, 8, 0);
+    const slots = [
+      { day: 2, time: "09:00" },
+      { day: 4, time: "18:00" },
+    ];
+    const drafts = applySlotSchedule(autoRows(2), slots, [], now).map(draft);
+
+    const rows = applySlotSchedule([...drafts, ...autoRows(4).slice(2)], slots, [], now);
+
+    expect(rows.map((r) => r.when)).toEqual(["", "", "2026-11-10T09:00", "2026-11-12T18:00"]);
   });
 });
 

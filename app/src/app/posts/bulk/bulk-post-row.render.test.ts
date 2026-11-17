@@ -313,3 +313,23 @@ describe("BulkPostRow send line", () => {
     expect(render(row({ sendError: "The server said no." }))).not.toContain("The server said no.");
   });
 });
+
+// R43 publishing-flow L1: a draft is saved without a time, so its row shows none.
+describe("Add many row: a created draft", () => {
+  it("says it has no time yet, in place of the date", () => {
+    const html = render(row({ postId: "job-d", when: "", result: "Saved as a draft." }));
+    expect(html).toContain("No time yet: set it in the Queue");
+    expect(html).not.toContain('type="datetime-local"');
+  });
+
+  it("a scheduled row keeps its date", () => {
+    const html = render(row({ postId: "job-1", when: "2026-11-18T18:00" }));
+    expect(html).toContain('value="2026-11-18T18:00"');
+    expect(html).not.toContain("No time yet");
+  });
+
+  it("the form clears a created draft's time through createdRowWhen", () => {
+    const formSource = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(formSource).toMatch(/postId: result\.postId,\s*when: createdRowWhen\(mode, row\.when\),/);
+  });
+});

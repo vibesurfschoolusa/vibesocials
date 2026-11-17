@@ -32,6 +32,7 @@ import {
   allRowsCreated,
   applySchedule,
   applySlotSchedule,
+  createdRowWhen,
   captionProgressText,
   classifySendResponse,
   filesThatFit,
@@ -897,8 +898,10 @@ export function BulkPostsForm({
           if (rowsRef.current.every((r) => r.id === id || r.postId !== null)) focusAfterPress(pressed, () => queueLinkRef.current);
           updateRow(id, {
             sending: false,
-            // With a post id the row's time is locked (rowTimeLocked): it shows the time sent.
+            // With a post id the row's time is locked (rowTimeLocked): it shows the
+            // time sent. A draft holds none, so its row takes no place in the spreads.
             postId: result.postId,
+            when: createdRowWhen(mode, row.when),
             result: bulkRowResultText({
               heldForApproval: result.heldForApproval,
               mode,

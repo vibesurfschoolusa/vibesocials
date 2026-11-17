@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VideoCoverPicker } from "@/components/video-cover-picker";
 import { ALT_TEXT_MAX } from "@/lib/altText";
 import { focusAfterPress } from "@/lib/focusAfter";
-import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
+import { BULK_DRAFT_NO_TIME_TEXT, BULK_MAYBE_CREATED_MESSAGE, rowHoldsNoTime } from "@/lib/bulkPosts";
 import { skippedForMediaLine } from "@/lib/postTargets";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
@@ -323,20 +323,28 @@ export function BulkPostRow({
           </div>
         ) : null}
 
-        <div className="flex flex-col gap-1">
-          <Label htmlFor={whenId}>Date and time</Label>
-          <Input
-            id={whenId}
-            type="datetime-local"
-            className="h-11 sm:max-w-xs"
-            min={minWhen}
-            value={row.when}
-            // A row whose post may exist keeps the time it was sent with, so the
-            // user looks for it in the Queue at that time (rowTimeLocked).
-            disabled={!editable || row.uncertain}
-            onChange={(event) => onWhenChange(event.target.value)}
-          />
-        </div>
+        {rowHoldsNoTime(row) ? (
+          // R43 publishing-flow L1: a draft is saved without a time, so no date is shown.
+          <div className="flex flex-col gap-1">
+            <p className="text-sm font-medium text-foreground">Date and time</p>
+            <p className="text-sm text-muted-foreground">{BULK_DRAFT_NO_TIME_TEXT}</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={whenId}>Date and time</Label>
+            <Input
+              id={whenId}
+              type="datetime-local"
+              className="h-11 sm:max-w-xs"
+              min={minWhen}
+              value={row.when}
+              // A row whose post may exist keeps the time it was sent with, so the
+              // user looks for it in the Queue at that time (rowTimeLocked).
+              disabled={!editable || row.uncertain}
+              onChange={(event) => onWhenChange(event.target.value)}
+            />
+          </div>
+        )}
 
         {skipped.length > 0 && !created ? (
           <p className="text-sm text-muted-foreground">{skippedForMediaLine(skipped, row.mimeType)}</p>
