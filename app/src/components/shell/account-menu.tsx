@@ -10,7 +10,7 @@ import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accou
 import { answerLostText } from "@/lib/answerLost";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
 import { cn } from "@/lib/cn";
-import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { contactUsHref } from "@/lib/contactUs";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
@@ -30,14 +30,13 @@ import { ThemeToggle } from "./theme-toggle";
 export const SWITCH_FAILED_MESSAGE = "Couldn't switch workspaces. Try again.";
 
 /**
- * What a failed switch says: a refusal's own sentence (not a member, too many
- * requests); for a 5xx, no answer or anything unreadable, SWITCH_FAILED_MESSAGE.
+ * What an answered, failed switch says: a refusal's own sentence (not a
+ * member, too many requests); for a 5xx or a refusal without one,
+ * SWITCH_FAILED_MESSAGE. No answer (or an unreadable 5xx) keeps the shared
+ * lost-answer wording of confirmFailureText, as every data change does.
  */
-export function switchFailureText(failure: unknown, data?: { error?: unknown } | null): string {
-  if (typeof failure !== "number") {
-    return isNoAnswer(failure) ? SWITCH_FAILED_MESSAGE : (confirmFailureText(failure) ?? SWITCH_FAILED_MESSAGE);
-  }
-  if (failure >= 500) return SWITCH_FAILED_MESSAGE;
+export function switchFailureText(status: number, data: { error?: unknown } | null): string {
+  if (status >= 500) return SWITCH_FAILED_MESSAGE;
   return typeof data?.error === "string" && data.error !== "" ? data.error : SWITCH_FAILED_MESSAGE;
 }
 
@@ -292,7 +291,8 @@ export function AccountMenu() {
       // last workspace's one-time message (R16).
       afterWorkspaceChange();
     } catch (error) {
-      toast.error(switchFailureText(error));
+      const text = confirmFailureText(error);
+      if (text) toast.error(text);
       setSwitchingId(null);
     }
   }
