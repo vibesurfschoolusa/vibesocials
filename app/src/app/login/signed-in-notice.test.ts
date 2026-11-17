@@ -16,7 +16,12 @@ import {
   showSignedInNotice,
   signOutHere,
 } from "./signed-in-notice";
-import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_NOT_SENT_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
+import {
+  SIGN_OUT_FAILED_MESSAGE,
+  SIGN_OUT_NOT_SENT_MESSAGE,
+  SIGN_OUT_SERVER_PROBLEM_MESSAGE,
+  SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
+} from "@/lib/signOutChecked";
 
 const source = readFileSync(join(__dirname, "signed-in-notice.tsx"), "utf8");
 
@@ -47,6 +52,10 @@ describe("signed-in notice on Log in and Register", () => {
     // R33 pages L4: no answer to the token read, so nothing was sent.
     await expect(signOutHere(async () => ({ ok: false as const, kind: "not_sent" as const }))).resolves.toBe(
       SIGN_OUT_NOT_SENT_MESSAGE,
+    );
+    // R34 pages L2: an unreadable 5xx on the token read is the server's problem.
+    await expect(signOutHere(async () => ({ ok: false as const, kind: "server_problem" as const }))).resolves.toBe(
+      SIGN_OUT_SERVER_PROBLEM_MESSAGE,
     );
     // Lead review 3 (R28 NN2): the sign-out may have ended the session before the answer was lost.
     expect(SIGN_OUT_FAILED_MESSAGE).toBe(

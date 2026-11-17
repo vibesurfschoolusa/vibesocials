@@ -1,5 +1,5 @@
 import { answerLostText } from "@/lib/answerLost";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { rereadSessionHere } from "@/lib/staleSignOut";
 
 // A plain module (not "use client"), like signInChecked.ts: the account menu,
@@ -12,23 +12,28 @@ export const SIGN_OUT_STILL_SIGNED_IN_MESSAGE = "You're still signed in. Press S
 
 /** R33 pages L4: the token read got no answer, so the sign-out was never sent. */
 export const SIGN_OUT_NOT_SENT_MESSAGE =
-  "Vibe Socials couldn't be reached, so nothing was sent. Reconnect, then press Sign out again.";
+  "Vibe Socials couldn't be reached, so nothing was sent. If your connection dropped, reconnect first, then press Sign out again.";
+/** R34 pages L2: the token read got an unreadable 5xx over a working connection; nothing was sent. */
+export const SIGN_OUT_SERVER_PROBLEM_MESSAGE =
+  "Vibe Socials had a problem, so nothing was sent. Press Sign out again in a minute.";
 
 /**
  * R33 (cure 3): how a sign-out failed. Each caller words it for its own
  * screen: Change password has no Sign out button, and its server already
  * ended the session.
- * - not_sent: the token read got no answer (offline, a non-JSON 5xx); nothing was sent.
+ * - not_sent: the token read got no answer (offline, the connection dropped); nothing was sent.
+ * - server_problem: the token read got an unreadable 5xx (R34 pages L2); nothing was sent.
  * - refused: an answer came and the person is still signed in.
  * - lost: the sign-out was sent and its answer lost or unreadable; it may have worked.
  */
-export type SignOutFailure = "not_sent" | "refused" | "lost";
+export type SignOutFailure = "not_sent" | "server_problem" | "refused" | "lost";
 export type SignOutCheck = { ok: true } | { ok: false; kind: SignOutFailure };
 
 /** The sentence for a screen with its own Sign out button (the account menu, Log in's notice). */
 export function signOutButtonFailureText(kind: SignOutFailure): string {
   return {
     not_sent: SIGN_OUT_NOT_SENT_MESSAGE,
+    server_problem: SIGN_OUT_SERVER_PROBLEM_MESSAGE,
     refused: SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
     lost: SIGN_OUT_FAILED_MESSAGE,
   }[kind];
@@ -37,6 +42,7 @@ export function signOutButtonFailureText(kind: SignOutFailure): string {
 const LOST: SignOutCheck = { ok: false, kind: "lost" };
 const STILL_SIGNED_IN: SignOutCheck = { ok: false, kind: "refused" };
 const NOT_SENT: SignOutCheck = { ok: false, kind: "not_sent" };
+const SERVER_PROBLEM: SignOutCheck = { ok: false, kind: "server_problem" };
 
 /** A 2xx answer's JSON object, or null when it can't be read. */
 async function jsonObject(response: Response): Promise<Record<string, unknown> | null> {
@@ -85,7 +91,8 @@ function tellTabsSignedOut(): void {
  * R32 lead review, R33 pages L4: three failures. No answer after the sign-out
  * was sent (offline, a non-JSON 5xx, fetchOrNoAnswer's NoAnswerError), or an
  * answer to it that can't be read, may have ended the session: "lost". No
- * answer to the token read means nothing was sent: "not_sent". An answer that
+ * answer to the token read means nothing was sent: "not_sent" when the
+ * connection gave none, "server_problem" for an unreadable 5xx. An answer that
  * leaves the person signed in is "refused": a token read with no token in it,
  * a refusal, csrf=true, a session that names someone.
  */
@@ -98,9 +105,10 @@ export async function signOutChecked(
     const csrfAnswer = await fetchOrNoAnswer("/api/auth/csrf", { cache: "no-store" }, fetchImpl);
     const csrf = csrfAnswer.ok ? await jsonObject(csrfAnswer) : null;
     if (typeof csrf?.csrfToken === "string") csrfToken = csrf.csrfToken;
-  } catch {
-    // No answer to the token read: the sign-out is never sent.
-    return NOT_SENT;
+  } catch (error) {
+    // No answer to the token read: the sign-out is never sent. Only a request
+    // that got no answer at all is the connection's fault (R34 pages L2).
+    return isNoConnection(error) ? NOT_SENT : SERVER_PROBLEM;
   }
   // An answer with no token: nothing was sent, so the session is as it was.
   if (!csrfToken) return STILL_SIGNED_IN;

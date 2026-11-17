@@ -10,7 +10,12 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), e
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_NOT_SENT_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
+import {
+  SIGN_OUT_FAILED_MESSAGE,
+  SIGN_OUT_NOT_SENT_MESSAGE,
+  SIGN_OUT_SERVER_PROBLEM_MESSAGE,
+  SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
+} from "@/lib/signOutChecked";
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 import {
@@ -284,6 +289,9 @@ describe("AccountMenu: Sign out", () => {
     // R33 pages L4: no answer to the token read, so nothing was sent.
     await signOutFromMenu(async () => ({ ok: false as const, kind: "not_sent" as const }), close, error, leave);
     expect(error).toHaveBeenLastCalledWith(SIGN_OUT_NOT_SENT_MESSAGE);
+    // R34 pages L2: an unreadable 5xx on the token read is the server's problem.
+    await signOutFromMenu(async () => ({ ok: false as const, kind: "server_problem" as const }), close, error, leave);
+    expect(error).toHaveBeenLastCalledWith(SIGN_OUT_SERVER_PROBLEM_MESSAGE);
     expect(close).not.toHaveBeenCalled();
     expect(leave).not.toHaveBeenCalled();
   });

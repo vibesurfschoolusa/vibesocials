@@ -5,6 +5,7 @@ vi.mock("next-auth/react", () => ({ getSession: vi.fn(async () => null), signOut
 import {
   SIGN_OUT_FAILED_MESSAGE,
   SIGN_OUT_NOT_SENT_MESSAGE,
+  SIGN_OUT_SERVER_PROBLEM_MESSAGE,
   SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
   signOutButtonFailureText,
   signOutChecked,
@@ -41,6 +42,7 @@ const gateway = async () => new Response("<html>Bad gateway</html>", { status: 5
 const lost = { ok: false, kind: "lost" };
 const still = { ok: false, kind: "refused" };
 const notSent = { ok: false, kind: "not_sent" };
+const serverProblem = { ok: false, kind: "server_problem" };
 
 describe("signOutChecked", () => {
   it("success: reads the token, sends next-auth's sign-out request with it, and checks the session names nobody", async () => {
@@ -91,11 +93,25 @@ describe("signOutChecked", () => {
 
   // R32 lead second look: no token read means the sign-out was never sent.
   // R33 pages L4: and nothing answered, so the sentence names the connection.
-  it("no answer to the token read (offline, a gateway's non-JSON 5xx): nothing sent", async () => {
-    for (const answer of [offline, gateway]) {
+  it("no answer to the token read (offline): nothing sent", async () => {
+    const fetchImpl = server({ csrf: offline });
+    const tellTabs = vi.fn();
+    await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(notSent);
+    expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(["/api/auth/csrf"]);
+    expect(tellTabs).not.toHaveBeenCalled();
+  });
+
+  // R34 pages L2: a gateway's non-JSON 5xx came over a working connection, so
+  // its outcome is the server's problem, not the person's connection.
+  it("an unreadable 5xx on the token read: nothing sent, the server's problem", async () => {
+    for (const answer of [
+      gateway,
+      async () => new Response("", { status: 500 }),
+      async () => new Response("Gateway timeout", { status: 504, headers: { "content-type": "text/plain" } }),
+    ]) {
       const fetchImpl = server({ csrf: answer });
       const tellTabs = vi.fn();
-      await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(notSent);
+      await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(serverProblem);
       expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(["/api/auth/csrf"]);
       expect(tellTabs).not.toHaveBeenCalled();
     }
@@ -115,7 +131,11 @@ describe("signOutChecked", () => {
   it("a page with a Sign out button words each outcome", () => {
     expect(signOutButtonFailureText("not_sent")).toBe(SIGN_OUT_NOT_SENT_MESSAGE);
     expect(SIGN_OUT_NOT_SENT_MESSAGE).toBe(
-      "Vibe Socials couldn't be reached, so nothing was sent. Reconnect, then press Sign out again.",
+      "Vibe Socials couldn't be reached, so nothing was sent. If your connection dropped, reconnect first, then press Sign out again.",
+    );
+    expect(signOutButtonFailureText("server_problem")).toBe(SIGN_OUT_SERVER_PROBLEM_MESSAGE);
+    expect(SIGN_OUT_SERVER_PROBLEM_MESSAGE).toBe(
+      "Vibe Socials had a problem, so nothing was sent. Press Sign out again in a minute.",
     );
     expect(signOutButtonFailureText("refused")).toBe(SIGN_OUT_STILL_SIGNED_IN_MESSAGE);
     expect(SIGN_OUT_STILL_SIGNED_IN_MESSAGE).toBe("You're still signed in. Press Sign out again.");

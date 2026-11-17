@@ -317,7 +317,7 @@ describe("Settings, Account: sign-out after a password change", () => {
 // says "still signed in" or "press Sign out again".
 describe("Settings, Account: the sign-out sentence after a password change", () => {
   it("is the same for every failed outcome", () => {
-    for (const kind of ["not_sent", "refused", "lost"] as const) {
+    for (const kind of ["not_sent", "server_problem", "refused", "lost"] as const) {
       expect(passwordChangeSignOutText({ ok: false, kind }), kind).toBe(PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE);
     }
     expect(PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE).toBe(
