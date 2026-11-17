@@ -78,7 +78,7 @@ import { BatchSettingsFieldset } from "./batch-settings";
 import {
   BULK_CAPTION_LOST_TEXT,
   BULK_COVER_FAILED_TEXT,
-  aiSwitchOn,
+  automaticRequestMayGo,
   autoCaptionRequestBody,
   buildBulkRowBody,
   bulkExtrasBlock,
@@ -544,8 +544,9 @@ export function BulkPostsForm({
     updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
     try {
       const frames = await readRowMedia(id, row, blob);
-      // R39 publishing L1: turned off during the frame grab, nothing is sent.
-      if (!aiSwitchOn(aiCaptionsRef)) {
+      // R39 publishing L1, R40 L2: turned off, or the row removed, during the
+      // frame grab: nothing is sent (updating a removed row changes nothing).
+      if (!automaticRequestMayGo(aiCaptionsRef, rowsRef.current.some((r) => r.id === id))) {
         updateRow(id, { captionStatus: "done", captionOverwrite: false });
         return;
       }

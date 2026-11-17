@@ -196,3 +196,22 @@ describe("Add many: Write captions with AI is read right before each AI request"
     expect(countOf("caption")).toBe(1);
   });
 });
+
+describe("R40 publishing L2: nothing is sent for a row that is gone", () => {
+  const removeButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Remove");
+    if (!hit) throw new Error("no Remove button");
+    return hit;
+  };
+
+  it("a video row removed during its frame grab: no caption request", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(frames.waiting.length).toBe(1);
+    await run(() => props(removeButton()).onClick());
+    expect(find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Remove")).toBeNull();
+    await releaseFrames();
+    expect(countOf("caption")).toBe(0);
+  });
+});

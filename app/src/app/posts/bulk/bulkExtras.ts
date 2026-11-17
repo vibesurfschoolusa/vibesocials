@@ -152,6 +152,15 @@ export function aiSwitchOn(aiSwitch: AiSwitch): boolean {
 }
 
 /**
+ * R40 publishing L2: the one check right before an automatic AI request's
+ * fetch, on Create and in Add many: its switch is still on and the media it
+ * is about is still there (not removed or replaced during the frame grab).
+ */
+export function automaticRequestMayGo(aiSwitch: AiSwitch, mediaStillThere: boolean): boolean {
+  return mediaStillThere && aiSwitchOn(aiSwitch);
+}
+
+/**
  * A row's caption step, then its automatic description whatever the caption's
  * outcome (a failed caption still gets one). `describe` marks the row asked,
  * so Write again does not describe it a second time.
@@ -180,7 +189,7 @@ export async function captionThenDescribe(
     await steps.writeCaption(id);
   } finally {
     const row = steps.row(id);
-    if (row && wantsAltText(row) && aiSwitchOn(ai)) await steps.describe(id);
+    if (row && wantsAltText(row) && automaticRequestMayGo(ai, true)) await steps.describe(id);
   }
 }
 
