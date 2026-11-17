@@ -107,6 +107,12 @@ jobs:
       # Lights the upload-only schedule flow. NOTE: E2E_STUBS_READY is
       # deliberately absent — compose/invite stay skipped (see job comment).
       E2E_UPLOAD_STUBS_READY: "1"
+      # Fake Pinterest app values, e2e job only: /c/[token] lists a platform
+      # only when its app credentials are set, and the hotfix test needs its
+      # Connect button on screen. Nothing presses it, so Pinterest is never called.
+      PINTEREST_APP_ID: e2e-placeholder
+      PINTEREST_APP_SECRET: e2e-placeholder
+      PINTEREST_REDIRECT_URI: http://localhost:3000/api/pinterest/callback
     steps:
       - uses: actions/checkout@v4
 

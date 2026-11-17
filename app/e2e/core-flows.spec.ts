@@ -429,11 +429,8 @@ test.describe(
 const NEXT_ERROR_PAGE = /couldn.t load|application error/i;
 
 // The connect page lists only platforms whose app credentials the server has
-// (src/lib/connectLink.ts PLATFORM_ENV). Placeholder values are enough to show
-// the Connect button; nothing here presses it. The Playwright process and the
-// server it boots share this environment (webServer.env is merged over it).
-const PINTEREST_ENV = ["PINTEREST_APP_ID", "PINTEREST_APP_SECRET", "PINTEREST_REDIRECT_URI"];
-const pinterestConfigured = PINTEREST_ENV.every((name) => !!process.env[name]?.trim());
+// (src/lib/connectLink.ts PLATFORM_ENV); the CI e2e job sets placeholder
+// Pinterest values for this. Nothing here presses Connect.
 
 test.describe(
   dbReady ? "server pages that render a Button" : "server pages that render a Button (skipped — needs E2E_DATABASE_URL)",
@@ -477,10 +474,6 @@ test.describe(
     });
 
     test("the connect link shows a Connect button for a platform not yet connected", async ({ page, request }) => {
-      test.skip(
-        !pinterestConfigured,
-        `Needs placeholder Pinterest app credentials (${PINTEREST_ENV.join(", ")}) in the E2E environment, or the page lists no platform`,
-      );
       const owner = freshTestUser("connect-button");
       await registerViaApi(request, owner);
       const token = await seedConnectLink(owner.email, ["pinterest"]);
