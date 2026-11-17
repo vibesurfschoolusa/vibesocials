@@ -24,6 +24,7 @@ import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
+import { onReturnFromCache } from "./returnFromCache";
 
 /**
  * R11 review: "November 21, 2026, 01:00 UTC", the end LinkedIn kept, in the
@@ -214,6 +215,10 @@ export function ConnectionActions({
   const [switchOpen, setSwitchOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [reconnectOpen, setReconnectOpen] = useState(false);
+
+  // R37 new-customer: Switch account disconnects and then leaves the page;
+  // Back can restore it from the cache still saying "Connected as ...".
+  useEffect(() => onReturnFromCache(window, () => router.refresh()), [router]);
 
   const isTikTok = platform === "tiktok";
   const isLinkedIn = platform === "linkedin";
