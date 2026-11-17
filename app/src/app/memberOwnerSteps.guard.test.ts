@@ -294,6 +294,7 @@ const SURFACES: Record<string, (role: Role) => string | Promise<string>> = {
         connections: [healthRow({ needsReconnect: true }), healthRow({ platform: "x" as Platform, connected: false })],
         loading: false,
         error: null,
+        reload: () => {},
         isMember: role === "member",
       }),
     ),
