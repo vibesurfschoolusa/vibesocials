@@ -345,6 +345,49 @@ describe("/v: a card decision's 429", () => {
     expect(stored.has("vs-review-note:tok:a")).toBe(false);
   });
 
+  // R42 client-journey L1: the list, the report and the decisions share the
+  // network's hourly limit, so a list reload refused with 429 while the list
+  // is on screen turns every decision off too, with one instruction that
+  // lifts by itself.
+  describe("a list reload refused by the network limit", () => {
+    const alreadyApproved = () => Promise.resolve(Response.json({ state: "approved", already: true }));
+
+    it("turns every card's decisions off, with one instruction", async () => {
+      fetchMock
+        .mockReturnValueOnce(listed("a", "b", "c"))
+        .mockReturnValueOnce(alreadyApproved())
+        .mockReturnValueOnce(refused(HOURLY, 1500));
+      await open();
+      await press(buttons("Looks good")[0]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const sentence = "Too many requests from this network in the last hour. You can send again in 25 minutes.";
+      expect(pageLine()?.textContent).toBe(sentence);
+      expect((container.textContent as string).match(/Too many requests/g)).toHaveLength(1);
+      expect(container.textContent).not.toContain("Reload");
+      for (const label of ["Looks good", "Ask for a change"]) {
+        const found = buttons(label);
+        expect(found).toHaveLength(3);
+        for (const node of found) expect(props(node).disabled).toBe(true);
+      }
+    });
+
+    it("the end of the wait turns them back on, with nothing left to say", async () => {
+      fetchMock
+        .mockReturnValueOnce(listed("a", "b"))
+        .mockReturnValueOnce(alreadyApproved())
+        .mockReturnValueOnce(refused(HOURLY, 1));
+      await open();
+      await press(buttons("Looks good")[0]);
+      expect(props(buttons("Looks good")[1]).disabled).toBe(true);
+
+      await wait(1200);
+      for (const node of buttons("Looks good")) expect(props(node).disabled).toBe(false);
+      expect(pageLine()).toBeUndefined();
+      expect(container.textContent).not.toContain("You can send again");
+    });
+  });
+
   // R41 lead: the per-link daily limit refuses every decision until it ends, the same rule.
   describe("the link's daily limit", () => {
     it("Looks good: the wait from Retry-After, on the card and atop the list, and no decision can be pressed", async () => {

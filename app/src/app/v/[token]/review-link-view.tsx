@@ -574,11 +574,11 @@ export function ReviewLinkView({ token }: { token: string }) {
   // R40 client-journey L2: the error is the network limit's, which a press can't clear.
   const [limited, setLimited] = useState(false);
   // R41 client-journey L2 and its review: a card's decision hit a limit every
-  // card shares. `cardId`: the card that pressed; `ended`: the hourly wait is
-  // over and the decisions are back on.
-  const [decisionLimitShown, setDecisionLimitShown] = useState<(DecisionLimit & { cardId: string; ended: boolean }) | null>(
-    null,
-  );
+  // card shares. `cardId`: the card that pressed (null: a list reload was
+  // refused, R42); `ended`: the hourly wait is over and the decisions are back on.
+  const [decisionLimitShown, setDecisionLimitShown] = useState<
+    (DecisionLimit & { cardId: string | null; ended: boolean }) | null
+  >(null);
   const limitEndsAfterMs = decisionLimitShown && !decisionLimitShown.ended ? decisionLimitShown.endsAfterMs : null;
   useEffect(() => {
     if (limitEndsAfterMs === null) return;
@@ -598,6 +598,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [kept, setKept] = useState<ReviewPostDTO[]>([]);
   // Numbers each reload that worked, so a card can tell its own from another's.
   const reloadCount = useRef(0);
+  // Whether a list is on screen (set once one loads; the list never goes away).
+  const listShown = useRef(false);
 
   /** The reload's number when the list was read again, else null. */
   const load = useCallback(async (): Promise<number | null> => {
@@ -612,8 +614,26 @@ export function ReviewLinkView({ token }: { token: string }) {
         | { posts?: ReviewPostDTO[]; more?: boolean; error?: string }
         | null;
       if (response.status === 429) {
+        const wait = limitWaitSeconds(response, data);
+        if (listShown.current) {
+          // R42 client-journey L1: the list shares the network's hourly limit
+          // with the decisions, so they would be refused too. They go off, and
+          // one instruction, which lifts by itself, covers the whole page.
+          // A limit already in force (a card's, or the day's) stands.
+          setDecisionLimitShown((current) =>
+            current && !current.ended
+              ? current
+              : {
+                  sentence: sendAgainSentence(wait),
+                  endsAfterMs: (wait ?? CLIENT_LINK_LIMIT_WINDOW_SECONDS) * 1000,
+                  cardId: null,
+                  ended: false,
+                },
+          );
+          return null;
+        }
         setLimited(true);
-        setError(limitReachedSentence(limitWaitSeconds(response, data)));
+        setError(limitReachedSentence(wait));
         return null;
       }
       if (!response.ok || !data?.posts) {
@@ -627,6 +647,7 @@ export function ReviewLinkView({ token }: { token: string }) {
       setMore(data.more === true);
       const count = ++reloadCount.current;
       setReloads(count);
+      listShown.current = true;
       return count;
     } catch {
       setError("");

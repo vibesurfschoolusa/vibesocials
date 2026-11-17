@@ -305,7 +305,7 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
-    expect(source).toMatch(/setPosts\(data\.posts\);\s*setMore\(data\.more === true\);\s*const count = \+\+reloadCount\.current;\s*setReloads\(count\);\s*return count;/);
+    expect(source).toMatch(/setPosts\(data\.posts\);\s*setMore\(data\.more === true\);\s*const count = \+\+reloadCount\.current;\s*setReloads\(count\);\s*listShown\.current = true;\s*return count;/);
     expect(source).toContain("reloads={reloads}");
   });
 });
