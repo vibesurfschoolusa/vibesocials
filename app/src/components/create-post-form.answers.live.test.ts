@@ -34,10 +34,15 @@ vi.mock("@/lib/prepareUploadFile", async (importOriginal) => ({
 
 type Deferred = { resolve: (value: unknown) => void };
 // While `frames.hold` is set, a video's frame grab waits until the test releases it.
-const frames = vi.hoisted(() => ({ hold: false, waiting: [] as (() => void)[] }));
+// While `frames.fail` is set, the grab throws: an unexpected failure the caption handler catches.
+const frames = vi.hoisted(() => ({ hold: false, fail: false, waiting: [] as (() => void)[] }));
 vi.mock("@/lib/extractVideoFrames", () => ({
   extractVideoFrames: () =>
-    frames.hold ? new Promise<string[]>((resolve) => frames.waiting.push(() => resolve([]))) : Promise.resolve([]),
+    frames.fail
+      ? Promise.reject(new Error("unexpected"))
+      : frames.hold
+        ? new Promise<string[]>((resolve) => frames.waiting.push(() => resolve([])))
+        : Promise.resolve([]),
 }));
 
 const uploads = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void }[] }));
@@ -50,9 +55,9 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CAPTION_OFFLINE_MESSAGE } from "@/lib/captionRequest";
+import { CAPTION_FAILED_MESSAGE, CAPTION_OFFLINE_MESSAGE } from "@/lib/captionRequest";
 import { AI_REQUEST_TIMEOUT_MS } from "./composer/useCaptionBox";
-import { captionsChangedMessage, CreatePostForm } from "./create-post-form";
+import { automaticCaptionRefusedText, captionsChangedMessage, CreatePostForm } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
@@ -197,6 +202,7 @@ beforeEach(async () => {
   prep.hold = false;
   prep.waiting.length = 0;
   frames.hold = false;
+  frames.fail = false;
   frames.waiting.length = 0;
   root = createRoot(container as unknown as HTMLElement);
   await act(async () => {
@@ -1095,6 +1101,26 @@ describe("the automatic caption's refusal says no caption was written", () => {
     await finishUploads();
     await answer("/api/posts/auto-caption", slow());
     expect(pageSays("No caption was written: the AI service took too long. Try again.")).toBe(true);
+  });
+
+  // R44 lead review: an unexpected throw in the handler is a failure of the automatic request too.
+  const video = () => new File(["v"], "v.mp4", { type: "video/mp4" });
+
+  it("automatic: a throw in the handler starts with No caption was written", async () => {
+    frames.fail = true;
+    await pick(video());
+    await finishUploads();
+    expect(pageSays(automaticCaptionRefusedText(CAPTION_FAILED_MESSAGE))).toBe(true);
+  });
+
+  it("a pressed Caption from media whose handler throws keeps the plain sentence", async () => {
+    frames.fail = true;
+    await untickAutoCaption();
+    await pick(video());
+    await finishUploads();
+    await press("Caption from media");
+    expect(pageSays(CAPTION_FAILED_MESSAGE)).toBe(true);
+    expect(pageSays("No caption was written")).toBe(false);
   });
 
   it("a pressed Caption from media keeps the 504's own words", async () => {

@@ -1731,7 +1731,8 @@ function CreatePostFormInner({
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
       if (request.live() && !options.isStale?.() && selectedMedia() === press.askedAbout) {
-        toast.error(CAPTION_FAILED_MESSAGE);
+        // R44 lead review: an unexpected throw fails the automatic request too.
+        toast.error(options.automatic ? automaticCaptionRefusedText(CAPTION_FAILED_MESSAGE) : CAPTION_FAILED_MESSAGE);
       }
     } finally {
       // A newer press or pick keeps the busy state it took.
