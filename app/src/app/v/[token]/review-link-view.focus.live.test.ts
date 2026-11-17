@@ -352,7 +352,7 @@ describe("/v: a card decision's 429", () => {
   describe("a list reload refused by the network limit", () => {
     const alreadyApproved = () => Promise.resolve(Response.json({ state: "approved", already: true }));
 
-    it("turns every card's decisions off, with one instruction", async () => {
+    it("turns every card's decisions off, with one instruction, read out by the page line", async () => {
       fetchMock
         .mockReturnValueOnce(listed("a", "b", "c"))
         .mockReturnValueOnce(alreadyApproved())
@@ -370,9 +370,35 @@ describe("/v: a card decision's 429", () => {
         expect(found).toHaveLength(3);
         for (const node of found) expect(props(node).disabled).toBe(true);
       }
+      // R42 review: no card owns it, so the page line is the one live region,
+      // and focus, which the turned-off button would drop, goes to it.
+      expect(liveWith(sentence)).toHaveLength(1);
+      expect(inCard(liveWith(sentence)[0])).toBe(false);
+      expect(liveWith(sentence)[0]).toBe(pageLine());
+      expect(doc.activeElement).toBe(pageLine());
     });
 
-    it("the end of the wait turns them back on, with nothing left to say", async () => {
+    it("after Reload the list: the same one live line, with focus on it", async () => {
+      fetchMock
+        .mockReturnValueOnce(listed("a", "b"))
+        .mockReturnValueOnce(alreadyApproved())
+        .mockReturnValueOnce(Promise.resolve(Response.json({ error: UNCHECKED }, { status: 503 })));
+      await open();
+      await press(buttons("Looks good")[0]);
+      const reload = buttons("Reload the list")[0];
+      expect(reload).toBeDefined();
+      fetchMock.mockReturnValueOnce(refused(HOURLY, 1500));
+      await press(reload);
+      await wait(150);
+
+      const sentence = "Too many requests from this network in the last hour. You can send again in 25 minutes.";
+      expect(buttons("Reload the list")).toHaveLength(0);
+      expect(liveWith(sentence)).toHaveLength(1);
+      expect(liveWith(sentence)[0]).toBe(pageLine());
+      expect(doc.activeElement).toBe(pageLine());
+    });
+
+    it("the end of the wait turns them back on, and says so once", async () => {
       fetchMock
         .mockReturnValueOnce(listed("a", "b"))
         .mockReturnValueOnce(alreadyApproved())
@@ -383,8 +409,23 @@ describe("/v: a card decision's 429", () => {
 
       await wait(1200);
       for (const node of buttons("Looks good")) expect(props(node).disabled).toBe(false);
-      expect(pageLine()).toBeUndefined();
-      expect(container.textContent).not.toContain("You can send again");
+      expect(liveWith("You can send again.")).toHaveLength(1);
+      expect(inCard(liveWith("You can send again.")[0])).toBe(false);
+      expect((container.textContent as string).match(/You can send again/g)).toHaveLength(1);
+      expect(container.textContent).not.toContain("Too many requests");
+    });
+
+    it("a card's own 429 keeps one live line, the card's, and its end is said once there", async () => {
+      fetchMock.mockReturnValueOnce(listed("a", "b")).mockReturnValueOnce(refused(HOURLY, 1));
+      await open();
+      await press(buttons("Looks good")[0]);
+      const sentence = "Too many requests from this network in the last hour. You can send again in 1 minute.";
+      expect(liveWith(sentence)).toHaveLength(1);
+      expect(inCard(liveWith(sentence)[0])).toBe(true);
+
+      await wait(1200);
+      expect(liveWith("You can send again.")).toHaveLength(1);
+      expect(inCard(liveWith("You can send again.")[0])).toBe(true);
     });
   });
 

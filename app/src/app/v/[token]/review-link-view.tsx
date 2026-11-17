@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
   limitWaitSeconds,
   sendAgainSentence,
 } from "@/lib/clientLinkLimit";
-import { focusAfterPress } from "@/lib/focusAfter";
+import { focusAfterPress, focusFirstOf } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { useRetryFocus } from "@/lib/useRetryFocus";
 import {
@@ -590,6 +590,31 @@ export function ReviewLinkView({ token }: { token: string }) {
     return () => window.clearTimeout(timer);
   }, [limitEndsAfterMs, decisionLimitShown]);
   const decisionsLimited = decisionLimitShown !== null && !decisionLimitShown.ended;
+  // R42 review: a limit no card pressed for (a refused list reload) is read
+  // out by the page's own line, the one live region that carries it; when it
+  // ends, that line says the decisions are back. A card's limit is read out by
+  // the card, and the page line stays plain.
+  const pageOwnsLimit = decisionLimitShown !== null && decisionLimitShown.cardId === null;
+  const pageLimitText = pageOwnsLimit ? (decisionLimitShown.ended ? DECISIONS_BACK_MESSAGE : decisionLimitShown.sentence) : "";
+  const pageLimitRef = useRef<HTMLParagraphElement>(null);
+  const pageLimitShownRef = useMemo<RefObject<HTMLElement | null>>(
+    () => ({
+      get current() {
+        const line = pageLimitRef.current;
+        return line && (line.textContent ?? "") !== "" ? line : null;
+      },
+    }),
+    [],
+  );
+  const pageLimitStarts = pageOwnsLimit && decisionsLimited ? decisionLimitShown.sentence : null;
+  useEffect(() => {
+    if (pageLimitStarts === null) return;
+    // The pressed button is now off, so focus would drop to the page body.
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body || active.hasAttribute("disabled") || !active.isConnected) {
+      if (pageLimitRef.current) focusFirstOf([pageLimitRef.current]);
+    }
+  }, [pageLimitStarts]);
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
   // List reloads that worked; a card's line set before one can go (shownCardLine).
@@ -687,7 +712,7 @@ export function ReviewLinkView({ token }: { token: string }) {
   const refreshFailedRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const emptyRef = useRef<HTMLParagraphElement>(null);
-  const retried = useRetryFocus(retrying, statusRef, [failedRef, refreshFailedRef, listRef, emptyRef]);
+  const retried = useRetryFocus(retrying, statusRef, [failedRef, refreshFailedRef, pageLimitShownRef, listRef, emptyRef]);
   const retry = () => {
     retried();
     setRetrying(true);
@@ -735,9 +760,17 @@ export function ReviewLinkView({ token }: { token: string }) {
         </p>
         {/* R41 review: why every card's decisions are off, in sight of each. Plain, not live (second
             look): the pressed card's line is the one read out and focused. */}
-        {decisionsLimited ? (
+        {decisionsLimited && !pageOwnsLimit ? (
           <p className="rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">{decisionLimitShown.sentence}</p>
         ) : null}
+        {/* R42 review: on the page from its first render; only the text changes. */}
+        <p
+          ref={pageLimitRef}
+          role="status"
+          className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm outline-none"
+        >
+          {pageLimitText}
+        </p>
         {posts === null ? null : cards.length === 0 ? (
           <p ref={emptyRef} className="text-sm text-muted-foreground outline-none">
             Nothing is scheduled for the next 60 days.
