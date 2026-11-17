@@ -47,6 +47,8 @@ import {
   listingNotice,
   unreadAccountsNotice,
 } from "./gbpLocations";
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 import { POST } from "./location/route";
 import { GET } from "./locations/route";
 
@@ -647,6 +649,34 @@ describe("nothing could be read", () => {
     expect(GBP_NO_LISTING_NOTICE).toBe(
       "Google found no locations for this Google account. If your business has a listing, sign in to Google again with the account that manages it. If it doesn't have one yet, create or verify it in Google Business Profile first.",
     );
+  });
+});
+
+// R36 review: the listing is read while the owner waits on the picker or the
+// save; a Google body that never ends is "Google didn't answer" within 15 s.
+describe("a Google answer whose body never ends", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each(routes2())("%s: Google didn't answer, after 15 seconds", async (_label, call) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    abortSignalTimeoutOnFakeClock();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL, init?: RequestInit) =>
+        String(input).startsWith(ACCOUNTS)
+          ? Promise.resolve(Response.json({ accounts: [{ name: "accounts/1" }] }))
+          : bodyNeverEnds(input, init),
+      ),
+    );
+
+    const pending = call();
+    await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+    const res = await pending;
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
   });
 });
 

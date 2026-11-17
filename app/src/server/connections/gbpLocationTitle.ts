@@ -1,7 +1,7 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { flagIfTokenRejected } from "@/server/googleFailure";
 import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
@@ -86,7 +86,8 @@ async function readTitleWith(current: SocialConnection, locationName: string): P
   const locationId = locationIdOf(resourceName);
   if (!locationId) return null;
 
-  const response = await fetchWithTimeout(
+  // R36 review: bounded headers and body, so a stalled answer can't hold the sweep's step.
+  const response = await fetchWithinLimit(
     `${BUSINESS_INFO_BASE}/locations/${encodeURIComponent(locationId)}?readMask=title`,
     { headers: { Authorization: `Bearer ${current.accessToken}` } },
     GBP_TITLE_TIMEOUT_MS,

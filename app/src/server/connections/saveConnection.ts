@@ -2,7 +2,7 @@ import { Platform, Prisma } from "@prisma/client";
 
 import { toConnectionSummary } from "@/lib/connectionSummary";
 import { prisma } from "@/lib/db";
-import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { connectedAccountName } from "@/lib/differentAccount";
 import { platformLabel } from "@/lib/platforms";
@@ -119,7 +119,8 @@ function reasonsOf(failure: unknown): string[] {
 }
 
 async function gbpGet(url: string | URL, accessToken: string): Promise<Response> {
-  return fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
+  // R36 review: runs while the person waits on Connect; bounded headers and body.
+  return fetchWithinLimit(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import {
   PINTEREST_API_BASE_URL,
   parsePinterestBoards,
@@ -24,6 +24,8 @@ export interface PinterestAccount {
   accountType: string | null;
 }
 
+const UNREADABLE = Symbol("unreadable");
+
 function bearer(accessToken: string): { headers: Record<string, string> } {
   return { headers: { Authorization: `Bearer ${accessToken}` } };
 }
@@ -34,7 +36,8 @@ function bearer(accessToken: string): { headers: Record<string, string> } {
  * throws.
  */
 export async function fetchPinterestAccount(accessToken: string): Promise<PinterestAccount | null> {
-  const response = await fetchWithTimeout(
+  // R36 review: bounded headers and body; an answer that never ends reads as unreadable (null).
+  const response = await fetchWithinLimit(
     `${PINTEREST_API_BASE_URL}/user_account`,
     bearer(accessToken),
     PINTEREST_CONNECT_TIMEOUT_MS,
@@ -75,12 +78,19 @@ export async function listPinterestBoards(accessToken: string): Promise<Pinteres
     url.searchParams.set("page_size", String(PINTEREST_BOARD_PAGE_SIZE));
     if (bookmark) url.searchParams.set("bookmark", bookmark);
 
-    const response = await fetchWithTimeout(url.toString(), bearer(accessToken), PINTEREST_CONNECT_TIMEOUT_MS);
+    const response = await fetchWithinLimit(url.toString(), bearer(accessToken), PINTEREST_CONNECT_TIMEOUT_MS);
     if (!response.ok) {
       console.error("[Pinterest OAuth] Could not list boards", { status: response.status, page });
       return page === 0 ? null : boards;
     }
-    const parsed = parsePinterestBoards(await response.json().catch(() => null));
+    const body: unknown = await response.json().catch(() => UNREADABLE);
+    // R36 review: a page that can't be read (a body that stalled past the
+    // limit, or broken JSON) is a failed read, never "no boards".
+    if (body === UNREADABLE) {
+      console.error("[Pinterest OAuth] Could not read the boards answer", { page });
+      return page === 0 ? null : boards;
+    }
+    const parsed = parsePinterestBoards(body);
     for (const board of parsed.boards) {
       if (seen.has(board.id)) continue;
       seen.add(board.id);

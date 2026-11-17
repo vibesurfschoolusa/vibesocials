@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { isExpiredTokenFailure, type GoogleFailureKind } from "@/server/googleFailure";
 import type { TokenSnapshot } from "@/server/platforms/connectionHealth";
@@ -189,9 +189,12 @@ async function refreshAccessToken(
   }
 }
 
-/** One Google GET with the bearer token, under the shared request timeout. */
+/**
+ * One Google GET with the bearer token. R36 review: the owner waits on it
+ * (picker, save, Reviews), so headers and body are bounded together.
+ */
 function googleGet(url: URL, accessToken: string): Promise<Response> {
-  return fetchWithTimeout(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+  return fetchWithinLimit(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } }, CONNECT_CALL_TIMEOUT_MS);
 }
 
 /**

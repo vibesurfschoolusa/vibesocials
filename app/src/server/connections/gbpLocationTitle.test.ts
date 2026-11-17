@@ -27,7 +27,7 @@ vi.mock("@/lib/fetchWithTimeout", async () => {
   const actual = await vi.importActual<typeof import("@/lib/fetchWithTimeout")>(
     "@/lib/fetchWithTimeout",
   );
-  return { ...actual, fetchWithTimeout: fetchMock };
+  return { ...actual, fetchWithTimeout: fetchMock, fetchWithinLimit: fetchMock };
 });
 
 vi.mock("@/server/platforms/connectionRefresh", () => ({

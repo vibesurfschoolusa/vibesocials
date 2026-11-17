@@ -7,6 +7,9 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
+
 import { connectionAccountKey, saveSocialConnection } from "./saveConnection";
 
 /**
@@ -271,6 +274,46 @@ describe("saveSocialConnection: Google Business Profile", () => {
 
     await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
     expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
+  // R36 review: the check runs while the person waits on Connect; a Google
+  // body that never ends is "couldn't check" within 15 s, nothing written.
+  describe("a Google answer whose body never ends", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    async function checkAfter15s() {
+      const saved = saveGbp();
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      await expect(saved).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
+      expect(h.updateMany).not.toHaveBeenCalled();
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      abortSignalTimeoutOnFakeClock();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    it("the location check's refusal (403): within 15 seconds, the same answer as a 403 with no readable body", async () => {
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockImplementation((input: string | URL, init?: RequestInit) =>
+        bodyNeverEnds(input, init).then((res) => new Response(res.body, { status: 403 })),
+      );
+      const saved = saveGbp();
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      await expect(saved).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+    });
+
+    it("the store-code search: check_failed after 15 seconds", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch
+        .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] }))
+        .mockImplementationOnce(bodyNeverEnds);
+      await checkAfter15s();
+    });
   });
 
   // R26 platform-clients L2: the store-code lookup's rule (gbpLocation.ts). An
