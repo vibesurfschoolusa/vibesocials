@@ -36,6 +36,7 @@ import {
   EmailRetryableError,
   isRetryableEmailError,
   sendEmail,
+  sendEmailOutcome,
 } from "@/server/notifications/email";
 
 beforeEach(() => {
@@ -730,5 +731,64 @@ describe("sendEmail - whether the email went out", () => {
   it("a network error resolves false", async () => {
     sendMock.mockRejectedValueOnce(new Error("network down"));
     await expect(sendEmail(params)).resolves.toBe(false);
+  });
+});
+
+// R41 lead review: why a send didn't go. A quota 429 is "try later", never
+// "refused for good"; sendEmail's true/false is unchanged.
+describe("sendEmailOutcome - why a send didn't go", () => {
+  const params = { to: "user@example.com", subject: "Hi", html: "<p>hi</p>" };
+  const rejection = (statusCode: number, name: string) => ({ data: null, error: { name, message: "x", statusCode }, headers: null });
+
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("an accepted send, or a key Resend already sent, is sent", async () => {
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: true });
+    sendMock.mockResolvedValueOnce(rejection(409, "invalid_idempotent_request"));
+    await expect(sendEmailOutcome(params, { idempotencyKey: "k" })).resolves.toEqual({ sent: true });
+  });
+
+  it.each(["daily_quota_exceeded", "monthly_quota_exceeded"])("a %s 429 is not sent, try later", async (name) => {
+    sendMock.mockResolvedValueOnce(rejection(429, name));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "try_later" });
+  });
+
+  it("no key, a bad key and another 4xx are refused for good", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    sendMock.mockResolvedValueOnce(rejection(401, "missing_api_key"));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    ResendMock.mockImplementationOnce(function BadCtor() {
+      throw new Error("bad key");
+    });
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    vi.stubEnv("RESEND_API_KEY", "");
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+  });
+
+  it("without throwOnRetryable, a swallowed 5xx, rate limit or network error is try later", async () => {
+    sendMock.mockResolvedValueOnce(rejection(503, "internal_server_error"));
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "try_later" });
+    sendMock.mockResolvedValueOnce(rejection(429, "rate_limit_exceeded"));
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "try_later" });
+    sendMock.mockRejectedValueOnce(new Error("network down"));
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "try_later" });
+  });
+
+  it("under throwOnRetryable a rate limit still throws, as sendEmail's does", async () => {
+    sendMock.mockResolvedValueOnce(rejection(429, "rate_limit_exceeded"));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).rejects.toBeInstanceOf(RetryAfterError);
+  });
+
+  it("sendEmail answers the outcome's sent, for every case", async () => {
+    sendMock.mockResolvedValueOnce(rejection(429, "daily_quota_exceeded"));
+    await expect(sendEmail(params, { throwOnRetryable: true })).resolves.toBe(false);
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+    await expect(sendEmail(params)).resolves.toBe(false);
+    await expect(sendEmail(params)).resolves.toBe(true);
   });
 });

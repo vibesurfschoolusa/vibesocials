@@ -58,7 +58,16 @@ vi.mock("@/lib/rateLimit", () => ({
   },
 }));
 vi.mock("@/server/notifications/email", () => ({
-  sendEmail: m.sendEmail,
+  sendEmail: async (...args: unknown[]) => {
+    const outcome = await m.sendEmail(...args);
+    return outcome === true || (outcome as { sent?: boolean } | undefined)?.sent === true;
+  },
+  // The notice reads why a send didn't go (R41 lead review). The mock answers
+  // true (sent), or an outcome object for a send that didn't go.
+  sendEmailOutcome: async (...args: unknown[]) => {
+    const outcome = await m.sendEmail(...args);
+    return outcome === true ? { sent: true } : outcome;
+  },
   isRetryableEmailError: () => true,
 }));
 vi.mock("./stripeApi", async (importOriginal) => {
@@ -924,11 +933,27 @@ describe("invoice.payment_failed", () => {
     expect(m.events.has("evt_1")).toBe(true);
   });
 
-  // sendEmail answers false, without throwing, when Resend refused the email
-  // for good (a 4xx, a quota 429, no key, a bad key): never counted as sent,
-  // and no retry can change it.
-  it("B refused for good: 200, recorded, and nothing more to anyone", async () => {
-    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+  const QUOTA = { sent: false, reason: "try_later" };
+  const BAD_KEY = { sent: false, reason: "refused" };
+
+  it("B hit Resend's quota (try later): 500, and the retry sends only to B", async () => {
+    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(QUOTA);
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(500);
+    expect(m.events.size).toBe(0);
+    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("Stripe will send the event again"), {
+      eventId: "evt_1",
+      notSent: 1,
+    });
+
+    m.sendEmail.mockClear();
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
+    expect(sentTo()).toEqual(["two@example.com"]);
+    expect(m.events.has("evt_1")).toBe(true);
+  });
+
+  // no key, a bad key or another 4xx: never counted as sent, and no retry can change it.
+  it("B refused for good (a bad key): 200, recorded, and nothing more to anyone", async () => {
+    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(BAD_KEY);
     expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
     expect(sentTo()).toEqual(["one@example.com", "two@example.com"]);
     expect(m.events.has("evt_1")).toBe(true);

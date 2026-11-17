@@ -179,14 +179,33 @@ function emailKind(label: string | undefined, idempotencyKey: string | undefined
 }
 
 /**
+ * R41 lead review: whether the email went and, when it did not, why.
+ * "try_later": a later send can go (a daily or monthly quota 429, or, without
+ * throwOnRetryable, a swallowed 5xx, rate limit or network error).
+ * "refused": no later send will (no key, a bad key, another 4xx).
+ */
+export type SendEmailOutcome = { sent: true } | { sent: false; reason: "try_later" | "refused" };
+
+const SENT: SendEmailOutcome = { sent: true };
+const TRY_LATER: SendEmailOutcome = { sent: false, reason: "try_later" };
+const REFUSED: SendEmailOutcome = { sent: false, reason: "refused" };
+
+/**
  * Resolves true when Resend accepted the email (or already had it under this
  * idempotency key), false when it did not go out. R23-client-journey L4: a
  * caller that tells someone "they were emailed" reads it; others ignore it.
+ * A caller that must tell "try later" from "refused for good" uses
+ * sendEmailOutcome.
  */
-export async function sendEmail(
+export async function sendEmail(params: SendEmailParams, options: SendEmailOptions = {}): Promise<boolean> {
+  return (await sendEmailOutcome(params, options)).sent;
+}
+
+/** sendEmail with the reason a send didn't go; throws exactly when sendEmail does. */
+export async function sendEmailOutcome(
   { to, subject, html, text }: SendEmailParams,
   { label, idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
-): Promise<boolean> {
+): Promise<SendEmailOutcome> {
   const apiKey = process.env.RESEND_API_KEY;
   const kind = emailKind(label, idempotencyKey);
 
@@ -194,7 +213,7 @@ export async function sendEmail(
     console.log(
       "[Notifications] RESEND_API_KEY not set — email notifications are disabled; skipping send.",
     );
-    return false;
+    return REFUSED;
   }
 
   const from = process.env.NOTIFICATIONS_FROM || DEFAULT_FROM;
@@ -206,7 +225,7 @@ export async function sendEmail(
     // A bad key is configuration, not a transient failure: never retried.
     // No log line here carries the recipient address (final review F9).
     console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
-    return false;
+    return REFUSED;
   }
 
   const payload = { from, to, subject, html, text: text ?? htmlToPlainText(html) };
@@ -224,13 +243,13 @@ export async function sendEmail(
     // notification) must complete regardless of whether the email actually
     // went out. The recipient address is never logged (final review F9).
     console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
-    return false;
+    return TRY_LATER;
   }
 
   // Resend 6.x reports an API rejection (bad key, unverified sender,
   // quota...) by RESOLVING { data: null, error } — it does not throw.
   const { error } = response;
-  if (!error) return true;
+  if (!error) return SENT;
 
   const failure = classifyResendFailure(error);
 
@@ -240,7 +259,7 @@ export async function sendEmail(
     logger.warn("[Notifications] Resend already accepted this idempotency key; treating as sent", {
       kind,
     });
-    return true;
+    return SENT;
   }
 
   // A quota 429 is dropped like any other rejection: it falls through to the
@@ -273,5 +292,5 @@ export async function sendEmail(
       statusCode: error.statusCode,
     },
   });
-  return false;
+  return failure === "rejected" ? REFUSED : TRY_LATER;
 }

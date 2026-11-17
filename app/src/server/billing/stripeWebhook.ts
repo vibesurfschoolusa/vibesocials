@@ -1,7 +1,7 @@
 import type { BillingEnv } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { sendEmail } from "@/server/notifications/email";
+import { sendEmailOutcome } from "@/server/notifications/email";
 import { sendOncePer } from "@/server/notifications/onceADay";
 
 import { buildPaymentFailedEmail } from "./billingEmails";
@@ -283,8 +283,9 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
     // Stripe's retry. R41 lead review: each owner through sendOncePer, the rule
     // the trial emails use, claimed per invoice, so the retry reaches only the
     // owners not yet reached (the per-invoice key alone covers only 24 h).
-    // sendEmail answering false is Resend refusing for good (a 4xx, a quota
-    // 429, no key): never counted as sent, and no retry would change it.
+    // An email refused for good (no key, a bad key, another 4xx) is never
+    // counted as sent, and no retry would change it. A quota 429 is "try
+    // later": Stripe's retry sends it once the quota resets.
     const email = buildPaymentFailedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
     const resetAt = new Date(Date.now() + PAYMENT_FAILED_CLAIM_MS);
     let notSent = 0;
@@ -294,12 +295,12 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
       const outcome = await sendOncePer(
         { key: `payment-failed-owner:${invoiceId}:${owner.userId}`, resetAt, keysFrom: null },
         async () => {
-          const sent = await sendEmail(
+          const outcome = await sendEmailOutcome(
             { to: owner.user.email, ...email },
             { idempotencyKey: `stripe-payment-failed/${invoiceId}/${owner.userId}`, throwOnRetryable: true },
           );
-          refusedForGood = !sent;
-          return sent;
+          refusedForGood = !outcome.sent && outcome.reason === "refused";
+          return outcome.sent;
         },
         (error) =>
           logger.error("[stripe webhook] Couldn't send the failed-payment email to one owner", {

@@ -26,7 +26,8 @@ function sourceFiles(dir: string): string[] {
 /** The text of each `sendEmail(...)` call in `source`, up to its matching paren. */
 function calls(source: string): Array<{ line: number; text: string }> {
   const found: Array<{ line: number; text: string }> = [];
-  const pattern = /(?<![\w.])sendEmail\(/g;
+  // sendEmailOutcome (R41 lead review) logs as sendEmail does.
+  const pattern = /(?<![\w.])sendEmail(?:Outcome)?\(/g;
   for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
     const before = source.slice(Math.max(0, match.index - 16), match.index);
     if (/function\s+$/.test(before)) continue;
@@ -34,7 +35,7 @@ function calls(source: string): Array<{ line: number; text: string }> {
     const lineStart = source.lastIndexOf("\n", match.index) + 1;
     if (/^\s*(\*|\/\/|\/\*)/.test(source.slice(lineStart, match.index))) continue;
     let depth = 0;
-    let end = match.index + "sendEmail".length;
+    let end = match.index + match[0].length - 1;
     for (; end < source.length; end += 1) {
       if (source[end] === "(") depth += 1;
       if (source[end] === ")" && (depth -= 1) === 0) break;
