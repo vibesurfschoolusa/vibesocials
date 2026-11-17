@@ -172,6 +172,46 @@ export function captionsAfterReuseDismissed(
 }
 
 /**
+ * R36 new-customer L3: a file reused from Media, as the blob the caption and
+ * photo description routes take (its own stored address).
+ */
+export function reusedItemBlob(item: {
+  storageLocation: string;
+  originalFilename: string;
+  mimeType: string;
+  sizeBytes: number;
+}): UploadedBlobInfo {
+  return { url: item.storageLocation, filename: item.originalFilename, mimeType: item.mimeType, sizeBytes: item.sizeBytes };
+}
+
+/**
+ * R36 new-customer L3: the automatic caption for a reused file follows a fresh
+ * upload's rule (the setting is on, the caption box is empty), and only when
+ * the item has no caption of its own (a client's /u upload is saved with "").
+ */
+export function reuseAutoCaptionWanted(state: {
+  enabled: boolean;
+  typedCaption: string;
+  itemCaption: string | null;
+}): boolean {
+  return state.enabled && !state.typedCaption.trim() && !(state.itemCaption ?? "").trim();
+}
+
+/**
+ * What "Caption from media" captions: the cover of a photo set, a fresh
+ * upload's blob, or a reused item's own (R36 new-customer L3). No blob: greyed.
+ */
+export function captionFromMediaSource(state: {
+  photoSet: ReadonlyArray<{ blob: UploadedBlobInfo | null; file: File }>;
+  uploadedBlob: UploadedBlobInfo | null;
+  reuseItem: Parameters<typeof reusedItemBlob>[0] | null;
+}): { blob: UploadedBlobInfo | null; file?: File } {
+  if (state.photoSet.length > 0) return { blob: state.photoSet[0].blob, file: state.photoSet[0].file };
+  if (state.reuseItem) return { blob: reusedItemBlob(state.reuseItem) };
+  return { blob: state.uploadedBlob };
+}
+
+/**
  * R30 new-customer L1: the item from ?mediaItemId= can arrive after the person
  * started typing. Its captions fill only the boxes still as they started
  * (empty); a box the person changed stays, the rule of captionsAfterReuseDismissed.
@@ -1338,6 +1378,18 @@ function CreatePostFormInner({
     selectedPlatforms,
   );
 
+  // R36 new-customer L3: the automatic caption for the item just loaded, read
+  // with the setting and the caption box as they are when it arrives. A newer
+  // pick or "Use a different file" (singlePhotoRef moves on) drops the answer.
+  const captionReusedItem = useEffectEvent((item: MediaItemDto) => {
+    if (!reuseAutoCaptionWanted({ enabled: autoCaptionEnabled, typedCaption: uploadCaption, itemCaption: item.baseCaption })) return;
+    void runAutoCaptionFromMedia({
+      overwrite: false,
+      blobOverride: reusedItemBlob(item),
+      isStale: () => singlePhotoRef.current !== item || !mountedRef.current,
+    });
+  });
+
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
   // `reuseMediaItemId` (a fresh navigation from the media library always
   // remounts this component, so the realistic case of the param changing
@@ -1380,6 +1432,7 @@ function CreatePostFormInner({
         setPlatformOverrides((current) => captionsAfterReuseLoaded(item, "", current).overrides);
         // R31 publishing L7: a press while it loaded may have left a line about the file.
         setUploadError((current) => uploadErrorAfterLibraryLoad(current, "loaded"));
+        captionReusedItem(item);
         setReuseLoading(false);
       } catch {
         if (cancelled) return;
@@ -1455,6 +1508,9 @@ function CreatePostFormInner({
     setReuseItem(null);
     setSingleAltText("");
     singlePhotoRef.current = null;
+    // A caption still being written for the item is dropped (its isStale), so
+    // its busy state ends here; no other pick can be under way in reuse mode.
+    setAutoCaptionLoading(false);
     setPlatformOverrides(kept.overrides);
     setUploadCaption(kept.caption);
   }, [reuseItem, uploadCaption, platformOverrides, setSingleAltText]);
@@ -2400,6 +2456,7 @@ function CreatePostFormInner({
   // MediaItem's public blob URL in reuse mode, else the local object-URL
   // preview of the freshly attached file.
   const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
+  const captionSource = captionFromMediaSource({ photoSet, uploadedBlob, reuseItem });
 
   // G1 review: what the confirmation says about platforms not sent.
   const banner = notSentBanner(notSent);
@@ -2633,15 +2690,7 @@ function CreatePostFormInner({
                   value={singleAltText}
                   onChange={setSingleAltText}
                   onWrite={() =>
-                    describeSinglePhoto(
-                      {
-                        url: reuseItem.storageLocation,
-                        filename: reuseItem.originalFilename,
-                        mimeType: reuseItem.mimeType,
-                        sizeBytes: reuseItem.sizeBytes,
-                      },
-                      reuseItem,
-                    )
+                    describeSinglePhoto(reusedItemBlob(reuseItem), reuseItem)
                   }
                 />
               )}
@@ -2788,14 +2837,14 @@ function CreatePostFormInner({
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  runAutoCaptionFromMedia(
-                    photoSet.length > 0
-                      ? { overwrite: true, blobOverride: photoSet[0].blob ?? undefined, fileOverride: photoSet[0].file }
-                      : { overwrite: true },
-                  )
+                  runAutoCaptionFromMedia({
+                    overwrite: true,
+                    blobOverride: captionSource.blob ?? undefined,
+                    fileOverride: captionSource.file,
+                  })
                 }
                 loading={autoCaptionLoading}
-                disabled={!(photoSet.length > 0 ? photoSet[0].blob : uploadedBlob)}
+                disabled={!captionSource.blob}
               >
                 {!autoCaptionLoading && <Sparkles className="h-4 w-4" aria-hidden />}
                 Caption from media

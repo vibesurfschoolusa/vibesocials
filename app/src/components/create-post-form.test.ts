@@ -24,6 +24,9 @@ import {
   LibraryFileStatus,
   UntouchedSubmitStatus,
   captionsAfterReuseLoaded,
+  captionFromMediaSource,
+  reuseAutoCaptionWanted,
+  reusedItemBlob,
   NothingConnectedState,
   composerPageState,
   composerPageView,
@@ -1201,7 +1204,7 @@ describe("Create's AI buttons and connections line", () => {
   const source = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
   it("Caption from media and Improve caption are loading, not disabled, while busy", () => {
     expect(source).toContain(
-      "loading={autoCaptionLoading}\n                disabled={!(photoSet.length > 0 ? photoSet[0].blob : uploadedBlob)}",
+      "loading={autoCaptionLoading}\n                disabled={!captionSource.blob}",
     );
     expect(source).toContain("loading={enhancingCaption}\n                disabled={!uploadCaption.trim()}");
   });
@@ -1586,5 +1589,64 @@ describe("a refusal line shows only while the form still refuses", () => {
     expect(raw).toContain("const shownUploadError = formLineShown(uploadError, keptRefusal, sendCheck);");
     expect(raw).toContain("{shownUploadError && <Alert ref={uploadErrorRef}");
     expect(raw).not.toContain("refusalFormKey");
+  });
+});
+
+// R36 new-customer L3: a file reused from Media (a client's /u upload too, saved
+// with an empty caption) gets "Caption from media" and the automatic caption,
+// with the same rules as a fresh upload, from the item's own blob.
+describe("Caption from media for a file reused from Media", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  const item = {
+    storageLocation: "https://store.public.blob.vercel-storage.com/ws/beach.jpg",
+    originalFilename: "beach.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 1234,
+  };
+  const BLOB = { url: item.storageLocation, filename: "beach.jpg", mimeType: "image/jpeg", sizeBytes: 1234 };
+
+  it("the item's blob is its own address, name, type and size", () => {
+    expect(reusedItemBlob(item)).toEqual(BLOB);
+  });
+
+  it("empty caption box and an item without a caption: the caption is written, if the setting is on", () => {
+    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "", itemCaption: "" })).toBe(true);
+    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "  ", itemCaption: null })).toBe(true);
+    expect(reuseAutoCaptionWanted({ enabled: false, typedCaption: "", itemCaption: "" })).toBe(false);
+  });
+
+  it("a caption of its own, or one typed: not written automatically", () => {
+    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "", itemCaption: "Sunset surf" })).toBe(false);
+    expect(reuseAutoCaptionWanted({ enabled: true, typedCaption: "My words", itemCaption: "" })).toBe(false);
+  });
+
+  it("the button is enabled with the reused item's blob, whatever its caption or type", () => {
+    for (const mimeType of ["image/jpeg", "video/mp4", "application/pdf"]) {
+      const source = captionFromMediaSource({ photoSet: [], uploadedBlob: null, reuseItem: { ...item, mimeType } });
+      expect(source.blob, mimeType).toEqual({ ...BLOB, mimeType });
+    }
+    expect(captionFromMediaSource({ photoSet: [], uploadedBlob: null, reuseItem: null }).blob).toBeNull();
+  });
+
+  it("a fresh upload and a photo set keep their own blob", () => {
+    const file = new File(["x"], "a.jpg", { type: "image/jpeg" });
+    expect(captionFromMediaSource({ photoSet: [], uploadedBlob: BLOB, reuseItem: null })).toEqual({ blob: BLOB });
+    expect(captionFromMediaSource({ photoSet: [{ blob: BLOB, file }], uploadedBlob: null, reuseItem: null })).toEqual({ blob: BLOB, file });
+    expect(captionFromMediaSource({ photoSet: [{ blob: null, file }], uploadedBlob: null, reuseItem: null }).blob).toBeNull();
+  });
+
+  it("the button presses and greys out from that source", () => {
+    const start = raw.indexOf("const captionSource = captionFromMediaSource(");
+    expect(start).toBeGreaterThan(-1);
+    expect(raw).toMatch(/blobOverride: captionSource\.blob \?\? undefined,\s+fileOverride: captionSource\.file,/);
+    expect(raw).toContain("disabled={!captionSource.blob}");
+  });
+
+  it("the loaded item is captioned with its own blob, by the rule, with the setting and caption as they are now", () => {
+    const load = raw.slice(raw.indexOf("const item = data.item;"), raw.indexOf("setReuseLoading(false);", raw.indexOf("const item = data.item;")));
+    expect(load).toContain("captionReusedItem(item);");
+    const event = raw.slice(raw.indexOf("const captionReusedItem = useEffectEvent("), raw.indexOf("});", raw.indexOf("const captionReusedItem = useEffectEvent(")));
+    expect(event).toContain("reuseAutoCaptionWanted({ enabled: autoCaptionEnabled, typedCaption: uploadCaption, itemCaption: item.baseCaption })");
+    expect(event).toMatch(/runAutoCaptionFromMedia\(\{\s*overwrite: false,\s*blobOverride: reusedItemBlob\(item\),/);
   });
 });
