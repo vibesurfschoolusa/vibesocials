@@ -35,6 +35,7 @@ import {
   createdRowWhen,
   captionProgressText,
   classifySendResponse,
+  confirmedInQueue,
   filesThatFit,
   minFirstDay,
   minRowTime,
@@ -141,6 +142,8 @@ export interface BulkRow {
   postId: string | null;
   /** The last send got no clear answer: the post may exist, so it is not sent again on its own. */
   uncertain: boolean;
+  /** The button that send came from, so "It is in the Queue" knows whether the post holds a time. */
+  uncertainMode: BulkFinishMode | null;
   sending: boolean;
   result: string | null;
   /** The server's refusal, or another send failure, as its sentence. */
@@ -175,6 +178,7 @@ function newRow(file: Pick<File, "name" | "type">): BulkRow {
     whenSetByHand: false,
     postId: null,
     uncertain: false,
+    uncertainMode: null,
     sending: false,
     result: null,
     sendError: null,
@@ -803,11 +807,11 @@ export function BulkPostsForm({
   }
 
   function markInQueue(id: string) {
-    updateRow(id, { uncertain: false, postId: "confirmed-in-queue", result: "In the Queue" });
+    updateRow(id, (row) => ({ ...confirmedInQueue(row), result: "In the Queue" }));
   }
 
   function sendAgain(id: string) {
-    updateRow(id, { uncertain: false });
+    updateRow(id, { uncertain: false, uncertainMode: null });
   }
 
   // Feed, Story, or Feed and Story for the batch. Every row is one file, so the
@@ -911,7 +915,7 @@ export function BulkPostsForm({
         } else if (result.outcome === "refused") {
           updateRow(id, { sending: false, sendError: result.error });
         } else {
-          updateRow(id, { sending: false, uncertain: true });
+          updateRow(id, { sending: false, uncertain: true, uncertainMode: mode });
         }
       }
     } finally {

@@ -100,6 +100,25 @@ export function createdRowWhen(mode: BulkFinishMode, when: string): string {
   return mode === "draft" ? "" : when;
 }
 
+/**
+ * "It is in the Queue" for a send that got no answer (R43 review): the post
+ * is taken as created, with the time its button gave it, so a draft holds
+ * none (createdRowWhen). Without a stored mode the shown time stays.
+ */
+export function confirmedInQueue(row: { when: string; uncertainMode: BulkFinishMode | null }): {
+  uncertain: false;
+  uncertainMode: null;
+  postId: string;
+  when: string;
+} {
+  return {
+    uncertain: false,
+    uncertainMode: null,
+    postId: "confirmed-in-queue",
+    when: row.uncertainMode ? createdRowWhen(row.uncertainMode, row.when) : row.when,
+  };
+}
+
 /** A created row with no time: a draft, which holds no place in the schedule. */
 export function rowHoldsNoTime(row: { postId: string | null; when: string }): boolean {
   return row.postId !== null && row.when === "";

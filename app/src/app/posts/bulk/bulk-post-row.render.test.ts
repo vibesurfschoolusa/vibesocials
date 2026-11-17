@@ -37,6 +37,7 @@ function row(overrides: Partial<BulkRow> = {}): BulkRow {
     whenSetByHand: false,
     postId: null,
     uncertain: false,
+    uncertainMode: null,
     sending: false,
     result: null,
     sendError: null,
@@ -363,5 +364,21 @@ describe("Add many row: caption failures are announced", () => {
     expect(render(row({ captionStatus: "failed", captionError: null, improving: true }))).toMatch(
       /id="bulk-row-r1-caption-status" class="[^"]*"><\/p>/,
     );
+  });
+});
+
+// R43 review: the form remembers which button a no-answer send came from, and
+// "It is in the Queue" goes through confirmedInQueue with it.
+describe("Add many form: It is in the Queue", () => {
+  const formSource = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+
+  it("the no-answer branch stores the pressed mode, and markInQueue uses it", () => {
+    expect(formSource).toContain("updateRow(id, { sending: false, uncertain: true, uncertainMode: mode });");
+    expect(formSource).toMatch(/function markInQueue\(id: string\) \{\s*updateRow\(id, \(row\) => \(\{ \.\.\.confirmedInQueue\(row\), result: "In the Queue" \}\)\);/);
+  });
+
+  it("a draft confirmed in the Queue shows no time", () => {
+    const html = render(row({ postId: "confirmed-in-queue", when: "", result: "In the Queue" }));
+    expect(html).toContain("No time yet: set it in the Queue");
   });
 });

@@ -19,6 +19,7 @@ import {
   captionProgressText,
   createdRowWhen,
   classifySendResponse,
+  confirmedInQueue,
   filesThatFit,
   minFirstDay,
   minRowTime,
@@ -267,6 +268,41 @@ describe("a created draft holds no time", () => {
     const rows = applySlotSchedule([...drafts, ...autoRows(4).slice(2)], slots, [], now);
 
     expect(rows.map((r) => r.when)).toEqual(["", "", "2026-11-10T09:00", "2026-11-12T18:00"]);
+  });
+});
+
+// R43 review: a send that got no answer and is then confirmed with "It is in
+// the Queue" holds what its button made: a draft no time, a scheduled post its own.
+describe("a row confirmed in the Queue after no answer", () => {
+  type UncertainRow = TestRow & { uncertainMode: "schedule" | "draft" | null };
+  const sentWithoutAnswer = (mode: "schedule" | "draft"): UncertainRow[] =>
+    applySchedule(autoRows(3), CONTROLS).map((r) => ({ ...r, uncertain: true, uncertainMode: mode }));
+  const confirmAll = (rows: UncertainRow[]) => rows.map((r) => ({ ...r, ...confirmedInQueue(r) }));
+
+  it("a draft holds no time, and rows added afterwards start from the First day", () => {
+    const confirmed = confirmAll(sentWithoutAnswer("draft"));
+    expect(confirmed.map((r) => [r.postId, r.uncertain, r.when])).toEqual([
+      ["confirmed-in-queue", false, ""],
+      ["confirmed-in-queue", false, ""],
+      ["confirmed-in-queue", false, ""],
+    ]);
+    const added = applySchedule([...confirmed, ...autoRows(5).slice(3).map((r) => ({ ...r, uncertainMode: null }))], CONTROLS);
+    expect(added.map((r) => r.when)).toEqual(["", "", "", "2026-11-11T18:00", "2026-11-12T18:00"]);
+  });
+
+  it("a scheduled post keeps its time and its place", () => {
+    const confirmed = confirmAll(sentWithoutAnswer("schedule"));
+    expect(confirmed.map((r) => r.when)).toEqual(["2026-11-11T18:00", "2026-11-12T18:00", "2026-11-13T18:00"]);
+    expect(applySchedule(confirmed, { ...CONTROLS, firstDay: "2026-11-20" }).map((r) => r.when)).toEqual([
+      "2026-11-11T18:00",
+      "2026-11-12T18:00",
+      "2026-11-13T18:00",
+    ]);
+  });
+
+  it("until confirmed, an uncertain row stays locked at its time", () => {
+    const rows = applySchedule(sentWithoutAnswer("draft"), { ...CONTROLS, firstDay: "2026-11-20" });
+    expect(rows.map((r) => r.when)).toEqual(["2026-11-11T18:00", "2026-11-12T18:00", "2026-11-13T18:00"]);
   });
 });
 
