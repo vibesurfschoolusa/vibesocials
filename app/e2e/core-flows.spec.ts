@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
+import { seedConnectLink, seedReviewLink } from "./support/seed-client-links";
 import { seedWorkspaceConnection } from "./support/seed-connection";
 
 /**
@@ -414,6 +415,81 @@ test.describe(
       // the shared workspace now has 2 members, so the card shows
       // "by {creator name}" next to the timestamp.
       await expect(page.getByText(`by ${member.name}`)).toBeVisible();
+    });
+  },
+);
+
+/**
+ * Hotfix (digest 2711503741): Button carried its own onClick without "use
+ * client", so every server page that rendered one crashed with "Event handlers
+ * cannot be passed to Client Component props" and showed Next's error page.
+ * Unit tests render components directly and cannot see it; these open the
+ * three pages that crashed, as a real browser would.
+ */
+const NEXT_ERROR_PAGE = /couldn.t load|application error/i;
+
+// The connect page lists only platforms whose app credentials the server has
+// (src/lib/connectLink.ts PLATFORM_ENV). Placeholder values are enough to show
+// the Connect button; nothing here presses it. The Playwright process and the
+// server it boots share this environment (webServer.env is merged over it).
+const PINTEREST_ENV = ["PINTEREST_APP_ID", "PINTEREST_APP_SECRET", "PINTEREST_REDIRECT_URI"];
+const pinterestConfigured = PINTEREST_ENV.every((name) => !!process.env[name]?.trim());
+
+test.describe(
+  dbReady ? "server pages that render a Button" : "server pages that render a Button (skipped — needs E2E_DATABASE_URL)",
+  () => {
+    test.skip(!dbReady, "Set E2E_DATABASE_URL to a seeded test DB to run these");
+
+    test("signed in, /reports renders its heading and month picker", async ({ page, request }) => {
+      await loginAsFreshUser(page, request, "reports");
+
+      const response = await page.goto("/reports");
+
+      expect(response?.status()).toBe(200);
+      await expect(page.getByRole("heading", { level: 1, name: "Reports" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Show", exact: true })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
+    });
+
+    test("a client opens /v/[token]/report through a review link", async ({ page, request }) => {
+      const owner = freshTestUser("review-report");
+      await registerViaApi(request, owner);
+      const token = await seedReviewLink(owner.email);
+
+      const response = await page.goto(`/v/${token}/report`);
+
+      expect(response?.status()).toBe(200);
+      await expect(page.getByRole("link", { name: "Back to upcoming posts" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Show", exact: true })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
+    });
+
+    test("a client opens /c/[token] through a connect link", async ({ page, request }) => {
+      const owner = freshTestUser("connect-link");
+      await registerViaApi(request, owner);
+      const token = await seedConnectLink(owner.email, ["pinterest"]);
+
+      const response = await page.goto(`/c/${token}`);
+
+      expect(response?.status()).toBe(200);
+      await expect(page.getByRole("heading", { level: 1, name: "Connect your accounts" })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
+    });
+
+    test("the connect link shows a Connect button for a platform not yet connected", async ({ page, request }) => {
+      test.skip(
+        !pinterestConfigured,
+        `Needs placeholder Pinterest app credentials (${PINTEREST_ENV.join(", ")}) in the E2E environment, or the page lists no platform`,
+      );
+      const owner = freshTestUser("connect-button");
+      await registerViaApi(request, owner);
+      const token = await seedConnectLink(owner.email, ["pinterest"]);
+
+      await page.goto(`/c/${token}`);
+
+      const row = page.getByRole("listitem").filter({ hasText: "Pinterest" });
+      await expect(row.getByRole("button", { name: "Connect" })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
     });
   },
 );
