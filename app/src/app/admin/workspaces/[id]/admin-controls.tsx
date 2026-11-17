@@ -124,7 +124,9 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
       setMessage(result.error ?? null);
       return;
     }
-    if (!result.changed) setMessage(kind === "pause" ? "It was already paused." : "It was not paused.");
+    // R41 pages L7: a change is said in the status line, as Limits and Billing say theirs.
+    if (result.changed) setMessage(kind === "pause" ? "Workspace paused." : "Workspace resumed.");
+    else setMessage(kind === "pause" ? "It was already paused." : "It was not paused.");
     setReason("");
     router.refresh();
   }
