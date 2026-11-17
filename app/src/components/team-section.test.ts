@@ -78,7 +78,7 @@ describe("readTeamList", () => {
       asFetch(async () => Response.json({ error: "Only the workspace owner can do this." }, { status: 403 })),
       { forbidden: ROLE_CHANGED_MESSAGE },
     );
-    expect(read).toEqual({ error: "Your role or workspace changed in another tab. Reload the page." });
+    expect(read).toEqual({ error: "Your role or workspace changed. Reload the page." });
     expect("error" in read && loadErrorAsksReload(read.error)).toBe(true);
   });
 

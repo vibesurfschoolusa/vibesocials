@@ -216,7 +216,7 @@ describe("Team: a failed load, Retry and focus", () => {
       );
     });
     await settle();
-    expect(container.textContent).toContain("Your role or workspace changed in another tab. Reload the page.");
+    expect(container.textContent).toContain("Your role or workspace changed. Reload the page.");
     expect(button("Reload page")).not.toBeNull();
     expect(button("Retry")).toBeNull();
   });
