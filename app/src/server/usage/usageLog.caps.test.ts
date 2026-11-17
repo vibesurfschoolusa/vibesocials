@@ -283,7 +283,8 @@ beforeEach(() => {
   store.limits = new Map();
   store.timeZones = {};
   sendEmailMock.mockReset();
-  sendEmailMock.mockResolvedValue(undefined);
+  // sendEmail answers whether the email went; the once-a-day email keeps its day only when one did.
+  sendEmailMock.mockResolvedValue(true);
   othersSent = 0;
   vi.stubEnv("BILLING_ENABLED", "");
   vi.stubEnv("ADMIN_EMAILS", "ops@example.com");
