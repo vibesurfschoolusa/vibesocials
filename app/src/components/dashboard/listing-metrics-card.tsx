@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import type { WorkspaceRole } from "@prisma/client";
 
 import type { ListingMetricsResponse } from "@/app/api/insights/listing-metrics/route";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,15 +42,26 @@ function daysSince(key: string, today: Date): number {
   );
 }
 
+/**
+ * Who reconnects Google, by the viewer's role: only an owner can. Lead review
+ * (R35): with the role unknown (setup not read), a sentence true for both.
+ */
+const RECONNECT_LEAD: Record<WorkspaceRole | "unknown", string> = {
+  owner: "Check",
+  member: "The workspace owner can reconnect",
+  unknown: "An owner can reconnect",
+};
+
 /** The card itself, from the route's answer; nothing without a listing. */
 export function ListingMetricsCardView({
   listing,
   today,
-  isMember = false,
+  viewerRole = null,
 }: {
   listing: Listing | null;
   today: Date;
-  isMember?: boolean;
+  /** The viewer's role, or null when the dashboard could not read it. */
+  viewerRole?: WorkspaceRole | null;
 }) {
   if (!listing) return null;
   const end = dayLabel(listing.endDay, today);
@@ -66,7 +78,7 @@ export function ListingMetricsCardView({
           <p className="text-sm text-warning-ontint">
             {/* R35 new-customer L3: the Connections section of Settings; only an owner can reconnect. */}
             Google has sent no new numbers since {end}.{" "}
-            {isMember ? "The workspace owner can reconnect" : "Check"} Google Business Profile under{" "}
+            {RECONNECT_LEAD[viewerRole ?? "unknown"]} Google Business Profile under{" "}
             <Link href={SETTINGS_CONNECTIONS_HREF} className="underline">
               Connections in Settings
             </Link>
@@ -101,7 +113,13 @@ export function ListingMetricsCardView({
  * supplementary. R32: it reads for the workspace the page was drawn for, so a
  * refusal (another tab switched) also renders nothing.
  */
-export function ListingMetricsCard({ workspaceId, isMember = false }: { workspaceId: string | null; isMember?: boolean }) {
+export function ListingMetricsCard({
+  workspaceId,
+  viewerRole = null,
+}: {
+  workspaceId: string | null;
+  viewerRole?: WorkspaceRole | null;
+}) {
   const [listing, setListing] = useState<Listing | null>(null);
 
   useEffect(() => {
@@ -121,5 +139,5 @@ export function ListingMetricsCard({ workspaceId, isMember = false }: { workspac
     };
   }, [workspaceId]);
 
-  return <ListingMetricsCardView listing={listing} today={new Date()} isMember={isMember} />;
+  return <ListingMetricsCardView listing={listing} today={new Date()} viewerRole={viewerRole} />;
 }

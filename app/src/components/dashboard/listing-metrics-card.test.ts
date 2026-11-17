@@ -19,8 +19,8 @@ const LISTING: Listing = {
 };
 const TODAY = new Date("2026-11-10T15:00:00.000Z");
 
-const render = (listing: Listing | null, today: Date = TODAY, isMember = false) =>
-  renderToStaticMarkup(createElement(ListingMetricsCardView, { listing, today, isMember }));
+const render = (listing: Listing | null, today: Date = TODAY, viewerRole: "owner" | "member" | null = "owner") =>
+  renderToStaticMarkup(createElement(ListingMetricsCardView, { listing, today, viewerRole }));
 
 describe("ListingMetricsCardView", () => {
   it("shows the four numbers, each with its change against the 28 days before, and where they come from", () => {
@@ -50,16 +50,26 @@ describe("ListingMetricsCardView", () => {
   });
 
   it("tells a member the workspace owner can reconnect it", () => {
-    const html = render(LISTING, new Date("2026-11-17T12:00:00.000Z"), true);
+    const html = render(LISTING, new Date("2026-11-17T12:00:00.000Z"), "member");
     expect(html.replace(/<[^>]+>/g, "")).toContain(
       "Google has sent no new numbers since 6 November. The workspace owner can reconnect Google Business Profile under Connections in Settings.",
     );
     expect(html).toContain('href="/settings#connections"');
   });
 
-  it("the dashboard tells the card whether the viewer is a member", () => {
+  // Lead review (R35): the dashboard's setup can fail to load, and then the
+  // role is unknown: a sentence true for an owner and a member alike.
+  it("with the role unknown, says an owner can reconnect it", () => {
+    const html = render(LISTING, new Date("2026-11-17T12:00:00.000Z"), null);
+    expect(html.replace(/<[^>]+>/g, "")).toContain(
+      "Google has sent no new numbers since 6 November. An owner can reconnect Google Business Profile under Connections in Settings.",
+    );
+    expect(html).toContain('href="/settings#connections"');
+  });
+
+  it("the dashboard passes the role it knows, or null when setup could not be read", () => {
     const home = readFileSync(join(__dirname, "dashboard-home.tsx"), "utf8");
-    expect(home).toContain('<ListingMetricsCard workspaceId={workspaceId} isMember={setup?.role === "member"} />');
+    expect(home).toContain("<ListingMetricsCard workspaceId={workspaceId} viewerRole={setup?.role ?? null} />");
   });
 
   it("names the year when the window ends in another year", () => {
