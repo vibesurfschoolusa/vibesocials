@@ -73,7 +73,7 @@ describe("Change cover: the chosen image", () => {
   it("pick, close, reopen: the preview and the file name show", async () => {
     let chosen: CoverChoice = { kind: "default" };
     await show(chosen, (choice) => (chosen = choice));
-    const upload = find(container, (n) => n.nodeName === "INPUT" && props(n)?.value === "upload")!;
+    const upload = find(container, (n) => n.nodeName === "INPUT" && (props(n)?.value as unknown) === "upload")!;
     await act(async () => {
       props(upload).onChange();
     });
