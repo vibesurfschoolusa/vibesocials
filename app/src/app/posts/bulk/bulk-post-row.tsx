@@ -17,6 +17,7 @@ import { focusAfterPress } from "@/lib/focusAfter";
 import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
 import { skippedForMediaLine } from "@/lib/postTargets";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
 import { formatCoverTime, type CoverChoice } from "@/lib/videoCover";
 import type { BulkRow } from "./bulk-posts-form";
 
@@ -85,7 +86,7 @@ function Thumbnail({ row }: { row: BulkRow }) {
  * on; the server's own text (a field name, a configuration or provider error)
  * is never shown, and the browser console keeps it.
  */
-export function captionFailedText(status: number | null, code: unknown): string {
+export function captionFailedText(status: number | null, code: unknown, waitSeconds?: number): string {
   // R21 publishing-flow L1: the session ended (another tab, a new password);
   // asking again fails until the person signs in.
   if (status === 401) return SIGNED_OUT_ERROR;
@@ -99,7 +100,10 @@ export function captionFailedText(status: number | null, code: unknown): string 
     return "No caption was written: your workspace has reached today's AI limit. Write one yourself, or try again tomorrow.";
   }
   if (status === 429) {
-    return "No caption was written: too many requests. Wait a few minutes, then ask again, or write one yourself.";
+    // R42 review: the limit's own wait (up to 15 minutes), in the routes' words, when the answer names it.
+    return waitSeconds === undefined
+      ? "No caption was written: too many requests. Wait a few minutes, then ask again, or write one yourself."
+      : `No caption was written. ${tooManyTriesSentence(waitSeconds, "ask again, or write one yourself")}`;
   }
   // Paused, plan or trial ended, email unconfirmed: asking again fails until
   // that is fixed, and the page's own notice says how.

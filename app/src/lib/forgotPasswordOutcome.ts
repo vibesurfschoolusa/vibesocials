@@ -11,6 +11,7 @@
 
 import { answerLostText } from "./answerLost";
 import { LIMIT_UNCHECKED_MESSAGE } from "./limitUncheckedMessage";
+import { tooManyTriesSentence, waitSecondsOf } from "./tooManyTriesText";
 
 export type ForgotPasswordOutcome = { kind: "sent" } | { kind: "error"; message: string };
 
@@ -20,14 +21,21 @@ export type ForgotPasswordOutcome = { kind: "sent" } | { kind: "error"; message:
  * whether an account exists, so it is shown; so is the shared couldn't-check
  * sentence. Other bodies are not read.
  */
-export function forgotPasswordOutcome(status: number | null, data?: { error?: unknown } | null): ForgotPasswordOutcome {
+export function forgotPasswordOutcome(
+  status: number | null,
+  data?: { error?: unknown; retryAfterSeconds?: unknown } | null,
+  retryAfterHeader?: string | number | null,
+): ForgotPasswordOutcome {
   if (status !== null && status >= 200 && status < 300) {
     return { kind: "sent" };
   }
   if (status === 429) {
+    // R42 review: the limit is up to 15 minutes, so the route's wait, in its words. The wait
+    // depends only on the request, never on whether an account exists.
+    const wait = waitSecondsOf(data, retryAfterHeader);
     return {
       kind: "error",
-      message: "Too many requests. Please wait a few minutes and try again.",
+      message: wait === undefined ? "Too many requests. Please wait a few minutes and try again." : tooManyTriesSentence(wait),
     };
   }
   if (status === null) {

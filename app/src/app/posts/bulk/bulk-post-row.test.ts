@@ -21,6 +21,16 @@ describe("Add many: a caption that failed", () => {
     );
   });
 
+  // R42 review: the limit's own wait (up to 15 minutes), when the answer names it.
+  it("429 with a wait: the routes' words, then write one yourself", () => {
+    expect(captionFailedText(429, undefined, 14 * 60)).toBe(
+      "No caption was written. Too many tries. Wait 14 minutes, then ask again, or write one yourself.",
+    );
+    expect(captionFailedText(429, undefined, 20)).toBe(
+      "No caption was written. Too many tries. Wait a minute, then ask again, or write one yourself.",
+    );
+  });
+
   it("the daily limit: its own sentence", () => {
     expect(captionFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).toBe(
       "No caption was written: your workspace has reached today's AI limit. Write one yourself, or try again tomorrow.",

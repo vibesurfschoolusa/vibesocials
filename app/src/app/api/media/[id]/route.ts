@@ -190,9 +190,10 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
     if (!outcome.ok) {
       return NextResponse.json(
         {
-          // R42 pages-a L4: which posts can hold a file, and the step that frees it.
+          // R42 pages-a L4 and review: true for every post refused here (draft, awaiting approval,
+          // scheduled, pending, in progress), with the step that frees the file for each.
           error:
-            "A scheduled, draft or publishing post uses this file. Cancel or delete that post in Queue first, or wait until it has gone out.",
+            "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or publishing, wait until it has finished.",
           code: "MEDIA_IN_USE",
         },
         { status: 409 },
@@ -205,9 +206,10 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
       userId: workspaceContext.user.id,
       workspaceId: workspaceContext.workspace.id,
     });
-    // The transaction rolled back, so nothing changed. The code tells the page this 5xx is ours.
+    // R42 review: the storage delete can land before the commit fails, so this never says nothing
+    // changed; trying again is safe (`del` is idempotent). The code tells the page this 5xx is ours.
     return NextResponse.json(
-      { error: "Couldn't delete the file. Nothing changed. Try again in a moment.", code: "MEDIA_DELETE_FAILED" },
+      { error: "Couldn't delete the file. Try again in a moment.", code: "MEDIA_DELETE_FAILED" },
       { status: 500 },
     );
   }

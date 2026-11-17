@@ -18,6 +18,7 @@ import type { coverRequestFields } from "@/lib/videoCover";
 import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { tooManyTriesSentence, waitSecondsOf } from "@/lib/tooManyTriesText";
 
 /**
  * Add many's share of what makes Create pleasant (P1 parity): Improve, the
@@ -63,7 +64,7 @@ export async function coverUploadFailedText(
  * captionFailedText says it for a caption (`status` null: no answer at all).
  * The server's own text stays in the console.
  */
-export function improveFailedText(status: number | null, code: unknown): string {
+export function improveFailedText(status: number | null, code: unknown, waitSeconds?: number): string {
   if (status === 401) return SIGNED_OUT_ERROR;
   // R31: a page for another workspace, or from before the release.
   const workspaceText = pageWorkspaceRefusalText(code);
@@ -72,7 +73,10 @@ export function improveFailedText(status: number | null, code: unknown): string 
     return "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.";
   }
   if (status === 429) {
-    return "The caption was not improved: too many requests. Wait a few minutes, then try again.";
+    // R42 review: the limit's own wait (up to 15 minutes), in the routes' words, when the answer names it.
+    return waitSeconds === undefined
+      ? "The caption was not improved: too many requests. Wait a few minutes, then try again."
+      : `The caption was not improved. ${tooManyTriesSentence(waitSeconds)}`;
   }
   if (status === 403) {
     return "The caption was not improved: this workspace can't use AI right now. See the notice at the top of the page.";
@@ -109,7 +113,8 @@ export async function requestImprovedCaption(
     if (!response.ok || typeof data?.enhancedCaption !== "string" || !data.enhancedCaption.trim()) {
       // The server's own text stays in the console, as for a failed caption.
       console.error("[Add many] Improve failed", { status: response.status, code: data?.code, error: data?.error });
-      return { ok: false, error: improveFailedText(response.ok ? null : response.status, data?.code) };
+      const wait = waitSecondsOf(data, response.headers.get("Retry-After"));
+      return { ok: false, error: improveFailedText(response.ok ? null : response.status, data?.code, wait) };
     }
     return { ok: true, caption: data.enhancedCaption };
   } catch (error: unknown) {

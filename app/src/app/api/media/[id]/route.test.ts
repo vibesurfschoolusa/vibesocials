@@ -297,8 +297,9 @@ describe("DELETE /api/media/[id]", () => {
     expect(response.status).toBe(409);
     expect(body.code).toBe("MEDIA_IN_USE");
     // R42 pages-a L4: which post, and what to do about it.
+    // R42 review: true for every post the route refuses (draft, awaiting approval, scheduled, pending, in progress).
     expect(body.error).toBe(
-      "A scheduled, draft or publishing post uses this file. Cancel or delete that post in Queue first, or wait until it has gone out.",
+      "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or publishing, wait until it has finished.",
     );
     expect(mediaItemUpdateMock).not.toHaveBeenCalled();
     expect(delMock).not.toHaveBeenCalled();
@@ -366,9 +367,9 @@ describe("DELETE /api/media/[id]", () => {
     const response = await DELETE(dummyRequest, ctx("media-1"));
 
     expect(response.status).toBe(500);
-    // R42 pages-a L4: the transaction rolled back, so nothing changed; the code lets the page trust that.
+    // R42 review: the storage delete can land before the commit fails, so it never claims nothing changed.
     await expect(response.json()).resolves.toEqual({
-      error: "Couldn't delete the file. Nothing changed. Try again in a moment.",
+      error: "Couldn't delete the file. Try again in a moment.",
       code: "MEDIA_DELETE_FAILED",
     });
 

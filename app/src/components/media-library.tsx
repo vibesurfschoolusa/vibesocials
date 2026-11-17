@@ -112,8 +112,8 @@ export const MEDIA_GONE_TEXT = "This file no longer exists.";
 
 /**
  * A refused delete: the route's sentence. R42 pages-a L4: a 5xx is the
- * route's only when it carries its MEDIA_DELETE_FAILED code (its transaction
- * rolled back); any other 5xx may come after the delete, so it says so.
+ * route's only when it carries its MEDIA_DELETE_FAILED code (it says to try
+ * again); any other 5xx may come after the delete, so it says so.
  */
 export function mediaDeleteFailureText(status: number, data: { error?: string; code?: string } | null): string {
   if (status === 404) return MEDIA_GONE_TEXT;

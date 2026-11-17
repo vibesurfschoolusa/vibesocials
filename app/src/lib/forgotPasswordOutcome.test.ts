@@ -74,3 +74,18 @@ describe("forgotPasswordOutcome when the limit couldn't be checked", () => {
     expect(forgotPasswordOutcome(502, { error: "x" })).toEqual(GENERIC);
   });
 });
+
+// R42 review: the limit is up to 15 minutes, so the page says the route's own wait.
+describe("forgotPasswordOutcome on a 429", () => {
+  it("says the wait the route answered", () => {
+    expect(forgotPasswordOutcome(429, { error: "Too many tries. Wait 12 minutes, then try again.", retryAfterSeconds: 700 })).toEqual({
+      kind: "error",
+      message: "Too many tries. Wait 12 minutes, then try again.",
+    });
+  });
+
+  it("falls back to the Retry-After header, then to the fixed sentence", () => {
+    expect(forgotPasswordOutcome(429, null, 90)).toEqual({ kind: "error", message: "Too many tries. Wait 2 minutes, then try again." });
+    expect(forgotPasswordOutcome(429, null)).toEqual(TOO_MANY);
+  });
+});

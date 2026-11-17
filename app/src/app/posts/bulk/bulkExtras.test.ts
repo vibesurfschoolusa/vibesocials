@@ -307,6 +307,10 @@ describe("Add many: why Improve failed", () => {
     expect(improveFailedText(429, undefined)).toBe(
       "The caption was not improved: too many requests. Wait a few minutes, then try again.",
     );
+    // R42 review: the limit's own wait, when the answer names it.
+    expect(improveFailedText(429, undefined, 12 * 60)).toBe(
+      "The caption was not improved. Too many tries. Wait 12 minutes, then try again.",
+    );
     expect(improveFailedText(403, "WORKSPACE_PAUSED")).toBe(
       "The caption was not improved: this workspace can't use AI right now. See the notice at the top of the page.",
     );
@@ -321,7 +325,8 @@ describe("Add many: why Improve failed", () => {
   it("requestImprovedCaption returns the mapped sentence and never a caption on failure", async () => {
     for (const [status, body, expected] of [
       [429, { error: "x", code: "AI_WORKSPACE_DAILY_LIMIT" }, improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")],
-      [429, { error: "Too many requests, slow down." }, improveFailedText(429, undefined)],
+      [429, { error: "Too many tries. Wait 4 minutes, then try again.", retryAfterSeconds: 230 }, "The caption was not improved. Too many tries. Wait 4 minutes, then try again."],
+      [429, { error: "unreadable" }, improveFailedText(429, undefined)],
       [403, { error: "Paused", code: "WORKSPACE_PAUSED" }, improveFailedText(403, "WORKSPACE_PAUSED")],
       [413, { error: "big" }, improveFailedText(413, undefined)],
       [400, { error: "too long", code: "AI_INPUT_TOO_LONG" }, improveFailedText(400, "AI_INPUT_TOO_LONG")],
@@ -622,5 +627,18 @@ describe("R41: rowAiRequests", () => {
     second.end();
     expect(second.live()).toBe(true);
     expect(requests.letGo("r1", "altText")).toBe(false);
+  });
+});
+
+// R42 review: a 429 whose body can't be read still says the wait from Retry-After.
+describe("requestImprovedCaption's wait from Retry-After", () => {
+  it("names the header's wait when the body is not JSON", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response("<html>busy</html>", { status: 429, headers: { "Retry-After": "600" } }),
+    ) as unknown as typeof fetch;
+    await expect(requestImprovedCaption("Keep me", "ws-1", fetchImpl)).resolves.toEqual({
+      ok: false,
+      error: "The caption was not improved. Too many tries. Wait 10 minutes, then try again.",
+    });
   });
 });
