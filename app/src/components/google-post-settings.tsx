@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Card } from "@/components/ui/card";
+import { CharacterCount } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -34,6 +35,29 @@ type OfferFields = NonNullable<GoogleBusinessPostMetadata["offer"]>;
 const EMPTY_DATES = { title: "", startDate: "", endDate: "" };
 
 /**
+ * R45 pages-b L1: a field longer than Google takes, counted trimmed as the
+ * check (optionalText) counts, and its sentence; null while it fits.
+ */
+function tooLongText(text: string, label: string, max: number): string | null {
+  return text.trim().length > max ? `The ${label} must be ${max.toLocaleString("en-US")} characters or fewer.` : null;
+}
+
+/**
+ * The press half of CharacterCount's rule for this box: the Create form's
+ * own submit is not this file's, so the browser's check refuses the press
+ * while the field is over. It focuses the field and shows the box's sentence,
+ * the box opens to it (GooglePostBox's onInvalidCapture), and nothing is sent.
+ */
+function refusedWhileOver(sentence: string | null) {
+  return (field: HTMLInputElement | HTMLTextAreaElement | null) => {
+    field?.setCustomValidity(sentence ?? "");
+  };
+}
+
+/** What Create's button does, as the count's hint says it. */
+const ACTION = "post to Google";
+
+/**
  * A Google Business Profile photo post's options (2026-11-10): an update, an
  * event or an offer, and a button. Only the chosen type's fields show. The
  * message under the fields is the same check POST /api/posts applies.
@@ -61,6 +85,8 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
   };
   const setEvent = (fields: Partial<EventFields>) => onChange({ ...metadata, event: { ...event, ...fields } });
   const setOffer = (fields: Partial<OfferFields>) => onChange({ ...metadata, offer: { ...offer, ...fields } });
+  const couponCode = offer.couponCode ?? "";
+  const terms = offer.terms ?? "";
 
   return (
     <Card className="space-y-3 p-4">
@@ -89,9 +115,17 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-event-title">Event title</Label>
             <Input
               id="google-event-title"
+              ref={refusedWhileOver(tooLongText(event.title, "event title", GOOGLE_TITLE_MAX))}
               value={event.title}
-              maxLength={GOOGLE_TITLE_MAX}
+              aria-describedby="google-event-title-count"
               onChange={(e) => setEvent({ title: e.target.value })}
+            />
+            <CharacterCount
+              id="google-event-title-count"
+              label="Event title"
+              text={event.title}
+              max={GOOGLE_TITLE_MAX}
+              action={ACTION}
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -144,9 +178,17 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-offer-title">Offer title</Label>
             <Input
               id="google-offer-title"
+              ref={refusedWhileOver(tooLongText(offer.title, "offer title", GOOGLE_TITLE_MAX))}
               value={offer.title}
-              maxLength={GOOGLE_TITLE_MAX}
+              aria-describedby="google-offer-title-count"
               onChange={(e) => setOffer({ title: e.target.value })}
+            />
+            <CharacterCount
+              id="google-offer-title-count"
+              label="Offer title"
+              text={offer.title}
+              max={GOOGLE_TITLE_MAX}
+              action={ACTION}
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -173,9 +215,17 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Label htmlFor="google-offer-coupon">Coupon code (optional)</Label>
             <Input
               id="google-offer-coupon"
-              value={offer.couponCode ?? ""}
-              maxLength={GOOGLE_COUPON_CODE_MAX}
+              ref={refusedWhileOver(tooLongText(couponCode, "coupon code", GOOGLE_COUPON_CODE_MAX))}
+              value={couponCode}
+              aria-describedby="google-offer-coupon-count"
               onChange={(e) => setOffer({ couponCode: e.target.value || undefined })}
+            />
+            <CharacterCount
+              id="google-offer-coupon-count"
+              label="Coupon code"
+              text={couponCode}
+              max={GOOGLE_COUPON_CODE_MAX}
+              action={ACTION}
             />
           </div>
           <div className="space-y-1.5">
@@ -193,9 +243,17 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
             <Textarea
               id="google-offer-terms"
               rows={3}
-              value={offer.terms ?? ""}
-              maxLength={GOOGLE_TERMS_MAX}
+              ref={refusedWhileOver(tooLongText(terms, "terms and conditions", GOOGLE_TERMS_MAX))}
+              value={terms}
+              aria-describedby="google-offer-terms-count"
               onChange={(e) => setOffer({ terms: e.target.value || undefined })}
+            />
+            <CharacterCount
+              id="google-offer-terms-count"
+              label="Terms and conditions"
+              text={terms}
+              max={GOOGLE_TERMS_MAX}
+              action={ACTION}
             />
           </div>
           <p className="text-xs text-muted-foreground">
