@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
+import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { sendPostRequest, submitErrorText } from "@/lib/postSubmitFailure";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
@@ -157,10 +158,14 @@ export function automaticCaptionRefusedText(routeSentence: string): string {
   return `No caption was written: ${routeSentence.charAt(0).toLowerCase()}${routeSentence.slice(1)}`;
 }
 
-/** The browser's fetch, telling `onStatus` the answer's status; requestCaption still words every failure. */
+/**
+ * The request requestCaption sends, telling `onStatus` the answer's status.
+ * Through fetchOrNoAnswer, so a lost answer still reads as one, and
+ * requestCaption still words every failure.
+ */
 function fetchKeepingStatus(onStatus: (status: number) => void): typeof fetch {
   return async (input, init) => {
-    const response = await fetch(input, init);
+    const response = await fetchOrNoAnswer(String(input), init);
     onStatus(response.status);
     return response;
   };
