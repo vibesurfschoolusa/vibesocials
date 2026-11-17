@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders } from "@/lib/linkedinApi";
 
 import type { LinkedInOrganization } from "./saveConnection";
@@ -101,15 +102,25 @@ function errorKind(error: unknown): { name?: string; code?: unknown } {
   return { name: (error as Error | null)?.name, code: (error as { code?: unknown } | null)?.code };
 }
 
-/** `GET /rest/organizations/{id}`: the page's details, or null when LinkedIn refuses or the call fails. */
+/**
+ * R35 platform-clients L1: how long one page lookup may take, as
+ * pinterestAccount.ts. The daily sweep calls it once per connection, and a
+ * plain fetch would wait up to Node's 300 s for a LinkedIn that never answers.
+ */
+export const LINKEDIN_LOOKUP_TIMEOUT_MS = 15_000;
+
+/** `GET /rest/organizations/{id}`: the page's details, or null when LinkedIn refuses, times out or the call fails. */
 export async function lookupOrganization(
   accessToken: string,
   id: string,
 ): Promise<LinkedInOrganizationDetails | null> {
   try {
-    const response = await fetch(`${LINKEDIN_REST_BASE_URL}/organizations/${encodeURIComponent(id)}`, {
-      headers: linkedinRestHeaders(accessToken),
-    });
+    // The signal bounds the body too; fetchWithTimeout's own bound ends at the headers.
+    const response = await fetchWithTimeout(
+      `${LINKEDIN_REST_BASE_URL}/organizations/${encodeURIComponent(id)}`,
+      { headers: linkedinRestHeaders(accessToken), signal: AbortSignal.timeout(LINKEDIN_LOOKUP_TIMEOUT_MS) },
+      LINKEDIN_LOOKUP_TIMEOUT_MS,
+    );
     if (!response.ok) {
       console.log("[LinkedIn OAuth] Organization lookup failed", { orgId: id, status: response.status });
       return null;

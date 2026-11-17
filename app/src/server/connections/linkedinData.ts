@@ -46,25 +46,53 @@ async function saveMetadata(id: string, metadata: LinkedInConnectionMetadata): P
   });
 }
 
+/**
+ * R35 platform-clients L1: LinkedIn lookups a run makes at most, and the time
+ * after which it makes no more, as backfillGbpLocationTitles, so the sweep step
+ * stays far inside Vercel's 300 s. Rows not reached come first the next day.
+ */
+export const LINKEDIN_ORG_REFRESH_MAX_PER_RUN = 25;
+export const LINKEDIN_ORG_REFRESH_BUDGET_MS = 120_000;
+
+/** When the page's name was last read; a row never read (or unreadable) sorts first. */
+function lastReadAt(metadata: LinkedInConnectionMetadata): number {
+  const readAt = Date.parse(metadata.organizationsFetchedAt ?? "");
+  return Number.isNaN(readAt) ? Number.NEGATIVE_INFINITY : readAt;
+}
+
 /** Refreshes or expires the stored LinkedIn page names; answers how many of each. */
 export async function refreshLinkedInOrganizationProfiles(
   now: Date = new Date(),
+  clock: () => number = Date.now,
 ): Promise<{ refreshed: number; cleared: number }> {
-  const rows = await prisma.socialConnection.findMany({
+  const startedAt = clock();
+  const found = await prisma.socialConnection.findMany({
     where: { platform: "linkedin" },
     select: { id: true, accessToken: true, expiresAt: true, metadata: true },
   });
+  // The read time is inside the JSON metadata, so the order is set here.
+  const rows = found
+    .map((row) => ({ row, metadata: (row.metadata ?? {}) as LinkedInConnectionMetadata }))
+    .sort((a, b) => lastReadAt(a.metadata) - lastReadAt(b.metadata));
 
   let refreshed = 0;
   let cleared = 0;
-  for (const row of rows) {
-    const metadata = (row.metadata ?? {}) as LinkedInConnectionMetadata;
+  let attempted = 0;
+  for (const { row, metadata } of rows) {
     const organizations = metadata.organizations ?? [];
     const page = organizations[0];
     if (!page?.id) continue;
 
     const tokenWorks = !row.expiresAt || row.expiresAt.getTime() > now.getTime();
-    const details = tokenWorks ? await lookupOrganization(row.accessToken, page.id) : null;
+    // Past the cap or the budget, no LinkedIn call; the eight-week clean-up below still runs.
+    const mayLookUp =
+      tokenWorks &&
+      attempted < LINKEDIN_ORG_REFRESH_MAX_PER_RUN &&
+      clock() - startedAt <= LINKEDIN_ORG_REFRESH_BUDGET_MS;
+    if (mayLookUp) attempted += 1;
+    // A failed or timed-out lookup answers null and writes nothing; only the
+    // eight-week rule below may clear the name.
+    const details = mayLookUp ? await lookupOrganization(row.accessToken, page.id) : null;
     if (details) {
       const fresh: LinkedInOrganization = {
         id: page.id,

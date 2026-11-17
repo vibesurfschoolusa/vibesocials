@@ -5,6 +5,7 @@ import { LINKEDIN_API_VERSION } from "@/lib/linkedinApi";
 import {
   findAdministeredOrganizations,
   LINKEDIN_ACL_MAX_PAGES,
+  LINKEDIN_LOOKUP_TIMEOUT_MS,
   LINKEDIN_ACL_PAGE_SIZE,
   lookupOrganization,
   lookupOrganizationByVanityName,
@@ -225,6 +226,34 @@ describe("lookupOrganization", () => {
 
     stubFetch(() => Promise.reject(new TypeError("fetch failed")));
     expect(await lookupOrganization("tok", "1")).toBeNull();
+  });
+});
+
+// R35 platform-clients L1: the daily sweep calls this once per connection; a
+// LinkedIn call that never answers must not hold the step for Node's 300 s.
+describe("lookupOrganization when LinkedIn does not answer", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("gives up after 15 seconds and answers null", async () => {
+    expect(LINKEDIN_LOOKUP_TIMEOUT_MS).toBe(15_000);
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      (_input: string | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const answer = lookupOrganization("tok", "101");
+    await vi.advanceTimersByTimeAsync(LINKEDIN_LOOKUP_TIMEOUT_MS);
+
+    await expect(answer).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(vi.mocked(console.log).mock.calls)).toContain("FETCH_TIMEOUT");
+    expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("tok");
   });
 });
 
