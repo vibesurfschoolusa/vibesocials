@@ -2083,6 +2083,15 @@ function CreatePostFormInner({
     changePhotoSet((prev) => removePhoto(prev, key));
   }
 
+  // R40 review: a move that puts another photo first changes the media the
+  // set's caption is asked about, so a caption request lets go at once, as
+  // removing the cover does. Descriptions are about their own photo and stay.
+  function moveAttachedPhoto(key: string, direction: -1 | 1) {
+    const coverBefore = photoSetRef.current[0]?.key;
+    changePhotoSet((prev) => movePhoto(prev, key, direction));
+    if (photoSetRef.current[0]?.key !== coverBefore) captionBox.letGoAiRequests((kind) => kind.media);
+  }
+
   function retryAttachedPhoto(key: string) {
     const photo = photoSetRef.current.find((p) => p.key === key);
     if (!photo || photo.status !== "failed") return;
@@ -2867,7 +2876,7 @@ function CreatePostFormInner({
                 <AttachedPhotos
                   photos={photoSet}
                   onRemove={removeAttachedPhoto}
-                  onMove={(key, direction) => changePhotoSet((prev) => movePhoto(prev, key, direction))}
+                  onMove={moveAttachedPhoto}
                   onRetry={retryAttachedPhoto}
                   onRemoveAll={removeAllPhotos}
                   removeAllClearsCaption={removeAllClearsTheCaption}

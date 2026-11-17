@@ -33,6 +33,11 @@ export interface AiRequest {
   live(): boolean;
   /** The request ended: the submit stops waiting for it. Safe to call twice. */
   done(): void;
+  /**
+   * R40 review: the caller's own rule says its answer can no longer apply
+   * (Adapt's source changed): let go as a media change does. Safe to call twice.
+   */
+  letGo(): void;
 }
 
 /** What a request is about, for the rules that let it go. */
@@ -142,7 +147,7 @@ export function useCaptionBox() {
     const controller = new AbortController();
     if (!answerCanApply(kind, captionRef.current)) {
       controller.abort();
-      return { signal: controller.signal, live: () => false, done: () => {} };
+      return { signal: controller.signal, live: () => false, done: () => {}, letGo: () => {} };
     }
     let ended = false;
     let letGo = false;
@@ -168,6 +173,9 @@ export function useCaptionBox() {
         clearTimeout(timer);
         runningRef.current.delete(entry);
         setAiRequests((count) => ({ ...count, [part]: count[part] - 1 }));
+      },
+      letGo: () => {
+        if (!ended) entry.letGo();
       },
     };
     runningRef.current.add(entry);

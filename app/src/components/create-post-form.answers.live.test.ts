@@ -870,3 +870,103 @@ describe("R40 lead review: the wait names what is being written, and a photo's d
     expect(field && describedAs(String(field.attributes.id))).toBe("Photo b, described.");
   });
 });
+
+describe("R40 review: Adapt and a cover move hold the wait only while their answer can apply", () => {
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const labelled = (label: string) => {
+    const hit = find(container, (n) => n.attributes?.["aria-label"] === label);
+    if (!hit) throw new Error(`no ${label}`);
+    return hit;
+  };
+  const photo = (name: string) => new File([name], `${name}.jpg`, { type: "image/jpeg" });
+
+  it("Adapt from an empty X box, then the main caption edited: the wait ends at once and the fetch is aborted", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    await typeX("");
+    await press("Adapt for X");
+    expect(submitDisabled()).toBe(true);
+    await typeCaption("Hi there");
+    expect(submitDisabled()).toBe(false);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(xCaptionNow()).toBe("");
+  });
+
+  it("Adapt of X's own text, then X edited: the wait ends at once and the fetch is aborted", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    await press("Adapt for X");
+    expect(submitDisabled()).toBe(true);
+    await typeX("Hi you");
+    expect(submitDisabled()).toBe(false);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(xCaptionNow()).toBe("Hi you");
+  });
+
+  it("Adapt of X's own text, then the main caption edited: its source is unchanged, so it still waits and writes", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    await press("Adapt for X");
+    await typeCaption("Hi there");
+    expect(submitDisabled()).toBe(true);
+    expect(signals[0]?.aborted).toBe(false);
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Hi from X" });
+    expect(xCaptionNow()).toBe("Hi from X");
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("Adapt with an unchanged source still waits and writes", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    await typeX("");
+    await press("Adapt for X");
+    expect(submitDisabled()).toBe(true);
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Hi from X" });
+    expect(xCaptionNow()).toBe("Hi from X");
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("another photo moved to the front during the set's caption: the wait ends at once; a description of a photo that stays keeps waiting", async () => {
+    await pick(photo("a"), photo("b"));
+    await finishUploads();
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(1);
+    // Photo 2's description, asked while the caption runs. (No focus move: the press has no element here.)
+    const writeButtons: FakeNode[] = [];
+    const walk = (n: FakeNode) => {
+      if (n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Write it for me") writeButtons.push(n);
+      n.childNodes.forEach(walk);
+    };
+    walk(container);
+    await run(() => props(writeButtons[1]!).onClick());
+    expect(pageSays("Wait until the AI has finished writing.")).toBe(true);
+    await run(() => { const node = labelled("Move photo 2 earlier"); return props(node).onClick({ currentTarget: null }); });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(pageSays("Wait until the photo description is ready.")).toBe(true);
+    await run(() => answers["/api/posts/auto-caption"]?.pop()?.resolve({ altText: "Photo b, described." }));
+    expect(submitDisabled()).toBe(false);
+    expect(captionNow()).toBe("");
+  });
+
+  it("a move that keeps the same cover changes nothing: the caption still waits and lands", async () => {
+    await pick(photo("a"), photo("b"), photo("c"));
+    await finishUploads();
+    await finishUploads();
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(1);
+    expect(submitDisabled()).toBe(true);
+    await run(() => { const node = labelled("Move photo 3 earlier"); return props(node).onClick({ currentTarget: null }); });
+    expect(submitDisabled()).toBe(true);
+    expect(signals[0]?.aborted).toBe(false);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(captionNow()).toBe("Waves at sunrise");
+    expect(submitDisabled()).toBe(false);
+  });
+});

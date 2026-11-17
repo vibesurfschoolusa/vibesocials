@@ -26,6 +26,30 @@ import type { AiRequest, AiRequestKind } from "./useCaptionBox";
 export const adaptLostText = (label: string): string =>
   answerLostText(`the adapted caption for ${label} isn't shown`, "Nothing was saved; try again.");
 
+/** What an Adapt was sent from, noted at its press. */
+export interface AdaptPress {
+  platform: Platform;
+  /** The platform's own text at the press ("" when it had none). */
+  ownAtPress: string;
+  /** The text sent to be adapted. */
+  source: string;
+  /** The source was the main caption (the platform's own box was empty). */
+  sentMainCaption: boolean;
+}
+
+/**
+ * R40 review: an Adapt answer is written only while its sources are as they
+ * were at the press: the platform's own text (applyAdaptedCaption) and, when
+ * it was sent, the main caption. The running Adapt is let go once this is false.
+ */
+export function adaptAnswerCanApply(
+  press: AdaptPress,
+  now: { caption: string; overrides: PlatformOverrides | null },
+): boolean {
+  if (press.sentMainCaption && now.caption !== press.source) return false;
+  return now.overrides?.[press.platform] === press.ownAtPress;
+}
+
 export interface PlatformCaptionEditorProps {
   /** Prefix for element ids, unique on the page. */
   idPrefix: string;
@@ -86,6 +110,14 @@ export function PlatformCaptionEditor({
   useEffect(() => {
     captionRef.current = caption;
   }, [caption]);
+  // R40 review: the Adapt running now, with what it was sent from. Once that
+  // source changes its answer can't be written, so it stops holding the
+  // submit at once and its fetch is aborted.
+  const runningAdaptRef = useRef<{ press: AdaptPress; request: AiRequest } | null>(null);
+  useEffect(() => {
+    const running = runningAdaptRef.current;
+    if (running && !adaptAnswerCanApply(running.press, { caption, overrides })) running.request.letGo();
+  }, [caption, overrides]);
 
   if (platforms.length === 0) return null;
 
@@ -106,6 +138,8 @@ export function PlatformCaptionEditor({
     const maxLength = adaptMaxLength(platform, footer);
     setAdapting(platform);
     const request = aiRequestStarted?.({ media: false, automatic: false });
+    const press: AdaptPress = { platform, ownAtPress, source, sentMainCaption };
+    if (request) runningAdaptRef.current = { press, request };
     try {
       const response = await fetchOrNoAnswer("/api/posts/enhance-caption", {
         method: "POST",
@@ -133,7 +167,7 @@ export function PlatformCaptionEditor({
       }
       const adapted = data.enhancedCaption;
       if (formGeneration && formGeneration() !== generationAtPress) return;
-      // It adapted the main caption: edited meanwhile, the answer is out of date.
+      // Its source edited meanwhile: the answer is out of date (adaptAnswerCanApply).
       if (sentMainCaption && captionRef.current !== source) return;
       onChange((prev) => applyAdaptedCaption(prev, platform, adapted, ownAtPress));
     } catch (caught) {
@@ -141,6 +175,7 @@ export function PlatformCaptionEditor({
       toast.error(isNoAnswer(caught) ? adaptLostText(platformLabel(platform)) : `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
     } finally {
       setAdapting(null);
+      if (runningAdaptRef.current?.request === request) runningAdaptRef.current = null;
       request?.done();
     }
   }
