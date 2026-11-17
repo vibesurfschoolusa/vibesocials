@@ -3,6 +3,7 @@ import { createHmac } from "crypto";
 import type { Platform } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { META_OAUTH_DIALOG_URL } from "@/lib/metaGraph";
 import {
@@ -112,7 +113,8 @@ const REQUEST_TOKEN_URL = "https://api.twitter.com/oauth/request_token";
  * X has no state: asks X for a request token exactly as the start route does,
  * and stores the handshake row as the link's creator with the link id and
  * nonce, which the callback compares with the visitor's cookie. Returns the
- * authorize address, or null when X is not configured or refuses.
+ * authorize address, or null when X is not configured or refuses. A network
+ * failure, or an X that stalls past CONNECT_CALL_TIMEOUT_MS, throws.
  */
 export async function startXLinkFlow({
   linkId,
@@ -146,7 +148,13 @@ export async function startXLinkFlow({
       .map((key) => `${key}="${encodeURIComponent(oauthParams[key])}"`)
       .join(", ");
 
-  const response = await fetch(REQUEST_TOKEN_URL, { method: "POST", headers: { Authorization: authHeader } });
+  // R36 platform-clients L1: bounded headers and body; a stall throws, and the
+  // connect-link start route answers the /c page's connect-failed line.
+  const response = await fetchWithinLimit(
+    REQUEST_TOKEN_URL,
+    { method: "POST", headers: { Authorization: authHeader } },
+    CONNECT_CALL_TIMEOUT_MS,
+  );
   if (!response.ok) {
     logger.error("[connect-link] X refused the request token", { status: response.status, connectLinkId: linkId });
     return null;

@@ -3,6 +3,7 @@ import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 /**
  * OAuth 1.0a signature generation
@@ -93,12 +94,13 @@ export async function GET(request: Request) {
       callbackUrl,
     });
 
-    const response = await fetch(requestTokenUrl, {
+    // R36 platform-clients L1: bounded headers and body; a stall throws into the catch below.
+    const response = await fetchWithinLimit(requestTokenUrl, {
       method: "POST",
       headers: {
         Authorization: authHeader,
       },
-    });
+    }, CONNECT_CALL_TIMEOUT_MS);
 
     if (!response.ok) {
       const errorText = await response.text();

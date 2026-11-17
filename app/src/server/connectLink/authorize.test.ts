@@ -31,6 +31,9 @@ import { GET as tiktokStart } from "@/app/api/auth/tiktok/start/route";
 import { GET as xStart } from "@/app/api/auth/x/start/route";
 import { GET as youtubeStart } from "@/app/api/auth/youtube/start/route";
 
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
+
 import { buildLinkAuthorizeUrl, startXLinkFlow } from "./authorize";
 
 const ORIGIN = "https://app.example.com";
@@ -198,4 +201,46 @@ describe("x: the request-token call and the handshake row", () => {
     expect(await startXLinkFlow({ linkId: "l", nonce: "n", userId: "u", workspaceId: "w" })).toBeNull();
     expect(h.handshakeCreate).not.toHaveBeenCalled();
   });
+});
+
+// R36 platform-clients L1 (lead follow-up): X's request token is asked for
+// while someone waits on Connect. A stall (no headers, or a body that never
+// ends) ends within 15 s in each one's existing failure path: Settings'
+// x_unexpected_error for the start route; a throw for the link flow, which the
+// connect-link start route turns into the /c page's x_connect_failed.
+describe("x: an X that stalls on the request token", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  for (const stall of [
+    { kind: "no headers", fetch: headersNeverCome },
+    { kind: "a body that never ends", fetch: bodyNeverEnds },
+  ]) {
+    it(`the start route sends Settings x_unexpected_error after 15 seconds of ${stall.kind}`, async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      abortSignalTimeoutOnFakeClock();
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      vi.stubGlobal("fetch", vi.fn(stall.fetch));
+
+      const pending = xStart(new Request(`${ORIGIN}/api/auth/x/start`));
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      const res = await pending;
+
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/settings?error=x_unexpected_error`);
+      expect(h.handshakeUpsert).not.toHaveBeenCalled();
+    });
+
+    it(`the link flow throws after 15 seconds of ${stall.kind}, and writes nothing`, async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      abortSignalTimeoutOnFakeClock();
+      vi.stubGlobal("fetch", vi.fn(stall.fetch));
+
+      const answer = startXLinkFlow({ linkId: "l", nonce: "n", userId: "u", workspaceId: "w" });
+      const settled = expect(answer).rejects.toBeDefined();
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      await settled;
+      expect(h.handshakeCreate).not.toHaveBeenCalled();
+    });
+  }
 });

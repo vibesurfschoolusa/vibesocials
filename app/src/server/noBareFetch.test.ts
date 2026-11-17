@@ -15,8 +15,6 @@ const ALLOWED: Record<string, string> = {
   "src/app/api/posts/auto-caption/route.ts": "AI provider call, bounded headers and body by its own AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS).",
   "src/app/api/posts/enhance-caption/route.ts": "AI provider call, bounded headers and body by its own AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS).",
   "src/app/api/reviews/draft-response/route.ts": "AI provider call, bounded headers and body by its own AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS).",
-  "src/app/api/auth/x/start/route.ts": "X's request token at Connect: no limit yet; outside round 36's files (VV2 report).",
-  "src/server/connectLink/authorize.ts": "X's request token for a connect link: no limit yet; outside round 36's files (VV2 report).",
   "src/server/jobs/socialMetricsSync.ts": "`fetch` there is a local parameter (one platform's fetcher), not the global.",
 };
 

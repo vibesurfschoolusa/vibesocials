@@ -35,7 +35,9 @@ import { GET as linkedinStart } from "@/app/api/auth/linkedin/start/route";
 import { GET as pinterestStart } from "@/app/api/auth/pinterest/start/route";
 import { GET as tiktokStart } from "@/app/api/auth/tiktok/start/route";
 import { GET as youtubeStart } from "@/app/api/auth/youtube/start/route";
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
 import { generateInviteToken } from "@/lib/inviteToken";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { openConnectCookie } from "@/server/connectLink/cookie";
 
@@ -291,6 +293,28 @@ describe("x", () => {
     expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?error=x_connect_failed`);
     expect(res.headers.get("set-cookie")).toBeNull();
   });
+
+  // R36 platform-clients L1 (lead follow-up): an X that stalls is the same
+  // sentence on the page within 15 s, never Vercel's timeout page.
+  for (const stall of [
+    { kind: "no headers", fetch: headersNeverCome },
+    { kind: "a body that never ends", fetch: bodyNeverEnds },
+  ]) {
+    it(`X with ${stall.kind} on the request token is x_connect_failed on the page after 15 seconds, and no cookie`, async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(NOW);
+      abortSignalTimeoutOnFakeClock();
+      vi.stubGlobal("fetch", vi.fn(stall.fetch));
+
+      const pending = press("x");
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      const res = await pending;
+
+      expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?error=x_connect_failed`);
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect(h.handshakeCreate).not.toHaveBeenCalled();
+    });
+  }
 });
 
 // Fix round 1: one link may start at most 60 flows an hour, from any number
