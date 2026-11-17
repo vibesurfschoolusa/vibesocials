@@ -45,6 +45,14 @@ export function rowScrollToShow(
   return null;
 }
 
+/**
+ * R42 pages-a L8: a smooth scroll asked for in JS ignores the CSS
+ * reduced-motion rule, so the row asks the browser itself.
+ */
+export function rowScrollBehavior(matchMedia: ((query: string) => MediaQueryList) | undefined): ScrollBehavior {
+  return matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
 export function SettingsSectionNav({ sections }: { sections: Section[] }) {
   const [currentId, setCurrentId] = useState<string | null>(sections[0]?.id ?? null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -61,7 +69,7 @@ export function SettingsSectionNav({ sections }: { sections: Section[] }) {
       { left: item.offsetLeft - list.offsetLeft, width: item.offsetWidth },
       { scrollLeft: list.scrollLeft, width: list.clientWidth },
     );
-    if (next !== null) list.scrollTo({ left: next, behavior: "smooth" });
+    if (next !== null) list.scrollTo({ left: next, behavior: rowScrollBehavior(window.matchMedia?.bind(window)) });
   }, [currentId]);
 
   useEffect(() => {

@@ -1,8 +1,12 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SECTION_LINE_PX, SettingsSectionNav, rowScrollToShow, sectionInView } from "./settings-section-nav";
+import { SECTION_LINE_PX, SettingsSectionNav, rowScrollBehavior, rowScrollToShow, sectionInView } from "./settings-section-nav";
+import { Skeleton } from "./ui/skeleton";
 
 const ids = ["post-defaults", "posting-times", "connections", "usage", "account"];
 
@@ -74,5 +78,39 @@ describe("rowScrollToShow", () => {
   });
   it("scrolls right to an item cut off at the end", () => {
     expect(rowScrollToShow({ left: 380, width: 80 }, view)).toBe(168);
+  });
+});
+
+// R42 pages-a L8: reduced motion is honoured. A smooth scroll asked for in JS
+// ignores the CSS rule, so the row picks its behaviour from the query.
+describe("reduced motion", () => {
+  const media = (matches: boolean) => (query: string) => {
+    expect(query).toBe("(prefers-reduced-motion: reduce)");
+    return { matches } as MediaQueryList;
+  };
+
+  it("the link row scrolls without animation when reduced motion is asked for", () => {
+    expect(rowScrollBehavior(media(true))).toBe("auto");
+    expect(rowScrollBehavior(media(false))).toBe("smooth");
+    expect(rowScrollBehavior(undefined)).toBe("smooth");
+  });
+
+  it("the row's scroll uses it", () => {
+    const source = readFileSync(fileURLToPath(new URL("./settings-section-nav.tsx", import.meta.url)), "utf8");
+    expect(source).toContain("list.scrollTo({ left: next, behavior: rowScrollBehavior(window.matchMedia?.bind(window)) });");
+    expect(source).not.toContain('behavior: "smooth"');
+  });
+
+  it("Skeleton pulses only when motion is fine", () => {
+    const html = renderToStaticMarkup(createElement(Skeleton, { className: "h-4" }));
+    expect(html).toContain("motion-safe:animate-pulse");
+    expect(html).not.toMatch(/(^|[\s"])animate-pulse/);
+  });
+
+  it("globals.css stops animations and smooth scrolling app-wide", () => {
+    const css = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8").replace(/\s+/g, " ");
+    expect(css).toContain(
+      "@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }",
+    );
   });
 });

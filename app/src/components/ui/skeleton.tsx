@@ -12,7 +12,8 @@ export const Skeleton = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div
       <div
         ref={ref}
         aria-hidden
-        className={cn("animate-pulse rounded-md bg-muted", className)}
+        // R42 pages-a L8: no pulse when the person asks for reduced motion.
+        className={cn("motion-safe:animate-pulse rounded-md bg-muted", className)}
         {...props}
       />
     );
