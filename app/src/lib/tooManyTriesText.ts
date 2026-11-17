@@ -17,14 +17,15 @@ export function tooManyTriesSentence(retryAfterSeconds: number | undefined, then
 
 /**
  * R45 lead review: the one wording of a known wait ("Wait <this>"). Whole
- * minutes, rounded up, up to an hour; past an hour, whole hours, rounded up,
- * so acting when it says never fails.
+ * minutes, rounded up, under an hour; from an hour, whole hours, rounded up
+ * ("1 hour", as dailyLimitSentence says it), so acting when it says never fails.
  */
 export function waitText(seconds: number): string {
   const minutes = Math.ceil(seconds / 60);
   if (minutes <= 1) return "a minute";
-  if (minutes <= 60) return `${minutes} minutes`;
-  return `${Math.ceil(seconds / 3600)} hours`;
+  if (minutes < 60) return `${minutes} minutes`;
+  const hours = Math.ceil(seconds / 3600);
+  return hours === 1 ? "1 hour" : `${hours} hours`;
 }
 
 /** The wait a 429 names: the body's `retryAfterSeconds`, else the Retry-After header's seconds. */
