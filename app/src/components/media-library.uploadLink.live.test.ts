@@ -13,6 +13,8 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), e
 vi.mock("@vercel/blob/client", () => ({ upload: vi.fn() }));
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+import { MISSING_WORKSPACE_ID_MESSAGE, renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 import { UPLOAD_LINK_LOAD_FAILED_TEXT, UPLOAD_LINK_LOAD_OFFLINE_TEXT, UploadLinkPanel } from "./media-library";
 
@@ -104,6 +106,25 @@ describe("Client upload link card when its read fails", () => {
       "We couldn't reach Vibe Socials to load the client upload link. Check your connection and try again.",
     );
     expect(button("Retry")).not.toBeNull();
+  });
+
+  it("a 401: the signed-out sentence", async () => {
+    fetchMock.mockResolvedValue(Response.json({ error: "Unauthorized" }, { status: 401 }));
+    await mount();
+    expect(alertNode()?.textContent).toContain(SIGNED_OUT_ERROR);
+  });
+
+  it("a gateway's HTML 502: the server-problem sentence", async () => {
+    fetchMock.mockResolvedValue(new Response("<html></html>", { status: 502, headers: { "content-type": "text/html" } }));
+    await mount();
+    expect(alertNode()?.textContent).toContain(UPLOAD_LINK_LOAD_FAILED_TEXT);
+  });
+
+  it("a workspace refusal: the shared sentence, whose step is Reload page", async () => {
+    fetchMock.mockResolvedValue(renderedWorkspaceRefusal(undefined, "ws-1") as Response);
+    await mount();
+    expect(alertNode()?.textContent).toContain(MISSING_WORKSPACE_ID_MESSAGE);
+    expect(button("Reload page")).not.toBeNull();
   });
 
   it("a 429: the server-problem sentence, not a missing card", async () => {

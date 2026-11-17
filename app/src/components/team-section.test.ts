@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { loadErrorAsksReload } from "@/components/load-error";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
 import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE, soleOwnerLeaveStep } from "@/lib/leaveRefusals";
@@ -16,6 +18,7 @@ import {
   MAKE_MEMBER_BLOCKED_TITLE,
   makeMemberBlockedTitle,
   MEMBERS_LOAD_FAILED_TEXT,
+  MEMBERS_LOAD_OFFLINE_TEXT,
   memberIsGone,
   memberRoleChanged,
   readTeamList,
@@ -43,13 +46,33 @@ describe("readTeamList", () => {
     await expect(readTeamList("/api/workspaces/members", "ws-1", fetchImpl)).resolves.toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE });
   });
 
-  it("any other failure: the card's own sentence", async () => {
-    await expect(readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => new Response("x", { status: 500 })))).resolves.toEqual({
+  // R41 review: the same reader and sentences as usePostJobs and useConnections.
+  it("a 5xx, HTML or JSON, or an unreadable 200: Try again in a moment", async () => {
+    const read = (answer: () => Promise<Response>) => readTeamList("/api/workspaces/members", "ws-1", asFetch(answer));
+    await expect(read(async () => new Response("<html></html>", { status: 502, headers: { "content-type": "text/html" } }))).resolves.toEqual({
       error: MEMBERS_LOAD_FAILED_TEXT,
     });
+    await expect(read(async () => Response.json({ error: "Internal error" }, { status: 500 }))).resolves.toEqual({ error: MEMBERS_LOAD_FAILED_TEXT });
+    await expect(read(async () => new Response("<!doctype html>", { status: 200 }))).resolves.toEqual({ error: MEMBERS_LOAD_FAILED_TEXT });
+    expect(MEMBERS_LOAD_FAILED_TEXT).toBe("Couldn't load members. Try again in a moment.");
+  });
+
+  it("no answer: the connection sentence", async () => {
     await expect(
       readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => Promise.reject(new TypeError("Failed to fetch")))),
-    ).resolves.toEqual({ error: MEMBERS_LOAD_FAILED_TEXT });
+    ).resolves.toEqual({ error: MEMBERS_LOAD_OFFLINE_TEXT });
+    expect(MEMBERS_LOAD_OFFLINE_TEXT).toBe("We couldn't reach Vibe Socials to load the members. Check your connection and try again.");
+  });
+
+  it("a 401: the signed-out sentence", async () => {
+    await expect(
+      readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => Response.json({ error: "Unauthorized" }, { status: 401 }))),
+    ).resolves.toEqual({ error: SIGNED_OUT_ERROR });
+  });
+
+  it("a workspace refusal's step is Reload page", async () => {
+    const read = await readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response));
+    expect("error" in read && loadErrorAsksReload(read.error)).toBe(true);
   });
 
   it("the roster, members and invite reads all send the page's id", () => {

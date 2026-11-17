@@ -33,7 +33,8 @@ import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkW
 import { formatDisplayDate } from "@/lib/displayDate";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 import { soleOwnerLeaveCase, soleOwnerLeaveStep } from "@/lib/leaveRefusals";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
@@ -185,6 +186,9 @@ export function makeMemberBlockedTitle(
 
 /** R41 pages L3: shown with Retry, which reads the list again. */
 export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try again in a moment.";
+/** R41 review: the read got no answer at all. */
+export const MEMBERS_LOAD_OFFLINE_TEXT =
+  "We couldn't reach Vibe Socials to load the members. Check your connection and try again.";
 
 /**
  * R32: the people of the workspace this page was drawn for (the roster or the
@@ -196,14 +200,16 @@ export async function readTeamList<T>(
   workspaceId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ members: T[] } | { error: string }> {
+  // R41 review: the reader and sentences of usePostJobs and useConnections.
   try {
-    const response = await fetchImpl(withWorkspaceId(path, workspaceId));
+    const response = await fetchOrNoAnswer(withWorkspaceId(path, workspaceId), { method: "GET" }, fetchImpl);
     const refusal = await readWorkspaceRefusalText(response);
     if (refusal) return { error: refusal };
+    if (response.status === 401) return { error: SIGNED_OUT_ERROR };
     const data = (await response.json().catch(() => null)) as { members?: T[] } | null;
     return response.ok && Array.isArray(data?.members) ? { members: data.members } : { error: MEMBERS_LOAD_FAILED_TEXT };
-  } catch {
-    return { error: MEMBERS_LOAD_FAILED_TEXT };
+  } catch (error) {
+    return { error: isNoConnection(error) ? MEMBERS_LOAD_OFFLINE_TEXT : MEMBERS_LOAD_FAILED_TEXT };
   }
 }
 

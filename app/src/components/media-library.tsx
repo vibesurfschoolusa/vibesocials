@@ -46,6 +46,7 @@ import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, uploadRouteUrl } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
+import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { pageWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 import {
   appendMediaPage,
@@ -444,6 +445,11 @@ export function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
         }
         if (response.status === 403) {
           setState("hidden");
+          return;
+        }
+        if (response.status === 401) {
+          setLoadError(SIGNED_OUT_ERROR);
+          setState("failed");
           return;
         }
         if (!response.ok || !data || !("link" in data)) {
