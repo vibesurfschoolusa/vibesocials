@@ -5,6 +5,7 @@ const { fetchMock, resolveMock } = vi.hoisted(() => ({ fetchMock: vi.fn(), resol
 vi.mock("@/lib/fetchWithTimeout", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/fetchWithTimeout")>()),
   fetchWithTimeout: fetchMock,
+  fetchWithinLimit: fetchMock,
 }));
 vi.mock("./platforms/gbpLocation", () => ({ resolveGbpLocationName: resolveMock }));
 vi.mock("./platforms/connectionRefresh", () => ({ refreshConnectionToken: vi.fn() }));

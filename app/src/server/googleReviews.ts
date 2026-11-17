@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import { classifyGoogleFailure, googleErrorFields, type GoogleFailureKind } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
@@ -95,14 +95,15 @@ async function fetchReviewsPage(
 ): Promise<{ reviews: GoogleReview[]; nextPageToken: string | null }> {
   // Use Google My Business API v4 to fetch reviews
   // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/list
-  const response = await fetchWithTimeout(
+  // R37 lead follow-up: bounded headers AND body, so a stalled answer is "try again".
+  const response = await fetchWithinLimit(
     `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews${query}`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
     },
-    timeoutMs
+    timeoutMs ?? CONNECT_CALL_TIMEOUT_MS
   );
 
   await assertGoogleOk(response, {
@@ -558,10 +559,10 @@ export async function fetchNewReviewUri(
   const locationId = locationIdOf(resourceName);
   if (!locationId) return null;
 
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     `https://mybusinessbusinessinformation.googleapis.com/v1/locations/${encodeURIComponent(locationId)}?readMask=metadata.newReviewUri`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
-    15_000
+    CONNECT_CALL_TIMEOUT_MS
   );
   await assertGoogleOk(response, {
     code: "GBP_REVIEW_LINK_FETCH_FAILED",

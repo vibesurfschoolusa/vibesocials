@@ -2,7 +2,7 @@ import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
-import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
+import { abortSignalTimeoutOnFakeClock, bodyBreaksOff, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   buildLocalPostBody,
@@ -1387,6 +1387,38 @@ describe("googleBusinessProfileClient: a 403 in the store-code lookup", () => {
     expect(publishErrorMessage("google_business_profile", error!)).toBe(TRY_AGAIN);
     expect(posted(fetchMock)).toBe(false);
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  // R37 lead follow-up: the lookup is bounded headers and body, so a 403
+  // whose body stalls is unreadable after its 30 s: the try-again text.
+  it("the account holding the code answering a 403 whose body stalls: the try-again text after 30 s, nothing sent, nothing flagged", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    abortSignalTimeoutOnFakeClock();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    try {
+      const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("accounts/111/locations")) {
+          const res = await bodyNeverEnds(url, init);
+          return new Response(res.body, { status: 403 });
+        }
+        if (url.includes("/locations")) return Response.json({ locations: [] });
+        return Response.json(TWO_ACCOUNTS);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const settled = failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+      await vi.advanceTimersByTimeAsync(30_000);
+      const error = await settled;
+
+      expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+      expect(publishErrorMessage("google_business_profile", error!)).toBe(TRY_AGAIN);
+      expect(posted(fetchMock)).toBe(false);
+      expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("the same post retried once Google answers: posted", async () => {

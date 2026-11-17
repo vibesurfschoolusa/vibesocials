@@ -1,4 +1,4 @@
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import {
   classifyGoogleFailure,
   flagIfTokenRejected,
@@ -341,7 +341,7 @@ function accountsListFailed(failure: unknown): Error {
  * `deadline` (epoch ms, publishBudget.ts): every request timeout is clamped to
  * the time left and none is started with under 5 s left. A full resource name
  * needs no request, so it is returned whatever is left. Without a deadline each
- * request keeps its 30 s default.
+ * request has the 30 s default, headers and body.
  */
 export async function resolveGbpLocationName(
   accessToken: string,
@@ -357,7 +357,11 @@ export async function resolveGbpLocationName(
   }
 
   const get = async (url: URL): Promise<Response> => {
-    const response = await fetchWithTimeout(
+    // R37 lead follow-up: a read, bounded headers AND body, so a 403 whose
+    // body stalls is unreadable (try again), not a wait for the step's budget.
+    // The limit stays the 30 s the headers had, so a post's lookup that
+    // answered in time before still does.
+    const response = await fetchWithinLimit(
       url,
       { headers: { Authorization: `Bearer ${accessToken}` } },
       budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),

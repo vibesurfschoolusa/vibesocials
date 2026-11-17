@@ -459,13 +459,18 @@ describe("resolveGbpLocationName — step deadline", () => {
     }
   });
 
-  it("keeps the 30 s default per lookup without a deadline", async () => {
+  // R37 lead follow-up: each lookup is a read bounded headers AND body
+  // (fetchWithinLimit), at the 30 s the headers had, so a stalled 403 body
+  // becomes unreadable and a lookup that answered in time still does.
+  it("gives each lookup the 30 s default, body included, without a deadline", async () => {
     stubTwoAccounts();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 
     await failure(resolveGbpLocationName("token-abc", "STORE-1"));
 
     expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([30_000, 30_000, 30_000]);
+    expect(timeoutSpy.mock.calls.map((c) => c[0])).toEqual([30_000, 30_000, 30_000]);
   });
 
   it("refuses to start the accounts request with under 5 s left", async () => {
