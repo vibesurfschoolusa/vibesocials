@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -207,6 +208,20 @@ export function UploadSummary({
   );
 }
 
+/**
+ * R45 pages-a L3: counted as the route stores them (cleanSenderText): trimmed,
+ * in whole characters, a name on one line. The route would cut anything
+ * longer, so Send is refused instead, with these sentences.
+ */
+function storedNoteLength(text: string): number {
+  return Array.from(text.trim()).length;
+}
+function storedNameLength(text: string): number {
+  return storedNoteLength(text.replace(/[\s\p{Cc}]+/gu, " "));
+}
+export const UPLOAD_NAME_TOO_LONG_TEXT = `Your name can be up to ${UPLOAD_LINK_TEXT_MAX} characters. Shorten it, then press Send again.`;
+export const UPLOAD_NOTE_TOO_LONG_TEXT = `The note can be up to ${UPLOAD_LINK_TEXT_MAX} characters. Shorten it, then press Send again.`;
+
 export function UploadLinkForm({ token }: { token: string }) {
   const [senderName, setSenderName] = useState("");
   const [note, setNote] = useState("");
@@ -219,6 +234,9 @@ export function UploadLinkForm({ token }: { token: string }) {
   const sendRef = useRef<HTMLButtonElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  // A refused Send's sentence, until the name or note is edited.
+  const [textRefusal, setTextRefusal] = useState<string | null>(null);
 
   function update(key: string, change: Partial<PickedFile>) {
     setFiles((prev) => prev.map((item) => (item.key === key ? { ...item, ...change } : item)));
@@ -227,6 +245,20 @@ export function UploadLinkForm({ token }: { token: string }) {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (files.length === 0 || phase === "sending") return;
+    const refused = refuseOverLimit(
+      [
+        {
+          text: senderName,
+          max: UPLOAD_LINK_TEXT_MAX,
+          count: storedNameLength,
+          sentence: UPLOAD_NAME_TOO_LONG_TEXT,
+          field: nameRef.current,
+        },
+        { text: note, max: UPLOAD_LINK_TEXT_MAX, count: storedNoteLength, sentence: UPLOAD_NOTE_TOO_LONG_TEXT, field: noteRef.current },
+      ],
+      setTextRefusal,
+    );
+    if (refused) return;
     // R27 MM3: "Try the files that didn't send" goes when sending starts; focus goes to Send.
     // Send itself stays (loading), and the watch at the end covers it: one watch at a time.
     // R29 pages L2: a name or note field that had focus is disabled now, so it is the one watched.
@@ -316,23 +348,46 @@ export function UploadLinkForm({ token }: { token: string }) {
               ref={nameRef}
               id="upload-link-name"
               value={senderName}
-              maxLength={UPLOAD_LINK_TEXT_MAX}
               autoComplete="name"
               disabled={phase === "sending"}
               className="text-base"
-              onChange={(event) => setSenderName(event.target.value)}
+              aria-describedby="upload-link-name-count"
+              onChange={(event) => {
+                setTextRefusal(null);
+                setSenderName(event.target.value);
+              }}
+            />
+            <CharacterCount
+              id="upload-link-name-count"
+              label="Your name"
+              text={senderName}
+              max={UPLOAD_LINK_TEXT_MAX}
+              count={storedNameLength}
+              action="send"
             />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="upload-link-note">Note (optional)</Label>
             <Textarea
+              ref={noteRef}
               id="upload-link-note"
               value={note}
-              maxLength={UPLOAD_LINK_TEXT_MAX}
               rows={3}
               disabled={phase === "sending"}
               className="text-base"
-              onChange={(event) => setNote(event.target.value)}
+              aria-describedby="upload-link-note-count"
+              onChange={(event) => {
+                setTextRefusal(null);
+                setNote(event.target.value);
+              }}
+            />
+            <CharacterCount
+              id="upload-link-note-count"
+              label="Note"
+              text={note}
+              max={UPLOAD_LINK_TEXT_MAX}
+              count={storedNoteLength}
+              action="send"
             />
           </div>
           <div className="space-y-1.5">
@@ -400,6 +455,10 @@ export function UploadLinkForm({ token }: { token: string }) {
         </ul>
       ) : null}
 
+      {/* On the page from the first render, so a refused Send is read out. */}
+      <p role="alert" className="empty:sr-only text-sm text-destructive">
+        {textRefusal}
+      </p>
       {phase === "done" ? (
         <div className="flex flex-col gap-3">
           {retry?.warning ? (
