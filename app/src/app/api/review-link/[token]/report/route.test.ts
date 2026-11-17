@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { findActiveReviewLinkMock, buildMonthlyReportMock, checkRateLimitMock } = vi.hoisted(() => ({
   findActiveReviewLinkMock: vi.fn(),
@@ -70,6 +70,10 @@ function keyPaths(value: unknown, prefix = ""): string[] {
 }
 
 beforeEach(() => {
+  // The asked month is 2026-10: pin "now" inside the months a report can be
+  // asked for (REPORT_MONTHS_BACK), so the tests pass whatever today's date is.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-14T12:00:00.000Z"));
   findActiveReviewLinkMock.mockReset();
   buildMonthlyReportMock.mockReset();
   checkRateLimitMock.mockReset();
@@ -79,6 +83,10 @@ beforeEach(() => {
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   findActiveReviewLinkMock.mockResolvedValue(LINK);
   buildMonthlyReportMock.mockResolvedValue(report());
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("GET /api/review-link/[token]/report", () => {
