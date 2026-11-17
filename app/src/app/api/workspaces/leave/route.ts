@@ -6,9 +6,8 @@ import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
 import {
   LEAVE_NOT_MEMBER_MESSAGE,
-  LEAVE_ONLY_PERSON_MESSAGE,
-  LEAVE_ONLY_WORKSPACE_MESSAGE,
-  LEAVE_SOLE_OWNER_MESSAGE,
+  soleOwnerLeaveCase,
+  soleOwnerLeaveRefusal,
 } from "@/lib/leaveRefusals";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
@@ -113,15 +112,16 @@ export async function POST(request: Request) {
         },
       });
       if (otherOwnerCount === 0) {
-        // R34 pages L3: worded by whether anyone else is here to make an owner.
+        // R34 pages L3 / R35: worded by whether anyone else is here to make an
+        // owner, and (the delete route's isOnlyWorkspace) whether Delete
+        // workspace would refuse; the Team card words its line with the same rule.
         const otherMemberCount = await tx.workspaceMember.count({
           where: { workspaceId: context.workspace.id, userId: { not: context.user.id } },
         });
-        if (otherMemberCount > 0) return "sole_owner" as const;
-        // Lead review (R34): the delete route's own rule (isOnlyWorkspace, as
-        // workspaceDeletionRefusal): in the only workspace, Delete workspace refuses.
         const memberships = await tx.workspaceMember.count({ where: { userId: context.user.id } });
-        return isOnlyWorkspace(memberships) ? ("only_workspace" as const) : ("only_person" as const);
+        return {
+          soleOwner: soleOwnerLeaveCase({ otherMembers: otherMemberCount, onlyWorkspace: isOnlyWorkspace(memberships) }),
+        };
       }
 
       const own = await tx.workspaceMember.findFirst({
@@ -134,17 +134,11 @@ export async function POST(request: Request) {
       await tx.workspaceMember.delete({ where: { id: own.id } });
       return { joinLinksRevoked: await revokeOwnInvites(tx, context.workspace.id, context.user.id) };
     });
-    if (outcome === "sole_owner") {
-      return NextResponse.json({ error: LEAVE_SOLE_OWNER_MESSAGE }, { status: 400 });
-    }
-    if (outcome === "only_person") {
-      return NextResponse.json({ error: LEAVE_ONLY_PERSON_MESSAGE }, { status: 400 });
-    }
-    if (outcome === "only_workspace") {
-      return NextResponse.json({ error: LEAVE_ONLY_WORKSPACE_MESSAGE }, { status: 400 });
-    }
     if (outcome === "not_found") {
       return NextResponse.json({ error: LEAVE_NOT_MEMBER_MESSAGE }, { status: 404 });
+    }
+    if (outcome.soleOwner) {
+      return NextResponse.json({ error: soleOwnerLeaveRefusal(outcome.soleOwner) }, { status: 400 });
     }
 
     const cookieStore = await cookies();

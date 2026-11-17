@@ -14,7 +14,9 @@ const {
   personalNoteMock,
   findOwnersMock,
   usageMock,
+  membershipCountMock,
 } = vi.hoisted(() => ({
+  membershipCountMock: vi.fn<(args?: unknown) => Promise<number>>(async () => 2),
   usageMock: vi.fn<(...args: unknown[]) => Promise<null>>(async () => null),
   getWorkspaceContextMock: vi.fn(),
   noPlanYetMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
@@ -49,12 +51,15 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: { findMany: findConnectionsMock },
     workspace: { findUnique: async () => null },
-    workspaceMember: { findMany: findOwnersMock },
+    workspaceMember: { findMany: findOwnersMock, count: membershipCountMock },
     postJob: { count: async () => 0 },
   },
 }));
 vi.mock("@/server/account/accountDeletion", () => ({ accountDeletionPreview: async () => null }));
-vi.mock("@/server/account/deleteWorkspace", () => ({ workspaceDeletionRefusal: async () => null }));
+vi.mock("@/server/account/deleteWorkspace", () => ({
+  workspaceDeletionRefusal: async () => null,
+  isOnlyWorkspace: (memberships: number) => memberships <= 1,
+}));
 vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: usageMock }));
 vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [], getYearlyPlanOffers: async () => [] }));
 // The plan section shows for an owner with a plan and billing on; never for a member.
@@ -394,6 +399,27 @@ describe("SettingsPage — the rendered workspace", () => {
     for (const name of ["SettingsForm", "PostingSlotsForm", "ConnectionsSection", "TeamSection"]) {
       expect(sectionProps[name]?.workspaceId, name).toBe("ws-1");
     }
+  });
+
+  // R35 client-journey L1: the Team card words a sole owner's Leave line with the
+  // leave route's rule; whether this is their only workspace is plain data.
+  it("tells the Team card, as a boolean, whether this is the owner's only workspace", async () => {
+    for (const memberships of [1, 2]) {
+      membershipCountMock.mockClear();
+      membershipCountMock.mockResolvedValue(memberships);
+      for (const key of Object.keys(sectionProps)) delete sectionProps[key];
+      await render("owner");
+      expect(sectionProps.TeamSection?.onlyWorkspace).toBe(memberships === 1);
+      expect(membershipCountMock).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+    }
+  });
+
+  it("reads no membership count for a member, who has no Leave line", async () => {
+    membershipCountMock.mockClear();
+    for (const key of Object.keys(sectionProps)) delete sectionProps[key];
+    await render("member");
+    expect(sectionProps.TeamSection?.onlyWorkspace).toBe(false);
+    expect(membershipCountMock).not.toHaveBeenCalled();
   });
 
   // R8-pages M1: the Usage section's per-person line says "Your" to the owner reading it.

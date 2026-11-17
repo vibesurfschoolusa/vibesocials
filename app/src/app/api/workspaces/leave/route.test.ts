@@ -300,7 +300,7 @@ describe("POST /api/workspaces/leave", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: LEAVE_ONLY_PERSON_MESSAGE });
     expect(LEAVE_ONLY_PERSON_MESSAGE).toBe(
-      "You're the only person in this workspace. Invite someone and make them an owner, or delete the workspace.",
+      "You're the only person in this workspace. Invite someone and make them an owner, or delete it with Delete this workspace.",
     );
     expect(countMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", userId: { not: "user-1" } } });
     // The delete route's own rule: the caller's memberships, counted inside the lock.
@@ -326,6 +326,14 @@ describe("POST /api/workspaces/leave", () => {
     expect(deleteMock).not.toHaveBeenCalled();
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  // R35 client-journey L1: the route and the Team card word a sole owner's way
+  // out with one rule (lib/leaveRefusals), so they name the same step.
+  it("words its refusal with the Team card's rule", () => {
+    const route = readFileSync(fileURLToPath(new URL("./route.ts", import.meta.url)), "utf8");
+    expect(route).toMatch(/soleOwnerLeaveCase\(\{ otherMembers: otherMemberCount, onlyWorkspace: isOnlyWorkspace\(memberships\) \}\)/);
+    expect(route).toContain("soleOwnerLeaveRefusal(outcome.soleOwner)");
   });
 
   it("the controls the only-workspace sentence names are there: Settings' Account section and its Delete account", () => {

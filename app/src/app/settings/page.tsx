@@ -14,7 +14,7 @@ import { RemountOnClientLinksReplaced } from "@/components/client-links-refresh"
 import { TeamSection, type WorkspaceDeletionInfo } from "@/components/team-section";
 import { AccountSection } from "@/components/account-section";
 import { accountDeletionPreview } from "@/server/account/accountDeletion";
-import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
+import { isOnlyWorkspace, workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
 import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
 import { PlanSection } from "@/components/plan-section";
@@ -271,11 +271,16 @@ export default async function SettingsPage({
   // the delete routes use, so the dialog shows the sentence the route would
   // refuse with.
   // S1: and whether deleting cancels a paid plan; nothing is read without the Stripe key.
-  const [accountDeletion, workspaceDeletion, accountCancelsPaidPlan] = await Promise.all([
+  // R35 client-journey L1: and, for an owner, whether this is their only
+  // workspace (the delete and leave routes' isOnlyWorkspace), so the Team card's
+  // Leave line names the step the leave route would; passed as a plain boolean.
+  const [accountDeletion, workspaceDeletion, accountCancelsPaidPlan, memberships] = await Promise.all([
     accountDeletionPreview(context.user.id),
     context.role === "owner" ? loadWorkspaceDeletion(context.workspace.id, context.user.id) : null,
     accountDeletionCancelsPaidPlan(context.user.id),
+    context.role === "owner" ? prisma.workspaceMember.count({ where: { userId: context.user.id } }) : null,
   ]);
+  const onlyWorkspace = memberships !== null && isOnlyWorkspace(memberships);
 
   // The section links: one per section this person sees, Plan on the same
   // condition that renders the Plan section below.
@@ -420,6 +425,7 @@ export default async function SettingsPage({
               role={context.role}
               workspaceName={context.workspace.name}
               deletion={workspaceDeletion}
+              onlyWorkspace={onlyWorkspace}
             />
           </section>
 

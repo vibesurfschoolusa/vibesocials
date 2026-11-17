@@ -5,12 +5,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
-import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE, soleOwnerLeaveStep } from "@/lib/leaveRefusals";
 
 import {
   answerFailureText,
   INVITE_MAYBE_MADE_MESSAGE,
   LEAVE_MAYBE_LEFT_MESSAGE,
+  leaveBlockedText,
   inviteFailureText,
   MEMBERS_LOAD_FAILED_TEXT,
   memberIsGone,
@@ -225,14 +226,45 @@ describe("Team: the only-owner line and Leave", () => {
     expect(soleOwnerKnown(null)).toBe(false);
   });
 
+  // R35 client-journey L1: the line is the leave route's own rule
+  // (lib/leaveRefusals), counted from the loaded list, without "Reload the page".
+  it("other members but no other owner: Make owner", () => {
+    expect(leaveBlockedText([owner, member], false)).toBe(soleOwnerLeaveStep("sole_owner"));
+    expect(leaveBlockedText([owner, member, member], true)).toBe(soleOwnerLeaveStep("sole_owner"));
+    expect(leaveBlockedText([owner, member], false)).not.toMatch(/Reload/);
+  });
+
+  it("alone with other workspaces: invite someone, or Delete this workspace", () => {
+    expect(leaveBlockedText([owner], false)).toBe(soleOwnerLeaveStep("only_person"));
+  });
+
+  it("alone in the only workspace: invite someone, or Delete account under Account in Settings", () => {
+    expect(leaveBlockedText([owner], true)).toBe(soleOwnerLeaveStep("only_workspace"));
+  });
+
+  it("a co-owner exists: Leave enabled, no line", () => {
+    expect(leaveBlockedText([owner, owner], false)).toBeNull();
+    expect(leaveBlockedText([owner, owner, member], true)).toBeNull();
+  });
+
+  it("list not loaded or failed: Leave enabled, no line (the route answers)", () => {
+    expect(leaveBlockedText(null, false)).toBeNull();
+    expect(leaveBlockedText(null, true)).toBeNull();
+  });
+
   it("the line and Leave's disabled state both follow it", () => {
     const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
-    expect(source).toContain("const soleOwner = soleOwnerKnown(members);");
+    expect(source).toContain("const leaveBlocked = leaveBlockedText(members, onlyWorkspace);");
     const start = source.indexOf("{/* Leave —");
     const leave = source.slice(start, source.indexOf("</div>", start));
-    expect(leave).toContain("disabled={soleOwner}");
-    expect(leave).toMatch(/\{soleOwner \? \(\s+<p[^>]*>\s+You&apos;re the only owner/);
-    expect(leave).not.toContain("ownerCount");
+    expect(leave).toContain("disabled={leaveBlocked !== null}");
+    expect(leave).toMatch(/\{leaveBlocked \? <p[^>]*>\{leaveBlocked\}<\/p> : null\}/);
+    expect(source).not.toContain("promote someone first");
+  });
+
+  it("Settings passes the only-workspace flag as a boolean", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    expect(source).toMatch(/onlyWorkspace\?: boolean;/);
   });
 });
 

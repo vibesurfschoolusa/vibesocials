@@ -34,6 +34,7 @@ import { focusAfterPress } from "@/lib/focusAfter";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { readWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
+import { soleOwnerLeaveCase, soleOwnerLeaveStep } from "@/lib/leaveRefusals";
 import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 import { personLabel } from "@/lib/usageLimits";
 import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
@@ -149,6 +150,21 @@ export function soleOwnerKnown(members: ReadonlyArray<{ role: string }> | null):
   return members !== null && members.filter((m) => m.role === "owner").length < 2;
 }
 
+/**
+ * R35 client-journey L1: the line under a disabled Leave, or null when Leave
+ * stays pressable (a co-owner exists, or the list hasn't loaded or failed, and
+ * the route answers). The leave route's own rule; with one owner, that owner is
+ * the caller (this view is for owners), so the other members are the non-owners.
+ */
+export function leaveBlockedText(
+  members: ReadonlyArray<{ role: string }> | null,
+  onlyWorkspace: boolean,
+): string | null {
+  if (!soleOwnerKnown(members) || members === null) return null;
+  const otherMembers = members.filter((m) => m.role !== "owner").length;
+  return soleOwnerLeaveStep(soleOwnerLeaveCase({ otherMembers, onlyWorkspace }));
+}
+
 export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try reloading the page.";
 
 /**
@@ -198,6 +214,8 @@ interface TeamSectionProps {
   role: WorkspaceRole;
   workspaceName: string;
   deletion?: WorkspaceDeletionInfo | null;
+  /** Whether this is the owner's only workspace (isOnlyWorkspace, from Settings): words Leave's line. */
+  onlyWorkspace?: boolean;
 }
 
 /**
@@ -565,11 +583,18 @@ export function ClientLinksPanel({
   );
 }
 
-export function TeamSection({ workspaceId, role, workspaceName, deletion }: TeamSectionProps) {
+export function TeamSection({ workspaceId, role, workspaceName, deletion, onlyWorkspace = false }: TeamSectionProps) {
   if (role !== "owner") {
     return <MemberView workspaceId={workspaceId} workspaceName={workspaceName} />;
   }
-  return <OwnerView workspaceId={workspaceId} workspaceName={workspaceName} deletion={deletion ?? null} />;
+  return (
+    <OwnerView
+      workspaceId={workspaceId}
+      workspaceName={workspaceName}
+      deletion={deletion ?? null}
+      onlyWorkspace={onlyWorkspace}
+    />
+  );
 }
 
 /**
@@ -691,10 +716,12 @@ function OwnerView({
   workspaceId,
   workspaceName,
   deletion,
+  onlyWorkspace,
 }: {
   workspaceId: string;
   workspaceName: string;
   deletion: WorkspaceDeletionInfo | null;
+  onlyWorkspace: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -1062,7 +1089,7 @@ function OwnerView({
   // Derived from the loaded roster each render, so it stays fresh after every
   // local-state role change above. Gates the last-owner demote/leave guards.
   const ownerCount = members?.filter((m) => m.role === "owner").length ?? 0;
-  const soleOwner = soleOwnerKnown(members);
+  const leaveBlocked = leaveBlockedText(members, onlyWorkspace);
 
   return (
     <Card className="flex flex-col gap-8 p-6">
@@ -1224,16 +1251,12 @@ function OwnerView({
           size="sm"
           variant="ghost"
           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-          disabled={soleOwner}
+          disabled={leaveBlocked !== null}
           onClick={() => setLeaveOpen(true)}
         >
           Leave workspace
         </Button>
-        {soleOwner ? (
-          <p className="mt-2 text-sm text-muted-foreground">
-            You&apos;re the only owner — promote someone first.
-          </p>
-        ) : null}
+        {leaveBlocked ? <p className="mt-2 text-sm text-muted-foreground">{leaveBlocked}</p> : null}
       </div>
 
       {deletion ? <DeleteWorkspace workspaceId={workspaceId} workspaceName={savedName} deletion={deletion} /> : null}
