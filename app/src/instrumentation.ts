@@ -1,6 +1,6 @@
 import type { Instrumentation } from "next";
 
-import { redactEventLinkTokens, redactServerBreadcrumb, redactServerSpan } from "@/lib/sentryRedaction";
+import { SENTRY_DATA_COLLECTION, redactForSentry } from "@/lib/sentryRedaction";
 
 // Health track H1 — server/edge Sentry init (Next.js instrumentation hook,
 // stable since Next 15; see https://nextjs.org/docs/app/guides/instrumentation).
@@ -33,24 +33,19 @@ export async function register(): Promise<void> {
       dsn,
       tracesSampleRate: 0.1,
       enabled: true,
-      // Explicit (matches the default): do not auto-attach request headers,
-      // cookies, or IP addresses to events. The logger's own key-based
-      // redaction (see lib/logger.ts) covers what we explicitly log; this
-      // keeps Sentry's OWN auto-instrumentation from ever picking up an
-      // Authorization/Cookie header by default.
-      sendDefaultPii: false,
-      // 2026-11-02 scale audit (jobs B3): Sentry's automatic instrumentation of
-      // outgoing fetch / http requests records each request's URL, query included,
-      // in a breadcrumb (attached to every logged error) and, for traced requests,
-      // in span attributes. Upload sessions (the YouTube resumable session URI,
-      // TikTok's upload_url, LinkedIn's part URLs) are capability URLs, so URLs are
-      // redacted before either leaves the process (lib/sentryRedaction.ts).
-      // R43: and an incoming path's link token (/c/, /u/, /v/, /join/ and their
-      // API routes) is replaced in spans, events, transactions and breadcrumbs.
-      beforeBreadcrumb: redactServerBreadcrumb,
-      beforeSendSpan: redactServerSpan,
-      beforeSend: redactEventLinkTokens,
-      beforeSendTransaction: redactEventLinkTokens,
+      // R44: no cookies, request headers, user, bodies or query values are
+      // collected. `sendDefaultPii: false` did not stop them: with SDK 10.78 it
+      // keeps the Cookie header, the parsed cookies and every request header
+      // but the IP ones, so the session JWT rode along on every server event.
+      dataCollection: SENTRY_DATA_COLLECTION,
+      // One rule for everything that leaves the process (lib/sentryRedaction.ts):
+      // outgoing upload URLs (capability URLs) lose their query and path, and
+      // every string loses its link token (/c/, /u/, /v/, /join/, their API
+      // routes, fragments, callbackUrl and the router-state tree).
+      beforeBreadcrumb: redactForSentry,
+      beforeSendSpan: redactForSentry,
+      beforeSend: redactForSentry,
+      beforeSendTransaction: redactForSentry,
     });
   }
 }

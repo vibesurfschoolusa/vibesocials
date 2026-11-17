@@ -2,14 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   LINK_TOKEN,
+  SENTRY_DATA_COLLECTION,
   redactBreadcrumb,
-  redactEventLinkTokens,
+  redactForSentry,
   redactLinkTokens,
-  redactLinkTokensInBreadcrumb,
-  redactLinkTokensInSpan,
   redactOutgoingSpan,
   redactOutgoingUrl,
-  redactServerSpan,
 } from "./sentryRedaction";
 
 // 2026-11-02 scale audit (jobs B3): Sentry's automatic fetch / http instrumentation
@@ -334,14 +332,14 @@ describe("redactLinkTokens", () => {
   });
 });
 
-describe("redactServerSpan: incoming spans lose the token, outgoing keep their rules", () => {
+describe("redactForSentry: incoming spans lose the token, outgoing keep their rules", () => {
   it("an incoming request span", () => {
     const span = {
       op: "http.server",
       description: "GET /c/SECRET-1",
       data: { "url.full": "https://vibesocials.wtf/c/SECRET-1?a=1", "http.target": "/c/SECRET-1?a=1", "url.path": "/c/SECRET-1", "http.status_code": 200 },
     };
-    const out = redactServerSpan(span);
+    const out = redactForSentry(span);
     expect(JSON.stringify(out)).not.toContain("SECRET-1");
     expect(out.description).toBe("GET /c/[token]");
     expect(out.data["http.status_code"]).toBe(200);
@@ -354,11 +352,11 @@ describe("redactServerSpan: incoming spans lose the token, outgoing keep their r
       description: "PUT https://www.googleapis.com/upload/youtube/v3/videos",
       data: { "url.full": YOUTUBE_SESSION, "http.query": "?upload_id=SESSION-SECRET-1" },
     };
-    expect(redactServerSpan(span)).toEqual(redactOutgoingSpan(span));
+    expect(redactForSentry(span)).toEqual(redactOutgoingSpan(span));
   });
 });
 
-describe("redactEventLinkTokens", () => {
+describe("redactForSentry", () => {
   it("the request URL, the transaction and the trace context lose the token", () => {
     const event = {
       transaction: "GET /join/SECRET-2",
@@ -366,7 +364,7 @@ describe("redactEventLinkTokens", () => {
       contexts: { trace: { op: "http.server", description: "GET /join/SECRET-2", data: { "url.full": "https://vibesocials.wtf/join/SECRET-2", n: 1 } } },
       message: "kept",
     };
-    const out = redactEventLinkTokens(event);
+    const out = redactForSentry(event);
     expect(JSON.stringify(out)).not.toContain("SECRET-2");
     expect(out.transaction).toBe("GET /join/[token]");
     expect(out.request?.url).toBe("https://vibesocials.wtf/join/[token]");
@@ -377,18 +375,18 @@ describe("redactEventLinkTokens", () => {
 
   it("an event with none of them is returned as it is", () => {
     const event: { message: string; transaction?: string } = { message: "x" };
-    expect(redactEventLinkTokens(event)).toEqual({ message: "x" });
+    expect(redactForSentry(event)).toEqual({ message: "x" });
   });
 });
 
-describe("redactLinkTokensInBreadcrumb", () => {
+describe("redactForSentry", () => {
   it("a navigation breadcrumb's from and to", () => {
-    const out = redactLinkTokensInBreadcrumb({ category: "navigation", data: { from: "/", to: "/u/SECRET-3" } });
+    const out = redactForSentry({ category: "navigation", data: { from: "/", to: "/u/SECRET-3" } });
     expect(out.data).toEqual({ from: "/", to: "/u/[token]" });
   });
 
   it("a fetch breadcrumb's relative URL and message", () => {
-    const out = redactLinkTokensInBreadcrumb({
+    const out = redactForSentry({
       category: "fetch",
       message: "POST /api/upload-link/SECRET-3/upload",
       data: { url: "/api/upload-link/SECRET-3/upload", method: "POST", status_code: 200 },
@@ -439,7 +437,7 @@ describe("redactLinkTokens: fragments and query values", () => {
   });
 
   it("an event's request URL and query string lose the fragment and the callbackUrl token", () => {
-    const out = redactEventLinkTokens({
+    const out = redactForSentry({
       request: { url: "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET#FRAG-SECRET", query_string: "callbackUrl=%2Fjoin%2FJOIN-SECRET" },
     });
     expect(JSON.stringify(out)).not.toContain("SECRET");
@@ -448,12 +446,12 @@ describe("redactLinkTokens: fragments and query values", () => {
   });
 
   it("a navigation breadcrumb to a #token page loses the fragment", () => {
-    const out = redactLinkTokensInBreadcrumb({ category: "navigation", data: { from: "/login", to: "/reset-password#RESET-SECRET" } });
+    const out = redactForSentry({ category: "navigation", data: { from: "/login", to: "/reset-password#RESET-SECRET" } });
     expect(out.data).toEqual({ from: "/login", to: "/reset-password" });
   });
 
   it("a span's fragment attributes are dropped", () => {
-    const out = redactLinkTokensInSpan({
+    const out = redactForSentry({
       op: "pageload",
       description: "/reset-password",
       data: { "url.fragment": "RESET-SECRET", "http.fragment": "#RESET-SECRET", "url.full": "https://vibesocials.wtf/reset-password#RESET-SECRET" },
@@ -463,9 +461,9 @@ describe("redactLinkTokens: fragments and query values", () => {
 });
 
 // R43 review: the browser's own fetch spans carry the API path, token included.
-describe("redactLinkTokensInSpan: the browser's fetch spans", () => {
+describe("redactForSentry: the browser's fetch spans", () => {
   it("a fetch span for /api/invites/<token> keeps no token in its description, url or http.url", () => {
-    const out = redactLinkTokensInSpan({
+    const out = redactForSentry({
       op: "http.client",
       description: "POST https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
       data: {
@@ -480,7 +478,7 @@ describe("redactLinkTokensInSpan: the browser's fetch spans", () => {
   });
 
   it("the server's span rule keeps the outgoing rules and redacts tokens too", () => {
-    const out = redactServerSpan({
+    const out = redactForSentry({
       op: "http.client",
       description: "GET https://vibesocials.wtf/api/review-link/REVIEW-SECRET",
       data: { "url.full": "https://vibesocials.wtf/api/review-link/REVIEW-SECRET?x=1" },
@@ -489,9 +487,120 @@ describe("redactLinkTokensInSpan: the browser's fetch spans", () => {
   });
 
   it("a transaction event's spans are redacted too", () => {
-    const out = redactEventLinkTokens({
+    const out = redactForSentry({
       spans: [{ op: "http.client", description: "GET /api/upload-link/UPLOAD-SECRET/media", data: { url: "/api/upload-link/UPLOAD-SECRET/media" } }],
     });
     expect(JSON.stringify(out)).not.toContain("UPLOAD-SECRET");
+  });
+});
+
+// R44 (security M1, L1): one rule for the whole event. Cookies and request
+// headers are never collected (SENTRY_DATA_COLLECTION), and as a second guard
+// redactForSentry drops them and walks every string in what it is given.
+describe("redactForSentry: nothing private in the whole event", () => {
+  const SESSION_COOKIE = "__Secure-next-auth.session-token=JWT-SECRET-1; theme=dark";
+  // What Next sends on /c/<token>: the dynamic segment's value inside URL-encoded JSON.
+  const ROUTER_STATE = encodeURIComponent(
+    JSON.stringify(["", { children: ["c", { children: [["token", "STATE-SECRET-1", "d"], { children: ["__PAGE__", {}] }] }] }, null, null, true]),
+  );
+
+  const event = {
+    transaction: "GET /c/PATH-SECRET-1",
+    request: {
+      url: "https://vibesocials.wtf/api/review-link/PATH-SECRET-2",
+      method: "GET",
+      cookies: { "__Secure-next-auth.session-token": "JWT-SECRET-1" },
+      headers: {
+        cookie: SESSION_COOKIE,
+        "User-Agent": "Mozilla/5.0 test",
+        Referer: "https://vibesocials.wtf/join/PATH-SECRET-3",
+        "next-url": "/u/PATH-SECRET-4",
+        "next-router-state-tree": ROUTER_STATE,
+      },
+    },
+    contexts: {
+      nextjs: { request_path: "/api/review-link/PATH-SECRET-5?x=1", router_kind: "App Router" },
+      trace: { op: "http.server", data: { "http.request.header.cookie.session": "JWT-SECRET-1", "http.request.header.user_agent": "Mozilla/5.0 test" } },
+    },
+    tags: { path: "/v/PATH-SECRET-6", runtime: "nodejs" },
+    extra: { link: "%2Fapi%2Fupload-link%2FPATH-SECRET-7%2Fupload", nested: { deeper: [{ url: "/api/invites/PATH-SECRET-8/accept" }] } },
+    breadcrumbs: [{ category: "navigation", data: { from: "/", to: "/join/PATH-SECRET-9" } }],
+    spans: [{ op: "http.server", description: "GET /c/PATH-SECRET-10", data: { "http.request.header.referer": "https://vibesocials.wtf/c/PATH-SECRET-10" } }],
+    exception: { values: [{ type: "Error", value: "lookup failed for /api/connect-link/PATH-SECRET-11/start" }] },
+    message: "callback /login?callbackUrl=%2Fjoin%2FPATH-SECRET-12",
+  };
+
+  it("keeps no token and no cookie anywhere", () => {
+    const text = JSON.stringify(redactForSentry(event));
+    expect(text).not.toMatch(/SECRET/);
+    expect(text).not.toMatch(/session-token/);
+  });
+
+  it("drops request cookies and every request header but the user agent", () => {
+    const out = redactForSentry(event);
+    expect(out.request).not.toHaveProperty("cookies");
+    expect(out.request.headers).toEqual({ "User-Agent": "Mozilla/5.0 test" });
+    expect(out.contexts.trace.data).toEqual({ "http.request.header.user_agent": "Mozilla/5.0 test" });
+    expect(out.spans[0].data).toEqual({});
+  });
+
+  it("redacts the link paths it walks into and keeps the rest", () => {
+    const out = redactForSentry(event);
+    expect(out.contexts.nextjs).toEqual({ request_path: "/api/review-link/[token]?x=1", router_kind: "App Router" });
+    expect(out.tags).toEqual({ path: "/v/[token]", runtime: "nodejs" });
+    expect(out.extra.link).toBe("/api/upload-link/[token]/upload");
+    expect(out.extra.nested.deeper[0].url).toBe("/api/invites/[token]/accept");
+    expect(out.exception.values[0].value).toBe("lookup failed for /api/connect-link/[token]/start");
+    expect(out.request.method).toBe("GET");
+  });
+
+  it("a router-state tree, decoded, loses the token segment's value", () => {
+    expect(redactLinkTokens(decodeURIComponent(ROUTER_STATE))).not.toContain("STATE-SECRET-1");
+    expect(JSON.stringify(redactForSentry({ extra: { tree: ROUTER_STATE } }))).not.toContain("STATE-SECRET-1");
+  });
+
+  it("strings without a token are unchanged, and the event given is not modified", () => {
+    const plain = {
+      message: "Upload failed: 50% done",
+      extra: { note: "100%25 sure", list: [1, true, null, "a/b"] },
+      contexts: { nextjs: { request_path: "/dashboard?tab=2" } },
+      request: { url: "https://vibesocials.wtf/settings" },
+    };
+    expect(redactForSentry(plain)).toEqual(plain);
+    const before = JSON.stringify(event);
+    redactForSentry(event);
+    expect(JSON.stringify(event)).toBe(before);
+  });
+
+  it("leaves the SDK's processing metadata as it is", () => {
+    const scope = { the: "scope" };
+    const out = redactForSentry({ sdkProcessingMetadata: { capturedSpanScope: scope } });
+    expect(out.sdkProcessingMetadata.capturedSpanScope).toBe(scope);
+  });
+
+  it("past its depth bound a value is dropped, never passed through", () => {
+    let deep: Record<string, unknown> = { url: "/c/DEEP-SECRET" };
+    for (let i = 0; i < 40; i += 1) deep = { next: deep };
+    expect(JSON.stringify(redactForSentry({ extra: deep }))).not.toContain("DEEP-SECRET");
+  });
+
+  it("a browser fetch breadcrumb to a relative path keeps the path, token redacted", () => {
+    const out = redactForSentry({ category: "fetch", data: { url: "/api/review-link/REL-SECRET/posts?page=2", method: "GET" } });
+    expect(out.data).toEqual({ url: "/api/review-link/[token]/posts?page=2", method: "GET" });
+  });
+});
+
+describe("SENTRY_DATA_COLLECTION", () => {
+  it("collects no cookies, no headers, no user, no bodies and no query values", () => {
+    expect(SENTRY_DATA_COLLECTION).toMatchObject({
+      cookies: false,
+      httpHeaders: false,
+      userInfo: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      genAI: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      stackFrameVariables: false,
+    });
   });
 });

@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 
-import { redactEventLinkTokens, redactLinkTokensInBreadcrumb, redactLinkTokensInSpan } from "@/lib/sentryRedaction";
+import { SENTRY_DATA_COLLECTION, redactForSentry } from "@/lib/sentryRedaction";
 
 // Health track H1 — client-side Sentry init.
 //
@@ -24,16 +24,16 @@ if (dsn) {
     dsn,
     tracesSampleRate: 0.1,
     enabled: true,
-    // Explicit (matches the default) -- see instrumentation.ts for why.
-    sendDefaultPii: false,
-    // R43: the page URL carries a link's token on /c/, /u/, /v/ and /join/ (and
-    // an account link's in its #fragment), and their API calls do too; it is
-    // replaced in events, the page-load transaction, spans (fetch included) and
-    // navigation and fetch breadcrumbs (lib/sentryRedaction.ts).
-    beforeSend: redactEventLinkTokens,
-    beforeSendTransaction: redactEventLinkTokens,
-    beforeSendSpan: redactLinkTokensInSpan,
-    beforeBreadcrumb: redactLinkTokensInBreadcrumb,
+    // R44: the same collection rule and the same redaction as the server
+    // (see instrumentation.ts). The browser adds document.referrer as a Referer
+    // header whatever dataCollection says, and the page URL carries a link's
+    // token on /c/, /u/, /v/ and /join/; redactForSentry drops the header and
+    // redacts every string.
+    dataCollection: SENTRY_DATA_COLLECTION,
+    beforeSend: redactForSentry,
+    beforeSendTransaction: redactForSentry,
+    beforeSendSpan: redactForSentry,
+    beforeBreadcrumb: redactForSentry,
   });
 }
 

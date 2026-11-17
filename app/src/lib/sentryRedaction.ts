@@ -175,8 +175,17 @@ const URL_FRAGMENT = /((?:https?:\/\/|\/)[^\s#]*)#\S*/gi;
 /** One query value: `?name=` or `&name=`, then the value up to "&", "#" or a space. */
 const QUERY_VALUE = /([?&][^=&#\s]+=)([^&#\s]*)/g;
 
+/**
+ * A link page's dynamic segment in Next's router state (the Next-Router-State-Tree
+ * header, URL-encoded JSON): `["token","<value>","d"]`. Every link page names its
+ * segment `[token]`, and the tree carries the value without the path around it.
+ */
+const TOKEN_SEGMENT = /(\["token",")[^"]*"/g;
+
 function redactLinkPaths(text: string): string {
-  return text.replace(LINK_TOKEN_PATH, (_match, before: string, prefix: string) => `${before}${prefix}${LINK_TOKEN}`);
+  return text
+    .replace(LINK_TOKEN_PATH, (_match, before: string, prefix: string) => `${before}${prefix}${LINK_TOKEN}`)
+    .replace(TOKEN_SEGMENT, `$1${LINK_TOKEN}"`);
 }
 
 /** A query value that holds a link path (`callbackUrl=%2Fjoin%2F<token>`), decoded, redacted and encoded again. */
@@ -202,80 +211,132 @@ export function redactLinkTokens(text: string): string {
   return redactLinkPaths(redactQueryValues(text.replace(URL_FRAGMENT, "$1")));
 }
 
+// R44 (security M1, L1): one rule for the whole event. Redacting named fields
+// one at a time missed a field each review (the Cookie header, the parsed
+// cookies, contexts.nextjs.request_path, Referer, Next-Url, the router-state
+// tree), so the SDK is told not to collect cookies or headers at all
+// (SENTRY_DATA_COLLECTION), and redactForSentry drops them again and walks
+// every string of whatever it is given.
+
+/**
+ * What the SDK may collect, for both Sentry.init calls. Setting `dataCollection`
+ * replaces the deprecated `sendDefaultPii`, and every field left out takes the
+ * SDK's DEFAULTS, which collect the user, bodies, AI inputs and query data
+ * (@sentry/core resolveDataCollectionOptions.js), so every field is set here.
+ * Query values are off too: the SDK's own filter is a denylist of key names.
+ */
+export const SENTRY_DATA_COLLECTION = {
+  userInfo: false,
+  cookies: false,
+  httpHeaders: false,
+  httpBodies: [],
+  urlQueryParams: false,
+  graphQL: { document: false, variables: false },
+  genAI: { inputs: false, outputs: false },
+  databaseQueryData: false,
+  stackFrameVariables: false,
+} as const satisfies NonNullable<import("@sentry/nextjs").BrowserOptions["dataCollection"]>;
+
+/** Objects deeper than this are dropped, never passed on unredacted. */
+const MAX_DEPTH = 24;
+export const TOO_DEEP = "[too deep]";
+
 /** Span and breadcrumb attributes that hold only a fragment. */
 const FRAGMENT_KEYS = new Set(["http.fragment", "url.fragment"]);
 
-/** A copy of `data` without fragment attributes, every string value through redactLinkTokens. */
-function redactLinkTokensInData(data: { [key: string]: unknown }): { [key: string]: unknown } {
-  return Object.fromEntries(
-    Object.entries(data)
-      .filter(([key]) => !FRAGMENT_KEYS.has(key))
-      .map(([key, value]) => [key, typeof value === "string" ? redactLinkTokens(value) : value]),
-  );
-}
+/** A header as a span attribute (`http.request.header.referer`); only the user agent is kept. */
+const HEADER_ATTRIBUTE = /^http\.(request|response)\.header\./;
+const USER_AGENT_ATTRIBUTE = "http.request.header.user_agent";
 
-/** A breadcrumb's message and string data without link tokens (navigation from/to, fetch url). */
-export function redactLinkTokensInBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T): T {
-  const out: T = { ...breadcrumb };
-  if (typeof breadcrumb.message === "string") out.message = redactLinkTokens(breadcrumb.message);
-  if (breadcrumb.data) out.data = redactLinkTokensInData(breadcrumb.data);
-  return out;
-}
+/** The SDK's own bookkeeping (scopes it reads after beforeSendTransaction); never sent. */
+const SDK_METADATA = "sdkProcessingMetadata";
 
-/** The server's `beforeBreadcrumb`: the outgoing rules, then link tokens. */
-export function redactServerBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T): T {
-  return redactLinkTokensInBreadcrumb(redactBreadcrumb(breadcrumb));
-}
+/** `name=value&name=value`, with no space, "/" before the first "=", "?" or "#". */
+const BARE_QUERY = /^[^\s/?#=&]+=[^\s#]*$/;
 
-/**
- * Any span's description and string attributes without link tokens: the
- * browser's `beforeSendSpan` (its page loads, navigations and fetch spans), and
- * the second half of the server's.
- */
-export function redactLinkTokensInSpan<T extends SpanLike>(span: T): T {
-  const out: T = { ...span, data: redactLinkTokensInData(span.data) };
-  if (typeof span.description === "string") out.description = redactLinkTokens(span.description);
-  return out;
-}
-
-/**
- * The server's `beforeSendSpan`: an outgoing span keeps its rules
- * ({@link redactOutgoingSpan}), then every span (an incoming request's above
- * all) loses its link tokens.
- */
-export function redactServerSpan<T extends SpanLike>(span: T): T {
-  return redactLinkTokensInSpan(redactOutgoingSpan(span));
-}
-
-/** The parts of a Sentry event these helpers read; the real `Event` is assignable to it. */
-interface EventLike {
-  transaction?: string;
-  request?: { url?: string; query_string?: unknown };
-  contexts?: { trace?: { description?: string; data?: { [key: string]: unknown } } };
-  spans?: SpanLike[];
-}
-
-/**
- * `beforeSend` / `beforeSendTransaction`: the request URL and query string, the
- * transaction name, the trace context (a transaction's root span) and the
- * transaction's spans without link tokens. The event it was given is not modified.
- */
-export function redactEventLinkTokens<T extends EventLike>(event: T): T {
-  const out: T = { ...event };
-  if (typeof event.transaction === "string") out.transaction = redactLinkTokens(event.transaction);
-  if (event.request) {
-    const request = { ...event.request };
-    if (typeof request.url === "string") request.url = redactLinkTokens(request.url);
-    if (typeof request.query_string === "string") request.query_string = redactQueryValues(`?${request.query_string}`).slice(1);
-    out.request = request;
+/** `text` through redactLinkTokens, and decoded first when only the decoded form shows a token. */
+function redactString(text: string): string {
+  // A bare query string (an event's request.query_string) has no "?" for QUERY_VALUE to start at.
+  if (BARE_QUERY.test(text)) return redactQueryValues(`?${text}`).slice(1);
+  const redacted = redactLinkTokens(text);
+  if (!text.includes("%")) return redacted;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(text);
+  } catch {
+    return redacted;
   }
-  const trace = event.contexts?.trace;
-  if (trace) {
-    const redacted = { ...trace };
-    if (typeof trace.description === "string") redacted.description = redactLinkTokens(trace.description);
-    if (trace.data) redacted.data = redactLinkTokensInData(trace.data);
-    out.contexts = { ...event.contexts, trace: redacted };
+  if (decoded === text) return redacted;
+  const decodedRedacted = redactLinkTokens(decoded);
+  return decodedRedacted === decoded ? redacted : decodedRedacted;
+}
+
+function isPlainObject(value: unknown): value is { [key: string]: unknown } {
+  if (value === null || typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+const ABSOLUTE_URL = /^https?:\/\//i;
+
+/**
+ * The outgoing-request rules, for an http / fetch breadcrumb or an http.client
+ * span whose URL is absolute. A relative URL (the browser's fetch to our own
+ * routes) is ours, never an upload service, and keeps its path.
+ */
+function applyOutgoingRules(value: { [key: string]: unknown }): { [key: string]: unknown } {
+  const data = isPlainObject(value.data) ? value.data : undefined;
+  const url = data?.url;
+  if (typeof url === "string" && !ABSOLUTE_URL.test(url)) return value;
+  if (typeof value.op === "string" && data) return redactOutgoingSpan(value as unknown as SpanLike) as unknown as typeof value;
+  return redactBreadcrumb(value as BreadcrumbLike) as typeof value;
+}
+
+/** An event's request: no cookies, and of its headers only the user agent. */
+function redactRequest(request: { [key: string]: unknown }): { [key: string]: unknown } {
+  const out: { [key: string]: unknown } = { ...request };
+  delete out.cookies;
+  if (isPlainObject(request.headers)) {
+    out.headers = Object.fromEntries(Object.entries(request.headers).filter(([name]) => name.toLowerCase() === "user-agent"));
+  } else {
+    delete out.headers;
   }
-  if (Array.isArray(event.spans)) out.spans = event.spans.map((span) => redactLinkTokensInSpan(span));
   return out;
+}
+
+function walk(value: unknown, depth: number): unknown {
+  if (typeof value === "string") return redactString(value);
+  if (Array.isArray(value)) {
+    if (depth >= MAX_DEPTH) return TOO_DEEP;
+    return value.map((item) => walk(item, depth + 1));
+  }
+  if (!isPlainObject(value)) return value;
+  if (depth >= MAX_DEPTH) return TOO_DEEP;
+
+  const outgoing = applyOutgoingRules(value);
+  const out: { [key: string]: unknown } = {};
+  for (const [key, item] of Object.entries(outgoing)) {
+    if (FRAGMENT_KEYS.has(key)) continue;
+    if (HEADER_ATTRIBUTE.test(key) && key !== USER_AGENT_ATTRIBUTE) continue;
+    if (depth === 0 && key === SDK_METADATA) {
+      out[key] = item;
+      continue;
+    }
+    const next = depth === 0 && key === "request" && isPlainObject(item) ? redactRequest(item) : item;
+    out[key] = walk(next, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * The one Sentry hook, for beforeSend, beforeSendTransaction, beforeSendSpan and
+ * beforeBreadcrumb, on the server and in the browser. A copy of `item` in which:
+ * an event's request has no cookies and no header but the user agent; no span
+ * attribute holds a header but the user agent, or a fragment; outgoing http
+ * breadcrumbs and spans keep the outgoing-URL rules; and every string, at any
+ * depth up to {@link MAX_DEPTH}, goes through redactLinkTokens (decoded first when
+ * only its decoded form shows a token). The item it was given is not modified.
+ */
+export function redactForSentry<T>(item: T): T {
+  return walk(item, 0) as T;
 }

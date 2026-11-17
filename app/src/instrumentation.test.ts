@@ -11,6 +11,7 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 import { register } from "./instrumentation";
+import { SENTRY_DATA_COLLECTION, redactForSentry } from "./lib/sentryRedaction";
 
 // 2026-11-02 scale audit (jobs B3): the server/edge init redacts the URL of every
 // outgoing request (lib/sentryRedaction.ts) because upload sessions are capability
@@ -39,7 +40,7 @@ describe("instrumentation register()", () => {
       dsn: "https://key@sentry.example/1",
       tracesSampleRate: 0.1,
       enabled: true,
-      sendDefaultPii: false,
+      dataCollection: SENTRY_DATA_COLLECTION,
       beforeBreadcrumb: expect.any(Function),
       beforeSendSpan: expect.any(Function),
     });
@@ -156,5 +157,44 @@ describe("link tokens in incoming paths", () => {
     expect(JSON.stringify(span)).not.toContain("LINK-SECRET");
     const reset = hooks.beforeSend({ request: { url: "https://vibesocials.wtf/reset-password#LINK-SECRET-9" } });
     expect(JSON.stringify(reset)).not.toContain("LINK-SECRET");
+  });
+});
+
+// R44 (security M1, L1): one rule for the whole event, on the server and in the
+// browser. Cookies and request headers are never collected, and every hook runs
+// the same redaction.
+describe("one Sentry rule on both inits", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function expectOneRule(options: Record<string, unknown>): void {
+    expect(options.dataCollection).toBe(SENTRY_DATA_COLLECTION);
+    expect(options).not.toHaveProperty("sendDefaultPii");
+    for (const hook of ["beforeSend", "beforeSendTransaction", "beforeSendSpan", "beforeBreadcrumb"]) {
+      expect(options[hook]).toBe(redactForSentry);
+    }
+  }
+
+  it("the server init", async () => {
+    initMock.mockReset();
+    vi.stubEnv("SENTRY_DSN", "https://key@sentry.example/1");
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    await register();
+    expectOneRule(initMock.mock.calls[0][0] as Record<string, unknown>);
+  });
+
+  it("the client init", async () => {
+    initMock.mockReset();
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "https://public@sentry.example/2");
+    vi.resetModules();
+    const { redactForSentry: fresh, SENTRY_DATA_COLLECTION: freshCollection } = await import("./lib/sentryRedaction");
+    await import("./instrumentation-client");
+    const options = initMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(options.dataCollection).toBe(freshCollection);
+    for (const hook of ["beforeSend", "beforeSendTransaction", "beforeSendSpan", "beforeBreadcrumb"]) {
+      expect(options[hook]).toBe(fresh);
+    }
+    expect(options).not.toHaveProperty("sendDefaultPii");
   });
 });

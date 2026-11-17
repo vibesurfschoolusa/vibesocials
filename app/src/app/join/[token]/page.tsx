@@ -8,6 +8,10 @@ import { JoinView } from "./join-view";
 
 export const metadata: Metadata = {
   title: "Join a workspace | Vibe Socials",
+  // The invite token is in the address and stays usable for 7 days, so only the
+  // bare origin is ever sent as a referrer. Not "no-referrer": as on /c, a browser
+  // without fetch metadata would then send `Origin: null` on the accept.
+  referrer: "strict-origin",
 };
 
 interface JoinPageProps {
