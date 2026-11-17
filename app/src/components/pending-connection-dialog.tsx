@@ -192,6 +192,7 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
     if (!selectedId || busy) return;
     setBusy("connect");
     setConnectError(null);
+    setCancelError(null);
 
     try {
       const response = await fetchOrNoAnswer(choiceAddress(endpoint, load.status === "ready" ? load.platform : null), {

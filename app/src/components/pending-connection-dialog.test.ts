@@ -105,6 +105,9 @@ describe("PendingConnectionDialog: a Cancel that fails", () => {
     const close = source.slice(source.indexOf("const handleClose"), source.indexOf("const copy ="));
     expect(close).toMatch(/if \(load\.status === "expired" \|\| cancelError\) \{\s+leave\(\);/);
     expect(source).toMatch(/<p role="alert" className="text-xs text-destructive">\s+\{connectError \?\? cancelError\}/);
+    // R42 second review: Connect clears an old Cancel failure too, so "Connecting…" never shows beside it.
+    const connect = source.slice(source.indexOf("async function handleConnect"), source.indexOf("async function handleCancel"));
+    expect(connect).toMatch(/setBusy\("connect"\);\s+setConnectError\(null\);\s+setCancelError\(null\);/);
   });
 });
 

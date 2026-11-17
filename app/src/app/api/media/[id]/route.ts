@@ -193,7 +193,7 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
           // R42 pages-a L4 and review: true for every post refused here (draft, awaiting approval,
           // scheduled, pending, in progress), with the step that frees the file for each.
           error:
-            "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or publishing, wait until it has finished.",
+            "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or in progress, wait until it has finished.",
           code: "MEDIA_IN_USE",
         },
         { status: 409 },

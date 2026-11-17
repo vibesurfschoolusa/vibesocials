@@ -299,7 +299,7 @@ describe("DELETE /api/media/[id]", () => {
     // R42 pages-a L4: which post, and what to do about it.
     // R42 review: true for every post the route refuses (draft, awaiting approval, scheduled, pending, in progress).
     expect(body.error).toBe(
-      "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or publishing, wait until it has finished.",
+      "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or in progress, wait until it has finished.",
     );
     expect(mediaItemUpdateMock).not.toHaveBeenCalled();
     expect(delMock).not.toHaveBeenCalled();

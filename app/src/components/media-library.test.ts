@@ -206,7 +206,7 @@ describe("Media: a lost answer may have gone through", () => {
     expect(mediaDeleteFailureText(400, null)).toBe(MEDIA_MESSAGES.deleteFailed);
     // R42 pages-a L4: the route's own sentence for each status, never text it didn't write.
     const inUse =
-      "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or publishing, wait until it has finished.";
+      "A post that hasn't gone out yet uses this file. If it's a draft, awaiting approval or scheduled, delete or cancel it in Queue first. If it's pending or in progress, wait until it has finished.";
     expect(mediaDeleteFailureText(409, { error: inUse, code: "MEDIA_IN_USE" })).toBe(inUse);
     const nothingChanged = "Couldn't delete the file. Try again in a moment.";
     expect(mediaDeleteFailureText(500, { error: nothingChanged, code: "MEDIA_DELETE_FAILED" })).toBe(nothingChanged);
