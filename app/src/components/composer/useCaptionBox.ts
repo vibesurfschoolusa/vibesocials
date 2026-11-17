@@ -9,6 +9,8 @@ export interface CaptionPress {
   askedAbout: unknown;
   captionAtPress: string;
   generation: number;
+  /** The box held the AI's unedited caption from media at the press. */
+  wasAiCaption: boolean;
 }
 
 /**
@@ -76,13 +78,21 @@ export function useCaptionBox() {
   }
 
   function pressed(askedAbout: unknown): CaptionPress {
-    return { askedAbout, captionAtPress: captionRef.current, generation: generationRef.current };
+    return {
+      askedAbout,
+      captionAtPress: captionRef.current,
+      generation: generationRef.current,
+      wasAiCaption: lastAiRef.current !== null && captionRef.current === lastAiRef.current,
+    };
   }
 
   /**
    * Writes the answer by captionResultApplies, within the press's form
    * generation. A caption from media (`fromMedia`, the default) is remembered
-   * as the AI's when written; Improve's rewrite is not, so a new pick keeps it.
+   * as the AI's when written. A rewrite (Improve, `fromMedia: false`) keeps
+   * the box's authorship at the press: of the unedited AI media caption it is
+   * still the AI's about that media (a new pick clears it); of the person's
+   * own text it stays theirs.
    */
   function answered(
     press: CaptionPress,
@@ -98,7 +108,7 @@ export function useCaptionBox() {
     });
     if (!applies) return false;
     setCaption(answer.caption);
-    if (answer.fromMedia !== false) setLastAiCaption(answer.caption);
+    if (answer.fromMedia !== false || press.wasAiCaption) setLastAiCaption(answer.caption);
     return true;
   }
 

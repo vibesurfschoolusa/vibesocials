@@ -159,12 +159,35 @@ describe("Create's caption box: a press and its late answer", () => {
     expect(box.formGeneration()).toBe(before + 1);
   });
 
-  it("R38: Improve's answer (not from media) writes the box but is not remembered as the media's caption", async () => {
+  it("R38: Improve of the person's own text writes the box and stays theirs", async () => {
     const box = await mount();
     await step(() => box.setCaption("My words"));
     const press = latest.pressed(null);
     await step(() => latest.answered(press, { caption: "Better words", selectedNow: null, overwrite: true, fromMedia: false }));
     expect(latest.caption).toBe("Better words");
     expect(latest.lastAiCaption).toBe(null);
+  });
+
+  it("R38 review: Improve of the unedited AI media caption stays the AI's caption about that media", async () => {
+    const box = await mount();
+    const pressA = box.pressed(fileA);
+    await step(() => box.answered(pressA, { caption: "A described", selectedNow: fileA, overwrite: false }));
+    const improve = latest.pressed(null);
+    await step(() => latest.answered(improve, { caption: "A described, better", selectedNow: null, overwrite: true, fromMedia: false }));
+    expect(latest.lastAiCaption).toBe("A described, better");
+    await step(() => latest.forgetMediaCaption());
+    expect(latest.caption).toBe("");
+  });
+
+  it("R38 review: Improve of an edited AI caption stays the person's", async () => {
+    const box = await mount();
+    const pressA = box.pressed(fileA);
+    await step(() => box.answered(pressA, { caption: "A described", selectedNow: fileA, overwrite: false }));
+    await step(() => latest.setCaption("A described, edited"));
+    const improve = latest.pressed(null);
+    await step(() => latest.answered(improve, { caption: "A edited, better", selectedNow: null, overwrite: true, fromMedia: false }));
+    expect(latest.lastAiCaption).toBe("A described");
+    await step(() => latest.forgetMediaCaption());
+    expect(latest.caption).toBe("A edited, better");
   });
 });

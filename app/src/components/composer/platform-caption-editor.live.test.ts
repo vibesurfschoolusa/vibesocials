@@ -17,6 +17,7 @@ let root: Root;
 let container: FakeNode;
 let overridesNow: PlatformOverrides | null = null;
 let setOverridesNow: (next: PlatformOverrides | null) => void = () => {};
+let setMainNow: (next: string) => void = () => {};
 let generation = 0;
 
 type Pending = { resolve: (body: unknown) => void };
@@ -30,9 +31,11 @@ const fetchMock = vi.fn(
 
 function Harness({ initial, withGeneration }: { initial: PlatformOverrides; withGeneration: boolean }) {
   const [overrides, setOverrides] = useState<PlatformOverrides | null>(initial);
+  const [main, setMain] = useState("Main caption");
   useEffect(() => {
     overridesNow = overrides;
     setOverridesNow = setOverrides;
+    setMainNow = setMain;
   }, [overrides]);
   return createElement(
     ToastProvider,
@@ -40,7 +43,7 @@ function Harness({ initial, withGeneration }: { initial: PlatformOverrides; with
     createElement(PlatformCaptionEditor, {
       idPrefix: "t",
       platforms: ["x", "linkedin"],
-      caption: "Main caption",
+      caption: main,
       overrides,
       onChange: (update) => setOverrides(update),
       workspaceId: "ws-1",
@@ -144,6 +147,22 @@ describe("Adapt for X: a late answer", () => {
     await pressAdapt("X");
     await answer("Main, for X");
     expect(overridesNow).toEqual({ x: "Main, for X" });
+  });
+
+  it("X's own text empty at the press, the main caption edited during the call: the answer is dropped", async () => {
+    await mount({ x: "" });
+    await pressAdapt("X");
+    await act(async () => setMainNow("Main caption, edited"));
+    await answer("Main, for X");
+    expect(overridesNow).toEqual({ x: "" });
+  });
+
+  it("X's own text set at the press, the main caption edited during the call: X's answer still lands", async () => {
+    await mount({ x: "Own words" });
+    await pressAdapt("X");
+    await act(async () => setMainNow("Main caption, edited"));
+    await answer("Own, for X");
+    expect(overridesNow).toEqual({ x: "Own, for X" });
   });
 
   it("the form was saved and reset meanwhile (a new generation): the answer is dropped", async () => {

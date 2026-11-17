@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
@@ -73,6 +73,11 @@ export function PlatformCaptionEditor({
 }: PlatformCaptionEditorProps) {
   const toast = useToast();
   const [adapting, setAdapting] = useState<Platform | null>(null);
+  // R38 review: the main caption as it is now, for an Adapt that sent it.
+  const captionRef = useRef(caption);
+  useEffect(() => {
+    captionRef.current = caption;
+  }, [caption]);
 
   if (platforms.length === 0) return null;
 
@@ -85,6 +90,7 @@ export function PlatformCaptionEditor({
     const generationAtPress = formGeneration?.();
     // Adapt the platform's own text once it has some; otherwise the main caption.
     const source = own?.trim() ? own : caption;
+    const sentMainCaption = source !== own;
     if (!source.trim()) {
       toast.error("Write a caption first, then adapt it.");
       return;
@@ -115,6 +121,8 @@ export function PlatformCaptionEditor({
       }
       const adapted = data.enhancedCaption;
       if (formGeneration && formGeneration() !== generationAtPress) return;
+      // It adapted the main caption: edited meanwhile, the answer is out of date.
+      if (sentMainCaption && captionRef.current !== source) return;
       onChange((prev) => applyAdaptedCaption(prev, platform, adapted, ownAtPress));
     } catch (caught) {
       toast.error(isNoAnswer(caught) ? adaptLostText(platformLabel(platform)) : `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);

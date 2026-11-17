@@ -1827,7 +1827,9 @@ function CreatePostFormInner({
     isStale: () => boolean,
     wantCaption: boolean,
   ) {
-    const writeCaption = wantCaption && autoCaptionRef.current;
+    // The checkbox is read in onCaption, when the request would go out; the
+    // spinner the pick started ends either way (onCaption or onDone).
+    const writeCaption = wantCaption;
     photoQueueRef.current = photoQueueRef.current.then(() =>
       uploadPhotosInOrder(entries, {
         upload: uploadPhoto,

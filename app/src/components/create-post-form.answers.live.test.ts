@@ -24,9 +24,12 @@ vi.mock("@/hooks/useConnections", async (importOriginal) => ({
     reload: () => {},
   }),
 }));
+// While `hold` is set, preparing a pick waits until the test releases it.
+const prep = vi.hoisted(() => ({ hold: false, waiting: [] as (() => void)[] }));
 vi.mock("@/lib/prepareUploadFile", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/prepareUploadFile")>()),
-  prepareUploadFile: async (file: File) => file,
+  prepareUploadFile: (file: File) =>
+    prep.hold ? new Promise<File>((resolve) => prep.waiting.push(() => resolve(file))) : Promise.resolve(file),
 }));
 
 type Deferred = { resolve: (value: unknown) => void };
@@ -129,6 +132,12 @@ function autoCaptionBox(): FakeNode {
   return box;
 }
 const untickAutoCaption = () => run(() => props(autoCaptionBox()).onChange({ target: { checked: false } }));
+const tickAutoCaption = () => run(() => props(autoCaptionBox()).onChange({ target: { checked: true } }));
+const releasePrepare = async () => {
+  prep.hold = false;
+  await run(() => prep.waiting.splice(0).forEach((go) => go()));
+};
+const captionFromMediaBusy = () => button("Caption from media").attributes["aria-busy"] === "true";
 const pick = (...files: File[]) => run(() => props(byId("post-media")).onChange({ target: { files } }));
 
 beforeEach(async () => {
@@ -158,6 +167,8 @@ beforeEach(async () => {
   for (const key of Object.keys(answers)) delete answers[key];
   calls.length = 0;
   uploads.pending.length = 0;
+  prep.hold = false;
+  prep.waiting.length = 0;
   root = createRoot(container as unknown as HTMLElement);
   await act(async () => {
     root.render(createElement(ToastProvider, null, createElement(CreatePostForm, { workspaceId: "ws-1" })));
@@ -258,5 +269,86 @@ describe("Generate a caption when media is added", () => {
     await finishUploads();
     await finishUploads();
     expect(autoCaptionCalls()).toBe(0);
+  });
+
+  describe("R38 review: the checkbox changed while the pick is still preparing", () => {
+    const setOf = () => [photo(), new File(["b"], "b.jpg", { type: "image/jpeg" })];
+
+    it("a photo set, unticked while Preparing: no call, the spinner ends, Caption from media still works", async () => {
+      prep.hold = true;
+      await pick(...setOf());
+      await untickAutoCaption();
+      await releasePrepare();
+      await finishUploads();
+      await finishUploads();
+      expect(autoCaptionCalls()).toBe(0);
+      expect(captionFromMediaBusy()).toBe(false);
+      await press("Caption from media");
+      expect(autoCaptionCalls()).toBe(1);
+    });
+
+    it("a single file, unticked while Preparing: no call, the spinner ends, Caption from media still works", async () => {
+      prep.hold = true;
+      await pick(photo());
+      await untickAutoCaption();
+      await releasePrepare();
+      await finishUploads();
+      expect(autoCaptionCalls()).toBe(0);
+      expect(captionFromMediaBusy()).toBe(false);
+      await press("Caption from media");
+      expect(autoCaptionCalls()).toBe(1);
+    });
+
+    it("a photo set, ticked again while Preparing: the call goes", async () => {
+      await untickAutoCaption();
+      prep.hold = true;
+      await pick(...setOf());
+      await tickAutoCaption();
+      await releasePrepare();
+      await finishUploads();
+      await finishUploads();
+      expect(autoCaptionCalls()).toBe(1);
+    });
+
+    it("a single file, ticked again while Preparing: the call goes", async () => {
+      await untickAutoCaption();
+      prep.hold = true;
+      await pick(photo());
+      await tickAutoCaption();
+      await releasePrepare();
+      await finishUploads();
+      expect(autoCaptionCalls()).toBe(1);
+    });
+  });
+});
+
+describe("R38 review: Improve, then a different photo", () => {
+  const photoA = () => new File(["a"], "a.jpg", { type: "image/jpeg" });
+  const photoB = () => new File(["b"], "b.jpg", { type: "image/jpeg" });
+
+  it("Improve of the AI's caption for photo A: replacing A clears it and B gets its own", async () => {
+    await pick(photoA());
+    await finishUploads();
+    await answer("/api/posts/auto-caption", { caption: "Photo A described" });
+    await press("Improve caption");
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Photo A, better" });
+    expect(captionNow()).toBe("Photo A, better");
+    await pick(photoB());
+    expect(captionNow()).toBe("");
+    await finishUploads();
+    await answer("/api/posts/auto-caption", { caption: "Photo B described" });
+    expect(captionNow()).toBe("Photo B described");
+  });
+
+  it("Improve of typed text: replacing the photo keeps it", async () => {
+    await untickAutoCaption();
+    await pick(photoA());
+    await finishUploads();
+    await typeCaption("My own words");
+    await press("Improve caption");
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "My own words, better" });
+    await pick(photoB());
+    await finishUploads();
+    expect(captionNow()).toBe("My own words, better");
   });
 });
