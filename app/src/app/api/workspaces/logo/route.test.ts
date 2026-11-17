@@ -387,3 +387,18 @@ describe("POST /api/workspaces/logo by plan", () => {
     }
   });
 });
+
+// R44 new-customer L1: the limit is a fixed hour counted across every workspace
+// the person owns, so the refusal names the real wait, not "Try again later".
+describe("the hourly limit names its wait", () => {
+  it("at 40 minutes left: the reason, the wait in minutes, and Retry-After", async () => {
+    m.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 40 * 60 });
+    const response = await POST(upload(await picture(100, 100)));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("2400");
+    await expect(response.json()).resolves.toEqual({
+      error: "You've changed a logo 10 times this hour, counted across all your workspaces. Too many tries. Wait 40 minutes, then try again.",
+      retryAfterSeconds: 2400,
+    });
+  });
+});

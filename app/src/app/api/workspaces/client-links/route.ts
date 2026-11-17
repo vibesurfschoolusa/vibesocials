@@ -7,6 +7,7 @@ import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { PLAN_FEATURE_CODE, planIncludes, planOffers } from "@/lib/planFeatures";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { reviewLinkUrl } from "@/lib/reviewLink";
 import { sealSecret } from "@/lib/tokenCrypto";
 import { uploadLinkUrl } from "@/lib/uploadLink";
@@ -84,7 +85,10 @@ export async function GET(request: Request) {
   });
 }
 
-export const CLIENT_LINKS_LIMIT_MESSAGE = "You made new client links many times this hour. Try again later.";
+/** New client links one owner makes in an hour, counted across every workspace they own. */
+const CLIENT_LINKS_PER_HOUR = 10;
+/** R44 new-customer L1: the reason before the wait (tooManyTriesResponse). */
+export const CLIENT_LINKS_LIMIT_REASON = `You've made new client links ${CLIENT_LINKS_PER_HOUR} times this hour, counted across all your workspaces.`;
 const FAILED_MESSAGE = "Couldn't make new client links. The old ones still work. Try again.";
 export const CLIENT_LINKS_NOT_INCLUDED_MESSAGE =
   "This workspace's plan doesn't include client links, so new ones can't be made. To stop the old ones working, press Turn off client links.";
@@ -106,14 +110,11 @@ export async function POST(request: Request) {
   const rateLimit = await checkRateLimit({
     userId: context.user.id,
     route: "workspaces/client-links",
-    limit: 10,
+    limit: CLIENT_LINKS_PER_HOUR,
     windowMs: 60 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: CLIENT_LINKS_LIMIT_MESSAGE, retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) } },
-    );
+    return tooManyTriesResponse(rateLimit, CLIENT_LINKS_LIMIT_REASON);
   }
 
   try {

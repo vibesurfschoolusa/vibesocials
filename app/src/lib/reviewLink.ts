@@ -47,9 +47,6 @@ export const REVIEW_LINK_DAILY_LIMIT_REASON = "This link has reached today's lim
 
 export const REVIEW_LINK_DAILY_LIMIT_MESSAGE = `${REVIEW_LINK_DAILY_LIMIT_REASON} Try again tomorrow.`;
 
-export const REVIEW_LINK_CREATE_LIMIT_MESSAGE =
-  "Too many new links in the last hour. Try again later.";
-
 export const REVIEW_DECISION_INVALID_MESSAGE = "Choose Looks good or Ask for a change.";
 
 export const REVIEW_NOTE_MISSING_MESSAGE = "Write what you would like changed.";
@@ -62,6 +59,8 @@ export const REVIEW_LINK_IP_PER_HOUR = 120;
 export const REVIEW_LINK_DECISIONS_PER_DAY = 300;
 /** New links (create or replace) one owner makes in an hour. */
 export const REVIEW_LINK_CREATES_PER_HOUR = 10;
+/** R44 new-customer L1: the reason before the wait (tooManyTriesResponse); the limit is per person, across every workspace they own. */
+export const REVIEW_LINK_CREATE_LIMIT_REASON = `You've made ${REVIEW_LINK_CREATES_PER_HOUR} new review links this hour, counted across all your workspaces.`;
 /** Longest note, in characters. */
 export const REVIEW_NOTE_MAX = 500;
 /** How far ahead the page lists scheduled posts. */

@@ -6,13 +6,14 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import {
   LOGO_CHANGES_PER_HOUR,
   LOGO_EMPTY_MESSAGE,
-  LOGO_LIMIT_MESSAGE,
+  LOGO_LIMIT_REASON,
   LOGO_MAX_BYTES,
   LOGO_REMOVE_FAILED_MESSAGE,
   LOGO_SAVE_FAILED_MESSAGE,
@@ -64,10 +65,7 @@ async function gate(request: Request, upload = false): Promise<WorkspaceContext 
   });
   if (limit.unavailable) return limitUncheckedResponse();
   if (!limit.allowed) {
-    return NextResponse.json(
-      { error: LOGO_LIMIT_MESSAGE, retryAfterSeconds: limit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds ?? 60) } },
-    );
+    return tooManyTriesResponse(limit, LOGO_LIMIT_REASON);
   }
   return contextOrError;
 }

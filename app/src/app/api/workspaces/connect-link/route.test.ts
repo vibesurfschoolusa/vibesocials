@@ -287,3 +287,18 @@ describe("POST while the workspace is blocked", () => {
     expect(h.create).not.toHaveBeenCalled();
   });
 });
+
+// R44 new-customer L1: the limit is a fixed hour counted across every workspace
+// the person owns, so the refusal names the real wait, not "Try again later".
+describe("the hourly limit names its wait", () => {
+  it("at 40 minutes left: the reason, the wait in minutes, and Retry-After", async () => {
+    h.rateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 40 * 60 });
+    const response = await POST(body("POST", { platforms: ["tiktok"] }));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("2400");
+    await expect(response.json()).resolves.toEqual({
+      error: "You've made 10 new connect links this hour, counted across all your workspaces. Too many tries. Wait 40 minutes, then try again.",
+      retryAfterSeconds: 2400,
+    });
+  });
+});

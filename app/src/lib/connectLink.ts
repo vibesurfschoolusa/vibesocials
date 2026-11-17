@@ -54,7 +54,8 @@ export const CONNECT_LINK_INACTIVE_MESSAGE =
 export const CONNECT_LINK_REOPEN_MESSAGE =
   "This link has expired or was opened in a different browser. Open the link you were sent again.";
 
-export const CONNECT_LINK_CREATE_LIMIT_MESSAGE = "Too many new links in the last hour. Try again later.";
+/** R44 new-customer L1: the reason before the wait (tooManyTriesResponse); the limit is per person, across every workspace they own. */
+export const CONNECT_LINK_CREATE_LIMIT_REASON = `You've made ${CONNECT_LINK_CREATES_PER_HOUR} new connect links this hour, counted across all your workspaces.`;
 
 /** The network limit's reason alone, so a page with its own instruction can say it once (R39 lead review). */
 export const CONNECT_LINK_RATE_LIMIT_REASON = "Too many requests from this network in the last hour.";

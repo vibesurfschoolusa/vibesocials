@@ -22,9 +22,6 @@ export const UPLOAD_LINK_IP_LIMIT_MESSAGE =
 export const UPLOAD_LINK_BYTES_LIMIT_MESSAGE =
   "This link has taken 20 GB of files today, its daily limit. Send the rest tomorrow.";
 
-export const UPLOAD_LINK_CREATE_LIMIT_MESSAGE =
-  "Too many new links in the last hour. Try again later.";
-
 /** Files one link takes in a UTC day, counted on the upload token and on the registration. */
 export const UPLOAD_LINK_FILES_PER_DAY = 200;
 /**
@@ -37,6 +34,8 @@ export const UPLOAD_LINK_IP_PER_HOUR = 300;
 export const UPLOAD_LINK_BYTES_PER_DAY = 20 * 1024 * 1024 * 1024;
 /** New links (create or replace) one owner makes in an hour. */
 export const UPLOAD_LINK_CREATES_PER_HOUR = 10;
+/** R44 new-customer L1: the reason before the wait (tooManyTriesResponse); the limit is per person, across every workspace they own. */
+export const UPLOAD_LINK_CREATE_LIMIT_REASON = `You've made ${UPLOAD_LINK_CREATES_PER_HOUR} new upload links this hour, counted across all your workspaces.`;
 /** Longest sender name, and longest note. */
 export const UPLOAD_LINK_TEXT_MAX = 200;
 

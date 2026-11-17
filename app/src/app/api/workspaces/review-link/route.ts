@@ -5,8 +5,9 @@ import { readJsonObject } from "@/lib/http";
 import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import {
-  REVIEW_LINK_CREATE_LIMIT_MESSAGE,
+  REVIEW_LINK_CREATE_LIMIT_REASON,
   REVIEW_LINK_CREATES_PER_HOUR,
   reviewLinkUrl,
 } from "@/lib/reviewLink";
@@ -103,10 +104,7 @@ export async function POST(request: Request) {
     windowMs: 60 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: REVIEW_LINK_CREATE_LIMIT_MESSAGE, retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) } },
-    );
+    return tooManyTriesResponse(rateLimit, REVIEW_LINK_CREATE_LIMIT_REASON);
   }
 
   const { raw, hash } = generateInviteToken();

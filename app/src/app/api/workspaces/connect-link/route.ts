@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 
 import {
   CONNECT_LINK_CREATES_PER_HOUR,
-  CONNECT_LINK_CREATE_LIMIT_MESSAGE,
+  CONNECT_LINK_CREATE_LIMIT_REASON,
   CONNECT_LINK_TTL_MS,
   configuredConnectLinkPlatforms,
   connectLinkUrl,
@@ -14,6 +14,7 @@ import { readJsonObject } from "@/lib/http";
 import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
 import { clientLinkCreateRefusal, clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
@@ -118,10 +119,7 @@ export async function POST(request: Request) {
     windowMs: 60 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: CONNECT_LINK_CREATE_LIMIT_MESSAGE, retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) } },
-    );
+    return tooManyTriesResponse(rateLimit, CONNECT_LINK_CREATE_LIMIT_REASON);
   }
 
   const { raw, hash } = generateInviteToken();
