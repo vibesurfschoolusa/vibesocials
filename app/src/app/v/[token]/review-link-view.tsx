@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { useRetryFocus } from "@/lib/useRetryFocus";
 import {
   REVIEW_ALREADY_APPROVED_MESSAGE,
   REVIEW_LIST_MAX,
@@ -538,19 +539,34 @@ export function ReviewLinkView({ token }: { token: string }) {
   );
   const cards = posts === null ? [] : cardsShown(posts, kept);
 
+  // R39 lead review: Try again and Reload the list go with the failure, so
+  // focus goes to the loading line while the list is read, then to what it shows.
+  const [retrying, setRetrying] = useState(false);
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const failedRef = useRef<HTMLParagraphElement>(null);
+  const refreshFailedRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const emptyRef = useRef<HTMLParagraphElement>(null);
+  const retried = useRetryFocus(retrying, statusRef, [failedRef, refreshFailedRef, listRef, emptyRef]);
+  const retry = () => {
+    retried();
+    setRetrying(true);
+    void load().finally(() => setRetrying(false));
+  };
+
   // R30 PP2: one return, so both status lines are on the page from the first
   // render and only their text changes.
   return (
     <div>
-      <p role="status" className="text-sm text-muted-foreground empty:sr-only">
-        {posts === null && error === null ? "Loading the posts…" : ""}
+      <p ref={statusRef} role="status" className="text-sm text-muted-foreground outline-none empty:sr-only">
+        {(posts === null && error === null) || retrying ? "Loading the posts…" : ""}
       </p>
       {error !== null && posts === null ? (
         <div className="space-y-3">
-          <p role="alert" className="text-sm">
+          <p ref={failedRef} role="alert" className="text-sm outline-none">
             {error || LOAD_FAILED_MESSAGE}
           </p>
-          <Button type="button" variant="outline" size="md" onClick={() => void load()}>
+          <Button type="button" variant="outline" size="md" onClick={retry}>
             Try again
           </Button>
         </div>
@@ -558,9 +574,13 @@ export function ReviewLinkView({ token }: { token: string }) {
       <div className="space-y-4">
         {posts !== null && error !== null ? (
           // A failed reload while the list is on screen: say so, and how to recover.
-          <div role="alert" className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3">
+          <div
+            ref={refreshFailedRef}
+            role="alert"
+            className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3 outline-none"
+          >
             <p className="text-sm">{error || REFRESH_FAILED_MESSAGE}</p>
-            <Button type="button" variant="outline" size="md" onClick={() => void load()}>
+            <Button type="button" variant="outline" size="md" onClick={retry}>
               Reload the list
             </Button>
           </div>
@@ -570,9 +590,11 @@ export function ReviewLinkView({ token }: { token: string }) {
           {notice}
         </p>
         {posts === null ? null : cards.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
+          <p ref={emptyRef} className="text-sm text-muted-foreground outline-none">
+            Nothing is scheduled for the next 60 days.
+          </p>
         ) : (
-          <ul className="space-y-4">
+          <ul ref={listRef} className="space-y-4 outline-none">
             {cards.map(({ post, gone }) => (
               // Keyed on the id only, so a card keeps its sentence across a reload.
               <ReviewPostCard

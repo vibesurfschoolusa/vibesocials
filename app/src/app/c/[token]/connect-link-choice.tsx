@@ -7,9 +7,12 @@ import { useRouter } from "next/navigation";
 import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { answerLostText } from "@/lib/answerLost";
+import { CONNECT_LINK_RATE_LIMIT_MESSAGE } from "@/lib/connectLink";
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUncheckedMessage";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { useRetryFocus } from "@/lib/useRetryFocus";
 
 /**
  * The visitor chooses which of several accounts to connect (2026-11-11), from
@@ -24,8 +27,11 @@ export type ConnectLinkChoiceState =
   | { status: "loading" }
   | { status: "ready"; platform: string; candidates: Candidate[] }
   | { status: "gone"; message: string }
-  /** R39 pages L2: the load failed but the choice may still wait, so Try again loads it again. */
-  | { status: "failed"; message: string };
+  /**
+   * R39 pages L2: the load failed but the choice may still wait. `retry`:
+   * Try again can work now (not for a 429, which lasts its hour).
+   */
+  | { status: "failed"; message: string; retry: boolean };
 
 /** R28 NN2: the account may have been connected before the answer was lost. */
 export const CHOICE_MAYBE_CONNECTED_MESSAGE = answerLostText("the account may have been connected", "Reload this page to see.");
@@ -36,18 +42,40 @@ const CHOOSE_FAILED_MESSAGE = "Couldn't connect that account. Try again.";
 
 type ChoiceAnswer = { platform?: string; candidates?: Candidate[]; error?: string; connected?: boolean } | null;
 
+/** " Try again in N minutes." from the answer's Retry-After, or "" without one. */
+function waitSentence(retryAfterSeconds: number | undefined): string {
+  if (!retryAfterSeconds || retryAfterSeconds <= 0) return "";
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+  return ` Try again in ${minutes === 1 ? "1 minute" : `${minutes} minutes`}.`;
+}
+
 /**
  * What the load answered: the accounts; for a 404, that the choice is gone
- * (the route's sentence, else reload). R39 pages L2: any other failure (the
- * limit couldn't be checked, too many tries, a server error) leaves the
- * choice waiting, so it says so with Try again.
+ * (the route's sentence, else reload). R39 pages L2: any other failure leaves
+ * the choice waiting. A 429 says so with its wait and no button (pressing
+ * within the hour can't work); the couldn't-check 503 keeps its sentence and
+ * Try again; anything else says only "Press Try again", so the page gives
+ * one instruction (R39 lead review).
  */
-export function loadOutcome(status: number, data: ChoiceAnswer): ConnectLinkChoiceState {
+export function loadOutcome(status: number, data: ChoiceAnswer, retryAfterSeconds?: number): ConnectLinkChoiceState {
   if (status >= 200 && status < 300 && data?.platform && data.candidates) {
     return { status: "ready", platform: data.platform, candidates: data.candidates };
   }
   if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
-  return { status: "failed", message: data?.error || LOAD_RETRY_MESSAGE };
+  if (status === 429) {
+    const sentence = data?.error || CONNECT_LINK_RATE_LIMIT_MESSAGE;
+    return { status: "failed", message: `${sentence}${waitSentence(retryAfterSeconds)}`, retry: false };
+  }
+  if (data?.error === LIMIT_UNCHECKED_MESSAGE) return { status: "failed", message: LIMIT_UNCHECKED_MESSAGE, retry: true };
+  return { status: "failed", message: LOAD_RETRY_MESSAGE, retry: true };
+}
+
+/** The wait a refused load names: the body's `retryAfterSeconds`, else the Retry-After header. */
+function answerRetryAfter(response: Response, data: unknown): number | undefined {
+  const fromBody = (data as { retryAfterSeconds?: unknown } | null)?.retryAfterSeconds;
+  if (typeof fromBody === "number" && fromBody > 0) return fromBody;
+  const header = Number(response.headers.get("Retry-After"));
+  return Number.isFinite(header) && header > 0 ? header : undefined;
 }
 
 const CHOICE_GONE_MESSAGE =
@@ -116,11 +144,11 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
         const response = await fetch(choiceAddress(base, rememberedChoicePlatform(pendingId)), { cache: "no-store" });
         const data = (await response.json().catch(() => null)) as ChoiceAnswer;
         if (cancelled) return;
-        const outcome = loadOutcome(response.status, data);
+        const outcome = loadOutcome(response.status, data, answerRetryAfter(response, data));
         if (outcome.status === "ready") rememberChoicePlatform(pendingId, outcome.platform);
         setState(outcome);
       } catch {
-        if (!cancelled) setState({ status: "failed", message: LOAD_RETRY_MESSAGE });
+        if (!cancelled) setState({ status: "failed", message: LOAD_RETRY_MESSAGE, retry: true });
       }
     })();
     return () => {
@@ -128,7 +156,14 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     };
   }, [base, pendingId, attempt]);
 
+  // R39 lead review: Try again goes with the failure, so focus follows the load.
+  const statusRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const failedRef = useRef<HTMLParagraphElement>(null);
+  const retried = useRetryFocus(state.status === "loading", statusRef, [headingRef, failedRef, goneRef]);
+
   function retry() {
+    retried();
     setState({ status: "loading" });
     setAttempt((count) => count + 1);
   }
@@ -193,6 +228,9 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
       onCancel={cancel}
       onRetry={retry}
       goneRef={goneRef}
+      statusRef={statusRef}
+      headingRef={headingRef}
+      failedRef={failedRef}
     />
   );
 }
@@ -208,16 +246,35 @@ export interface ConnectLinkChoiceViewProps {
   onRetry?: () => void;
   /** The gone sentence, which takes focus when a press removed the section (R29 lead review). */
   goneRef?: React.Ref<HTMLParagraphElement>;
+  /** R39 lead review: where focus goes after Try again: the loading line, then the heading or the failure. */
+  statusRef?: React.Ref<HTMLDivElement>;
+  headingRef?: React.Ref<HTMLHeadingElement>;
+  failedRef?: React.Ref<HTMLParagraphElement>;
 }
 
 /**
  * The choice as it renders. R5-pages L9: what a press or the load answers comes
  * later, so it is announced (role="alert"); the loading line is read through the announcer.
  */
-export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, onRetry, goneRef }: ConnectLinkChoiceViewProps) {
+export function ConnectLinkChoiceView({
+  state,
+  busy,
+  error,
+  onChoose,
+  onCancel,
+  onRetry,
+  goneRef,
+  statusRef,
+  headingRef,
+  failedRef,
+}: ConnectLinkChoiceViewProps) {
   if (state.status === "loading") {
     // R30 lead review: this view comes and goes, so the line is read through the announcer.
-    return <AnnouncedText className="text-sm text-muted-foreground" text="Loading the accounts…" />;
+    return (
+      <div ref={statusRef} className="outline-none">
+        <AnnouncedText className="text-sm text-muted-foreground" text="Loading the accounts…" />
+      </div>
+    );
   }
   if (state.status === "gone") {
     return (
@@ -229,19 +286,23 @@ export function ConnectLinkChoiceView({ state, busy, error, onChoose, onCancel, 
   if (state.status === "failed") {
     return (
       <div className="space-y-3">
-        <p role="alert" className="text-sm">
+        <p ref={failedRef} role="alert" className="text-sm outline-none">
           {state.message}
         </p>
-        <Button type="button" variant="outline" size="md" onClick={onRetry}>
-          Try again
-        </Button>
+        {state.retry ? (
+          <Button type="button" variant="outline" size="md" onClick={onRetry}>
+            Try again
+          </Button>
+        ) : null}
       </div>
     );
   }
 
   return (
     <section className="rounded-[var(--radius)] border p-4">
-      <h2 className="text-base font-semibold">Choose the account to connect</h2>
+      <h2 ref={headingRef} className="text-base font-semibold outline-none">
+        Choose the account to connect
+      </h2>
       <ul className="mt-3 space-y-2">
         {state.candidates.map((candidate) => (
           <li key={candidate.id} className="flex items-center justify-between gap-3">

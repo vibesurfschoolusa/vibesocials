@@ -11,11 +11,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 
 import { html, makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
+import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 
 import { ConnectLinkChoice } from "./connect-link-choice";
 
 const UNCHECKED = "We couldn't check that just now. Nothing was changed. Try again in a minute.";
 const READY = { platform: "facebook_page", candidates: [{ id: "a", name: "Surf Co" }, { id: "b", name: "Surf Co Kids" }] };
+
+let doc: FocusDoc;
 
 let root: Root;
 let container: FakeNode;
@@ -53,7 +56,10 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
+  doc = made.doc as unknown as FocusDoc;
+  makeFocusable(doc);
   vi.stubGlobal("window", made.doc.defaultView);
+  vi.stubGlobal("document", made.doc);
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   root = createRoot(container as unknown as HTMLElement);
@@ -100,5 +106,49 @@ describe("the /c account choice after a failed load", () => {
     expect(container.textContent).toContain(gone);
     expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// R39 lead review: Try again removes itself, so focus fell to the page body.
+describe("the /c account choice: focus after Try again", () => {
+  function deferred() {
+    let resolve!: (value: Response) => void;
+    const promise = new Promise<Response>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  }
+
+  async function failedThenRetry(next: Response) {
+    const later = deferred();
+    fetchMock.mockReturnValueOnce(answer(503, { error: UNCHECKED })).mockReturnValueOnce(later.promise);
+    await mount();
+    const retry = button("Try again")!;
+    (retry.focus as () => void)();
+    await act(async () => {
+      void props(retry).onClick();
+    });
+    await settle();
+    const status = doc.activeElement as FakeNode;
+    expect((status.textContent as string).trim()).toBe("Loading the accounts…");
+    await act(async () => {
+      later.resolve(next);
+    });
+    await settle();
+    return status;
+  }
+
+  it("goes to the loading line, then to the accounts", async () => {
+    await failedThenRetry(Response.json(READY));
+    const active = doc.activeElement as FakeNode;
+    expect(active.nodeName).toBe("H2");
+    expect(active.textContent).toBe("Choose the account to connect");
+  });
+
+  it("goes to the loading line, then to the new error", async () => {
+    await failedThenRetry(Response.json({ error: UNCHECKED }, { status: 503 }));
+    const active = doc.activeElement as FakeNode;
+    expect(active.attributes.role).toBe("alert");
+    expect(active.textContent).toBe(UNCHECKED);
   });
 });

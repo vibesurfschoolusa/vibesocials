@@ -61,7 +61,8 @@ describe("the connect link's account choice", () => {
   // the page's announcer (components/ui/announcer.tsx), not a region of its own.
   it("says it is loading, read through the announcer", () => {
     const html = view({ state: { status: "loading" } });
-    expect(html).toBe('<p class="text-sm text-muted-foreground">Loading the accounts…</p>');
+    // R39 lead review: inside a wrapper that takes focus after Try again.
+    expect(html).toBe('<div class="outline-none"><p class="text-sm text-muted-foreground">Loading the accounts…</p></div>');
   });
 });
 
@@ -239,17 +240,43 @@ describe("the account choice after a lost Connect answer (R30)", () => {
 describe("the account choice when the load fails but the choice may still wait (R39)", () => {
   const unchecked = "We couldn't check that just now. Nothing was changed. Try again in a minute.";
 
-  it("load: a non-404 failure keeps a way back, with the route's sentence", () => {
-    expect(loadOutcome(503, { error: unchecked })).toEqual({ status: "failed", message: unchecked });
-    expect(loadOutcome(500, null)).toEqual({ status: "failed", message: "Couldn't load the accounts. Press Try again." });
-    expect(loadOutcome(429, { error: "Too many tries." })).toEqual({ status: "failed", message: "Too many tries." });
+  it("load: a 503 (couldn't check) shows the route's sentence and keeps Try again", () => {
+    expect(loadOutcome(503, { error: unchecked })).toEqual({ status: "failed", message: unchecked, retry: true });
   });
 
-  it("shows the sentence as an alert with a Try again button", () => {
-    const html = view({ state: { status: "failed", message: unchecked } });
-    expect(html).toContain("We couldn&#x27;t check that just now.");
+  // R39 lead review: the route's 500 says "Reload this page to try again"; next to a button that is two instructions.
+  it("load: a 500, or an unreadable failure, gives one instruction: Try again", () => {
+    for (const data of [null, { error: "The accounts couldn't be loaded. Reload this page to try again." }]) {
+      expect(loadOutcome(500, data)).toEqual({ status: "failed", message: "Couldn't load the accounts. Press Try again.", retry: true });
+    }
+  });
+
+  // R39 lead review: a Try again pressed inside the hour can't succeed.
+  it("load: a 429 keeps the route's sentence, adds the wait, and offers no Try again", () => {
+    const limited = "Too many requests from this network in the last hour. Try again later.";
+    expect(loadOutcome(429, { error: limited }, 720)).toEqual({
+      status: "failed",
+      message: `${limited} Try again in 12 minutes.`,
+      retry: false,
+    });
+    expect(loadOutcome(429, { error: limited }, 30)).toEqual({
+      status: "failed",
+      message: `${limited} Try again in 1 minute.`,
+      retry: false,
+    });
+    expect(loadOutcome(429, { error: limited })).toEqual({ status: "failed", message: limited, retry: false });
+  });
+
+  it("shows a retryable failure as an alert with a Try again button", () => {
+    const html = view({ state: { status: "failed", message: unchecked, retry: true } });
     expect(html).toMatch(/<p role="alert"[^>]*>We couldn&#x27;t check/);
     expect(html).toMatch(/<button[^>]*>Try again<\/button>/);
+  });
+
+  it("shows a 429 as an alert with no button", () => {
+    const html = view({ state: { status: "failed", message: "Too many requests. Try again in 12 minutes.", retry: false } });
+    expect(html).toMatch(/<p role="alert"[^>]*>Too many requests. Try again in 12 minutes.<\/p>/);
+    expect(html).not.toContain("<button");
   });
 
   it("a gone choice still has no button", () => {
