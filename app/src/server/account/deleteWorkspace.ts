@@ -74,6 +74,15 @@ export async function isPostPublishing(
 }
 
 /**
+ * Whether a person with `memberships` workspaces is in their only one, which
+ * they may not delete (they delete their account instead). Also the leave
+ * route's rule for a sole owner alone in the workspace, so the two can't drift.
+ */
+export function isOnlyWorkspace(memberships: number): boolean {
+  return memberships <= 1;
+}
+
+/**
  * Why `userId` (an owner of `workspaceId`) may not delete it, or null when
  * they may. The route calls it inside its transaction; Settings calls it with
  * the default client to show the same sentence ahead of time.
@@ -89,7 +98,7 @@ export async function workspaceDeletionRefusal(
   if (otherOwners > 0) return OTHER_OWNER_MESSAGE;
   if (await isPostPublishing([workspaceId], db)) return POST_PUBLISHING_MESSAGE;
   const memberships = await db.workspaceMember.count({ where: { userId } });
-  if (memberships <= 1) return LAST_WORKSPACE_MESSAGE;
+  if (isOnlyWorkspace(memberships)) return LAST_WORKSPACE_MESSAGE;
   return null;
 }
 

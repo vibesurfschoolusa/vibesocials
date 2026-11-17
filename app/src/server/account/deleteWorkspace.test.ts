@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import type { Prisma } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +45,7 @@ import {
   POST_PUBLISHING_MESSAGE,
   deleteQueuedFiles,
   deleteWorkspaceRows,
+  isOnlyWorkspace,
   isPostPublishing,
   queueWorkspaceFiles,
   workspaceDeletionRefusal,
@@ -418,6 +422,27 @@ describe("workspaceDeletionRefusal", () => {
     setup({});
 
     await expect(workspaceDeletionRefusal("ws-1", "u-1")).resolves.toBeNull();
+  });
+});
+
+// Lead review (R34): one rule for "this is the person's only workspace", used
+// by this refusal and by the leave route's refusal, so the two can't drift.
+describe("isOnlyWorkspace", () => {
+  it("is true for one membership (or none), false for more", () => {
+    expect(isOnlyWorkspace(0)).toBe(true);
+    expect(isOnlyWorkspace(1)).toBe(true);
+    expect(isOnlyWorkspace(2)).toBe(false);
+  });
+
+  it("is the rule workspaceDeletionRefusal and the leave route use", () => {
+    const here = readFileSync(fileURLToPath(new URL("./deleteWorkspace.ts", import.meta.url)), "utf8");
+    expect(here).toContain("if (isOnlyWorkspace(memberships)) return LAST_WORKSPACE_MESSAGE;");
+    // Written once, in the helper.
+    expect(here.split("<= 1")).toHaveLength(2);
+    const leave = readFileSync(fileURLToPath(new URL("../../app/api/workspaces/leave/route.ts", import.meta.url)), "utf8");
+    expect(leave).toContain('import { isOnlyWorkspace } from "@/server/account/deleteWorkspace";');
+    expect(leave).toContain('return isOnlyWorkspace(memberships) ? ("only_workspace" as const) : ("only_person" as const);');
+    expect(leave).not.toContain("memberships <= 1");
   });
 });
 

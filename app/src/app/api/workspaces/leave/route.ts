@@ -13,6 +13,7 @@ import {
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { isOnlyWorkspace } from "@/server/account/deleteWorkspace";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 
 import { noticeOwnersOfFormerOwner } from "../members/formerOwnerNotice";
@@ -117,10 +118,10 @@ export async function POST(request: Request) {
           where: { workspaceId: context.workspace.id, userId: { not: context.user.id } },
         });
         if (otherMemberCount > 0) return "sole_owner" as const;
-        // Lead review (R34): the delete route's own rule (workspaceDeletionRefusal,
-        // server/account/deleteWorkspace.ts): with one membership it refuses.
+        // Lead review (R34): the delete route's own rule (isOnlyWorkspace, as
+        // workspaceDeletionRefusal): in the only workspace, Delete workspace refuses.
         const memberships = await tx.workspaceMember.count({ where: { userId: context.user.id } });
-        return memberships <= 1 ? ("only_workspace" as const) : ("only_person" as const);
+        return isOnlyWorkspace(memberships) ? ("only_workspace" as const) : ("only_person" as const);
       }
 
       const own = await tx.workspaceMember.findFirst({
