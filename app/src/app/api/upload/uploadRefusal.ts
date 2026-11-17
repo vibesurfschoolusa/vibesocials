@@ -11,7 +11,8 @@ import {
 } from "@/lib/workspaceChanged";
 
 /**
- * Why a person's last upload token was refused, kept for 10 minutes.
+ * Why a person's last upload token was refused, kept for 10 minutes (the
+ * token limit's refusal: until the limit resets).
  * `upload()` from @vercel/blob/client drops a refused token's body, so the page
  * asks GET /api/upload afterwards (lib/uploadFailure.ts); without this it could
  * only say "wait a few minutes", which is wrong for a page that is out of date
@@ -60,8 +61,11 @@ function refusalKey(userId: string): string {
 
 /**
  * Remember why this person's token was refused. Never throws: at worst the page says "wait".
- * `until`: when the refusal stops being true (a limit's reset), if sooner than
- * the 10 minutes; the remembered wait is then counted down to it.
+ * `until`: when the refusal stops being true (a limit's reset). It is kept
+ * until then, with no 10-minute cap: the upload limit's fixed 15-minute block
+ * can leave up to 900 s, and a shorter memory would name too short a wait
+ * (R44 review). The remembered wait is counted down to it. A reason with no
+ * reset keeps the 10 minutes.
  */
 export async function recordUploadRefusal(
   userId: string,
@@ -71,9 +75,7 @@ export async function recordUploadRefusal(
 ): Promise<void> {
   const key = refusalKey(userId);
   const count = REASONS[reason].number;
-  const expiresAt = new Date(
-    until ? Math.min(until.getTime(), now + UPLOAD_REFUSAL_MEMORY_MS) : now + UPLOAD_REFUSAL_MEMORY_MS,
-  );
+  const expiresAt = until ?? new Date(now + UPLOAD_REFUSAL_MEMORY_MS);
   try {
     await prisma.rateLimitEntry.upsert({
       where: { key },
@@ -85,7 +87,7 @@ export async function recordUploadRefusal(
   }
 }
 
-/** The sentence for this person's refusal in the last 10 minutes, or null. Never throws. */
+/** The sentence for this person's refusal while it is remembered, or null. Never throws. */
 export async function readUploadRefusal(
   userId: string,
   now: number = Date.now(),

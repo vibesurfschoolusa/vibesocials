@@ -88,6 +88,50 @@ describe("upload refusal memory", () => {
     await expect(readUploadRefusal("user-1", NOW)).resolves.toBeNull();
   });
 
+  // R44 review: the upload limit counts in fixed 15-minute blocks, so its wait
+  // can be up to 900 s. The remembered wait lasts until the reset itself.
+  describe("the token limit's wait is remembered until the limit resets", () => {
+    const refusedWith = async (seconds: number) => {
+      const rows = store();
+      await recordUploadRefusal("user-1", "rate-limited", NOW, new Date(NOW + seconds * 1000));
+      return rows;
+    };
+
+    it("780 s left reads 13 minutes, and is still remembered at 11 minutes", async () => {
+      await refusedWith(780);
+      await expect(readUploadRefusal("user-1", NOW)).resolves.toEqual({
+        error: "Too many tries. Wait 13 minutes, then try again.",
+        code: "UPLOAD_RATE_LIMITED",
+        retryAfterSeconds: 780,
+      });
+      await expect(readUploadRefusal("user-1", NOW + 11 * 60 * 1000)).resolves.toMatchObject({
+        error: "Too many tries. Wait 2 minutes, then try again.",
+        retryAfterSeconds: 120,
+      });
+    });
+
+    it("900 s left reads 15 minutes", async () => {
+      await refusedWith(900);
+      await expect(readUploadRefusal("user-1", NOW)).resolves.toMatchObject({
+        error: "Too many tries. Wait 15 minutes, then try again.",
+      });
+    });
+
+    it("is forgotten once the limit resets", async () => {
+      const rows = await refusedWith(900);
+      expect(rows.get(KEY)?.expiresAt).toEqual(new Date(NOW + 900_000));
+      await expect(readUploadRefusal("user-1", NOW + 900_000)).resolves.toBeNull();
+    });
+
+    it("the other reasons keep their 10 minutes", async () => {
+      const rows = store();
+      for (const reason of ["out-of-date", "day-limit", "limit-unchecked"] as const) {
+        await recordUploadRefusal("user-1", reason, NOW);
+        expect(rows.get(KEY)?.expiresAt, reason).toEqual(new Date(NOW + UPLOAD_REFUSAL_MEMORY_MS));
+      }
+    });
+  });
+
   it("never throws: a store error only means no sentence", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
     findUniqueMock.mockRejectedValue(new Error("db down"));
