@@ -1122,9 +1122,35 @@ export function queueListUrl(workspaceId: string | null, cursor?: string): strin
   return withWorkspaceId(`/api/posts?${params.toString()}`, workspaceId);
 }
 
-/** What the Queue says when it cannot load; a 401 is the shared signed-out sentence (R21 pages L3). */
-export function queueLoadErrorText(status: number): string {
-  return status === 401 ? SIGNED_OUT_ERROR : "Failed to load your queue.";
+/**
+ * R42 pages-a L1: what the Queue says when it cannot load, the same rule as
+ * usePostJobs: no answer at all, or anything else the page couldn't use. A
+ * 401 is the shared signed-out sentence (R21 pages L3), and a workspace
+ * refusal keeps the shared switch sentence, whose step LoadError makes
+ * Reload page.
+ */
+export const QUEUE_OFFLINE_TEXT =
+  "We couldn't reach Vibe Socials to load your queue. Check your connection and try again.";
+export const QUEUE_FAILED_TEXT = "We couldn't load your queue. Try again in a moment.";
+
+/** Reads the Queue's first page, or the sentence that says why it couldn't. */
+export async function readQueuePage(
+  workspaceId: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true; data: PostsResponse } | { ok: false; error: string }> {
+  try {
+    // clientChangesFirst: the first page also carries every draft the client
+    // asked to change (up to 20), however old, so none hides behind Load more.
+    const response = await fetchOrNoAnswer(queueListUrl(workspaceId), { method: "GET" }, fetchImpl);
+    const refusal = await readWorkspaceRefusalText(response);
+    if (refusal) return { ok: false, error: refusal };
+    if (!response.ok) return { ok: false, error: response.status === 401 ? SIGNED_OUT_ERROR : QUEUE_FAILED_TEXT };
+    const data = (await response.json()) as PostsResponse | null;
+    if (!data || !Array.isArray(data.jobs)) return { ok: false, error: QUEUE_FAILED_TEXT };
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: isNoConnection(error) ? QUEUE_OFFLINE_TEXT : QUEUE_FAILED_TEXT };
+  }
 }
 
 /** Client-rendered Queue: scheduled + draft posts with edit/cancel/publish/delete. */
@@ -1211,21 +1237,12 @@ export function QueueView({
   const load = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
     try {
-      // clientChangesFirst: the first page also carries every draft the client
-      // asked to change (up to 20), however old, so none hides behind Load more.
-      const response = await fetch(queueListUrl(workspaceId));
-      const refusal = await readWorkspaceRefusalText(response);
-      if (refusal) {
-        if (!silent) setError(refusal);
+      const read = await readQueuePage(workspaceId);
+      if (!read.ok) {
+        if (!silent) setError(read.error);
         return;
       }
-      if (!response.ok) {
-        if (!silent) {
-          setError(queueLoadErrorText(response.status));
-        }
-        return;
-      }
-      const data: PostsResponse = await response.json();
+      const data = read.data;
       setJobs(sortQueue(data.jobs));
       setNextCursor(data.nextCursor);
       setLoadMoreError(null);
@@ -1234,7 +1251,7 @@ export function QueueView({
       setWorkspaceRequireApproval(data.workspaceRequireApproval);
       setNowMs(Date.now());
     } catch {
-      if (!silent) setError("Failed to load your queue.");
+      if (!silent) setError(QUEUE_FAILED_TEXT);
     } finally {
       setLoading(false);
     }

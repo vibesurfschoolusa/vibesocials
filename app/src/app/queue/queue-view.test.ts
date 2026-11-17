@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import type { PostJobDTO } from "@/lib/postsDto";
+import { loadErrorAsksReload } from "@/components/load-error";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
+import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
 import {
   cancelRequest,
@@ -15,7 +17,9 @@ import {
   labelName,
   pairLabel,
   queueListUrl,
-  queueLoadErrorText,
+  QUEUE_FAILED_TEXT,
+  QUEUE_OFFLINE_TEXT,
+  readQueuePage,
   readQueueView,
   saveQueueView,
   seriesLabel,
@@ -262,13 +266,52 @@ describe("Queue card by lines", () => {
 });
 
 // R21 pages L3: Queue's 401 says the shared signed-out sentence, as every other 401 does.
-describe("queueLoadErrorText", () => {
-  it("a 401 is the shared signed-out sentence", () => {
-    expect(queueLoadErrorText(401)).toBe(SIGNED_OUT_ERROR);
+// R42 pages-a L1: the load goes through fetchOrNoAnswer and says the shared
+// kind of sentence, as usePostJobs does: offline, failed, signed out, or the
+// workspace refusal (whose step LoadError makes Reload page).
+describe("readQueuePage", () => {
+  const answer = (response: Response | Error) =>
+    readQueuePage("ws-1", (() => (response instanceof Error ? Promise.reject(response) : Promise.resolve(response))) as typeof fetch);
+
+  it("no connection: the offline sentence", async () => {
+    expect(await answer(new TypeError("Failed to fetch"))).toEqual({ ok: false, error: QUEUE_OFFLINE_TEXT });
+    expect(QUEUE_OFFLINE_TEXT).toBe("We couldn't reach Vibe Socials to load your queue. Check your connection and try again.");
   });
 
-  it("any other failure is as before", () => {
-    expect(queueLoadErrorText(500)).toBe("Failed to load your queue.");
+  it("an HTML 5xx (a gateway page): the failed sentence, with Try again", async () => {
+    const read = await answer(new Response("<html>Bad gateway</html>", { status: 502, headers: { "content-type": "text/html" } }));
+    expect(read).toEqual({ ok: false, error: QUEUE_FAILED_TEXT });
+    expect(QUEUE_FAILED_TEXT).toBe("We couldn't load your queue. Try again in a moment.");
+    expect(loadErrorAsksReload(QUEUE_FAILED_TEXT)).toBe(false);
+  });
+
+  it("a JSON 5xx: the failed sentence", async () => {
+    expect(await answer(Response.json({ error: "Internal" }, { status: 500 }))).toEqual({ ok: false, error: QUEUE_FAILED_TEXT });
+  });
+
+  it("an unreadable 200: the failed sentence", async () => {
+    expect(await answer(Response.json({ nope: true }))).toEqual({ ok: false, error: QUEUE_FAILED_TEXT });
+  });
+
+  it("a 401: the shared signed-out sentence", async () => {
+    expect(await answer(Response.json({ error: "Unauthorized" }, { status: 401 }))).toEqual({ ok: false, error: SIGNED_OUT_ERROR });
+  });
+
+  it("a workspace refusal: its sentence, whose step is Reload page", async () => {
+    const read = await answer(Response.json({ error: "x", code: WORKSPACE_CHANGED_CODE }, { status: 409 }));
+    expect(read).toEqual({ ok: false, error: WORKSPACE_CHANGED_SAVE_MESSAGE });
+    expect(loadErrorAsksReload(WORKSPACE_CHANGED_SAVE_MESSAGE)).toBe(true);
+  });
+
+  it("a good answer: the page", async () => {
+    const data = { jobs: [], nextCursor: null, workspaceMemberCount: 1, workspaceRole: "owner", workspaceRequireApproval: false };
+    expect(await answer(Response.json(data))).toEqual({ ok: true, data });
+  });
+
+  it("the Queue loads through it, and the old bare sentence is gone", () => {
+    const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+    expect(queueSource).toMatch(/await readQueuePage\(workspaceId\)/);
+    expect(queueSource).not.toContain("Failed to load your queue.");
   });
 });
 
@@ -367,7 +410,8 @@ describe("the Queue's reads and the page's workspace", () => {
 
   it("a refused read says the shared sentence: the first load in place of the list, Load more under its button", () => {
     expect(queueSource.match(/readWorkspaceRefusalText\(response\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-    expect(queueSource).toMatch(/if \(refusal\) \{\s*if \(!silent\) setError\(refusal\);/);
+    expect(queueSource).toContain("if (refusal) return { ok: false, error: refusal };");
+    expect(queueSource).toMatch(/if \(!read\.ok\) \{\s*if \(!silent\) setError\(read\.error\);/);
     expect(queueSource).toMatch(/if \(refusal\) \{\s*setLoadMoreError\(refusal\);/);
   });
 
