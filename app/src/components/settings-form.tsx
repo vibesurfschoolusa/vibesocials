@@ -89,6 +89,31 @@ function TrackingTagsField({
   );
 }
 
+// The route's COMPANY_WEBSITE_MAX_LENGTH and DEFAULT_HASHTAGS_MAX_LENGTH (settings-form.test.ts ties them).
+const COMPANY_WEBSITE_MAX_LENGTH = 2048;
+const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
+
+/**
+ * R43 new-customer L1: no maxLength on these boxes, so a paste is never cut
+ * mid-tag without a word. The count says when the text is over; Save then
+ * shows the route's own sentence. Counted as the route counts: trimmed.
+ */
+function FooterFieldCount({ id, text, max }: { id: string; text: string; max: number }) {
+  const length = text.trim().length;
+  const over = length - max;
+  return (
+    <p id={id} className="text-xs text-muted-foreground">
+      {length.toLocaleString("en-US")} of {max.toLocaleString("en-US")} characters
+      {over > 0 ? (
+        <span className="text-destructive">
+          {" "}
+          ({over.toLocaleString("en-US")} over). Shorten it to save.
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
 const RECENT_POSTS_FAILED_TEXT = "Could not load your recent posts. Try again.";
 
 /**
@@ -290,11 +315,11 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
               <Input
                 id="companyWebsite"
                 placeholder="www.example.com"
-                // R42 pages-a L5: the route's COMPANY_WEBSITE_MAX_LENGTH (settings-form.test.ts ties them).
-                maxLength={2048}
                 value={companyWebsite}
                 onChange={(e) => setCompanyWebsite(e.target.value)}
+                aria-describedby="companyWebsiteCount"
               />
+              <FooterFieldCount id="companyWebsiteCount" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} />
               <p className="text-sm text-muted-foreground">
                 Appended to every caption as: &quot;For more info visit [your website]&quot;.
               </p>
@@ -311,12 +336,12 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
               <Textarea
                 id="defaultHashtags"
                 placeholder="#YourBrand #YourIndustry #YourLocation"
-                // The route's DEFAULT_HASHTAGS_MAX_LENGTH (settings-form.test.ts ties them).
-                maxLength={1024}
                 value={defaultHashtags}
                 onChange={(e) => setDefaultHashtags(e.target.value)}
                 rows={3}
+                aria-describedby="defaultHashtagsCount"
               />
+              <FooterFieldCount id="defaultHashtagsCount" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} />
               <p className="text-sm text-muted-foreground">
                 Added after your website, separated by a blank line.
               </p>

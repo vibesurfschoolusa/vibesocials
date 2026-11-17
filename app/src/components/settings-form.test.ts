@@ -381,11 +381,13 @@ describe("readRecentCaptions", () => {
   });
 });
 
-// R42 pages-a L5: the two footer fields stop at the route's limits, so its length refusal never comes.
+// R43 new-customer L1: the two footer fields never cut a paste; each counts against the route's limit.
 describe("SettingsForm — footer field limits", () => {
-  it("Company website and Default hashtags stop at the route's limits", () => {
+  it("Company website and Default hashtags have no maxLength and count against the route's limits", () => {
     const html = render(SETTINGS);
-    expect(html).toMatch(new RegExp(`<input[^>]*id="companyWebsite"[^>]*maxLength="${COMPANY_WEBSITE_MAX_LENGTH}"|<input[^>]*maxLength="${COMPANY_WEBSITE_MAX_LENGTH}"[^>]*id="companyWebsite"`, "i"));
-    expect(html).toMatch(new RegExp(`<textarea[^>]*id="defaultHashtags"[^>]*maxLength="${DEFAULT_HASHTAGS_MAX_LENGTH}"|<textarea[^>]*maxLength="${DEFAULT_HASHTAGS_MAX_LENGTH}"[^>]*id="defaultHashtags"`, "i"));
+    expect(html).not.toMatch(/<input[^>]*id="companyWebsite"[^>]*maxLength|<input[^>]*maxLength[^>]*id="companyWebsite"/i);
+    expect(html).not.toMatch(/<textarea[^>]*id="defaultHashtags"[^>]*maxLength|<textarea[^>]*maxLength[^>]*id="defaultHashtags"/i);
+    expect(html).toContain(`15 of ${COMPANY_WEBSITE_MAX_LENGTH.toLocaleString("en-US")} characters`);
+    expect(html).toContain(`0 of ${DEFAULT_HASHTAGS_MAX_LENGTH.toLocaleString("en-US")} characters`);
   });
 });
