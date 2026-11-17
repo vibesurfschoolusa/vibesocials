@@ -417,7 +417,7 @@ describe("ReviewPostCard: kept after the reload when the post left the list", ()
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     expect(source).toMatch(/readOnly=\{gone\}/);
-    expect(source).toMatch(/disabled=\{gone \|\| noteTooShort \|\| noteTooLong\}/);
+    expect(source).toMatch(/disabled=\{gone \|\| limited \|\| noteTooShort \|\| noteTooLong\}/);
     expect(source).toMatch(/if \(focusLine\) lineRef\.current\?\.focus\(\);/);
     expect(source).toContain("const focusLine = goneLineTakesFocus(gone, ownReload, reloads);");
     // Only a refusal that reloads keeps its card; the view merges with cardsShown.

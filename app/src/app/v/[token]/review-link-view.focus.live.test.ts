@@ -20,6 +20,7 @@ let root: Root;
 let container: FakeNode;
 let doc: FocusDoc;
 let stopKeeper: () => void;
+let made: ReturnType<typeof makeDocument>;
 const fetchMock = vi.fn();
 
 function find(node: FakeNode, test: (n: FakeNode) => boolean): FakeNode | null {
@@ -54,7 +55,7 @@ function deferred() {
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  const made = makeDocument();
+  made = makeDocument();
   container = made.container;
   doc = made.doc as unknown as FocusDoc;
   makeFocusable(doc);
@@ -134,5 +135,107 @@ describe("/v: the network limit", () => {
     await settle();
     expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
     expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+});
+
+// R41 client-journey L2: the decisions share the network limit with the list,
+// so every press within the window fails the same way: one instruction, no live button.
+describe("/v: a card decision's 429", () => {
+  beforeEach(() => {
+    // focusAfterPress waits a frame for the page to change.
+    const view = made.doc.defaultView as Record<string, unknown>;
+    view.requestAnimationFrame = (step: () => void) => setTimeout(step, 0);
+    view.setTimeout = setTimeout;
+  });
+
+  const card = (id: string) => ({
+    id,
+    scheduledFor: "2026-11-20T15:00:00.000Z",
+    platforms: ["Instagram"],
+    caption: `Post ${id}`,
+    platformCaptions: [],
+    media: null,
+    mediaCount: 0,
+    state: "pending",
+    note: null,
+    version: "v1",
+  });
+
+  function buttons(text: string): FakeNode[] {
+    const found: FakeNode[] = [];
+    const walk = (node: FakeNode) => {
+      if (node.nodeName === "BUTTON" && (node.textContent as string).trim() === text) found.push(node);
+      node.childNodes.forEach(walk);
+    };
+    walk(container);
+    return found;
+  }
+
+  async function press(node: FakeNode) {
+    (node.focus as () => void)();
+    await act(async () => {
+      void props(node).onClick({ currentTarget: node, preventDefault: () => {} });
+    });
+    await settle();
+  }
+
+  it("Looks good: the card says when to reload, and no decision can be pressed on any card", async () => {
+    fetchMock
+      .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a"), card("b")], more: false })))
+      .mockReturnValueOnce(
+        Promise.resolve(
+          Response.json(
+            { error: "Too many requests from this network in the last hour. Try again later.", retryAfterSeconds: 1500 },
+            { status: 429, headers: { "Retry-After": "1500" } },
+          ),
+        ),
+      );
+    await act(async () => {
+      root.render(createElement(ReviewLinkView, { token: "tok" }));
+    });
+    await settle();
+    await press(buttons("Looks good")[0]);
+
+    expect(container.textContent).toContain("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
+    expect(container.textContent).not.toContain("Try again later");
+    for (const label of ["Looks good", "Ask for a change"]) {
+      const found = buttons(label);
+      expect(found).toHaveLength(2);
+      for (const node of found) expect(props(node).disabled).toBe(true);
+    }
+    const active = doc.activeElement as FakeNode;
+    expect(active.attributes.role).toBe("alert");
+    expect(active.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
+  });
+
+  it("Send: the typed note stays, and Send can't be pressed again", async () => {
+    fetchMock
+      .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a")], more: false })))
+      .mockReturnValueOnce(
+        Promise.resolve(
+          Response.json(
+            { error: "Too many requests from this network in the last hour. Try again later.", retryAfterSeconds: 300 },
+            { status: 429, headers: { "Retry-After": "300" } },
+          ),
+        ),
+      );
+    await act(async () => {
+      root.render(createElement(ReviewLinkView, { token: "tok" }));
+    });
+    await settle();
+    await press(buttons("Ask for a change")[0]);
+    const box = find(container, (n) => n.nodeName === "TEXTAREA")!;
+    await act(async () => {
+      void props(box).onChange({ target: { value: "Use the other photo" } });
+    });
+    const form = find(container, (n) => n.nodeName === "FORM")!;
+    await act(async () => {
+      void props(form).onSubmit({ preventDefault: () => {} });
+    });
+    await settle();
+
+    expect(container.textContent).toContain("Too many requests from this network in the last hour. Reload this page in 5 minutes.");
+    expect(props(find(container, (n) => n.nodeName === "TEXTAREA")!).value).toBe("Use the other photo");
+    expect(props(buttons("Send")[0]).disabled).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ import {
   REVIEW_POST_LOCKED_MESSAGE,
   REVIEW_POST_LOCKED_RELOADED_MESSAGE,
   REVIEW_NOTE_MAX,
+  REVIEW_LINK_IP_LIMIT_MESSAGE,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
 // Types only (erased): the card a Feed and Story post folds into (F6).
@@ -223,6 +224,8 @@ export function ReviewPostCard({
   reloads,
   gone = false,
   onDismiss,
+  limited = false,
+  onLimited,
 }: {
   post: ReviewPostDTO;
   token: string;
@@ -240,6 +243,13 @@ export function ReviewPostCard({
   gone?: boolean;
   /** Removes a gone card. */
   onDismiss?: () => void;
+  /**
+   * R41 client-journey L2: a decision hit the network limit, which the list
+   * and every card share, so no decision can work until the page is reloaded.
+   */
+  limited?: boolean;
+  /** This card's decision hit the network limit. */
+  onLimited?: () => void;
 }) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
@@ -283,6 +293,13 @@ export function ReviewPostCard({
         },
       );
       const data: unknown = await response.json().catch(() => null);
+      if (response.status === 429 && (data as { error?: unknown } | null)?.error === REVIEW_LINK_IP_LIMIT_MESSAGE) {
+        // The one limit view: the wait, and no decision left to press on any card.
+        focusAfterPress(pressed, () => lineRef.current);
+        setError({ text: limitReachedSentence(limitWaitSeconds(response, data)), clearAfter: null });
+        onLimited?.();
+        return;
+      }
       const outcome = reviewDecisionOutcome(response.status, data);
       if (outcome.kind === "saved") {
         focusAfterPress(pressed, () => stateRef.current);
@@ -399,7 +416,7 @@ export function ReviewPostCard({
                 {noteLength}/{REVIEW_NOTE_MAX}. {changeNoteHint(post)}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={gone || noteTooShort || noteTooLong}>
+                <Button ref={sendRef} type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={gone || limited || noteTooShort || noteTooLong}>
                   Send
                 </Button>
                 <Button
@@ -424,7 +441,7 @@ export function ReviewPostCard({
                 size="lg"
                 className="w-full sm:w-auto"
                 loading={busy}
-                disabled={gone || post.state === "approved"}
+                disabled={gone || limited || post.state === "approved"}
                 onClick={(event) => void decide({ decision: "approve", version: post.version }, event.currentTarget)}
               >
                 Looks good
@@ -435,7 +452,7 @@ export function ReviewPostCard({
                 className="w-full sm:w-auto"
                 variant="outline"
                 ref={askRef}
-                disabled={gone || busy}
+                disabled={gone || limited || busy}
                 onClick={(event) => {
                   // R27 MM3: the buttons are replaced by the form; focus goes to its note box.
                   focusAfterPress(event.currentTarget, () => noteRef.current);
@@ -480,6 +497,8 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   // R40 client-journey L2: the error is the network limit's, which a press can't clear.
   const [limited, setLimited] = useState(false);
+  // R41 client-journey L2: a card's decision hit the same limit; only a reload can end it.
+  const [decisionsLimited, setDecisionsLimited] = useState(false);
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
   // List reloads that worked; a card's line set before one can go (shownCardLine).
@@ -619,6 +638,8 @@ export function ReviewLinkView({ token }: { token: string }) {
                 reloads={reloads}
                 gone={gone}
                 onDismiss={() => setKept((current) => current.filter((p) => p.id !== post.id))}
+                limited={decisionsLimited}
+                onLimited={() => setDecisionsLimited(true)}
               />
             ))}
           </ul>
