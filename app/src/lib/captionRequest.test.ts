@@ -17,6 +17,14 @@ describe("requestCaption", () => {
     });
   });
 
+  // R39 lead review: Create aborts a request that runs out of time or is let go.
+  it("passes the caller's abort signal to the fetch", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ enhancedCaption: "Better" }));
+    const signal = new AbortController().signal;
+    await requestCaption("/api/posts/enhance-caption", body, "enhancedCaption", fetchImpl as unknown as typeof fetch, signal);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/posts/enhance-caption", expect.objectContaining({ signal }));
+  });
+
   it("a failed fetch (Chrome): our sentence, not the browser's", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError("Failed to fetch");

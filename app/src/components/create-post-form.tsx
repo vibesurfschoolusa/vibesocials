@@ -483,9 +483,15 @@ export function submitButtonLabel(state: { mode: PublishMode; noFile: boolean; l
  */
 export const AI_WRITING_MESSAGE = "Wait until the AI caption is ready.";
 
-/** R39 new-customer M1: what the confirmation says when the captions changed while it was open. */
-export const CAPTIONS_CHANGED_MESSAGE =
-  "The caption changed while this was open. Press Cancel, read the caption, then publish again.";
+/**
+ * R39 new-customer M1: what the confirmation says when the captions changed
+ * while it was open, in the words of what it confirms (lead review): it
+ * confirms Publish now, or Schedule for a text post.
+ */
+export function captionsChangedMessage(mode: PublishMode): string {
+  const again = mode === "schedule" ? "schedule again" : "publish again";
+  return `The caption changed while this was open. Press Cancel, read the caption, then ${again}.`;
+}
 
 /** The captions the confirmation was opened on; see captionsChangedSince. */
 export interface CaptionsAtConfirm {
@@ -1648,7 +1654,9 @@ function CreatePostFormInner({
     }
 
     const busy = captionBusy.start();
-    const aiDone = captionBox.aiWritingStarted();
+    // Lead review: let go at once by a media change, and by an untick when
+    // automatic; aborted after AI_REQUEST_TIMEOUT_MS (useCaptionBox).
+    const request = captionBox.aiRequestStarted({ media: true, automatic: options.automatic === true });
     try {
       setUploadError(null);
 
@@ -1658,6 +1666,8 @@ function CreatePostFormInner({
       const frames = blob.mimeType.startsWith("video/")
         ? await extractVideoFrames(options.fileOverride ?? uploadFile ?? blob.url)
         : [];
+      // Nothing is sent for media that is gone, or once the switch is off.
+      if (!request.live() || options.isStale?.()) return;
       if (options.automatic && !aiSwitchOn(autoCaptionRef)) return;
 
       // No answer, or one that is not JSON, reads as a sentence that the
@@ -1671,10 +1681,12 @@ function CreatePostFormInner({
           ...(frames.length > 0 ? { frames } : {}),
         },
         "caption",
+        undefined,
+        request.signal,
       );
 
-      // Dismissed or replaced meanwhile: the answer is about other media.
-      if (options.isStale?.() || selectedMedia() !== press.askedAbout) {
+      // Let go, dismissed or replaced meanwhile: the answer is not for this post.
+      if (!request.live() || options.isStale?.() || selectedMedia() !== press.askedAbout) {
         return;
       }
 
@@ -1689,13 +1701,13 @@ function CreatePostFormInner({
       captionBox.answered(press, { caption, selectedNow: selectedMedia(), overwrite: options.overwrite });
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
-      if (!options.isStale?.() && selectedMedia() === press.askedAbout) {
+      if (request.live() && !options.isStale?.() && selectedMedia() === press.askedAbout) {
         toast.error(CAPTION_FAILED_MESSAGE);
       }
     } finally {
       // A newer press or pick keeps the busy state it took.
       captionBusy.end(busy);
-      aiDone();
+      request.done();
     }
   }
 
@@ -2024,6 +2036,8 @@ function CreatePostFormInner({
       clearAttachedPhotos();
       return;
     }
+    // The set's caption is asked about its first photo: removing that lets it go.
+    if (current[0]?.key === key) captionBox.letGoAiRequests((kind) => kind.media);
     changePhotoSet((prev) => removePhoto(prev, key));
   }
 
@@ -2473,7 +2487,8 @@ function CreatePostFormInner({
     // it did here and the post hasn't been saved since (useCaptionBox); the box
     // stays editable, and what is typed meanwhile is kept.
     const press = captionBox.pressed(null);
-    const aiDone = captionBox.aiWritingStarted();
+    // Let go by a form reset; aborted after AI_REQUEST_TIMEOUT_MS (useCaptionBox).
+    const request = captionBox.aiRequestStarted({ media: false, automatic: false });
     try {
       setEnhancingCaption(true);
       setUploadError(null);
@@ -2484,7 +2499,10 @@ function CreatePostFormInner({
         "/api/posts/enhance-caption",
         { workspaceId, caption: uploadCaption },
         "enhancedCaption",
+        undefined,
+        request.signal,
       );
+      if (!request.live()) return;
       if (!result.ok) {
         console.error("Error enhancing caption:", result.error);
         toast.error(result.error);
@@ -2494,10 +2512,10 @@ function CreatePostFormInner({
       captionBox.answered(press, { caption: result.caption, selectedNow: null, overwrite: true, fromMedia: false });
     } catch (err: unknown) {
       console.error("Error enhancing caption:", err);
-      toast.error(CAPTION_FAILED_MESSAGE);
+      if (request.live()) toast.error(CAPTION_FAILED_MESSAGE);
     } finally {
       setEnhancingCaption(false);
-      aiDone();
+      request.done();
     }
   }
 
@@ -2886,6 +2904,8 @@ function CreatePostFormInner({
                   onChange={(event) => {
                     autoCaptionRef.current = event.target.checked;
                     setAutoCaptionEnabled(event.target.checked);
+                    // Lead review: an automatic caption under way is let go at once.
+                    if (!event.target.checked) captionBox.letGoAiRequests((kind) => kind.automatic);
                   }}
                 />
                 <span>Generate a caption when media is added</span>
@@ -2948,7 +2968,7 @@ function CreatePostFormInner({
           footer={footerSettings}
           workspaceId={workspaceId}
           formGeneration={captionBox.formGeneration}
-          aiWritingStarted={captionBox.aiWritingStarted}
+          aiRequestStarted={captionBox.aiRequestStarted}
         />
 
         {tiktokSelected && activeMimeType && (
@@ -3234,7 +3254,7 @@ function CreatePostFormInner({
             {confirmCopy.trail ? <span className="block">{confirmCopy.trail}</span> : null}
             {captionsChanged ? (
               <span role="alert" className="block font-medium text-destructive">
-                {CAPTIONS_CHANGED_MESSAGE}
+                {captionsChangedMessage(publishMode)}
               </span>
             ) : null}
           </span>

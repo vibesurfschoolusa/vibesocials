@@ -20,6 +20,7 @@ import {
 import { platformLabel } from "@/lib/platforms";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import type { AiRequest, AiRequestKind } from "./useCaptionBox";
 
 /** Lead review 3 (R28 NN2): on a lost answer the AI ran and used the allowance; only its answer is missing, and nothing is saved. */
 export const adaptLostText = (label: string): string =>
@@ -48,9 +49,10 @@ export interface PlatformCaptionEditorProps {
   formGeneration?: () => number;
   /**
    * R39 new-customer M1: Create's "AI is writing" state (useCaptionBox); an
-   * Adapt holds it while it runs, so the post can't be sent meanwhile.
+   * Adapt holds it while it runs, so the post can't be sent meanwhile. Lead
+   * review: it is aborted after its time limit, or let go by a form reset.
    */
-  aiWritingStarted?: () => () => void;
+  aiRequestStarted?: (kind: AiRequestKind) => AiRequest;
 }
 
 function captionCountText(count: number): string {
@@ -75,7 +77,7 @@ export function PlatformCaptionEditor({
   disabled = false,
   workspaceId,
   formGeneration,
-  aiWritingStarted,
+  aiRequestStarted,
 }: PlatformCaptionEditorProps) {
   const toast = useToast();
   const [adapting, setAdapting] = useState<Platform | null>(null);
@@ -103,10 +105,11 @@ export function PlatformCaptionEditor({
     }
     const maxLength = adaptMaxLength(platform, footer);
     setAdapting(platform);
-    const aiDone = aiWritingStarted?.();
+    const request = aiRequestStarted?.({ media: false, automatic: false });
     try {
       const response = await fetchOrNoAnswer("/api/posts/enhance-caption", {
         method: "POST",
+        ...(request ? { signal: request.signal } : {}),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           caption: source,
@@ -118,6 +121,8 @@ export function PlatformCaptionEditor({
       const data = (await response.json().catch(() => null)) as
         | { enhancedCaption?: unknown; error?: unknown }
         | null;
+      // Let go (the form was reset): nothing to write or say.
+      if (request && !request.live()) return;
       if (!response.ok || typeof data?.enhancedCaption !== "string") {
         toast.error(
           typeof data?.error === "string" && data.error
@@ -132,10 +137,11 @@ export function PlatformCaptionEditor({
       if (sentMainCaption && captionRef.current !== source) return;
       onChange((prev) => applyAdaptedCaption(prev, platform, adapted, ownAtPress));
     } catch (caught) {
+      if (request && !request.live()) return;
       toast.error(isNoAnswer(caught) ? adaptLostText(platformLabel(platform)) : `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
     } finally {
       setAdapting(null);
-      aiDone?.();
+      request?.done();
     }
   }
 

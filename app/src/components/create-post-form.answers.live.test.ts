@@ -50,7 +50,9 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CreatePostForm } from "./create-post-form";
+import { CAPTION_OFFLINE_MESSAGE } from "@/lib/captionRequest";
+import { AI_REQUEST_TIMEOUT_MS } from "./composer/useCaptionBox";
+import { captionsChangedMessage, CreatePostForm } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
@@ -58,11 +60,13 @@ let body: FakeNode;
 const answers: Record<string, Deferred[]> = {};
 const calls: string[] = [];
 
-const fetchMock = vi.fn((input: unknown) => {
+const fetchMock = vi.fn((input: unknown, init?: { signal?: AbortSignal }) => {
   const url = String(input);
   calls.push(url);
   if (url === "/api/posts/enhance-caption" || url === "/api/posts/auto-caption") {
-    return new Promise<Response>((resolve) => {
+    // As a browser's fetch: an aborted signal rejects it.
+    return new Promise<Response>((resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
       (answers[url] ??= []).push({ resolve: (body) => resolve(Response.json(body)) });
     });
   }
@@ -99,13 +103,15 @@ function button(text: string): FakeNode {
 const captionNow = () => String(byId("post-caption").value ?? "");
 const xCaptionNow = () => {
   const box = find(container, (n) => n.attributes?.id === "post-platform-caption-x-caption");
-  return box ? String(box.value ?? "") : null;
+  // A textarea React has only mounted holds its text as defaultValue in the fake DOM.
+  return box ? String(box.value ?? box.defaultValue ?? "") : null;
 };
 
 async function settle() {
   for (let i = 0; i < 5; i += 1) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+      else await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
 }
@@ -196,6 +202,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await act(async () => root.unmount());
   vi.unstubAllGlobals();
 });
@@ -432,7 +439,8 @@ describe("R39 new-customer M1: nothing is posted that the person didn't see", ()
     await answer("/api/posts/enhance-caption", { enhancedCaption: "Catch a wave today!" });
     expect(captionNow()).toBe("Catch a wave today!");
     expect((props(dialogButton("Publish without a photo")).disabled as unknown)).toBe(true);
-    expect(pageSays("The caption changed while this was open.")).toBe(true);
+    expect(pageSays(captionsChangedMessage("now"))).toBe(true);
+    expect(pageSays("then publish again.")).toBe(true);
     await run(() => props(dialogButton("Publish without a photo")).onClick());
     expect(postCalls()).toBe(0);
   });
@@ -480,5 +488,106 @@ describe("R39 publishing L1: the automatic caption reads the switch after the fr
     expect(autoCaptionCalls()).toBe(0);
     await run(() => frames.waiting.splice(0).forEach((go) => go()));
     expect(autoCaptionCalls()).toBe(1);
+  });
+});
+
+describe("R39 lead review: the AI wait ends with its request", () => {
+  const AI_WAIT = "Wait until the AI caption is ready.";
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const video = () => new File(["v"], "v.mp4", { type: "video/mp4" });
+  const photo = () => new File(["a"], "a.jpg", { type: "image/jpeg" });
+
+  it("a video removed during its frame grab: the wait ends at once and nothing is sent", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(submitDisabled()).toBe(true);
+    await pick();
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(AI_WAIT)).toBe(false);
+    await run(() => frames.waiting.splice(0).forEach((go) => go()));
+    expect(autoCaptionCalls()).toBe(0);
+  });
+
+  it("unticked during the automatic caption's call: the wait ends at once and its answer is dropped", async () => {
+    await pick(photo());
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(1);
+    expect(submitDisabled()).toBe(true);
+    await untickAutoCaption();
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(AI_WAIT)).toBe(false);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(captionNow()).toBe("");
+  });
+
+  it("a manual Caption from media is not stopped by unticking", async () => {
+    await untickAutoCaption();
+    await pick(photo());
+    await finishUploads();
+    await tickAutoCaption();
+    await press("Caption from media");
+    await untickAutoCaption();
+    expect(submitDisabled()).toBe(true);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(captionNow()).toBe("Waves at sunrise");
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("an Improve that never answers runs out of time: the wait ends and it says so", async () => {
+    await typeCaption("Surf lesson today");
+    vi.useFakeTimers();
+    await press("Improve caption");
+    expect(submitDisabled()).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AI_REQUEST_TIMEOUT_MS);
+    });
+    await settle();
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(CAPTION_OFFLINE_MESSAGE)).toBe(true);
+    expect(captionNow()).toBe("Surf lesson today");
+  });
+
+  it("a Caption from media that never answers runs out of time: the wait ends", async () => {
+    await untickAutoCaption();
+    await pick(photo());
+    await finishUploads();
+    vi.useFakeTimers();
+    await press("Caption from media");
+    expect(submitDisabled()).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AI_REQUEST_TIMEOUT_MS);
+    });
+    await settle();
+    expect(submitDisabled()).toBe(false);
+    expect(captionFromMediaBusy()).toBe(false);
+  });
+
+  it("an Adapt that never answers runs out of time: the wait ends", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    vi.useFakeTimers();
+    await press("Adapt for X");
+    expect(submitDisabled()).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AI_REQUEST_TIMEOUT_MS);
+    });
+    await settle();
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("the confirmation's refusal names what it confirms: publish or schedule", () => {
+    expect(captionsChangedMessage("now")).toBe(
+      "The caption changed while this was open. Press Cancel, read the caption, then publish again.",
+    );
+    expect(captionsChangedMessage("schedule")).toBe(
+      "The caption changed while this was open. Press Cancel, read the caption, then schedule again.",
+    );
   });
 });

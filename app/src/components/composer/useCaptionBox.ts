@@ -14,6 +14,36 @@ export interface CaptionPress {
 }
 
 /**
+ * R39 lead review: how long Create waits for an AI answer before the request
+ * is given up (aborted) and the submit no longer waits for it. The server's
+ * own provider limit is 20 s per call (lib/aiGuards.ts), so a working answer
+ * is always in well before this.
+ */
+export const AI_REQUEST_TIMEOUT_MS = 60_000;
+
+/**
+ * One AI request that writes into the post (useCaptionBox.aiRequestStarted).
+ * The submit waits while it runs; it ends when it is done, runs out of time,
+ * or is let go by the rule it belongs to (a media change, an untick, a reset).
+ */
+export interface AiRequest {
+  /** Aborts the fetch when the request is let go or runs out of time. */
+  signal: AbortSignal;
+  /** False once a media change, an untick or a form reset let it go: send nothing, write nothing, say nothing. */
+  live(): boolean;
+  /** The request ended: the submit stops waiting for it. Safe to call twice. */
+  done(): void;
+}
+
+/** What a request is about, for the rules that let it go. */
+export interface AiRequestKind {
+  /** A caption from media: a media change lets it go. */
+  media: boolean;
+  /** Started by the media, not a press: unticking its switch lets it go. */
+  automatic: boolean;
+}
+
+/**
  * R36 lead review: a caption from media is written only while the media it was
  * asked about is still the selected media (not dismissed, not replaced by a new
  * pick) and the caption box is as it was at the press. `overwrite` (a manual
@@ -46,14 +76,60 @@ export function useCaptionBox() {
   // every answer pressed for the old post is dropped, whatever the box says.
   const generationRef = useRef(0);
   // R39 new-customer M1: how many requests that will write into the post
-  // (Improve, Adapt, Caption from media, manual or automatic) are running.
+  // (Improve, Adapt, Caption from media, manual or automatic) are running,
+  // and (lead review) each one, so the rule it belongs to can let it go.
   const [aiRequests, setAiRequests] = useState(0);
+  const runningRef = useRef(new Set<{ kind: AiRequestKind; letGo: () => void }>());
 
   // Stable, so effects can name it as they name a state setter.
   const setCaption = useCallback((next: SetStateAction<string>) => {
     const value = typeof next === "function" ? next(captionRef.current) : next;
     captionRef.current = value;
     setCaptionState(value);
+  }, []);
+
+  /**
+   * R39 new-customer M1: a request that will write into the post holds the
+   * submit while it runs, so nothing is posted unseen. Lead review: it lets
+   * go when done, after AI_REQUEST_TIMEOUT_MS (the fetch is aborted and the
+   * caller's failure sentence shows), or at once when a media change, an
+   * untick or a form reset lets it go (letGoAiRequests). Stable, like setCaption.
+   */
+  const aiRequestStarted = useCallback((kind: AiRequestKind): AiRequest => {
+    const controller = new AbortController();
+    let ended = false;
+    let letGo = false;
+    const entry = {
+      kind,
+      letGo: () => {
+        letGo = true;
+        request.done();
+        controller.abort();
+      },
+    };
+    const timer = setTimeout(() => {
+      request.done();
+      controller.abort();
+    }, AI_REQUEST_TIMEOUT_MS);
+    const request: AiRequest = {
+      signal: controller.signal,
+      live: () => !letGo,
+      done: () => {
+        if (ended) return;
+        ended = true;
+        clearTimeout(timer);
+        runningRef.current.delete(entry);
+        setAiRequests((count) => count - 1);
+      },
+    };
+    runningRef.current.add(entry);
+    setAiRequests((count) => count + 1);
+    return request;
+  }, []);
+
+  /** Lets go of every running request that `which` names (the rules above). */
+  const letGoAiRequests = useCallback((which: (kind: AiRequestKind) => boolean) => {
+    for (const entry of [...runningRef.current]) if (which(entry.kind)) entry.letGo();
   }, []);
 
   function setLastAiCaption(next: string | null) {
@@ -65,6 +141,8 @@ export function useCaptionBox() {
   // caption the AI wrote for it, still unedited, goes with it
   // (captionAfterMediaChange); typed or edited text stays untouched.
   function forgetMediaCaption() {
+    // A caption still being asked for about the old media is let go.
+    letGoAiRequests((kind) => kind.media);
     const next = captionAfterMediaChange(captionRef.current, lastAiRef.current);
     if (next.caption === captionRef.current) return;
     setCaption(next.caption);
@@ -75,24 +153,10 @@ export function useCaptionBox() {
   // their answers to the same generation.
   const formGeneration = useCallback(() => generationRef.current, []);
 
-  /**
-   * R39 new-customer M1: a request that will write into the post holds this
-   * while it runs, so the submit waits and nothing is posted unseen. Returns
-   * the release; a second call does nothing. Stable, like setCaption.
-   */
-  const aiWritingStarted = useCallback((): (() => void) => {
-    let released = false;
-    setAiRequests((count) => count + 1);
-    return () => {
-      if (released) return;
-      released = true;
-      setAiRequests((count) => count - 1);
-    };
-  }, []);
-
   /** The form was saved and reset: answers pressed before now are dropped. */
   function formReset() {
     generationRef.current += 1;
+    letGoAiRequests(() => true);
   }
 
   function pressed(askedAbout: unknown): CaptionPress {
@@ -140,6 +204,7 @@ export function useCaptionBox() {
     formReset,
     formGeneration,
     aiWriting: aiRequests > 0,
-    aiWritingStarted,
+    aiRequestStarted,
+    letGoAiRequests,
   };
 }

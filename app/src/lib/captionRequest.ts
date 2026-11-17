@@ -30,12 +30,19 @@ export async function requestCaption(
   body: unknown,
   field: string,
   fetchImpl: typeof fetch = fetch,
+  /** R39 lead review: Create aborts a request that runs out of time or is let go (an abort reads as no answer). */
+  signal?: AbortSignal,
 ): Promise<CaptionRequestResult> {
   let response: Response;
   try {
     response = await fetchOrNoAnswer(
       url,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        ...(signal ? { signal } : {}),
+      },
       fetchImpl,
     );
   } catch {
