@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
-import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_ONLY_PERSON_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
@@ -107,7 +107,11 @@ export async function POST(request: Request) {
         },
       });
       if (otherOwnerCount === 0) {
-        return "sole_owner" as const;
+        // R34 pages L3: worded by whether anyone else is here to make an owner.
+        const otherMemberCount = await tx.workspaceMember.count({
+          where: { workspaceId: context.workspace.id, userId: { not: context.user.id } },
+        });
+        return otherMemberCount === 0 ? ("only_person" as const) : ("sole_owner" as const);
       }
 
       const own = await tx.workspaceMember.findFirst({
@@ -122,6 +126,9 @@ export async function POST(request: Request) {
     });
     if (outcome === "sole_owner") {
       return NextResponse.json({ error: LEAVE_SOLE_OWNER_MESSAGE }, { status: 400 });
+    }
+    if (outcome === "only_person") {
+      return NextResponse.json({ error: LEAVE_ONLY_PERSON_MESSAGE }, { status: 400 });
     }
     if (outcome === "not_found") {
       return NextResponse.json({ error: LEAVE_NOT_MEMBER_MESSAGE }, { status: 404 });

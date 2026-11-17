@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_ONLY_PERSON_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/switch/route.test.ts). route.ts imports `@/lib/db`,
@@ -258,16 +258,38 @@ describe("POST /api/workspaces/leave", () => {
 
   it("returns 400 and deletes nothing when the caller is the SOLE owner (no other owner to inherit)", async () => {
     getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
-    countMock.mockResolvedValue(0); // zero OTHER owners
+    // Zero OTHER owners, two other members.
+    countMock.mockImplementation(async ({ where }: { where: { role?: string } }) => (where.role === "owner" ? 0 : 2));
 
     const response = await POST(leaveReq());
 
     expect(response.status).toBe(400);
     // R33 lead review: names the Team card's real control (Make owner).
     await expect(response.json()).resolves.toEqual({ error: LEAVE_SOLE_OWNER_MESSAGE });
+    // R34 pages L3: the other members are counted inside the same lock.
+    expect(countMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", userId: { not: "user-1" } } });
     // The last-owner guard runs INSIDE the advisory-locked transaction; no row
     // is deleted through either path.
     expect(executeRawMock).toHaveBeenCalledTimes(1);
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  // R34 pages L3: alone in the workspace there is nobody to make an owner.
+  it("returns 400 with its own sentence when the caller is the only person in the workspace", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    countMock.mockResolvedValue(0); // no other owner, no other member
+
+    const response = await POST(leaveReq());
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: LEAVE_ONLY_PERSON_MESSAGE });
+    expect(LEAVE_ONLY_PERSON_MESSAGE).toBe(
+      "You're the only person in this workspace. Invite someone and make them an owner, or delete the workspace.",
+    );
+    expect(countMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", userId: { not: "user-1" } } });
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(countMock.mock.invocationCallOrder[1]);
     expect(deleteMock).not.toHaveBeenCalled();
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
