@@ -2,7 +2,7 @@ import { RetryAfterError } from "inngest";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
+import { isRetryableEmailError, sendEmailOutcome, type SendEmailOutcome } from "@/server/notifications/email";
 import { sendOncePer } from "@/server/notifications/onceADay";
 
 import { buildTrialEndedEmail, buildTrialEndingEmail } from "./billingEmails";
@@ -38,6 +38,12 @@ export const REMINDER_MAX_EMAILS_PER_RUN = 40;
  * of failed sends to a co-owner.
  */
 export const TRIAL_ENDED_CLAIM_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * R41 lead review: the trial-ended notice is for a trial that ended in the
+ * last 30 days. Past that it is news to nobody, and an owner never reached
+ * would otherwise be tried every day for good.
+ */
+export const TRIAL_ENDED_NOTICE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type BillingReminderSummary = {
   /** Workspaces found for each kind this run (at most the cap plus one). */
@@ -45,11 +51,33 @@ export type BillingReminderSummary = {
   trialEnded: number;
   sent: number;
   failed: number;
+  /** Owners whose email Resend refused for good (a 4xx such as 422): not tried again. */
+  refused: number;
   /** Workspaces found but not reached because of the cap. */
   left: number;
 };
 
 type Kind = "trial-ending" | "trial-ended";
+
+const KINDS: readonly Kind[] = ["trial-ending", "trial-ended"];
+
+/** One owner's claim on one kind of trial email for one trial date. */
+function ownerClaimKey(kind: Kind, workspaceId: string, userId: string, trialEndsAt: Date): string {
+  return `${ownerClaimPrefix(kind, workspaceId)}${userId}:${trialEndsAt.toISOString()}`;
+}
+
+function ownerClaimPrefix(kind: Kind, workspaceId: string): string {
+  return `billing-owner:${kind}:${workspaceId}:`;
+}
+
+/**
+ * R41 lead review: every owner claim on this workspace's trial emails, for
+ * every date. admin/actions.ts deletes them with the markers when the trial
+ * date changes, so a date put back (A, B, then A) gets A's emails again.
+ */
+export function trialEmailClaimsWhere(workspaceId: string) {
+  return { OR: KINDS.map((kind) => ({ key: { startsWith: ownerClaimPrefix(kind, workspaceId) } })) };
+}
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -93,7 +121,11 @@ export async function runBillingReminders(
       take,
     }),
     prisma.workspace.findMany({
-      where: { ...base, trialEndsAt: { lte: now }, trialEndedEmailSentAt: null },
+      where: {
+        ...base,
+        trialEndsAt: { gt: new Date(now.getTime() - TRIAL_ENDED_NOTICE_WINDOW_MS), lte: now },
+        trialEndedEmailSentAt: null,
+      },
       select: SELECT,
       orderBy: { id: "asc" },
       take,
@@ -107,10 +139,11 @@ export async function runBillingReminders(
 
   let sent = 0;
   let failed = 0;
+  let refused = 0;
   let left = 0;
   let first = true;
   for (const [index, { kind, workspace }] of work.entries()) {
-    if (sent + failed + workspace.members.length > REMINDER_MAX_EMAILS_PER_RUN) {
+    if (sent + failed + refused + workspace.members.length > REMINDER_MAX_EMAILS_PER_RUN) {
       left = work.length - index;
       break;
     }
@@ -132,16 +165,17 @@ export async function runBillingReminders(
       // the operator changes within 24 h of a send is a new email, not Resend's
       // 409 for a reused key with a new body (which counts as sent).
       const send = () =>
-        sendEmail(
+        sendEmailOutcome(
           { to: owner.user.email, ...email },
           {
             idempotencyKey: `billing/${kind}/${workspace.id}/${owner.userId}/${trialEndsAt.toISOString()}`,
             throwOnRetryable: true,
           },
         );
+      let refusedForGood = false;
       const outcome = await sendOncePer(
         {
-          key: `billing-owner:${kind}:${workspace.id}:${owner.userId}:${trialEndsAt.toISOString()}`,
+          key: ownerClaimKey(kind, workspace.id, owner.userId, trialEndsAt),
           resetAt: kind === "trial-ending" ? trialEndsAt : new Date(now.getTime() + TRIAL_ENDED_CLAIM_MS),
           // No per-recipient keys over this window, so a store error never sends.
           keysFrom: null,
@@ -151,15 +185,21 @@ export async function runBillingReminders(
         async () => {
           if (!first) await sleep(REMINDER_SEND_INTERVAL_MS);
           first = false;
-          // R41 security L1: sendEmail's own answer, so an email Resend didn't
-          // take (a quota 429, another 4xx, no key) fails and is tried tomorrow.
+          // R41 security L1: the send's own answer, so an email Resend didn't
+          // take fails and is tried tomorrow (a quota 429, no key or a bad key).
+          // R41 lead review: one Resend refused for good (a 4xx such as 422)
+          // answers true here only so sendOncePer keeps the claim and that
+          // owner is not tried again; it is counted as refused, never sent.
+          let answer: SendEmailOutcome;
           try {
-            return await send();
+            answer = await send();
           } catch (error) {
             if (!isRetryableEmailError(error)) throw error;
             await sleep(retryDelayMs(error));
-            return await send();
+            answer = await send();
           }
+          refusedForGood = !answer.sent && answer.reason === "refused";
+          return answer.sent || refusedForGood;
         },
         (error) =>
           logger.error("[billing] Couldn't send one trial email; trying again tomorrow", {
@@ -169,7 +209,14 @@ export async function runBillingReminders(
             error: error instanceof Error ? error.name : typeof error,
           }),
       );
-      if (outcome === "sent") sent++;
+      if (outcome === "sent" && refusedForGood) {
+        refused++;
+        logger.warn("[billing] Resend refused one trial email for good; not tried again", {
+          kind,
+          workspaceId: workspace.id,
+          userId: owner.userId,
+        });
+      } else if (outcome === "sent") sent++;
       if (outcome === "failed") {
         failed++;
         allSent = false;
@@ -187,5 +234,5 @@ export async function runBillingReminders(
   if (left > 0) {
     logger.warn("[billing] Trial email cap reached; the rest go out tomorrow", { cap: REMINDER_MAX_EMAILS_PER_RUN, left });
   }
-  return { trialEnding: ending.length, trialEnded: ended.length, sent, failed, left };
+  return { trialEnding: ending.length, trialEnded: ended.length, sent, failed, refused, left };
 }

@@ -283,8 +283,9 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
     // Stripe's retry. R41 lead review: each owner through sendOncePer, the rule
     // the trial emails use, claimed per invoice, so the retry reaches only the
     // owners not yet reached (the per-invoice key alone covers only 24 h).
-    // An email refused for good (no key, a bad key, another 4xx) is never
-    // counted as sent, and no retry would change it. A quota 429 is "try
+    // An email refused for good (no key or a bad key: "not_configured";
+    // another 4xx: "refused") is never counted as sent, and no retry within
+    // Stripe's three days is expected to change it. A quota 429 is "try
     // later": Stripe's retry sends it once the quota resets.
     const email = buildPaymentFailedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
     const resetAt = new Date(Date.now() + PAYMENT_FAILED_CLAIM_MS);
@@ -299,7 +300,7 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
             { to: owner.user.email, ...email },
             { idempotencyKey: `stripe-payment-failed/${invoiceId}/${owner.userId}`, throwOnRetryable: true },
           );
-          refusedForGood = !outcome.sent && outcome.reason === "refused";
+          refusedForGood = !outcome.sent && outcome.reason !== "try_later";
           return outcome.sent;
         },
         (error) =>

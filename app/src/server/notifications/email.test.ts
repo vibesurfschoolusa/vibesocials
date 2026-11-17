@@ -757,17 +757,26 @@ describe("sendEmailOutcome - why a send didn't go", () => {
     await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "try_later" });
   });
 
-  it("no key, a bad key and another 4xx are refused for good", async () => {
-    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
-    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+  // R41 lead review: no key or a bad key is the app's set-up, fixed once for
+  // every address; another 4xx (422) is this address or email, refused for good.
+  it("no key or a bad key (constructor, 401, 403) is not configured", async () => {
     sendMock.mockResolvedValueOnce(rejection(401, "missing_api_key"));
-    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "not_configured" });
+    sendMock.mockResolvedValueOnce(rejection(403, "invalid_api_key"));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "not_configured" });
     ResendMock.mockImplementationOnce(function BadCtor() {
       throw new Error("bad key");
     });
-    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "not_configured" });
     vi.stubEnv("RESEND_API_KEY", "");
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "not_configured" });
+  });
+
+  it("another 4xx is refused for good", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
     await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    sendMock.mockResolvedValueOnce(rejection(400, "invalid_parameter"));
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "refused" });
   });
 
   it("without throwOnRetryable, a swallowed 5xx, rate limit or network error is try later", async () => {

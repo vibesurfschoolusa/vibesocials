@@ -12,6 +12,7 @@ const db = vi.hoisted(() => ({
   workspaceUpdate: vi.fn(),
   actionCreate: vi.fn(),
   transaction: vi.fn(),
+  claimsDelete: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => {
@@ -19,6 +20,7 @@ vi.mock("@/lib/db", () => {
     $executeRaw: db.executeRaw,
     workspace: { findUnique: db.workspaceFindUnique, update: db.workspaceUpdate },
     adminAction: { create: db.actionCreate },
+    rateLimitEntry: { deleteMany: db.claimsDelete },
   };
   return {
     prisma: {
@@ -57,7 +59,17 @@ beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
   db.workspaceUpdate.mockResolvedValue({});
   db.actionCreate.mockResolvedValue({ id: "act-1" });
+  db.claimsDelete.mockResolvedValue({ count: 0 });
 });
+
+// R41 lead review: a new date lets go of the owners' claims on the trial
+// emails (all dates), in the same transaction, so a date put back gets its emails.
+const CLAIMS_WHERE = {
+  OR: [
+    { key: { startsWith: "billing-owner:trial-ending:ws-1:" } },
+    { key: { startsWith: "billing-owner:trial-ended:ws-1:" } },
+  ],
+};
 
 describe("validateTrialBody", () => {
   it("takes a date from tomorrow to 90 days ahead (UTC), as the end of that UTC day", () => {
@@ -178,6 +190,21 @@ describe("startTrial", () => {
     });
   });
 
+  it("a new date releases the owners' trial-email claims in the same transaction", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-20T23:59:59.999Z") }));
+    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END });
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.claimsDelete).toHaveBeenCalledWith({ where: CLAIMS_WHERE });
+  });
+
+  it("the same date set twice releases nothing, so no email goes twice", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date(END) }));
+    expect(await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "unchanged" });
+    db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true, trialEndsAt: new Date(END) }));
+    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END });
+    expect(db.claimsDelete).not.toHaveBeenCalled();
+  });
+
   it("ending an exemption on the same date keeps the email markers", async () => {
     db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true, trialEndsAt: new Date(END) }));
     expect(await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "changed" });
@@ -230,6 +257,13 @@ describe("endTrialNow", () => {
       },
     });
     expect(planState({ billingExempt: false, trialEndsAt: NOW }, NOW)).toBe("ended");
+  });
+
+  it("ending now releases the owners' trial-email claims in the same transaction", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-20T23:59:59.999Z") }));
+    await endTrialNow({ operator: OPS, workspaceId: "ws-1", now: NOW });
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.claimsDelete).toHaveBeenCalledWith({ where: CLAIMS_WHERE });
   });
 
   it("ends an exempt workspace's exemption, with an ended trial", async () => {

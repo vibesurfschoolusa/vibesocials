@@ -4,6 +4,7 @@ import { MAX_TRIAL_DAYS } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import type { Operator } from "@/lib/operator";
 import { utcDateLabel } from "@/lib/usageLimits";
+import { trialEmailClaimsWhere } from "@/server/billing/reminders";
 
 /**
  * What the operator can change on /admin (2026-11-10): a workspace's limit
@@ -263,6 +264,15 @@ export async function exemptWorkspace(args: { operator: Operator; workspaceId: s
 const TRIAL_EMAILS_UNSENT = { trialReminderSentAt: null, trialEndedEmailSentAt: null } as const;
 
 /**
+ * R41 lead review: with the markers, the owners' claims on the trial emails
+ * go too (every date), in the same transaction, so a date put back (A, B,
+ * then A) gets A's emails again instead of keeping B's as the last word.
+ */
+async function releaseTrialEmailClaims(tx: Prisma.TransactionClient, workspaceId: string): Promise<void> {
+  await tx.rateLimitEntry.deleteMany({ where: trialEmailClaimsWhere(workspaceId) });
+}
+
+/**
  * "Start or change the trial": billingExempt false and the trial end set
  * (bounds checked by validateTrialBody). The same values again record nothing.
  */
@@ -281,6 +291,7 @@ export async function startTrial(args: {
       where: { id: row.id },
       data: { billingExempt: false, trialEndsAt: args.trialEndsAt, ...(dateChanged ? TRIAL_EMAILS_UNSENT : {}) },
     });
+    if (dateChanged) await releaseTrialEmailClaims(tx, row.id);
     await record(tx, args.operator, row, "trial", {
       old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
       new: { billingExempt: false, trialEndsAt: args.trialEndsAt.toISOString() },
@@ -304,6 +315,7 @@ export async function endTrialNow(args: { operator: Operator; workspaceId: strin
       where: { id: row.id },
       data: { billingExempt: false, trialEndsAt: args.now, ...TRIAL_EMAILS_UNSENT },
     });
+    await releaseTrialEmailClaims(tx, row.id);
     await record(tx, args.operator, row, "trial", {
       old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
       new: { billingExempt: false, trialEndsAt: args.now.toISOString() },

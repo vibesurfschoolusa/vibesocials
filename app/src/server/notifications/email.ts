@@ -182,13 +182,19 @@ function emailKind(label: string | undefined, idempotencyKey: string | undefined
  * R41 lead review: whether the email went and, when it did not, why.
  * "try_later": a later send can go (a daily or monthly quota 429, or, without
  * throwOnRetryable, a swallowed 5xx, rate limit or network error).
- * "refused": no later send will (no key, a bad key, another 4xx).
+ * "not_configured": no key or a bad key (a constructor error, a 401 or 403):
+ * no send goes until the set-up is fixed, then every one can.
+ * "refused": Resend refused this email for good (another 4xx, such as 422).
  */
-export type SendEmailOutcome = { sent: true } | { sent: false; reason: "try_later" | "refused" };
+export type SendEmailOutcome = { sent: true } | { sent: false; reason: "try_later" | "not_configured" | "refused" };
 
 const SENT: SendEmailOutcome = { sent: true };
 const TRY_LATER: SendEmailOutcome = { sent: false, reason: "try_later" };
+const NOT_CONFIGURED: SendEmailOutcome = { sent: false, reason: "not_configured" };
 const REFUSED: SendEmailOutcome = { sent: false, reason: "refused" };
+
+/** Resend's answers to a missing or bad API key. */
+const KEY_REFUSED_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 
 /**
  * Resolves true when Resend accepted the email (or already had it under this
@@ -213,7 +219,7 @@ export async function sendEmailOutcome(
     console.log(
       "[Notifications] RESEND_API_KEY not set — email notifications are disabled; skipping send.",
     );
-    return REFUSED;
+    return NOT_CONFIGURED;
   }
 
   const from = process.env.NOTIFICATIONS_FROM || DEFAULT_FROM;
@@ -225,7 +231,7 @@ export async function sendEmailOutcome(
     // A bad key is configuration, not a transient failure: never retried.
     // No log line here carries the recipient address (final review F9).
     console.error("[Notifications] Failed to send email", { kind, error: loggableError(error, to) });
-    return REFUSED;
+    return NOT_CONFIGURED;
   }
 
   const payload = { from, to, subject, html, text: text ?? htmlToPlainText(html) };
@@ -292,5 +298,6 @@ export async function sendEmailOutcome(
       statusCode: error.statusCode,
     },
   });
-  return failure === "rejected" ? REFUSED : TRY_LATER;
+  if (failure !== "rejected") return TRY_LATER;
+  return error.statusCode != null && KEY_REFUSED_STATUSES.has(error.statusCode) ? NOT_CONFIGURED : REFUSED;
 }

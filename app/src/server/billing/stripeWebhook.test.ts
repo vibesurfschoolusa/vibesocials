@@ -934,7 +934,7 @@ describe("invoice.payment_failed", () => {
   });
 
   const QUOTA = { sent: false, reason: "try_later" };
-  const BAD_KEY = { sent: false, reason: "refused" };
+  const BAD_KEY = { sent: false, reason: "not_configured" };
 
   it("B hit Resend's quota (try later): 500, and the retry sends only to B", async () => {
     m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(QUOTA);

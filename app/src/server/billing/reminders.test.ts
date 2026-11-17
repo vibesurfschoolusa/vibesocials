@@ -36,9 +36,17 @@ vi.mock("@/lib/rateLimit", () => ({
 }));
 vi.mock("@/server/notifications/email", async () => {
   class EmailRetryableError extends Error {}
+  // m.sendEmail answers true (sent), false (a quota 429: try later) or an outcome object.
+  const outcome = async (...args: unknown[]) => {
+    const answer = await m.sendEmail(...args);
+    if (answer === true) return { sent: true };
+    if (answer === false || answer === undefined) return { sent: false, reason: "try_later" };
+    return answer;
+  };
   return {
     EmailRetryableError,
-    sendEmail: m.sendEmail,
+    sendEmailOutcome: outcome,
+    sendEmail: async (...args: unknown[]) => (await outcome(...args)).sent,
     isRetryableEmailError: (error: unknown) => error instanceof EmailRetryableError,
   };
 });
@@ -116,6 +124,8 @@ import {
   REMINDER_SEND_INTERVAL_MS,
   runBillingReminders,
   TRIAL_ENDED_CLAIM_MS,
+  TRIAL_ENDED_NOTICE_WINDOW_MS,
+  trialEmailClaimsWhere,
 } from "./reminders";
 
 const NOW = new Date("2026-11-10T16:00:00Z");
@@ -171,7 +181,7 @@ describe("runBillingReminders", () => {
 
   it("a trial ending within 3 days gets one reminder, and its marker", async () => {
     m.rows = [ws("a")];
-    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, refused: 0, left: 0 });
     expect(m.sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({ to: "a@example.com" }),
       { idempotencyKey: "billing/trial-ending/a/owner-a/2026-11-12T16:00:00.000Z", throwOnRetryable: true },
@@ -180,7 +190,7 @@ describe("runBillingReminders", () => {
     expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
 
     m.sendEmail.mockClear();
-    expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, refused: 0, left: 0 });
     expect(m.sendEmail).not.toHaveBeenCalled();
   });
 
@@ -211,7 +221,7 @@ describe("runBillingReminders", () => {
 
   it("an ended trial gets one trial-ended email, and its marker", async () => {
     m.rows = [ws("a", { trialEndsAt: new Date(NOW.getTime() - DAY), trialReminderSentAt: new Date(NOW.getTime() - 3 * DAY) })];
-    expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, refused: 0, left: 0 });
     expect(m.sendEmail.mock.calls[0][1]).toEqual({
       idempotencyKey: "billing/trial-ended/a/owner-a/2026-11-09T16:00:00.000Z",
       throwOnRetryable: true,
@@ -232,7 +242,7 @@ describe("runBillingReminders", () => {
       ws("c", { billingExempt: true }),
       ws("d", { trialEndsAt: null }),
     ];
-    expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, refused: 0, left: 0 });
     for (const args of m.findManyArgs as Array<{ where: { plan: null; billingExempt: boolean } }>) {
       expect(args.where.plan).toBeNull();
       expect(args.where.billingExempt).toBe(false);
@@ -254,7 +264,7 @@ describe("runBillingReminders", () => {
     m.sendEmail
       .mockRejectedValueOnce(new EmailRetryableError("503"))
       .mockRejectedValueOnce(new EmailRetryableError("503"));
-    expect(await run()).toEqual({ trialEnding: 2, trialEnded: 0, sent: 1, failed: 1, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 2, trialEnded: 0, sent: 1, failed: 1, refused: 0, left: 0 });
     expect(m.sendEmail).toHaveBeenCalledTimes(3);
     expect(m.rows[0].trialReminderSentAt).toBeNull();
     expect(m.rows[1].trialReminderSentAt).toEqual(NOW);
@@ -271,12 +281,12 @@ describe("runBillingReminders", () => {
       .mockResolvedValueOnce(true)
       .mockRejectedValueOnce(new EmailRetryableError("503"))
       .mockRejectedValueOnce(new EmailRetryableError("503"));
-    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 1, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 1, refused: 0, left: 0 });
     expect(m.rows[0].trialReminderSentAt).toBeNull();
 
     m.sendEmail.mockClear();
     const tomorrow = new Date(NOW.getTime() + DAY);
-    expect(await runBillingReminders(tomorrow, { sleep })).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, left: 0 });
+    expect(await runBillingReminders(tomorrow, { sleep })).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, refused: 0, left: 0 });
     expect(m.sendEmail.mock.calls.map(([params]) => params.to)).toEqual(["two@example.com"]);
     expect(m.rows[0].trialReminderSentAt).toEqual(tomorrow);
   });
@@ -293,7 +303,7 @@ describe("runBillingReminders", () => {
   it("a claim store that can't answer sends nothing and leaves the marker unset for tomorrow", async () => {
     m.rows = [ws("a")];
     m.claimsDown = true;
-    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 0, failed: 1, left: 0 });
+    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 0, failed: 1, refused: 0, left: 0 });
     expect(m.sendEmail).not.toHaveBeenCalled();
     expect(m.rows[0].trialReminderSentAt).toBeNull();
 
@@ -365,6 +375,87 @@ describe("runBillingReminders", () => {
     expect(m.sendEmail.mock.calls[0][1].idempotencyKey).not.toBe(firstKey);
   });
 
+  // R41 lead review: what the operator's change does (admin/actions.ts), applied to the store.
+  const operatorSets = (row: Ws, trialEndsAt: Date) => {
+    const where = trialEmailClaimsWhere(row.id);
+    for (const key of [...m.claims.keys()]) {
+      if (where.OR.some((clause) => key.startsWith(clause.key.startsWith))) m.claims.delete(key);
+    }
+    Object.assign(row, { trialEndsAt, trialReminderSentAt: null, trialEndedEmailSentAt: null });
+  };
+
+  it("a date put back (A, then B, then A) sends A's reminder again", async () => {
+    const a = new Date(NOW.getTime() + 2 * DAY);
+    const b = new Date(NOW.getTime() + 2.5 * DAY);
+    m.rows = [ws("x", { trialEndsAt: a })];
+    expect((await run()).sent).toBe(1);
+
+    operatorSets(m.rows[0], b);
+    const later = new Date(NOW.getTime() + 60 * 60 * 1000);
+    expect((await runBillingReminders(later, { sleep })).sent).toBe(1);
+
+    operatorSets(m.rows[0], a);
+    m.sendEmail.mockClear();
+    const laterStill = new Date(NOW.getTime() + 2 * 60 * 60 * 1000);
+    expect((await runBillingReminders(laterStill, { sleep })).sent).toBe(1);
+    expect(m.sendEmail.mock.calls[0][1].idempotencyKey).toBe(`billing/trial-ending/x/owner-x/${a.toISOString()}`);
+    expect(m.rows[0].trialReminderSentAt).toEqual(laterStill);
+  });
+
+  it("the claims released are this workspace's trial emails only", () => {
+    expect(trialEmailClaimsWhere("ws-1")).toEqual({
+      OR: [
+        { key: { startsWith: "billing-owner:trial-ending:ws-1:" } },
+        { key: { startsWith: "billing-owner:trial-ended:ws-1:" } },
+      ],
+    });
+  });
+
+  // R41 lead review: refused for good means done, not tried every day.
+  it("an owner whose email Resend refused for good (422) is not tried again; the workspace is done", async () => {
+    const owners = [
+      { userId: "u1", email: "one@example.com" },
+      { userId: "u2", email: "two@example.com" },
+    ];
+    m.rows = [ws("a", { owners })];
+    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce({ sent: false, reason: "refused" });
+    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, refused: 1, left: 0 });
+    expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
+    expect(m.logger.warn).toHaveBeenCalledWith(expect.stringContaining("not tried again"), {
+      kind: "trial-ending",
+      workspaceId: "a",
+      userId: "u2",
+    });
+
+    // Even were the marker cleared, the refused owner's claim holds.
+    m.rows[0].trialReminderSentAt = null;
+    m.sendEmail.mockClear();
+    expect((await runBillingReminders(new Date(NOW.getTime() + DAY / 2), { sleep })).sent).toBe(0);
+    expect(m.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a quota 429", { sent: false, reason: "try_later" }],
+    ["no key or a bad key", { sent: false, reason: "not_configured" }],
+  ])("an owner not sent for %s is tried again at the next run", async (_name, answer) => {
+    m.rows = [ws("a")];
+    m.sendEmail.mockResolvedValueOnce(answer);
+    expect(await run()).toMatchObject({ sent: 0, failed: 1, refused: 0 });
+    expect(m.rows[0].trialReminderSentAt).toBeNull();
+    m.sendEmail.mockClear();
+    expect((await runBillingReminders(new Date(NOW.getTime() + DAY / 2), { sleep })).sent).toBe(1);
+  });
+
+  it("a trial that ended more than 30 days ago gets no notice", async () => {
+    m.rows = [
+      ws("old", { trialEndsAt: new Date(NOW.getTime() - TRIAL_ENDED_NOTICE_WINDOW_MS - 1) }),
+      ws("recent", { trialEndsAt: new Date(NOW.getTime() - TRIAL_ENDED_NOTICE_WINDOW_MS + 60_000) }),
+    ];
+    expect(await run()).toMatchObject({ trialEnded: 1, sent: 1 });
+    expect(m.sendEmail.mock.calls.map(([params]) => params.to)).toEqual(["recent@example.com"]);
+    expect(TRIAL_ENDED_NOTICE_WINDOW_MS).toBe(30 * DAY);
+  });
+
   it("sends at most the cap per run and reports the rest as left", async () => {
     m.rows = Array.from({ length: REMINDER_MAX_EMAILS_PER_RUN + 5 }, (_, i) => ws(`w${String(i).padStart(3, "0")}`));
     const result = await run();
@@ -399,7 +490,7 @@ describe("runBillingReminders", () => {
 
     it("an unused workspace in its last days gets no reminder, and its marker stays null", async () => {
       m.rows = [ws("a", unused)];
-      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
+      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, refused: 0, left: 0 });
       expect(m.sendEmail).not.toHaveBeenCalled();
       expect(m.rows[0].trialReminderSentAt).toBeNull();
     });
@@ -416,7 +507,7 @@ describe("runBillingReminders", () => {
 
     it("an unused workspace whose trial ended gets no notice, and its marker stays null", async () => {
       m.rows = [ws("a", { ...unused, ...ended })];
-      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
+      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, refused: 0, left: 0 });
       expect(m.rows[0].trialEndedEmailSentAt).toBeNull();
     });
 
@@ -426,7 +517,7 @@ describe("runBillingReminders", () => {
       expect(m.sendEmail).not.toHaveBeenCalled();
 
       Object.assign(m.rows[0], { posts: 1, ...ended });
-      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, left: 0 });
+      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, refused: 0, left: 0 });
       expect(m.sendEmail.mock.calls[0][1].idempotencyKey).toBe("billing/trial-ended/a/owner-a/2026-11-09T16:00:00.000Z");
       expect(m.rows[0].trialReminderSentAt).toBeNull();
       expect(m.rows[0].trialEndedEmailSentAt).toEqual(NOW);
