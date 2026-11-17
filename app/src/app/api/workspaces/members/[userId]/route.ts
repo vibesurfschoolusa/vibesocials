@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
-import { soleOwnerDemoteRefusal } from "@/lib/leaveRefusals";
+import { THEIR_ROLE_CHANGED_MESSAGE, demoteAnswer, type DemoteAnswer } from "@/lib/memberRoleAnswer";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { payerRefusal } from "@/server/billing/payerRefusal";
 
@@ -30,11 +30,8 @@ function memberGone() {
  * in the workspace: another owner changed their role meanwhile. Not "gone", so
  * the Team card keeps the row.
  */
-function roleChanged() {
-  return NextResponse.json(
-    { error: "Their role changed in the meantime. Reload the page to see the current members.", roleChanged: true },
-    { status: 409 },
-  );
+function roleChanged(error: string = THEIR_ROLE_CHANGED_MESSAGE) {
+  return NextResponse.json({ error, roleChanged: true }, { status: 409 });
 }
 
 async function stillMember(
@@ -45,6 +42,9 @@ async function stillMember(
   const membership = await db.workspaceMember.findFirst({ where: { workspaceId, userId }, select: { role: true } });
   return membership !== null;
 }
+
+type DemoteRefusal = Exclude<DemoteAnswer, { kind: "demote" }>;
+type DemoteOutcome = { refused: DemoteRefusal } | { joinLinksRevoked: number };
 
 interface MemberRouteContext {
   params: Promise<{ userId: string }>;
@@ -166,9 +166,11 @@ export async function DELETE(request: Request, { params }: MemberRouteContext) {
  *     advisory lock keyed `ws-owners:<workspaceId>` — the SAME key
  *     `POST /api/workspaces/leave`'s owner path takes, so a concurrent
  *     demote and owner-leave on one workspace serialize and cannot race it to
- *     zero owners — then RE-READS the owner count INSIDE the lock. If the
- *     target is the last owner (count < 2) it refuses with 400; otherwise it
- *     demotes via a conditional `updateMany`. `pg_advisory_xact_lock`
+ *     zero owners — then RE-READS both people's roles and the owner
+ *     count INSIDE the lock, and demoteAnswer (lib/memberRoleAnswer.ts)
+ *     decides: the last owner's own Make member is refused with 400, a role
+ *     changed meanwhile is 409, a target gone 404; otherwise it demotes via a
+ *     conditional `updateMany`. `pg_advisory_xact_lock`
  *     auto-releases at commit/rollback (the `ensurePersonalWorkspace`
  *     precedent, src/lib/workspace.ts).
  *
@@ -243,30 +245,32 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
   }
 
   // Demote owner -> member. This CAN remove the last owner, so serialize on the
-  // shared ws-owners advisory lock and re-read the owner count INSIDE it.
-  const outcome = await prisma.$transaction(async (tx) => {
+  // shared ws-owners advisory lock and re-read the roles INSIDE it.
+  const outcome = await prisma.$transaction(async (tx): Promise<DemoteOutcome> => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-owners:${workspaceId}`}))`;
 
-    // R36 lead second look: two owners demoting each other at once. The other's
-    // request may have made the caller a member already; they are told the
-    // roles changed, not that they are the only owner.
-    const callerStillOwner = await tx.workspaceMember.count({
-      where: { workspaceId, userId: context.user.id, role: "owner" },
+    // R37 security L1: the read before the lock may be stale (a co-owner
+    // stepped down, left, or demoted the caller meanwhile), so both roles are
+    // read again here and one rule decides.
+    const self = targetUserId === context.user.id;
+    const caller = await tx.workspaceMember.findFirst({
+      where: { workspaceId, userId: context.user.id },
+      select: { role: true },
     });
-    if (callerStillOwner === 0) {
-      return "role_changed" as const;
-    }
-
-    const ownerCount = await tx.workspaceMember.count({
-      where: { workspaceId, role: "owner" },
+    const target = self
+      ? caller
+      : await tx.workspaceMember.findFirst({ where: { workspaceId, userId: targetUserId }, select: { role: true } });
+    const ownerCount = await tx.workspaceMember.count({ where: { workspaceId, role: "owner" } });
+    const otherMembers = await tx.workspaceMember.count({ where: { workspaceId, userId: { not: targetUserId } } });
+    const answer = demoteAnswer({
+      self,
+      callerRole: caller?.role ?? null,
+      targetRole: target?.role ?? null,
+      ownerCount,
+      otherMembers,
     });
-    if (ownerCount < 2) {
-      // R36 lead review: the one owner left is the target (owners alone get
-      // here); worded by whether anyone else is here to make an owner.
-      const otherMembers = await tx.workspaceMember.count({
-        where: { workspaceId, userId: { not: targetUserId } },
-      });
-      return { lastOwner: soleOwnerDemoteRefusal(otherMembers) };
+    if (answer.kind !== "demote") {
+      return { refused: answer };
     }
 
     const { count } = await tx.workspaceMember.updateMany({
@@ -274,7 +278,10 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
       data: { role: "member" },
     });
     if (count === 0) {
-      return (await stillMember(tx, workspaceId, targetUserId)) ? ("role_changed" as const) : ("not_found" as const);
+      const refused: DemoteRefusal = (await stillMember(tx, workspaceId, targetUserId))
+        ? { kind: "their_role_changed", error: THEIR_ROLE_CHANGED_MESSAGE }
+        : { kind: "gone" };
+      return { refused };
     }
     // R8-client-journey L1 / security L2: as on leave, the invite links they
     // made as an owner stop working with their ownership (same transaction),
@@ -285,14 +292,11 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     });
     return { joinLinksRevoked: revoked.count };
   });
-  if (typeof outcome === "object" && "lastOwner" in outcome) {
-    return NextResponse.json({ error: outcome.lastOwner }, { status: 400 });
-  }
-  if (outcome === "not_found") {
-    return memberGone();
-  }
-  if (outcome === "role_changed") {
-    return roleChanged();
+  if ("refused" in outcome) {
+    const { refused } = outcome;
+    if (refused.kind === "gone") return memberGone();
+    if (refused.kind === "last_owner") return NextResponse.json({ error: refused.error }, { status: 400 });
+    return roleChanged(refused.error);
   }
 
   // R5-security L1: as an owner they could copy the client links, which keep

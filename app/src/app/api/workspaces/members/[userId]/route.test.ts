@@ -72,6 +72,7 @@ vi.mock("@/server/billing/payerRefusal", () => ({ payerRefusal: payerRefusalMock
 
 import { DELETE, PATCH } from "./route";
 import { DEMOTE_ONLY_PERSON_MESSAGE, DEMOTE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+import { YOUR_ROLE_CHANGED_MESSAGE } from "@/lib/memberRoleAnswer";
 
 // R25 new-customer L2: "Not found" told the owner nothing. Every answer for a
 // person who is no longer in the workspace says so, and `gone` lets the Team
@@ -482,49 +483,6 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     );
   });
 
-  it("refuses (400, no write) to demote the last owner — owner count 1 inside the lock", async () => {
-    findFirstMock.mockResolvedValue({ role: "owner" });
-    // The caller still an owner, the owners, then the other members (all inside the lock).
-    countMock.mockResolvedValueOnce(1).mockResolvedValueOnce(1).mockResolvedValueOnce(2);
-
-    const response = await PATCH(patchReq("member"), ctx("user-2"));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: DEMOTE_SOLE_OWNER_MESSAGE });
-    expect(countMock).toHaveBeenNthCalledWith(3, { where: { workspaceId: "ws-1", userId: { not: "user-2" } } });
-    // The lock was taken, but the guard tripped before any write.
-    expect(executeRawMock).toHaveBeenCalledTimes(1);
-    expect(updateManyMock).not.toHaveBeenCalled();
-  });
-
-  // R36 lead review: the last owner alone in the workspace stays its owner; no "promote" step.
-  it("the last owner with nobody else: says they stay its owner", async () => {
-    findFirstMock.mockResolvedValue({ role: "owner" });
-    countMock.mockResolvedValueOnce(1).mockResolvedValueOnce(1).mockResolvedValueOnce(0);
-
-    const response = await PATCH(patchReq("member"), ctx("user-2"));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: DEMOTE_ONLY_PERSON_MESSAGE });
-    expect(updateManyMock).not.toHaveBeenCalled();
-  });
-
-  // R36 lead second look: two owners demote each other at once; the other's
-  // request ran first, so the caller is a member now, not "the only owner".
-  it("the caller was made a member in the meantime: the role-changed answer, no write", async () => {
-    findFirstMock.mockResolvedValue({ role: "owner" });
-    countMock.mockResolvedValueOnce(0).mockResolvedValue(1);
-
-    const response = await PATCH(patchReq("member"), ctx("user-2"));
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({ roleChanged: true });
-    expect(countMock).toHaveBeenNthCalledWith(1, { where: { workspaceId: "ws-1", userId: "user-1", role: "owner" } });
-    expect(countMock).toHaveBeenCalledTimes(1);
-    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(countMock.mock.invocationCallOrder[0]);
-    expect(updateManyMock).not.toHaveBeenCalled();
-  });
-
   it("demotes an owner to member via a role-guarded updateMany when another owner exists (count >= 2)", async () => {
     findFirstMock.mockResolvedValue({ role: "owner" });
     countMock.mockResolvedValue(2);
@@ -583,7 +541,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     await PATCH(patchReq("owner"), ctx("user-2"));
     findFirstMock.mockResolvedValue({ role: "owner" });
     countMock.mockResolvedValue(1);
-    await PATCH(patchReq("member"), ctx("user-2"));
+    await PATCH(patchReq("member"), ctx("user-1"));
     countMock.mockResolvedValue(2);
     updateManyMock.mockResolvedValue({ count: 0 });
     await PATCH(patchReq("member"), ctx("user-2"));
@@ -594,7 +552,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     await PATCH(patchReq("owner"), ctx("user-2"));
     findFirstMock.mockResolvedValue({ role: "owner" });
     countMock.mockResolvedValue(1);
-    await PATCH(patchReq("member"), ctx("user-2"));
+    await PATCH(patchReq("member"), ctx("user-1"));
     countMock.mockResolvedValue(2);
     updateManyMock.mockResolvedValue({ count: 0 });
     await PATCH(patchReq("member"), ctx("user-2"));
@@ -630,7 +588,12 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
   });
 
   it("returns 404 when a demote's conditional updateMany matches nothing (owner raced away under the lock)", async () => {
-    findFirstMock.mockResolvedValueOnce({ role: "owner" }).mockResolvedValueOnce(null);
+    // Before the lock, then the caller and the target inside it, then after the update.
+    findFirstMock
+      .mockResolvedValueOnce({ role: "owner" })
+      .mockResolvedValueOnce({ role: "owner" })
+      .mockResolvedValueOnce({ role: "owner" })
+      .mockResolvedValueOnce(null);
     countMock.mockResolvedValue(2);
     updateManyMock.mockResolvedValue({ count: 0 });
 
@@ -661,7 +624,10 @@ describe("PATCH when the role changed in the meantime", () => {
 
   it("demote: still in the workspace under the lock, no longer an owner -> 409 roleChanged", async () => {
     noticeMock.mockClear();
-    findFirstMock.mockResolvedValueOnce({ role: "owner" }).mockResolvedValueOnce({ role: "member" });
+    findFirstMock
+      .mockResolvedValueOnce({ role: "owner" })
+      .mockResolvedValueOnce({ role: "owner" })
+      .mockResolvedValueOnce({ role: "member" });
     countMock.mockResolvedValue(2);
     updateManyMock.mockResolvedValue({ count: 0 });
 
@@ -718,5 +684,104 @@ describe("members/[userId] and the rendered workspace", () => {
     );
     expect(response.status).toBe(400);
     nothingChanged();
+  });
+});
+
+// R37 security L1 / client-journey L4 / pages L3: Make member is decided from
+// the roles read inside the ws-owners lock (both the caller's and the
+// target's), by one rule (lib/memberRoleAnswer.ts). `before` is what the
+// route read before the lock; `inside` is the workspace once it holds it.
+describe("PATCH demote: decided from the roles inside the lock", () => {
+  type Roles = Record<string, "owner" | "member">;
+
+  function workspace(before: Roles, inside: Roles) {
+    let locked = false;
+    executeRawMock.mockImplementation(async () => {
+      locked = true;
+      return 1;
+    });
+    findFirstMock.mockImplementation(async ({ where }: { where: { userId: string } }) => {
+      const role = (locked ? inside : before)[where.userId];
+      return role ? { role } : null;
+    });
+    countMock.mockImplementation(async ({ where }: { where: { role?: string; userId?: { not: string } } }) => {
+      const people = Object.entries(inside);
+      if (where.role) return people.filter(([, role]) => role === where.role).length;
+      return people.filter(([id]) => id !== where.userId?.not).length;
+    });
+  }
+
+  const CASES: Array<[string, string, Roles, Roles, number, unknown]> = [
+    [
+      "the caller was made a member meanwhile: your role changed",
+      "user-2",
+      { "user-1": "owner", "user-2": "owner" },
+      { "user-1": "member", "user-2": "owner" },
+      409,
+      { error: YOUR_ROLE_CHANGED_MESSAGE, roleChanged: true },
+    ],
+    [
+      "the target stepped down meanwhile: their role changed, never the only-owner sentence",
+      "user-2",
+      { "user-1": "owner", "user-2": "owner" },
+      { "user-1": "owner", "user-2": "member" },
+      409,
+      ROLE_CHANGED_ANSWER,
+    ],
+    [
+      "the target left meanwhile, the caller alone: gone",
+      "user-2",
+      { "user-1": "owner", "user-2": "owner" },
+      { "user-1": "owner" },
+      404,
+      MEMBER_GONE_ANSWER,
+    ],
+    [
+      "the real last owner on their own Make member, others here: the Make owner sentence",
+      "user-1",
+      { "user-1": "owner", "user-2": "owner", "user-3": "member" },
+      { "user-1": "owner", "user-3": "member" },
+      400,
+      { error: DEMOTE_SOLE_OWNER_MESSAGE },
+    ],
+    [
+      "the real last owner on their own Make member, alone: they stay its owner, reload",
+      "user-1",
+      { "user-1": "owner", "user-2": "owner" },
+      { "user-1": "owner" },
+      400,
+      { error: DEMOTE_ONLY_PERSON_MESSAGE },
+    ],
+    [
+      "a co-owner, both still owners: demoted",
+      "user-2",
+      { "user-1": "owner", "user-2": "owner" },
+      { "user-1": "owner", "user-2": "owner" },
+      200,
+      { ok: true, role: "member", joinLinksRevoked: 1 },
+    ],
+  ];
+
+  it.each(CASES)("%s", async (_label, target, before, inside, status, answer) => {
+    workspace(before, inside);
+
+    const response = await PATCH(patchReq("member"), ctx(target));
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual(answer);
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    // Every role read after the first happens inside the lock.
+    const lockAt = executeRawMock.mock.invocationCallOrder[0];
+    for (const at of findFirstMock.mock.invocationCallOrder.slice(1)) expect(at).toBeGreaterThan(lockAt);
+    for (const at of countMock.mock.invocationCallOrder) expect(at).toBeGreaterThan(lockAt);
+    if (status === 200) {
+      expect(updateManyMock).toHaveBeenCalledWith({
+        where: { workspaceId: "ws-1", userId: target, role: "owner" },
+        data: { role: "member" },
+      });
+    } else {
+      expect(updateManyMock).not.toHaveBeenCalled();
+      expect(inviteUpdateManyMock).not.toHaveBeenCalled();
+    }
   });
 });

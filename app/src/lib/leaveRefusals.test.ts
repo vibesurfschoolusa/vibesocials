@@ -73,6 +73,9 @@ describe("the last owner's own Make member", () => {
 
   it("nobody else: they stay its owner", () => {
     expect(soleOwnerDemoteRefusal(0)).toBe(DEMOTE_ONLY_PERSON_MESSAGE);
-    expect(DEMOTE_ONLY_PERSON_MESSAGE).toBe("You're the only person in this workspace, so you stay its owner.");
+    // R37 pages L3: reachable only from a stale list, so it says to reload.
+    expect(DEMOTE_ONLY_PERSON_MESSAGE).toBe(
+      "You're the only person in this workspace, so you stay its owner. Reload the page to see the current members.",
+    );
   });
 });

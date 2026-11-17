@@ -72,4 +72,6 @@ export function soleOwnerDemoteRefusal(otherMembers: number): string {
 export const DEMOTE_SOLE_OWNER_MESSAGE =
   "You're the only owner. Reload the page, make another member an owner with Make owner, then try again.";
 
-export const DEMOTE_ONLY_PERSON_MESSAGE = "You're the only person in this workspace, so you stay its owner.";
+// R37 pages L3: only a stale list gets here (the card showed a co-owner), so it says to reload.
+export const DEMOTE_ONLY_PERSON_MESSAGE =
+  "You're the only person in this workspace, so you stay its owner. Reload the page to see the current members.";
