@@ -2,9 +2,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Platform } from "@prisma/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { commitRequest } from "@/server/platforms/commitCall";
+
+import { FETCH_TIMEOUT_CODE } from "./fetchWithTimeout";
 import { PLATFORM_LABELS } from "./platforms";
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "./publishOutcomes";
 
 import {
   connectionGoneMessage,
@@ -249,6 +253,46 @@ describe("publishErrorMessage (F1 L7)", () => {
       expect(codes.size).toBeGreaterThanOrEqual(7);
       for (const code of codes) expect(STORAGE_READ_CODES.has(code), code).toBe(true);
     });
+  });
+});
+
+// R38 publishing L2: our own limit ending a call before the post (a store-code
+// lookup, a token or upload step) is one sentence for every platform, never the
+// raw "Request timed out after 30000ms". The commit call's own timeout is
+// sorted earlier (commitCall.ts) and stays PUBLISH_UNCONFIRMED.
+describe("publishErrorMessage: FETCH_TIMEOUT", () => {
+  // fetchWithTimeout's own error (fetchTimeoutError there).
+  const fetchTimeoutError = (ms: number) =>
+    Object.assign(new Error(`Request timed out after ${ms}ms`), { code: FETCH_TIMEOUT_CODE });
+
+  it.each([
+    ["google_business_profile", "Google Business Profile"],
+    ["linkedin", "LinkedIn"],
+  ] as const)("%s: didn't answer in time, nothing posted, try again later", (platform, label) => {
+    expect(publishErrorMessage(platform, fetchTimeoutError(30_000))).toBe(
+      `${label} didn't answer in time, so nothing was posted. Try again later.`,
+    );
+  });
+
+  it("a sentence a client wrote for its own timeout is kept (TikTok's account check)", () => {
+    const written = "TikTok didn't answer the account check it needs before a post, so nothing was posted. Try again in a few minutes.";
+    expect(publishErrorMessage("tiktok", { code: FETCH_TIMEOUT_CODE, message: written })).toBe(written);
+  });
+
+  it("the raw timeout text never shows, whatever the code", () => {
+    expect(publishErrorMessage("linkedin", { code: "LINKEDIN_UPLOAD_FAILED", message: "Request timed out after 12000ms" })).not.toMatch(
+      /timed out after/,
+    );
+  });
+
+  it("a commit call that timed out is unchanged: PUBLISH_UNCONFIRMED", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await commitRequest("google_business_profile", () => Promise.reject(fetchTimeoutError(30_000))).catch(
+      (e: unknown) => e as Error & { code?: string },
+    );
+    expect(error).toMatchObject({ code: "PUBLISH_UNCONFIRMED" });
+    expect(publishErrorMessage("google_business_profile", error)).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    vi.restoreAllMocks();
   });
 });
 

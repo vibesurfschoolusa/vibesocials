@@ -283,6 +283,11 @@ export function platformDownMessage(platform: Platform): string {
   return `${platformLabel(platform)} had a problem on its side. Try again later.`;
 }
 
+/** Our own time limit ended a call before the post was sent (FETCH_TIMEOUT). */
+export function notAnsweredInTimeMessage(platform: Platform): string {
+  return `${platformLabel(platform)} didn't answer in time, so nothing was posted. Try again later.`;
+}
+
 /**
  * No answer from the platform to judge: a network failure, our database, or an
  * error nobody wrote for the user. Not a refusal, so no rules advice.
@@ -316,8 +321,9 @@ const RENEW_CODE = /(?:_NO_REFRESH_TOKEN|_NO_ACCESS_TOKEN|RECONNECT_REQUIRED)$/;
 const REFRESH_FAILED_CODE = /_TOKEN_REFRESH_FAILED$/;
 // Database, network and host details that must never reach the user. ECONN is
 // matched at a word start only: "Reconnect" holds the same letters (R26).
+// R38: fetchWithTimeout's "Request timed out after 30000ms" too.
 const INTERNALS =
-  /prisma|database|can't reach|\bECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
+  /timed out after \d+\s*ms|prisma|database|can't reach|\bECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
 
 /** Would publishErrorMessage hide this text as an internal detail? A client checks before adding a platform's word. */
 export function hasInternalDetail(text: string): boolean {
@@ -371,6 +377,12 @@ export function publishErrorMessage(
     statusLine === null &&
     !INTERNALS.test(message);
   if (written) return message;
+  // R38 publishing L2: our own limit ended a call before the post (a commit
+  // call's timeout is PUBLISH_UNCONFIRMED by then, commitCall.ts), and no
+  // client wrote a sentence for it (fetchWithTimeout's own text is INTERNALS).
+  // The code is fetchWithTimeout's FETCH_TIMEOUT_CODE, written out so this text
+  // module does not load it; publishFailureText.test.ts keeps the two equal.
+  if (code === "FETCH_TIMEOUT") return notAnsweredInTimeMessage(platform);
   if (status !== null && status >= 400) return platformRefusedMessage(platform);
   return notReachedMessage(platform);
 }
