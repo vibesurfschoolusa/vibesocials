@@ -12,6 +12,9 @@ import { NAV_ITEMS, isActiveNav } from "./nav";
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/** Tailwind's md breakpoint, where the drawer (md:hidden) is no longer shown. */
+const DRAWER_HIDDEN_QUERY = "(min-width: 768px)";
+
 /**
  * Mobile slide-over navigation. Applies the same accessibility patterns as the
  * Dialog primitive — role="dialog" + aria-modal, focus trap, Esc-to-close,
@@ -48,6 +51,22 @@ export function MobileDrawer({
       previouslyFocused.current?.focus();
     };
   }, [open]);
+
+  // R44 new-customer L4: the drawer is md:hidden, so a phone turned sideways
+  // would hide it while its scroll lock stayed. Close it at that width.
+  useEffect(() => {
+    if (!open || typeof window.matchMedia !== "function") return;
+    const wide = window.matchMedia(DRAWER_HIDDEN_QUERY);
+    if (wide.matches) {
+      onClose();
+      return;
+    }
+    const onChange = (event: { matches: boolean }) => {
+      if (event.matches) onClose();
+    };
+    wide.addEventListener("change", onChange);
+    return () => wide.removeEventListener("change", onChange);
+  }, [open, onClose]);
 
   // Esc to close + Tab focus trap.
   useEffect(() => {
