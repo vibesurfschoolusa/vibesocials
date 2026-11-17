@@ -1103,6 +1103,17 @@ describe("the automatic caption's refusal says no caption was written", () => {
     expect(pageSays("No caption was written: the AI service took too long. Try again.")).toBe(true);
   });
 
+  // R44 review L1: a lost answer may hide a caption the AI did write, so it
+  // keeps its own sentence (and Vibe its capital), with no prefix.
+  it("automatic: a lost answer keeps the lost-answer sentence as it is", async () => {
+    await pick(photo());
+    await finishUploads();
+    await answer("/api/posts/auto-caption", new Response("Bad gateway", { status: 502, headers: { "Content-Type": "text/plain" } }));
+    expect(CAPTION_OFFLINE_MESSAGE.startsWith("Vibe Socials")).toBe(true);
+    expect(pageSays(CAPTION_OFFLINE_MESSAGE)).toBe(true);
+    expect(pageSays("No caption was written")).toBe(false);
+  });
+
   // R44 lead review: an unexpected throw in the handler is a failure of the automatic request too.
   const video = () => new File(["v"], "v.mp4", { type: "video/mp4" });
 

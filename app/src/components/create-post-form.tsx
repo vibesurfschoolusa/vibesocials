@@ -4,7 +4,7 @@ import { useCallback, useState, useEffect, useEffectEvent, useMemo, useRef, Susp
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
-import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
+import { CAPTION_FAILED_MESSAGE, CAPTION_OFFLINE_MESSAGE, requestCaption } from "@/lib/captionRequest";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { sendPostRequest, submitErrorText } from "@/lib/postSubmitFailure";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
@@ -150,8 +150,9 @@ interface UploadedBlobInfo {
 type PublishMode = "now" | "schedule" | "draft";
 
 /**
- * R43 new-customer L4, R44 L2: every failure of an automatic caption (written
- * when a file is added) says the caption wasn't written before its sentence.
+ * R43 new-customer L4, R44 L2: a failure of an automatic caption (written
+ * when a file is added) says the caption wasn't written before its sentence,
+ * except a lost answer, which can't say that (R44 review L1).
  */
 export function automaticCaptionRefusedText(routeSentence: string): string {
   return `No caption was written: ${routeSentence.charAt(0).toLowerCase()}${routeSentence.slice(1)}`;
@@ -1719,9 +1720,14 @@ function CreatePostFormInner({
       if (!result.ok) {
         console.error("Error generating caption from media:", result.error);
         // R43 new-customer L4, R44 L2: no one pressed anything for the caption
-        // written when a file is added, so any failure says what didn't happen,
-        // as Add many does.
-        toast.error(options.automatic ? automaticCaptionRefusedText(result.error) : result.error);
+        // written when a file is added, so a refusal says what didn't happen,
+        // as Add many does. R44 review L1: a lost answer is not one; the AI may
+        // have written a caption that never arrived, so its sentence stays.
+        toast.error(
+          options.automatic && result.error !== CAPTION_OFFLINE_MESSAGE
+            ? automaticCaptionRefusedText(result.error)
+            : result.error,
+        );
         return;
       }
       const caption = result.caption;
