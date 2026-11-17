@@ -14,7 +14,7 @@ vi.mock("next/link", async () => {
   return { default: ({ href, children, ...rest }: { href: string; children: unknown }) => h("a", { href, ...rest }, children as never) };
 });
 
-import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
+import { html, makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { NeedsYou } from "./needs-you";
 
 let root: Root;
@@ -80,5 +80,104 @@ describe("Needs you: the Google reviews call", () => {
     await show(false);
     await show(false);
     expect(reviewCalls()).toBe(0);
+  });
+});
+
+/**
+ * R36 client-journey L1: a reviews call started after mount (the listing came
+ * with the Connections card's Retry) keeps the loaded card instead of the
+ * skeleton, and never says "You're all caught up" until it settles; a quiet
+ * "Checking Google reviews…" line stands in.
+ */
+describe("Needs you: a reviews call started after mount", () => {
+  const QUIET = { problemsLast7Days: 0, awaitingYourApproval: 0, clientChangesRequested: 0, nextScheduled: null };
+  let summaryBody: Record<string, unknown> = QUIET;
+  let settleReviews: (outcome: { reviews: unknown[] } | "fail") => void = () => {};
+
+  beforeEach(() => {
+    summaryBody = QUIET;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).startsWith("/api/reviews")) {
+        return new Promise<Response>((resolve, reject) => {
+          settleReviews = (outcome) =>
+            outcome === "fail"
+              ? reject(new TypeError("Failed to fetch"))
+              : resolve({ ok: true, status: 200, json: async () => outcome } as unknown as Response);
+        });
+      }
+      return { ok: true, status: 200, json: async () => summaryBody } as unknown as Response;
+    });
+  });
+
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  const text = () => container.textContent as string;
+  const skeleton = () => html(container).includes("animate-pulse");
+  async function settle(outcome: { reviews: unknown[] } | "fail") {
+    await act(async () => {
+      settleReviews(outcome);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it("listing at mount: the skeleton until the reviews settle (unchanged)", async () => {
+    await show(true);
+    expect(skeleton()).toBe(true);
+    expect(text()).toContain("Loading what needs you…");
+    expect(text()).not.toContain("all caught up");
+    await settle({ reviews: [] });
+    expect(skeleton()).toBe(false);
+    expect(text()).toContain("You're all caught up");
+  });
+
+  it("listing later with other rows: the loaded rows stay, with the checking line", async () => {
+    summaryBody = { ...QUIET, awaitingYourApproval: 1 };
+    await show(false);
+    expect(text()).toContain("1 post is waiting for your approval");
+    await show(true);
+    expect(skeleton()).toBe(false);
+    expect(text()).not.toContain("Loading what needs you…");
+    expect(text()).toContain("Needs you");
+    expect(text()).toContain("1 post is waiting for your approval");
+    expect(text()).toContain("Checking Google reviews…");
+  });
+
+  it("listing later with no rows: no caught-up heading while checking", async () => {
+    await show(false);
+    expect(text()).toContain("You're all caught up");
+    await show(true);
+    expect(skeleton()).toBe(false);
+    expect(text()).not.toContain("all caught up");
+    expect(text()).toContain("Checking Google reviews…");
+    expect(text()).toContain("Plan the next few weeks with Add many.");
+  });
+
+  it("settled with reviews: the reviews row is added and the checking line goes", async () => {
+    await show(false);
+    await show(true);
+    await settle({ reviews: [{ reviewReply: null }, { reviewReply: { comment: "Thanks" } }] });
+    expect(text()).toContain("Needs you");
+    expect(text()).toContain("1 Google review needs a reply");
+    expect(text()).not.toContain("Checking Google reviews…");
+  });
+
+  it("settled with none: the caught-up heading comes back", async () => {
+    await show(false);
+    await show(true);
+    await settle({ reviews: [] });
+    expect(text()).toContain("You're all caught up");
+    expect(text()).not.toContain("Checking Google reviews…");
+  });
+
+  it("the reviews call fails: no reviews row, the card as it was", async () => {
+    summaryBody = { ...QUIET, awaitingYourApproval: 2 };
+    await show(false);
+    await show(true);
+    await settle("fail");
+    expect(text()).toContain("2 posts are waiting for your approval");
+    expect(text()).not.toContain("Google review");
+    expect(text()).not.toContain("Checking Google reviews…");
   });
 });

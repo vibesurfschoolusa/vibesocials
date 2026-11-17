@@ -19,6 +19,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  CHECKING_REVIEWS_TEXT,
+  needsYouHeading,
   needsYouRows,
   needsYouView,
   reviewsNeedingReply,
@@ -57,6 +59,9 @@ export function NeedsYou({
   // later connections reload starts no second Google call.
   const [hasGoogleListing, setHasGoogleListing] = useState(googleNow);
   if (googleNow && !hasGoogleListing) setHasGoogleListing(true);
+  // R36 client-journey L1: only a reviews call started at mount shows the
+  // skeleton; a later one keeps the loaded card.
+  const [askedAtMount] = useState(googleNow);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [failed, setFailed] = useState(false);
   const [reviews, setReviews] = useState<number | null>(null);
@@ -98,7 +103,7 @@ export function NeedsYou({
 
   const view = needsYouView({
     summary: failed ? "failed" : summary ? "loaded" : "loading",
-    reviews: !hasGoogleListing ? "not_asked" : reviewsSettled ? "settled" : "pending",
+    reviews: !hasGoogleListing ? "not_asked" : reviewsSettled ? "settled" : askedAtMount ? "pending" : "checking",
   });
   const loadingShown = view !== "nothing" && (view === "skeleton" || !summary);
   // Only owners get a number for approvals; the server sends null to a member.
@@ -106,12 +111,16 @@ export function NeedsYou({
     view === "nothing" || loadingShown || !summary
       ? null
       : needsYouRows(summary, reviews, summary.awaitingYourApproval === null ? "member" : "owner");
+  const checking = view === "checking";
+  const heading = card && (view === "card" || view === "checking") ? needsYouHeading(card, view) : null;
 
   // R30 PP2: the loading line is outside the views, on the page from the
   // first render; only its text changes.
   return (
     <>
-      <p role="status" className="sr-only">{loadingShown ? "Loading what needs you…" : ""}</p>
+      <p role="status" className="sr-only">
+        {loadingShown ? "Loading what needs you…" : checking && card ? CHECKING_REVIEWS_TEXT : ""}
+      </p>
       {loadingShown ? (
         <Card>
           <CardHeader>
@@ -125,7 +134,13 @@ export function NeedsYou({
       ) : card ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{card.title}</CardTitle>
+            {heading ? <CardTitle className="text-base">{heading}</CardTitle> : null}
+            {/* Read out by the status line above; shown here as the quiet stand-in. */}
+            {checking ? (
+              <p aria-hidden className="text-sm text-muted-foreground">
+                {CHECKING_REVIEWS_TEXT}
+              </p>
+            ) : null}
           </CardHeader>
           <CardContent>
             <ul className="-mx-2 space-y-1">

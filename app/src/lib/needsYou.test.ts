@@ -4,6 +4,8 @@ import {
   formatNextPostTime,
   hasGoogleListing,
   needsYouRows,
+  CHECKING_REVIEWS_TEXT,
+  needsYouHeading,
   needsYouView,
   reviewsNeedingReply,
   shouldMountNeedsYou,
@@ -172,6 +174,22 @@ describe("needsYouView", () => {
     const failed = needsYouRows(QUIET, null, "owner");
     expect(failed.title).toBe("You're all caught up");
     expect(failed.rows.map((row) => row.kind)).toEqual(["add_many"]);
+  });
+});
+
+// R36 client-journey L1: a reviews call started after mount keeps the loaded card.
+describe("needsYouView: a reviews call started after mount", () => {
+  it("keeps the card while checking once the summary is in", () => {
+    expect(needsYouView({ summary: "loaded", reviews: "checking" })).toBe("checking");
+    expect(needsYouView({ summary: "loading", reviews: "checking" })).toBe("skeleton");
+    expect(needsYouView({ summary: "failed", reviews: "checking" })).toBe("nothing");
+  });
+
+  it("never says all caught up while checking; the checking line stands in", () => {
+    expect(needsYouHeading(needsYouRows(QUIET, null, "owner"), "checking")).toBeNull();
+    expect(needsYouHeading(needsYouRows({ ...QUIET, problemsLast7Days: 1 }, null, "owner"), "checking")).toBe("Needs you");
+    expect(needsYouHeading(needsYouRows(QUIET, 0, "owner"), "card")).toBe("You're all caught up");
+    expect(CHECKING_REVIEWS_TEXT).toBe("Checking Google reviews…");
   });
 });
 

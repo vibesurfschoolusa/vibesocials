@@ -148,18 +148,29 @@ export function needsYouRows(
 }
 
 /**
- * What the card shows right now. With Google connected it waits for the
- * reviews call as well as the summary: drawing "You're all caught up" first
+ * What the card shows right now. With Google connected at mount it waits for
+ * the reviews call as well as the summary: drawing "You're all caught up" first
  * and then flipping to "Needs you" when the reviews land would say something
  * untrue for a moment. A failed reviews call counts as settled (no row).
+ * R36 client-journey L1: a call started later ("checking": the listing came
+ * with the Connections card's Retry) keeps the loaded card on screen, without
+ * the caught-up heading (needsYouHeading), until it settles.
  */
 export function needsYouView(input: {
   summary: "loading" | "loaded" | "failed";
-  reviews: "not_asked" | "pending" | "settled";
-}): "nothing" | "skeleton" | "card" {
+  reviews: "not_asked" | "pending" | "checking" | "settled";
+}): "nothing" | "skeleton" | "card" | "checking" {
   if (input.summary === "failed") return "nothing";
   if (input.summary === "loading" || input.reviews === "pending") return "skeleton";
-  return "card";
+  return input.reviews === "checking" ? "checking" : "card";
+}
+
+/** The quiet line while a later reviews call is out. */
+export const CHECKING_REVIEWS_TEXT = "Checking Google reviews…";
+
+/** The card's heading; none while checking would otherwise say all caught up. */
+export function needsYouHeading(card: NeedsYouCard, view: "card" | "checking"): NeedsYouCard["title"] | null {
+  return view === "checking" && card.title === "You're all caught up" ? null : card.title;
 }
 
 /**
