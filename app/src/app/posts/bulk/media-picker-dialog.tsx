@@ -90,6 +90,9 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
     void fetchPage(null, FIRST_LOAD_FAILED_MESSAGE).then((result) => {
       if (cancelled) return;
       if (typeof result === "string") {
+        // R44 pages-a L2: the last opening's list is not this one's.
+        setItems([]);
+        setNextCursor(null);
         setError(result);
       } else {
         setItems(result.items);
@@ -154,7 +157,7 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
           />
         ) : (
           <>
-            {items.length > 0 ? <AnnouncedText className="sr-only" text={mediaCountLine(items.length)} /> : null}
+            {items.length > 0 && !error ? <AnnouncedText className="sr-only" text={mediaCountLine(items.length)} /> : null}
             <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {items.map((item) => {
                 const added = addedIds.has(item.id);
