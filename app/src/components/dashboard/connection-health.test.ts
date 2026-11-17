@@ -157,6 +157,12 @@ describe("ConnectionHealth when the read failed", () => {
     expect(html).not.toContain("load connection status");
   });
 
+  // R35 pages L3: inside a danger Alert (role="alert"), so a screen reader hears it.
+  it("is announced", () => {
+    const html = renderError(CONNECTIONS_FAILED_TEXT);
+    expect(html).toMatch(/<div role="alert"[^>]*>[\s\S]*We couldn&#x27;t load your connections/);
+  });
+
   it("a workspace refusal offers Reload page", () => {
     const html = renderError(WORKSPACE_CHANGED_SAVE_MESSAGE);
     expect(html).toContain(">Reload page</button>");

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import {
   Card,
   CardContent,
@@ -85,9 +86,10 @@ export function ConnectionHealth({
         ) : error ? (
           // R34 pages L4: the hook's sentence and the shared step (Retry, or
           // Reload page after a workspace refusal), so the checklist can come back.
-          <div className="text-sm text-muted-foreground">
+          // R35 pages L3: in a danger Alert (role="alert"), as every LoadError.
+          <Alert variant="danger">
             <LoadError message={error} onRetry={reload} />
-          </div>
+          </Alert>
         ) : (
           <ul className="space-y-1">
             {ordered.map((connection) => (
