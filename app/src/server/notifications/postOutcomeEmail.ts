@@ -62,6 +62,8 @@ export interface PostOutcomeResultSummary {
   /** Internal code, read only to word a stalled or unconfirmed row (R27 MM4). */
   errorCode?: string | null;
   errorMessage?: string | null;
+  /** A success's note (a chosen cover the platform did not take), shown after "Succeeded". */
+  note?: string | null;
   /** A stalled row's connection needs reconnecting (or is gone), read when the email is sent. */
   needsReconnect?: boolean;
   /** Sent as a Story: the row reads "Instagram Story" (R5-client-journey L3). */
@@ -185,7 +187,10 @@ function renderResultRow(result: PostOutcomeResultSummary, recipientRole: "owner
       : `<li>${label}: ${stopped} Reconnect ${name} in Settings, then retry it in Activity.</li>`;
   }
   if (result.status === "success") {
-    return `<li>${label}: Succeeded</li>`;
+    // R44 publishing L3: the note the Activity card shows, so a success that
+    // lost its chosen cover does not read as complete.
+    const note = result.note ? ` — ${escapeHtml(result.note)}` : "";
+    return `<li>${label}: Succeeded${note}</li>`;
   }
   if (result.status === "failed") {
     const reason = result.errorMessage ? ` — ${escapeHtml(result.errorMessage)}` : "";
@@ -308,6 +313,8 @@ const OUTCOME_JOB_SELECT = {
       // Pause (2026-11-10): to send nothing for a paused workspace's job.
       errorCode: true,
       errorMessage: true,
+      // R44 publishing L3: a success's note, shown in its row.
+      note: true,
       // When the result finished, and a platform limit the other half waits out.
       updatedAt: true,
       deferredUntil: true,

@@ -44,6 +44,7 @@ vi.mock("@/server/notifications/email", async (importOriginal) => ({
 import { RetryAfterError } from "inngest";
 
 import { EmailRetryableError } from "@/server/notifications/email";
+import { htmlToPlainText } from "@/server/notifications/plainText";
 import {
   buildPostOutcomeEmail,
   deliverPostOutcomeNotification,
@@ -429,6 +430,7 @@ describe("deliverPostOutcomeNotification", () => {
       status: true,
       errorCode: true,
       errorMessage: true,
+      note: true,
       updatedAt: true,
       deferredUntil: true,
     });
@@ -696,6 +698,36 @@ describe("buildPostOutcomeEmail - names the workspace and the post (F4)", () => 
     const email = buildPostOutcomeEmail({ results: [], status: "failed", appBaseUrl: null, ...WS });
     expect(email.html).toContain("Settings, Posts and emails");
     expect(email.html).toContain("<p>In <strong>Surf Co</strong>.</p>");
+  });
+});
+
+// R44 publishing L3: a success can carry a note (a chosen video cover the
+// platform did not take). The email shows it, as the Activity card does.
+describe("deliverPostOutcomeNotification - a success row's note", () => {
+  const COVER_NOTE = "Cover not set: LinkedIn did not accept the chosen cover, so the video uses its own.";
+
+  it("reads the note and shows it after Succeeded, in the HTML and the plain text", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue(
+      jobRow({
+        status: "completed",
+        results: [
+          { platform: "linkedin", status: "success", errorCode: null, errorMessage: null, note: `${COVER_NOTE} <b>` },
+          { platform: "x", status: "success", errorCode: null, errorMessage: null, note: null },
+        ],
+      }),
+    );
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(findUniquePostJobMock.mock.calls[0][0].select.results.select).toMatchObject({ note: true });
+    const sent = sendEmailMock.mock.calls[0][0] as { html: string };
+    expect(sent.html).toContain(`<li>LinkedIn: Succeeded — ${COVER_NOTE} &lt;b&gt;</li>`);
+    expect(sent.html).toContain("<li>X: Succeeded</li>");
+    const text = htmlToPlainText(sent.html);
+    expect(text).toContain(`LinkedIn: Succeeded — ${COVER_NOTE} <b>`);
+    expect(text).toMatch(/X: Succeeded(\n|$)/);
   });
 });
 
