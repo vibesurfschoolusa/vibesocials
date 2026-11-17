@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { LoadError } from "@/components/load-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -182,7 +183,8 @@ export function makeMemberBlockedTitle(
   return soleOwnerLeaveCase({ otherMembers, onlyWorkspace }) === "sole_owner" ? MAKE_MEMBER_BLOCKED_TITLE : undefined;
 }
 
-export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try reloading the page.";
+/** R41 pages L3: shown with Retry, which reads the list again. */
+export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try again in a moment.";
 
 /**
  * R32: the people of the workspace this page was drawn for (the roster or the
@@ -633,6 +635,8 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
   const [roster, setRoster] = useState<RosterEntry[] | null>(null);
   const [rosterLoading, setRosterLoading] = useState(true);
   const [rosterError, setRosterError] = useState<string | null>(null);
+  // Bumped by Retry, so the read runs again.
+  const [rosterAttempt, setRosterAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -645,7 +649,7 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, rosterAttempt]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here, mirrors revokeInvite/
@@ -686,7 +690,17 @@ function MemberView({ workspaceId, workspaceName }: { workspaceId: string; works
             </div>
           </>
         ) : rosterError ? (
-          <p className="text-sm text-muted-foreground">{rosterError}</p>
+          // R41 pages L3: announced, as every load error.
+          <Alert variant="danger">
+            <LoadError
+              message={rosterError}
+              onRetry={() => {
+                setRosterError(null);
+                setRosterLoading(true);
+                setRosterAttempt((attempt) => attempt + 1);
+              }}
+            />
+          </Alert>
         ) : roster && roster.length > 0 ? (
           <ul className="divide-y divide-border">
             {roster.map((entry, index) => (
@@ -887,6 +901,8 @@ function OwnerView({
   const [members, setMembers] = useState<Member[] | null>(null);
   const [membersLoading, setMembersLoading] = useState(true);
   const [membersError, setMembersError] = useState<string | null>(null);
+  // Bumped by Retry, so the read runs again.
+  const [membersAttempt, setMembersAttempt] = useState(0);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
   const [promoteTarget, setPromoteTarget] = useState<Member | null>(null);
   const [demoteTarget, setDemoteTarget] = useState<Member | null>(null);
@@ -919,7 +935,7 @@ function OwnerView({
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, membersAttempt]);
 
   // R36 new-customer L1 + lead review: every change to the loaded list goes
   // through here. Settings works out what Delete account and Delete this
@@ -1215,7 +1231,17 @@ function OwnerView({
             </div>
           </>
         ) : membersError ? (
-          <p className="text-sm text-muted-foreground">{membersError}</p>
+          // R41 pages L3: announced, as every load error.
+          <Alert variant="danger">
+            <LoadError
+              message={membersError}
+              onRetry={() => {
+                setMembersError(null);
+                setMembersLoading(true);
+                setMembersAttempt((attempt) => attempt + 1);
+              }}
+            />
+          </Alert>
         ) : members && members.length > 0 ? (
           <ul className="divide-y divide-border">
             {members.map((member) => (

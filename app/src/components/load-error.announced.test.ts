@@ -48,3 +48,28 @@ describe("every LoadError is announced", () => {
     expect(sites.filter((site) => !site.inside).map((site) => site.file)).toEqual([]);
   });
 });
+
+/**
+ * R41 pages L3: a load error written by hand (a plain <p> in the error branch
+ * of a loading view) is missed by the check above. Every `: <name>Error ? (`
+ * branch opens with an announcing Alert, or ErrorState, which is one.
+ */
+describe("every hand-written load-error branch is announced", () => {
+  const ANNOUNCING = /^(?:<Alert\b[^>]*variant="(?:danger|warning)"|<ErrorState\b)/;
+  const branches = files(SRC).flatMap((path) => {
+    const source = readFileSync(path, "utf8");
+    // Skips `//` comment lines between the branch and its first element.
+    return [...source.matchAll(/:\s*[A-Za-z.]*[eE]rror \? \(\s*((?:\/\/[^\n]*\n\s*)*)(<[^\n]*)/g)].map((match) => ({
+      file: relative(SRC, path),
+      opens: match[2],
+    }));
+  });
+
+  it("finds the branches", () => {
+    expect(branches.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("opens each with a danger or warning Alert", () => {
+    expect(branches.filter((branch) => !ANNOUNCING.test(branch.opens))).toEqual([]);
+  });
+});
