@@ -141,3 +141,102 @@ describe("server code never calls a plain function from a \"use client\" module"
     expect(boundaryViolations([server], (file) => sources[file] ?? readFileSync(file, "utf8"))).toEqual([]);
   });
 });
+
+/**
+ * Hotfix (digest 2711503741): button.tsx gained its own onClick in R25 but had
+ * no "use client", so every server page that rendered <Button> (Reports, the
+ * connect link) crashed with "Event handlers cannot be passed to Client
+ * Component props". Unit tests render components directly and cannot see it.
+ *
+ * This scan finds every component module under src/app or src/components
+ * WITHOUT "use client" that writes an inline event handler (`onClick={`) or
+ * calls a hook (`useState(`), and is a page or layout, or is imported by a
+ * file under src/app or src/components that has no "use client" either. As above, the scan holds
+ * every file without the directive to the server's rules: a component that
+ * needs the browser says "use client".
+ */
+
+/** The event-handler props and hook calls in a source, which only work in the browser. */
+export function browserOnlyCode(source: string): string[] {
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+  const handlers = [...code.matchAll(/\s(on[A-Z]\w*)=\{/g)].map((match) => match[1]);
+  const hooks = [...code.matchAll(/(?<![.\w$])(use[A-Z]\w*)\s*\(/g)].map((match) => match[1]);
+  return [...new Set([...handlers, ...hooks])];
+}
+
+/** The project files a source imports at run time (type-only imports left out). */
+function runtimeImports(file: string, source: string): string[] {
+  const targets: string[] = [];
+  for (const match of source.matchAll(/import\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/g)) {
+    const target = resolveImport(file, match[1]);
+    if (target) targets.push(target);
+  }
+  return targets;
+}
+
+/** "component (handlers, hooks) <- server importers" for each component that needs "use client". */
+export function serverRenderedBrowserCode(files: string[], read: (file: string) => string): string[] {
+  const inScope = (file: string) => ["app", "components"].some((dir) => file.startsWith(path.join(SRC, dir) + path.sep));
+  const importers = new Map<string, string[]>();
+  for (const file of files) {
+    const source = read(file);
+    if (!inScope(file) || isClientModule(source)) continue;
+    // A page or layout is itself rendered on the server, imported or not.
+    if (/^(page|layout|template|not-found|loading|default)\.tsx$/.test(path.basename(file))) {
+      importers.set(file, [...(importers.get(file) ?? []), "Next.js"]);
+    }
+    for (const target of runtimeImports(file, source)) {
+      if (!inScope(target)) continue;
+      importers.set(target, [...(importers.get(target) ?? []), path.relative(SRC, file)]);
+    }
+  }
+  const violations: string[] = [];
+  for (const [target, by] of importers) {
+    const source = read(target);
+    if (isClientModule(source)) continue;
+    const found = browserOnlyCode(source);
+    if (found.length > 0) violations.push(`${path.relative(SRC, target)} (${found.join(", ")}) <- ${by.join(", ")}`);
+  }
+  return violations.sort();
+}
+
+describe("a component a server file renders has \"use client\" when it needs the browser", () => {
+  const button = path.join(SRC, "components", "ui", "button.tsx");
+  const page = path.join(SRC, "app", "reports", "page.tsx");
+  const withHandler = 'export function Button() { return <button onClick={() => {}} />; }\n';
+  const withHook = 'import { useState } from "react";\nexport function Button() { const [a] = useState(0); return a; }\n';
+  const pageSource = (directive: string) =>
+    `${directive}import { Button } from "@/components/ui/button";\nexport default function Page() { return <Button />; }\n`;
+  const scan = (sources: Record<string, string>) =>
+    serverRenderedBrowserCode([page, button], (file) => sources[file] ?? readFileSync(file, "utf8"));
+  const where = path.join("components", "ui", "button.tsx");
+  const by = path.join("app", "reports", "page.tsx");
+
+  it("finds none under src/app and src/components", () => {
+    const files = ROOTS.flatMap(sourceFiles);
+    expect(serverRenderedBrowserCode(files, (file) => readFileSync(file, "utf8"))).toEqual([]);
+  });
+
+  it("catches the shape that crashed Reports: an onClick in a component without the directive", () => {
+    expect(scan({ [button]: withHandler, [page]: pageSource("") })).toEqual([`${where} (onClick) <- ${by}`]);
+  });
+
+  it("catches a hook in a component without the directive", () => {
+    expect(scan({ [button]: withHook, [page]: pageSource("") })).toEqual([`${where} (useState) <- ${by}`]);
+  });
+
+  it("allows the same component once it says \"use client\", or when only client files import it", () => {
+    expect(scan({ [button]: `"use client";\n${withHandler}`, [page]: pageSource("") })).toEqual([]);
+    expect(scan({ [button]: withHook, [page]: pageSource('"use client";\n') })).toEqual([]);
+  });
+
+  it("catches a handler in a page itself", () => {
+    const pageWithHandler = 'export default function Page() { return <form onSubmit={() => {}} />; }\n';
+    expect(serverRenderedBrowserCode([page], () => pageWithHandler)).toEqual([`${by} (onSubmit) <- Next.js`]);
+  });
+
+  it("ignores handlers and hooks named only in comments", () => {
+    const commented = "// onClick={go} and useState( in a comment\n/* onChange={x} */\nexport const A = 1;\n";
+    expect(scan({ [button]: commented, [page]: pageSource("") })).toEqual([]);
+  });
+});

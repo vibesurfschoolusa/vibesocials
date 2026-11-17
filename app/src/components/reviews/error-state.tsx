@@ -2,7 +2,8 @@ import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { SignInAgainLink } from "@/components/gbp-sign-in-link";
 import { GBP_CARD_HREF } from "@/lib/gbpSignIn";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";

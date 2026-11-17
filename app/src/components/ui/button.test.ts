@@ -66,7 +66,7 @@ describe("Button while loading", () => {
 // keeps focus), and must look unavailable as a disabled one does.
 describe("buttonVariants and aria-disabled", () => {
   it("an aria-disabled button gets the disabled look: opacity and cursor", async () => {
-    const { buttonVariants } = await import("./button");
+    const { buttonVariants } = await import("./buttonVariants");
     const classes = buttonVariants().split(/\s+/);
     expect(classes).toContain("disabled:opacity-50");
     expect(classes).toContain("aria-disabled:opacity-50");

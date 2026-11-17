@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { BrandMark } from "@/components/brand-mark";
 import { SignedInSwap } from "@/components/signed-in-swap";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { cn } from "@/lib/cn";
 import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 

@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 import { NewTabHint } from "@/components/external-link";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { cn } from "@/lib/cn";
 import { isInstalledApp } from "@/lib/installedApp";
 

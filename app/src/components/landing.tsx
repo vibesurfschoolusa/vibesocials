@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { TrialPriceLine } from "@/components/trial-offer";

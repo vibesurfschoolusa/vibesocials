@@ -3,7 +3,7 @@ import Link from "next/link";
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { SignedInSwap } from "@/components/signed-in-swap";
 import { TrialPriceLine } from "@/components/trial-offer";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { paymentsConfigured, trialDays } from "@/lib/billing";
 import { platformLabel } from "@/lib/platforms";

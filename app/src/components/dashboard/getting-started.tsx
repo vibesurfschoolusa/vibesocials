@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { cn } from "@/lib/cn";
 import { deriveGettingStarted, type GettingStartedStep, type WorkspaceSetup } from "@/lib/gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";

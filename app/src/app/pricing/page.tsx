@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { getCurrentUser } from "@/lib/auth";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { planIncludesLine, PLANS, type PlanKey } from "@/lib/plans";

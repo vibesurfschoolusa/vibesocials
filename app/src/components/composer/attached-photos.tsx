@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ImagePlus, Sparkles, X } from "lucide-react";
 
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ALT_TEXT_MAX, cleanAltText } from "@/lib/altText";

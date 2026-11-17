@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import type { SignedInAccount } from "@/components/signed-in-swap";
 import { signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";

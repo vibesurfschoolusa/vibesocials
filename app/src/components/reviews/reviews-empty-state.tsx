@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { MessageSquare } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 

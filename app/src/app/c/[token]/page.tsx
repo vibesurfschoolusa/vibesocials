@@ -3,7 +3,8 @@ import type { Metadata } from "next";
 import { ClientPageShell } from "@/components/client-page-header";
 import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { cn } from "@/lib/cn";
 import {
   CONNECT_LINK_INACTIVE_MESSAGE,

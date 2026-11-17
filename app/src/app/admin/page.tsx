@@ -5,7 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
 import { platformLabel } from "@/lib/platforms";

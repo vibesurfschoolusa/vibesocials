@@ -5,7 +5,8 @@ import type { Platform } from "@prisma/client";
 import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import {
   ConfirmDialog,
   ConfirmFailureShown,

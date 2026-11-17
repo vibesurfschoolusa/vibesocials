@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { CreatePostForm } from "@/components/create-post-form";

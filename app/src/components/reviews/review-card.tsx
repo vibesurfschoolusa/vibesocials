@@ -1,3 +1,5 @@
+"use client";
+
 import Image from "next/image";
 import { MessageSquare } from "lucide-react";
 

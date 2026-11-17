@@ -6,16 +6,13 @@
  */
 export { Alert, type AlertProps, type AlertVariant } from "@/components/ui/alert";
 export { Badge, type BadgeProps, type BadgeVariant } from "@/components/ui/badge";
+export { Button, ButtonLink, type ButtonProps, type ButtonLinkProps } from "@/components/ui/button";
 export {
-  Button,
-  ButtonLink,
   buttonVariants,
-  type ButtonProps,
-  type ButtonLinkProps,
   type ButtonSize,
   type ButtonVariant,
   type ButtonVariantOptions,
-} from "@/components/ui/button";
+} from "@/components/ui/buttonVariants";
 export {
   Card,
   CardContent,

@@ -6,7 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Inbox, PlusCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostJobCard } from "@/components/activity/post-job-card";

@@ -10,7 +10,7 @@ import type { Platform } from "@prisma/client";
 import { useServerSaysSignedOut } from "@/components/shell/signed-out-alert";
 import { useSignedInAccount } from "@/components/signed-in-swap";
 import { Alert } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { RecentActivity } from "@/components/dashboard/recent-activity";

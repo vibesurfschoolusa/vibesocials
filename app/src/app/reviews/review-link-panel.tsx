@@ -7,7 +7,8 @@ import { ExternalLink } from "@/components/external-link";
 import { SignInAgainLink, useInstalledApp } from "@/components/gbp-sign-in-link";
 import { gbpSignInUrl } from "@/lib/gbpSignIn";
 
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
