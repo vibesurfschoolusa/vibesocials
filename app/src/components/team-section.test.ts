@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { loadErrorAsksReload } from "@/components/load-error";
+import { loadErrorAsksReload, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
@@ -70,6 +70,23 @@ describe("readTeamList", () => {
     ).resolves.toEqual({ error: SIGNED_OUT_ERROR });
   });
 
+  // R41 second look L3: an owner demoted in another tab gets 403 on the owners' list.
+  it("a 403 on the owners' list: the role changed, with Reload page", async () => {
+    const read = await readTeamList(
+      "/api/workspaces/members",
+      "ws-1",
+      asFetch(async () => Response.json({ error: "Only the workspace owner can do this." }, { status: 403 })),
+      { forbidden: ROLE_CHANGED_MESSAGE },
+    );
+    expect(read).toEqual({ error: "Your role in this workspace changed. Reload the page." });
+    expect("error" in read && loadErrorAsksReload(read.error)).toBe(true);
+  });
+
+  it("the owners' list is read with that sentence for a 403", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    expect(source).toContain('readTeamList<Member>("/api/workspaces/members", workspaceId, fetch, { forbidden: ROLE_CHANGED_MESSAGE })');
+  });
+
   it("a workspace refusal's step is Reload page", async () => {
     const read = await readTeamList("/api/workspaces/members", "ws-1", asFetch(async () => renderedWorkspaceRefusal("ws-1", "ws-2") as Response));
     expect("error" in read && loadErrorAsksReload(read.error)).toBe(true);
@@ -78,7 +95,7 @@ describe("readTeamList", () => {
   it("the roster, members and invite reads all send the page's id", () => {
     const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
     expect(source).toContain('readTeamList<RosterEntry>("/api/workspaces/members/roster", workspaceId)');
-    expect(source).toContain('readTeamList<Member>("/api/workspaces/members", workspaceId)');
+    expect(source).toContain('readTeamList<Member>("/api/workspaces/members", workspaceId, fetch, { forbidden: ROLE_CHANGED_MESSAGE })');
     expect(source).toContain('fetch(withWorkspaceId("/api/workspaces/invites", workspaceId))');
   });
 });

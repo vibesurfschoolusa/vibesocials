@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { LoadError } from "@/components/load-error";
+import { LoadError, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -199,6 +199,8 @@ export async function readTeamList<T>(
   path: string,
   workspaceId: string,
   fetchImpl: typeof fetch = fetch,
+  /** What a 403 says (the owners' list: the viewer's role changed in another tab). */
+  { forbidden }: { forbidden?: string } = {},
 ): Promise<{ members: T[] } | { error: string }> {
   // R41 review: the reader and sentences of usePostJobs and useConnections.
   try {
@@ -206,6 +208,7 @@ export async function readTeamList<T>(
     const refusal = await readWorkspaceRefusalText(response);
     if (refusal) return { error: refusal };
     if (response.status === 401) return { error: SIGNED_OUT_ERROR };
+    if (response.status === 403 && forbidden) return { error: forbidden };
     const data = (await response.json().catch(() => null)) as { members?: T[] } | null;
     return response.ok && Array.isArray(data?.members) ? { members: data.members } : { error: MEMBERS_LOAD_FAILED_TEXT };
   } catch (error) {
@@ -932,7 +935,7 @@ function OwnerView({
 
   useEffect(() => {
     let cancelled = false;
-    void readTeamList<Member>("/api/workspaces/members", workspaceId).then((read) => {
+    void readTeamList<Member>("/api/workspaces/members", workspaceId, fetch, { forbidden: ROLE_CHANGED_MESSAGE }).then((read) => {
       if (cancelled) return;
       if ("members" in read) setMembers(read.members);
       else setMembersError(read.error);

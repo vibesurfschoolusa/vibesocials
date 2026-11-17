@@ -15,6 +15,13 @@ import {
 } from "@/lib/workspaceChanged";
 
 /**
+ * R41 second look L3: an owner-only read refused (403) because the viewer's
+ * role changed in another tab. The page was drawn for an owner; only
+ * reloading draws it for the role they have now.
+ */
+export const ROLE_CHANGED_MESSAGE = "Your role in this workspace changed. Reload the page.";
+
+/**
  * R33 pages L5: the sentences a read is refused with when the page was drawn
  * for another workspace (a switch in another tab) or has no id. Asking again
  * sends the same id and gets the same answer; only reloading draws the page
@@ -27,6 +34,7 @@ const RELOAD_SENTENCES: ReadonlySet<string> = new Set(
     pageWorkspaceRefusalText(MISSING_WORKSPACE_ID_CODE),
     pageWorkspaceRefusalText(INVALID_WORKSPACE_ID_CODE),
     WORKSPACE_CHANGED_MESSAGE,
+    ROLE_CHANGED_MESSAGE,
   ].filter((text): text is string => text !== null),
 );
 

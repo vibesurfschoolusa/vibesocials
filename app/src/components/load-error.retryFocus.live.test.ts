@@ -196,6 +196,31 @@ describe("Team: a failed load, Retry and focus", () => {
     expect(active().textContent).toContain("Ana");
   });
 
+  // R41 second look L3: demoted in another tab, the owners' list answers 403.
+  it("OwnerView: a 403 says the role changed, with Reload page", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).includes("/api/workspaces/members?")
+          ? Response.json({ error: "Only the workspace owner can do this." }, { status: 403 })
+          : Response.json({}),
+      ),
+    );
+    await act(async () => {
+      root.render(
+        createElement(TeamSection, {
+          workspaceId: "ws-1",
+          role: "owner",
+          workspaceName: "Surf Co",
+          deletion: { memberCount: 1, scheduledCount: 0, refusal: null },
+        }),
+      );
+    });
+    await settle();
+    expect(container.textContent).toContain("Your role in this workspace changed. Reload the page.");
+    expect(button("Reload page")).not.toBeNull();
+    expect(button("Retry")).toBeNull();
+  });
+
   it("OwnerView: a second failure puts focus on the new Retry", async () => {
     await mount("owner", "/api/workspaces/members?");
     await retryThrough("/api/workspaces/members?", Response.json({ error: "Internal error" }, { status: 500 }), "Loading members…");
