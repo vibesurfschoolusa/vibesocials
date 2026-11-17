@@ -60,9 +60,10 @@ describe("privacyLastUpdated", () => {
     expect(legalDateValue(PRIVACY_LAST_UPDATED)).toBeGreaterThanOrEqual(legalDateValue(LEGAL_LAST_UPDATED));
   });
 
-  // R9-pages L3: the usage-count retention line changed the policy on 15 November.
+  // R9-pages L3: the usage-count retention line changed the policy on 15 November;
+  // R36 pages note: the LinkedIn name line on 16 November.
   it("is the date of the policy's last change", () => {
-    expect(PRIVACY_LAST_UPDATED).toBe("November 15, 2026");
+    expect(PRIVACY_LAST_UPDATED).toBe("November 16, 2026");
   });
 
   it("billing off: the later of the privacy text's date and the shared date", () => {

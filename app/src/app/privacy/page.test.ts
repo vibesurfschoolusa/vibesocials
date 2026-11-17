@@ -150,3 +150,18 @@ describe("Privacy: no place search", () => {
     expect(page).not.toContain("add a location to a post");
   });
 });
+
+// R36 pages note: the LinkedIn name refresh reads at most 25 connections a
+// run, so past 25 it is not every day; the eight-week deletion still holds.
+describe("Privacy: a LinkedIn page's name", () => {
+  it("says it is read again regularly, not every day, and keeps the eight-week promise", () => {
+    const page = text();
+    expect(page).toContain("is read again from LinkedIn regularly while the connection works.");
+    expect(page).not.toContain("read again from LinkedIn every day");
+    expect(page).toContain("A name not refreshed for eight weeks is deleted; disconnecting LinkedIn deletes it at once.");
+  });
+
+  it("carries the date of this change", () => {
+    expect(privacyLastUpdated(false)).toBe("November 16, 2026");
+  });
+});

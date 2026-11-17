@@ -245,7 +245,7 @@ export default function PrivacyPage() {
             Google Business Profile also deletes the listing&apos;s numbers.
           </li>
           <li>
-            A connected LinkedIn page&apos;s name is read again from LinkedIn every day while the
+            A connected LinkedIn page&apos;s name is read again from LinkedIn regularly while the
             connection works. A name not refreshed for eight weeks is deleted; disconnecting LinkedIn
             deletes it at once.
           </li>

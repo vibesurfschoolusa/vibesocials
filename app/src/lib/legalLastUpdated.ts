@@ -51,8 +51,9 @@ export function billingOnLastUpdated(
  * the AI provider). The Terms did not change, so they keep the shared date.
  * 2026-11-15 (R9-pages L3): it says how long the limits' post counts are kept.
  * 2026-11-15 (FF2 review): place search and Google Maps Platform are gone with the Location field.
+ * 2026-11-16 (R36 pages note): a LinkedIn page name is read again regularly, not every day.
  */
-export const PRIVACY_LAST_UPDATED = "November 15, 2026";
+export const PRIVACY_LAST_UPDATED = "November 16, 2026";
 
 /**
  * The privacy policy's "Last updated": the latest of its own date, the shared
