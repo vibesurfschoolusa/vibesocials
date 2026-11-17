@@ -107,14 +107,19 @@ export function mediaSaveFailureText(status: number, data: { error?: string } | 
   return status >= 500 ? MEDIA_MESSAGES.saveLost : MEDIA_MESSAGES.uploadFailed;
 }
 
-/** A refused delete: the route's sentence, else an unreadable 5xx may come after the delete. */
 /** R31: a file deleted meanwhile (or another workspace's), never a bare "Not found". */
 export const MEDIA_GONE_TEXT = "This file no longer exists.";
 
-export function mediaDeleteFailureText(status: number, data: { error?: string } | null): string {
+/**
+ * A refused delete: the route's sentence. R42 pages-a L4: a 5xx is the
+ * route's only when it carries its MEDIA_DELETE_FAILED code (its transaction
+ * rolled back); any other 5xx may come after the delete, so it says so.
+ */
+export function mediaDeleteFailureText(status: number, data: { error?: string; code?: string } | null): string {
   if (status === 404) return MEDIA_GONE_TEXT;
-  if (typeof data?.error === "string" && data.error) return data.error;
-  return status >= 500 ? MEDIA_MESSAGES.deleteLost : MEDIA_MESSAGES.deleteFailed;
+  const sentence = typeof data?.error === "string" && data.error ? data.error : null;
+  if (status >= 500) return sentence && data?.code === "MEDIA_DELETE_FAILED" ? sentence : MEDIA_MESSAGES.deleteLost;
+  return sentence ?? MEDIA_MESSAGES.deleteFailed;
 }
 
 /*
@@ -973,9 +978,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     }
 
     if (!response.ok) {
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      // Covers the 409 "still referenced by an active post" case: the
-      // server's message already states the reason, so it's shown as-is.
+      const data = (await response.json().catch(() => null)) as { error?: string; code?: string } | null;
+      // The 409 MEDIA_IN_USE sentence names the posts and the step that frees the file.
       toast.error(mediaDeleteFailureText(response.status, data));
       if (response.status === 404) {
         // R31 / R32 pages L2: the file is gone already: the dialog closes and

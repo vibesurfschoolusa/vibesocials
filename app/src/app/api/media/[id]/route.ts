@@ -190,7 +190,9 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
     if (!outcome.ok) {
       return NextResponse.json(
         {
-          error: "This media is still referenced by an active post and can't be deleted yet.",
+          // R42 pages-a L4: which posts can hold a file, and the step that frees it.
+          error:
+            "A scheduled, draft or publishing post uses this file. Cancel or delete that post in Queue first, or wait until it has gone out.",
           code: "MEDIA_IN_USE",
         },
         { status: 409 },
@@ -203,7 +205,11 @@ export async function DELETE(request: NextRequest, context: MediaItemRouteContex
       userId: workspaceContext.user.id,
       workspaceId: workspaceContext.workspace.id,
     });
-    return NextResponse.json({ error: "Failed to delete media" }, { status: 500 });
+    // The transaction rolled back, so nothing changed. The code tells the page this 5xx is ours.
+    return NextResponse.json(
+      { error: "Couldn't delete the file. Nothing changed. Try again in a moment.", code: "MEDIA_DELETE_FAILED" },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

@@ -292,10 +292,14 @@ describe("DELETE /api/media/[id]", () => {
     postJobCountMock.mockResolvedValue(1);
 
     const response = await DELETE(dummyRequest, ctx("media-1"));
-    const body = (await response.json()) as { code?: string };
+    const body = (await response.json()) as { code?: string; error?: string };
 
     expect(response.status).toBe(409);
     expect(body.code).toBe("MEDIA_IN_USE");
+    // R42 pages-a L4: which post, and what to do about it.
+    expect(body.error).toBe(
+      "A scheduled, draft or publishing post uses this file. Cancel or delete that post in Queue first, or wait until it has gone out.",
+    );
     expect(mediaItemUpdateMock).not.toHaveBeenCalled();
     expect(delMock).not.toHaveBeenCalled();
   });
@@ -362,7 +366,11 @@ describe("DELETE /api/media/[id]", () => {
     const response = await DELETE(dummyRequest, ctx("media-1"));
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to delete media" });
+    // R42 pages-a L4: the transaction rolled back, so nothing changed; the code lets the page trust that.
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't delete the file. Nothing changed. Try again in a moment.",
+      code: "MEDIA_DELETE_FAILED",
+    });
 
     consoleSpy.mockRestore();
   });

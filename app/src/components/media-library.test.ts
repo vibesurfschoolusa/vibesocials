@@ -204,6 +204,15 @@ describe("Media: a lost answer may have gone through", () => {
     expect(mediaDeleteFailureText(404, null)).toBe("This file no longer exists.");
     expect(mediaDeleteFailureText(404, { error: "Not found" })).toBe("This file no longer exists.");
     expect(mediaDeleteFailureText(400, null)).toBe(MEDIA_MESSAGES.deleteFailed);
+    // R42 pages-a L4: the route's own sentence for each status, never text it didn't write.
+    const inUse =
+      "A scheduled, draft or publishing post uses this file. Cancel or delete that post in Queue first, or wait until it has gone out.";
+    expect(mediaDeleteFailureText(409, { error: inUse, code: "MEDIA_IN_USE" })).toBe(inUse);
+    const nothingChanged = "Couldn't delete the file. Nothing changed. Try again in a moment.";
+    expect(mediaDeleteFailureText(500, { error: nothingChanged, code: "MEDIA_DELETE_FAILED" })).toBe(nothingChanged);
+    // A 5xx the route didn't write (a gateway's JSON, or HTML read as null) may come after the delete.
+    expect(mediaDeleteFailureText(504, { error: "FUNCTION_INVOCATION_TIMEOUT" })).toBe(MEDIA_MESSAGES.deleteLost);
+    expect(mediaDeleteFailureText(500, null)).toBe(MEDIA_MESSAGES.deleteLost);
     const remove = source.slice(source.indexOf("const handleConfirmDelete"), source.indexOf("return (", source.indexOf("const handleConfirmDelete")));
     // R31 pages L2: with the workspace the library was drawn for (a DELETE has no body).
     expect(remove).toMatch(/await fetchOrNoAnswer\(withWorkspaceId\(`\/api\/media\/\$\{target\.id\}`, workspaceId\), \{ method: "DELETE" \}\)/);
