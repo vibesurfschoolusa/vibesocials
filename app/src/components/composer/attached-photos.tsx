@@ -138,7 +138,8 @@ export async function requestPhotoDescription(
 /**
  * 07d: one photo's description: a one-line field with a character count, and
  * "Write it for me". `onWrite` is null until the photo has uploaded; a write
- * that resolves to null (the photo was replaced meanwhile) changes nothing.
+ * that resolves to null (the photo was replaced meanwhile, or R41 L1 its
+ * description was edited) changes nothing.
  * What the AI wrote goes into the field for the person to edit.
  */
 export function PhotoDescriptionField({

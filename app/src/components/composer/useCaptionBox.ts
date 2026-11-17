@@ -58,6 +58,12 @@ export interface AiRequestKind {
    * photo is gone; the wait names a description, not a caption.
    */
   photo?: object;
+  /**
+   * R41 L1: that photo's description at the press. The answer is written only
+   * while the description still reads this; Create lets the request go at
+   * once when it doesn't (the person typed), as typing does for a caption.
+   */
+  descriptionAtPress?: string;
 }
 
 /** R40 lead review: what the submit's wait says, by what the AI is writing. */

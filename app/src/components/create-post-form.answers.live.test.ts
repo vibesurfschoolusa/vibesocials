@@ -970,3 +970,80 @@ describe("R40 review: Adapt and a cover move hold the wait only while their answ
     expect(submitDisabled()).toBe(false);
   });
 });
+
+describe("R41 L1: Write it for me keeps a description typed while it runs", () => {
+  const DESCRIPTION_WAIT = "Wait until the photo description is ready.";
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const photo = (name: string) => new File([name], `${name}.jpg`, { type: "image/jpeg" });
+  const valueOf = (id: string) => String(byId(id).value ?? "");
+  const typeInto = (id: string, value: string) => run(() => props(byId(id)).onChange({ target: { value } }));
+  const setFields = () => {
+    const hits: FakeNode[] = [];
+    const walk = (n: FakeNode) => {
+      if (n.nodeName === "INPUT" && String(n.attributes?.id ?? "").startsWith("alt-")) hits.push(n);
+      n.childNodes.forEach(walk);
+    };
+    walk(container);
+    return hits.map((n) => String(n.attributes.id));
+  };
+  const allButtons = (text: string) => {
+    const hits: FakeNode[] = [];
+    const walk = (n: FakeNode) => {
+      if (n.nodeName === "BUTTON" && (n.textContent as string).trim() === text) hits.push(n);
+      n.childNodes.forEach(walk);
+    };
+    walk(container);
+    return hits;
+  };
+
+  it("the single photo: typing ends the wait at once, aborts the fetch, and the typed text stays", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"));
+    await finishUploads();
+    await typeCaption("Surf lesson today");
+    await press("Write it for me");
+    expect(submitDisabled()).toBe(true);
+    await typeInto("post-alt-text", "Our surf crew at Dania Beach");
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+    expect(signals[0]?.aborted).toBe(true);
+    await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
+    expect(valueOf("post-alt-text")).toBe("Our surf crew at Dania Beach");
+  });
+
+  it("a set photo: typing in its field ends only its wait, and the typed text stays", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"), photo("b"));
+    await finishUploads();
+    await finishUploads();
+    const [first, second] = allButtons("Write it for me");
+    await run(() => props(first!).onClick());
+    await run(() => props(second!).onClick());
+    const [firstField, secondField] = setFields();
+    await typeInto(firstField!, "Two surfers paddling out at the pier");
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(true);
+    await run(() => answers["/api/posts/auto-caption"]?.pop()?.resolve({ altText: "Photo b, described." }));
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+    expect(valueOf(firstField!)).toBe("Two surfers paddling out at the pier");
+    expect(valueOf(secondField!)).toBe("Photo b, described.");
+  });
+
+  it("an untouched field still waits, and the answer is written", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"));
+    await finishUploads();
+    await press("Write it for me");
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(true);
+    await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
+    expect(valueOf("post-alt-text")).toBe("A surfer on a wave.");
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+  });
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useEffectEvent, useMemo, useRef, Suspense } from "react";
+import { useCallback, useState, useEffect, useEffectEvent, useMemo, useRef, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
@@ -1113,7 +1113,14 @@ function CreatePostFormInner({
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
   // 07d: the description (alt text) of a single photo, uploaded or reused. With
   // several photos each one keeps its own on its AttachedPhoto.
-  const [singleAltText, setSingleAltText] = useState("");
+  const [singleAltText, setSingleAltTextState] = useState("");
+  // R41 L1: read live by a "Write it for me" answer (descriptionOf), as the
+  // caption box's ref is, so every change of the field updates it at once.
+  const singleAltTextRef = useRef("");
+  const setSingleAltText = useCallback((text: string) => {
+    singleAltTextRef.current = text;
+    setSingleAltTextState(text);
+  }, []);
   // The photo the single field is for right now (the picked File, or the reused
   // item), so a "Write it for me" answer finds its photo when it comes back.
   const singlePhotoRef = useRef<object | null>(null);
@@ -1492,7 +1499,7 @@ function CreatePostFormInner({
     return () => {
       cancelled = true;
     };
-  }, [reuseMediaItemId, setUploadCaption, toast, workspaceId]);
+  }, [reuseMediaItemId, setSingleAltText, setUploadCaption, toast, workspaceId]);
 
   // Build (and clean up) an object URL for the attached file so we can render
   // an inline media preview without touching the upload flow.
@@ -1875,11 +1882,15 @@ function CreatePostFormInner({
   // form reset or (lead review) its own photo going (null: nothing is written
   // or said), or out of time (its lost-answer sentence). `photo` is what
   // whereDescriptionGoes follows: the File, or the reused item.
+  //
+  // R41 L1: the answer is written only while the photo's description reads as
+  // it did at the press; typing in it lets the request go (the effect below).
   async function writePhotoDescription(blob: UploadedBlobInfo, photo: object): Promise<string | null> {
-    const request = captionBox.aiRequestStarted({ media: false, automatic: false, photo });
+    const descriptionAtPress = descriptionOf(photo) ?? "";
+    const request = captionBox.aiRequestStarted({ media: false, automatic: false, photo, descriptionAtPress });
     try {
       const text = await requestPhotoDescription(blob, workspaceId, undefined, request.signal);
-      return request.live() ? text : null;
+      return request.live() && descriptionOf(photo) === descriptionAtPress ? text : null;
     } catch (err: unknown) {
       if (!request.live()) return null;
       throw err;
@@ -1902,17 +1913,28 @@ function CreatePostFormInner({
     return target?.to === "single" ? text : null;
   }
 
+  // A photo's description as it reads now, wherever the photo is; null once it is gone.
+  function descriptionOf(photo: object): string | null {
+    const target = whereDescriptionGoes(photo, { single: singlePhotoRef.current, set: photoSetRef.current });
+    if (target?.to === "set") return photoSetRef.current.find((entry) => entry.key === target.key)?.altText ?? "";
+    return target?.to === "single" ? singleAltTextRef.current : null;
+  }
+
   // R40 lead review: a photo's "Write it for me" stops holding the submit, and
   // its fetch is aborted, once that photo is gone (removed, replaced, the set
   // cleared, the form reset); the other photos' descriptions keep waiting.
+  // R41 L1: and once its description no longer reads as at the press.
   const { letGoAiRequests } = captionBox;
+  const letGoDescriptions = useEffectEvent(() => {
+    letGoAiRequests((kind) => {
+      if (kind.photo === undefined) return false;
+      const now = descriptionOf(kind.photo);
+      return now === null || now !== (kind.descriptionAtPress ?? now);
+    });
+  });
   useEffect(() => {
-    letGoAiRequests(
-      (kind) =>
-        kind.photo !== undefined &&
-        whereDescriptionGoes(kind.photo, { single: singlePhotoRef.current, set: photoSetRef.current }) === null,
-    );
-  }, [photoSet, uploadFile, reuseItem, letGoAiRequests]);
+    letGoDescriptions();
+  }, [photoSet, uploadFile, reuseItem, singleAltText]);
 
   const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
