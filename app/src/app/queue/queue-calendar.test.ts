@@ -94,3 +94,44 @@ describe("QueueCalendar with no posts", () => {
     expect(html).not.toContain("Nothing scheduled this month.");
   });
 });
+
+// R43 pages-a L5: a chip's name was only its time and caption, so two posts
+// on different days read alike; each chip now starts with its date.
+describe("QueueCalendar chips name their day", () => {
+  it("a chip's name includes its date, in the viewer's format", () => {
+    const now = new Date();
+    const when = new Date(now.getFullYear(), now.getMonth(), 15, 10, 0);
+    const html = renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(QueueCalendar, {
+          jobs: [
+            {
+              id: "j1",
+              status: "scheduled",
+              createdAt: "2026-11-01T00:00:00.000Z",
+              updatedAt: "2026-11-01T00:00:00.000Z",
+              scheduledFor: when.toISOString(),
+              caption: "Summer sale",
+              platformCaptions: null,
+              results: [],
+              media: null,
+              mediaCount: 1,
+              publish: null,
+              createdBy: null,
+              approvalState: "none",
+            },
+          ],
+          onShowList: () => {},
+          onEdit: () => {},
+          onRescheduled: () => {},
+        }),
+      ),
+    );
+    const date = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(when);
+    const chip = html.match(/<button[^>]*draggable[^>]*>([\s\S]*?)<\/button>/)![1];
+    expect(chip).toContain(`<span class="sr-only">${date}, </span>`);
+    expect(chip.replace(/<[^>]+>/g, "")).toMatch(new RegExp(`^${date}, .+ Summer sale$`));
+  });
+});

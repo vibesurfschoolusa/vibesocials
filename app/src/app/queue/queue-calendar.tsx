@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { CONFIRM_NOTHING_SENT_MESSAGE } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
@@ -31,6 +32,14 @@ const MONTH_FORMAT = new Intl.DateTimeFormat(undefined, {
 const TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
+});
+
+// R43 pages-a L5: the day a chip is on, for its name ("Fri, Nov 20"); the
+// grid's day number isn't tied to the chip for a screen reader.
+const CHIP_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
 });
 
 function chipLabel(job: QueueCardPost): string {
@@ -192,6 +201,9 @@ export function QueueCalendar({
   const monthLabel = MONTH_FORMAT.format(
     new Date(monthCursor.year, monthCursor.monthIndex, 1),
   );
+  // R43 pages-a L5: a new month (Previous, Next, Today) is read out through
+  // the page's announcer; the first one, there on load, is not.
+  useAnnounceOnShow(() => monthLabel, true, false);
 
   return (
     <div className="space-y-3">
@@ -319,6 +331,9 @@ export function QueueCalendar({
                             savingId === job.id && "cursor-wait",
                           )}
                         >
+                          {job.scheduledFor ? (
+                            <span className="sr-only">{`${CHIP_DATE_FORMAT.format(new Date(job.scheduledFor))}, `}</span>
+                          ) : null}
                           <span className="font-medium">
                             {job.scheduledFor
                               ? TIME_FORMAT.format(new Date(job.scheduledFor))
