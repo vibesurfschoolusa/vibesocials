@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -17,8 +19,8 @@ const LISTING: Listing = {
 };
 const TODAY = new Date("2026-11-10T15:00:00.000Z");
 
-const render = (listing: Listing | null, today: Date = TODAY) =>
-  renderToStaticMarkup(createElement(ListingMetricsCardView, { listing, today }));
+const render = (listing: Listing | null, today: Date = TODAY, isMember = false) =>
+  renderToStaticMarkup(createElement(ListingMetricsCardView, { listing, today, isMember }));
 
 describe("ListingMetricsCardView", () => {
   it("shows the four numbers, each with its change against the 28 days before, and where they come from", () => {
@@ -38,11 +40,26 @@ describe("ListingMetricsCardView", () => {
     expect(render(LISTING, new Date("2026-11-16T12:00:00.000Z"))).not.toContain("no new numbers");
     const html = render(LISTING, new Date("2026-11-17T12:00:00.000Z"));
     expect(html).toContain("Google listing, 28 days to 6 November");
+    // R35 new-customer L3: the Connections section of Settings, by its real name.
     expect(html.replace(/<[^>]+>/g, "")).toContain(
-      "Google has sent no new numbers since 6 November. Check the Google connection on the Connections page.",
+      "Google has sent no new numbers since 6 November. Check Google Business Profile under Connections in Settings.",
     );
-    expect(html).toContain('href="/connections"');
+    expect(html).toContain('href="/settings#connections"');
+    expect(html).not.toContain('href="/connections"');
     expect(html).toContain("two to three days late");
+  });
+
+  it("tells a member the workspace owner can reconnect it", () => {
+    const html = render(LISTING, new Date("2026-11-17T12:00:00.000Z"), true);
+    expect(html.replace(/<[^>]+>/g, "")).toContain(
+      "Google has sent no new numbers since 6 November. The workspace owner can reconnect Google Business Profile under Connections in Settings.",
+    );
+    expect(html).toContain('href="/settings#connections"');
+  });
+
+  it("the dashboard tells the card whether the viewer is a member", () => {
+    const home = readFileSync(join(__dirname, "dashboard-home.tsx"), "utf8");
+    expect(home).toContain('<ListingMetricsCard workspaceId={workspaceId} isMember={setup?.role === "member"} />');
   });
 
   it("names the year when the window ends in another year", () => {
@@ -66,5 +83,29 @@ describe("ListingMetricsCardView — the window's days", () => {
   it("reads 1 day for a one-day window and 28 days otherwise", () => {
     expect(render({ ...LISTING, windowDays: 1 })).toContain("1 day to");
     expect(render(LISTING)).toContain("28 days to");
+  });
+});
+
+// R35 new-customer L3: /connections only redirects old bookmarks to the top of
+// Settings; every link in the app goes to the Connections section itself.
+describe("no internal link to /connections", () => {
+  function files(dir: string): string[] {
+    return readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) return files(path);
+      return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+    });
+  }
+
+  it("names /settings#connections, never /connections", () => {
+    const src = join(__dirname, "../..");
+    // A path literal, or an address built on the app's URL; robots.ts keeps it
+    // off search engines, which is not a link.
+    const offenders = files(src)
+      .filter((path) => !path.endsWith(join("app", "robots.ts")))
+      .filter((path) => /(?:["'`]|\})\/connections(?:["'`#?]|\/(?!api))/.test(readFileSync(path, "utf8")));
+    expect(offenders).toEqual([]);
+    // The redirect for old bookmarks stays.
+    expect(readFileSync(join(src, "app/connections/page.tsx"), "utf8")).toMatch(/redirect\(/);
   });
 });

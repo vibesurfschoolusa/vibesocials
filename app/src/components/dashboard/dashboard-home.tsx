@@ -219,7 +219,7 @@ function Dashboard({ availablePlatforms, workspaceId, setup, notice }: Dashboard
           <PublishHealthCard workspaceId={workspaceId} />
           {/* Renders only once the workspace's chosen Google listing has a
               stored day of numbers (google-listing-metrics-sync). */}
-          <ListingMetricsCard workspaceId={workspaceId} />
+          <ListingMetricsCard workspaceId={workspaceId} isMember={setup?.role === "member"} />
         </div>
       </div>
     </div>

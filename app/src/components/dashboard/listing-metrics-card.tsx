@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { ListingMetricsResponse } from "@/app/api/insights/listing-metrics/route";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { describeListingChange, type ListingMetricTotals } from "@/lib/listingMetrics";
+import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { countWord } from "@/lib/plural";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
@@ -41,7 +42,15 @@ function daysSince(key: string, today: Date): number {
 }
 
 /** The card itself, from the route's answer; nothing without a listing. */
-export function ListingMetricsCardView({ listing, today }: { listing: Listing | null; today: Date }) {
+export function ListingMetricsCardView({
+  listing,
+  today,
+  isMember = false,
+}: {
+  listing: Listing | null;
+  today: Date;
+  isMember?: boolean;
+}) {
   if (!listing) return null;
   const end = dayLabel(listing.endDay, today);
   return (
@@ -55,9 +64,11 @@ export function ListingMetricsCardView({ listing, today }: { listing: Listing | 
         </CardDescription>
         {daysSince(listing.endDay, today) > STALE_AFTER_DAYS ? (
           <p className="text-sm text-warning-ontint">
-            Google has sent no new numbers since {end}. Check the Google connection on the{" "}
-            <Link href="/connections" className="underline">
-              Connections page
+            {/* R35 new-customer L3: the Connections section of Settings; only an owner can reconnect. */}
+            Google has sent no new numbers since {end}.{" "}
+            {isMember ? "The workspace owner can reconnect" : "Check"} Google Business Profile under{" "}
+            <Link href={SETTINGS_CONNECTIONS_HREF} className="underline">
+              Connections in Settings
             </Link>
             .
           </p>
@@ -90,7 +101,7 @@ export function ListingMetricsCardView({ listing, today }: { listing: Listing | 
  * supplementary. R32: it reads for the workspace the page was drawn for, so a
  * refusal (another tab switched) also renders nothing.
  */
-export function ListingMetricsCard({ workspaceId }: { workspaceId: string | null }) {
+export function ListingMetricsCard({ workspaceId, isMember = false }: { workspaceId: string | null; isMember?: boolean }) {
   const [listing, setListing] = useState<Listing | null>(null);
 
   useEffect(() => {
@@ -110,5 +121,5 @@ export function ListingMetricsCard({ workspaceId }: { workspaceId: string | null
     };
   }, [workspaceId]);
 
-  return <ListingMetricsCardView listing={listing} today={new Date()} />;
+  return <ListingMetricsCardView listing={listing} today={new Date()} isMember={isMember} />;
 }
