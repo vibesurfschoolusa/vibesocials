@@ -15,11 +15,12 @@ import {
 } from "@/lib/workspaceChanged";
 
 /**
- * R41 second look L3: an owner-only read refused (403) because the viewer's
- * role changed in another tab. The page was drawn for an owner; only
- * reloading draws it for the role they have now.
+ * R41 second look L3: an owner-only read refused (403). The members route
+ * checks the owner role before the workspace, so this is true both when the
+ * viewer's role changed and when another tab switched workspace. The page was
+ * drawn for an owner of this workspace; only reloading draws it for now.
  */
-export const ROLE_CHANGED_MESSAGE = "Your role in this workspace changed. Reload the page.";
+export const ROLE_CHANGED_MESSAGE = "Your role or workspace changed in another tab. Reload the page.";
 
 /**
  * R33 pages L5: the sentences a read is refused with when the page was drawn

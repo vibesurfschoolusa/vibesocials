@@ -71,14 +71,14 @@ describe("readTeamList", () => {
   });
 
   // R41 second look L3: an owner demoted in another tab gets 403 on the owners' list.
-  it("a 403 on the owners' list: the role changed, with Reload page", async () => {
+  it("a 403 on the owners' list: the role or workspace changed, with Reload page", async () => {
     const read = await readTeamList(
       "/api/workspaces/members",
       "ws-1",
       asFetch(async () => Response.json({ error: "Only the workspace owner can do this." }, { status: 403 })),
       { forbidden: ROLE_CHANGED_MESSAGE },
     );
-    expect(read).toEqual({ error: "Your role in this workspace changed. Reload the page." });
+    expect(read).toEqual({ error: "Your role or workspace changed in another tab. Reload the page." });
     expect("error" in read && loadErrorAsksReload(read.error)).toBe(true);
   });
 

@@ -197,7 +197,7 @@ describe("Team: a failed load, Retry and focus", () => {
   });
 
   // R41 second look L3: demoted in another tab, the owners' list answers 403.
-  it("OwnerView: a 403 says the role changed, with Reload page", async () => {
+  it("OwnerView: a 403 says the role or workspace changed, with Reload page", async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(
         String(url).includes("/api/workspaces/members?")
@@ -216,7 +216,7 @@ describe("Team: a failed load, Retry and focus", () => {
       );
     });
     await settle();
-    expect(container.textContent).toContain("Your role in this workspace changed. Reload the page.");
+    expect(container.textContent).toContain("Your role or workspace changed in another tab. Reload the page.");
     expect(button("Reload page")).not.toBeNull();
     expect(button("Retry")).toBeNull();
   });
