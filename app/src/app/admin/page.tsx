@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
+import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
 import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb } from "@/lib/usageLimits";
@@ -93,10 +94,11 @@ export default async function AdminPage({
   const limit = await checkAdminRateLimit(operator, "read");
   if (!limit.allowed) {
     // R38: a counter store that couldn't answer is not a used-up hour.
+    // R43 pages-a L7: the window is a fixed clock hour, so say the limit's own wait.
     return (
       <div className="mx-auto max-w-5xl px-4 py-8 md:px-6">
         <Alert variant="warning">
-          {limit.unavailable ? LIMIT_UNCHECKED_MESSAGE : "Too many admin page loads this hour. Wait a few minutes and reload."}
+          {limit.unavailable ? LIMIT_UNCHECKED_MESSAGE : tooManyTriesSentence(limit.retryAfterSeconds, "reload")}
         </Alert>
       </div>
     );

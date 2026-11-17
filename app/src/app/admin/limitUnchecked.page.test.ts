@@ -26,7 +26,8 @@ import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import AdminPage from "./page";
 import AdminWorkspacePage from "./workspaces/[id]/page";
 
-const LIMITED_TEXT = "Too many admin page loads this hour. Wait a few minutes and reload.";
+// R43 pages-a L7: the limit's own wait, against a fixed clock hour.
+const LIMITED_TEXT = "Too many tries. Wait";
 
 const pages = [
   ["the workspace list", () => AdminPage({ searchParams: Promise.resolve({}) })],
@@ -49,9 +50,10 @@ describe("operator pages and their hourly counter", () => {
     expect(h.detail).not.toHaveBeenCalled();
   });
 
-  it.each(pages)("%s: a used-up hour still says so", async (_name, load) => {
-    h.checkAdminRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 600 });
+  it.each(pages)("%s: a used-up hour says the real wait", async (_name, load) => {
+    h.checkAdminRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 40 * 60 });
     const html = renderToStaticMarkup((await load()) as ReactElement);
-    expect(html).toContain(LIMITED_TEXT);
+    expect(html).toContain("Too many tries. Wait 40 minutes, then reload.");
+    expect(html).not.toContain("a few minutes");
   });
 });
