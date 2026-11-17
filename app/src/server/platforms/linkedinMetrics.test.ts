@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_API_VERSION } from "@/lib/linkedinApi";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 
+import { SOCIAL_METRICS_TIMEOUT_MS } from "./facebookMetrics";
 import { LINKEDIN_URNS_PER_REQUEST, fetchLinkedInShareStatisticsBatch } from "./linkedinMetrics";
 
 const fetchMock = vi.fn();
@@ -16,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -219,6 +222,46 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
         code: null,
         inputErrors: [{ code: null, fieldPath: null }],
       });
+    });
+
+    // R41 lead review: the time limit covers the body too (fetchWithinLimit).
+    it("a stalled error body ends within the limit and logs a warning with no codes", async () => {
+      vi.useFakeTimers();
+      abortSignalTimeoutOnFakeClock();
+      fetchMock.mockImplementationOnce((_url: string, init?: RequestInit) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"status":400,'));
+            init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+          },
+        });
+        return Promise.resolve(new Response(body, { status: 400 }));
+      });
+      const settled = fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3"], "t");
+      await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+      const out = await settled;
+      expect([...out.failed]).toEqual(["urn:li:ugcPost:3"]);
+      expect(console.error).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith("[PostMetrics] LinkedIn share statistics refused", {
+        param: "ugcPosts",
+        urnCount: 1,
+        status: 400,
+        body: "unreadable",
+      });
+    });
+
+    it("a stalled success body ends within the limit as no answer", async () => {
+      vi.useFakeTimers();
+      abortSignalTimeoutOnFakeClock();
+      fetchMock.mockImplementationOnce(bodyNeverEnds);
+      const settled = fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:share:1"], "t");
+      await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+      const out = await settled;
+      expect([...out.failed]).toEqual(["urn:li:share:1"]);
+      expect(console.error).toHaveBeenCalledWith(
+        "[PostMetrics] LinkedIn share statistics failed",
+        expect.objectContaining({ param: "shares", code: FETCH_TIMEOUT_CODE }),
+      );
     });
 
     it("no answer is an error naming the request and the URN count", async () => {

@@ -1,4 +1,4 @@
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders } from "@/lib/linkedinApi";
 
 import {
@@ -69,9 +69,16 @@ function plainLabel(value: unknown): string | null {
  * descriptions, which can name a post (socialMetricsSync.ts: logs never do).
  */
 async function refusalFields(response: Response) {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    // The body stalled past the limit or broke off: nothing to read codes from.
+    return { body: "unreadable" as const };
+  }
   let body: Record<string, unknown> | null = null;
   try {
-    const parsed: unknown = JSON.parse(await response.text());
+    const parsed: unknown = JSON.parse(text);
     if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
   } catch {
     // Not LinkedIn's JSON (a gateway page): no codes to log.
@@ -109,7 +116,9 @@ export async function fetchLinkedInShareStatisticsBatch(
     }
 
     try {
-      const response = await fetchWithTimeout(
+      // R41 lead review: the limit covers the body too, so neither the
+      // numbers' read nor a refusal's can stall the sync.
+      const response = await fetchWithinLimit(
         statisticsUrl(organizationUrn, kind.param, urns),
         { headers: linkedinRestHeaders(accessToken) },
         SOCIAL_METRICS_TIMEOUT_MS,
