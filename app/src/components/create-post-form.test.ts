@@ -25,6 +25,7 @@ import {
   UntouchedSubmitStatus,
   captionsAfterReuseLoaded,
   captionFromMediaSource,
+  captionResultApplies,
   reuseAutoCaptionWanted,
   reusedItemBlob,
   NothingConnectedState,
@@ -1648,5 +1649,56 @@ describe("Caption from media for a file reused from Media", () => {
     const event = raw.slice(raw.indexOf("const captionReusedItem = useEffectEvent("), raw.indexOf("});", raw.indexOf("const captionReusedItem = useEffectEvent(")));
     expect(event).toContain("reuseAutoCaptionWanted({ enabled: autoCaptionEnabled, typedCaption: uploadCaption, itemCaption: item.baseCaption })");
     expect(event).toMatch(/runAutoCaptionFromMedia\(\{\s*overwrite: false,\s*blobOverride: reusedItemBlob\(item\),/);
+  });
+});
+
+// R36 lead review: a caption answer is written only while the media it was
+// asked about is still the selected media and the caption box is as it was at
+// the press. A manual press keeps overwrite (the person asked to replace it).
+describe("a caption from media that comes back late", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  const reused = { id: "m1" };
+  const fileA = new File(["a"], "a.jpg", { type: "image/jpeg" });
+  const fileB = new File(["b"], "b.jpg", { type: "image/jpeg" });
+
+  it("reuse: Use a different file pressed during the call drops the answer", () => {
+    expect(
+      captionResultApplies({ askedAbout: reused, selectedNow: null, captionAtPress: "Old", captionNow: "Old", overwrite: true }),
+    ).toBe(false);
+  });
+
+  it("fresh upload: another file picked during the call drops the answer", () => {
+    expect(
+      captionResultApplies({ askedAbout: fileA, selectedNow: fileB, captionAtPress: "", captionNow: "", overwrite: true }),
+    ).toBe(false);
+  });
+
+  it("the caption box edited since the press keeps what was typed", () => {
+    expect(
+      captionResultApplies({ askedAbout: fileA, selectedNow: fileA, captionAtPress: "Old", captionNow: "New words", overwrite: true }),
+    ).toBe(false);
+  });
+
+  it("a normal press still writes, replacing the caption; the automatic one only into an empty box", () => {
+    expect(
+      captionResultApplies({ askedAbout: fileA, selectedNow: fileA, captionAtPress: "Old", captionNow: "Old", overwrite: true }),
+    ).toBe(true);
+    expect(
+      captionResultApplies({ askedAbout: "photo-1", selectedNow: "photo-1", captionAtPress: "", captionNow: "", overwrite: false }),
+    ).toBe(true);
+    expect(
+      captionResultApplies({ askedAbout: fileA, selectedNow: fileA, captionAtPress: "Mine", captionNow: "Mine", overwrite: false }),
+    ).toBe(false);
+  });
+
+  it("runAutoCaptionFromMedia notes the media and caption at the press and writes by the rule", () => {
+    const start = raw.indexOf("async function runAutoCaptionFromMedia(");
+    const body = raw.slice(start, raw.indexOf("\n  }\n", start));
+    expect(body).toContain("const askedAbout = selectedMedia();");
+    expect(body).toContain("const captionAtPress = uploadCaption;");
+    expect(body).toMatch(/captionResultApplies\(\{\s*askedAbout,\s*selectedNow: selectedMedia\(\),\s*captionAtPress,\s*captionNow: prev,\s*overwrite: options\.overwrite,?\s*\}\)/);
+    expect(body).not.toContain("if (!options.overwrite && prev.trim())");
+    // The selected media: a set's cover, else the single file or reused item.
+    expect(raw).toContain("const selectedMedia = () => photoSetRef.current[0]?.key ?? singlePhotoRef.current;");
   });
 });

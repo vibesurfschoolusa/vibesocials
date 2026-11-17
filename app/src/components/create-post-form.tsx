@@ -212,6 +212,23 @@ export function captionFromMediaSource(state: {
 }
 
 /**
+ * R36 lead review: a caption from media is written only while the media it was
+ * asked about is still the selected media (not dismissed, not replaced by a new
+ * pick) and the caption box is as it was at the press. `overwrite` (a manual
+ * press) replaces that caption; the automatic one fills only an empty box.
+ */
+export function captionResultApplies(state: {
+  askedAbout: unknown;
+  selectedNow: unknown;
+  captionAtPress: string;
+  captionNow: string;
+  overwrite: boolean;
+}): boolean {
+  if (state.askedAbout !== state.selectedNow || state.captionNow !== state.captionAtPress) return false;
+  return state.overwrite || !state.captionNow.trim();
+}
+
+/**
  * R30 new-customer L1: the item from ?mediaItemId= can arrive after the person
  * started typing. Its captions fill only the boxes still as they started
  * (empty); a box the person changed stays, the rule of captionsAfterReuseDismissed.
@@ -1154,6 +1171,9 @@ function CreatePostFormInner({
   // photo is still attached (and still the cover) before acting on it. Every
   // change goes through changePhotoSet so the two never differ.
   const photoSetRef = useRef<AttachedPhoto[]>([]);
+  // R36 lead review: the media a caption is asked about: a set's cover, else
+  // the single file or the reused item.
+  const selectedMedia = () => photoSetRef.current[0]?.key ?? singlePhotoRef.current;
   const changePhotoSet = (change: (prev: AttachedPhoto[]) => AttachedPhoto[]) => {
     const next = change(photoSetRef.current);
     photoSetRef.current = next;
@@ -1592,6 +1612,9 @@ function CreatePostFormInner({
     isStale?: () => boolean;
   }) {
     const blob = options.blobOverride ?? uploadedBlob;
+    // What the answer must still match when it comes back (captionResultApplies).
+    const askedAbout = selectedMedia();
+    const captionAtPress = uploadCaption;
 
     if (!blob) {
       setUploadError(
@@ -1624,7 +1647,8 @@ function CreatePostFormInner({
         "caption",
       );
 
-      if (options.isStale?.()) {
+      // Dismissed or replaced meanwhile: the answer is about other media.
+      if (options.isStale?.() || selectedMedia() !== askedAbout) {
         return;
       }
 
@@ -1635,18 +1659,23 @@ function CreatePostFormInner({
       }
       const caption = result.caption;
 
-      setUploadCaption((prev) => {
-        if (!options.overwrite && prev.trim()) {
-          return prev;
-        }
-        return caption;
-      });
+      setUploadCaption((prev) =>
+        captionResultApplies({
+          askedAbout,
+          selectedNow: selectedMedia(),
+          captionAtPress,
+          captionNow: prev,
+          overwrite: options.overwrite,
+        })
+          ? caption
+          : prev,
+      );
       // Remembered even when the box kept the user's text: it then differs,
       // so "Remove all" keeps it.
       setLastAiCaption(caption);
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
-      if (!options.isStale?.()) {
+      if (!options.isStale?.() && selectedMedia() === askedAbout) {
         toast.error(CAPTION_FAILED_MESSAGE);
       }
     } finally {
