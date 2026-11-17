@@ -34,7 +34,7 @@
 
   /* Muted / secondary / accent (subtle fills + hover surfaces) */
   --muted: #f1f5f9; /* slate-100 */
-  --muted-foreground: #64748b; /* slate-500 — 4.7:1 on white */
+  --muted-foreground: #556274; /* between slate-500 and -600: 5.66:1 on --muted, 6.2:1 on white (R42 pages-a L7) */
   --secondary: #f1f5f9;
   --secondary-foreground: #0f172a;
   --accent: #f1f5f9;
