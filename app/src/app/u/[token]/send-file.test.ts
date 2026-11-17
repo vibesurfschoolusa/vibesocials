@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UPLOAD_LINK_STORAGE_FULL_MESSAGE } from "@/lib/uploadLink";
+import {
+  UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
+  UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
+  UPLOAD_LINK_IP_LIMIT_MESSAGE,
+  UPLOAD_LINK_STORAGE_FULL_MESSAGE,
+} from "@/lib/uploadLink";
 
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 
@@ -172,5 +177,48 @@ describe("sendClientFile", () => {
       deps.prepare.mockRejectedValue(new Error("We couldn't convert this iPhone (HEIC) photo."));
       expect(await failure()).toMatchObject({ kind: "refused", message: "We couldn't convert this iPhone (HEIC) photo." });
     });
+  });
+});
+
+// R45 pages-a L6: /u's limit refusals said "Try again tomorrow" or "later" and
+// never the wait the answer carries. They are worded as /v's, from that wait,
+// keeping the route's reason.
+describe("sendClientFile: a refused try names its wait", () => {
+  async function refusal(answer: Response): Promise<ClientFileError> {
+    deps.fetch.mockImplementation(async (url: string) =>
+      url.endsWith("/upload") ? answer : jsonResponse(201, { ok: true }),
+    );
+    return sendClientFile(input(), deps).then(
+      () => {
+        throw new Error("sent");
+      },
+      (error: ClientFileError) => error,
+    );
+  }
+  const limited = (error: string, retryAfterSeconds?: number, header?: string) =>
+    new Response(JSON.stringify({ error, retryAfterSeconds }), {
+      status: 429,
+      headers: { "Content-Type": "application/json", ...(header ? { "Retry-After": header } : {}) },
+    });
+
+  it("the network's hour: its reason, then the wait in minutes", async () => {
+    const error = await refusal(limited(UPLOAD_LINK_IP_LIMIT_MESSAGE, 12 * 60 - 5));
+    expect(error.kind).toBe("refused");
+    expect(error.message).toBe("Too many files from this network in the last hour. Reload this page in 12 minutes.");
+  });
+
+  it("the link's day: the wait in hours, from the Retry-After header when the body has none", async () => {
+    const error = await refusal(limited(UPLOAD_LINK_DAILY_LIMIT_MESSAGE, undefined, String(7 * 3600 - 100)));
+    expect(error.message).toBe("This link has reached today's limit. Reload this page in 7 hours.");
+  });
+
+  it("the day's 20 GB: its own reason with the wait", async () => {
+    const error = await refusal(limited(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, 30 * 60));
+    expect(error.message).toBe("This link has taken 20 GB of files today, its daily limit. Reload this page in 30 minutes.");
+  });
+
+  it("no wait in the answer: the route's own sentence", async () => {
+    const error = await refusal(limited(UPLOAD_LINK_DAILY_LIMIT_MESSAGE));
+    expect(error.message).toBe(UPLOAD_LINK_DAILY_LIMIT_MESSAGE);
   });
 });

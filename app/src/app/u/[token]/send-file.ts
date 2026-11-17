@@ -2,6 +2,8 @@ import { put } from "@vercel/blob/client";
 
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { answerLostText } from "@/lib/answerLost";
+import { dailyLimitSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
+import { REVIEW_LINK_DAILY_LIMIT_REASON } from "@/lib/reviewLink";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /**
@@ -71,12 +73,28 @@ type Lost = { kind: ClientFileFailureKind; message: string };
 const NOTHING_ARRIVED: Lost = { kind: "network", message: UPLOAD_FAILED_MESSAGE };
 const MAYBE_ARRIVED: Lost = { kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE };
 
+/**
+ * R45 pages-a L6: a limit's refusal, worded as /v's (clientLinkLimit) from
+ * the answer's wait: the route's reason (its sentence without the last one,
+ * "Try again tomorrow."), then the wait in minutes, or in hours from an hour
+ * on. With no wait in the answer, the route's own sentence.
+ */
+export function uploadLimitText(routeSentence: string, waitSeconds: number | undefined): string {
+  if (!waitSeconds) return routeSentence;
+  const sentences = routeSentence.split(/(?<=\.)\s+/);
+  const reason = sentences.length > 1 ? sentences.slice(0, -1).join(" ") : routeSentence;
+  // dailyLimitSentence is the reason, then " Reload this page in <wait>.".
+  return `${reason}${dailyLimitSentence(waitSeconds).slice(REVIEW_LINK_DAILY_LIMIT_REASON.length)}`;
+}
+
 /** A refused answer: the server's sentence; `fallback` when it gave none (a gateway error). */
 async function failureOf(response: Response, fallback: Lost): Promise<ClientFileError> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-  return typeof body?.error === "string" && body.error
-    ? new ClientFileError("refused", body.error)
-    : new ClientFileError(fallback.kind, fallback.message);
+  if (typeof body?.error !== "string" || !body.error) return new ClientFileError(fallback.kind, fallback.message);
+  return new ClientFileError(
+    "refused",
+    response.status === 429 ? uploadLimitText(body.error, limitWaitSeconds(response, body)) : body.error,
+  );
 }
 
 async function postJson(deps: SendFileDeps, url: string, body: unknown, lost: Lost = NOTHING_ARRIVED): Promise<Response> {
