@@ -365,9 +365,10 @@ export interface AttachedPhotosProps {
   onDescribe(key: string, text: string): void;
   /**
    * "Write it for me" for one uploaded photo: Create's, which holds the submit
-   * while it runs (R40 publishing L3). Null: nothing to write.
+   * while it runs (R40 publishing L3) and lets go once `photo` is removed.
+   * Null: nothing to write.
    */
-  writeDescription(blob: UploadedBlob): Promise<string | null>;
+  writeDescription(blob: UploadedBlob, photo: File): Promise<string | null>;
 }
 
 export function AttachedPhotos({
@@ -407,7 +408,7 @@ export function AttachedPhotos({
               label={`Photo ${index + 1}: describe this photo (alt text)`}
               value={photo.altText ?? ""}
               onChange={(text) => onDescribe(photo.key, text)}
-              onWrite={photo.blob ? () => writeDescription(photo.blob as UploadedBlob) : null}
+              onWrite={photo.blob ? () => writeDescription(photo.blob as UploadedBlob, photo.file) : null}
             />
           </li>
         ))}

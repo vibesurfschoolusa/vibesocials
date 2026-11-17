@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
-  AI_WRITING_MESSAGE,
   barTikTokDeclaration,
   composerPageView,
   FILE_LOST_PRESS_TOAST,
@@ -15,6 +14,7 @@ import {
 } from "../create-post-form";
 import { TikTokConsentDeclaration } from "../tiktok-post-settings";
 import { ToastProvider } from "../ui/toast";
+import { AI_CAPTION_WAIT_MESSAGE, AI_DESCRIPTION_WAIT_MESSAGE } from "./useCaptionBox";
 import { PUBLISH_BAR_OFFSET_VAR, PUBLISH_BAR_SCROLL_PADDING, PublishBar, publishBarOffset } from "./publish-bar";
 
 const base = {
@@ -25,7 +25,7 @@ const base = {
   untouchedMessage: null,
   platformAlert: null,
   pageError: null,
-  aiWriting: false,
+  aiWait: null,
 };
 
 const render = (
@@ -85,12 +85,13 @@ describe("submitControl: the one source for the form's button and the bar", () =
     expect(reason({ fileBlock: "Wait until the file is ready, then press the button again." })).toBe(
       "Wait until the file is ready, then press the button again.",
     );
-    expect(reason({ aiWriting: true })).toBe(AI_WRITING_MESSAGE);
+    expect(reason({ aiWait: AI_CAPTION_WAIT_MESSAGE })).toBe(AI_CAPTION_WAIT_MESSAGE);
+    expect(reason({ aiWait: AI_DESCRIPTION_WAIT_MESSAGE })).toBe(AI_DESCRIPTION_WAIT_MESSAGE);
   });
 
   // R39 new-customer M1: an AI answer could land behind the confirmation.
   it("an AI request writing into the post disables the form's button and the bar, with the reason", () => {
-    const control = submitControl({ ...base, buttonLabel: "Publish post", aiWriting: true });
+    const control = submitControl({ ...base, buttonLabel: "Publish post", aiWait: AI_CAPTION_WAIT_MESSAGE });
     expect(control.disabled).toBe(true);
     expect(control.reason).toBe("Wait until the AI caption is ready.");
     const html = render(control);

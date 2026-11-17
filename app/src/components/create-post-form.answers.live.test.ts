@@ -775,3 +775,98 @@ describe("R40 publishing L3: Write it for me counts as AI writing into the post"
     );
   });
 });
+
+describe("R40 lead review: the wait names what is being written, and a photo's description ends with the photo", () => {
+  const CAPTION_WAIT = "Wait until the AI caption is ready.";
+  const DESCRIPTION_WAIT = "Wait until the photo description is ready.";
+  const BOTH_WAIT = "Wait until the AI has finished writing.";
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const photo = (name: string) => new File([name], `${name}.jpg`, { type: "image/jpeg" });
+  const allButtons = (text: string) => {
+    const hits: FakeNode[] = [];
+    const walk = (n: FakeNode) => {
+      if (n.nodeName === "BUTTON" && (n.textContent as string).trim() === text) hits.push(n);
+      n.childNodes.forEach(walk);
+    };
+    walk(container);
+    return hits;
+  };
+  const labelled = (label: string) => {
+    const hit = find(container, (n) => n.attributes?.["aria-label"] === label);
+    if (!hit) throw new Error(`no ${label}`);
+    return hit;
+  };
+  const describedAs = (id: string) => String(byId(id).value ?? "");
+
+  it("Write it for me running: the wait names the photo description", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"));
+    await finishUploads();
+    await press("Write it for me");
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(true);
+    expect(pageSays(CAPTION_WAIT)).toBe(false);
+    await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+  });
+
+  it("a caption request running: the wait names the caption", async () => {
+    await typeCaption("Surf lesson today");
+    await press("Improve caption");
+    expect(pageSays(CAPTION_WAIT)).toBe(true);
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+  });
+
+  it("both running: one neutral sentence, then the one still running", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"));
+    await finishUploads();
+    await typeCaption("Surf lesson today");
+    await press("Write it for me");
+    await press("Improve caption");
+    expect(pageSays(BOTH_WAIT)).toBe(true);
+    expect(pageSays(CAPTION_WAIT)).toBe(false);
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Catch a wave today!" });
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(true);
+    expect(pageSays(BOTH_WAIT)).toBe(false);
+  });
+
+  it("the single photo removed during its Write it for me: the wait ends at once and the fetch is aborted", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"));
+    await finishUploads();
+    await press("Write it for me");
+    expect(submitDisabled()).toBe(true);
+    await pick();
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("a set photo removed during its Write it for me: only its wait ends; the other photo's stays and lands", async () => {
+    await untickAutoCaption();
+    await pick(photo("a"), photo("b"));
+    await finishUploads();
+    await finishUploads();
+    const [first, second] = allButtons("Write it for me");
+    await run(() => props(first!).onClick());
+    await run(() => props(second!).onClick());
+    expect(signals.length).toBe(2);
+    await run(() => props(labelled("Remove photo 1")).onClick());
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(submitDisabled()).toBe(true);
+    expect(pageSays(DESCRIPTION_WAIT)).toBe(true);
+    // The second request's answer is the one still waiting.
+    await run(() => answers["/api/posts/auto-caption"]?.pop()?.resolve({ altText: "Photo b, described." }));
+    expect(submitDisabled()).toBe(false);
+    const field = find(container, (n) => n.nodeName === "INPUT" && String(n.attributes?.id ?? "").startsWith("alt-"));
+    expect(field && describedAs(String(field.attributes.id))).toBe("Photo b, described.");
+  });
+});

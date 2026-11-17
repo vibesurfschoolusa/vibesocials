@@ -477,13 +477,6 @@ export function submitButtonLabel(state: { mode: PublishMode; noFile: boolean; l
 }
 
 /**
- * R39 new-customer M1: why the submit waits while Improve, Adapt or Caption
- * from media is writing into the post: its answer could otherwise land behind
- * the confirmation and be posted unread.
- */
-export const AI_WRITING_MESSAGE = "Wait until the AI caption is ready.";
-
-/**
  * R39 new-customer M1: what the confirmation says when the captions changed
  * while it was open, in the words of what it confirms (lead review): it
  * confirms Publish now, or Schedule for a text post.
@@ -539,8 +532,8 @@ export function submitControl(input: {
   platformAlert: string | null;
   /** R31 pages A1: the form's error line (a refused press), shown by the bar's button too. */
   pageError: string | null;
-  /** R39 new-customer M1: an AI request is writing into the post (useCaptionBox). */
-  aiWriting: boolean;
+  /** R39 new-customer M1: an AI request is writing into the post: its wait sentence (useCaptionBox.aiWait), else null. */
+  aiWait: string | null;
 }): SubmitControlView {
   const counter = captionCounter(input.caption);
   // What disables the button, in the order the bar has always named them.
@@ -548,7 +541,7 @@ export function submitControl(input: {
     (counter.over ? `Caption is too long: ${counter.label} characters.` : null) ??
     (input.tiktokBlock ? `TikTok: ${input.tiktokBlock}` : null) ??
     input.fileBlock ??
-    (input.aiWriting ? AI_WRITING_MESSAGE : null);
+    input.aiWait;
   // R31 lead review: the form's line shows only while the button is enabled,
   // so an old line never hides what disables it now.
   const reason =
@@ -563,7 +556,7 @@ export function submitControl(input: {
     reason,
   };
   // Kept apart so the line above stays byte-identical (it is a frozen line).
-  return input.aiWriting ? { ...view, disabled: true } : view;
+  return input.aiWait !== null ? { ...view, disabled: true } : view;
 }
 
 /**
@@ -1879,10 +1872,11 @@ function CreatePostFormInner({
 
   // R40 publishing L3: "Write it for me" writes into the post, so it holds the
   // submit like a caption request (useCaptionBox): until done, let go by a
-  // form reset (null: nothing is written or said), or out of time (its
-  // lost-answer sentence).
-  async function writePhotoDescription(blob: UploadedBlobInfo): Promise<string | null> {
-    const request = captionBox.aiRequestStarted({ media: false, automatic: false });
+  // form reset or (lead review) its own photo going (null: nothing is written
+  // or said), or out of time (its lost-answer sentence). `photo` is what
+  // whereDescriptionGoes follows: the File, or the reused item.
+  async function writePhotoDescription(blob: UploadedBlobInfo, photo: object): Promise<string | null> {
+    const request = captionBox.aiRequestStarted({ media: false, automatic: false, photo });
     try {
       const text = await requestPhotoDescription(blob, workspaceId, undefined, request.signal);
       return request.live() ? text : null;
@@ -1898,7 +1892,7 @@ function CreatePostFormInner({
   // wherever it is now: still the single photo (returned, for the field), moved
   // into the set by "Add photos" (written onto its place there), or gone (dropped).
   async function describeSinglePhoto(blob: UploadedBlobInfo, photo: object): Promise<string | null> {
-    const text = await writePhotoDescription(blob);
+    const text = await writePhotoDescription(blob, photo);
     if (text === null) return null;
     const target = whereDescriptionGoes(photo, { single: singlePhotoRef.current, set: photoSetRef.current });
     if (target?.to === "set") {
@@ -1907,6 +1901,18 @@ function CreatePostFormInner({
     }
     return target?.to === "single" ? text : null;
   }
+
+  // R40 lead review: a photo's "Write it for me" stops holding the submit, and
+  // its fetch is aborted, once that photo is gone (removed, replaced, the set
+  // cleared, the form reset); the other photos' descriptions keep waiting.
+  const { letGoAiRequests } = captionBox;
+  useEffect(() => {
+    letGoAiRequests(
+      (kind) =>
+        kind.photo !== undefined &&
+        whereDescriptionGoes(kind.photo, { single: singlePhotoRef.current, set: photoSetRef.current }) === null,
+    );
+  }, [photoSet, uploadFile, reuseItem, letGoAiRequests]);
 
   const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
   const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
@@ -2584,7 +2590,7 @@ function CreatePostFormInner({
   // keeps this one region mounted while the views change around it.
   const libraryStatus = <LibraryFileStatus loading={libraryStatusReady && reuseLoading} />;
   // R39 new-customer M1: the page's one status line also says why the submit waits for the AI.
-  const aiWritingMessage = captionBox.aiWriting ? AI_WRITING_MESSAGE : null;
+  const aiWritingMessage = captionBox.aiWait;
   const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage ?? aiWritingMessage} />;
 
   // `composerGate` (computed above the hooks that need it). The `loading`
@@ -2685,7 +2691,7 @@ function CreatePostFormInner({
     untouchedMessage,
     platformAlert,
     pageError: shownUploadError,
-    aiWriting: captionBox.aiWriting,
+    aiWait: captionBox.aiWait,
   });
   const postTextChanged = confirmPublishOpen ? postTextChangedSince(postTextAtConfirm, postTextNow()) : null;
   const captionsChanged = postTextChanged !== null;

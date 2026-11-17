@@ -47,6 +47,24 @@ export interface AiRequestKind {
    * be written: not taken when it already can't, let go once the box changes.
    */
   intoCaption?: { press: CaptionPress; overwrite: boolean };
+  /**
+   * R40 lead review: a photo's description ("Write it for me"), asked about
+   * this photo (its File, or the reused item). Create lets it go once that
+   * photo is gone; the wait names a description, not a caption.
+   */
+  photo?: object;
+}
+
+/** R40 lead review: what the submit's wait says, by what the AI is writing. */
+export const AI_CAPTION_WAIT_MESSAGE = "Wait until the AI caption is ready.";
+export const AI_DESCRIPTION_WAIT_MESSAGE = "Wait until the photo description is ready.";
+export const AI_WRITING_WAIT_MESSAGE = "Wait until the AI has finished writing.";
+
+/** The one sentence for the wait (null: nothing is being written). */
+export function aiWaitMessage(running: { captions: number; descriptions: number }): string | null {
+  if (running.captions > 0 && running.descriptions > 0) return AI_WRITING_WAIT_MESSAGE;
+  if (running.captions > 0) return AI_CAPTION_WAIT_MESSAGE;
+  return running.descriptions > 0 ? AI_DESCRIPTION_WAIT_MESSAGE : null;
 }
 
 /** R40: whether a request's answer could still be written into the box as it reads now. */
@@ -96,7 +114,7 @@ export function useCaptionBox() {
   // R39 new-customer M1: how many requests that will write into the post
   // (Improve, Adapt, Caption from media, manual or automatic) are running,
   // and (lead review) each one, so the rule it belongs to can let it go.
-  const [aiRequests, setAiRequests] = useState(0);
+  const [aiRequests, setAiRequests] = useState({ captions: 0, descriptions: 0 });
   const runningRef = useRef(new Set<{ kind: AiRequestKind; letGo: () => void }>());
 
   // Stable, so effects can name it as they name a state setter.
@@ -128,6 +146,7 @@ export function useCaptionBox() {
     }
     let ended = false;
     let letGo = false;
+    const part = kind.photo === undefined ? "captions" : "descriptions";
     const entry = {
       kind,
       letGo: () => {
@@ -148,11 +167,11 @@ export function useCaptionBox() {
         ended = true;
         clearTimeout(timer);
         runningRef.current.delete(entry);
-        setAiRequests((count) => count - 1);
+        setAiRequests((count) => ({ ...count, [part]: count[part] - 1 }));
       },
     };
     runningRef.current.add(entry);
-    setAiRequests((count) => count + 1);
+    setAiRequests((count) => ({ ...count, [part]: count[part] + 1 }));
     return request;
   }, []);
 
@@ -232,7 +251,8 @@ export function useCaptionBox() {
     answered,
     formReset,
     formGeneration,
-    aiWriting: aiRequests > 0,
+    /** The submit's wait sentence while an AI request writes into the post, else null. */
+    aiWait: aiWaitMessage(aiRequests),
     aiRequestStarted,
     letGoAiRequests,
   };
