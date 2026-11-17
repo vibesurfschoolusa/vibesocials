@@ -30,7 +30,6 @@ const EXCEPTIONS: Record<string, { why: string; mustContain: string[] }> = {
 /** The result types a fail-closed limiter (or a wrapper of one) returns. */
 const LIMIT_RESULT_TYPE = /Promise<\s*(RateLimitResult|AiQuotaResult)\b/;
 
-const count = (text: string, needle: string) => text.split(needle).length - 1;
 const answersUnchecked = (text: string) =>
   text.includes("limitUncheckedResponse(") || text.includes("LIMIT_UNCHECKED_MESSAGE");
 
@@ -44,15 +43,60 @@ function wrappersIn(text: string): string[] {
   return names;
 }
 
-/** Every rule break in `files`, as "<file>: <why>". Empty when all callers answer the mark. */
+/** The limiters themselves; a call to one counts only with `failClosed: true`. */
+const LIMITERS = ["checkRateLimit", "consumeFixedWindow"];
+
+/** The call's argument text, from its "(" at `open` to the matching ")". */
+function argumentsAt(text: string, open: number): string {
+  let depth = 0;
+  for (let index = open; index < text.length; index++) {
+    if (text[index] === "(") depth++;
+    else if (text[index] === ")" && --depth === 0) return text.slice(open, index + 1);
+  }
+  return text.slice(open);
+}
+
+type LimitCall = { callee: string; at: number; end: number; variable: string | null; returned: boolean };
+
+/** Each fail-closed limiter call and each wrapper call in `text`, in order, with the variable it is kept in. */
+function limitCalls(text: string, wrapperNames: string[]): LimitCall[] {
+  const pattern = new RegExp(`\\b(${[...LIMITERS, ...wrapperNames].join("|")})\\(`, "g");
+  const calls: LimitCall[] = [];
+  for (const match of text.matchAll(pattern)) {
+    const at = match.index ?? 0;
+    const before = text.slice(Math.max(0, at - 200), at);
+    if (/function\s+$/.test(before)) continue;
+    const open = at + match[1].length;
+    const args = argumentsAt(text, open);
+    if (LIMITERS.includes(match[1]) && !args.includes("failClosed: true")) continue;
+    const kept = /(?:const|let)\s+(\w+)\s*=\s*await\s+$/.exec(before);
+    calls.push({
+      callee: match[1],
+      at,
+      end: open + args.length,
+      variable: kept ? kept[1] : null,
+      returned: /return\s+(?:await\s+)?$/.test(before),
+    });
+  }
+  return calls;
+}
+
+/**
+ * Every rule break in `files`, as "<file>: <why>". Empty when all callers
+ * answer the mark. R38 second look: each limit call is tied to its own
+ * result: the variable it is kept in must be read as `<variable>.unavailable`
+ * after the call and before the next limit call, so another limit's check
+ * never stands in for it. A wrapper may hand its limiter's result straight on
+ * (`return checkRateLimit(...)`); its callers are held to the rule instead.
+ */
 function guardFailures(files: SourceFile[]): string[] {
   const failures: string[] = [];
-  const failClosed = files.filter((file) => file.rel !== "lib/rateLimit.ts" && file.text.includes("failClosed: true"));
+  const scanned = files.filter((file) => file.rel !== "lib/rateLimit.ts");
 
-  const wrappers = new Map<string, string>();
-  for (const file of failClosed) for (const name of wrappersIn(file.text)) wrappers.set(name, file.rel);
+  const wrappers: string[] = [];
+  for (const file of scanned) if (file.text.includes("failClosed: true")) wrappers.push(...wrappersIn(file.text));
 
-  for (const file of failClosed) {
+  for (const file of scanned) {
     const exception = EXCEPTIONS[file.rel];
     if (exception) {
       for (const needle of exception.mustContain) {
@@ -60,19 +104,20 @@ function guardFailures(files: SourceFile[]): string[] {
       }
       continue;
     }
-    if (count(file.text, ".unavailable") < count(file.text, "failClosed: true")) {
-      failures.push(`${file.rel}: a failClosed result without its .unavailable check`);
-    }
-    if (!answersUnchecked(file.text)) failures.push(`${file.rel}: doesn't answer through the shared sentence`);
-  }
-
-  for (const file of files) {
-    for (const [name, home] of wrappers) {
-      if (file.rel === home) continue;
-      const calls = count(file.text, `${name}(`);
-      if (calls === 0) continue;
-      if (count(file.text, ".unavailable") < calls) failures.push(`${file.rel}: calls ${name} without its .unavailable check`);
-      if (!answersUnchecked(file.text)) failures.push(`${file.rel}: calls ${name} without the shared sentence`);
+    const definesWrapper = wrappersIn(file.text).length > 0;
+    const calls = limitCalls(file.text, wrappers).filter((call) => !(call.returned && definesWrapper));
+    calls.forEach((call, index) => {
+      if (!call.variable) {
+        failures.push(`${file.rel}: a ${call.callee} call whose result isn't kept in a variable`);
+        return;
+      }
+      const after = file.text.slice(call.end, calls[index + 1]?.at ?? file.text.length);
+      if (!after.includes(`${call.variable}.unavailable`)) {
+        failures.push(`${file.rel}: ${call.callee} result "${call.variable}" is not checked for .unavailable`);
+      }
+    });
+    if (calls.length > 0 && !answersUnchecked(file.text)) {
+      failures.push(`${file.rel}: doesn't answer through the shared sentence`);
     }
   }
   return failures;
@@ -122,8 +167,6 @@ describe("every fail-closed limiter caller answers a store it couldn't read as c
         "export async function checkSomething(id: string): Promise<RateLimitResult> {",
         '  return checkRateLimit({ userId: id, route: "x", limit: 1, windowMs: 1, failClosed: true });',
         "}",
-        "// limitUncheckedResponse( is not this file's job; its callers answer.",
-        "// .unavailable",
       ].join("\n"),
     };
 
@@ -133,8 +176,8 @@ describe("every fail-closed limiter caller answers a store it couldn't read as c
         text: 'const limit = await checkSomething("u");\nif (!limit.allowed) return "Too many";',
       };
       expect(guardFailures([wrapper, caller])).toEqual([
-        "app/some/page.tsx: calls checkSomething without its .unavailable check",
-        "app/some/page.tsx: calls checkSomething without the shared sentence",
+        'app/some/page.tsx: checkSomething result "limit" is not checked for .unavailable',
+        "app/some/page.tsx: doesn't answer through the shared sentence",
       ]);
     });
 
@@ -152,8 +195,68 @@ describe("every fail-closed limiter caller answers a store it couldn't read as c
         text: 'const r = await checkRateLimit({ failClosed: true });\nif (!r.allowed) return tooMany();',
       };
       expect(guardFailures([caller])).toEqual([
-        "app/api/x/route.ts: a failClosed result without its .unavailable check",
+        'app/api/x/route.ts: checkRateLimit result "r" is not checked for .unavailable',
         "app/api/x/route.ts: doesn't answer through the shared sentence",
+      ]);
+    });
+
+    // R38 second look: two limits in one route are each tied to their own result.
+    const aiGuards: SourceFile = {
+      rel: "lib/aiGuards.ts",
+      text: [
+        "export async function checkWorkspaceAiQuota(workspaceId: string): Promise<AiQuotaResult> {",
+        '  const result = await checkRateLimit({ userId: workspaceId, route: "ai", limit: 1, windowMs: 1, failClosed: true });',
+        "  return { ...result };",
+        "}",
+      ].join("\n"),
+    };
+    const twoLimitRoute = (handleQuota: boolean): SourceFile => ({
+      rel: "app/api/ai/route.ts",
+      text: [
+        "const rateLimit = await checkRateLimit({ userId, route: \"r\", limit: 2, windowMs: 1, failClosed: true });",
+        "if (rateLimit.unavailable) return limitUncheckedResponse();",
+        "if (!rateLimit.allowed) return tooMany();",
+        "// a second read of the same result, as a route may have",
+        "if (rateLimit.unavailable) log();",
+        "const quota = await checkWorkspaceAiQuota(context.workspace.id);",
+        ...(handleQuota ? ["if (quota.unavailable) return limitUncheckedResponse();"] : []),
+        "if (!quota.allowed) return aiWorkspaceLimitResponse();",
+      ].join("\n"),
+    });
+
+    it("a two-limit route that handles both passes", () => {
+      expect(guardFailures([aiGuards, twoLimitRoute(true)])).toEqual([]);
+    });
+
+    it("removing the AI-budget handling fails, whatever else reads .unavailable", () => {
+      expect(guardFailures([aiGuards, twoLimitRoute(false)])).toEqual([
+        'app/api/ai/route.ts: checkWorkspaceAiQuota result "quota" is not checked for .unavailable',
+      ]);
+    });
+
+    it("a check that comes before its call, or only after the next limit, doesn't count", () => {
+      const route: SourceFile = {
+        rel: "app/api/two/route.ts",
+        text: [
+          "if (b.unavailable) return limitUncheckedResponse();",
+          "const a = await checkRateLimit({ failClosed: true });",
+          "const b = await checkRateLimit({ failClosed: true });",
+          "if (a.unavailable) return limitUncheckedResponse();",
+        ].join("\n"),
+      };
+      expect(guardFailures([route])).toEqual([
+        'app/api/two/route.ts: checkRateLimit result "a" is not checked for .unavailable',
+        'app/api/two/route.ts: checkRateLimit result "b" is not checked for .unavailable',
+      ]);
+    });
+
+    it("a fail-closed call whose result isn't kept in a variable fails", () => {
+      const route: SourceFile = {
+        rel: "app/api/inline/route.ts",
+        text: "if (!(await checkRateLimit({ failClosed: true })).allowed) return limitUncheckedResponse();",
+      };
+      expect(guardFailures([route])).toEqual([
+        "app/api/inline/route.ts: a checkRateLimit call whose result isn't kept in a variable",
       ]);
     });
   });

@@ -92,6 +92,7 @@ const UNAVAILABLE = { allowed: false, retryAfterSeconds: 60, unavailable: true }
 const LIMITED = { allowed: false, retryAfterSeconds: 900 } as const;
 const ALLOWED = { allowed: true } as const;
 const TOKEN = "a".repeat(43);
+const BLOB_URL = "https://abc123.public.blob.vercel-storage.com/photo.jpg";
 const USER = { id: "user-1", email: "owner@example.com", passwordHash: "x" };
 
 const json = (url: string, body: Record<string, unknown>, method = "POST") =>
@@ -136,6 +137,14 @@ const rows: Row[] = [
     call: () => autoCaption.POST(json("/api/posts/auto-caption", { workspaceId: "ws-1", blobUrl: "https://x.example/a.jpg" })),
   },
   {
+    name: "posts/auto-caption (AI budget)",
+    passFirst: 1,
+    call: () =>
+      autoCaption.POST(
+        json("/api/posts/auto-caption", { workspaceId: "ws-1", blobUrl: BLOB_URL, mimeType: "image/jpeg" }),
+      ),
+  },
+  {
     name: "posts/enhance-caption",
     call: () => enhanceCaption.POST(json("/api/posts/enhance-caption", { workspaceId: "ws-1", caption: "Surf today" })),
   },
@@ -167,6 +176,12 @@ const rows: Row[] = [
     name: "reviews/draft-response",
     call: () =>
       draftResponse.POST(json("/api/reviews/draft-response", { workspaceId: "ws-1", reviewerName: "Sam", starRating: "5" })),
+  },
+  {
+    name: "reviews/draft-response (AI budget)",
+    passFirst: 1,
+    call: () =>
+      draftResponse.POST(json("/api/reviews/draft-response", { workspaceId: "ws-1", reviewerName: "Sam", starRating: "FIVE" })),
   },
   { name: "upload", call: () => upload.POST(json("/api/upload?workspaceId=ws-1", { type: "blob.generate-client-token" })) },
   {
