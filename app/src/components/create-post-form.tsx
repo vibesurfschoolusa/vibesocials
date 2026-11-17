@@ -212,6 +212,30 @@ export function captionFromMediaSource(state: {
 }
 
 /**
+ * R36 lead second look: the "Caption from media" busy state belongs to the
+ * latest request (a press, a pick, its automatic caption). `start` takes it,
+ * `end` gives it back only if no newer request took it since, and `stop` (a
+ * cleared pick, "Use a different file") ends it whoever holds it.
+ */
+export function captionBusyTracker(setBusy: (busy: boolean) => void) {
+  let latest = 0;
+  return {
+    start(): number {
+      latest += 1;
+      setBusy(true);
+      return latest;
+    },
+    end(token: number): void {
+      if (token === latest) setBusy(false);
+    },
+    stop(): void {
+      latest += 1;
+      setBusy(false);
+    },
+  };
+}
+
+/**
  * R36 lead review: a caption from media is written only while the media it was
  * asked about is still the selected media (not dismissed, not replaced by a new
  * pick) and the caption box is as it was at the press. `overwrite` (a manual
@@ -1076,6 +1100,7 @@ function CreatePostFormInner({
 
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
+  const [captionBusy] = useState(() => captionBusyTracker(setAutoCaptionLoading));
   const connectionsRetryRef = useRef<HTMLButtonElement>(null);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
   // 07d: the description (alt text) of a single photo, uploaded or reused. With
@@ -1530,10 +1555,10 @@ function CreatePostFormInner({
     singlePhotoRef.current = null;
     // A caption still being written for the item is dropped (its isStale), so
     // its busy state ends here; no other pick can be under way in reuse mode.
-    setAutoCaptionLoading(false);
+    captionBusy.stop();
     setPlatformOverrides(kept.overrides);
     setUploadCaption(kept.caption);
-  }, [reuseItem, uploadCaption, platformOverrides, setSingleAltText]);
+  }, [captionBusy, reuseItem, uploadCaption, platformOverrides, setSingleAltText]);
 
   // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
   // for the SAME file (by reference) reuse the in-flight or already-resolved
@@ -1623,8 +1648,8 @@ function CreatePostFormInner({
       return;
     }
 
+    const busy = captionBusy.start();
     try {
-      setAutoCaptionLoading(true);
       setUploadError(null);
 
       // For a video, a few still frames let the AI see what it shows
@@ -1679,10 +1704,8 @@ function CreatePostFormInner({
         toast.error(CAPTION_FAILED_MESSAGE);
       }
     } finally {
-      // A replaced pick leaves the busy state to the newer one.
-      if (!options.isStale?.()) {
-        setAutoCaptionLoading(false);
-      }
+      // A newer press or pick keeps the busy state it took.
+      captionBusy.end(busy);
     }
   }
 
@@ -1715,13 +1738,13 @@ function CreatePostFormInner({
     activeUploadRef.current = null;
 
     if (!pickedFile) {
-      // A cleared input ends any busy state an earlier pick left.
-      setAutoCaptionLoading(false);
+      // A cleared input ends any busy state an earlier pick or press left.
+      captionBusy.stop();
       return;
     }
 
+    const busy = captionBusy.start();
     try {
-      setAutoCaptionLoading(true);
       setUploadError(null);
 
       // iPhone HEIC -> JPEG, big photos shrunk, unsupported
@@ -1777,10 +1800,8 @@ function CreatePostFormInner({
         );
       }
     } finally {
-      // Only the latest pick owns the busy state.
-      if (selection === fileSelectionRef.current) {
-        setAutoCaptionLoading(false);
-      }
+      // Only the latest pick or press owns the busy state.
+      captionBusy.end(busy);
     }
   }
 

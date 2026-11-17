@@ -26,6 +26,7 @@ import {
   captionsAfterReuseLoaded,
   captionFromMediaSource,
   captionResultApplies,
+  captionBusyTracker,
   reuseAutoCaptionWanted,
   reusedItemBlob,
   NothingConnectedState,
@@ -1700,5 +1701,67 @@ describe("a caption from media that comes back late", () => {
     expect(body).not.toContain("if (!options.overwrite && prev.trim())");
     // The selected media: a set's cover, else the single file or reused item.
     expect(raw).toContain("const selectedMedia = () => photoSetRef.current[0]?.key ?? singlePhotoRef.current;");
+  });
+});
+
+// R36 lead second look: the "Caption from media" busy state belongs to the
+// latest request; an older one finishing never clears a newer one's.
+describe("the caption busy state", () => {
+  const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+  function tracker() {
+    const states: boolean[] = [];
+    const busy = captionBusyTracker((value) => states.push(value));
+    return { busy, last: () => states[states.length - 1] };
+  }
+
+  it("a manual press, then a new pick's automatic caption: busy until the automatic one ends", () => {
+    const { busy, last } = tracker();
+    const manual = busy.start();
+    const pick = busy.start();
+    const auto = busy.start();
+    busy.end(manual);
+    expect(last()).toBe(true);
+    busy.end(pick);
+    expect(last()).toBe(true);
+    busy.end(auto);
+    expect(last()).toBe(false);
+  });
+
+  it("a single request: busy, then not", () => {
+    const { busy, last } = tracker();
+    const one = busy.start();
+    expect(last()).toBe(true);
+    busy.end(one);
+    expect(last()).toBe(false);
+  });
+
+  it("a reset (cleared pick, Use a different file) ends it, and an older request ending later changes nothing", () => {
+    const { busy, last } = tracker();
+    const old = busy.start();
+    busy.stop();
+    expect(last()).toBe(false);
+    const next = busy.start();
+    busy.end(old);
+    expect(last()).toBe(true);
+    busy.end(next);
+    expect(last()).toBe(false);
+  });
+
+  it("the caption call, a pick and Use a different file use it", () => {
+    const body = (name: string) => {
+      const start = raw.indexOf(`async function ${name}(`);
+      return raw.slice(start, raw.indexOf("\n  }\n", start));
+    };
+    const caption = body("runAutoCaptionFromMedia");
+    expect(caption).toContain("const busy = captionBusy.start();");
+    expect(caption).toContain("captionBusy.end(busy);");
+    expect(caption).not.toContain("setAutoCaptionLoading(");
+    const pick = body("attachPickedFile");
+    expect(pick).toContain("const busy = captionBusy.start();");
+    expect(pick).toContain("captionBusy.end(busy);");
+    expect(pick).toContain("captionBusy.stop();");
+    expect(pick).not.toContain("setAutoCaptionLoading(");
+    const dismiss = raw.slice(raw.indexOf("const handleDismissReuse"), raw.indexOf("}, [", raw.indexOf("const handleDismissReuse")));
+    expect(dismiss).toContain("captionBusy.stop();");
   });
 });
