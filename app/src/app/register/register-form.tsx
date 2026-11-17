@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
@@ -10,7 +10,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
-import { CharacterCount } from "@/components/ui/character-count";
+import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
@@ -40,6 +40,8 @@ function collapsedLength(text: string): number {
 
 /** The route's REGISTER_NAME_MAX_LENGTH (register-form.nameField.live.test.ts ties them). */
 export const REGISTER_NAME_MAX_LENGTH = 48;
+/** The route's own sentence for a longer name, shown without sending it. */
+export const REGISTER_NAME_TOO_LONG_TEXT = `Use a name of up to ${REGISTER_NAME_MAX_LENGTH} characters, or leave it empty.`;
 
 /** What the form says when sign-up didn't go through (R5 pages L8). */
 export const REGISTER_FAILED_MESSAGE =
@@ -72,6 +74,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
   // R17-pages L1: a signed-in visitor sees who they are, not this form; R18 L1:
   // once the server's own session says so, not the cached one alone.
   const account = useFreshSignedInAccount();
@@ -80,6 +83,24 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    // R45 new-customer L1: the route counts the network's sign-up try before
+    // it checks the name, so a name it would refuse is never sent.
+    if (
+      refuseOverLimit(
+        [
+          {
+            text: name,
+            max: REGISTER_NAME_MAX_LENGTH,
+            count: collapsedLength,
+            sentence: REGISTER_NAME_TOO_LONG_TEXT,
+            field: nameRef.current,
+          },
+        ],
+        setError,
+      )
+    ) {
+      return;
+    }
     setError(null);
     setLoading(true);
 
@@ -165,6 +186,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
                   Name <span className="font-normal text-muted-foreground">(optional)</span>
                 </Label>
                 <Input
+                  ref={nameRef}
                   id="name"
                   type="text"
                   autoComplete="name"
@@ -178,6 +200,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
                   text={name}
                   count={collapsedLength}
                   max={REGISTER_NAME_MAX_LENGTH}
+                  action="create your account"
                 />
               </div>
               <div className="space-y-1.5">

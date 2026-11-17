@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { LoadError, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
-import { CharacterCount } from "@/components/ui/character-count";
+import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -779,9 +779,24 @@ function OwnerView({
   const [savingName, setSavingName] = useState(false);
 
   const saveNameRef = useRef<HTMLButtonElement>(null);
+  const nameFieldRef = useRef<HTMLInputElement>(null);
 
   const handleSaveName = useCallback(async () => {
     if (!workspaceNameSavable(name, savedName)) return;
+    // R45 new-customer L1: as every counted field, a name the route would refuse is not sent.
+    const refused = refuseOverLimit(
+      [
+        {
+          text: name,
+          max: WORKSPACE_NAME_MAX_LENGTH,
+          count: (typed) => workspaceNameToSave(typed).length,
+          sentence: WORKSPACE_NAME_TOO_LONG_TEXT,
+          field: nameFieldRef.current,
+        },
+      ],
+      (sentence) => toast.error(sentence),
+    );
+    if (refused) return;
     const trimmed = workspaceNameToSave(name);
     setSavingName(true);
     try {
@@ -1156,6 +1171,7 @@ function OwnerView({
         <Label htmlFor="workspace-name">Workspace name</Label>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
+            ref={nameFieldRef}
             id="workspace-name"
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -1180,6 +1196,7 @@ function OwnerView({
           text={name}
           count={(typed) => workspaceNameToSave(typed).length}
           max={WORKSPACE_NAME_MAX_LENGTH}
+          action="save"
         />
       </div>
 
@@ -1405,6 +1422,8 @@ function OwnerView({
  */
 /** The rename route's NAME_MAX_LENGTH (team-section.nameField.live.test.ts ties them). */
 export const WORKSPACE_NAME_MAX_LENGTH = 60;
+/** The rename route's own sentence for a longer name, shown without sending it. */
+export const WORKSPACE_NAME_TOO_LONG_TEXT = `Name must be 1-${WORKSPACE_NAME_MAX_LENGTH} characters.`;
 
 export function workspaceNameToSave(name: string): string {
   return name.replace(/\s+/g, " ").trim();

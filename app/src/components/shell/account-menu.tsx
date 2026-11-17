@@ -15,7 +15,7 @@ import { contactUsHref } from "@/lib/contactUs";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
 import { confirmFailureText } from "@/components/ui/dialog";
-import { CharacterCount } from "@/components/ui/character-count";
+import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
@@ -139,6 +139,8 @@ function collapsedLength(text: string): number {
 
 /** The create route's WORKSPACE_NAME_MAX_LENGTH (account-menu.nameField.live.test.ts ties them). */
 export const NEW_WORKSPACE_NAME_MAX_LENGTH = 60;
+/** The create route's own sentence for a longer name, shown without sending it. */
+export const NEW_WORKSPACE_NAME_TOO_LONG_TEXT = `Give the workspace a name of up to ${NEW_WORKSPACE_NAME_MAX_LENGTH} characters.`;
 
 export function createWorkspaceFailureText(status: number, data: { error?: unknown } | null): string {
   if (typeof data?.error === "string" && data.error) return data.error;
@@ -186,6 +188,7 @@ export function AccountMenu() {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const newWorkspaceCountId = useId();
+  const newWorkspaceInputRef = useRef<HTMLInputElement>(null);
   const installApp = useInstallApp();
   // The operator's link (2026-11-10): whatever GET /api/workspaces sends, which
   // is nothing for everyone else, so this file names no path or label of its own.
@@ -311,6 +314,21 @@ export function AccountMenu() {
     event.preventDefault();
     const name = newWorkspaceName.trim();
     if (!name || createBusy) return;
+    // R45 new-customer L1: the route counts one of the owner's creations
+    // before it checks the name, so a name it would refuse is never sent.
+    const refused = refuseOverLimit(
+      [
+        {
+          text: newWorkspaceName,
+          max: NEW_WORKSPACE_NAME_MAX_LENGTH,
+          count: collapsedLength,
+          sentence: NEW_WORKSPACE_NAME_TOO_LONG_TEXT,
+          field: newWorkspaceInputRef.current,
+        },
+      ],
+      (sentence) => toast.error(sentence),
+    );
+    if (refused) return;
     setCreateBusy(true);
     try {
       const response = await fetchOrNoAnswer("/api/workspaces", {
@@ -459,6 +477,7 @@ export function AccountMenu() {
                   creatingWorkspace ? (
                     <form onSubmit={handleCreateWorkspace} className="mt-2 flex flex-col gap-2">
                       <Input
+                        ref={newWorkspaceInputRef}
                         autoFocus
                         aria-label="New workspace name"
                         placeholder="Client or business name"
@@ -473,6 +492,7 @@ export function AccountMenu() {
                         text={newWorkspaceName}
                         count={collapsedLength}
                         max={NEW_WORKSPACE_NAME_MAX_LENGTH}
+                        action="create the workspace"
                       />
                       {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}
                       <div className="flex justify-end gap-2">

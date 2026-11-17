@@ -12,14 +12,14 @@ vi.mock("@/components/ui/announcer", () => ({ useAnnounce: () => announce }));
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 
-import { CharacterCount } from "./character-count";
+import { CharacterCount, refuseOverLimit } from "./character-count";
 
 let root: Root;
 let container: FakeNode;
 
 async function show(length: number) {
   await act(async () => {
-    root.render(createElement(CharacterCount, { id: "c", label: "Workspace name", text: "x".repeat(length), max: 60 }));
+    root.render(createElement(CharacterCount, { id: "c", label: "Workspace name", text: "x".repeat(length), max: 60, action: "save" }));
   });
 }
 
@@ -60,7 +60,7 @@ describe("CharacterCount", () => {
 
   it("counts trimmed text by default, or by the field's own rule", async () => {
     await act(async () => {
-      root.render(createElement(CharacterCount, { id: "c", label: "Website", text: "  abc  ", max: 60 }));
+      root.render(createElement(CharacterCount, { id: "c", label: "Website", text: "  abc  ", max: 60, action: "save" }));
     });
     expect(container.textContent).toBe("3 of 60 characters");
     await act(async () => {
@@ -70,6 +70,7 @@ describe("CharacterCount", () => {
           label: "Name",
           text: " a   b ",
           max: 60,
+          action: "save",
           count: (text: string) => text.replace(/\s+/g, " ").trim().length,
         }),
       );
@@ -90,5 +91,49 @@ describe("CharacterCount", () => {
   it("an opening already over is not announced", async () => {
     await show(70);
     expect(announce).not.toHaveBeenCalled();
+  });
+
+  // R45 new-customer L1: the hint names the form's own button.
+  it("names the form's action in the hint", async () => {
+    await act(async () => {
+      root.render(createElement(CharacterCount, { id: "c", label: "Name", text: "x".repeat(52), max: 48, action: "create your account" }));
+    });
+    expect(container.textContent).toBe("52 of 48 characters (4 over). Shorten it to create your account.");
+  });
+});
+
+// R45 new-customer L1: the press half of the rule, shared by every form with a count.
+describe("refuseOverLimit", () => {
+  const focus = vi.fn();
+  const show = vi.fn();
+  beforeEach(() => {
+    focus.mockReset();
+    show.mockReset();
+  });
+
+  it("refuses while a field is over: shows its sentence and focuses it", () => {
+    const refused = refuseOverLimit(
+      [
+        { text: "short", max: 10, sentence: "first", field: { focus: vi.fn() } },
+        { text: "x".repeat(11), max: 10, sentence: "Too long.", field: { focus } },
+      ],
+      show,
+    );
+    expect(refused).toBe(true);
+    expect(show).toHaveBeenCalledWith("Too long.");
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts as the field counts, trimmed by default", () => {
+    expect(refuseOverLimit([{ text: "  abc  ", max: 3, sentence: "s", field: { focus } }], show)).toBe(false);
+    expect(
+      refuseOverLimit([{ text: "a  b", max: 3, count: (t) => t.length, sentence: "s", field: { focus } }], show),
+    ).toBe(true);
+  });
+
+  it("under the limit: nothing is shown or focused", () => {
+    expect(refuseOverLimit([{ text: "x".repeat(10), max: 10, sentence: "s", field: { focus } }], show)).toBe(false);
+    expect(show).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
   });
 });

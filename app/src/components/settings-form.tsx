@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { CharacterCount } from "@/components/ui/character-count";
+import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { useToast } from "@/components/ui/toast";
 import {
   BRAND_VOICE_EXAMPLE_MAX_LENGTH,
@@ -93,6 +93,10 @@ function TrackingTagsField({
 // The route's COMPANY_WEBSITE_MAX_LENGTH and DEFAULT_HASHTAGS_MAX_LENGTH (settings-form.test.ts ties them).
 const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
+/** The route's own sentence for a footer field over its limit (validateOptionalString). */
+function footerTooLongText(label: string, max: number): string {
+  return `${label} can be up to ${max.toLocaleString("en-US")} characters.`;
+}
 
 // R43 new-customer L1: no maxLength on these boxes, so a paste is never cut
 // mid-tag without a word; the shared count (components/ui/character-count.tsx)
@@ -146,6 +150,8 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
   const toast = useToast();
   const isOwner = role === "owner";
   const [companyWebsite, setCompanyWebsite] = useState(settings.companyWebsite || "");
+  const companyWebsiteRef = useRef<HTMLInputElement>(null);
+  const defaultHashtagsRef = useRef<HTMLTextAreaElement>(null);
   const [defaultHashtags, setDefaultHashtags] = useState(settings.defaultHashtags || "");
   const [notifyOnPostComplete, setNotifyOnPostComplete] = useState(
     settings.notifyOnPostComplete,
@@ -216,6 +222,29 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // R45 new-customer L1: as every counted field, text the route would refuse is not sent.
+    if (
+      isOwner &&
+      refuseOverLimit(
+        [
+          {
+            text: companyWebsite,
+            max: COMPANY_WEBSITE_MAX_LENGTH,
+            sentence: footerTooLongText("Company website", COMPANY_WEBSITE_MAX_LENGTH),
+            field: companyWebsiteRef.current,
+          },
+          {
+            text: defaultHashtags,
+            max: DEFAULT_HASHTAGS_MAX_LENGTH,
+            sentence: footerTooLongText("Default hashtags", DEFAULT_HASHTAGS_MAX_LENGTH),
+            field: defaultHashtagsRef.current,
+          },
+        ],
+        (sentence) => toast.error(sentence),
+      )
+    ) {
+      return;
+    }
     if (isOwner && googleButtonError) {
       toast.error(googleButtonError);
       return;
@@ -297,13 +326,14 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="companyWebsite">Company website</Label>
               <Input
+                ref={companyWebsiteRef}
                 id="companyWebsite"
                 placeholder="www.example.com"
                 value={companyWebsite}
                 onChange={(e) => setCompanyWebsite(e.target.value)}
                 aria-describedby="companyWebsiteCount"
               />
-              <CharacterCount id="companyWebsiteCount" label="Company website" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} />
+              <CharacterCount id="companyWebsiteCount" label="Company website" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} action="save" />
               <p className="text-sm text-muted-foreground">
                 Appended to every caption as: &quot;For more info visit [your website]&quot;.
               </p>
@@ -318,6 +348,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="defaultHashtags">Default hashtags</Label>
               <Textarea
+                ref={defaultHashtagsRef}
                 id="defaultHashtags"
                 placeholder="#YourBrand #YourIndustry #YourLocation"
                 value={defaultHashtags}
@@ -325,7 +356,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
                 rows={3}
                 aria-describedby="defaultHashtagsCount"
               />
-              <CharacterCount id="defaultHashtagsCount" label="Default hashtags" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} />
+              <CharacterCount id="defaultHashtagsCount" label="Default hashtags" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} action="save" />
               <p className="text-sm text-muted-foreground">
                 Added after your website, separated by a blank line.
               </p>

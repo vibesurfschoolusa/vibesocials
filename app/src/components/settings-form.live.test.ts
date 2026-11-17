@@ -21,6 +21,8 @@ vi.mock("@/components/ui/announcer", async (importOriginal) => ({
 vi.mock("@/components/ui/select", () => ({ Select: () => null }));
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
+import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
+import { parseSettingsInput } from "@/app/api/settings/route";
 import type { UserSettings } from "@/lib/userSettings";
 
 import { SettingsForm } from "./settings-form";
@@ -42,6 +44,7 @@ const SETTINGS: UserSettings = {
 
 let root: Root;
 let container: FakeNode;
+let doc: FocusDoc;
 const fetchMock = vi.fn();
 
 function find(node: FakeNode, test: (n: FakeNode) => boolean): FakeNode | null {
@@ -100,6 +103,8 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
+  doc = made.doc as unknown as FocusDoc;
+  makeFocusable(doc);
   vi.stubGlobal("window", made.doc.defaultView);
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("navigator", { onLine: true });
@@ -123,11 +128,9 @@ async function mount() {
 }
 
 describe("Settings footer fields never cut a paste short", () => {
-  it("a 1,100-character hashtag paste stays whole, the counter says so, and Save shows the route's sentence", async () => {
+  it("a 1,100-character hashtag paste stays whole, the counter says so, and Save sends nothing but the route's sentence", async () => {
     expect(LONG_HASHTAGS).toHaveLength(1100);
-    fetchMock.mockResolvedValue(
-      Response.json({ error: "Default hashtags can be up to 1,024 characters." }, { status: 400 }),
-    );
+    fetchMock.mockResolvedValue(Response.json({}));
     await mount();
     await type("defaultHashtags", LONG_HASHTAGS);
 
@@ -137,11 +140,29 @@ describe("Settings footer fields never cut a paste short", () => {
     expect(box.attributes["aria-describedby"]).toBe("defaultHashtagsCount");
     const counter = byId("defaultHashtagsCount").textContent as string;
     expect(counter).toContain("1,100 of 1,024 characters");
-    expect(counter).toContain("76 over");
+    expect(counter).toContain("76 over). Shorten it to save.");
 
+    // R45 new-customer L1: one behaviour for every counted field: the press is
+    // refused in the browser with the route's sentence, and the field takes the focus.
     await save();
-    expect(sentBody().defaultHashtags).toBe(LONG_HASHTAGS);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const routeSays = parseSettingsInput({ defaultHashtags: LONG_HASHTAGS });
+    expect(routeSays).toEqual({ ok: false, error: "Default hashtags can be up to 1,024 characters." });
     expect(toastError).toHaveBeenCalledWith("Default hashtags can be up to 1,024 characters.");
+    expect(doc.activeElement).toBe(byId("defaultHashtags"));
+  });
+
+  it("an over-long Company website: Save sends nothing, says the route's sentence and focuses it", async () => {
+    fetchMock.mockResolvedValue(Response.json({}));
+    await mount();
+    const long = "a".repeat(2050);
+    await type("companyWebsite", long);
+    await save();
+    expect(fetchMock).not.toHaveBeenCalled();
+    const routeSays = parseSettingsInput({ companyWebsite: long });
+    expect(routeSays).toEqual({ ok: false, error: "Company website can be up to 2,048 characters." });
+    expect(toastError).toHaveBeenCalledWith("Company website can be up to 2,048 characters.");
+    expect(doc.activeElement).toBe(byId("companyWebsite"));
   });
 
   it("Company website has no cut-off and a counter against 2,048", async () => {
