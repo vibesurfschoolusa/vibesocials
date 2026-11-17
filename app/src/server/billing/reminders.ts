@@ -3,6 +3,7 @@ import { RetryAfterError } from "inngest";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
+import { sendOncePer } from "@/server/notifications/onceADay";
 
 import { buildTrialEndedEmail, buildTrialEndingEmail } from "./billingEmails";
 
@@ -11,9 +12,12 @@ import { buildTrialEndedEmail, buildTrialEndingEmail } from "./billingEmails";
  * one step. Owners of a workspace whose trial ends within 3 days get one
  * reminder (marked by trialReminderSentAt); owners of one whose trial ended
  * get one notice (trialEndedEmailSentAt). Only workspaces with no plan, not
- * exempt by their flag, and used (a connection or a post). A marker is set once every owner's send went out, so
- * a failed one is tried again the next day; the idempotency key per
- * workspace, owner and kind stops a re-run of the step sending twice.
+ * exempt by their flag, and used (a connection or a post). Each owner's send
+ * goes through sendOncePer, claimed until the trial date (R40 security L3), so
+ * an owner already reached is skipped when a co-owner's failed send is tried
+ * again the next day. The workspace marker is set once every owner is reached;
+ * the idempotency key per workspace, owner and kind stops a re-run of the step
+ * sending twice.
  *
  * Bounded and paced as the daily problems email is (problemDigest.ts), so the
  * step fits Vercel's limit even when every send fails retryably.
@@ -26,6 +30,12 @@ export const REMINDER_SEND_INTERVAL_MS = 600;
 export const REMINDER_RETRY_DELAY_MS = 2_000;
 /** Per run, as DIGEST_MAX_EMAILS_PER_RUN: 40 x 4.6 s worst case fits one step. */
 export const REMINDER_MAX_EMAILS_PER_RUN = 40;
+/**
+ * How long a reached owner is skipped for the trial-ended notice, whose trial
+ * date has passed: the claim is set on the first try and outlasts any spell
+ * of failed sends to a co-owner.
+ */
+export const TRIAL_ENDED_CLAIM_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type BillingReminderSummary = {
   /** Workspaces found for each kind this run (at most the cap plus one). */
@@ -115,31 +125,43 @@ export async function runBillingReminders(
               timeZone: owner.user.timeZone,
             })
           : buildTrialEndedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
-      if (!first) await sleep(REMINDER_SEND_INTERVAL_MS);
-      first = false;
       const send = () =>
         sendEmail(
           { to: owner.user.email, ...email },
           { idempotencyKey: `billing/${kind}/${workspace.id}/${owner.userId}`, throwOnRetryable: true },
         );
-      try {
-        try {
-          await send();
-        } catch (error) {
-          if (!isRetryableEmailError(error)) throw error;
-          await sleep(retryDelayMs(error));
-          await send();
-        }
-        sent++;
-      } catch (error) {
+      const trialEndsAt = workspace.trialEndsAt!;
+      const outcome = await sendOncePer(
+        {
+          key: `billing-owner:${kind}:${workspace.id}:${owner.userId}:${trialEndsAt.toISOString()}`,
+          resetAt: kind === "trial-ending" ? trialEndsAt : new Date(now.getTime() + TRIAL_ENDED_CLAIM_MS),
+        },
+        // sendStarted is not called: a failed owner is tried again the next day,
+        // as before; only owners already reached are skipped.
+        async () => {
+          if (!first) await sleep(REMINDER_SEND_INTERVAL_MS);
+          first = false;
+          try {
+            await send();
+          } catch (error) {
+            if (!isRetryableEmailError(error)) throw error;
+            await sleep(retryDelayMs(error));
+            await send();
+          }
+          return true;
+        },
+        (error) =>
+          logger.error("[billing] Couldn't send one trial email; trying again tomorrow", {
+            kind,
+            workspaceId: workspace.id,
+            userId: owner.userId,
+            error: error instanceof Error ? error.name : typeof error,
+          }),
+      );
+      if (outcome === "sent") sent++;
+      if (outcome === "failed") {
         failed++;
         allSent = false;
-        logger.error("[billing] Couldn't send one trial email; trying again tomorrow", {
-          kind,
-          workspaceId: workspace.id,
-          userId: owner.userId,
-          error: error instanceof Error ? error.name : typeof error,
-        });
       }
     }
 

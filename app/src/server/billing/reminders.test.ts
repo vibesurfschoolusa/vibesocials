@@ -18,10 +18,22 @@ const m = vi.hoisted(() => ({
   rows: [] as Ws[],
   sendEmail: vi.fn(),
   findManyArgs: [] as unknown[],
+  /** The once-per-owner claims (consumeFixedWindow), by key. */
+  claims: new Map<string, { count: number; expiresAt: Date }>(),
+  claimsDown: false,
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: m.logger }));
+vi.mock("@/lib/rateLimit", () => ({
+  consumeFixedWindow: async ({ key, limit, resetAt }: { key: string; limit: number; resetAt: Date }) => {
+    if (m.claimsDown) return { allowed: false, retryAfterSeconds: 60, unavailable: true };
+    const entry = m.claims.get(key) ?? { count: 0, expiresAt: resetAt };
+    entry.count += 1;
+    m.claims.set(key, entry);
+    return entry.count > limit ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true };
+  },
+}));
 vi.mock("@/server/notifications/email", async () => {
   class EmailRetryableError extends Error {}
   return {
@@ -61,6 +73,9 @@ vi.mock("@/lib/db", () => {
     used(w, where.OR);
   return {
     prisma: {
+      rateLimitEntry: {
+        deleteMany: async ({ where }: { where: { key: string } }) => ({ count: Number(m.claims.delete(where.key)) }),
+      },
       workspace: {
         findMany: async (args: {
           where: Where;
@@ -96,7 +111,12 @@ vi.mock("@/lib/db", () => {
 
 import { EmailRetryableError } from "@/server/notifications/email";
 
-import { REMINDER_MAX_EMAILS_PER_RUN, REMINDER_SEND_INTERVAL_MS, runBillingReminders } from "./reminders";
+import {
+  REMINDER_MAX_EMAILS_PER_RUN,
+  REMINDER_SEND_INTERVAL_MS,
+  runBillingReminders,
+  TRIAL_ENDED_CLAIM_MS,
+} from "./reminders";
 
 const NOW = new Date("2026-11-10T16:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -123,6 +143,8 @@ const run = () => runBillingReminders(NOW, { sleep });
 beforeEach(() => {
   m.rows = [];
   m.findManyArgs = [];
+  m.claims.clear();
+  m.claimsDown = false;
   m.sendEmail.mockReset();
   m.sendEmail.mockResolvedValue(undefined);
   sleep.mockClear();
@@ -233,6 +255,47 @@ describe("runBillingReminders", () => {
     expect(m.sendEmail).toHaveBeenCalledTimes(3);
     expect(m.rows[0].trialReminderSentAt).toBeNull();
     expect(m.rows[1].trialReminderSentAt).toEqual(NOW);
+  });
+
+  // R40 security L3: a co-owner's failure never sends the others a second copy the next day.
+  it("owner A reached and owner B failed: the next day only B is sent, then the marker is set", async () => {
+    const owners = [
+      { userId: "u1", email: "one@example.com" },
+      { userId: "u2", email: "two@example.com" },
+    ];
+    m.rows = [ws("a", { owners })];
+    m.sendEmail
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new EmailRetryableError("503"))
+      .mockRejectedValueOnce(new EmailRetryableError("503"));
+    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 1, left: 0 });
+    expect(m.rows[0].trialReminderSentAt).toBeNull();
+
+    m.sendEmail.mockClear();
+    const tomorrow = new Date(NOW.getTime() + DAY);
+    expect(await runBillingReminders(tomorrow, { sleep })).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, left: 0 });
+    expect(m.sendEmail.mock.calls.map(([params]) => params.to)).toEqual(["two@example.com"]);
+    expect(m.rows[0].trialReminderSentAt).toEqual(tomorrow);
+  });
+
+  it("each owner's claim lasts until the trial date; an ended trial's, TRIAL_ENDED_CLAIM_MS from its first try", async () => {
+    m.rows = [ws("a"), ws("b", { trialEndsAt: new Date(NOW.getTime() - DAY) })];
+    await run();
+    expect([...m.claims.values()].map((claim) => claim.expiresAt)).toEqual([
+      m.rows[0].trialEndsAt,
+      new Date(NOW.getTime() + TRIAL_ENDED_CLAIM_MS),
+    ]);
+  });
+
+  it("a claim store that can't answer sends nothing and leaves the marker unset for tomorrow", async () => {
+    m.rows = [ws("a")];
+    m.claimsDown = true;
+    expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 0, failed: 1, left: 0 });
+    expect(m.sendEmail).not.toHaveBeenCalled();
+    expect(m.rows[0].trialReminderSentAt).toBeNull();
+
+    m.claimsDown = false;
+    expect((await runBillingReminders(new Date(NOW.getTime() + DAY), { sleep })).sent).toBe(1);
   });
 
   it("a retry that succeeds counts as sent", async () => {
