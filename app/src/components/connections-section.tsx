@@ -1,6 +1,7 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   Facebook,
   Instagram,
@@ -27,6 +28,7 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
+import { useResetOnReturnFromCache } from "./returnFromCache";
 import { SignInAgainLink } from "./gbp-sign-in-link";
 import { LinkedInConnectButton } from "./linkedin-account-dialog";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
@@ -156,6 +158,13 @@ export function ConnectionsSection({
   sameEndAt = {},
   endsAt = {},
 }: ConnectionsSectionProps) {
+  // R37 new-customer and lead follow-up: Switch account disconnects, then
+  // leaves the page; Back can restore it from the cache with the rows still
+  // saying "Connected as ...". One refresh here for all the rows.
+  const router = useRouter();
+  const refreshServerData = useCallback(() => router.refresh(), [router]);
+  useResetOnReturnFromCache(refreshServerData, undefined);
+
   return (
     <>
       {!readOnly ? (

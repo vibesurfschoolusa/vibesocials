@@ -14,6 +14,8 @@ vi.mock("./connection-actions", () => ({
   },
 }));
 vi.mock("./linkedin-account-dialog", () => ({ LinkedInConnectButton: () => null }));
+// R37: the section refreshes the server data on a return from the back-forward cache.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }) }));
 vi.mock("./google-business-location-form", () => ({ GoogleBusinessLocationForm: () => null }));
 
 import type { ConnectionSummary } from "@/lib/connectionSummary";
