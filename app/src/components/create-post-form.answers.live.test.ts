@@ -70,7 +70,7 @@ const fetchMock = vi.fn((input: unknown, init?: { signal?: AbortSignal }) => {
     // As a browser's fetch: an aborted signal rejects it.
     return new Promise<Response>((resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-      (answers[url] ??= []).push({ resolve: (body) => resolve(Response.json(body)) });
+      (answers[url] ??= []).push({ resolve: (body) => resolve(body instanceof Response ? body : Response.json(body)) });
     });
   }
   if (url === "/api/posts") return Promise.resolve(Response.json({ id: "job-1" }));
@@ -1045,5 +1045,36 @@ describe("R41 L1: Write it for me keeps a description typed while it runs", () =
     await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
     expect(valueOf("post-alt-text")).toBe("A surfer on a wave.");
     expect(pageSays(DESCRIPTION_WAIT)).toBe(false);
+  });
+});
+
+// R43 new-customer L4: the caption written when a file is added got the
+// route's bare "Too many tries…", which didn't say the caption wasn't written.
+describe("the automatic caption's refusal says no caption was written", () => {
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const photo = () => new File(["a"], "a.jpg", { type: "image/jpeg" });
+  const tooMany = () =>
+    Response.json(
+      { error: "Too many tries. Wait 4 minutes, then try again.", retryAfterSeconds: 230 },
+      { status: 429, headers: { "Retry-After": "230" } },
+    );
+
+  it("automatic: the toast starts with No caption was written", async () => {
+    await pick(photo());
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(1);
+    await answer("/api/posts/auto-caption", tooMany());
+    expect(pageSays("No caption was written: too many tries. Wait 4 minutes, then try again.")).toBe(true);
+    expect(captionNow()).toBe("");
+  });
+
+  it("a pressed Caption from media keeps the route's own words", async () => {
+    await untickAutoCaption();
+    await pick(photo());
+    await finishUploads();
+    await press("Caption from media");
+    await answer("/api/posts/auto-caption", tooMany());
+    expect(pageSays("Too many tries. Wait 4 minutes, then try again.")).toBe(true);
+    expect(pageSays("No caption was written")).toBe(false);
   });
 });

@@ -150,6 +150,23 @@ interface UploadedBlobInfo {
 type PublishMode = "now" | "schedule" | "draft";
 
 /**
+ * R43 new-customer L4: a refused automatic caption (written when a file is
+ * added) says the caption wasn't written before the route's own sentence.
+ */
+export function automaticCaptionRefusedText(routeSentence: string): string {
+  return `No caption was written: ${routeSentence.charAt(0).toLowerCase()}${routeSentence.slice(1)}`;
+}
+
+/** The browser's fetch, telling `onStatus` the answer's status; requestCaption still words every failure. */
+function fetchKeepingStatus(onStatus: (status: number) => void): typeof fetch {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    onStatus(response.status);
+    return response;
+  };
+}
+
+/**
  * Posts without a photo (2026-11-10): the page is writing a text post when no
  * file is attached and no library item is still loading (`?mediaItemId=`).
  */
@@ -1690,6 +1707,8 @@ function CreatePostFormInner({
 
       // No answer, or one that is not JSON, reads as a sentence that the
       // caption is unchanged (lib/captionRequest.ts), never "Failed to fetch".
+      // The answer's status is kept to word a refused automatic request.
+      let answerStatus: number | null = null;
       const result = await requestCaption(
         "/api/posts/auto-caption",
         {
@@ -1699,7 +1718,9 @@ function CreatePostFormInner({
           ...(frames.length > 0 ? { frames } : {}),
         },
         "caption",
-        undefined,
+        fetchKeepingStatus((status) => {
+          answerStatus = status;
+        }),
         request.signal,
       );
 
@@ -1710,7 +1731,9 @@ function CreatePostFormInner({
 
       if (!result.ok) {
         console.error("Error generating caption from media:", result.error);
-        toast.error(result.error);
+        // R43 new-customer L4: no one pressed anything for the caption written
+        // when a file is added, so a refusal says what didn't happen, as Add many does.
+        toast.error(options.automatic && answerStatus === 429 ? automaticCaptionRefusedText(result.error) : result.error);
         return;
       }
       const caption = result.caption;
