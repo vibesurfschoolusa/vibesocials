@@ -101,6 +101,8 @@ export async function requestPhotoDescription(
   /** R31: the workspace the page was drawn for (null: none yet, left out). */
   workspaceId: string | null,
   fetchImpl: typeof fetch = fetch,
+  /** R40: Create's hold on the request (useCaptionBox); aborting it reads as a lost answer. */
+  signal?: AbortSignal,
 ): Promise<string> {
   let response: Response;
   try {
@@ -108,6 +110,7 @@ export async function requestPhotoDescription(
       "/api/posts/auto-caption",
       {
         method: "POST",
+        signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           blobUrl: blob.url,
@@ -360,8 +363,11 @@ export interface AttachedPhotosProps {
   removeAllClearsCaption: boolean;
   /** 07d: the photo's description changed (typed, or written by the AI). */
   onDescribe(key: string, text: string): void;
-  /** R31: the workspace the page was drawn for, sent with "Write it for me". */
-  workspaceId: string | null;
+  /**
+   * "Write it for me" for one uploaded photo: Create's, which holds the submit
+   * while it runs (R40 publishing L3). Null: nothing to write.
+   */
+  writeDescription(blob: UploadedBlob): Promise<string | null>;
 }
 
 export function AttachedPhotos({
@@ -372,7 +378,7 @@ export function AttachedPhotos({
   onRemoveAll,
   removeAllClearsCaption: clearsCaption,
   onDescribe,
-  workspaceId,
+  writeDescription,
 }: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -401,7 +407,7 @@ export function AttachedPhotos({
               label={`Photo ${index + 1}: describe this photo (alt text)`}
               value={photo.altText ?? ""}
               onChange={(text) => onDescribe(photo.key, text)}
-              onWrite={photo.blob ? () => requestPhotoDescription(photo.blob as UploadedBlob, workspaceId) : null}
+              onWrite={photo.blob ? () => writeDescription(photo.blob as UploadedBlob) : null}
             />
           </li>
         ))}

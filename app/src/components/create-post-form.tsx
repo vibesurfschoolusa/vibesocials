@@ -104,7 +104,7 @@ import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { captureVideoFrame } from "@/lib/captureVideoFrame";
 import { coverBlobPathname } from "@/lib/coverBlobPath";
 import { coverRequestFields, type CoverChoice, type UploadedCoverImage } from "@/lib/videoCover";
-import { aiSwitchOn, coverUploadFailedText } from "@/app/posts/bulk/bulkExtras";
+import { automaticRequestMayGo, coverUploadFailedText } from "@/app/posts/bulk/bulkExtras";
 import {
   deriveComposerPlatforms,
   isTikTokPrivacyMissing,
@@ -488,25 +488,36 @@ export const AI_WRITING_MESSAGE = "Wait until the AI caption is ready.";
  * while it was open, in the words of what it confirms (lead review): it
  * confirms Publish now, or Schedule for a text post.
  */
-export function captionsChangedMessage(mode: PublishMode): string {
+export function captionsChangedMessage(mode: PublishMode, part: "caption" | "description" = "caption"): string {
   const again = mode === "schedule" ? "schedule again" : "publish again";
+  if (part === "description") {
+    return `A photo description changed while this was open. Press Cancel, read the descriptions, then ${again}.`;
+  }
   return `The caption changed while this was open. Press Cancel, read the caption, then ${again}.`;
 }
 
-/** The captions the confirmation was opened on; see captionsChangedSince. */
-export interface CaptionsAtConfirm {
+/**
+ * R40 publishing L3: everything the AI can write into the post, as the post
+ * would send it: the caption, the platforms' captions and the photo
+ * descriptions. The confirmation is opened on one; see postTextChangedSince.
+ */
+export interface PostText {
   caption: string;
   overrides: PlatformOverrides | null;
+  descriptions: ReadonlyArray<string | undefined>;
 }
 
 /**
  * R39 new-customer M1: the confirmation shows no caption, so it sends only the
- * captions it was opened on. A late AI answer that changed the caption or a
- * platform's caption since then makes it refuse.
+ * post text it was opened on. A late AI answer that changed it since then
+ * makes it refuse; this says which part changed (null: none).
  */
-export function captionsChangedSince(at: CaptionsAtConfirm | null, now: CaptionsAtConfirm): boolean {
-  if (at === null) return false;
-  return at.caption !== now.caption || JSON.stringify(at.overrides ?? {}) !== JSON.stringify(now.overrides ?? {});
+export function postTextChangedSince(at: PostText | null, now: PostText): "caption" | "description" | null {
+  if (at === null) return null;
+  if (at.caption !== now.caption || JSON.stringify(at.overrides ?? {}) !== JSON.stringify(now.overrides ?? {})) {
+    return "caption";
+  }
+  return JSON.stringify(at.descriptions) !== JSON.stringify(now.descriptions) ? "description" : null;
 }
 
 /**
@@ -1153,8 +1164,8 @@ function CreatePostFormInner({
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
   const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
-  // R39 new-customer M1: the captions the confirmation was opened on.
-  const [captionsAtConfirm, setCaptionsAtConfirm] = useState<CaptionsAtConfirm | null>(null);
+  // R39 new-customer M1, R40: the post text the confirmation was opened on.
+  const [postTextAtConfirm, setPostTextAtConfirm] = useState<PostText | null>(null);
   // Posts saved on this page: the preview list is keyed on it, so the next
   // post starts on the first selected platform's tab again.
   const [postsSaved, setPostsSaved] = useState(0);
@@ -1655,9 +1666,16 @@ function CreatePostFormInner({
 
     const busy = captionBusy.start();
     // Lead review: let go at once by a media change, and by an untick when
-    // automatic; aborted after AI_REQUEST_TIMEOUT_MS (useCaptionBox).
-    const request = captionBox.aiRequestStarted({ media: true, automatic: options.automatic === true });
+    // automatic; aborted after AI_REQUEST_TIMEOUT_MS (useCaptionBox). R40: and
+    // once the box changes so its answer can't be written; an automatic one
+    // with text in the box already is never taken, and sends nothing.
+    const request = captionBox.aiRequestStarted({
+      media: true,
+      automatic: options.automatic === true,
+      intoCaption: { press, overwrite: options.overwrite },
+    });
     try {
+      if (!request.live()) return;
       setUploadError(null);
 
       // For a video, a few still frames let the AI see what it shows
@@ -1667,8 +1685,8 @@ function CreatePostFormInner({
         ? await extractVideoFrames(options.fileOverride ?? uploadFile ?? blob.url)
         : [];
       // Nothing is sent for media that is gone, or once the switch is off.
-      if (!request.live() || options.isStale?.()) return;
-      if (options.automatic && !aiSwitchOn(autoCaptionRef)) return;
+      const mediaThere = request.live() && !options.isStale?.();
+      if (options.automatic ? !automaticRequestMayGo(autoCaptionRef, mediaThere) : !mediaThere) return;
 
       // No answer, or one that is not JSON, reads as a sentence that the
       // caption is unchanged (lib/captionRequest.ts), never "Failed to fetch".
@@ -1859,11 +1877,29 @@ function CreatePostFormInner({
     }
   }
 
+  // R40 publishing L3: "Write it for me" writes into the post, so it holds the
+  // submit like a caption request (useCaptionBox): until done, let go by a
+  // form reset (null: nothing is written or said), or out of time (its
+  // lost-answer sentence).
+  async function writePhotoDescription(blob: UploadedBlobInfo): Promise<string | null> {
+    const request = captionBox.aiRequestStarted({ media: false, automatic: false });
+    try {
+      const text = await requestPhotoDescription(blob, workspaceId, undefined, request.signal);
+      return request.live() ? text : null;
+    } catch (err: unknown) {
+      if (!request.live()) return null;
+      throw err;
+    } finally {
+      request.done();
+    }
+  }
+
   // 07d: "Write it for me" for the single photo. The answer goes to that photo
   // wherever it is now: still the single photo (returned, for the field), moved
   // into the set by "Add photos" (written onto its place there), or gone (dropped).
   async function describeSinglePhoto(blob: UploadedBlobInfo, photo: object): Promise<string | null> {
-    const text = await requestPhotoDescription(blob, workspaceId);
+    const text = await writePhotoDescription(blob);
+    if (text === null) return null;
     const target = whereDescriptionGoes(photo, { single: singlePhotoRef.current, set: photoSetRef.current });
     if (target?.to === "set") {
       changePhotoSet((prev) => patchPhoto(prev, target.key, { altText: text }));
@@ -2110,6 +2146,21 @@ function CreatePostFormInner({
     setSlotPresses(presses);
   }
 
+  // R40 publishing L3: the post's text as it would be sent now, for the send
+  // and for the confirmation's check (postTextChangedSince).
+  function postTextNow(): PostText {
+    const descriptions = reuseItem
+      ? reuseItem.mimeType.startsWith("image/")
+        ? [singleAltText]
+        : []
+      : photoSet.length > 0
+        ? photoSet.map((photo) => photo.altText)
+        : uploadFile?.type.startsWith("image/")
+          ? [singleAltText]
+          : [];
+    return { caption: uploadCaption, overrides: platformOverrides, descriptions };
+  }
+
   // Extracted from handleUploadSubmit below (Task 7 / Step 5) so it can run
   // either directly (schedule/draft — no confirmation needed) or via the
   // publish-now confirmation dialog's onConfirm (immediate publish). Every
@@ -2136,15 +2187,7 @@ function CreatePostFormInner({
       }
     }
 
-    const photoDescriptions = reuseItem
-      ? reuseItem.mimeType.startsWith("image/")
-        ? [singleAltText]
-        : []
-      : photoSet.length > 0
-        ? photoSet.map((photo) => photo.altText)
-        : uploadFile?.type.startsWith("image/")
-          ? [singleAltText]
-          : [];
+    const photoDescriptions = postTextNow().descriptions;
 
     try {
       let postData: CreatePostRequest | CreatePostReuseRequest | CreatePostMediaRequest | CreateTextPostRequest;
@@ -2470,7 +2513,7 @@ function CreatePostFormInner({
     // is also confirmed when scheduled; a draft and a scheduled post with a file
     // submit directly, as before.
     if (needsSubmitConfirm({ mode: publishMode, noFile })) {
-      setCaptionsAtConfirm({ caption: uploadCaption, overrides: platformOverrides });
+      setPostTextAtConfirm(postTextNow());
       setConfirmPublishOpen(true);
       return;
     }
@@ -2487,8 +2530,13 @@ function CreatePostFormInner({
     // it did here and the post hasn't been saved since (useCaptionBox); the box
     // stays editable, and what is typed meanwhile is kept.
     const press = captionBox.pressed(null);
-    // Let go by a form reset; aborted after AI_REQUEST_TIMEOUT_MS (useCaptionBox).
-    const request = captionBox.aiRequestStarted({ media: false, automatic: false });
+    // Let go by a form reset or (R40) a change to the box; aborted after
+    // AI_REQUEST_TIMEOUT_MS (useCaptionBox).
+    const request = captionBox.aiRequestStarted({
+      media: false,
+      automatic: false,
+      intoCaption: { press, overwrite: true },
+    });
     try {
       setEnhancingCaption(true);
       setUploadError(null);
@@ -2639,8 +2687,8 @@ function CreatePostFormInner({
     pageError: shownUploadError,
     aiWriting: captionBox.aiWriting,
   });
-  const captionsChanged =
-    confirmPublishOpen && captionsChangedSince(captionsAtConfirm, { caption: uploadCaption, overrides: platformOverrides });
+  const postTextChanged = confirmPublishOpen ? postTextChangedSince(postTextAtConfirm, postTextNow()) : null;
+  const captionsChanged = postTextChanged !== null;
 
   return (
     <>
@@ -2818,7 +2866,7 @@ function CreatePostFormInner({
                   onRemoveAll={removeAllPhotos}
                   removeAllClearsCaption={removeAllClearsTheCaption}
                   onDescribe={(key, text) => changePhotoSet((prev) => patchPhoto(prev, key, { altText: text }))}
-                  workspaceId={workspaceId}
+                  writeDescription={writePhotoDescription}
                 />
               )}
               <PreparingPhotosStatus photos={photoSet} />
@@ -3254,7 +3302,7 @@ function CreatePostFormInner({
             {confirmCopy.trail ? <span className="block">{confirmCopy.trail}</span> : null}
             {captionsChanged ? (
               <span role="alert" className="block font-medium text-destructive">
-                {captionsChangedMessage(publishMode)}
+                {captionsChangedMessage(publishMode, postTextChanged ?? "caption")}
               </span>
             ) : null}
           </span>

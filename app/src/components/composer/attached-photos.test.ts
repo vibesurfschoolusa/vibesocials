@@ -296,7 +296,7 @@ describe("AttachedPhotos", () => {
   const render = (photos: AttachedPhoto[]) =>
     renderToStaticMarkup(
       createElement(AttachedPhotos, {
-        workspaceId: "ws-1",
+        writeDescription: () => Promise.resolve(null),
         photos,
         onRemove: noop,
         onMove: noop,
@@ -594,7 +594,7 @@ describe("AttachedPhotos - descriptions", () => {
   it("gives every photo its own description field, numbered like its tile", () => {
     const html = renderToStaticMarkup(
       createElement(AttachedPhotos, {
-        workspaceId: "ws-1",
+        writeDescription: () => Promise.resolve(null),
         photos: [photo("a", { altText: "A dog." }), photo("b")],
         onRemove: noop,
         onMove: noop,

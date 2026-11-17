@@ -1500,7 +1500,7 @@ describe("Create's AI requests carry the page's workspace id", () => {
     expect(source).toMatch(/requestCaption\(\s*"\/api\/posts\/auto-caption",\s*\{\s*workspaceId,/);
     expect(source).toMatch(/requestCaption\(\s*"\/api\/posts\/enhance-caption",\s*\{ workspaceId, caption: uploadCaption \}/);
     expect(source).not.toMatch(/requestPhotoDescription\(blob\)/);
-    expect(source.match(/requestPhotoDescription\([^)]*, workspaceId\)/g)?.length).toBeGreaterThanOrEqual(1);
+    expect(source.match(/requestPhotoDescription\(blob, workspaceId[,)]/g)?.length).toBeGreaterThanOrEqual(1);
   });
 });
 

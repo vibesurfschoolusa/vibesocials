@@ -41,6 +41,24 @@ export interface AiRequestKind {
   media: boolean;
   /** Started by the media, not a press: unticking its switch lets it go. */
   automatic: boolean;
+  /**
+   * R40: its answer goes into the caption box, by captionResultApplies with
+   * this press and `overwrite`. It is held only while that answer can still
+   * be written: not taken when it already can't, let go once the box changes.
+   */
+  intoCaption?: { press: CaptionPress; overwrite: boolean };
+}
+
+/** R40: whether a request's answer could still be written into the box as it reads now. */
+function answerCanApply(kind: AiRequestKind, captionNow: string): boolean {
+  if (!kind.intoCaption) return true;
+  return captionResultApplies({
+    askedAbout: null,
+    selectedNow: null,
+    captionAtPress: kind.intoCaption.press.captionAtPress,
+    captionNow,
+    overwrite: kind.intoCaption.overwrite,
+  });
 }
 
 /**
@@ -86,6 +104,9 @@ export function useCaptionBox() {
     const value = typeof next === "function" ? next(captionRef.current) : next;
     captionRef.current = value;
     setCaptionState(value);
+    // R40: a request whose answer this box can no longer take stops holding
+    // the submit at once, and its fetch is aborted.
+    for (const entry of [...runningRef.current]) if (!answerCanApply(entry.kind, value)) entry.letGo();
   }, []);
 
   /**
@@ -94,9 +115,17 @@ export function useCaptionBox() {
    * go when done, after AI_REQUEST_TIMEOUT_MS (the fetch is aborted and the
    * caller's failure sentence shows), or at once when a media change, an
    * untick or a form reset lets it go (letGoAiRequests). Stable, like setCaption.
+   *
+   * R40: one whose answer the box can't take already (an automatic caption
+   * with text in the box) takes no token: it comes back let go, so the
+   * caller sends nothing.
    */
   const aiRequestStarted = useCallback((kind: AiRequestKind): AiRequest => {
     const controller = new AbortController();
+    if (!answerCanApply(kind, captionRef.current)) {
+      controller.abort();
+      return { signal: controller.signal, live: () => false, done: () => {} };
+    }
     let ended = false;
     let letGo = false;
     const entry = {

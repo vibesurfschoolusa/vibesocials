@@ -59,11 +59,14 @@ let container: FakeNode;
 let body: FakeNode;
 const answers: Record<string, Deferred[]> = {};
 const calls: string[] = [];
+// Each AI request's signal, in order, to see it aborted when let go.
+const signals: AbortSignal[] = [];
 
 const fetchMock = vi.fn((input: unknown, init?: { signal?: AbortSignal }) => {
   const url = String(input);
   calls.push(url);
   if (url === "/api/posts/enhance-caption" || url === "/api/posts/auto-caption") {
+    if (init?.signal) signals.push(init.signal);
     // As a browser's fetch: an aborted signal rejects it.
     return new Promise<Response>((resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
@@ -189,6 +192,7 @@ beforeEach(async () => {
   vi.stubGlobal("Node", class {});
   for (const key of Object.keys(answers)) delete answers[key];
   calls.length = 0;
+  signals.length = 0;
   uploads.pending.length = 0;
   prep.hold = false;
   prep.waiting.length = 0;
@@ -588,6 +592,186 @@ describe("R39 lead review: the AI wait ends with its request", () => {
     );
     expect(captionsChangedMessage("schedule")).toBe(
       "The caption changed while this was open. Press Cancel, read the caption, then schedule again.",
+    );
+  });
+});
+
+describe("R40: a wait is held only while its answer can still apply", () => {
+  const AI_WAIT = "Wait until the AI caption is ready.";
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const photo = () => new File(["a"], "a.jpg", { type: "image/jpeg" });
+  const video = () => new File(["v"], "v.mp4", { type: "video/mp4" });
+
+  it("a caption typed, then a photo picked: no request, and the submit stays enabled", async () => {
+    await typeCaption("Surf lesson today, 3 pm");
+    await pick(photo());
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(0);
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(AI_WAIT)).toBe(false);
+    expect(captionNow()).toBe("Surf lesson today, 3 pm");
+  });
+
+  it("a caption typed, then a video picked: no frame grab, no request, the submit stays enabled", async () => {
+    frames.hold = true;
+    await typeCaption("Sunset session tonight");
+    await pick(video());
+    await finishUploads();
+    expect(frames.waiting.length).toBe(0);
+    expect(autoCaptionCalls()).toBe(0);
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("a caption typed, then a photo set picked: no request, and the submit stays enabled", async () => {
+    await typeCaption("Surf lesson today, 3 pm");
+    await pick(photo(), new File(["b"], "b.jpg", { type: "image/jpeg" }));
+    await finishUploads();
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(0);
+    expect(submitDisabled()).toBe(false);
+    expect(captionFromMediaBusy()).toBe(false);
+  });
+
+  it("typing during an automatic caption: the wait ends at once, the fetch is aborted, the text is kept", async () => {
+    await pick(photo());
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(1);
+    expect(submitDisabled()).toBe(true);
+    await typeCaption("My own words");
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(AI_WAIT)).toBe(false);
+    expect(signals[0]?.aborted).toBe(true);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(captionNow()).toBe("My own words");
+  });
+
+  it("typing during a video's frame grab: the wait ends and nothing is sent", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(submitDisabled()).toBe(true);
+    await typeCaption("Sunset session tonight");
+    expect(submitDisabled()).toBe(false);
+    await run(() => frames.waiting.splice(0).forEach((go) => go()));
+    expect(autoCaptionCalls()).toBe(0);
+  });
+
+  it("typing during Improve: the wait ends at once and the fetch is aborted", async () => {
+    await typeCaption("Surf lesson today");
+    await press("Improve caption");
+    expect(submitDisabled()).toBe(true);
+    await typeCaption("Surf lesson today at 3 pm");
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(AI_WAIT)).toBe(false);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(captionNow()).toBe("Surf lesson today at 3 pm");
+  });
+
+  it("typing during a manual Caption from media: the wait ends", async () => {
+    await untickAutoCaption();
+    await pick(photo());
+    await finishUploads();
+    await typeCaption("Hi");
+    await press("Caption from media");
+    expect(submitDisabled()).toBe(true);
+    await typeCaption("Hi there");
+    expect(submitDisabled()).toBe(false);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(captionNow()).toBe("Hi there");
+  });
+
+  it("an unchanged box still waits, and the answer is written", async () => {
+    await pick(photo());
+    await finishUploads();
+    expect(submitDisabled()).toBe(true);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(captionNow()).toBe("Waves at sunrise");
+    expect(submitDisabled()).toBe(false);
+    await press("Improve caption");
+    expect(submitDisabled()).toBe(true);
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Catch a wave at sunrise!" });
+    expect(captionNow()).toBe("Catch a wave at sunrise!");
+    expect(submitDisabled()).toBe(false);
+  });
+});
+
+describe("R40 publishing L3: Write it for me counts as AI writing into the post", () => {
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const submit = () => run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
+  const dialogConfirm = () => {
+    const dialog = find(body, (n) => n.attributes?.role === "dialog");
+    if (!dialog) throw new Error("no dialog");
+    const buttons: FakeNode[] = [];
+    const walk = (n: FakeNode) => {
+      if (n.nodeName === "BUTTON") buttons.push(n);
+      n.childNodes.forEach(walk);
+    };
+    walk(dialog);
+    const hit = buttons.find((b) => (b.textContent as string).trim() !== "Cancel");
+    if (!hit) throw new Error("no confirm button");
+    return hit;
+  };
+  const postCalls = () => calls.filter((url) => url === "/api/posts").length;
+  const descriptionNow = () => String(byId("post-alt-text").value ?? "");
+  const photoReady = async () => {
+    await untickAutoCaption();
+    await pick(new File(["a"], "a.jpg", { type: "image/jpeg" }));
+    await finishUploads();
+    await typeCaption("Surf lesson today");
+  };
+
+  it("Write it for me running: the submit waits, then the description is written", async () => {
+    await photoReady();
+    expect(submitDisabled()).toBe(false);
+    await press("Write it for me");
+    expect(submitDisabled()).toBe(true);
+    await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
+    expect(descriptionNow()).toBe("A surfer on a wave.");
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("a description arrives while the confirmation is open: Publish refuses and says why", async () => {
+    await photoReady();
+    await press("Write it for me");
+    await submit();
+    expect(props(dialogConfirm()).disabled as unknown).toBeFalsy();
+    await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
+    expect(descriptionNow()).toBe("A surfer on a wave.");
+    expect(props(dialogConfirm()).disabled as unknown).toBe(true);
+    expect(pageSays(captionsChangedMessage("now", "description"))).toBe(true);
+    await run(() => props(dialogConfirm()).onClick());
+    expect(postCalls()).toBe(0);
+  });
+
+  it("a normal publish with a written description: unchanged", async () => {
+    await photoReady();
+    await press("Write it for me");
+    await answer("/api/posts/auto-caption", { altText: "A surfer on a wave." });
+    await submit();
+    expect(props(dialogConfirm()).disabled as unknown).toBeFalsy();
+    expect(pageSays("changed while this was open")).toBe(false);
+    await run(() => props(dialogConfirm()).onClick());
+    expect(postCalls()).toBe(1);
+  });
+
+  it("the description refusal names what it confirms", () => {
+    expect(captionsChangedMessage("now", "description")).toBe(
+      "A photo description changed while this was open. Press Cancel, read the descriptions, then publish again.",
+    );
+    expect(captionsChangedMessage("schedule", "description")).toBe(
+      "A photo description changed while this was open. Press Cancel, read the descriptions, then schedule again.",
     );
   });
 });
