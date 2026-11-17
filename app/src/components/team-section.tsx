@@ -39,7 +39,7 @@ import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 import { personLabel } from "@/lib/usageLimits";
 import { announceWorkspaceChange } from "@/lib/workspaceChangeEvent";
 
-import { FormError } from "./account-section";
+import { FormError, useClearedOnClose } from "./account-section";
 import { announceClientLinksReplaced, subscribeClientLinksReplaced } from "./client-links-refresh";
 
 /** GET /api/workspaces/members list item — owner-only route (SEC-1: never fetched for a member). */
@@ -1404,10 +1404,13 @@ export function DeleteWorkspace({
   workspaceName: string;
   deletion: WorkspaceDeletionInfo;
 }) {
-  const [open, setOpen] = useState(false);
   const [confirmName, setConfirmName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useClearedOnClose(() => {
+    setConfirmName("");
+    setError(null);
+  });
 
   async function handleDelete() {
     setBusy(true);

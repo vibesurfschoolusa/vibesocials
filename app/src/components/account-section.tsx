@@ -117,6 +117,21 @@ export function FormError({ message }: { message: string }) {
   );
 }
 
+/**
+ * R41 pages L4: the one rule for a form or dialog that opens and closes in
+ * place. Closing it (Cancel, Escape, the backdrop) runs `clear`, which empties
+ * its error and typed text, so reopening starts clean instead of showing an
+ * old alert, read out as new, over what was typed last time.
+ */
+export function useClearedOnClose(clear: () => void, startOpen = false): [boolean, (open: boolean) => void] {
+  const [open, setOpenState] = useState(startOpen);
+  const setOpen = (next: boolean) => {
+    if (!next) clear();
+    setOpenState(next);
+  };
+  return [open, setOpen];
+}
+
 /** Settings → Account: sign-in email (and changing it), change password, delete account. */
 export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan = false }: AccountSectionProps) {
   return (
@@ -168,11 +183,15 @@ export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan =
  * (api/auth/change-email). `startOpen` shows the form at once (tests).
  */
 export function ChangeEmailForm({ email, startOpen = false }: { email: string; startOpen?: boolean }) {
-  const [open, setOpen] = useState(startOpen);
   const [newEmail, setNewEmail] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useClearedOnClose(() => {
+    setNewEmail("");
+    setCurrentPassword("");
+    setError(null);
+  }, startOpen);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const changeEmailRef = useRef<HTMLButtonElement>(null);
   const newEmailRef = useRef<HTMLInputElement>(null);
@@ -443,10 +462,13 @@ function DeleteAccount({
   deletion: AccountDeletionPreview;
   cancelsPaidPlan: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [confirmValue, setConfirmValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useClearedOnClose(() => {
+    setConfirmValue("");
+    setError(null);
+  });
 
   async function handleDelete() {
     setBusy(true);
