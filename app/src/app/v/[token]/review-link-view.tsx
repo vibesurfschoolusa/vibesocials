@@ -373,11 +373,9 @@ export function ReviewPostCard({
       if (outcome.kind === "saved") {
         focusAfterPress(pressed, () => stateRef.current);
         setAsking(false);
-        // The note went: nothing is left to keep.
-        if (body.decision === "change") {
-          keepNote(token, post.id, "");
-          setNote("");
-        }
+        // R41 second look: any decision that went settles the post, so its kept note goes too.
+        keepNote(token, post.id, "");
+        setNote("");
         onDecided(outcome.patch);
         // A change request that already stood: the post may have been edited since, so reload.
         if (alreadyStood(data)) onStale(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE);
@@ -714,10 +712,11 @@ export function ReviewLinkView({ token }: { token: string }) {
         <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
           {notice}
         </p>
-        {/* R41 review: why every card's decisions are off, in sight of each; on the page from the first render. */}
-        <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
-          {decisionsLimited ? decisionLimitShown.sentence : ""}
-        </p>
+        {/* R41 review: why every card's decisions are off, in sight of each. Plain, not live (second
+            look): the pressed card's line is the one read out and focused. */}
+        {decisionsLimited ? (
+          <p className="rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">{decisionLimitShown.sentence}</p>
+        ) : null}
         {posts === null ? null : cards.length === 0 ? (
           <p ref={emptyRef} className="text-sm text-muted-foreground outline-none">
             Nothing is scheduled for the next 60 days.

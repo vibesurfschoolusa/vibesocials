@@ -241,8 +241,22 @@ describe("/v: a card decision's 429", () => {
   }
 
   const noteBox = () => find(container, (n) => n.nodeName === "TEXTAREA");
-  const pageLine = () =>
-    all((n) => n.attributes?.role === "status").find((n) => (n.textContent as string).startsWith("Too many") || (n.textContent as string).startsWith("This link"));
+  const isLimitText = (n: FakeNode) =>
+    (n.textContent as string).startsWith("Too many") || (n.textContent as string).startsWith("This link");
+  /** Inside a card's list item, or not. */
+  const inCard = (n: FakeNode) => {
+    for (let at: FakeNode | null = n; at; at = at.parentNode as FakeNode | null) if (at.nodeName === "LI") return true;
+    return false;
+  };
+  /** The line atop the list: outside every card. */
+  const pageLine = () => all((n) => n.nodeName === "P" && isLimitText(n) && !inCard(n))[0];
+  /** R41 second look: a live region (alert, status, aria-live) whose own text is the sentence. */
+  const liveWith = (text: string) =>
+    all(
+      (n) =>
+        (n.attributes?.role === "alert" || n.attributes?.role === "status" || n.attributes?.["aria-live"] !== undefined) &&
+        (n.textContent as string) === text,
+    );
 
   it("Looks good: one sentence on the card and atop the list, and no decision on any card can be pressed", async () => {
     fetchMock.mockReturnValueOnce(listed("a", "b", "c")).mockReturnValueOnce(refused(HOURLY, 1500));
@@ -259,6 +273,9 @@ describe("/v: a card decision's 429", () => {
     }
     // R41 review: card 3's greyed buttons have a reason in sight, atop the list.
     expect(pageLine()?.textContent).toBe(sentence);
+    // R41 second look: read out once, by the pressed card's line; the top line is plain.
+    expect(liveWith(sentence)).toHaveLength(1);
+    expect(inCard(liveWith(sentence)[0])).toBe(true);
     const active = doc.activeElement as FakeNode;
     expect(active.attributes.role).toBe("alert");
     expect(active.textContent).toBe(sentence);
@@ -295,6 +312,20 @@ describe("/v: a card decision's 429", () => {
     expect(noteBox()).toBeNull();
     await press(buttons("Ask for a change")[0]);
     expect(props(noteBox()!).value).toBe(NOTE);
+  });
+
+  // R41 second look: an approved card's Ask for a change must not reopen old text.
+  it("a Looks good that went clears the kept note too", async () => {
+    stored.set("vs-review-note:tok:a", NOTE);
+    fetchMock
+      .mockReturnValueOnce(listed("a"))
+      .mockReturnValueOnce(Promise.resolve(Response.json({ state: "approved", version: "v2" })));
+    await open();
+    await press(buttons("Looks good")[0]);
+    expect(container.textContent).toContain("You approved this");
+    expect(stored.has("vs-review-note:tok:a")).toBe(false);
+    await press(buttons("Ask for a change")[0]);
+    expect(props(noteBox()!).value).toBe("");
   });
 
   it("a send that went clears the kept note", async () => {
