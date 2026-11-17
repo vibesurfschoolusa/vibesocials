@@ -441,8 +441,13 @@ describe("isOnlyWorkspace", () => {
     expect(here.split("<= 1")).toHaveLength(2);
     const leave = readFileSync(fileURLToPath(new URL("../../app/api/workspaces/leave/route.ts", import.meta.url)), "utf8");
     expect(leave).toContain('import { isOnlyWorkspace } from "@/server/account/deleteWorkspace";');
-    expect(leave).toContain('return isOnlyWorkspace(memberships) ? ("only_workspace" as const) : ("only_person" as const);');
+    // R35: through the one sole-owner rule (lib/leaveRefusals) the Team card uses too.
+    expect(leave).toContain("soleOwnerLeaveCase({ otherMembers: otherMemberCount, onlyWorkspace: isOnlyWorkspace(memberships) })");
     expect(leave).not.toContain("memberships <= 1");
+    // And Settings, for the Team card's Leave line.
+    const settings = readFileSync(fileURLToPath(new URL("../../app/settings/page.tsx", import.meta.url)), "utf8");
+    expect(settings).toContain("const onlyWorkspace = memberships !== null && isOnlyWorkspace(memberships);");
+    expect(settings).not.toContain("memberships <= 1");
   });
 });
 
