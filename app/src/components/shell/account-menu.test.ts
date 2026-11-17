@@ -10,7 +10,7 @@ vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), e
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
+import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_NOT_SENT_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
 import { announceWorkspaceChange, newestAnswer } from "@/lib/workspaceChangeEvent";
 
 import {
@@ -276,11 +276,14 @@ describe("AccountMenu: Sign out", () => {
     const close = vi.fn();
     const error = vi.fn();
     const leave = vi.fn();
-    await signOutFromMenu(async () => ({ ok: false as const, message: SIGN_OUT_FAILED_MESSAGE }), close, error, leave);
+    await signOutFromMenu(async () => ({ ok: false as const, kind: "lost" as const }), close, error, leave);
     expect(error).toHaveBeenCalledWith(SIGN_OUT_FAILED_MESSAGE);
     // R32 lead review: an answer that left the person signed in says so.
-    await signOutFromMenu(async () => ({ ok: false as const, message: SIGN_OUT_STILL_SIGNED_IN_MESSAGE }), close, error, leave);
+    await signOutFromMenu(async () => ({ ok: false as const, kind: "refused" as const }), close, error, leave);
     expect(error).toHaveBeenLastCalledWith(SIGN_OUT_STILL_SIGNED_IN_MESSAGE);
+    // R33 pages L4: no answer to the token read, so nothing was sent.
+    await signOutFromMenu(async () => ({ ok: false as const, kind: "not_sent" as const }), close, error, leave);
+    expect(error).toHaveBeenLastCalledWith(SIGN_OUT_NOT_SENT_MESSAGE);
     expect(close).not.toHaveBeenCalled();
     expect(leave).not.toHaveBeenCalled();
   });

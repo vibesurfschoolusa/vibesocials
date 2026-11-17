@@ -20,6 +20,8 @@ import {
   emailChangeFailureText,
   emailChangeRefusal,
   emailChangeSentMessage,
+  PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE,
+  passwordChangeSignOutText,
   passwordFailureText,
   undoLinkSentence,
 } from "./account-section";
@@ -301,11 +303,29 @@ describe("Settings, Account: sign-out after a password change", () => {
   it("goes to Log in only when signOutChecked says signed out; otherwise the sign-out sentence shows", () => {
     expect(form).not.toMatch(/\bsignOut\(/);
     expect(form).toMatch(/signOutChecked\(\)/);
-    // R32 lead review: the helper's own sentence (lost answer, or still signed in).
-    expect(form).toMatch(/else setSignOutError\(signedOut\.message\);/);
+    // R33 security-billing L1: this card's own sentence for every outcome.
+    expect(form).toMatch(/else setSignOutError\(passwordChangeSignOutText\(signedOut\)\);/);
     expect(form).toMatch(/if \(signedOut\.ok\) afterWorkspaceChange\("\/login"\);/);
     // The sentence shows with the success line (the form is gone by then).
     const alert = form.indexOf('<Alert variant="success">');
     expect(form.indexOf("signOutError", alert)).toBeGreaterThan(alert);
+  });
+});
+
+// R33 security-billing L1 (= new-customer L1, pages L1): the server ended every
+// session with the change, and this card has no Sign out button, so no outcome
+// says "still signed in" or "press Sign out again".
+describe("Settings, Account: the sign-out sentence after a password change", () => {
+  it("is the same for every failed outcome", () => {
+    for (const kind of ["not_sent", "refused", "lost"] as const) {
+      expect(passwordChangeSignOutText({ ok: false, kind }), kind).toBe(PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE);
+    }
+    expect(PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE).toBe(
+      "Your password changed and you're signed out everywhere. Reload the page, then log in.",
+    );
+  });
+
+  it("is nothing once the sign-out worked", () => {
+    expect(passwordChangeSignOutText({ ok: true })).toBeNull();
   });
 });

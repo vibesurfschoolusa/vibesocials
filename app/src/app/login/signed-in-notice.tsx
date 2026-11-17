@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import type { SignedInAccount } from "@/components/signed-in-swap";
-import { signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
+import { signOutButtonFailureText, signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
 
 /**
  * R17-pages L1: Log in and Register show who is signed in instead of their
@@ -27,7 +27,7 @@ export function showSignedInNotice(account: SignedInAccount | null, submitting: 
  */
 export async function signOutHere(signOutFn: () => Promise<SignOutCheck> = signOutChecked): Promise<string | null> {
   const check = await signOutFn();
-  return check.ok ? null : check.message;
+  return check.ok ? null : signOutButtonFailureText(check.kind);
 }
 
 /**

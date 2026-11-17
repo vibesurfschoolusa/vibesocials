@@ -16,7 +16,7 @@ import {
   showSignedInNotice,
   signOutHere,
 } from "./signed-in-notice";
-import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
+import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_NOT_SENT_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE } from "@/lib/signOutChecked";
 
 const source = readFileSync(join(__dirname, "signed-in-notice.tsx"), "utf8");
 
@@ -39,11 +39,15 @@ describe("signed-in notice on Log in and Register", () => {
   });
 
   it("says plainly when signing out did not work (a csrf=true answer, a lost one, a session still there)", async () => {
-    await expect(signOutHere(async () => ({ ok: false as const, message: SIGN_OUT_FAILED_MESSAGE }))).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
+    await expect(signOutHere(async () => ({ ok: false as const, kind: "lost" as const }))).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
     // R32 lead review: an answer that left the person signed in says so.
-    await expect(
-      signOutHere(async () => ({ ok: false as const, message: SIGN_OUT_STILL_SIGNED_IN_MESSAGE })),
-    ).resolves.toBe(SIGN_OUT_STILL_SIGNED_IN_MESSAGE);
+    await expect(signOutHere(async () => ({ ok: false as const, kind: "refused" as const }))).resolves.toBe(
+      SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
+    );
+    // R33 pages L4: no answer to the token read, so nothing was sent.
+    await expect(signOutHere(async () => ({ ok: false as const, kind: "not_sent" as const }))).resolves.toBe(
+      SIGN_OUT_NOT_SENT_MESSAGE,
+    );
     // Lead review 3 (R28 NN2): the sign-out may have ended the session before the answer was lost.
     expect(SIGN_OUT_FAILED_MESSAGE).toBe(
       "Vibe Socials' answer didn't reach you, so you may be signed out. If your connection dropped, reconnect first. Then reload the page to see.",
@@ -68,7 +72,7 @@ describe("after Sign out on the notice", () => {
   it("does not move the focus when signing out failed; the notice says why", async () => {
     const onSignedOut = vi.fn();
     await expect(
-      pressSignOut(async () => ({ ok: false as const, message: SIGN_OUT_FAILED_MESSAGE }), onSignedOut),
+      pressSignOut(async () => ({ ok: false as const, kind: "lost" as const }), onSignedOut),
     ).resolves.toBe(SIGN_OUT_FAILED_MESSAGE);
     expect(onSignedOut).not.toHaveBeenCalled();
   });

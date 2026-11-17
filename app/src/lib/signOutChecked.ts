@@ -10,10 +10,33 @@ export const SIGN_OUT_FAILED_MESSAGE = answerLostText("you may be signed out", "
 /** R32 lead review: an answer came and the person is still signed in (csrf=true, a refusal, a session still there). */
 export const SIGN_OUT_STILL_SIGNED_IN_MESSAGE = "You're still signed in. Press Sign out again.";
 
-export type SignOutCheck = { ok: true } | { ok: false; message: string };
+/** R33 pages L4: the token read got no answer, so the sign-out was never sent. */
+export const SIGN_OUT_NOT_SENT_MESSAGE =
+  "Vibe Socials couldn't be reached, so nothing was sent. Reconnect, then press Sign out again.";
 
-const LOST: SignOutCheck = { ok: false, message: SIGN_OUT_FAILED_MESSAGE };
-const STILL_SIGNED_IN: SignOutCheck = { ok: false, message: SIGN_OUT_STILL_SIGNED_IN_MESSAGE };
+/**
+ * R33 (cure 3): how a sign-out failed. Each caller words it for its own
+ * screen: Change password has no Sign out button, and its server already
+ * ended the session.
+ * - not_sent: the token read got no answer (offline, a non-JSON 5xx); nothing was sent.
+ * - refused: an answer came and the person is still signed in.
+ * - lost: the sign-out was sent and its answer lost or unreadable; it may have worked.
+ */
+export type SignOutFailure = "not_sent" | "refused" | "lost";
+export type SignOutCheck = { ok: true } | { ok: false; kind: SignOutFailure };
+
+/** The sentence for a screen with its own Sign out button (the account menu, Log in's notice). */
+export function signOutButtonFailureText(kind: SignOutFailure): string {
+  return {
+    not_sent: SIGN_OUT_NOT_SENT_MESSAGE,
+    refused: SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
+    lost: SIGN_OUT_FAILED_MESSAGE,
+  }[kind];
+}
+
+const LOST: SignOutCheck = { ok: false, kind: "lost" };
+const STILL_SIGNED_IN: SignOutCheck = { ok: false, kind: "refused" };
+const NOT_SENT: SignOutCheck = { ok: false, kind: "not_sent" };
 
 /** A 2xx answer's JSON object, or null when it can't be read. */
 async function jsonObject(response: Response): Promise<Record<string, unknown> | null> {
@@ -59,13 +82,12 @@ function tellTabsSignedOut(): void {
  * names nobody. Never throws and never leaves the page: the caller shows the
  * failure's message and leaves only after { ok: true }.
  *
- * R32 lead review: two failure sentences. No answer after the sign-out was
- * sent (offline, a non-JSON 5xx, fetchOrNoAnswer's NoAnswerError), or an
- * answer to it that can't be read, may have ended the session:
- * SIGN_OUT_FAILED_MESSAGE. Everything that leaves the person signed in says
- * SIGN_OUT_STILL_SIGNED_IN_MESSAGE: no token (the token read got no answer or
- * none in it, so nothing was sent), a refusal, csrf=true, a session that
- * names someone.
+ * R32 lead review, R33 pages L4: three failures. No answer after the sign-out
+ * was sent (offline, a non-JSON 5xx, fetchOrNoAnswer's NoAnswerError), or an
+ * answer to it that can't be read, may have ended the session: "lost". No
+ * answer to the token read means nothing was sent: "not_sent". An answer that
+ * leaves the person signed in is "refused": a token read with no token in it,
+ * a refusal, csrf=true, a session that names someone.
  */
 export async function signOutChecked(
   fetchImpl: typeof fetch = fetch,
@@ -77,9 +99,10 @@ export async function signOutChecked(
     const csrf = csrfAnswer.ok ? await jsonObject(csrfAnswer) : null;
     if (typeof csrf?.csrfToken === "string") csrfToken = csrf.csrfToken;
   } catch {
-    // No answer to the token read: the sign-out below is never sent.
+    // No answer to the token read: the sign-out is never sent.
+    return NOT_SENT;
   }
-  // Nothing was sent, so the session is as it was.
+  // An answer with no token: nothing was sent, so the session is as it was.
   if (!csrfToken) return STILL_SIGNED_IN;
   try {
     const response = await fetchOrNoAnswer(

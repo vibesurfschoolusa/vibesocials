@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useSignedInAccount } from "@/components/signed-in-swap";
-import { signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
+import { signOutButtonFailureText, signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
 import { InstallInstructionsDialog, useInstallApp } from "./install-app";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -135,7 +135,7 @@ export async function signOutFromMenu(
 ): Promise<void> {
   const check = await signOutFn();
   if (!check.ok) {
-    showError(check.message);
+    showError(signOutButtonFailureText(check.kind));
     return;
   }
   close();

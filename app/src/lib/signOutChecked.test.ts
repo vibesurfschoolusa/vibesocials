@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next-auth/react", () => ({ getSession: vi.fn(async () => null), signOut: vi.fn() }));
 
-import { SIGN_OUT_FAILED_MESSAGE, SIGN_OUT_STILL_SIGNED_IN_MESSAGE, signOutChecked } from "./signOutChecked";
+import {
+  SIGN_OUT_FAILED_MESSAGE,
+  SIGN_OUT_NOT_SENT_MESSAGE,
+  SIGN_OUT_STILL_SIGNED_IN_MESSAGE,
+  signOutButtonFailureText,
+  signOutChecked,
+} from "./signOutChecked";
 
 type Name = "csrf" | "signout" | "session";
 type Answers = Partial<Record<Name, () => Promise<Response>>>;
@@ -31,8 +37,10 @@ const gateway = async () => new Response("<html>Bad gateway</html>", { status: 5
 // server answers 200 { url: ".../signout?csrf=true" } and keeps the cookie.
 // R32 lead review: an answer that came but left the person signed in has its
 // own sentence; the may-have one is only for an answer that never came.
-const lost = { ok: false, message: SIGN_OUT_FAILED_MESSAGE };
-const still = { ok: false, message: SIGN_OUT_STILL_SIGNED_IN_MESSAGE };
+// R33 (cure 3): the helper returns the outcome's kind; each caller words it.
+const lost = { ok: false, kind: "lost" };
+const still = { ok: false, kind: "refused" };
+const notSent = { ok: false, kind: "not_sent" };
 
 describe("signOutChecked", () => {
   it("success: reads the token, sends next-auth's sign-out request with it, and checks the session names nobody", async () => {
@@ -49,12 +57,11 @@ describe("signOutChecked", () => {
     expect(tellTabs).toHaveBeenCalledTimes(1);
   });
 
-  it("csrf=true in the answer: still signed in, in its own sentence", async () => {
+  it("csrf=true in the answer: still signed in", async () => {
     const tellTabs = vi.fn();
     const fetchImpl = server({ signout: async () => Response.json({ url: "http://localhost/api/auth/signout?csrf=true" }) });
     await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(still);
     expect(tellTabs).not.toHaveBeenCalled();
-    expect(SIGN_OUT_STILL_SIGNED_IN_MESSAGE).toBe("You're still signed in. Press Sign out again.");
   });
 
   it("a session read that still names someone: still signed in", async () => {
@@ -83,11 +90,12 @@ describe("signOutChecked", () => {
   });
 
   // R32 lead second look: no token read means the sign-out was never sent.
-  it("no answer to the token read (offline, a gateway's non-JSON 5xx): nothing sent, still signed in", async () => {
+  // R33 pages L4: and nothing answered, so the sentence names the connection.
+  it("no answer to the token read (offline, a gateway's non-JSON 5xx): nothing sent", async () => {
     for (const answer of [offline, gateway]) {
       const fetchImpl = server({ csrf: answer });
       const tellTabs = vi.fn();
-      await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(still);
+      await expect(signOutChecked(fetchImpl, tellTabs)).resolves.toEqual(notSent);
       expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(["/api/auth/csrf"]);
       expect(tellTabs).not.toHaveBeenCalled();
     }
@@ -101,6 +109,17 @@ describe("signOutChecked", () => {
         expect(tellTabs).not.toHaveBeenCalled();
       }
     }
+  });
+
+  // R33 pages L4: the account menu and Log in's notice both have a Sign out button.
+  it("a page with a Sign out button words each outcome", () => {
+    expect(signOutButtonFailureText("not_sent")).toBe(SIGN_OUT_NOT_SENT_MESSAGE);
+    expect(SIGN_OUT_NOT_SENT_MESSAGE).toBe(
+      "Vibe Socials couldn't be reached, so nothing was sent. Reconnect, then press Sign out again.",
+    );
+    expect(signOutButtonFailureText("refused")).toBe(SIGN_OUT_STILL_SIGNED_IN_MESSAGE);
+    expect(SIGN_OUT_STILL_SIGNED_IN_MESSAGE).toBe("You're still signed in. Press Sign out again.");
+    expect(signOutButtonFailureText("lost")).toBe(SIGN_OUT_FAILED_MESSAGE);
   });
 
   it("the may-have sentence claims nothing either way", () => {

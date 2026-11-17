@@ -23,7 +23,7 @@ import { accountDeleteLockedSentence, emailChangeLockedSentence, formatDisplayDa
 import { focusAfterPress } from "@/lib/focusAfter";
 import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
-import { signOutChecked } from "@/lib/signOutChecked";
+import { signOutChecked, type SignOutCheck } from "@/lib/signOutChecked";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
 
@@ -38,6 +38,17 @@ interface AccountSectionProps {
 
 const GOOGLE_ONLY = "You sign in with Google, so this account has no password to change.";
 const PASSWORD_CHANGED = "Password changed. Sign in again with your new password.";
+/**
+ * R33 security-billing L1: the change already ended every session on the
+ * server, and this card has no Sign out button, so a failed browser sign-out
+ * (not sent, refused or lost alike) says only what is true and what to do.
+ */
+export const PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE =
+  "Your password changed and you're signed out everywhere. Reload the page, then log in.";
+
+export function passwordChangeSignOutText(check: SignOutCheck): string | null {
+  return check.ok ? null : PASSWORD_CHANGED_SIGN_OUT_FAILED_MESSAGE;
+}
 const PASSWORD_NOT_CHANGED = "Could not change your password. Try again.";
 
 /**
@@ -361,7 +372,7 @@ function ChangePasswordForm() {
         void signOutChecked().then((signedOut) => {
           // A full load, so nothing of the signed-in page stays in memory.
           if (signedOut.ok) afterWorkspaceChange("/login");
-          else setSignOutError(signedOut.message);
+          else setSignOutError(passwordChangeSignOutText(signedOut));
         });
       }, 2000);
     } catch (error) {
