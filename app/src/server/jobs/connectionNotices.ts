@@ -2,7 +2,7 @@ import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
 import { clientLinkPanelStatus } from "@/server/clientLinkPanelStatus";
-import { sendEmail } from "@/server/notifications/email";
+import { sendEmailOutcome, type SendEmailOutcome } from "@/server/notifications/email";
 import { buildExpiryWarningEmail, buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { expiryNoticeDue, expiryNoticeWhere } from "./connectionHealthSweep";
 
@@ -47,6 +47,28 @@ type Stamp = Date | string | null;
  * as Settings' connect-link group reads them).
  */
 const WORKSPACE_SELECT = () => ({ name: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() }) as const;
+
+/**
+ * R43 platform L1: what one notice's sends add up to. `sent`: the owners it
+ * reached. `done`: no owner is left to try, so the notice may be recorded: an
+ * owner Resend refused for good is done (one bad address must not hold the
+ * record back for ever), one whose send can still go (a quota answer, no or a
+ * bad key) is not, and the next sweep tries the notice again. A rate limit or
+ * a 5xx still throws out of the send (throwOnRetryable), and nothing is recorded.
+ */
+async function sendToEach<T>(
+  owners: readonly T[],
+  send: (owner: T) => Promise<SendEmailOutcome>,
+): Promise<{ sent: number; done: boolean }> {
+  let sent = 0;
+  let done = true;
+  for (const owner of owners) {
+    const outcome = await send(owner);
+    if (outcome.sent) sent++;
+    else if (outcome.reason !== "refused") done = false;
+  }
+  return { sent, done };
+}
 
 /** Was the reconnect email already sent for the connection's current flag? */
 function reconnectAlreadyEmailed(connection: { refreshFailedAt: Stamp; reconnectEmailedAt: Stamp }): boolean {
@@ -107,17 +129,16 @@ export async function notifyOwnersToReconnect(
   // One reconnect email per owner per connection per UTC day: a retry of the step
   // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
   // owners already emailed (V18).
-  let emailed = 0;
-  for (const owner of owners) {
-    await sendEmail(
+  const { sent: emailed, done } = await sendToEach(owners, (owner) =>
+    sendEmailOutcome(
       { to: owner.user.email, ...email },
       {
         idempotencyKey: `reconnect/${socialConnectionId}/${utcDay}/${owner.user.id}`,
         throwOnRetryable: true,
       },
-    );
-    emailed++;
-  }
+    ),
+  );
+  if (!done) return { emailed };
   await prisma.socialConnection.updateMany({
     where: { id: socialConnectionId, needsReconnect: true },
     data: { reconnectEmailedAt: new Date() },
@@ -125,13 +146,16 @@ export async function notifyOwnersToReconnect(
   return { emailed };
 }
 
-/** Warn each owner, in their own time zone, that the sign-in ends on `expiresAt`. */
+/**
+ * Warn each owner, in their own time zone, that the sign-in ends on `expiresAt`.
+ * Returns how many owners it reached; it is recorded only once none is left to try.
+ */
 async function warnOwnersOfExpiry(connection: {
   id: string;
   platform: Parameters<typeof platformLabel>[0];
   workspaceId: string;
   expiresAt: Date;
-}): Promise<void> {
+}): Promise<number> {
   const [workspace, owners] = await Promise.all([
     prisma.workspace.findUnique({ where: { id: connection.workspaceId }, select: WORKSPACE_SELECT() }),
     prisma.workspaceMember.findMany({
@@ -141,7 +165,7 @@ async function warnOwnersOfExpiry(connection: {
   ]);
   const expiry = connection.expiresAt.toISOString();
   const clientLinks = workspace ? clientLinkPanelStatus(workspace) : {};
-  for (const owner of owners) {
+  const { sent, done } = await sendToEach(owners, (owner) => {
     const email = buildExpiryWarningEmail({
       platformLabel: platformLabel(connection.platform),
       workspaceId: connection.workspaceId,
@@ -151,16 +175,18 @@ async function warnOwnersOfExpiry(connection: {
       appBaseUrl: process.env.NEXTAUTH_URL || null,
       clientLinks,
     });
-    await sendEmail(
+    return sendEmailOutcome(
       { to: owner.user.email, ...email },
       { idempotencyKey: `expiry-warning/${connection.id}/${expiry}/${owner.user.id}`, throwOnRetryable: true },
     );
-  }
+  });
+  if (!done) return sent;
   // Only while the expiry is the one warned about: a reconnect meanwhile has its own.
   await prisma.socialConnection.updateMany({
     where: { id: connection.id, expiresAt: connection.expiresAt },
     data: { expiryWarnedFor: connection.expiresAt },
   });
+  return sent;
 }
 
 /**
@@ -200,8 +226,8 @@ export async function sendConnectionNotices(
     // The WHERE already holds these two; the rule is checked whole.
     const due = expiryNoticeDue({ ...candidate, refreshToken: null, needsReconnect: false }, now);
     if (due === "warning") {
-      await warnOwnersOfExpiry({ ...candidate, expiresAt: candidate.expiresAt });
-      warned++;
+      // Counted when it reached an owner; one not recorded is tried at the next sweep.
+      if ((await warnOwnersOfExpiry({ ...candidate, expiresAt: candidate.expiresAt })) > 0) warned++;
     } else if (due === "lapsed") {
       // Flag fields only, never a token (connectionHealth.ts invariant).
       const flagged = await prisma.socialConnection.updateMany({

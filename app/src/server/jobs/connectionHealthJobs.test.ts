@@ -70,7 +70,7 @@ vi.mock("@/server/platforms/connectionRefresh", async (importOriginal) => ({
 // Only the transport is replaced; EmailRetryableError / isRetryableEmailError stay real.
 vi.mock("@/server/notifications/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/notifications/email")>()),
-  sendEmail: sendEmailMock,
+  sendEmailOutcome: sendEmailMock,
 }));
 // The page logic has its own suite (youtubeMetricsSync.test.ts); the handler's
 // paging loop is what is under test here.
@@ -188,7 +188,7 @@ beforeEach(() => {
   refreshConnectionTokenMock.mockImplementation(
     (snapshot: unknown, refresh: (current: unknown) => Promise<unknown>) => refresh(snapshot),
   );
-  sendEmailMock.mockResolvedValue(undefined);
+  sendEmailMock.mockResolvedValue({ sent: true });
   backfillGbpLocationTitlesMock.mockReset();
   backfillGbpLocationTitlesMock.mockResolvedValue({ named: 0, failed: 0, flagged: [] });
   sendConnectionNoticesMock.mockReset();
