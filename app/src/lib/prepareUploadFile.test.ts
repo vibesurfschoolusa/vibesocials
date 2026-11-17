@@ -5,11 +5,14 @@ import {
   HEIC_JPEG_QUALITY,
   MAX_UPLOAD_PHOTO_BYTES,
   SHRINK_ATTEMPTS,
+  UNKNOWN_TYPE_MESSAGE,
   fitWithin,
   isHeicFile,
   jpegFileName,
   prepareUploadFile,
   preparedTypeOf,
+  unsupportedTypeMessage,
+  uploadTypeOf,
   type PrepareUploadDeps,
 } from "./prepareUploadFile";
 
@@ -100,8 +103,26 @@ describe("prepareUploadFile", () => {
     );
   });
 
-  it("leaves a file the browser gave no type to the server (only HEIC is caught by name)", async () => {
-    const original = file("clip.mkv", "");
+  // R45 client-journey L1: a file with no type is told by its name, never refused as "type ()".
+  it("gives a file with no type the type its name tells, so IMG_0042.MP4 goes as a video", async () => {
+    const prepared = await prepareUploadFile(file("IMG_0042.MP4", ""), fakeDeps());
+    expect(prepared.type).toBe("video/mp4");
+    expect(prepared.name).toBe("IMG_0042.MP4");
+    expect(prepared.size).toBe(10);
+    expect((await prepareUploadFile(file("a.JPEG", "application/octet-stream"), fakeDeps())).type).toBe("image/jpeg");
+  });
+
+  it("refuses a file whose type can't be told with a plain sentence, never \"()\"", async () => {
+    for (const name of ["IMG_0042", "clip.mkv", "notes."]) {
+      await expect(prepareUploadFile(file(name, ""), fakeDeps()), name).rejects.toThrow(UNKNOWN_TYPE_MESSAGE);
+    }
+    expect(UNKNOWN_TYPE_MESSAGE).toBe(
+      "We couldn't tell what kind of file this is. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
+    );
+  });
+
+  it("keeps a typed file's own type, whatever its name says", async () => {
+    const original = file("clip.jpg", "video/mp4");
     await expect(prepareUploadFile(original, fakeDeps())).resolves.toBe(original);
   });
 
@@ -168,5 +189,30 @@ describe("preparedTypeOf", () => {
   ])("%s: %s", async (_label, picked, expected) => {
     expect(preparedTypeOf(picked)).toBe(expected);
     expect((await prepareUploadFile(picked, fakeDeps())).type).toBe(expected);
+  });
+});
+
+describe("uploadTypeOf / unsupportedTypeMessage", () => {
+  it.each([
+    ["IMG_0042.MP4", "", "video/mp4"],
+    ["a.jpg", "", "image/jpeg"],
+    ["a.jpeg", "", "image/jpeg"],
+    ["a.png", "", "image/png"],
+    ["a.gif", "", "image/gif"],
+    ["a.webp", "", "image/webp"],
+    ["a.mov", "", "video/quicktime"],
+    ["a.webm", "", "video/webm"],
+    ["IMG_0042", "", ""],
+    ["a.mkv", "", ""],
+    ["a.png", "image/png", "image/png"],
+    ["a.mp4", "image/tiff", "image/tiff"],
+  ])("%s typed %j uploads as %j", (name, type, expected) => {
+    expect(uploadTypeOf({ name, type })).toBe(expected);
+  });
+
+  it("names a known type, and says plainly when there is none", () => {
+    expect(unsupportedTypeMessage("image/tiff")).toMatch(/^This file type \(image\/tiff\) isn't supported\./);
+    expect(unsupportedTypeMessage("")).toBe(UNKNOWN_TYPE_MESSAGE);
+    expect(unsupportedTypeMessage(" ")).toBe(UNKNOWN_TYPE_MESSAGE);
   });
 });

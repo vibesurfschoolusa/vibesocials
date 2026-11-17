@@ -10,6 +10,7 @@ import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
  * - X and Google Business Profile refuse photos over 5 MB. A JPEG, WebP or PNG
  *   photo over {@link MAX_UPLOAD_PHOTO_BYTES} is re-encoded as a smaller JPEG
  *   (which also drops its metadata, including any GPS location).
+ * - A file the browser gave no type takes the one its name tells (uploadTypeOf).
  * - Any other type the upload route would refuse gets a clear message here,
  *   before the upload starts.
  *
@@ -56,9 +57,37 @@ export function fitWithin(width: number, height: number, maxEdge: number): { wid
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
-/** The message for a type the upload route would refuse. */
+/** What a file whose type can't be told is told (R45 client-journey L1: never "type ()"). */
+export const UNKNOWN_TYPE_MESSAGE =
+  "We couldn't tell what kind of file this is. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
+
+/** The message for a type the upload route would refuse; "" is a type that can't be told. */
 export function unsupportedTypeMessage(type: string): string {
+  if (type.trim() === "") return UNKNOWN_TYPE_MESSAGE;
   return `This file type (${type}) isn't supported. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.`;
+}
+
+/** The uploadable types by file extension, for a file the browser gave no type. */
+const TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+};
+
+/**
+ * The type `file` is uploaded as: its own, or, when the browser gave none (some
+ * phones give a video or an extensionless photo no type), the one its name's
+ * extension tells. "" when that can't be told either.
+ */
+export function uploadTypeOf(file: { name: string; type: string }): string {
+  if (file.type !== "" && file.type !== "application/octet-stream") return file.type;
+  const extension = /\.([^./\\]+)$/.exec(file.name)?.[1].toLowerCase();
+  return extension !== undefined && Object.hasOwn(TYPE_BY_EXTENSION, extension) ? TYPE_BY_EXTENSION[extension] : "";
 }
 
 export const HEIC_CONVERSION_FAILED_MESSAGE =
@@ -72,8 +101,9 @@ export const HEIC_CONVERSION_FAILED_MESSAGE =
  */
 export function preparedTypeOf(file: { name: string; type: string; size: number }): string {
   if (isHeicFile(file)) return "image/jpeg";
-  if (SHRINKABLE_TYPES.has(file.type) && file.size > MAX_UPLOAD_PHOTO_BYTES) return "image/jpeg";
-  return file.type;
+  const type = uploadTypeOf(file);
+  if (SHRINKABLE_TYPES.has(type) && file.size > MAX_UPLOAD_PHOTO_BYTES) return "image/jpeg";
+  return type;
 }
 
 /** The browser work, injectable so the decisions above can be tested without a browser. */
@@ -102,8 +132,12 @@ export async function prepareUploadFile(
     });
   }
 
-  if (prepared.type !== "" && !UPLOAD_ALLOWED_CONTENT_TYPES.includes(prepared.type)) {
-    throw new Error(unsupportedTypeMessage(prepared.type));
+  const type = uploadTypeOf(prepared);
+  if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(type)) {
+    throw new Error(unsupportedTypeMessage(type));
+  }
+  if (type !== prepared.type) {
+    prepared = new File([prepared], prepared.name, { type, lastModified: prepared.lastModified });
   }
 
   if (SHRINKABLE_TYPES.has(prepared.type) && prepared.size > MAX_UPLOAD_PHOTO_BYTES) {

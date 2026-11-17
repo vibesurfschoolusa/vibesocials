@@ -28,6 +28,7 @@ vi.mock("./linkBytes", () => ({
 
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
+import { UNKNOWN_TYPE_MESSAGE } from "@/lib/prepareUploadFile";
 import {
   UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
@@ -166,6 +167,28 @@ describe("issuing a token", () => {
       expect(handleUploadMock).not.toHaveBeenCalled();
     }
     // Only the IP limit ran: the per-link day count was not spent.
+    expect(checkRateLimitMock.mock.calls.every(([opts]) => opts.route === "upload-link/upload")).toBe(true);
+  });
+
+  // R45 client-journey L1.
+  it("signs a file with no type for the type its name tells", async () => {
+    const response = await call(tokenRequest({ contentType: "", pathname: "IMG_0042.MP4" }));
+    expect(response.status).toBe(200);
+    const { onBeforeGenerateToken } = handleUploadMock.mock.calls[0][0] as { onBeforeGenerateToken: BeforeGenerate };
+    const options = await onBeforeGenerateToken("ul/link-1/abc-IMG_0042.MP4", null, false);
+    expect(options).toMatchObject({ allowedContentTypes: ["video/mp4"] });
+  });
+
+  it("refuses a file whose type can't be told with the plain sentence, before counting", async () => {
+    for (const contentType of ["", undefined]) {
+      const response = await call(tokenRequest({ body: {
+        type: "blob.generate-client-token",
+        payload: { pathname: "IMG_0042", clientPayload: JSON.stringify({ contentType }), multipart: false },
+      } }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: UNKNOWN_TYPE_MESSAGE });
+    }
+    expect(handleUploadMock).not.toHaveBeenCalled();
     expect(checkRateLimitMock.mock.calls.every(([opts]) => opts.route === "upload-link/upload")).toBe(true);
   });
 

@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
-import { unsupportedTypeMessage } from "@/lib/prepareUploadFile";
+import { unsupportedTypeMessage, uploadTypeOf } from "@/lib/prepareUploadFile";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import {
@@ -99,12 +99,15 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     return NextResponse.json({ error: "A file name is required." }, { status: 400 });
   }
   const claimed = readClientPayload(payload.clientPayload);
-  const contentType = claimed.contentType;
-  if (typeof contentType !== "string" || !UPLOAD_ALLOWED_CONTENT_TYPES.includes(contentType)) {
-    return NextResponse.json(
-      { error: unsupportedTypeMessage(typeof contentType === "string" ? contentType : "unknown") },
-      { status: 400 },
-    );
+  // R45 client-journey L1: a file the browser gave no type is told by its name,
+  // by the same rule the page uses (uploadTypeOf), so a page loaded before that
+  // rule is not refused as "type ()".
+  const contentType =
+    typeof claimed.contentType === "string"
+      ? uploadTypeOf({ name: payload.pathname, type: claimed.contentType })
+      : "";
+  if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(contentType)) {
+    return NextResponse.json({ error: unsupportedTypeMessage(contentType) }, { status: 400 });
   }
   // The size asked for is counted against the link's day and signed into the
   // token as its maximum, so the stored file can be no larger. A page that
