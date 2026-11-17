@@ -149,12 +149,15 @@ export function redactOutgoingSpan<T extends SpanLike>(span: T): T {
   return out;
 }
 
-// R43 (lead, from security's second half): incoming paths. The client connect,
-// upload and review links and the invite link carry their token in the path
-// (/c/, /u/, /v/, /join/ and the API routes behind them), and whoever holds the
-// token can use the link. An incoming request's URL reaches Sentry in the event's
-// request, the server span, the transaction name and the browser's navigation and
-// fetch breadcrumbs, so the token segment is replaced wherever those appear.
+// R43 (lead, from security's second half, and its review): incoming URLs. The
+// client connect, upload and review links and the invite link carry their token
+// in the path (/c/, /u/, /v/, /join/ and the API routes behind them); the account
+// links (reset password, verify email, new address, undo) carry theirs in the
+// #fragment; and a sign-in redirect carries a link path in its callbackUrl.
+// Whoever holds the token can use the link. These URLs reach Sentry in the
+// event's request, the spans (the server's and the browser's), the transaction
+// name and the browser's navigation and fetch breadcrumbs, so every one of them
+// goes through redactLinkTokens.
 
 /** What a link token is replaced with. */
 export const LINK_TOKEN = "[token]";
@@ -166,15 +169,48 @@ export const LINK_TOKEN = "[token]";
 const LINK_TOKEN_PATH =
   /(^|\s|\/\/[^/\s?#]+)(\/(?:c|u|v|join|api\/(?:connect-link|review-link|upload-link|invites))\/)[^/?#\s]+/g;
 
-/** `text` with the token segment of every link path in it replaced by {@link LINK_TOKEN}. */
-export function redactLinkTokens(text: string): string {
+/** A URL's or a path's #fragment: everything from "#" to the next space. */
+const URL_FRAGMENT = /((?:https?:\/\/|\/)[^\s#]*)#\S*/gi;
+
+/** One query value: `?name=` or `&name=`, then the value up to "&", "#" or a space. */
+const QUERY_VALUE = /([?&][^=&#\s]+=)([^&#\s]*)/g;
+
+function redactLinkPaths(text: string): string {
   return text.replace(LINK_TOKEN_PATH, (_match, before: string, prefix: string) => `${before}${prefix}${LINK_TOKEN}`);
 }
 
-/** A copy of `data` with every string value passed through redactLinkTokens. */
+/** A query value that holds a link path (`callbackUrl=%2Fjoin%2F<token>`), decoded, redacted and encoded again. */
+function redactQueryValues(text: string): string {
+  return text.replace(QUERY_VALUE, (match, name: string, value: string) => {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(value.replace(/\+/g, " "));
+    } catch {
+      return match;
+    }
+    const redacted = redactLinkPaths(decoded);
+    return redacted === decoded ? match : `${name}${encodeURIComponent(redacted)}`;
+  });
+}
+
+/**
+ * `text` with no link token in it: every URL's or path's #fragment dropped (never
+ * needed in Sentry), every query value holding a link path redacted, and the token
+ * segment of every link path replaced by {@link LINK_TOKEN}.
+ */
+export function redactLinkTokens(text: string): string {
+  return redactLinkPaths(redactQueryValues(text.replace(URL_FRAGMENT, "$1")));
+}
+
+/** Span and breadcrumb attributes that hold only a fragment. */
+const FRAGMENT_KEYS = new Set(["http.fragment", "url.fragment"]);
+
+/** A copy of `data` without fragment attributes, every string value through redactLinkTokens. */
 function redactLinkTokensInData(data: { [key: string]: unknown }): { [key: string]: unknown } {
   return Object.fromEntries(
-    Object.entries(data).map(([key, value]) => [key, typeof value === "string" ? redactLinkTokens(value) : value]),
+    Object.entries(data)
+      .filter(([key]) => !FRAGMENT_KEYS.has(key))
+      .map(([key, value]) => [key, typeof value === "string" ? redactLinkTokens(value) : value]),
   );
 }
 
@@ -192,34 +228,46 @@ export function redactServerBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T):
 }
 
 /**
- * The server's `beforeSendSpan`: an outgoing span keeps its rules
- * ({@link redactOutgoingSpan}); any other span (an incoming request) loses the
- * link tokens in its description and string attributes.
+ * Any span's description and string attributes without link tokens: the
+ * browser's `beforeSendSpan` (its page loads, navigations and fetch spans), and
+ * the second half of the server's.
  */
-export function redactServerSpan<T extends SpanLike>(span: T): T {
-  if (span.op?.startsWith("http.client")) return redactOutgoingSpan(span);
+export function redactLinkTokensInSpan<T extends SpanLike>(span: T): T {
   const out: T = { ...span, data: redactLinkTokensInData(span.data) };
   if (typeof span.description === "string") out.description = redactLinkTokens(span.description);
   return out;
 }
 
+/**
+ * The server's `beforeSendSpan`: an outgoing span keeps its rules
+ * ({@link redactOutgoingSpan}), then every span (an incoming request's above
+ * all) loses its link tokens.
+ */
+export function redactServerSpan<T extends SpanLike>(span: T): T {
+  return redactLinkTokensInSpan(redactOutgoingSpan(span));
+}
+
 /** The parts of a Sentry event these helpers read; the real `Event` is assignable to it. */
 interface EventLike {
   transaction?: string;
-  request?: { url?: string };
+  request?: { url?: string; query_string?: unknown };
   contexts?: { trace?: { description?: string; data?: { [key: string]: unknown } } };
+  spans?: SpanLike[];
 }
 
 /**
- * `beforeSend` / `beforeSendTransaction`: the request URL, the transaction name
- * and the trace context (a transaction's root span) without link tokens. The
- * event it was given is not modified.
+ * `beforeSend` / `beforeSendTransaction`: the request URL and query string, the
+ * transaction name, the trace context (a transaction's root span) and the
+ * transaction's spans without link tokens. The event it was given is not modified.
  */
 export function redactEventLinkTokens<T extends EventLike>(event: T): T {
   const out: T = { ...event };
   if (typeof event.transaction === "string") out.transaction = redactLinkTokens(event.transaction);
-  if (event.request && typeof event.request.url === "string") {
-    out.request = { ...event.request, url: redactLinkTokens(event.request.url) };
+  if (event.request) {
+    const request = { ...event.request };
+    if (typeof request.url === "string") request.url = redactLinkTokens(request.url);
+    if (typeof request.query_string === "string") request.query_string = redactQueryValues(`?${request.query_string}`).slice(1);
+    out.request = request;
   }
   const trace = event.contexts?.trace;
   if (trace) {
@@ -228,5 +276,6 @@ export function redactEventLinkTokens<T extends EventLike>(event: T): T {
     if (trace.data) redacted.data = redactLinkTokensInData(trace.data);
     out.contexts = { ...event.contexts, trace: redacted };
   }
+  if (Array.isArray(event.spans)) out.spans = event.spans.map((span) => redactLinkTokensInSpan(span));
   return out;
 }

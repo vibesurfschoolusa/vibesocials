@@ -6,6 +6,7 @@ import {
   redactEventLinkTokens,
   redactLinkTokens,
   redactLinkTokensInBreadcrumb,
+  redactLinkTokensInSpan,
   redactOutgoingSpan,
   redactOutgoingUrl,
   redactServerSpan,
@@ -304,7 +305,7 @@ describe("redactLinkTokens", () => {
     [`/api/review-link/${SECRET}/posts/p1`, "/api/review-link/[token]/posts/p1"],
     [`/api/upload-link/${SECRET}/upload`, "/api/upload-link/[token]/upload"],
     [`/api/invites/${SECRET}/accept`, "/api/invites/[token]/accept"],
-    [`https://vibesocials.wtf/c/${SECRET}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=2#top"],
+    [`https://vibesocials.wtf/c/${SECRET}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=2"],
     [`GET /v/${SECRET}`, "GET /v/[token]"],
     [`POST https://vibesocials.wtf/api/invites/${SECRET}/accept`, "POST https://vibesocials.wtf/api/invites/[token]/accept"],
     [`/c/${SECRET}?x=1`, "/c/[token]?x=1"],
@@ -394,5 +395,103 @@ describe("redactLinkTokensInBreadcrumb", () => {
     });
     expect(JSON.stringify(out)).not.toContain("SECRET-3");
     expect(out.data).toEqual({ url: "/api/upload-link/[token]/upload", method: "POST", status_code: 200 });
+  });
+});
+
+// R43 review: the account links (reset password, verify email, new address,
+// undo) carry their token in the #fragment, and a sign-in redirect carries a
+// link path encoded in its callbackUrl. Fragments are never needed in Sentry.
+describe("redactLinkTokens: fragments and query values", () => {
+  it.each([
+    ["https://vibesocials.wtf/reset-password#RESET-SECRET", "https://vibesocials.wtf/reset-password"],
+    ["https://vibesocials.wtf/verify-email/undo#UNDO-SECRET", "https://vibesocials.wtf/verify-email/undo"],
+    ["/verify-email/new-address#NEW-SECRET", "/verify-email/new-address"],
+    ["/verify-email?x=1#VERIFY-SECRET", "/verify-email?x=1"],
+    ["navigated to /reset-password#RESET-SECRET now", "navigated to /reset-password now"],
+  ])("%s loses its fragment", (input, output) => {
+    expect(redactLinkTokens(input)).toBe(output);
+  });
+
+  it.each([
+    ["/login?callbackUrl=%2Fjoin%2FJOIN-SECRET", "/login?callbackUrl=%2Fjoin%2F%5Btoken%5D"],
+    [
+      "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET&x=1",
+      "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2F%5Btoken%5D&x=1",
+    ],
+    ["/login?callbackUrl=/c/CLIENT-SECRET", "/login?callbackUrl=%2Fc%2F%5Btoken%5D"],
+    [
+      "/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2FINVITE-SECRET%2Faccept",
+      "/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2F%5Btoken%5D%2Faccept",
+    ],
+  ])("%s keeps no token in its query", (input, output) => {
+    expect(redactLinkTokens(input)).toBe(output);
+    expect(redactLinkTokens(input)).not.toMatch(/SECRET/);
+  });
+
+  it.each([
+    "/login?callbackUrl=%2Fdashboard",
+    "https://vibesocials.wtf/login?callbackUrl=%2Fsettings%23plan2&tab=1",
+    "/posts?page=2&q=surf%20lessons",
+    "/login?callbackUrl=%E0%A4%A",
+    "div#main > button",
+  ])("%s, with no token, is unchanged", (input) => {
+    expect(redactLinkTokens(input)).toBe(input);
+  });
+
+  it("an event's request URL and query string lose the fragment and the callbackUrl token", () => {
+    const out = redactEventLinkTokens({
+      request: { url: "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET#FRAG-SECRET", query_string: "callbackUrl=%2Fjoin%2FJOIN-SECRET" },
+    });
+    expect(JSON.stringify(out)).not.toContain("SECRET");
+    expect(out.request?.url).toBe("https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2F%5Btoken%5D");
+    expect(out.request?.query_string).toBe("callbackUrl=%2Fjoin%2F%5Btoken%5D");
+  });
+
+  it("a navigation breadcrumb to a #token page loses the fragment", () => {
+    const out = redactLinkTokensInBreadcrumb({ category: "navigation", data: { from: "/login", to: "/reset-password#RESET-SECRET" } });
+    expect(out.data).toEqual({ from: "/login", to: "/reset-password" });
+  });
+
+  it("a span's fragment attributes are dropped", () => {
+    const out = redactLinkTokensInSpan({
+      op: "pageload",
+      description: "/reset-password",
+      data: { "url.fragment": "RESET-SECRET", "http.fragment": "#RESET-SECRET", "url.full": "https://vibesocials.wtf/reset-password#RESET-SECRET" },
+    });
+    expect(out.data).toEqual({ "url.full": "https://vibesocials.wtf/reset-password" });
+  });
+});
+
+// R43 review: the browser's own fetch spans carry the API path, token included.
+describe("redactLinkTokensInSpan: the browser's fetch spans", () => {
+  it("a fetch span for /api/invites/<token> keeps no token in its description, url or http.url", () => {
+    const out = redactLinkTokensInSpan({
+      op: "http.client",
+      description: "POST https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
+      data: {
+        url: "https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
+        "http.url": "https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
+        "http.method": "POST",
+      },
+    });
+    expect(JSON.stringify(out)).not.toContain("INVITE-SECRET");
+    expect(out.description).toBe("POST https://vibesocials.wtf/api/invites/[token]/accept");
+    expect(out.data["http.method"]).toBe("POST");
+  });
+
+  it("the server's span rule keeps the outgoing rules and redacts tokens too", () => {
+    const out = redactServerSpan({
+      op: "http.client",
+      description: "GET https://vibesocials.wtf/api/review-link/REVIEW-SECRET",
+      data: { "url.full": "https://vibesocials.wtf/api/review-link/REVIEW-SECRET?x=1" },
+    });
+    expect(out.data["url.full"]).toBe("https://vibesocials.wtf/api/review-link/[token]");
+  });
+
+  it("a transaction event's spans are redacted too", () => {
+    const out = redactEventLinkTokens({
+      spans: [{ op: "http.client", description: "GET /api/upload-link/UPLOAD-SECRET/media", data: { url: "/api/upload-link/UPLOAD-SECRET/media" } }],
+    });
+    expect(JSON.stringify(out)).not.toContain("UPLOAD-SECRET");
   });
 });
