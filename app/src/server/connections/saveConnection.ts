@@ -10,7 +10,7 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
-import { googleErrorFields, googleFailureKind, isGoogleScopeRefusal } from "@/server/googleFailure";
+import { googleErrorFields, googleFailureKind, isGoogleScopeRefusal, type GoogleFailureKind } from "@/server/googleFailure";
 import { exactStoreCodeMatches, readGbpLocations, storeCodeFilter } from "@/server/platforms/gbpLocation";
 import { readGoogleErrorBody } from "@/server/platforms/rateLimited";
 
@@ -118,6 +118,19 @@ function reasonsOf(failure: unknown): string[] {
   return Array.isArray(reasons) ? reasons.filter((reason): reason is string => typeof reason === "string") : [];
 }
 
+/**
+ * R38 client-journey L1: the one mapping from a failed Google answer to the
+ * check, for the store-code search (the listing's kind) and the location id
+ * (its 403's kind) alike. A missing permission is fixed on Google's screen;
+ * access refused (every account, for a listing) is not this login's
+ * location, so it is cleared for the chooser; anything else (unreadable,
+ * our setup or quota, Google down) couldn't be told.
+ */
+function checkOfFailure(kind: GoogleFailureKind, failure: unknown): GbpLocationCheck {
+  if (isGoogleScopeRefusal(reasonsOf(failure))) return "permission_missing";
+  return kind === "access" ? "unavailable" : "check_failed";
+}
+
 async function gbpGet(url: string | URL, accessToken: string): Promise<Response> {
   // R36 review: runs while the person waits on Connect; bounded headers and body.
   return fetchWithinLimit(url, { headers: { Authorization: `Bearer ${accessToken}` } }, GBP_CHECK_TIMEOUT_MS);
@@ -130,7 +143,8 @@ async function gbpGet(url: string | URL, accessToken: string): Promise<Response>
  * own rule, so a sign-in keeps what publishing would post to. Exactly one
  * match keeps it; more than one is unavailable. None is unavailable when the
  * list is complete or only accounts that refused access are missing (they
- * can't be posted to either); none while an account failed, or the list ran
+ * can't be posted to either), and so is a list every account refused
+ * (checkOfFailure); none while an account failed, or the list ran
  * past its page cap, is check_failed, never "not found". Nothing is flagged
  * here: the token was just granted, and the row is being saved.
  */
@@ -141,7 +155,7 @@ async function checkGbpStoreCode(storeCode: string, accessToken: string): Promis
     used: () => null,
     locationsFilter: storeCodeFilter(storeCode),
   });
-  if (!listing.ok) return isGoogleScopeRefusal(reasonsOf(listing.failure)) ? "permission_missing" : "check_failed";
+  if (!listing.ok) return checkOfFailure(listing.kind, listing.failure);
   const matches = exactStoreCodeMatches(listing.locations, storeCode).length;
   if (matches === 1) return "kept";
   if (matches > 1) return "unavailable";
@@ -178,15 +192,14 @@ async function checkGbpLocation(existing: StoredConnection, accessToken: unknown
     if (response.status === 403) {
       // R37: a body that can't be read is "try later" by the shared rule
       // (readGoogleErrorBody), as in the store-code search: check_failed.
-      const fields = googleErrorFields(await readGoogleErrorBody(response));
-      if (googleFailureKind({ status: 403, ...fields }) === "access") return "unavailable";
-      // R27 lead review: a missing permission is fixed on Google's screen, not by a retry.
-      if (isGoogleScopeRefusal(fields.googleReasons)) return "permission_missing";
+      const failure = { status: 403, ...googleErrorFields(await readGoogleErrorBody(response)) };
+      const check = checkOfFailure(googleFailureKind(failure), failure);
+      if (check !== "check_failed") return check;
       logger.warn("[GBP] Couldn't check the location with the new sign-in", {
         connectionId: existing.id,
         status: 403,
-        reasons: fields.googleReasons,
-        ...(fields.googleBodyUnreadable ? { unreadable: true } : {}),
+        reasons: failure.googleReasons,
+        ...(failure.googleBodyUnreadable ? { unreadable: true } : {}),
       });
       return "check_failed";
     }

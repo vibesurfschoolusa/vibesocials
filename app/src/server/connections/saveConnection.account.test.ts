@@ -394,6 +394,86 @@ describe("saveSocialConnection: Google Business Profile", () => {
     expect(h.updateMany.mock.calls[0][0].data.metadata).toEqual({ locationName: null, locationTitle: null });
   });
 
+  // R38 client-journey L1: one mapping from Google's answer to the check, for
+  // the store-code search and the location id alike. Every account refusing
+  // access is "not this login's location" (cleared), never "try again".
+  describe("one mapping from Google's answer to the check, on both paths", () => {
+    const SCOPE_403 = { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } };
+    const CLEARED_ANSWER = { ok: true, locationCleared: "Surf Co Dania" };
+    const CHECK_FAILED = { ok: false, reason: "check_failed", connectedName: "Surf Co Dania" };
+    const PERMISSION_MISSING = { ok: false, reason: "permission_missing", connectedName: "Surf Co Dania" };
+
+    beforeEach(() => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("store code, one account refusing its list (403): cleared for the chooser", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch.mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] })).mockResolvedValueOnce(answer(403));
+      await expect(saveGbp()).resolves.toEqual(CLEARED_ANSWER);
+      expect(h.updateMany.mock.calls[0][0].data.metadata).toEqual({ locationName: null, locationTitle: null });
+    });
+
+    it("store code, two accounts both refusing their lists: cleared for the chooser", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch
+        .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+        .mockResolvedValueOnce(answer(403))
+        .mockResolvedValueOnce(answer(403, { error: { code: 403, status: "PERMISSION_DENIED" } }));
+      await expect(saveGbp()).resolves.toEqual(CLEARED_ANSWER);
+    });
+
+    it("store code, the accounts list itself refusing access (readable 403): cleared for the chooser", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch.mockResolvedValueOnce(answer(403, { error: { code: 403, status: "PERMISSION_DENIED" } }));
+      await expect(saveGbp()).resolves.toEqual(CLEARED_ANSWER);
+    });
+
+    it("store code, one refusing plus one readable with no match: cleared for the chooser", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch
+        .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+        .mockResolvedValueOnce(answer(403))
+        .mockResolvedValueOnce(answer(200, { locations: [] }));
+      await expect(saveGbp()).resolves.toEqual(CLEARED_ANSWER);
+    });
+
+    it("store code, one account whose 403 can't be read: check_failed, nothing written", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch.mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] })).mockResolvedValueOnce(bodyBreaksOff(403));
+      await expect(saveGbp()).resolves.toEqual(CHECK_FAILED);
+      expect(h.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("store code, a scope refusal: permission_missing, nothing written", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch.mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }] })).mockResolvedValueOnce(answer(403, SCOPE_403));
+      await expect(saveGbp()).resolves.toEqual(PERMISSION_MISSING);
+      expect(h.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("location id, a refusing 403: cleared for the chooser", async () => {
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(answer(403, { error: { code: 403, status: "PERMISSION_DENIED" } }));
+      await expect(saveGbp()).resolves.toEqual(CLEARED_ANSWER);
+    });
+
+    it("location id, a 403 that can't be read: check_failed", async () => {
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(bodyBreaksOff(403));
+      await expect(saveGbp()).resolves.toEqual(CHECK_FAILED);
+    });
+
+    it("location id, a scope refusal: permission_missing", async () => {
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(answer(403, SCOPE_403));
+      await expect(saveGbp()).resolves.toEqual(PERMISSION_MISSING);
+    });
+  });
+
   // R25 lead review: Google's filter can return near matches (case-insensitive).
   it("a near match beside the exact code is ignored: kept", async () => {
     h.findUnique.mockResolvedValue(withStoreCode);
