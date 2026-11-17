@@ -309,6 +309,32 @@ describe.each(HANDLERS)("%s /api/connections/pending/[id]: access", (_method, ha
   });
 });
 
+// R37 lead follow-up: the owner gate reads the database and re-throws all
+// but "forbidden". A failure there used to be a bare 500, which the dialog
+// reads as a lost answer ("may have been connected"). Nothing was read or
+// saved, so each method answers its own sentence, as JSON. The 401 and 403
+// answers above are unchanged.
+describe("pending/[id]: the owner gate's database read fails", () => {
+  const CASES: Array<[string, Handler, () => Request, string]> = [
+    ["POST", POST, () => postReq({ candidateId: "page-2" }), "That account wasn't connected: something went wrong on our side. Reload the page and choose it again."],
+    ["GET", GET, getReq, "Couldn't load your accounts. Reload the page to try again."],
+    ["DELETE", DELETE, deleteReq, "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes."],
+  ];
+
+  it.each(CASES)("%s: its own sentence, a 500 with a JSON body, nothing read or saved", async (_method, handler, request, error) => {
+    requireOwnerContextMock.mockRejectedValue(new Error("db down"));
+
+    const response = await handler(request(), ctx());
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expectNothingSaved();
+  });
+});
+
 describe("GET /api/connections/pending/[id]", () => {
   // R32 publishing L1: the choice dialog reads only for the page's workspace.
   it("409s another workspace's id and reads nothing", async () => {

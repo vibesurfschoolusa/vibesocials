@@ -113,7 +113,7 @@ async function loadFailedText(request: Request, workspaceId: string): Promise<st
   const card = await hintedCardButton(request, workspaceId);
   return card
     ? `Couldn't load your accounts. Reload the page to try again, or close this and press ${card.button} on ${card.label}.`
-    : "Couldn't load your accounts. Reload the page to try again.";
+    : LOAD_FAILED_MESSAGE;
 }
 
 /** The button the dialog's platform (`?platform=`) shows on its card, or null when none is named or it can't be read. */
@@ -153,6 +153,26 @@ async function otherWorkspaceStep(workspaceId: string, userId: string, platform:
   }
 }
 
+/**
+ * R37 lead follow-up: the owner gate reads the database and re-throws all but
+ * "forbidden" (a member's 403 and the signed-out 401 come back as answers, as
+ * before). A failure there was a bare 500, which the dialog reads as a lost
+ * answer ("may have been connected"). Nothing was read or saved yet, so the
+ * method's own sentence answers, as JSON. `method` names the log line only.
+ */
+async function ownerGate(method: string, failedText: string): Promise<WorkspaceContext | NextResponse> {
+  try {
+    return await requireOwnerContext();
+  } catch (error) {
+    logger.error(`[${method} /api/connections/pending/[id]] The owner check failed`, { error: errorKind(error) });
+    return NextResponse.json({ error: failedText }, { status: 500 });
+  }
+}
+
+const LOAD_FAILED_MESSAGE = "Couldn't load your accounts. Reload the page to try again.";
+
+const CANCEL_FAILED_MESSAGE = "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes.";
+
 function ownerOf(context: WorkspaceContext) {
   return { workspaceId: context.workspace.id, userId: context.user.id };
 }
@@ -170,7 +190,7 @@ function errorKind(error: unknown): { name: string; code?: string } {
 
 /** GET → `{ platform, candidates: [{ id, name, detail? }] }`. Never tokens. */
 export async function GET(request: Request, { params }: PendingRouteContext) {
-  const contextOrError = await requireOwnerContext();
+  const contextOrError = await ownerGate("GET", LOAD_FAILED_MESSAGE);
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
@@ -207,7 +227,8 @@ export async function GET(request: Request, { params }: PendingRouteContext) {
  * `{ ok: true, platform }`.
  */
 export async function POST(request: Request, { params }: PendingRouteContext) {
-  const contextOrError = await requireOwnerContext();
+  // No workspace is known yet, so the before-save sentence names no card button.
+  const contextOrError = await ownerGate("POST", choiceFailedText("before_save", "settings"));
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
@@ -328,7 +349,7 @@ async function refusedChoice(
 
 /** DELETE → cancels the pending connect. */
 export async function DELETE(request: Request, { params }: PendingRouteContext) {
-  const contextOrError = await requireOwnerContext();
+  const contextOrError = await ownerGate("DELETE", CANCEL_FAILED_MESSAGE);
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
@@ -353,9 +374,6 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return NextResponse.json(
-      { error: "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes." },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: CANCEL_FAILED_MESSAGE }, { status: 500 });
   }
 }
