@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { PLAN_STATE_LABELS } from "@/lib/billing";
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
 import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb } from "@/lib/usageLimits";
@@ -91,9 +92,12 @@ export default async function AdminPage({
 
   const limit = await checkAdminRateLimit(operator, "read");
   if (!limit.allowed) {
+    // R38: a counter store that couldn't answer is not a used-up hour.
     return (
       <div className="mx-auto max-w-5xl px-4 py-8 md:px-6">
-        <Alert variant="warning">Too many admin page loads this hour. Wait a few minutes and reload.</Alert>
+        <Alert variant="warning">
+          {limit.unavailable ? LIMIT_UNCHECKED_MESSAGE : "Too many admin page loads this hour. Wait a few minutes and reload."}
+        </Alert>
       </div>
     );
   }
