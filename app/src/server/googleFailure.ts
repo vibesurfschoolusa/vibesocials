@@ -32,8 +32,12 @@ import {
  *   accessNotConfigured or quota reason, a 429, a 5xx, no answer, our own
  *   timeout, invalid_client, missing OAuth credentials, another refresh holding
  *   the lock.
- * - other: anything else (another 404, a body we could not read, tokens that
- *   changed while the call ran, a bug).
+ * - other: anything else (another 404, a success body we could not read,
+ *   tokens that changed while the call ran, a bug).
+ *
+ * R37 platform-clients L1: a 403 whose body could not be read
+ * (`googleBodyUnreadable`, from readGoogleErrorBody) is tryLater: it says
+ * nothing about access, so it is never "access" and never flagged.
  *
  * `googleReasons` on the error are googleErrorReasons' normalized form
  * (platforms/rateLimited.ts), set where the response is read (googleReviews.ts,
@@ -121,6 +125,15 @@ interface FailureFields {
   code?: unknown;
   oauthError?: unknown;
   googleReasons?: unknown;
+  googleBodyUnreadable?: unknown;
+}
+
+/** The fields a failure carries from Google's error body (rateLimited.ts readGoogleErrorBody). */
+export function googleErrorFields(body: { reasons: string[]; unreadable: boolean }): {
+  googleReasons: string[];
+  googleBodyUnreadable?: true;
+} {
+  return { googleReasons: body.reasons, ...(body.unreadable ? { googleBodyUnreadable: true as const } : {}) };
 }
 
 function reasonsOf(error: FailureFields): string[] {
@@ -250,6 +263,7 @@ export function googleFailureKind(error: unknown): GoogleFailureKind {
     return code && LOCATION_CALL_CODES.has(code) ? "notFound" : "other";
   }
   if (status === 403) {
+    if (fields.googleBodyUnreadable === true) return "tryLater";
     const reasons = reasonsOf(fields);
     if (reasons.some((reason) => SERVICE_REASONS.has(reason))) return "tryLater";
     return "access";
@@ -273,6 +287,7 @@ export function classifyGoogleFailure(error: unknown, where: string): GoogleFail
     ...(typeof fields.code === "string" ? { code: fields.code } : {}),
     ...(typeof fields.oauthError === "string" ? { oauthError: fields.oauthError } : {}),
     ...(reasons.length > 0 ? { reasons } : {}),
+    ...(fields.googleBodyUnreadable === true ? { unreadable: true } : {}),
     // Unexpected: the error's name helps find it (never its message).
     ...(kind === "other" && error instanceof Error ? { name: error.name } : {}),
   });

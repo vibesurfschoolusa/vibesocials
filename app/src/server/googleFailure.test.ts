@@ -281,3 +281,24 @@ describe("a 401 on a token already past its stored expiry", () => {
     });
   });
 });
+
+// R37 platform-clients L1: a 403 whose body couldn't be read says nothing
+// about access: Google's failure, to try again. Never flagged.
+describe("a 403 whose body couldn't be read", () => {
+  it("is tryLater, never access; an empty 403 stays access", () => {
+    expect(googleFailureKind(failure({ status: 403, googleReasons: [], googleBodyUnreadable: true }))).toBe("tryLater");
+    expect(googleFailureKind(failure({ status: 403, googleReasons: [] }))).toBe("access");
+  });
+
+  it("flags nothing", async () => {
+    const error = failure({ status: 403, googleReasons: [], googleBodyUnreadable: true });
+    await expect(flagIfTokenRejected(error, { id: "c1", accessToken: "a", refreshToken: "r" })).resolves.toBe(error);
+    expect(h.flagRejectedToken).not.toHaveBeenCalled();
+  });
+
+  it("is logged as unreadable", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    classifyGoogleFailure(failure({ status: 403, googleReasons: [], googleBodyUnreadable: true }), "test");
+    expect(warn).toHaveBeenCalledWith("[Google] request failed", { where: "test", kind: "tryLater", status: 403, unreadable: true });
+  });
+});

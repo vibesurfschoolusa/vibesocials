@@ -8,7 +8,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
-import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
+import { abortSignalTimeoutOnFakeClock, bodyBreaksOff, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 
 import { connectionAccountKey, saveSocialConnection } from "./saveConnection";
 
@@ -321,6 +321,39 @@ describe("saveSocialConnection: Google Business Profile", () => {
         answer(403, { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } }),
       );
       await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "permission_missing", connectedName: "Surf Co Dania" });
+      expect(h.updateMany).not.toHaveBeenCalled();
+    });
+
+    // R37 platform-clients L1: the store-code search reads the shared listing,
+    // where a 403 that can't be read is an account that failed, not one that
+    // refused access: the code may be there, so the location stays.
+    it("the store-code search, two accounts, a 403 that never ends on the one holding the code: check_failed, location kept", async () => {
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch
+        .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+        .mockImplementationOnce((input: string | URL, init?: RequestInit) =>
+          bodyNeverEnds(input, init).then((res) => new Response(res.body, { status: 403 })),
+        )
+        .mockResolvedValueOnce(answer(200, { locations: [] }));
+      await checkAfter15s();
+    });
+
+    it("the same with a 403 whose body broke off: check_failed, location kept", async () => {
+      vi.useRealTimers();
+      h.findUnique.mockResolvedValue(withStoreCode);
+      h.fetch
+        .mockResolvedValueOnce(answer(200, { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] }))
+        .mockResolvedValueOnce(bodyBreaksOff(403))
+        .mockResolvedValueOnce(answer(200, { locations: [] }));
+      await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
+      expect(h.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("the location check's 403 whose body broke off: check_failed, location kept", async () => {
+      vi.useRealTimers();
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(bodyBreaksOff(403));
+      await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "check_failed", connectedName: "Surf Co Dania" });
       expect(h.updateMany).not.toHaveBeenCalled();
     });
 

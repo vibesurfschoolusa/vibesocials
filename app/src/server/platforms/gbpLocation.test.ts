@@ -7,7 +7,8 @@ vi.mock("@/server/platforms/connectionHealth", async (importOriginal) => ({
 }));
 
 import { googleFailureKind } from "@/server/googleFailure";
-import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
+import { readGbpLocations, resolveGbpLocationName } from "@/server/platforms/gbpLocation";
+import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -499,5 +500,74 @@ describe("resolveGbpLocationName — step deadline", () => {
       resolveGbpLocationName("token-abc", "accounts/111/locations/999", NOW - 1),
     ).resolves.toBe("accounts/111/locations/999");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// R37 platform-clients L1: a 403 whose body can't be read (it stalled past the
+// limit or broke off) says nothing about access. The account is one that
+// failed (try again), never one that refused access, so a store code it may
+// hold is never "not listed".
+describe("a 403 whose body can't be read", () => {
+  const ACCOUNTS = { accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] };
+  const listing = (first: () => Response) =>
+    vi.fn(async (input: string | URL) => {
+      const url = input.toString();
+      if (url.includes("accounts/111/locations")) return first();
+      if (url.includes("/locations")) return jsonResponse({ locations: [{ name: "locations/9", storeCode: "OTHER" }] });
+      return jsonResponse(ACCOUNTS);
+    });
+  const read = (get: (url: URL) => Promise<Response>) => readGbpLocations({ where: "test", get, used: () => null });
+
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+  });
+
+  it("one account's: that account failed, not refused; the rest still listed", async () => {
+    const result = await read(listing(() => bodyBreaksOff(403)));
+    expect(result).toMatchObject({ ok: true, complete: false, refusedOnly: false, unread: { access: false, failed: true } });
+    expect(result.ok && result.locations.map((l) => l.resourceName)).toEqual(["accounts/222/locations/9"]);
+  });
+
+  it.each([
+    ["an empty 403", () => new Response("", { status: 403 })],
+    ["a readable access 403", () => jsonResponse({ error: { details: [{ reason: "PERMISSION_DENIED" }] } }, 403)],
+  ])("%s is unchanged: that account refused access", async (_label, answer) => {
+    const result = await read(listing(answer));
+    expect(result).toMatchObject({ ok: true, refusedOnly: true, unread: { access: true, failed: false } });
+  });
+
+  it("the accounts list's: the whole list failed, to try again", async () => {
+    const result = await read(vi.fn(async () => bodyBreaksOff(403)));
+    expect(result).toMatchObject({ ok: false, kind: "tryLater" });
+  });
+
+  it("the store-code lookup, the code nowhere else: Google's failure (try again), never not found; nothing flagged", async () => {
+    vi.stubGlobal("fetch", listing(() => bodyBreaksOff(403)));
+    const used = { id: "conn-1", accessToken: "token-abc", refreshToken: "r" };
+
+    const error = await resolveGbpLocationName("token-abc", "STORE-1", undefined, used).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+    expect(googleFailureKind(error)).toBe("tryLater");
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the store-code lookup, the only account's: try again, never access", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) =>
+        input.toString().includes("/locations") ? bodyBreaksOff(403) : jsonResponse({ accounts: [{ name: "accounts/111" }] }),
+      ),
+    );
+    const error = await resolveGbpLocationName("token-abc", "STORE-1").then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+    expect(googleFailureKind(error)).toBe("tryLater");
   });
 });

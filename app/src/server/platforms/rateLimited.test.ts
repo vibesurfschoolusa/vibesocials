@@ -11,8 +11,11 @@ import {
   PACIFIC_RESET_GRACE_MS,
   RATE_LIMITED_CODE,
   rateLimitedError,
+  readGoogleErrorBody,
+  readGoogleErrorReasons,
   retryAtFromHeaders,
 } from "./rateLimited";
+import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
 
 // 2026-11-01 scale audit (jobs H6 / platform limits): the classifier turns a
 // platform's 429 / quota response into a typed RateLimitedError so the job can
@@ -567,5 +570,36 @@ describe("classifyRateLimit", () => {
     const limited = json(429, "");
     await limited.text();
     expect(await classify("linkedin", limited)).toMatchObject({ kind: "rate_limited" });
+  });
+});
+
+// R37 platform-clients L1: a body that can't be read is not an empty one.
+describe("readGoogleErrorBody", () => {
+  it("a readable 403 gives its reasons", async () => {
+    const res = json(403, { error: { details: [{ reason: "SERVICE_DISABLED" }] } });
+    await expect(readGoogleErrorBody(res)).resolves.toEqual({ reasons: ["servicedisabled"], unreadable: false });
+  });
+
+  it.each([
+    ["empty", ""],
+    ["non-JSON", "<html>nope</html>"],
+  ])("a %s body is read: no reasons, not unreadable", async (_label, body) => {
+    await expect(readGoogleErrorBody(json(403, body))).resolves.toEqual({ reasons: [], unreadable: false });
+  });
+
+  it("a body that broke off is unreadable", async () => {
+    await expect(readGoogleErrorBody(bodyBreaksOff(403))).resolves.toEqual({ reasons: [], unreadable: true });
+  });
+
+  it("the original body is left for the caller", async () => {
+    const res = json(403, { error: { errors: [{ reason: "forbidden" }] } });
+    await readGoogleErrorBody(res);
+    await expect(res.json()).resolves.toEqual({ error: { errors: [{ reason: "forbidden" }] } });
+  });
+
+  // The posts (googleBusinessProfileClient, youtubeClient) read reasons only:
+  // a post that got a 403 failed whatever its body says.
+  it("readGoogleErrorReasons: an unreadable body is no reasons, as before", async () => {
+    await expect(readGoogleErrorReasons(bodyBreaksOff(403))).resolves.toEqual([]);
   });
 });

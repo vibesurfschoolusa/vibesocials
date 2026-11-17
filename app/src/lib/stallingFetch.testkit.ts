@@ -35,3 +35,14 @@ export function abortSignalTimeoutOnFakeClock(): void {
     return controller.signal;
   });
 }
+
+/** A Google error whose headers came (`status`) but whose body broke off: it can't be read. */
+export function bodyBreaksOff(status: number): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"error":'));
+      controller.error(new TypeError("terminated"));
+    },
+  });
+  return new Response(body, { status, headers: { "content-type": "application/json" } });
+}

@@ -2,6 +2,7 @@ import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
+import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   buildLocalPostBody,
@@ -1306,6 +1307,19 @@ describe("googleBusinessProfileClient: a 403 on a post", () => {
     );
   });
 
+  // R37 (readGoogleErrorReasons' callers): a post's 403 whose body broke off
+  // is still a failed post with the access sentence, as before; nothing flagged.
+  it("a 403 whose body can't be read: failed, the access sentence, nothing flagged", async () => {
+    flagRejectedTokenMock.mockReset();
+    stubMediaCreate(() => bodyBreaksOff(403));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error).toMatchObject({ code: "GBP_CREATE_POST_FAILED", status: 403 });
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(GBP_ACCESS_REFUSED);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
   // R26 lead review: one 403 rule for both Google clients. Our own API setup or
   // quota is no refusal of the post: try later, and it is logged.
   it.each(["QUOTA_EXCEEDED", "SERVICE_DISABLED", "rateLimitExceeded"])(
@@ -1338,6 +1352,30 @@ describe("googleBusinessProfileClient: a 403 in the store-code lookup", () => {
     (ctx.socialConnection as { metadata: unknown }).metadata = { locationName: "STORE-1" };
     return ctx;
   };
+
+  // R37 platform-clients L1: an account whose 403 body can't be read failed
+  // (gbpLocation.ts), so the post fails before anything is sent, never as
+  // "store code not found", and nothing is flagged.
+  it.each([
+    ["the only account", { accounts: [{ name: "accounts/111" }] }],
+    ["one of two accounts, the code nowhere else", { accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] }],
+  ])("%s answering a 403 whose body can't be read: failed, never not found, nothing flagged", async (_label, accounts) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    flagRejectedTokenMock.mockReset();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("accounts/111/locations")) return bodyBreaksOff(403);
+      if (url.includes("/locations")) return Response.json({ locations: [] });
+      return Response.json(accounts);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(storeCodeCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_ACCOUNTS_LIST_FAILED", status: 403 });
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("localPosts"))).toBe(false);
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["the accounts list", (reason: string) => () => googleError(reason)],

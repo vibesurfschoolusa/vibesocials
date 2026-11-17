@@ -287,17 +287,48 @@ export function googleErrorReasons(body: unknown): Set<string> {
   return reasons;
 }
 
-/** A failed Google response's reasons (googleErrorReasons), read from a clone of its body. */
+/**
+ * A failed Google response's body, read from a clone (the caller can still
+ * read the original): its reasons (googleErrorReasons), and whether it could
+ * be read at all. R37 platform-clients L1: an empty or non-JSON body was read
+ * and has no reasons; one that stalled past the call's limit or broke off is
+ * `unreadable`, which says nothing about why Google refused. Put it on a
+ * failure with googleErrorFields (googleFailure.ts): a 403 then reads "try
+ * later", never "access".
+ */
+export async function readGoogleErrorBody(res: Response): Promise<{ reasons: string[]; unreadable: boolean }> {
+  let text: string;
+  try {
+    text = await res.clone().text();
+  } catch {
+    return { reasons: [], unreadable: true };
+  }
+  return { reasons: [...googleErrorReasons(parsedOrNull(text))], unreadable: false };
+}
+
+/**
+ * The reasons only, for a post's 403 (googleBusinessProfileClient,
+ * youtubeClient): the post failed whatever the body says, so an unreadable
+ * body is no reasons there, and nothing is flagged on it.
+ */
 export async function readGoogleErrorReasons(res: Response): Promise<string[]> {
-  return [...googleErrorReasons(await readJsonClone(res))];
+  return (await readGoogleErrorBody(res)).reasons;
+}
+
+function parsedOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null; // Empty or not JSON: read, with no reasons.
+  }
 }
 
 /** Parse a response body as JSON from a clone, so the caller can still read the original. */
 async function readJsonClone(res: Response): Promise<unknown> {
   try {
-    return JSON.parse(await res.clone().text());
+    return parsedOrNull(await res.clone().text());
   } catch {
-    // Empty, not JSON, or the body was already consumed: not a body we can use.
+    // The body was already consumed or couldn't be read: not a body we can use.
     return null;
   }
 }

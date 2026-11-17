@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { publishErrorMessage, sentenceForRecipient } from "@/lib/publishFailureText";
+import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
 import { YOUTUBE_UPLOAD_STATE_KIND, type UploadStateStore } from "@/server/jobs/uploadState";
 
 import { LARGE_UPLOAD_CHUNK_WINDOW_MS, LARGE_VIDEO_THRESHOLD_BYTES } from "./largeUpload";
@@ -258,6 +259,20 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(sentenceForRecipient(owner, "youtube", "member")).toBe(
       "YouTube refused the upload, so nothing was posted. The workspace owner can check in YouTube Studio that this channel can upload videos; then retry.",
     );
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
+  // R37 (readGoogleErrorReasons' callers): an upload 403 whose body broke off
+  // is still a failed upload with the YouTube Studio sentence; nothing flagged.
+  it("insert 403 whose body can't be read: failed as before, nothing flagged", async () => {
+    flagRejectedTokenMock.mockReset();
+    stubYouTube(() => bodyBreaksOff(403));
+
+    const error = (await failure()) as Error & { code?: string; status?: number; uploadScopeMissing?: boolean };
+
+    expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 403 });
+    expect(publishErrorMessage("youtube", error)).toBe(YOUTUBE_REFUSED);
+    expect(error.uploadScopeMissing).toBeUndefined();
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 

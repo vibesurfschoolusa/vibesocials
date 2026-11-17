@@ -31,6 +31,8 @@ import {
   replyErrorBody,
 } from "./googleReviews";
 import { isTerminalRefreshFailure } from "./platforms/connectionHealth";
+import { googleFailureKind } from "./googleFailure";
+import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -194,6 +196,18 @@ describe("fetchNewReviewUri", () => {
     };
 
     expect(error.googleReasons).toEqual([]);
+  });
+
+  // R37 platform-clients L1: a 403 whose body broke off says nothing about
+  // access, so Reviews says try again, never "Google refused access".
+  it("a 403 whose body can't be read: try again, never access", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(bodyBreaksOff(403));
+
+    const error = await fetchNewReviewUri("tok", "accounts/1/locations/22").catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ status: 403, googleReasons: [], googleBodyUnreadable: true });
+    expect(googleFailureKind(error)).toBe("tryLater");
   });
 });
 

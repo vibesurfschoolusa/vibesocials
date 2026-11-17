@@ -3,9 +3,9 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
-import { classifyGoogleFailure, type GoogleFailureKind } from "./googleFailure";
+import { classifyGoogleFailure, googleErrorFields, type GoogleFailureKind } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
-import { readGoogleErrorReasons } from "./platforms/rateLimited";
+import { readGoogleErrorBody } from "./platforms/rateLimited";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
 import { refreshGoogleToken } from "./platforms/googleTokens";
 
@@ -55,15 +55,17 @@ export async function refreshAccessToken(
 
 /**
  * assertOk, with Google's error reasons on the thrown error (`googleReasons`),
- * so reviewsErrorBody can tell one 403 from another (JJ3 lead review).
+ * so reviewsErrorBody can tell one 403 from another (JJ3 lead review). R37:
+ * and whether the body could be read at all (googleErrorFields): an unreadable
+ * 403 reads "try again", never "Google refused access".
  */
 async function assertGoogleOk(response: Response, options: Parameters<typeof assertOk>[1]): Promise<void> {
   if (response.ok) return;
-  const googleReasons = await readGoogleErrorReasons(response);
+  const fields = googleErrorFields(await readGoogleErrorBody(response));
   try {
     await assertOk(response, options);
   } catch (error) {
-    throw Object.assign(error as Error, { googleReasons });
+    throw Object.assign(error as Error, fields);
   }
 }
 

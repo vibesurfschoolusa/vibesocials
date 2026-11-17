@@ -2,6 +2,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import {
   classifyGoogleFailure,
   flagIfTokenRejected,
+  googleErrorFields,
   googleFailureKind,
   isExpiredTokenFailure,
   type GoogleFailureKind,
@@ -9,7 +10,7 @@ import {
 
 import type { TokenSnapshot } from "./connectionHealth";
 import { budgetedTimeout } from "./publishBudget";
-import { classifyRateLimit, readGoogleErrorReasons } from "./rateLimited";
+import { classifyRateLimit, readGoogleErrorBody } from "./rateLimited";
 
 // Server-only: the Google Business Profile location listing, and the
 // store-code resolver that reads it.
@@ -116,11 +117,10 @@ async function readAllPages<T>(
     try {
       const response = await get(url);
       if (!response.ok) {
-        const googleReasons = await readGoogleErrorReasons(response);
-        return {
-          ok: false,
-          failure: Object.assign(new Error("Google list failed"), { status: response.status, googleReasons }),
-        };
+        // R37 platform-clients L1: a body that can't be read is marked, so the
+        // account counts as failed (try again), never as refusing access.
+        const fields = googleErrorFields(await readGoogleErrorBody(response));
+        return { ok: false, failure: Object.assign(new Error("Google list failed"), { status: response.status, ...fields }) };
       }
       json = (await response.json()) as Record<string, unknown> | null;
     } catch (error) {
@@ -298,13 +298,19 @@ export function exactStoreCodeMatches<T extends { storeCode: string | null }>(lo
  * on Reviews (googleFailureKind) and on a post (googleBusinessProfileClient).
  */
 function accountsListFailed(failure: unknown): Error {
-  const fields = (failure ?? {}) as { status?: unknown; googleReasons?: unknown };
+  const fields = (failure ?? {}) as { status?: unknown; googleReasons?: unknown; googleBodyUnreadable?: unknown };
   const status = fields.status;
   const known = typeof status === "number";
   const googleReasons = Array.isArray(fields.googleReasons) ? fields.googleReasons : undefined;
+  const unreadable = fields.googleBodyUnreadable === true;
   return Object.assign(
     new Error(`Failed to list Google Business Profile accounts while resolving location${known ? ` (status ${status})` : ""}`),
-    { code: "GBP_ACCOUNTS_LIST_FAILED", ...(known ? { status } : {}), ...(googleReasons ? { googleReasons } : {}) },
+    {
+      code: "GBP_ACCOUNTS_LIST_FAILED",
+      ...(known ? { status } : {}),
+      ...(googleReasons ? { googleReasons } : {}),
+      ...(unreadable ? { googleBodyUnreadable: true } : {}),
+    },
   );
 }
 
