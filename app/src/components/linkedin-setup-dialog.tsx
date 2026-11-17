@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
+import { useResetOnReturnFromCache } from "@/components/returnFromCache";
 
 const noSubscription = () => () => {};
 
@@ -34,6 +35,8 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Continue leaves for LinkedIn; Back may bring this page back from the cache.
+  useResetOnReturnFromCache(setIsConnecting, false);
 
   // Closing clears the trigger query param (?linkedin_setup=true) so the dialog
   // stays closed. Blocked while a redirect is in flight.

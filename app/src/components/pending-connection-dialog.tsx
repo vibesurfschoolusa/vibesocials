@@ -10,6 +10,7 @@ import { cn } from "@/lib/cn";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
+import { useResetOnReturnFromCache } from "@/components/returnFromCache";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -127,6 +128,8 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState<"connect" | "cancel" | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // Both choices end by moving to /settings; if the page comes back from the cache, its buttons do too.
+  useResetOnReturnFromCache(setBusy, null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {

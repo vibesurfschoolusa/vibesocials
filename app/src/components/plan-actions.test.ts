@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { onReturnFromCache, PlanActions } from "./plan-actions";
+import { PlanActions } from "./plan-actions";
 
 /** Q1: the Settings, Plan buttons as rendered (the first render, so Monthly). */
 
@@ -58,36 +58,6 @@ describe("PlanActions with yearly prices only", () => {
     expect(html).toContain("Choose Starter, $190 a year");
     expect(html).toContain("Choose Growth, $400 a year");
     expect(html.match(/Two months free compared with monthly/g)).toHaveLength(1);
-  });
-});
-
-// Unconfirmed in R7-new-customer: Back from Stripe Checkout restores the page
-// from the browser's cache with the buttons still busy; they come back.
-describe("onReturnFromCache", () => {
-  function fakeWindow() {
-    const listeners = new Map<string, (event: { persisted: boolean }) => void>();
-    return {
-      listeners,
-      addEventListener: (type: string, listener: (event: { persisted: boolean }) => void) => listeners.set(type, listener),
-      removeEventListener: (type: string) => listeners.delete(type),
-    };
-  }
-
-  it("calls back when the page is shown again from the cache, not on a fresh load", () => {
-    const target = fakeWindow();
-    const reset = vi.fn();
-    onReturnFromCache(target as never, reset);
-    target.listeners.get("pageshow")?.({ persisted: false });
-    expect(reset).not.toHaveBeenCalled();
-    target.listeners.get("pageshow")?.({ persisted: true });
-    expect(reset).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops listening when the component goes", () => {
-    const target = fakeWindow();
-    const stop = onReturnFromCache(target as never, () => {});
-    stop();
-    expect(target.listeners.has("pageshow")).toBe(false);
   });
 });
 

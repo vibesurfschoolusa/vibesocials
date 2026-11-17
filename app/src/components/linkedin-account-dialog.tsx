@@ -21,6 +21,7 @@ import {
 } from "@/lib/linkedinAccount";
 import { linkedInReconnectSignInStep } from "@/lib/differentAccount";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
+import { useResetOnReturnFromCache } from "@/components/returnFromCache";
 
 /**
  * R7-pages M2: Reconnect goes through the same sign-out steps as Connect and
@@ -88,6 +89,8 @@ export function LinkedInAccountDialog({
   scheduledNote,
 }: Props) {
   const [busy, setBusy] = useState(false);
+  // Continue leaves for LinkedIn; Back may bring this page back from the cache.
+  useResetOnReturnFromCache(setBusy, false);
   const copy = mode === "reconnect" ? reconnectCopy(accountName) : linkedInAccountDialogCopy(mode);
   const numbersNote = linkedInSwitchNumbersNote(mode);
 
