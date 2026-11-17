@@ -323,7 +323,7 @@ describe("the connect link page", () => {
     expect(html).toContain('role="alert"');
   });
 
-  it.each([{}, { wait: "soon" }, { wait: "999999" }])("a missing or garbage wait %o: a plain sentence", async (wait) => {
+  it.each<Record<string, string>>([{}, { wait: "soon" }, { wait: "999999" }])("a missing or garbage wait %o: a plain sentence", async (wait) => {
     const html = await render({ error: "rate_limited", platform: "nonsense", ...wait });
     expect(html).toContain("Too many requests from this network in the last hour. Wait up to an hour, then press Connect again.");
     expect(html).not.toContain("nonsense");
