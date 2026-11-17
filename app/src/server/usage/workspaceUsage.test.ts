@@ -386,28 +386,50 @@ describe("the limit-reached email", () => {
     }
   });
 
-  // R39 lead review L3: a store blip sends with the keys only inside their 24 hours.
-  it("a counter store that can't answer: today's window sends with the keys, a month's sends nothing", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-    try {
+  // R39 lead review L3 + R40 security L1: a store blip sends with the keys only when the
+  // window's key could not have been used more than 24 hours ago.
+  describe("a counter store that can't answer", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
       consumeFixedWindowMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
-      db.postJobCount.mockResolvedValue(20);
-      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
-      expect(sendEmailMock.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
-        "usage-limit/ws-1/postsPerDay/2026-11-10/owner-1",
-        "usage-limit/ws-1/postsPerDay/2026-11-10/owner-2",
-      ]);
+    });
+    afterEach(() => vi.useRealTimers());
 
-      sendEmailMock.mockClear();
+    it("storage and YouTube (today's window, claimed only today): sent with the keys", async () => {
+      vi.setSystemTime(NOW);
+      db.queryRaw.mockResolvedValue([{ total: BigInt(5120 * MB) }]);
+      await checkStorageLimit("ws-1", NOW);
+      expect(sendEmailMock.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
+        "usage-limit/ws-1/storage/2026-11-10/owner-1",
+        "usage-limit/ws-1/storage/2026-11-10/owner-2",
+      ]);
+    });
+
+    it("X posts on the last day of the month: nothing sent", async () => {
+      const lastDay = new Date("2026-11-30T15:00:00.000Z");
+      vi.setSystemTime(lastDay);
+      xPostsMock.mockResolvedValue(30);
+      const refusal = await checkXMonthlyLimit("ws-1", lastDay);
+      await refusal!.notifyOwners();
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(db.releaseKey).not.toHaveBeenCalled();
+    });
+
+    it("X posts early in the month: nothing sent", async () => {
+      vi.setSystemTime(NOW);
       xPostsMock.mockResolvedValue(30);
       const refusal = await checkXMonthlyLimit("ws-1", NOW);
       await refusal!.notifyOwners();
       expect(sendEmailMock).not.toHaveBeenCalled();
+    });
+
+    it("posts per day, on a day that could have been filled days ahead: nothing sent on that day", async () => {
+      vi.setSystemTime(NOW);
+      db.postJobCount.mockResolvedValue(20);
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      expect(sendEmailMock).not.toHaveBeenCalled();
       expect(db.releaseKey).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   // Resend keeps an idempotency key 24 hours; past that a lost reply could become a second copy.

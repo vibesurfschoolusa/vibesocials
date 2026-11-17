@@ -162,6 +162,11 @@ type LimitNotice = {
   limit: number;
   windowKey: string;
   windowEnd: Date;
+  /**
+   * R40 security L1: when the window's email could first be sent (sendOncePer's
+   * keysFrom); null when there is no bound.
+   */
+  windowStart: Date | null;
   /** When the limit starts again, as the email says it; null when the email names none. */
   resetsAt: Date | null;
   /** Posts per day only: the UTC day that is full. */
@@ -189,7 +194,12 @@ async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
   // R39 client-journey L2: through sendOncePer, so the window is let go again
   // when the owners can't be read or no email went, and the next refusal tries.
   await sendOncePer(
-    { key: `usage-limit-email:${workspaceId}:${kind}:${windowKey}`, resetAt: args.windowEnd, perRecipientKeys: true },
+    {
+      key: `usage-limit-email:${workspaceId}:${kind}:${windowKey}`,
+      resetAt: args.windowEnd,
+      keysFrom: args.windowStart,
+      perRecipientKeys: true,
+    },
     async (sendStarted) => {
       const [owners, planInSettings] = await Promise.all([
         prisma.workspaceMember.findMany({
@@ -321,6 +331,8 @@ export async function checkDailyPostLimit(args: {
       limit: limits.postsPerDay,
       windowKey: utcDayKey(day),
       windowEnd: end,
+      // A day can be filled while scheduling days ahead, so its email can have gone long before it.
+      windowStart: null,
       resetsAt: null,
       day,
     });
@@ -344,7 +356,7 @@ export async function checkXMonthlyLimit(
     const used = await xPostsThisMonth(workspaceId, now);
     if (used < limits.xPostsPerMonth) return null;
 
-    const { end } = utcMonthRange(now);
+    const { start, end } = utcMonthRange(now);
     return {
       errorCode: X_MONTHLY_LIMIT_CODE,
       errorMessage: xMonthlyLimitMessage(limits.xPostsPerMonth, now),
@@ -356,6 +368,7 @@ export async function checkXMonthlyLimit(
           limit: limits.xPostsPerMonth,
           windowKey: utcMonthKey(now),
           windowEnd: end,
+          windowStart: start,
           resetsAt: end,
         }),
     };
@@ -375,7 +388,7 @@ export async function checkYoutubeDailyLimit(
     const used = await countYoutubeUploadsToday(workspaceId, now);
     if (used < limits.youtubeUploadsPerDay) return null;
 
-    const { end } = pacificDayRange(now);
+    const { start, end } = pacificDayRange(now);
     return {
       errorCode: YOUTUBE_WORKSPACE_DAILY_LIMIT_CODE,
       errorMessage: youtubeWorkspaceDailyLimitMessage(limits.youtubeUploadsPerDay),
@@ -387,6 +400,7 @@ export async function checkYoutubeDailyLimit(
           limit: limits.youtubeUploadsPerDay,
           windowKey: pacificDayKey(now),
           windowEnd: end,
+          windowStart: start,
           resetsAt: end,
         }),
     };
@@ -417,6 +431,7 @@ export async function checkStorageLimit(
       // Storage has no window of its own: the owners hear about it once per UTC day.
       windowKey: utcDayKey(now),
       windowEnd: utcDayRange(now).end,
+      windowStart: utcDayRange(now).start,
       resetsAt: null,
     });
     return { error: storageFullMessage(limits.storageBytes), code: STORAGE_FULL_CODE };

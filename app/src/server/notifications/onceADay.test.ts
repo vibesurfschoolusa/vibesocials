@@ -29,11 +29,16 @@ describe("sendOnceADay", () => {
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
-  it("already claimed today, or a store that couldn't answer: nothing sent, nothing let go", async () => {
-    for (const result of [{ allowed: false, retryAfterSeconds: 10 }, { allowed: false, retryAfterSeconds: 60, unavailable: true }]) {
+  // R40 security L3: "skipped" means already sent, so a caller can tell a reached recipient
+  // from one the store couldn't answer for.
+  it("already claimed today: skipped; a store that couldn't answer: failed; nothing sent, nothing let go", async () => {
+    for (const [result, outcome] of [
+      [{ allowed: false, retryAfterSeconds: 10 }, "skipped"],
+      [{ allowed: false, retryAfterSeconds: 60, unavailable: true }, "failed"],
+    ] as const) {
       consumeMock.mockResolvedValueOnce(result);
       const send = vi.fn();
-      await expect(sendOnceADay(KEY, RESET_AT, send, onError)).resolves.toBe("skipped");
+      await expect(sendOnceADay(KEY, RESET_AT, send, onError)).resolves.toBe(outcome);
       expect(send).not.toHaveBeenCalled();
     }
     expect(releaseMock).not.toHaveBeenCalled();
@@ -129,13 +134,42 @@ describe("sendOncePer", () => {
     expect(releaseMock).toHaveBeenCalledWith({ where: { key: month.key } });
   });
 
-  it("a short window: a throw after a send started still lets the claim go", async () => {
+  it("a short window with per-recipient keys: a throw after a send started still lets the claim go", async () => {
+    await expect(
+      sendOncePer(
+        { ...HOUR, perRecipientKeys: true },
+        async (sendStarted) => {
+          sendStarted();
+          throw new Error("network error");
+        },
+        onError,
+      ),
+    ).resolves.toBe("failed");
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: HOUR.key } });
+  });
+
+  // R40 security L2: with no per-recipient key, a later try after a lost reply is a second copy.
+  it("a short window without per-recipient keys: a throw after a send started keeps the claim", async () => {
     await expect(
       sendOncePer(
         HOUR,
         async (sendStarted) => {
           sendStarted();
           throw new Error("network error");
+        },
+        onError,
+      ),
+    ).resolves.toBe("failed");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("a short window without per-recipient keys: a throw before any send started lets the claim go", async () => {
+    await expect(
+      sendOncePer(
+        HOUR,
+        async () => {
+          throw new Error("db blip");
         },
         onError,
       ),
@@ -168,10 +202,62 @@ describe("sendOncePer", () => {
     for (const window of [longKeyed, shortUnkeyed]) {
       consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true });
       const send = vi.fn(async () => true);
-      await expect(sendOncePer(window, send, onError)).resolves.toBe("skipped");
+      await expect(sendOncePer(window, send, onError)).resolves.toBe("failed");
       expect(send).not.toHaveBeenCalled();
     }
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  // R40 security L1: Resend forgets a key 24 hours after its first use, so a blip may send
+  // only when the window's key could not have been used before then.
+  describe("a store error with per-recipient keys, by when the key was first usable", () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const blip = () => consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+
+    it("the last day of a month (usable since the 1st): nothing sent", async () => {
+      blip();
+      const send = vi.fn(async () => true);
+      const lastDay = {
+        key: "some-email:2026-11",
+        resetAt: new Date(Date.now() + 12 * HOUR_MS),
+        keysFrom: new Date(Date.now() - 29 * 24 * HOUR_MS),
+        perRecipientKeys: true as const,
+      };
+      await expect(sendOncePer(lastDay, send, onError)).resolves.toBe("failed");
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("a day that could be booked ahead (no bound on when its key was first used): nothing sent on that day", async () => {
+      blip();
+      const send = vi.fn(async () => true);
+      const bookedAhead = {
+        key: "some-email:2026-11-17",
+        resetAt: new Date(Date.now() + 6 * HOUR_MS),
+        keysFrom: null,
+        perRecipientKeys: true as const,
+      };
+      await expect(sendOncePer(bookedAhead, send, onError)).resolves.toBe("failed");
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("the current hour or day (usable only since it began): still sent", async () => {
+      for (const [startedMsAgo, endsInMs] of [
+        [20 * 60 * 1000, 40 * 60 * 1000],
+        [18 * HOUR_MS, 6 * HOUR_MS],
+      ]) {
+        blip();
+        const send = vi.fn(async () => true);
+        const current = {
+          key: "some-email:now",
+          resetAt: new Date(Date.now() + endsInMs),
+          keysFrom: new Date(Date.now() - startedMsAgo),
+          perRecipientKeys: true as const,
+        };
+        await expect(sendOncePer(current, send, onError)).resolves.toBe("sent");
+        expect(send).toHaveBeenCalledTimes(1);
+      }
+      expect(releaseMock).not.toHaveBeenCalled();
+    });
   });
 
   it("already claimed: nothing sent", async () => {

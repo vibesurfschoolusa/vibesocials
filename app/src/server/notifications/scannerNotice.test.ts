@@ -67,13 +67,18 @@ describe("notifyNotSentAtScan", () => {
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
-  // Review of T1, item 3: a failed send lets the key go, so the next scan tries again.
-  it("a send that fails lets the day's key go, and never throws", async () => {
-    deliverMock.mockRejectedValue(new Error("resend 429"));
+  // R40 security L2: deliverPostOutcomeNotification throws only from its send, and its
+  // key is per post, so a lost reply (Resend took the email) must not free the day for a
+  // second notice about the next post.
+  it("a send that throws keeps the day's key, so the next post sends no second notice, and never throws", async () => {
+    deliverMock.mockRejectedValueOnce(new Error("network error"));
     await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
-    expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
+    expect(releaseMock).not.toHaveBeenCalled();
 
-    releaseMock.mockClear();
+    consumeMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
+    await expect(notifyNotSentAtScan({ ...NOTICE, postJobId: "post-2" }, NOW)).resolves.toBe(true);
+    expect(deliverMock).toHaveBeenCalledTimes(1);
+
     consumeMock.mockRejectedValue(new Error("db down"));
     await expect(notifyNotSentAtScan(NOTICE, NOW)).resolves.toBe(true);
     expect(releaseMock).not.toHaveBeenCalled();

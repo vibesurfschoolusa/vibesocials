@@ -29,7 +29,8 @@ export function scanNoticeKey(notice: ScanNotice, now: Date): string {
 /**
  * Never throws: the scan carries on whatever happens to the email. When the
  * send fails (deliverPostOutcomeNotification throws only a failure a retry
- * can fix), the day's key is let go, so the next scan's notice tries again.
+ * can fix), the day's key is kept: the email may have gone with its reply
+ * lost, and the email promises no second one that day.
  *
  * Answers whether the notice was dealt with (sent, already sent today, or
  * tried): false only when it was left for the pair (or that check failed), so
@@ -50,9 +51,12 @@ export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Da
   await sendOnceADay(
     key,
     utcDayRange(now).end,
-    async () => {
+    async (sendStarted) => {
       // Any other half is done or not due yet (checked above), so none is waited for.
-      // It throws only a failure a retry can fix; otherwise the notice is dealt with.
+      // It throws only a failure a retry can fix, and only from its send (R40 security
+      // L2): Resend may have taken the email, and its key is per post, so the day is
+      // kept rather than a later post sending a second notice.
+      sendStarted();
       await deliverPostOutcomeNotification({
         userId: notice.userId,
         postJobId: notice.postJobId,
@@ -62,7 +66,7 @@ export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Da
       return true;
     },
     (error) =>
-      logger.error("[scanner] Couldn't tell the owner about a post that was not sent (a later scan tries again)", {
+      logger.error("[scanner] Couldn't tell the owner about a post that was not sent (not tried again today: it may have gone)", {
         error,
         postJobId: notice.postJobId,
         reason: notice.reason,

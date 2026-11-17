@@ -33,6 +33,13 @@ export type OncePerWindow = {
    * second copy. Only then may a store error still send.
    */
   perRecipientKeys?: boolean;
+  /**
+   * R40 security L1: the earliest time this window's key could be claimed, so
+   * its first email sent. Omitted: `resetAt` minus 24 hours (a window of a day
+   * or less, claimed only while it runs, such as the current hour or day).
+   * null: no bound, such as a day that can be filled days ahead.
+   */
+  keysFrom?: Date | null;
 };
 
 /**
@@ -42,18 +49,20 @@ export type OncePerWindow = {
  * unless `send` answers true (at least one email went).
  *
  * A throw from `send` goes to `onError`, the caller's own log line, and lets
- * the claim go, except when `send` had called `sendStarted` (an email may have
- * gone, its reply lost) and the window outlasts IDEMPOTENCY_KEY_MS: then a
- * later try could be a second copy, so the claim is kept. A throw before any
- * send started (a failed read) always lets it go.
+ * the claim go. Except when `send` had called `sendStarted` (an email may have
+ * gone, its reply lost): then it is let go only with per-recipient keys and a
+ * window that ends within IDEMPOTENCY_KEY_MS, where each key still stops any
+ * later try being a second copy (R40 security L2). A throw before any send
+ * started (a failed read) always lets it go.
  *
- * A claim store that can't answer: with a window of 24 hours or less and
- * per-recipient keys, it sends anyway and the keys stop repeats; otherwise it
- * sends nothing and the next trigger tries again. Never throws.
+ * A claim store that can't answer: with per-recipient keys, a window that ends
+ * within IDEMPOTENCY_KEY_MS and a key first usable no more than
+ * IDEMPOTENCY_KEY_MS ago (R40 security L1: so any email it already sent is one
+ * Resend still remembers), it sends anyway and the keys stop repeats;
+ * otherwise it sends nothing and the next trigger tries again. Never throws.
  *
- * "skipped": already sent in this window, or the store answered "unavailable"
- * and nothing was sent. "failed": nothing went, a send threw, or the claim
- * threw and nothing was sent.
+ * "skipped": already sent in this window. "failed": nothing went, a send
+ * threw, or the claim store failed and nothing was sent.
  */
 export async function sendOncePer(
   window: OncePerWindow,
@@ -61,9 +70,11 @@ export async function sendOncePer(
   onError: (error: unknown) => void,
 ): Promise<"sent" | "skipped" | "failed"> {
   const { key, resetAt } = window;
-  const withinKeys = resetAt.getTime() - Date.now() <= IDEMPOTENCY_KEY_MS;
+  const now = Date.now();
+  const keysCoverLater = window.perRecipientKeys === true && resetAt.getTime() - now <= IDEMPOTENCY_KEY_MS;
+  const keysFrom = window.keysFrom === undefined ? resetAt.getTime() - IDEMPOTENCY_KEY_MS : window.keysFrom?.getTime();
+  const keysCoverEarlier = keysFrom !== undefined && now - keysFrom <= IDEMPOTENCY_KEY_MS;
   let storeDown = false;
-  let claimThrew = false;
   let claimed = false;
   try {
     const claim = await consumeFixedWindow({ key, limit: 1, resetAt, failClosed: true });
@@ -71,16 +82,16 @@ export async function sendOncePer(
     storeDown = !claim.allowed && claim.unavailable === true;
   } catch (error) {
     onError(error);
-    storeDown = claimThrew = true;
+    storeDown = true;
   }
-  if (!claimed && !(storeDown && withinKeys && window.perRecipientKeys)) return claimThrew ? "failed" : "skipped";
+  if (!claimed && !(storeDown && keysCoverLater && keysCoverEarlier)) return storeDown ? "failed" : "skipped";
 
   let started = false;
   try {
     if (await send(() => (started = true))) return "sent";
   } catch (error) {
     onError(error);
-    if (started && !withinKeys) return "failed";
+    if (started && !keysCoverLater) return "failed";
   }
   if (claimed) await releaseOnceADayKey(key);
   return "failed";
