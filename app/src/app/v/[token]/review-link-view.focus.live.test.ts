@@ -141,13 +141,25 @@ describe("/v: the network limit", () => {
 // R41 client-journey L2: the decisions share the network limit with the list,
 // so every press within the window fails the same way: one instruction, no live button.
 describe("/v: a card decision's 429", () => {
+  let stored: Map<string, string>;
   beforeEach(() => {
     // focusAfterPress waits a frame for the page to change; a long one, so
     // the render is in before it under a loaded run (press waits it out).
     const view = made.doc.defaultView as Record<string, unknown>;
     view.requestAnimationFrame = (step: () => void) => setTimeout(step, 50);
     view.setTimeout = setTimeout;
+    view.clearTimeout = clearTimeout;
+    stored = new Map();
+    view.sessionStorage = {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    };
   });
+
+  const HOURLY = "Too many requests from this network in the last hour. Try again later.";
+  const DAILY = "This link has reached today's limit. Try again tomorrow.";
+  const NOTE = "Use the other photo";
 
   const card = (id: string) => ({
     id,
@@ -162,6 +174,15 @@ describe("/v: a card decision's 429", () => {
     version: "v1",
   });
 
+  const listed = (...ids: string[]) => Promise.resolve(Response.json({ posts: ids.map(card), more: false }));
+  const refused = (error: string, seconds?: number) =>
+    Promise.resolve(
+      Response.json(
+        seconds === undefined ? { error } : { error, retryAfterSeconds: seconds },
+        seconds === undefined ? { status: 429 } : { status: 429, headers: { "Retry-After": String(seconds) } },
+      ),
+    );
+
   function buttons(text: string): FakeNode[] {
     const found: FakeNode[] = [];
     const walk = (node: FakeNode) => {
@@ -172,95 +193,137 @@ describe("/v: a card decision's 429", () => {
     return found;
   }
 
+  function all(test: (n: FakeNode) => boolean): FakeNode[] {
+    const found: FakeNode[] = [];
+    const walk = (node: FakeNode) => {
+      if (test(node)) found.push(node);
+      node.childNodes.forEach(walk);
+    };
+    walk(container);
+    return found;
+  }
+
+  async function wait(ms: number) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  }
+
   async function press(node: FakeNode) {
     (node.focus as () => void)();
     await act(async () => {
       void props(node).onClick({ currentTarget: node, preventDefault: () => {} });
     });
     await settle();
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 80));
-    });
+    await wait(80);
   }
 
-  it("Looks good: the card says when to reload, and no decision can be pressed on any card", async () => {
-    fetchMock
-      .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a"), card("b")], more: false })))
-      .mockReturnValueOnce(
-        Promise.resolve(
-          Response.json(
-            { error: "Too many requests from this network in the last hour. Try again later.", retryAfterSeconds: 1500 },
-            { status: 429, headers: { "Retry-After": "1500" } },
-          ),
-        ),
-      );
+  async function open() {
     await act(async () => {
       root.render(createElement(ReviewLinkView, { token: "tok" }));
     });
     await settle();
-    await press(buttons("Looks good")[0]);
+  }
 
-    expect(container.textContent).toContain("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
-    expect(container.textContent).not.toContain("Try again later");
-    for (const label of ["Looks good", "Ask for a change"]) {
-      const found = buttons(label);
-      expect(found).toHaveLength(2);
-      for (const node of found) expect(props(node).disabled).toBe(true);
-    }
-    const active = doc.activeElement as FakeNode;
-    expect(active.attributes.role).toBe("alert");
-    expect(active.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
-  });
-
-  it("Send: the typed note stays, and Send can't be pressed again", async () => {
-    fetchMock
-      .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a")], more: false })))
-      .mockReturnValueOnce(
-        Promise.resolve(
-          Response.json(
-            { error: "Too many requests from this network in the last hour. Try again later.", retryAfterSeconds: 300 },
-            { status: 429, headers: { "Retry-After": "300" } },
-          ),
-        ),
-      );
-    await act(async () => {
-      root.render(createElement(ReviewLinkView, { token: "tok" }));
-    });
-    await settle();
+  /** Ask for a change on the first card, type the note, and Send. */
+  async function typeAndSend() {
     await press(buttons("Ask for a change")[0]);
     const box = find(container, (n) => n.nodeName === "TEXTAREA")!;
     await act(async () => {
-      void props(box).onChange({ target: { value: "Use the other photo" } });
+      void props(box).onChange({ target: { value: NOTE } });
     });
     const form = find(container, (n) => n.nodeName === "FORM")!;
     await act(async () => {
       void props(form).onSubmit({ preventDefault: () => {} });
     });
     await settle();
+    await wait(80);
+  }
 
-    expect(container.textContent).toContain("Too many requests from this network in the last hour. Reload this page in 5 minutes.");
-    expect(props(find(container, (n) => n.nodeName === "TEXTAREA")!).value).toBe("Use the other photo");
-    expect(props(buttons("Send")[0]).disabled).toBe(true);
+  const noteBox = () => find(container, (n) => n.nodeName === "TEXTAREA");
+  const pageLine = () =>
+    all((n) => n.attributes?.role === "status").find((n) => (n.textContent as string).startsWith("Too many") || (n.textContent as string).startsWith("This link"));
+
+  it("Looks good: one sentence on the card and atop the list, and no decision on any card can be pressed", async () => {
+    fetchMock.mockReturnValueOnce(listed("a", "b", "c")).mockReturnValueOnce(refused(HOURLY, 1500));
+    await open();
+    await press(buttons("Looks good")[0]);
+
+    const sentence = "Too many requests from this network in the last hour. You can send again in 25 minutes.";
+    expect(container.textContent).not.toContain("Try again later");
+    expect(container.textContent).not.toContain("Reload");
+    for (const label of ["Looks good", "Ask for a change"]) {
+      const found = buttons(label);
+      expect(found).toHaveLength(3);
+      for (const node of found) expect(props(node).disabled).toBe(true);
+    }
+    // R41 review: card 3's greyed buttons have a reason in sight, atop the list.
+    expect(pageLine()?.textContent).toBe(sentence);
+    const active = doc.activeElement as FakeNode;
+    expect(active.attributes.role).toBe("alert");
+    expect(active.textContent).toBe(sentence);
   });
+
+  it("hourly: the decisions come back by themselves when the wait ends, with the note kept", async () => {
+    fetchMock.mockReturnValueOnce(listed("a", "b")).mockReturnValueOnce(refused(HOURLY, 1));
+    await open();
+    await typeAndSend();
+
+    expect(container.textContent).toContain("Too many requests from this network in the last hour. You can send again in 1 minute.");
+    expect(props(noteBox()!).value).toBe(NOTE);
+    expect(props(buttons("Send")[0]).disabled).toBe(true);
+    expect(props(buttons("Looks good")[0]).disabled).toBe(true);
+
+    await wait(1200);
+    expect(props(buttons("Send")[0]).disabled).toBe(false);
+    expect(props(buttons("Looks good")[0]).disabled).toBe(false);
+    expect(props(noteBox()!).value).toBe(NOTE);
+    expect(container.textContent).toContain("You can send again.");
+    expect(container.textContent).not.toContain("You can send again in");
+    expect(pageLine()).toBeUndefined();
+  });
+
+  it("a reload keeps the typed note, and Ask for a change opens it", async () => {
+    fetchMock.mockReturnValueOnce(listed("a")).mockReturnValueOnce(refused(DAILY));
+    await open();
+    await typeAndSend();
+    await act(async () => root.unmount());
+
+    root = createRoot(container as unknown as HTMLElement);
+    fetchMock.mockReturnValueOnce(listed("a"));
+    await open();
+    expect(noteBox()).toBeNull();
+    await press(buttons("Ask for a change")[0]);
+    expect(props(noteBox()!).value).toBe(NOTE);
+  });
+
+  it("a send that went clears the kept note", async () => {
+    stored.set("vs-review-note:tok:a", NOTE);
+    fetchMock
+      .mockReturnValueOnce(listed("a"))
+      .mockReturnValueOnce(Promise.resolve(Response.json({ state: "change_requested", note: NOTE })));
+    await open();
+    await press(buttons("Ask for a change")[0]);
+    expect(props(noteBox()!).value).toBe(NOTE);
+    await act(async () => {
+      void props(find(container, (n) => n.nodeName === "FORM")!).onSubmit({ preventDefault: () => {} });
+    });
+    await settle();
+    expect(String(fetchMock.mock.calls[1][1].body)).toContain(NOTE);
+    expect(container.textContent).toContain("Change requested");
+    expect(stored.has("vs-review-note:tok:a")).toBe(false);
+  });
+
   // R41 lead: the per-link daily limit refuses every decision until it ends, the same rule.
   describe("the link's daily limit", () => {
-    const DAILY = "This link has reached today's limit. Try again tomorrow.";
-
-    it("Looks good: the wait from Retry-After, and no decision can be pressed on any card", async () => {
-      fetchMock
-        .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a"), card("b")], more: false })))
-        .mockReturnValueOnce(
-          Promise.resolve(
-            Response.json({ error: DAILY, retryAfterSeconds: 5 * 3600 }, { status: 429, headers: { "Retry-After": "18000" } }),
-          ),
-        );
-      await act(async () => {
-        root.render(createElement(ReviewLinkView, { token: "tok" }));
-      });
-      await settle();
+    it("Looks good: the wait from Retry-After, on the card and atop the list, and no decision can be pressed", async () => {
+      fetchMock.mockReturnValueOnce(listed("a", "b")).mockReturnValueOnce(refused(DAILY, 5 * 3600));
+      await open();
       await press(buttons("Looks good")[0]);
 
-      expect(container.textContent).toContain("This link has reached today's limit. Reload this page in 5 hours.");
+      const sentence = "This link has reached today's limit. Reload this page in 5 hours.";
+      expect(container.textContent).toContain(sentence);
+      expect(pageLine()?.textContent).toBe(sentence);
       for (const label of ["Looks good", "Ask for a change"]) {
         const found = buttons(label);
         expect(found).toHaveLength(2);
@@ -270,27 +333,23 @@ describe("/v: a card decision's 429", () => {
       expect(active.attributes.role).toBe("alert");
     });
 
-    it("Send with no wait named: the route's sentence, the note stays, Send is off", async () => {
-      fetchMock
-        .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a")], more: false })))
-        .mockReturnValueOnce(Promise.resolve(Response.json({ error: DAILY }, { status: 429 })));
-      await act(async () => {
-        root.render(createElement(ReviewLinkView, { token: "tok" }));
-      });
-      await settle();
-      await press(buttons("Ask for a change")[0]);
-      const box = find(container, (n) => n.nodeName === "TEXTAREA")!;
-      await act(async () => {
-        void props(box).onChange({ target: { value: "Use the other photo" } });
-      });
-      const form = find(container, (n) => n.nodeName === "FORM")!;
-      await act(async () => {
-        void props(form).onSubmit({ preventDefault: () => {} });
-      });
-      await settle();
+    it("Send with no wait named: the route's sentence, the note stays, Send is off, and Cancel can reopen it", async () => {
+      fetchMock.mockReturnValueOnce(listed("a", "b")).mockReturnValueOnce(refused(DAILY));
+      await open();
+      await typeAndSend();
 
       expect(container.textContent).toContain(DAILY);
-      expect(props(find(container, (n) => n.nodeName === "TEXTAREA")!).value).toBe("Use the other photo");
+      expect(props(noteBox()!).value).toBe(NOTE);
+      expect(props(buttons("Send")[0]).disabled).toBe(true);
+
+      await press(buttons("Cancel")[0]);
+      expect(noteBox()).toBeNull();
+      // The note with text can be opened again; the other card has none to open.
+      const asks = buttons("Ask for a change");
+      expect(props(asks[0]).disabled).toBe(false);
+      expect(props(asks[1]).disabled).toBe(true);
+      await press(asks[0]);
+      expect(props(noteBox()!).value).toBe(NOTE);
       expect(props(buttons("Send")[0]).disabled).toBe(true);
     });
   });

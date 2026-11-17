@@ -6,7 +6,13 @@ import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { dailyLimitSentence, limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
+import {
+  CLIENT_LINK_LIMIT_WINDOW_SECONDS,
+  dailyLimitSentence,
+  limitReachedSentence,
+  limitWaitSeconds,
+  sendAgainSentence,
+} from "@/lib/clientLinkLimit";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { useRetryFocus } from "@/lib/useRetryFocus";
@@ -142,17 +148,58 @@ export function shownCardLine(line: CardLine | null, reloads: number): string | 
   return line.text;
 }
 
+/** A decision limit in force: its sentence, and when it ends by itself (ms), if the page can tell. */
+export interface DecisionLimit {
+  sentence: string;
+  endsAfterMs: number | null;
+}
+
+/** On the pressed card once the hourly wait has ended and the decisions are back. */
+export const DECISIONS_BACK_MESSAGE = "You can send again.";
+
 /**
  * R41: a decision's 429 from either limit (the network's hour, the link's
- * day) refuses every press until it ends, so the card gets its one sentence,
- * worded from the wait, and every decision is turned off. Null otherwise.
+ * day) refuses every press until it ends, so every decision is turned off and
+ * the sentence, worded from the wait, says why. R41 review: the hourly one
+ * ends within the hour, so the page turns the decisions back on by itself and
+ * names no reload (which would empty a typed note). Null otherwise.
  */
-function decisionLimitSentence(response: Response, data: unknown): string | null {
+function decisionLimit(response: Response, data: unknown): DecisionLimit | null {
   if (response.status !== 429) return null;
   const error = (data as { error?: unknown } | null)?.error;
-  if (error === REVIEW_LINK_IP_LIMIT_MESSAGE) return limitReachedSentence(limitWaitSeconds(response, data));
-  if (error === REVIEW_LINK_DAILY_LIMIT_MESSAGE) return dailyLimitSentence(limitWaitSeconds(response, data));
+  const wait = limitWaitSeconds(response, data);
+  if (error === REVIEW_LINK_IP_LIMIT_MESSAGE) {
+    return { sentence: sendAgainSentence(wait), endsAfterMs: (wait ?? CLIENT_LINK_LIMIT_WINDOW_SECONDS) * 1000 };
+  }
+  if (error === REVIEW_LINK_DAILY_LIMIT_MESSAGE) return { sentence: dailyLimitSentence(wait), endsAfterMs: null };
   return null;
+}
+
+/**
+ * R41 review: nothing typed is lost. A card's change note is kept for this
+ * tab, by link and post, so a reload (the daily limit's step) brings it back;
+ * a send that went clears it. A convenience: without storage it lives in the
+ * card only.
+ */
+function noteKey(token: string, postId: string): string {
+  return `vs-review-note:${token}:${postId}`;
+}
+
+export function keptNote(token: string, postId: string): string {
+  try {
+    return window.sessionStorage.getItem(noteKey(token, postId)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function keepNote(token: string, postId: string, note: string): void {
+  try {
+    if (note) window.sessionStorage.setItem(noteKey(token, postId), note);
+    else window.sessionStorage.removeItem(noteKey(token, postId));
+  } catch {
+    // Private mode or blocked storage: the note stays in the card.
+  }
 }
 
 /** The route's `already`: this request wrote nothing, as an earlier one had. */
@@ -239,7 +286,9 @@ export function ReviewPostCard({
   gone = false,
   onDismiss,
   limited = false,
+  limitLine = null,
   onLimited,
+  onPress,
 }: {
   post: ReviewPostDTO;
   token: string;
@@ -258,18 +307,23 @@ export function ReviewPostCard({
   /** Removes a gone card. */
   onDismiss?: () => void;
   /**
-   * R41 client-journey L2: a decision hit the network limit, which the list
-   * and every card share, so no decision can work until the page is reloaded.
+   * R41 client-journey L2: a decision hit a limit that every card shares, so
+   * no decision can work until it ends.
    */
   limited?: boolean;
-  /** This card's decision hit the network limit. */
-  onLimited?: () => void;
+  /** R41 review: the limit's line on the card whose press hit it (then the decisions-back line). */
+  limitLine?: string | null;
+  /** This card's decision hit a limit. */
+  onLimited?: (limit: DecisionLimit) => void;
+  /** A decision starts, so a decisions-back line has served its turn. */
+  onPress?: () => void;
 }) {
   const [asking, setAsking] = useState(false);
-  const [note, setNote] = useState("");
+  // R41 review: a note kept for this tab comes back after a reload.
+  const [note, setNote] = useState(() => keptNote(token, post.id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<CardLine | null>(null);
-  const shownError = gone ? REVIEW_POST_GONE_MESSAGE : shownCardLine(error, reloads);
+  const shownError = gone ? REVIEW_POST_GONE_MESSAGE : (limitLine ?? shownCardLine(error, reloads));
   const lineRef = useRef<HTMLParagraphElement>(null);
   // The number of the reload this card's own refusal started, once it worked.
   const [ownReload, setOwnReload] = useState<number | null>(null);
@@ -297,6 +351,7 @@ export function ReviewPostCard({
   ) {
     setBusy(true);
     setError(null);
+    onPress?.();
     try {
       const response = await fetchOrNoAnswer(
         `/api/review-link/${encodeURIComponent(token)}/posts/${encodeURIComponent(post.id)}`,
@@ -307,18 +362,22 @@ export function ReviewPostCard({
         },
       );
       const data: unknown = await response.json().catch(() => null);
-      const limitSentence = decisionLimitSentence(response, data);
-      if (limitSentence) {
+      const limit = decisionLimit(response, data);
+      if (limit) {
         // The one limit view: the wait, and no decision left to press on any card.
         focusAfterPress(pressed, () => lineRef.current);
-        setError({ text: limitSentence, clearAfter: null });
-        onLimited?.();
+        onLimited?.(limit);
         return;
       }
       const outcome = reviewDecisionOutcome(response.status, data);
       if (outcome.kind === "saved") {
         focusAfterPress(pressed, () => stateRef.current);
         setAsking(false);
+        // The note went: nothing is left to keep.
+        if (body.decision === "change") {
+          keepNote(token, post.id, "");
+          setNote("");
+        }
         onDecided(outcome.patch);
         // A change request that already stood: the post may have been edited since, so reload.
         if (alreadyStood(data)) onStale(REVIEW_CHANGE_ALREADY_SAVED_MESSAGE);
@@ -419,7 +478,10 @@ export function ReviewPostCard({
                 ref={noteRef}
                 id={`note-${post.id}`}
                 value={note}
-                onChange={(event) => setNote(event.target.value)}
+                onChange={(event) => {
+                  setNote(event.target.value);
+                  keepNote(token, post.id, event.target.value);
+                }}
                 rows={3}
                 required
                 aria-invalid={noteTooLong || undefined}
@@ -467,7 +529,8 @@ export function ReviewPostCard({
                 className="w-full sm:w-auto"
                 variant="outline"
                 ref={askRef}
-                disabled={gone || limited || busy}
+                // R41 review: under a limit, a typed note can still be opened, to read and keep.
+                disabled={gone || busy || (limited && noteTooShort)}
                 onClick={(event) => {
                   // R27 MM3: the buttons are replaced by the form; focus goes to its note box.
                   focusAfterPress(event.currentTarget, () => noteRef.current);
@@ -512,8 +575,23 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   // R40 client-journey L2: the error is the network limit's, which a press can't clear.
   const [limited, setLimited] = useState(false);
-  // R41 client-journey L2: a card's decision hit the same limit; only a reload can end it.
-  const [decisionsLimited, setDecisionsLimited] = useState(false);
+  // R41 client-journey L2 and its review: a card's decision hit a limit every
+  // card shares. `cardId`: the card that pressed; `ended`: the hourly wait is
+  // over and the decisions are back on.
+  const [decisionLimitShown, setDecisionLimitShown] = useState<(DecisionLimit & { cardId: string; ended: boolean }) | null>(
+    null,
+  );
+  const limitEndsAfterMs = decisionLimitShown && !decisionLimitShown.ended ? decisionLimitShown.endsAfterMs : null;
+  useEffect(() => {
+    if (limitEndsAfterMs === null) return;
+    // At the wait the answer named, so never later than the rounded minutes the sentence says.
+    const timer = window.setTimeout(
+      () => setDecisionLimitShown((current) => (current ? { ...current, ended: true } : current)),
+      limitEndsAfterMs,
+    );
+    return () => window.clearTimeout(timer);
+  }, [limitEndsAfterMs, decisionLimitShown]);
+  const decisionsLimited = decisionLimitShown !== null && !decisionLimitShown.ended;
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
   // List reloads that worked; a card's line set before one can go (shownCardLine).
@@ -636,6 +714,10 @@ export function ReviewLinkView({ token }: { token: string }) {
         <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
           {notice}
         </p>
+        {/* R41 review: why every card's decisions are off, in sight of each; on the page from the first render. */}
+        <p role="status" className="empty:sr-only rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
+          {decisionsLimited ? decisionLimitShown.sentence : ""}
+        </p>
         {posts === null ? null : cards.length === 0 ? (
           <p ref={emptyRef} className="text-sm text-muted-foreground outline-none">
             Nothing is scheduled for the next 60 days.
@@ -654,7 +736,15 @@ export function ReviewLinkView({ token }: { token: string }) {
                 gone={gone}
                 onDismiss={() => setKept((current) => current.filter((p) => p.id !== post.id))}
                 limited={decisionsLimited}
-                onLimited={() => setDecisionsLimited(true)}
+                limitLine={
+                  decisionLimitShown?.cardId === post.id
+                    ? decisionLimitShown.ended
+                      ? DECISIONS_BACK_MESSAGE
+                      : decisionLimitShown.sentence
+                    : null
+                }
+                onLimited={(limit) => setDecisionLimitShown({ ...limit, cardId: post.id, ended: false })}
+                onPress={() => setDecisionLimitShown((current) => (current?.ended ? null : current))}
               />
             ))}
           </ul>

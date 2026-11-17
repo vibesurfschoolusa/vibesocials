@@ -47,6 +47,19 @@ export function limitReachedSentence(
   return `${CLIENT_LINK_LIMIT_REASON} Reload this page in ${minutesText(waitSeconds)}.`;
 }
 
+/** The network window is a clock hour, so no wait known is at most an hour. */
+export const CLIENT_LINK_LIMIT_WINDOW_SECONDS = 3600;
+
+/**
+ * R41 review: /v turns its decisions back on by itself when the wait ends,
+ * so the sentence names the wait and no reload step (a reload would empty
+ * what is typed).
+ */
+export function sendAgainSentence(waitSeconds: number | undefined): string {
+  const wait = waitSeconds && waitSeconds > 0 ? waitSeconds : CLIENT_LINK_LIMIT_WINDOW_SECONDS;
+  return `${CLIENT_LINK_LIMIT_REASON} You can send again in ${minutesText(wait)}.`;
+}
+
 /**
  * R41 lead: the /v link's daily decision limit, the same view. Its wait can
  * be most of a day, so from an hour on it is named in whole hours, rounded up;

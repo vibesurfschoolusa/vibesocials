@@ -4,7 +4,13 @@ import { CONNECT_LINK_COOKIE_MAX_AGE_SECONDS, CONNECT_LINK_RATE_LIMIT_MESSAGE } 
 import { REVIEW_LINK_DAILY_LIMIT_MESSAGE, REVIEW_LINK_DAILY_LIMIT_REASON, REVIEW_LINK_IP_LIMIT_MESSAGE } from "./reviewLink";
 import { PENDING_CONNECTION_TTL_MS } from "@/server/connections/pendingConnection";
 
-import { CLIENT_LINK_LIMIT_REASON, dailyLimitSentence, limitReachedSentence, limitWaitSeconds } from "./clientLinkLimit";
+import {
+  CLIENT_LINK_LIMIT_REASON,
+  dailyLimitSentence,
+  limitReachedSentence,
+  limitWaitSeconds,
+  sendAgainSentence,
+} from "./clientLinkLimit";
 
 /**
  * R40 client-journey L2/L3: one "limit reached" view for every client link.
@@ -63,6 +69,15 @@ describe("limitReachedSentence", () => {
 
   it("the /c choice's life on the page is the server's", () => {
     expect(CONNECT_LINK_COOKIE_MAX_AGE_SECONDS * 1000).toBe(PENDING_CONNECTION_TTL_MS);
+  });
+});
+
+// R41 review: on /v the decisions come back by themselves when the wait ends, so no reload step.
+describe("sendAgainSentence", () => {
+  it("names the wait, rounded up, with no reload step; an hour when none is known", () => {
+    expect(sendAgainSentence(1500)).toBe(`${CLIENT_LINK_LIMIT_REASON} You can send again in 25 minutes.`);
+    expect(sendAgainSentence(1)).toBe(`${CLIENT_LINK_LIMIT_REASON} You can send again in 1 minute.`);
+    expect(sendAgainSentence(undefined)).toBe(`${CLIENT_LINK_LIMIT_REASON} You can send again in 60 minutes.`);
   });
 });
 
