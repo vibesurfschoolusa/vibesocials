@@ -6,7 +6,7 @@ import { generateAccountToken } from "@/lib/accountToken";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { emailChangeLockedSentence } from "@/lib/displayDate";
-import { normalizeEmail } from "@/lib/email";
+import { isEmailShaped, normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (typeof rawEmail !== "string" || !/^\S+@\S+\.\S+$/.test(rawEmail.trim())) {
+  if (typeof rawEmail !== "string" || !isEmailShaped(rawEmail.trim())) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
   const newEmail = normalizeEmail(rawEmail);

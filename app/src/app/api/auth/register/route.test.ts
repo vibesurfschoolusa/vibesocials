@@ -309,6 +309,18 @@ describe("POST /api/auth/register", () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
+  // R45 review M1: the email check runs before the limit, so it can't be made slow.
+  it("refuses a 10,000-character email within milliseconds, before the limit", async () => {
+    for (const email of ["a.@".repeat(3334) + " ", "a".repeat(9_990) + "@example.com"]) {
+      const started = performance.now();
+      const response = await POST(jsonRequest({ email, password: "goodpassword" }));
+      expect(performance.now() - started).toBeLessThan(50);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Enter a valid email address." });
+    }
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
   it("still counts a try that passes the field checks", async () => {
     happyPathEchoingUser();
     await POST(jsonRequest({ email: "user@example.com", password: "goodpassword", name: "Maria" }));

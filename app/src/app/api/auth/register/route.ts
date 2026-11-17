@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { buildVerifyEmail, deliverAccountEmail } from "@/lib/accountEmails";
 import { issueAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
-import { normalizeEmail } from "@/lib/email";
+import { isEmailShaped, normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (typeof rawEmail !== "string" || !/^\S+@\S+\.\S+$/.test(rawEmail)) {
+  if (!isEmailShaped(rawEmail)) {
     return NextResponse.json(
       { error: "Enter a valid email address." },
       { status: 400 },

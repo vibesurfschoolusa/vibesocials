@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { buildPasswordResetEmail, deliverAccountEmail } from "@/lib/accountEmails";
 import { issueAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
-import { normalizeEmail } from "@/lib/email";
+import { isEmailShaped, normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -44,8 +44,8 @@ export async function POST(request: Request) {
 
   // Validate BEFORE rate limiting so the per-email throttle key is well-formed.
   // A malformed email reveals nothing about account existence, so returning 400
-  // here is not an oracle. Rule byte-matches the register route.
-  if (typeof email !== "string" || !/^\S+@\S+\.\S+$/.test(email)) {
+  // here is not an oracle. The same rule as the register route (isEmailShaped).
+  if (!isEmailShaped(email)) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
 

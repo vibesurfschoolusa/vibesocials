@@ -77,6 +77,18 @@ describe("POST /api/auth/forgot-password", () => {
     expect(findUniqueUserMock).not.toHaveBeenCalled();
   });
 
+  // R45 review M1: checked before any limit, so it can't be made slow.
+  it("refuses a 10,000-character email within milliseconds, before any limit", async () => {
+    for (const email of ["a.@".repeat(3334) + " ", "a".repeat(9_990) + "@example.com"]) {
+      const started = performance.now();
+      const response = await POST(req({ email }));
+      expect(performance.now() - started).toBeLessThan(50);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Enter a valid email address." });
+    }
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for a missing email body", async () => {
     const response = await POST(req({}));
 

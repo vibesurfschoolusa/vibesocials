@@ -141,6 +141,15 @@ describe("POST /api/auth/change-email", () => {
     await expect(response.json()).resolves.toEqual({ error: "Enter a valid email address." });
   });
 
+  // R45 review M1: the shared check, linear and capped at 254 characters.
+  it("refuses a 10,000-character address within milliseconds", async () => {
+    const started = performance.now();
+    const response = await POST(request({ ...GOOD, newEmail: "a.@".repeat(3334) + " " }));
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Enter a valid email address." });
+  });
+
   it("refuses the address it already uses", async () => {
     const response = await POST(request({ ...GOOD, newEmail: "OLD@example.com" }));
     expect(response.status).toBe(400);
