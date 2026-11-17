@@ -448,10 +448,8 @@ test.describe(
       await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
     });
 
-    test("a client opens /v/[token]/report through a review link", async ({ page, request }) => {
-      const owner = freshTestUser("review-report");
-      await registerViaApi(request, owner);
-      const token = await seedReviewLink(owner.email);
+    test("a client opens /v/[token]/report through a review link", async ({ page }) => {
+      const token = await seedReviewLink("review-report");
 
       const response = await page.goto(`/v/${token}/report`);
 
@@ -461,10 +459,8 @@ test.describe(
       await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
     });
 
-    test("a client opens /c/[token] through a connect link", async ({ page, request }) => {
-      const owner = freshTestUser("connect-link");
-      await registerViaApi(request, owner);
-      const token = await seedConnectLink(owner.email, ["pinterest"]);
+    test("a client opens /c/[token] through a connect link", async ({ page }) => {
+      const token = await seedConnectLink("connect-link", ["pinterest"]);
 
       const response = await page.goto(`/c/${token}`);
 
@@ -473,10 +469,8 @@ test.describe(
       await expect(page.locator("body")).not.toContainText(NEXT_ERROR_PAGE);
     });
 
-    test("the connect link shows a Connect button for a platform not yet connected", async ({ page, request }) => {
-      const owner = freshTestUser("connect-button");
-      await registerViaApi(request, owner);
-      const token = await seedConnectLink(owner.email, ["pinterest"]);
+    test("the connect link shows a Connect button for a platform not yet connected", async ({ page }) => {
+      const token = await seedConnectLink("connect-button", ["pinterest"]);
 
       await page.goto(`/c/${token}`);
 

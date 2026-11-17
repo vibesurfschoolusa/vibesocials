@@ -3,8 +3,8 @@ import crypto from "node:crypto";
 import { PrismaClient, type Platform } from "@prisma/client";
 
 /**
- * Hotfix (digest 2711503741) E2E seed: one client review link and one client
- * connect link on a test user's personal workspace, so the specs can open
+ * Hotfix (digest 2711503741) E2E seed: a client review link or a client
+ * connect link, each on its own new owner and workspace, so the specs can open
  * /v/[token]/report and /c/[token] as the client would.
  *
  * Seeded in the database rather than through the owner's create routes: those
@@ -39,23 +39,32 @@ async function withTestDb<T>(run: (prisma: PrismaClient) => Promise<T>): Promise
   }
 }
 
-/** The user's id and personal workspace: the oldest owned membership, as seed-connection.ts. */
-async function ownerAndWorkspace(prisma: PrismaClient, email: string): Promise<{ userId: string; workspaceId: string }> {
-  const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-  if (!user) throw new Error(`seed-client-links: no user found for ${email}`);
-  const membership = await prisma.workspaceMember.findFirst({
-    where: { userId: user.id, role: "owner" },
-    orderBy: { createdAt: "asc" },
-    select: { workspaceId: true },
+/**
+ * A fresh owner with one workspace, written straight into the test database.
+ * Not through POST /api/auth/register: that route allows only a few accounts
+ * per network an hour, and the earlier core flows already use them up (429 on
+ * PR #217). The owner never signs in; the link pages only need the rows.
+ */
+async function newOwnerWorkspace(prisma: PrismaClient, label: string): Promise<{ userId: string; workspaceId: string }> {
+  const suffix = `${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const user = await prisma.user.create({
+    data: { email: `e2e-${suffix}@example.test`, name: `E2E ${label}` },
+    select: { id: true },
   });
-  if (!membership) throw new Error(`seed-client-links: no owned workspace for ${email}`);
-  return { userId: user.id, workspaceId: membership.workspaceId };
+  const workspace = await prisma.workspace.create({
+    data: {
+      name: `E2E ${label} workspace`,
+      members: { create: { userId: user.id, role: "owner" } },
+    },
+    select: { id: true },
+  });
+  return { userId: user.id, workspaceId: workspace.id };
 }
 
-/** Seeds an active client review link; returns the raw token for /v/<token>. */
-export async function seedReviewLink(email: string): Promise<string> {
+/** Seeds an owner, a workspace and an active client review link; returns the raw token for /v/<token>. */
+export async function seedReviewLink(label: string): Promise<string> {
   return withTestDb(async (prisma) => {
-    const { userId, workspaceId } = await ownerAndWorkspace(prisma, email);
+    const { userId, workspaceId } = await newOwnerWorkspace(prisma, label);
     const { raw, hash } = newLinkToken();
     await prisma.workspaceReviewLink.create({
       data: { workspaceId, tokenHash: hash, tokenSealed: "e2e-not-sealed", createdById: userId },
@@ -64,10 +73,10 @@ export async function seedReviewLink(email: string): Promise<string> {
   });
 }
 
-/** Seeds an active client connect link offering `platforms`; returns the raw token for /c/<token>. */
-export async function seedConnectLink(email: string, platforms: Platform[]): Promise<string> {
+/** Seeds an owner, a workspace and an active client connect link offering `platforms`; returns the raw token for /c/<token>. */
+export async function seedConnectLink(label: string, platforms: Platform[]): Promise<string> {
   return withTestDb(async (prisma) => {
-    const { userId, workspaceId } = await ownerAndWorkspace(prisma, email);
+    const { userId, workspaceId } = await newOwnerWorkspace(prisma, label);
     const { raw, hash } = newLinkToken();
     await prisma.workspaceConnectLink.create({
       data: {
