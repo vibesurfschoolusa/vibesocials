@@ -2,7 +2,6 @@ import { planSectionActions } from "@/components/planSectionView";
 import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { consumeFixedWindow } from "@/lib/rateLimit";
 import {
   DAILY_POST_LIMIT_CODE,
   dailyPostLimitMessage,
@@ -26,6 +25,7 @@ import { deferredPostCanSend } from "@/server/jobs/posting";
 import { pacificDayKey } from "@/server/platforms/rateLimited";
 import { buildLimitReachedEmail } from "@/server/notifications/limitReachedEmail";
 import { sendEmail } from "@/server/notifications/email";
+import { sendOncePer, sendToEach } from "@/server/notifications/onceADay";
 
 import {
   crossWorkspacePostRefusal,
@@ -186,60 +186,56 @@ async function planInSettingsFor(workspaceId: string): Promise<boolean> {
 
 async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
   const { workspaceId, kind, windowKey } = args;
-  const first = await consumeFixedWindow({
-    key: `usage-limit-email:${workspaceId}:${kind}:${windowKey}`,
-    limit: 1,
-    resetAt: args.windowEnd,
-  });
-  if (!first.allowed) return;
-
-  const [owners, planInSettings] = await Promise.all([
-    prisma.workspaceMember.findMany({
-      where: { workspaceId, role: "owner" },
-      select: { user: { select: { id: true, email: true, timeZone: true } } },
-    }),
-    planInSettingsFor(workspaceId),
-  ]);
-  for (const owner of owners) {
-    // R2-pages L4: built per owner, so each reads the times in their own zone.
-    const email = buildLimitReachedEmail({
-      workspaceId,
-      workspaceName: args.workspaceName,
-      planInSettings,
-      appBaseUrl: process.env.NEXTAUTH_URL || null,
-      kind,
-      limit: args.limit,
-      resetsAt: args.resetsAt,
-      day: args.day ?? null,
-      timeZone: owner.user.timeZone ?? null,
-    });
-    await sendEmail(
-      { to: owner.user.email, ...email },
-      { idempotencyKey: `usage-limit/${workspaceId}/${kind}/${windowKey}/${owner.user.id}` },
-    );
-  }
-}
-
-/**
- * Email every owner the first time `kind` is hit in its window. A limit-1
- * counter per window decides "first time"; the per-owner idempotency key stops
- * a repeat send if the counter store is down (it fails open). Best-effort and
- * bounded: it never throws, and after NOTIFY_TIMEOUT_MS the caller carries on
- * (the counter is spent by then, so a cut-off send is not retried: at most once).
- */
-async function notifyOwnersOfLimitReached(args: LimitNotice): Promise<void> {
-  const { workspaceId, kind } = args;
-  const work = sendLimitReachedEmails(args).then(
-    () => "sent" as const,
-    (error: unknown) => {
-      logger.error("[usage] Couldn't email the owners about a reached limit (ignored)", {
+  // R39 client-journey L2: through sendOncePer, so the window is let go again
+  // when the owners can't be read or no email went, and the next refusal tries.
+  await sendOncePer(
+    { key: `usage-limit-email:${workspaceId}:${kind}:${windowKey}`, resetAt: args.windowEnd },
+    async () => {
+      const [owners, planInSettings] = await Promise.all([
+        prisma.workspaceMember.findMany({
+          where: { workspaceId, role: "owner" },
+          select: { user: { select: { id: true, email: true, timeZone: true } } },
+        }),
+        planInSettingsFor(workspaceId),
+      ]);
+      // A lost reply throws (the window is let go); the next try reuses each key.
+      return sendToEach(owners, (owner) => {
+        // R2-pages L4: built per owner, so each reads the times in their own zone.
+        const email = buildLimitReachedEmail({
+          workspaceId,
+          workspaceName: args.workspaceName,
+          planInSettings,
+          appBaseUrl: process.env.NEXTAUTH_URL || null,
+          kind,
+          limit: args.limit,
+          resetsAt: args.resetsAt,
+          day: args.day ?? null,
+          timeZone: owner.user.timeZone ?? null,
+        });
+        return sendEmail(
+          { to: owner.user.email, ...email },
+          { idempotencyKey: `usage-limit/${workspaceId}/${kind}/${windowKey}/${owner.user.id}`, throwOnRetryable: true },
+        );
+      });
+    },
+    (error) =>
+      logger.error("[usage] Couldn't email the owners about a reached limit (a later refusal tries again)", {
         error,
         workspaceId,
         kind,
-      });
-      return "failed" as const;
-    },
+      }),
   );
+}
+
+/**
+ * Email every owner the first time `kind` is hit in its window, once per
+ * window through sendOncePer, with a per-owner idempotency key. Best-effort
+ * and bounded: it never throws, and after NOTIFY_TIMEOUT_MS the caller carries
+ * on while the send finishes.
+ */
+async function notifyOwnersOfLimitReached(args: LimitNotice): Promise<void> {
+  const { workspaceId, kind } = args;
+  const work = sendLimitReachedEmails(args);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), NOTIFY_TIMEOUT_MS);

@@ -6,6 +6,7 @@ const db = vi.hoisted(() => ({
   resultCount: vi.fn(),
   queryRaw: vi.fn(),
   memberFindMany: vi.fn(),
+  releaseKey: vi.fn(),
 }));
 const { consumeFixedWindowMock, sendEmailMock, crossWorkspaceMock, xPostsMock, canSendMock, personalMock } = vi.hoisted(() => ({
   canSendMock: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@/lib/db", () => ({
     postJobResult: { count: db.resultCount },
     workspaceMember: { findMany: db.memberFindMany },
     $queryRaw: db.queryRaw,
+    rateLimitEntry: { deleteMany: db.releaseKey },
   },
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeFixedWindowMock }));
@@ -86,7 +88,8 @@ beforeEach(() => {
     { user: { id: "owner-2", email: "two@example.com" } },
   ]);
   consumeFixedWindowMock.mockResolvedValue({ allowed: true });
-  sendEmailMock.mockResolvedValue(undefined);
+  sendEmailMock.mockResolvedValue(true);
+  db.releaseKey.mockResolvedValue({ count: 1 });
 });
 
 afterEach(() => {
@@ -318,6 +321,7 @@ describe("the limit-reached email", () => {
       key: "usage-limit-email:ws-1:postsPerDay:2026-11-10",
       limit: 1,
       resetAt: new Date("2026-11-11T00:00:00.000Z"),
+      failClosed: true,
     });
     expect(db.memberFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { workspaceId: "ws-1", role: "owner" } }),
@@ -325,12 +329,62 @@ describe("the limit-reached email", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(2);
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({ to: "one@example.com", subject: "Surf Co reached a Vibe Socials limit" }),
-      { idempotencyKey: "usage-limit/ws-1/postsPerDay/2026-11-10/owner-1" },
+      { idempotencyKey: "usage-limit/ws-1/postsPerDay/2026-11-10/owner-1", throwOnRetryable: true },
     );
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({ to: "two@example.com" }),
-      { idempotencyKey: "usage-limit/ws-1/postsPerDay/2026-11-10/owner-2" },
+      { idempotencyKey: "usage-limit/ws-1/postsPerDay/2026-11-10/owner-2", throwOnRetryable: true },
     );
+    expect(db.releaseKey).not.toHaveBeenCalled();
+  });
+
+  // R39 client-journey L2 + L3: the window is let go when no email went, and one
+  // owner's retryable failure never stops the email to the next.
+  it("the first owner fails retryably: the second is still sent and the day is let go", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      db.postJobCount.mockResolvedValue(20);
+      sendEmailMock.mockRejectedValueOnce(new Error("resend 429")).mockResolvedValueOnce(true);
+
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      expect(sendEmailMock.mock.calls.map(([params]) => params.to)).toEqual(["one@example.com", "two@example.com"]);
+      expect(db.releaseKey).toHaveBeenCalledWith({ where: { key: "usage-limit-email:ws-1:postsPerDay:2026-11-10" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the owners can't be read: the day is let go", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      db.postJobCount.mockResolvedValue(20);
+      db.memberFindMany.mockRejectedValue(new Error("db blip"));
+
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(db.releaseKey).toHaveBeenCalledWith({ where: { key: "usage-limit-email:ws-1:postsPerDay:2026-11-10" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Resend keeps an idempotency key 24 hours; past that a lost reply could become a second copy.
+  it("a month's window: a failed send keeps the claim, so no owner can get a second copy that month", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      xPostsMock.mockResolvedValue(30);
+      sendEmailMock.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce(true);
+
+      const refusal = await checkXMonthlyLimit("ws-1", NOW);
+      await refusal!.notifyOwners();
+      expect(sendEmailMock).toHaveBeenCalledTimes(2);
+      expect(db.releaseKey).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("is not sent again once the window's counter is used", async () => {
@@ -423,6 +477,7 @@ describe("the limit-reached email", () => {
       key: "usage-limit-email:ws-1:xPostsPerMonth:2026-11",
       limit: 1,
       resetAt: new Date("2026-12-01T00:00:00.000Z"),
+      failClosed: true,
     });
   });
 
@@ -437,6 +492,7 @@ describe("the limit-reached email", () => {
       key: "usage-limit-email:ws-1:youtubeUploadsPerDay:2026-11-10",
       limit: 1,
       resetAt: new Date("2026-11-11T08:00:00.000Z"),
+      failClosed: true,
     });
   });
 
@@ -449,6 +505,7 @@ describe("the limit-reached email", () => {
       key: "usage-limit-email:ws-1:storage:2026-11-10",
       limit: 1,
       resetAt: new Date("2026-11-11T00:00:00.000Z"),
+      failClosed: true,
     });
   });
 });
