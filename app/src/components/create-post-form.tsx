@@ -2517,7 +2517,9 @@ function CreatePostFormInner({
   // Review of R29 pages L6: the first child of every view below, so React
   // keeps this one region mounted while the views change around it.
   const libraryStatus = <LibraryFileStatus loading={libraryStatusReady && reuseLoading} />;
-  const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage} />;
+  // R39 new-customer M1: the page's one status line also says why the submit waits for the AI.
+  const aiWritingMessage = captionBox.aiWriting ? AI_WRITING_MESSAGE : null;
+  const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage ?? aiWritingMessage} />;
 
   // `composerGate` (computed above the hooks that need it). The `loading`
   // branch exists because rendering the full form during the first fetch let
@@ -3195,10 +3197,11 @@ function CreatePostFormInner({
                 TikTok: {tiktokBlock}
               </p>
             ) : null}
-            {/* Below md the publish bar says it (control.reason). */}
-            {captionBox.aiWriting ? (
-              <p className="hidden text-sm text-muted-foreground md:block" role="status">
-                {AI_WRITING_MESSAGE}
+            {/* Below md the publish bar says it (control.reason). Screen
+                readers hear it from the page's status line (untouchedStatus). */}
+            {aiWritingMessage ? (
+              <p className="hidden text-sm text-muted-foreground md:block" aria-hidden>
+                {aiWritingMessage}
               </p>
             ) : null}
           </div>

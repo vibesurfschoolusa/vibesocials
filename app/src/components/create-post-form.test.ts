@@ -1261,7 +1261,8 @@ describe("Create at phone width and its status line", () => {
     expect(renderToStaticMarkup(createElement(UntouchedSubmitStatus, { message: "Add a file" }))).toBe(
       '<p class="sr-only">Add a file</p>',
     );
-    expect(source).toContain("const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage} />;");
+    // R39 new-customer M1: the same line also says why the submit waits for the AI.
+    expect(source).toContain("const untouchedStatus = <UntouchedSubmitStatus message={untouchedMessage ?? aiWritingMessage} />;");
     expect(source).toMatch(/<p className="text-sm text-muted-foreground empty:sr-only" aria-hidden>\s*\{untouchedMessage\}\s*<\/p>/);
     expect(source).not.toContain("{untouchedMessage ? (");
   });
