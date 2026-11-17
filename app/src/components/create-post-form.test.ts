@@ -7,6 +7,7 @@ import type { Platform } from "@prisma/client";
 import { deriveComposerPlatforms } from "@/lib/postTargets";
 import { REPEAT_X_NOTE } from "@/lib/repeatSchedule";
 import { selectedMediaOf } from "./composer/attached-photos";
+import { captionResultApplies } from "./composer/useCaptionBox";
 
 // The release switch (platformLimits.ts textPostsEnabled), overridden per test.
 const textPosts = vi.hoisted(() => ({ enabled: true }));
@@ -26,7 +27,6 @@ import {
   UntouchedSubmitStatus,
   captionsAfterReuseLoaded,
   captionFromMediaSource,
-  captionResultApplies,
   captionBusyTracker,
   reusedItemBlob,
   NothingConnectedState,
@@ -648,11 +648,9 @@ describe("the media changed: one caption rule for every path", () => {
     return raw.slice(start, raw.indexOf("\n  }", start));
   };
 
-  it("forgetMediaCaption applies the one rule, and clears only when it says so", () => {
-    const body = fn("forgetMediaCaption");
-    expect(body).toContain("captionAfterMediaChange(uploadCaption, lastAiCaption)");
-    expect(body).toContain("setUploadCaption(next.caption);");
-    expect(body).toContain("setLastAiCaption(next.lastAiCaption);");
+  it("forgetMediaCaption is the caption box's (useCaptionBox, tested live beside it)", () => {
+    expect(raw).toMatch(/const \{ caption: uploadCaption, setCaption: setUploadCaption, lastAiCaption, forgetMediaCaption \} = captionBox;/);
+    expect(raw).not.toContain("function forgetMediaCaption(");
   });
 
   it("a new single pick, a cleared pick and a replacing set go through it (attachPickedFile)", () => {
@@ -1731,10 +1729,12 @@ describe("a caption from media that comes back late", () => {
   it("runAutoCaptionFromMedia notes the media and caption at the press and writes by the rule", () => {
     const start = raw.indexOf("async function runAutoCaptionFromMedia(");
     const body = raw.slice(start, raw.indexOf("\n  }\n", start));
-    expect(body).toContain("const askedAbout = selectedMedia();");
-    expect(body).toContain("const captionAtPress = uploadCaption;");
-    expect(body).toMatch(/captionResultApplies\(\{\s*askedAbout,\s*selectedNow: selectedMedia\(\),\s*captionAtPress,\s*captionNow: prev,\s*overwrite: options\.overwrite,?\s*\}\)/);
-    expect(body).not.toContain("if (!options.overwrite && prev.trim())");
+    // R37 lead review: the press and the answer read the box through the
+    // caption box's ref (useCaptionBox), never this closure's uploadCaption.
+    expect(body).toContain("const press = captionBox.pressed(selectedMedia());");
+    expect(body).toContain("captionBox.answered(press, { caption, selectedNow: selectedMedia(), overwrite: options.overwrite });");
+    expect(body).not.toContain("uploadCaption");
+    expect(body).not.toContain("setLastAiCaption(");
     // The selected media: a set's cover File, else the single file or reused
     // item (selectedMediaOf), so Add photos moving the File keeps it the same.
     expect(raw).toContain("const selectedMedia = () => selectedMediaOf({ single: singlePhotoRef.current, set: photoSetRef.current });");

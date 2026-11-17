@@ -19,7 +19,6 @@ import {
   preparePhotos,
   PreparingPhotosStatus,
   removeAllClearsCaption,
-  captionAfterMediaChange,
   selectedMediaOf,
   requestPhotoDescription,
   uploadPhotosInOrder,
@@ -27,6 +26,7 @@ import {
   withPhotoDescriptions,
   type AttachedPhoto,
 } from "./composer/attached-photos";
+import { useCaptionBox } from "./composer/useCaptionBox";
 import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { GooglePostBox, googleBoxOpensOnSubmit } from "./composer/google-post-box";
 import { PlatformPreviewList } from "./composer/platform-preview";
@@ -222,23 +222,6 @@ export function captionBusyTracker(setBusy: (busy: boolean) => void) {
       setBusy(false);
     },
   };
-}
-
-/**
- * R36 lead review: a caption from media is written only while the media it was
- * asked about is still the selected media (not dismissed, not replaced by a new
- * pick) and the caption box is as it was at the press. `overwrite` (a manual
- * press) replaces that caption; the automatic one fills only an empty box.
- */
-export function captionResultApplies(state: {
-  askedAbout: unknown;
-  selectedNow: unknown;
-  captionAtPress: string;
-  captionNow: string;
-  overwrite: boolean;
-}): boolean {
-  if (state.askedAbout !== state.selectedNow || state.captionNow !== state.captionAtPress) return false;
-  return state.overwrite || !state.captionNow.trim();
 }
 
 /**
@@ -1054,10 +1037,12 @@ function CreatePostFormInner({
   const [platformOverrides, setPlatformOverrides] = useState<PlatformOverrides | null>(null);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadCaption, setUploadCaption] = useState("");
-  // 07c: the last caption the AI wrote from the media. "Remove all" clears the
-  // caption box only while it still holds exactly this (removeAllClearsCaption).
-  const [lastAiCaption, setLastAiCaption] = useState<string | null>(null);
+  // The caption box and the last caption the AI wrote from the media. "Remove
+  // all" clears the box only while it still holds exactly that
+  // (removeAllClearsCaption). R37 lead review: caption requests read the box
+  // through the hook's ref, never through a render's closure.
+  const captionBox = useCaptionBox();
+  const { caption: uploadCaption, setCaption: setUploadCaption, lastAiCaption, forgetMediaCaption } = captionBox;
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // POST /api/posts rejects - blocks the submit (lib/captionLimits.ts).
   const captionOver = captionCounter(uploadCaption).over;
@@ -1459,7 +1444,7 @@ function CreatePostFormInner({
     return () => {
       cancelled = true;
     };
-  }, [reuseMediaItemId, toast, workspaceId]);
+  }, [reuseMediaItemId, setUploadCaption, toast, workspaceId]);
 
   // Build (and clean up) an object URL for the attached file so we can render
   // an inline media preview without touching the upload flow.
@@ -1528,16 +1513,6 @@ function CreatePostFormInner({
     setPlatformOverrides(kept.overrides);
     setUploadCaption(kept.caption);
     forgetMediaCaption();
-  }
-
-  // R37 new-customer L1: the selected media is being replaced or dropped. A
-  // caption the AI wrote for it, still unedited, goes with it
-  // (captionAfterMediaChange); typed or edited text stays untouched.
-  function forgetMediaCaption() {
-    const next = captionAfterMediaChange(uploadCaption, lastAiCaption);
-    if (next.caption === uploadCaption) return;
-    setUploadCaption(next.caption);
-    setLastAiCaption(next.lastAiCaption);
   }
 
   // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
@@ -1617,9 +1592,9 @@ function CreatePostFormInner({
     isStale?: () => boolean;
   }) {
     const blob = options.blobOverride ?? uploadedBlob;
-    // What the answer must still match when it comes back (captionResultApplies).
-    const askedAbout = selectedMedia();
-    const captionAtPress = uploadCaption;
+    // What the answer must still match when it comes back (captionResultApplies):
+    // the media, and the box as it is now (the hook's ref, not this closure).
+    const press = captionBox.pressed(selectedMedia());
 
     if (!blob) {
       setUploadError(
@@ -1653,7 +1628,7 @@ function CreatePostFormInner({
       );
 
       // Dismissed or replaced meanwhile: the answer is about other media.
-      if (options.isStale?.() || selectedMedia() !== askedAbout) {
+      if (options.isStale?.() || selectedMedia() !== press.askedAbout) {
         return;
       }
 
@@ -1664,23 +1639,11 @@ function CreatePostFormInner({
       }
       const caption = result.caption;
 
-      setUploadCaption((prev) =>
-        captionResultApplies({
-          askedAbout,
-          selectedNow: selectedMedia(),
-          captionAtPress,
-          captionNow: prev,
-          overwrite: options.overwrite,
-        })
-          ? caption
-          : prev,
-      );
-      // Remembered even when the box kept the user's text: it then differs,
-      // so "Remove all" keeps it.
-      setLastAiCaption(caption);
+      // Written, and remembered as the AI's, only when it applies.
+      captionBox.answered(press, { caption, selectedNow: selectedMedia(), overwrite: options.overwrite });
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
-      if (!options.isStale?.() && selectedMedia() === askedAbout) {
+      if (!options.isStale?.() && selectedMedia() === press.askedAbout) {
         toast.error(CAPTION_FAILED_MESSAGE);
       }
     } finally {
