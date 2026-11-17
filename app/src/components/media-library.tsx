@@ -19,6 +19,7 @@ import {
 import { CaptionCounter } from "@/components/caption-counter";
 import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
+import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { LoadError, LoadMoreButton } from "@/components/load-error";
 import {
@@ -591,13 +592,10 @@ export function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       </Alert>
     );
   }
-  // After Retry, a status line in the card's place says it is loading, and takes focus (LoadError).
+  // After Retry, a line in the card's place says it is loading, and takes focus (LoadError).
+  // AnnouncedText, as Team's, since this view comes and goes.
   if (state === "loading" && attempt > 0) {
-    return (
-      <p role="status" className="sr-only">
-        Loading the client upload link…
-      </p>
-    );
+    return <AnnouncedText className="sr-only" text="Loading the client upload link…" />;
   }
   if (state !== "ready") return null;
 
