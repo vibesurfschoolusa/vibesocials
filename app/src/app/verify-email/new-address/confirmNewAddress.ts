@@ -103,9 +103,12 @@ export async function confirmNewAddress(fetchImpl: typeof fetch, token: string):
     return { ...notChanged, title: "Your email wasn't changed", message: sentence(data.until) };
   }
   const serverFailed = response.status >= 500;
+  // R43 review: a 429 says to wait, then try again (the route's shared
+  // sentence), so Try again is offered: it posts the link's code once more.
+  const tooManyTries = response.status === 429;
   return {
     ...notChanged,
-    offerRetry: serverFailed,
+    offerRetry: serverFailed || tooManyTries,
     title: serverFailed ? "Something went wrong on our side" : "Your email wasn't changed",
     message:
       data?.error ??

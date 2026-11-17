@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
+
 import { undoEmailChange } from "./undoChange";
 
 function respond(status: number, body: unknown) {
@@ -33,10 +35,19 @@ describe("undoEmailChange", () => {
   });
 
   it("shows the route's sentence for a used, expired or overtaken link, without a retry", async () => {
-    for (const status of [400, 409, 429]) {
+    for (const status of [400, 409]) {
       const view = await undoEmailChange(respond(status, { error: `Sentence ${status}.` }), "tok");
       expect(view).toMatchObject({ undone: false, title: "The change wasn't undone", message: `Sentence ${status}.`, offerRetry: false });
     }
+  });
+
+  // R43 review: the route's 429 says to wait, then try again (tooManyTriesResponse),
+  // so the page offers Try again, which posts the link's code once more.
+  it("a 429: the route's wait sentence, and a Try again button, the step it names", async () => {
+    const sentence = tooManyTriesSentence(8);
+    const view = await undoEmailChange(respond(429, { error: sentence, retryAfterSeconds: 8 }), "tok");
+    expect(view.message).toBe("Too many tries. Wait a minute, then try again.");
+    expect(view.offerRetry).toBe(true);
   });
 
   it("offers a retry after a server failure or no network", async () => {

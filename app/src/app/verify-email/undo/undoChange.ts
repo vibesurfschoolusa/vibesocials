@@ -81,9 +81,12 @@ export async function undoEmailChange(fetchImpl: typeof fetch, token: string): P
     return { ...notUndone, title: "This link can't be used", message: data.error };
   }
   const serverFailed = response.status >= 500;
+  // R43 review: a 429 says to wait, then try again (the route's shared
+  // sentence), so Try again is offered: it posts the link's code once more.
+  const tooManyTries = response.status === 429;
   return {
     ...notUndone,
-    offerRetry: serverFailed,
+    offerRetry: serverFailed || tooManyTries,
     title: serverFailed ? "Something went wrong on our side" : "The change wasn't undone",
     message:
       data?.error ??

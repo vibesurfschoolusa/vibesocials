@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { tooManyTriesSentence } from "@/lib/tooManyTriesText";
+
 import { confirmNewAddress } from "./confirmNewAddress";
 
 function respond(status: number, body: unknown) {
@@ -45,10 +47,19 @@ describe("confirmNewAddress", () => {
   });
 
   it("shows the route's own sentence for a dead link or a taken address, without a retry", async () => {
-    for (const status of [400, 409, 429]) {
+    for (const status of [400, 409]) {
       const view = await confirmNewAddress(respond(status, { error: `Sentence ${status}.` }), "tok");
       expect(view).toMatchObject({ changed: false, signOutHere: false, message: `Sentence ${status}.`, offerRetry: false });
     }
+  });
+
+  // R43 review: the route's 429 says to wait, then try again (tooManyTriesResponse),
+  // so the page offers Try again, which posts the link's code once more.
+  it("a 429: the route's wait sentence, and a Try again button, the step it names", async () => {
+    const sentence = tooManyTriesSentence(8);
+    const view = await confirmNewAddress(respond(429, { error: sentence, retryAfterSeconds: 8 }), "tok");
+    expect(view.message).toBe("Too many tries. Wait a minute, then try again.");
+    expect(view.offerRetry).toBe(true);
   });
 
   // R6-pages L1: a used link opened again (most likely by whoever just used
