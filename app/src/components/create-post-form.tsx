@@ -742,49 +742,100 @@ export function revealRefusal(
 }
 
 /**
- * R32 pages L1: a press's refusal line, with the form as it was at that press
- * (refusalFormKey). The line named a field to fix; once the form is edited it
- * may no longer be true, and it is the phone bar's reason (the button's
- * description) too, so it goes. The next press says what is true then.
+ * R32 pages L1, R33 pages L2: a press's refusal named a field to fix, and it is
+ * the phone bar's reason (the button's description) too. What is kept is that
+ * a press refused, not its sentence: the line is the form's live check
+ * (pressRefusalLine), so it changes or goes as soon as the form does (a
+ * caption typed, Story switched to Feed, a platform unticked). "send" keeps
+ * the clock at the press, which the scheduled time is judged against.
  */
-export interface PressRefusal {
-  text: string;
-  form: string;
-}
+export type PressRefusal = { kind: "send"; at: number } | { kind: "enhance" };
 
-/** The parts of the form a refusal names, as one comparable string. */
-export function refusalFormKey(form: {
+/** What the press's own checks read from the form (the short-video disclosure check is separate and frozen). */
+export interface ComposerSendCheck {
+  /** fileSubmitBlock for a file still on its way, or null. */
+  fileBlock: string | null;
+  /** Nothing typed or picked yet: a press says so by the button, not as a line. */
+  untouched: boolean;
+  noFile: boolean;
   caption: string;
-  platformCaptions: PlatformOverrides | null;
-  platforms: readonly Platform[];
+  ownCaptionWritten: boolean;
+  selectedCount: number;
+  allDisabled: boolean;
+  /** A picked file, a reused item or attached photos. */
+  hasMedia: boolean;
+  photosNotReady: boolean;
+  captionOver: boolean;
+  /** Why a chosen Story cannot take this video, or null. */
+  storyLengthRefusal: string | null;
   mode: PublishMode;
   scheduledFor: string;
-  repeat: string;
-  repeatCount: number;
-  /** The picked file (name, size, time), or null. */
-  file: string | null;
-  reuseId: string | null;
-  /** Each attached photo's key and status. */
-  photos: readonly string[];
-}): string {
-  return JSON.stringify([
-    form.caption,
-    form.platformCaptions,
-    form.platforms,
-    form.mode,
-    form.scheduledFor,
-    form.repeat,
-    form.repeatCount,
-    form.file,
-    form.reuseId,
-    form.photos,
-  ]);
+  /** Repeat is on with fewer dates than REPEAT_MIN_COUNT. */
+  repeatShort: boolean;
 }
 
-/** The form's error line as shown: a press's refusal goes once the form changed since that press. */
-export function refusalLineShown(error: string | null, refusal: PressRefusal | null, form: string): string | null {
-  if (error !== null && refusal !== null && refusal.text === error && refusal.form !== form) return null;
-  return error;
+/** The clock at a press, read in the press handler (never during render). */
+function pressClock(): number {
+  return Date.now();
+}
+
+/** The press's checks before the disclosure check, in the press's order. */
+export function composerSendRefusalBeforeDisclosure(state: ComposerSendCheck): string | null {
+  if (state.fileBlock) return state.fileBlock;
+  if (state.untouched) return null;
+  if (state.noFile) {
+    const textError = noFileSubmitError(state);
+    if (textError) return textError;
+  } else if (!state.hasMedia) {
+    return CHOOSE_FILE_MESSAGE;
+  }
+  if (state.photosNotReady) return "Wait until every photo has uploaded, or remove the ones that failed.";
+  if (!state.caption.trim()) return "Please enter a caption for this post.";
+  // 2026-11-01 scale audit (jobs, event size): POST /api/posts 400s a caption over the
+  // cap; the submit button is already disabled, this covers any other path.
+  if (state.captionOver) return captionTooLongMessage("Caption");
+  // Task 7: at least one target platform must stay selected.
+  if (state.selectedCount === 0) {
+    return state.allDisabled
+      ? "None of your connected platforms can publish this media. Choose a different file."
+      : "Select at least one platform to publish to.";
+  }
+  return null;
+}
+
+/** The press's checks after the disclosure check; `at` is the clock at the press. */
+export function composerSendRefusalAfterDisclosure(state: ComposerSendCheck, at: number): string | null {
+  if (state.storyLengthRefusal) return state.storyLengthRefusal;
+  if (state.mode === "schedule") {
+    const iso = localDateTimeToUtcIso(state.scheduledFor);
+    if (!iso) return "Please choose a valid date and time to schedule this post.";
+    if (new Date(iso).getTime() < at + SCHEDULE_BUFFER_MS) return "Scheduled time must be at least a minute in the future.";
+    if (state.repeatShort) return "Choose how many times the post repeats, then press the button again.";
+  }
+  return null;
+}
+
+/** Why a press would be refused now, or null. */
+export function composerSendRefusal(state: ComposerSendCheck, at: number): string | null {
+  if (state.untouched && !state.fileBlock) return null;
+  return composerSendRefusalBeforeDisclosure(state) ?? composerSendRefusalAfterDisclosure(state, at);
+}
+
+/** A refused press's line as the form is now, or null once its check passes. */
+export function pressRefusalLine(refusal: PressRefusal | null, state: ComposerSendCheck): string | null {
+  if (refusal === null) return null;
+  if (refusal.kind === "enhance") return state.caption.trim() ? null : "Please enter some text first to enhance.";
+  return composerSendRefusal(state, refusal.at);
+}
+
+/** The press's refusal while its check still refuses; null once it passes, so a later failing edit waits for the next press. */
+export function pressRefusalKept(refusal: PressRefusal | null, state: ComposerSendCheck): PressRefusal | null {
+  return pressRefusalLine(refusal, state) === null ? null : refusal;
+}
+
+/** The form's error line as shown: any other line as set, else a refused press's live line. */
+export function formLineShown(error: string | null, refusal: PressRefusal | null, state: ComposerSendCheck): string | null {
+  return error ?? pressRefusalLine(refusal, state);
 }
 
 /**
@@ -954,7 +1005,7 @@ function CreatePostFormInner({
   const captionOver = captionCounter(uploadCaption).over;
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // R32 pages L1: the line a press refused with, and the form it judged (refuse below).
+  // R33 pages L2: that a press refused (and its clock); the line is the live check (formLineShown).
   const [pressRefusal, setPressRefusal] = useState<PressRefusal | null>(null);
   // Counts presses that got past the first checks, so a refusal with the same
   // sentence as the last one is brought into view again.
@@ -1406,7 +1457,7 @@ function CreatePostFormInner({
     singlePhotoRef.current = null;
     setPlatformOverrides(kept.overrides);
     setUploadCaption(kept.caption);
-  }, [reuseItem, uploadCaption, platformOverrides]);
+  }, [reuseItem, uploadCaption, platformOverrides, setSingleAltText]);
 
   // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
   // for the SAME file (by reference) reuse the in-flight or already-resolved
@@ -2193,24 +2244,40 @@ function CreatePostFormInner({
     }
   }
 
-  // R32 pages L1: the form as it is now; a refusal set from another form is not shown.
-  const formNow = refusalFormKey({
+  // R33 pages L2: the press's own checks on the form as it is now (pressRefusalLine).
+  const sendCheck: ComposerSendCheck = {
+    fileBlock:
+      preparingFile || sharedPendingNow || reuseLoading
+        ? fileSubmitBlock({
+            preparingFile,
+            sharedFilePending: sharedPendingNow,
+            reuseLoading,
+            preparingPhotos: false,
+            photosNotReady: false,
+          })
+        : null,
+    untouched: pageState === "untouched",
+    noFile,
     caption: uploadCaption,
-    platformCaptions: platformOverrides,
-    platforms: selectedPlatforms,
+    ownCaptionWritten: Object.values(platformOverrides ?? {}).some((text) => (text ?? "").trim() !== ""),
+    selectedCount: selectedPlatforms.length,
+    allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
+    hasMedia: Boolean(reuseItem || uploadFile || photoSet.length > 0),
+    photosNotReady: photoSet.length > 0 && !photoSetReady(photoSet),
+    captionOver,
+    storyLengthRefusal,
     mode: publishMode,
     scheduledFor: scheduledForLocal,
-    repeat,
-    repeatCount,
-    file: uploadFile ? `${uploadFile.name}:${uploadFile.size}:${uploadFile.lastModified}` : null,
-    reuseId: reuseItem?.id ?? null,
-    photos: photoSet.map((photo) => `${photo.key}:${photo.status}`),
-  });
-  const shownUploadError = refusalLineShown(uploadError, pressRefusal, formNow);
-  /** A press's refusal: the line, tied to the form it judged (refusalLineShown). */
-  const refuse = (text: string) => {
-    setUploadError(text);
-    setPressRefusal({ text, form: formNow });
+    repeatShort: repeatOn && repeatDates.length < REPEAT_MIN_COUNT,
+  };
+  // Once the check passes the press's refusal is over (React's set-state-while-rendering).
+  const keptRefusal = pressRefusalKept(pressRefusal, sendCheck);
+  if (keptRefusal !== pressRefusal) setPressRefusal(keptRefusal);
+  const shownUploadError = formLineShown(uploadError, keptRefusal, sendCheck);
+  /** A refused press: its line is the live check from now on (formLineShown). */
+  const refuse = (refusal: PressRefusal) => {
+    setUploadError(null);
+    setPressRefusal(refusal);
   };
 
   async function handleUploadSubmit(event: React.FormEvent) {
@@ -2221,16 +2288,7 @@ function CreatePostFormInner({
     const first = submitFirstStep({
       pageState,
       fileLost: fileLostShown ? fileLost : "none",
-      fileBlock:
-        preparingFile || sharedPendingNow || reuseLoading
-          ? fileSubmitBlock({
-              preparingFile,
-              sharedFilePending: sharedPendingNow,
-              reuseLoading,
-              preparingPhotos: false,
-              photosNotReady: false,
-            })
-          : null,
+      fileBlock: sendCheck.fileBlock,
     });
     if (first.countsAsTry) setTriedSend(true);
     // A file just went away: the first press stops here, with the notice (and
@@ -2242,11 +2300,13 @@ function CreatePostFormInner({
       return;
     }
     setUploadError(null);
+    setPressRefusal(null);
     setShowSuccess(false);
     setPressCount((count) => count + 1);
+    const pressedAt = pressClock();
 
     if (first.stop === "wait") {
-      refuse(first.message);
+      refuse({ kind: "send", at: pressedAt });
       return;
     }
 
@@ -2256,46 +2316,8 @@ function CreatePostFormInner({
       return;
     }
 
-    if (noFile) {
-      const textError = noFileSubmitError({
-        caption: uploadCaption,
-        ownCaptionWritten: Object.values(platformOverrides ?? {}).some((text) => (text ?? "").trim() !== ""),
-        selectedCount: selectedPlatforms.length,
-        allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
-      });
-      if (textError) {
-        refuse(textError);
-        return;
-      }
-    } else if (!reuseItem && !uploadFile && photoSet.length === 0) {
-      refuse(CHOOSE_FILE_MESSAGE);
-      return;
-    }
-
-    if (photoSet.length > 0 && !photoSetReady(photoSet)) {
-      refuse("Wait until every photo has uploaded, or remove the ones that failed.");
-      return;
-    }
-
-    if (!uploadCaption.trim()) {
-      refuse("Please enter a caption for this post.");
-      return;
-    }
-
-    // 2026-11-01 scale audit (jobs, event size): POST /api/posts 400s a caption over the
-    // cap; the submit button is already disabled, this covers any other path.
-    if (captionOver) {
-      refuse(captionTooLongMessage("Caption"));
-      return;
-    }
-
-    // Task 7 — at least one target platform must stay selected.
-    if (selectedPlatforms.length === 0) {
-      refuse(
-        platformChoices.every((choice) => choice.disabledReason !== null)
-          ? "None of your connected platforms can publish this media. Choose a different file."
-          : "Select at least one platform to publish to.",
-      );
+    if (composerSendRefusalBeforeDisclosure(sendCheck)) {
+      refuse({ kind: "send", at: pressedAt });
       return;
     }
 
@@ -2309,25 +2331,9 @@ function CreatePostFormInner({
       return;
     }
 
-    if (storyLengthRefusal) {
-      refuse(storyLengthRefusal);
+    if (composerSendRefusalAfterDisclosure(sendCheck, pressedAt)) {
+      refuse({ kind: "send", at: pressedAt });
       return;
-    }
-
-    if (publishMode === "schedule") {
-      const iso = localDateTimeToUtcIso(scheduledForLocal);
-      if (!iso) {
-        refuse("Please choose a valid date and time to schedule this post.");
-        return;
-      }
-      if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
-        refuse("Scheduled time must be at least a minute in the future.");
-        return;
-      }
-      if (repeatOn && repeatDates.length < REPEAT_MIN_COUNT) {
-        refuse("Choose how many times the post repeats, then press the button again.");
-        return;
-      }
     }
 
     // Ruling R5 (2026-11-01 audit): a TikTok privacy level is required whenever
@@ -2355,7 +2361,7 @@ function CreatePostFormInner({
 
   async function handleEnhanceCaption() {
     if (!uploadCaption.trim()) {
-      refuse("Please enter some text first to enhance.");
+      refuse({ kind: "enhance" });
       return;
     }
 

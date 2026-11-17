@@ -40,8 +40,11 @@ import {
   nextPickJudgment,
   CHOOSE_FILE_MESSAGE,
   LIBRARY_FILE_WAIT_MESSAGE,
-  refusalFormKey,
-  refusalLineShown,
+  composerSendRefusal,
+  formLineShown,
+  pressRefusalKept,
+  pressRefusalLine,
+  type ComposerSendCheck,
   revealRefusal,
   uploadErrorAfterLibraryLoad,
   notSentBanner,
@@ -222,7 +225,9 @@ describe("noFileSubmitError", () => {
 
   it("the press passes whether a platform's own caption has text", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
-    expect(raw).toMatch(/noFileSubmitError\(\{\s*caption: uploadCaption,\s*ownCaptionWritten: Object\.values\(platformOverrides \?\? \{\}\)\.some\(/);
+    // R33: the press's checks read the form through sendCheck (composerSendRefusal).
+    expect(raw).toMatch(/const sendCheck: ComposerSendCheck = \{[\s\S]*?caption: uploadCaption,\s*ownCaptionWritten: Object\.values\(platformOverrides \?\? \{\}\)\.some\(/);
+    expect(raw).toContain("const textError = noFileSubmitError(state);");
   });
 });
 
@@ -1388,14 +1393,14 @@ describe("a file still loading from Media", () => {
   it("the form passes reuseLoading to both blocks and clears the line when the load ends", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
-    expect(submit).toMatch(/preparingFile \|\| sharedPendingNow \|\| reuseLoading\s*\?\s*fileSubmitBlock\(\{[^}]*reuseLoading,/);
+    expect(raw).toMatch(/const sendCheck: ComposerSendCheck = \{\s*fileBlock:\s*preparingFile \|\| sharedPendingNow \|\| reuseLoading\s*\?\s*fileSubmitBlock\(\{[^}]*reuseLoading,/);
+    expect(submit).toContain("fileBlock: sendCheck.fileBlock,");
     const control = raw.slice(raw.indexOf("const control = submitControl({"), raw.indexOf("return (", raw.indexOf("const control = submitControl({")));
     expect(control).toMatch(/fileBlock: fileSubmitBlock\(\{[^}]*reuseLoading,/);
     const load = raw.slice(raw.indexOf("if (!reuseMediaItemId) return;"), raw.indexOf("}, [reuseMediaItemId, toast]);"));
     expect(load.match(/setUploadError\(\(current\) => uploadErrorAfterLibraryLoad\(current, "failed"\)\)/g)).toHaveLength(2);
     expect(load.match(/setUploadError\(\(current\) => uploadErrorAfterLibraryLoad\(current, "loaded"\)\)/g)).toHaveLength(1);
-    // R32 pages L1: a press's refusal, through refuse.
-    expect(submit).toContain("refuse(CHOOSE_FILE_MESSAGE)");
+    // R33 pages L2: a press's refusal is the live check (composerSendRefusal), so no file is CHOOSE_FILE_MESSAGE while it lasts.
   });
 });
 
@@ -1428,7 +1433,7 @@ describe("a refused press shows its reason where the person is", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
     // Counted with the clear, before any refusal, so the same sentence twice is shown twice.
-    expect(submit).toMatch(/setUploadError\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*if \(first\.stop === "wait"\)/);
+    expect(submit).toMatch(/setUploadError\(null\);\s*setPressRefusal\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*const pressedAt = pressClock\(\);\s*if \(first\.stop === "wait"\)/);
     expect(raw).toMatch(/if \(pressCount === 0\) return;[\s\S]{0,200}revealRefusal\(uploadErrorRef\.current, reduce\);\s*\}, \[pressCount\]\);/);
     expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger" className="scroll-mt-24">\{shownUploadError\}<\/Alert>/);
   });
@@ -1465,71 +1470,121 @@ describe("Create's AI requests carry the page's workspace id", () => {
   });
 });
 
-// R32 pages L1: a press's refusal line stayed after the person fixed what it
-// named (a caption typed, a time picked), on the form and as the phone bar's
-// reason, and hid the reason that is true now. The line is tied to the form
-// as it was at the press: any edit of the form takes it away.
-describe("a refusal line goes when the form is edited", () => {
-  const form = {
-    caption: "",
-    platformCaptions: null,
-    platforms: ["instagram"] as Platform[],
-    mode: "schedule" as const,
+// R32 pages L1, R33 pages L2: a press's refusal line stayed after the person
+// fixed what it named (a caption typed, Story switched to Feed), on the form
+// and as the phone bar's reason. The press is stored, not its sentence: the
+// line is the form's live check, so it changes or goes as the form does.
+describe("a refusal line shows only while the form still refuses", () => {
+  const pressedAt = new Date("2026-11-20T09:00:00Z").getTime();
+  const ok: ComposerSendCheck = {
+    fileBlock: null,
+    untouched: false,
+    noFile: false,
+    caption: "Sunday session",
+    ownCaptionWritten: false,
+    selectedCount: 1,
+    allDisabled: false,
+    hasMedia: true,
+    photosNotReady: false,
+    captionOver: false,
+    storyLengthRefusal: null,
+    mode: "draft",
     scheduledFor: "",
-    repeat: "none" as const,
-    repeatCount: 4,
-    file: "a.jpg:100:1",
-    reuseId: null,
-    photos: [] as string[],
+    repeatShort: false,
   };
-  const caption = "Please enter a caption for this post.";
+  const story = "Instagram Stories take videos up to 60 seconds. This one is 80 seconds.";
+  const send = { kind: "send", at: pressedAt } as const;
 
-  it("stays while the form is as it was at the press", () => {
-    const at = refusalFormKey(form);
-    expect(refusalLineShown(caption, { text: caption, form: at }, refusalFormKey({ ...form }))).toBe(caption);
+  it("Story to Feed: the Story line goes", () => {
+    expect(pressRefusalLine(send, { ...ok, storyLengthRefusal: story })).toBe(story);
+    expect(pressRefusalLine(send, { ...ok, storyLengthRefusal: null })).toBeNull();
   });
 
-  it("goes when the caption, a time, the platforms, the file or the repeat change", () => {
-    const at = refusalFormKey(form);
-    for (const edit of [
-      { caption: "Sunday session" },
-      { scheduledFor: "2026-11-20T10:00" },
-      { platforms: [] as Platform[] },
-      { platformCaptions: { instagram: "x" } },
-      { mode: "now" as const },
-      { repeat: "weekly" as const },
-      { repeatCount: 5 },
-      { file: "b.jpg:200:2" },
-      { reuseId: "m1" },
-      { photos: ["p1:uploaded"] },
-    ]) {
-      expect(refusalLineShown(caption, { text: caption, form: at }, refusalFormKey({ ...form, ...edit }))).toBeNull();
-    }
+  it("platform removed: the line follows what is selected now", () => {
+    // Instagram unticked, another platform still on: nothing refuses.
+    expect(pressRefusalLine(send, { ...ok, storyLengthRefusal: null, selectedCount: 1 })).toBeNull();
+    // The last one unticked: the reason that is true now.
+    expect(pressRefusalLine(send, { ...ok, selectedCount: 0 })).toBe("Select at least one platform to publish to.");
   });
 
-  it("a line that was not a press's refusal (an upload failure) is not touched", () => {
-    const at = refusalFormKey(form);
+  it("the same refusal on a second press is the same line", () => {
+    const empty = { ...ok, caption: "" };
+    expect(pressRefusalLine(send, empty)).toBe("Please enter a caption for this post.");
+    expect(pressRefusalLine({ kind: "send", at: pressedAt + 5_000 }, empty)).toBe("Please enter a caption for this post.");
+  });
+
+  it("a different refusal: the line says what refuses now", () => {
+    expect(pressRefusalLine(send, { ...ok, caption: "", storyLengthRefusal: story })).toBe("Please enter a caption for this post.");
+    expect(pressRefusalLine(send, { ...ok, storyLengthRefusal: story })).toBe(story);
+  });
+
+  it("the time is judged against the clock at the press", () => {
+    const at = new Date(2026, 10, 20, 10, 0).getTime();
+    const schedule = { ...ok, mode: "schedule" as const };
+    expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "" })).toBe(
+      "Please choose a valid date and time to schedule this post.",
+    );
+    expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "2026-11-20T10:00" })).toBe(
+      "Scheduled time must be at least a minute in the future.",
+    );
+    expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "2026-11-20T11:00" })).toBeNull();
+    expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "2026-11-20T11:00", repeatShort: true })).toBe(
+      "Choose how many times the post repeats, then press the button again.",
+    );
+  });
+
+  it("the checks run in the press's order", () => {
+    expect(composerSendRefusal({ ...ok, fileBlock: "Wait until the file is ready, then press the button again." }, pressedAt)).toBe(
+      "Wait until the file is ready, then press the button again.",
+    );
+    expect(composerSendRefusal({ ...ok, untouched: true, caption: "" }, pressedAt)).toBeNull();
+    expect(composerSendRefusal({ ...ok, hasMedia: false }, pressedAt)).toBe(CHOOSE_FILE_MESSAGE);
+    expect(composerSendRefusal({ ...ok, noFile: true, hasMedia: false, caption: "" }, pressedAt)).toBe(
+      noFileSubmitError({ caption: "", selectedCount: 1, allDisabled: false }),
+    );
+    expect(composerSendRefusal({ ...ok, photosNotReady: true }, pressedAt)).toBe(
+      "Wait until every photo has uploaded, or remove the ones that failed.",
+    );
+    expect(composerSendRefusal({ ...ok, selectedCount: 0, allDisabled: true }, pressedAt)).toBe(
+      "None of your connected platforms can publish this media. Choose a different file.",
+    );
+    expect(composerSendRefusal(ok, pressedAt)).toBeNull();
+  });
+
+  it("once the check passes the press is dropped, so a later failing edit waits for the next press", () => {
+    const empty = { ...ok, caption: "" };
+    expect(pressRefusalKept(send, empty)).toBe(send);
+    expect(pressRefusalKept(send, ok)).toBeNull();
+    expect(pressRefusalKept(null, empty)).toBeNull();
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    expect(raw).toContain("const keptRefusal = pressRefusalKept(pressRefusal, sendCheck);\n  if (keptRefusal !== pressRefusal) setPressRefusal(keptRefusal);");
+  });
+
+  it("Improve caption's refusal goes once a caption is typed", () => {
+    expect(pressRefusalLine({ kind: "enhance" }, { ...ok, caption: " " })).toBe("Please enter some text first to enhance.");
+    expect(pressRefusalLine({ kind: "enhance" }, ok)).toBeNull();
+  });
+
+  it("a line that was not a press's refusal (an upload failure, TikTok's) is shown as it is", () => {
     const failure = "The upload failed. Try again.";
-    expect(refusalLineShown(failure, { text: caption, form: at }, refusalFormKey({ ...form, caption: "x" }))).toBe(failure);
-    expect(refusalLineShown(failure, null, refusalFormKey(form))).toBe(failure);
-    expect(refusalLineShown(null, { text: caption, form: at }, at)).toBeNull();
+    expect(formLineShown(failure, send, { ...ok, caption: "" })).toBe(failure);
+    expect(formLineShown(failure, null, ok)).toBe(failure);
+    expect(formLineShown(null, null, { ...ok, caption: "" })).toBeNull();
+    expect(formLineShown(null, send, { ...ok, caption: "" })).toBe("Please enter a caption for this post.");
   });
 
-  it("the form's refusals go through refuse, and the line and the bar show the shown line", () => {
+  it("the press goes through the live check, and the line and the bar show it", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
-    for (const line of [
-      'refuse("Please enter a caption for this post.")',
-      'refuse("Please choose a valid date and time to schedule this post.")',
-      'refuse("Scheduled time must be at least a minute in the future.")',
-      "refuse(CHOOSE_FILE_MESSAGE)",
-      "refuse(textError)",
-      "refuse(first.message)",
-    ]) {
-      expect(submit).toContain(line);
-    }
-    expect(submit).not.toContain('setUploadError("Please enter a caption for this post.")');
-    expect(raw).toContain("const shownUploadError = refusalLineShown(uploadError, pressRefusal, formNow);");
+    expect(submit).toContain("const pressedAt = pressClock();");
+    expect(submit).toMatch(/if \(composerSendRefusalBeforeDisclosure\(sendCheck\)\) \{\s*refuse\(\{ kind: "send", at: pressedAt \}\);\s*return;/);
+    expect(submit).toMatch(/if \(composerSendRefusalAfterDisclosure\(sendCheck, pressedAt\)\) \{\s*refuse\(\{ kind: "send", at: pressedAt \}\);\s*return;/);
+    // Frozen: TikTok's disclosure line is set as it was.
+    expect(submit).toContain("setUploadError(TIKTOK_DISCLOSURE_INCOMPLETE_TEXT);");
+    expect(submit).not.toContain('refuse("');
+    expect(raw).toMatch(/const sendCheck: ComposerSendCheck = \{[\s\S]{0,1500}storyLengthRefusal,/);
+    expect(raw).toContain("const shownUploadError = formLineShown(uploadError, keptRefusal, sendCheck);");
     expect(raw).toContain("{shownUploadError && <Alert ref={uploadErrorRef}");
+    expect(raw).not.toContain("refusalFormKey");
   });
 });

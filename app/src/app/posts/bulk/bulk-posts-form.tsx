@@ -93,6 +93,7 @@ import {
   requestImprovedCaption,
   rowStoryRefusal,
   saveAiCaptionsChoice,
+  type BulkStories,
 } from "./bulkExtras";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 
@@ -137,6 +138,7 @@ export interface BulkRow {
   uncertain: boolean;
   sending: boolean;
   result: string | null;
+  /** The server's refusal, or another send failure, as its sentence. */
   sendError: string | null;
   /** An object URL of the prepared photo, or a frame of the video once one was read. */
   thumbnail: string | null;
@@ -192,6 +194,71 @@ function newMediaRow(item: MediaItemDto): BulkRow {
 }
 
 const noSubscription = () => () => {};
+
+/** What a row's own checks read from the batch: its platforms, Feed or Story, and the Google options. */
+export interface BulkBatchCheck {
+  selectedPlatforms: readonly Platform[];
+  stories: BulkStories;
+  /** bulkGoogleMetadataError while Google is chosen, else null. */
+  googleError: string | null;
+}
+
+type RowCheck = Pick<BulkRow, "mimeType" | "durationSec" | "caption" | "when" | "blob">;
+
+/** Why a press would not send this row, judged against the clock `at` of the press, or null. */
+export function rowLocalBlock(row: RowCheck, mode: BulkFinishMode, at: Date, batch: BulkBatchCheck): string | null {
+  const platforms = platformsForRow(batch.selectedPlatforms, row.mimeType).platforms;
+  return (
+    rowSendBlock(
+      { id: "", uploaded: row.blob !== null, caption: row.caption, platforms, when: row.when, postId: null, uncertain: false },
+      mode,
+      at,
+    ) ??
+    bulkExtrasBlock({
+      mimeType: row.mimeType,
+      durationSec: row.durationSec,
+      platforms,
+      stories: batch.stories,
+      googleError: batch.googleError,
+    })
+  );
+}
+
+/** A press a row's own checks refused (R33 pages L7): its mode and clock. */
+export interface RefusedPress {
+  mode: BulkFinishMode;
+  at: number;
+}
+
+/**
+ * R33 pages L7, one rule with Create's pressRefusalLine: the row's send line
+ * as shown. A server refusal is its sentence; a press the row's own checks
+ * refused is the live check, so Story switched to Feed, a mended Google link
+ * or an edited row takes the line (and its alert) away at once.
+ */
+export function rowSendLine(
+  row: RowCheck & Pick<BulkRow, "sendError">,
+  press: RefusedPress | undefined,
+  batch: BulkBatchCheck,
+): string | null {
+  if (row.sendError) return row.sendError;
+  if (!press) return null;
+  return rowLocalBlock(row, press.mode, new Date(press.at), batch);
+}
+
+/** The refused presses still refusing: a row whose check passed is dropped (the same map when none is). */
+export function refusedPressesKept(
+  presses: ReadonlyMap<string, RefusedPress>,
+  rows: readonly (RowCheck & Pick<BulkRow, "id">)[],
+  batch: BulkBatchCheck,
+): ReadonlyMap<string, RefusedPress> {
+  const kept = new Map<string, RefusedPress>();
+  for (const row of rows) {
+    const press = presses.get(row.id);
+    if (press && rowLocalBlock(row, press.mode, new Date(press.at), batch) !== null) kept.set(row.id, press);
+  }
+  return kept.size === presses.size ? presses : kept;
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -252,6 +319,8 @@ export function BulkPostsForm({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [duplicateNote, setDuplicateNote] = useState(0);
   const [sendingMode, setSendingMode] = useState<BulkFinishMode | null>(null);
+  // R33 pages L7: the rows the last press's own checks refused (rowSendLine).
+  const [refusedPresses, setRefusedPresses] = useState<ReadonlyMap<string, RefusedPress>>(() => new Map());
   // F7 (R1 M2): "Write captions with AI". Off, no file goes to the AI and rows
   // keep an empty caption box. On until this browser turned it off; read after
   // mount, since the server cannot know (a different first render is React #418).
@@ -686,6 +755,11 @@ export function BulkPostsForm({
   };
   const googleShown = selectedPlatforms.includes("google_business_profile");
   const googleError = googleShown ? bulkGoogleMetadataError(googleMetadata) : null;
+  const batchCheck: BulkBatchCheck = { selectedPlatforms, stories, googleError };
+  // Once a row's check passes its press is over; a later edit that fails a
+  // check again waits for the next press (React's set-state-while-rendering).
+  const keptPresses = refusedPressesKept(refusedPresses, rows, batchCheck);
+  if (keptPresses !== refusedPresses) setRefusedPresses(keptPresses);
 
   async function finish(mode: BulkFinishMode, pressed: HTMLElement | null) {
     if (sendingMode) return;
@@ -696,30 +770,17 @@ export function BulkPostsForm({
       // another one still has a time in the past.
       const pressedAt = new Date();
       const ready: string[] = [];
+      const refused = new Map<string, RefusedPress>();
       for (const row of rowsToSend(rowsRef.current)) {
-        const block = rowSendBlock(
-          {
-            id: row.id,
-            uploaded: row.blob !== null,
-            caption: row.caption,
-            platforms: platformsOf(row),
-            when: row.when,
-            postId: row.postId,
-            uncertain: row.uncertain,
-          },
-          mode,
-          pressedAt,
-        ) ??
-          bulkExtrasBlock({
-            mimeType: row.mimeType,
-            durationSec: row.durationSec,
-            platforms: platformsOf(row),
-            stories,
-            googleError,
-          });
-        if (block) updateRow(row.id, { sendError: block });
-        else ready.push(row.id);
+        const block = rowLocalBlock(row, mode, pressedAt, batchCheck);
+        if (block) {
+          refused.set(row.id, { mode, at: pressedAt.getTime() });
+          updateRow(row.id, { sendError: null });
+        } else {
+          ready.push(row.id);
+        }
       }
+      setRefusedPresses(refused);
 
       // One after another. A created row, or one whose post may exist, is never sent again here.
       for (const id of ready) {
@@ -1155,6 +1216,7 @@ export function BulkPostsForm({
                 platforms: platformsForRow(selectedPlatforms, row.mimeType).platforms,
                 stories,
               })}
+              sendLine={rowSendLine(row, refusedPresses.get(row.id), batchCheck)}
               coverOpen={coverOpenId === row.id}
               onConfirmInQueue={() => markInQueue(row.id)}
               onSendAgain={() => sendAgain(row.id)}

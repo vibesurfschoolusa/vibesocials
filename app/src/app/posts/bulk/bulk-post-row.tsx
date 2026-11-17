@@ -32,6 +32,8 @@ interface BulkPostRowProps {
   minWhen: string;
   /** Why this row cannot be the Story chosen for the batch (rowStoryRefusal), or null. */
   storyRefusal: string | null;
+  /** The row's send line as shown (rowSendLine): a server refusal, or a refused press while its check still refuses. */
+  sendLine: string | null;
   /** This video row's cover picker is the one open (one at a time: the picker's ids are fixed). */
   coverOpen: boolean;
   /** "Write captions with AI" is on (F7). Off, no Write again: it would send the file to the AI. */
@@ -134,6 +136,7 @@ export function BulkPostRow({
   locked,
   minWhen,
   storyRefusal,
+  sendLine,
   coverOpen,
   aiCaptions = true,
   onConfirmInQueue,
@@ -350,7 +353,7 @@ export function BulkPostRow({
             </Alert>
           ) : null}
         </div>
-        {row.sendError ? <Alert variant="danger">{row.sendError}</Alert> : null}
+        {sendLine ? <Alert variant="danger">{sendLine}</Alert> : null}
         {row.uncertain ? (
           <Alert variant="warning">
             <p>{BULK_MAYBE_CREATED_MESSAGE}</p>

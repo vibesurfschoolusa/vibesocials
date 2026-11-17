@@ -9,10 +9,12 @@ vi.mock("@/hooks/useConnections", () => ({
   useConnections: () => ({ connections: null, loading: true, error: null, reload: () => {} }),
 }));
 
-import { refreshedFirstDay } from "@/lib/bulkPosts";
+import type { Platform } from "@prisma/client";
+
+import { BULK_EMPTY_CAPTION_MESSAGE, BULK_PAST_TIME_MESSAGE, refreshedFirstDay } from "@/lib/bulkPosts";
 import { localTimeZoneLabel } from "@/lib/scheduling";
 
-import { BulkPostsForm, NoPlatformConnectedLine } from "./bulk-posts-form";
+import { BulkPostsForm, NoPlatformConnectedLine, refusedPressesKept, rowSendLine, type BulkBatchCheck } from "./bulk-posts-form";
 
 const ORIGINAL_TZ = process.env.TZ;
 
@@ -216,5 +218,84 @@ describe("Add many: focus when the last row is created", () => {
     expect(source).toContain('onClick={(event) => void finish("draft", event.currentTarget)}');
     expect(source).toMatch(/if \(rowsRef\.current\.every\(\(r\) => r\.id === id \|\| r\.postId !== null\)\) focusAfterPress\(pressed, \(\) => queueLinkRef\.current\);\s*updateRow\(id, \{\s*sending: false,/);
     expect(source).toMatch(/<Link ref=\{queueLinkRef\} href="\/queue"/);
+  });
+});
+
+// R33 pages L7: a row's Schedule all refusal stayed after the batch setting it
+// named was fixed (Story switched to Feed, the Google button link mended). As
+// on Create (pressRefusalLine), the row keeps that its press refused and the
+// clock then; the line is the live check, so it goes once the check passes.
+describe("Add many: a row's refusal shows only while the row still refuses", () => {
+  const at = new Date(2026, 10, 20, 10, 0).getTime();
+  const video = {
+    id: "r1",
+    mimeType: "video/mp4",
+    durationSec: 80,
+    blob: { url: "https://blob.example/a.mp4", filename: "a.mp4", mimeType: "video/mp4", sizeBytes: 10 },
+    caption: "Sunday session",
+    when: "2026-11-21T10:00",
+    sendError: null,
+  };
+  const press = { mode: "schedule" as const, at };
+  const photo = { ...video, mimeType: "image/jpeg", durationSec: undefined };
+  const story = "Instagram Stories take videos up to 60 seconds. This one is 80 seconds.";
+  const feed = { instagram: false, facebook: false };
+  const batch = (over: Partial<BulkBatchCheck> = {}): BulkBatchCheck => ({
+    selectedPlatforms: ["instagram"] as Platform[],
+    stories: { instagram: true, facebook: false },
+    googleError: null,
+    ...over,
+  });
+
+  it("Story to Feed: the line goes", () => {
+    expect(rowSendLine(video, press, batch())).toBe(story);
+    expect(rowSendLine(video, press, batch({ stories: feed }))).toBeNull();
+  });
+
+  it("platform removed: the line goes when the Story platform is unticked", () => {
+    expect(rowSendLine(video, press, batch({ selectedPlatforms: ["facebook_page"] as Platform[] }))).toBeNull();
+  });
+
+  it("Google link fixed: the line goes", () => {
+    const google = batch({ selectedPlatforms: ["google_business_profile"] as Platform[], stories: feed });
+    expect(rowSendLine(photo, press, { ...google, googleError: "Enter a link that starts with https://." })).toBe(
+      "Enter a link that starts with https://.",
+    );
+    expect(rowSendLine(photo, press, google)).toBeNull();
+  });
+
+  it("the same refusal on a second press, and a different one, are what the row says now", () => {
+    expect(rowSendLine(video, { mode: "schedule", at: at + 5_000 }, batch())).toBe(story);
+    expect(rowSendLine({ ...video, caption: " " }, press, batch())).toBe(BULK_EMPTY_CAPTION_MESSAGE);
+    // The time is judged against the clock at the press.
+    expect(rowSendLine({ ...video, when: "2026-11-20T10:00" }, press, batch({ stories: feed }))).toBe(BULK_PAST_TIME_MESSAGE);
+  });
+
+  it("a row that was not refused, or was refused by the server, shows that as it is", () => {
+    expect(rowSendLine(video, undefined, batch())).toBeNull();
+    expect(rowSendLine({ ...video, sendError: "Instagram refused it." }, undefined, batch({ stories: feed }))).toBe(
+      "Instagram refused it.",
+    );
+  });
+
+  it("once a row's check passes its press is dropped, so a later failing edit waits for the next press", () => {
+    const presses = new Map([["r1", press], ["r2", press]]);
+    const rows = [video, { ...video, id: "r2", caption: "" }];
+    const kept = refusedPressesKept(presses, rows, batch({ stories: feed }));
+    expect([...kept.keys()]).toEqual(["r2"]);
+    // Nothing to drop: the same map, so the page does not render again.
+    expect(refusedPressesKept(presses, rows, batch())).toBe(presses);
+  });
+
+  it("Schedule all stores the press and the row shows the live line", () => {
+    const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const block = rowLocalBlock(row, mode, pressedAt, batchCheck);");
+    expect(source).toMatch(/if \(block\) \{\s*refused\.set\(row\.id, \{ mode, at: pressedAt\.getTime\(\) \}\);\s*updateRow\(row\.id, \{ sendError: null \}\);/);
+    expect(source).toContain("setRefusedPresses(refused);");
+    expect(source).toContain("const keptPresses = refusedPressesKept(refusedPresses, rows, batchCheck);\n  if (keptPresses !== refusedPresses) setRefusedPresses(keptPresses);");
+    expect(source).toContain("sendLine={rowSendLine(row, refusedPresses.get(row.id), batchCheck)}");
+    const rowSource = readFileSync(new URL("./bulk-post-row.tsx", import.meta.url), "utf8");
+    expect(rowSource).toContain('{sendLine ? <Alert variant="danger">{sendLine}</Alert> : null}');
+    expect(rowSource).not.toContain("row.sendError");
   });
 });

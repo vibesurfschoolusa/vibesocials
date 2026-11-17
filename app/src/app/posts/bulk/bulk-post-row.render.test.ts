@@ -49,6 +49,7 @@ function render(
   r: BulkRow,
   extra: {
     storyRefusal?: string | null;
+    sendLine?: string | null;
     coverOpen?: boolean;
     locked?: boolean;
     aiCaptions?: boolean;
@@ -64,6 +65,7 @@ function render(
       locked: extra.locked ?? false,
       minWhen: "2026-11-14T10:00",
       storyRefusal: extra.storyRefusal ?? null,
+      sendLine: extra.sendLine ?? null,
       coverOpen: extra.coverOpen ?? false,
       ...(extra.aiCaptions === undefined ? {} : { aiCaptions: extra.aiCaptions }),
       onConfirmInQueue: noop,
@@ -301,5 +303,13 @@ describe("Add many row: the caption box during Write again", () => {
     expect(rowSource).toMatch(/readOnly=\{locked \|\| captionIsLocked\}|readOnly=\{captionIsLocked\}/);
     expect(rowSource).toMatch(/onChange=\{\(event\) => \{\s*if \(!captionIsLocked\) onCaptionChange\(event\.target\.value\);/);
     expect(formSource).toMatch(/onCaptionChange=\{\(caption\) => \{\s*if \(captionLocked\(row\)\) return;/);
+  });
+});
+
+// R33 pages L7: the row's send line is the one the form passes (rowSendLine), never a stored refusal.
+describe("BulkPostRow send line", () => {
+  it("shows the line it is given, and none without one", () => {
+    expect(render(row({ sendError: "The server said no." }), { sendLine: "Pick a time in the future." })).toContain("Pick a time in the future.");
+    expect(render(row({ sendError: "The server said no." }))).not.toContain("The server said no.");
   });
 });
