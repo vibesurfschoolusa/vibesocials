@@ -32,7 +32,7 @@ import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { ConfirmDialog, ConfirmFailureShown, confirmFailureText } from "@/components/ui/dialog";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { answerLostText } from "@/lib/answerLost";
-import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,7 +46,7 @@ import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, uploadRouteUrl } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
-import { withWorkspaceId } from "@/lib/workspaceChanged";
+import { pageWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
 import {
   appendMediaPage,
   buildMediaCreateBody,
@@ -399,16 +399,25 @@ interface UploadLinkDto {
   createdAt: string;
 }
 
+/** R41 pages L6: what the card says when the owner's read of the link fails. */
+export const UPLOAD_LINK_LOAD_OFFLINE_TEXT =
+  "We couldn't reach Vibe Socials to load the client upload link. Check your connection and try again.";
+export const UPLOAD_LINK_LOAD_FAILED_TEXT = "We couldn't load the client upload link. Try again in a moment.";
+
 /**
  * Client upload link (2026-11-10): owners make, copy, replace or turn off the
  * workspace's link here. The owner-only GET answers a member 403, and then the
- * panel is not shown at all. Every call carries the workspace this page was
+ * panel is not shown at all. R41 pages L6: only then; any other failed read
+ * shows the card's LoadError with Retry, so an owner never finds it missing. Every call carries the workspace this page was
  * rendered for: if another tab switched workspace, the routes answer 409 and
  * the panel shows their sentence instead of acting on the other workspace.
  */
-function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
+export function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
-  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
+  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed" | "failed">("loading");
+  const [loadError, setLoadError] = useState(UPLOAD_LINK_LOAD_FAILED_TEXT);
+  // Bumped by Retry, so the read runs again.
+  const [attempt, setAttempt] = useState(0);
   const [changedMessage, setChangedMessage] = useState("");
   const [pausedByPlan, setPausedByPlan] = useState(false);
   const [workspaceBlocked, setWorkspaceBlocked] = useState<string | null>(null);
@@ -421,11 +430,11 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(
+        const response = await fetchOrNoAnswer(
           `/api/workspaces/upload-link?workspaceId=${encodeURIComponent(workspaceId)}`,
         );
         const data = (await response.json().catch(() => null)) as
-          | { link?: UploadLinkDto | null; error?: string; pausedByPlan?: boolean; workspaceBlocked?: string }
+          | { link?: UploadLinkDto | null; error?: string; code?: unknown; pausedByPlan?: boolean; workspaceBlocked?: string }
           | null;
         if (cancelled) return;
         if (response.status === 409) {
@@ -433,22 +442,30 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
           setState("changed");
           return;
         }
-        if (!response.ok) {
+        if (response.status === 403) {
           setState("hidden");
           return;
         }
-        setLink(data?.link ?? null);
+        if (!response.ok || !data || !("link" in data)) {
+          // A page without its workspace id: LoadError's step is Reload page.
+          setLoadError(pageWorkspaceRefusalText(data?.code) ?? UPLOAD_LINK_LOAD_FAILED_TEXT);
+          setState("failed");
+          return;
+        }
+        setLink(data.link ?? null);
         setPausedByPlan(data?.pausedByPlan === true);
         setWorkspaceBlocked(typeof data?.workspaceBlocked === "string" ? data.workspaceBlocked : null);
         setState("ready");
-      } catch {
-        if (!cancelled) setState("hidden");
+      } catch (error) {
+        if (cancelled) return;
+        setLoadError(isNoConnection(error) ? UPLOAD_LINK_LOAD_OFFLINE_TEXT : UPLOAD_LINK_LOAD_FAILED_TEXT);
+        setState("failed");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, attempt]);
 
   // client-journey L1: after a lost answer the panel reads the link again, so
   // it shows the one that works. A failed read keeps what is shown; the
@@ -552,6 +569,19 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
     return (
       <Alert variant="warning" title="Client upload link">
         <p>{changedMessage}</p>
+      </Alert>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <Alert variant="danger" title="Couldn't load the client upload link">
+        <LoadError
+          message={loadError}
+          onRetry={() => {
+            setState("loading");
+            setAttempt((count) => count + 1);
+          }}
+        />
       </Alert>
     );
   }
