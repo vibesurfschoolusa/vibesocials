@@ -24,6 +24,8 @@ import {
 import { findActiveUploadLink } from "@/server/uploadLink";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
+import { UPLOAD_EMPTY_MESSAGE } from "@/app/api/upload/uploadBudget";
+
 import { consumeUploadLinkDayBytes, releaseUploadLinkReservation } from "./linkBytes";
 
 /**
@@ -108,6 +110,8 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   // token as its maximum, so the stored file can be no larger. A page that
   // names no size is counted as the largest file.
   const size = claimed.size === undefined ? MAX_MEDIA_BYTES : claimed.size;
+  // R44 pages-a L5: an empty file is told so, as on the signed-in path.
+  if (size === 0) return NextResponse.json({ error: UPLOAD_EMPTY_MESSAGE }, { status: 400 });
   if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0 || size > MAX_MEDIA_BYTES) {
     return NextResponse.json({ error: "File is too large (max 512 MB)." }, { status: 400 });
   }

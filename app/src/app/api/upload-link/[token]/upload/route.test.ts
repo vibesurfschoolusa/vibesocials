@@ -312,6 +312,13 @@ describe("the bytes a link takes in a day", () => {
     }
   });
 
+  // R44 pages-a L5: an empty file is told it is empty, as on the signed-in path.
+  it("an empty file is told it is empty, not too large", async () => {
+    const response = await call(tokenRequest({ size: 0 }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "This file is empty." });
+  });
+
   it("refuses with a plain sentence once the link's day is full, and signs nothing", async () => {
     consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000 });
 
