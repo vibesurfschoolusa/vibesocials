@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNo
 import { Copy } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
-import { LoadError, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
+import { LoadError } from "@/components/load-error";
 import { Alert } from "@/components/ui/alert";
 import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
@@ -301,8 +301,8 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
         isConnectLinkAnswer,
       );
       if (cancelled) return;
-      if (read.kind === "forbidden" || read.kind === "changed") {
-        setChangedMessage(read.kind === "changed" ? read.message : ROLE_CHANGED_MESSAGE);
+      if (read.kind === "changed") {
+        setChangedMessage(read.message);
         setState("changed");
       } else if (read.kind === "failed") {
         setLoadError(read.message);

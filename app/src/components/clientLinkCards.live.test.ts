@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * them found nothing. Each now does what the upload-link card does: a failed
  * read shows LoadError with Retry in an announced Alert; a 409 or a missing
  * workspace id shows Reload page; after Retry focus goes to the loading line,
- * then to the card. Only the review-link card hides, for a member's 403; the
- * connect-link card is for owners only, so a 403 there asks for a reload.
+ * then to the card. Both are drawn only for owners, so a 403 asks for a
+ * reload and neither card ever hides.
  */
 
 vi.mock("next/navigation", () => ({
@@ -178,25 +178,17 @@ describe.each(cards)("$name card when its read fails", ({ mount, thing, title, r
   });
 });
 
-describe("a 403", () => {
-  const forbidden = () => Response.json({ error: "Only the workspace owner can do this." }, { status: 403 });
-
-  it("the review-link card: a member may not see it, so no card", async () => {
-    fetchMock.mockResolvedValue(forbidden());
+// R42 review: both cards are drawn only for owners, so a 403 (the role or
+// workspace changed since) never hides either: the role sentence, Reload page.
+describe.each(cards)("$name card: a 403", ({ mount }) => {
+  it("shows the role sentence with Reload page", async () => {
+    fetchMock.mockResolvedValue(Response.json({ error: "Only the workspace owner can do this." }, { status: 403 }));
     await act(async () => {
-      root.render(createElement(ReviewLinkPanel, { workspaceId: "ws-1" }));
-    });
-    await settle();
-    expect(container.childNodes).toEqual([]);
-  });
-
-  it("the connect-link card is for owners only: the role sentence with Reload page", async () => {
-    fetchMock.mockResolvedValue(forbidden());
-    await act(async () => {
-      root.render(createElement(ConnectLinkSection, { workspaceId: "ws-1", isOwner: true }));
+      root.render(mount());
     });
     await settle();
     expect(alertNode()?.textContent).toContain(ROLE_CHANGED_MESSAGE);
     expect(button("Reload page")).not.toBeNull();
+    expect(button("Retry")).toBeNull();
   });
 });

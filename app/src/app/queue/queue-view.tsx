@@ -836,17 +836,16 @@ function isReviewLinkAnswer(data: unknown): data is ReviewLinkAnswer {
 
 /**
  * Client review link (2026-11-10): owners make, copy, replace or turn off the
- * workspace's link here, as the upload link's panel on the Media page. The
- * owner-only GET answers a member 403, and then the panel is not shown. Every
+ * workspace's link here, as the upload link's panel on the Media page. Every
  * call carries the workspace whose posts this page shows: if another tab
  * switched workspace, the routes answer 409 and the panel shows their sentence.
- * R42 pages-b L1: only a 403 hides it. Any other failed read says what
- * happened, with Retry, or Reload page for a workspace refusal
- * (readClientLinkCard), as the upload-link card does.
+ * R42 pages-b L1 and its review: it never hides. The Queue draws it only for
+ * owners, so a failed read says what happened, with Retry, and a workspace
+ * refusal or a 403 (the role changed) asks for a reload (readClientLinkCard).
  */
 export function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
-  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed" | "failed">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "changed" | "failed">("loading");
   const [changedMessage, setChangedMessage] = useState("");
   const [loadError, setLoadError] = useState(REVIEW_LINK_LOAD_TEXTS.failed);
   // Bumped by Retry, so the read runs again.
@@ -867,10 +866,7 @@ export function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
         isReviewLinkAnswer,
       );
       if (cancelled) return;
-      if (read.kind === "forbidden") {
-        // A member may not see the card.
-        setState("hidden");
-      } else if (read.kind === "changed") {
+      if (read.kind === "changed") {
         setChangedMessage(read.message);
         setState("changed");
       } else if (read.kind === "failed") {

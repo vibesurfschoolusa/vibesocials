@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ROLE_CHANGED_MESSAGE } from "@/components/load-error";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import {
   MISSING_WORKSPACE_ID_MESSAGE,
@@ -12,8 +13,8 @@ import { clientLinkLoadTexts, readClientLinkCard } from "./clientLinkCardRead";
 /**
  * R42 pages-b L1: the Queue's review-link card and Settings' connect-link
  * card read their link by one rule, as the upload-link card does (R41 L6):
- * a failure says what happened, a workspace refusal asks for a reload, and
- * only a 403 is left to the caller (a member may not see the card).
+ * a failure says what happened, and a workspace refusal or a 403 asks for a
+ * reload. Both cards are drawn only for owners, so neither ever hides.
  */
 
 const texts = clientLinkLoadTexts("client review link");
@@ -80,7 +81,12 @@ describe("readClientLinkCard", () => {
     });
   });
 
-  it("a 403 is left to the caller", async () => {
-    expect(await read(Response.json({ error: "Owners only" }, { status: 403 }))).toEqual({ kind: "forbidden" });
+  // R42 review: both cards are drawn only for owners, so a 403 means the
+  // viewer's role or workspace changed since: never hidden, Reload page.
+  it("a 403: changed, with the role sentence", async () => {
+    expect(await read(Response.json({ error: "Owners only" }, { status: 403 }))).toEqual({
+      kind: "changed",
+      message: ROLE_CHANGED_MESSAGE,
+    });
   });
 });

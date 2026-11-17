@@ -1,3 +1,4 @@
+import { ROLE_CHANGED_MESSAGE } from "@/components/load-error";
 import { fetchOrNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
 import { pageWorkspaceRefusalText, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
@@ -9,15 +10,14 @@ import { pageWorkspaceRefusalText, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/
  * owner sent to it found nothing. Now:
  * - "failed": what happened, and Retry (no connection, a 5xx, a 429, an
  *   unreadable answer; a 401 is the signed-out sentence);
- * - "changed": another tab switched workspace (409) or the page has no id;
- *   asking again gets the same answer, so the step is Reload page;
- * - "forbidden": a 403, the viewer is no longer an owner. The caller decides,
- *   since only it knows whether a member may see the card.
+ * - "changed": another tab switched workspace (409), the page has no id, or
+ *   a 403 (the viewer is no longer an owner: both cards are drawn only for
+ *   owners, so neither ever hides); asking again gets the same answer, so the
+ *   step is Reload page.
  */
 export type ClientLinkCardRead<T> =
   | { kind: "ready"; data: T }
   | { kind: "changed"; message: string }
-  | { kind: "forbidden" }
   | { kind: "failed"; message: string };
 
 export interface ClientLinkLoadTexts {
@@ -49,7 +49,7 @@ export async function readClientLinkCard<T>(
     }
     const refusal = response.status === 400 ? pageWorkspaceRefusalText(code) : null;
     if (refusal) return { kind: "changed", message: refusal };
-    if (response.status === 403) return { kind: "forbidden" };
+    if (response.status === 403) return { kind: "changed", message: ROLE_CHANGED_MESSAGE };
     if (response.status === 401) return { kind: "failed", message: SIGNED_OUT_ERROR };
     if (!response.ok || !isReady(data)) return { kind: "failed", message: texts.failed };
     return { kind: "ready", data };
