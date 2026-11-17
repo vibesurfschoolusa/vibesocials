@@ -156,9 +156,11 @@ export function aiSwitchOn(aiSwitch: AiSwitch): boolean {
  * outcome (a failed caption still gets one). `describe` marks the row asked,
  * so Write again does not describe it a second time.
  *
- * F7 (R1 M2): with "Write captions with AI" off (`ai: false`), nothing goes to
- * the AI: only `withoutAi` runs, which reads what the row needs from its own
- * file (a video's length and thumbnail) and leaves the caption box empty.
+ * F7 (R1 M2): with "Write captions with AI" off, nothing goes to the AI: only
+ * `withoutAi` runs, which reads what the row needs from its own file (a
+ * video's length and thumbnail) and leaves the caption box empty. R39: the
+ * switch is read live (aiSwitchOn), again before the description, so turning
+ * it off while the caption is written sends no photo to be described.
  */
 export async function captionThenDescribe(
   id: string,
@@ -168,9 +170,9 @@ export async function captionThenDescribe(
     describe(id: string): Promise<void>;
     withoutAi?(id: string): Promise<void>;
   },
-  { ai }: { ai: boolean } = { ai: true },
+  { ai }: { ai: AiSwitch } = { ai: { current: true } },
 ): Promise<void> {
-  if (!ai) {
+  if (!aiSwitchOn(ai)) {
     await steps.withoutAi?.(id);
     return;
   }
@@ -178,7 +180,7 @@ export async function captionThenDescribe(
     await steps.writeCaption(id);
   } finally {
     const row = steps.row(id);
-    if (row && wantsAltText(row)) await steps.describe(id);
+    if (row && wantsAltText(row) && aiSwitchOn(ai)) await steps.describe(id);
   }
 }
 

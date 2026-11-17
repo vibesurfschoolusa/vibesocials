@@ -445,7 +445,7 @@ describe("Add many: Write captions with AI off", () => {
     const withoutAi = vi.fn(async () => {});
     const row = () => ({ mediaItemId: null, mimeType: "image/jpeg", uploaded: true, altTextAsked: false });
 
-    await captionThenDescribe("r1", { writeCaption, row, describe: describePhoto, withoutAi }, { ai: false });
+    await captionThenDescribe("r1", { writeCaption, row, describe: describePhoto, withoutAi }, { ai: { current: false } });
 
     expect(writeCaption).not.toHaveBeenCalled();
     expect(describePhoto).not.toHaveBeenCalled();
@@ -462,6 +462,25 @@ describe("Add many: Write captions with AI off", () => {
       withoutAi: async () => void order.push("local"),
     });
     expect(order).toEqual(["caption", "describe"]);
+  });
+
+  // R39 publishing L1: the switch is read again after the caption, before the description.
+  it("turned off while the caption is written: no description", async () => {
+    const aiSwitch = { current: true };
+    const describePhoto = vi.fn(async () => {});
+    const row = () => ({ mediaItemId: null, mimeType: "image/jpeg", uploaded: true, altTextAsked: false });
+    await captionThenDescribe(
+      "r1",
+      {
+        writeCaption: async () => {
+          aiSwitch.current = false;
+        },
+        row,
+        describe: describePhoto,
+      },
+      { ai: aiSwitch },
+    );
+    expect(describePhoto).not.toHaveBeenCalled();
   });
 });
 

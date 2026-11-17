@@ -133,7 +133,7 @@ describe("Add many: Write captions with AI", () => {
   it("the caption step sends nothing to the AI while it is off", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
-    expect(source).toContain("{ ai: aiCaptionsRef.current }");
+    expect(source).toContain("{ ai: aiCaptionsRef }");
   });
 });
 

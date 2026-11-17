@@ -78,6 +78,7 @@ import { BatchSettingsFieldset } from "./batch-settings";
 import {
   BULK_CAPTION_LOST_TEXT,
   BULK_COVER_FAILED_TEXT,
+  aiSwitchOn,
   autoCaptionRequestBody,
   buildBulkRowBody,
   bulkExtrasBlock,
@@ -543,6 +544,11 @@ export function BulkPostsForm({
     updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
     try {
       const frames = await readRowMedia(id, row, blob);
+      // R39 publishing L1: turned off during the frame grab, nothing is sent.
+      if (!aiSwitchOn(aiCaptionsRef)) {
+        updateRow(id, { captionStatus: "done", captionOverwrite: false });
+        return;
+      }
       // Built from the rows as they are now, after the frames were read, so the
       // other rows' latest captions go with it and this one does not repeat them.
       const response = await fetchOrNoAnswer("/api/posts/auto-caption", {
@@ -673,7 +679,7 @@ export function BulkPostsForm({
                 : undefined;
             },
             describe: describeRow,
-          }, { ai: aiCaptionsRef.current });
+          }, { ai: aiCaptionsRef });
         }
       }
     } finally {
