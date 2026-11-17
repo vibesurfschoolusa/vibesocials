@@ -67,46 +67,48 @@ export interface LimitedChoice {
 }
 
 /**
+ * R41 client-journey L1: the limit counts the load, Connect and Cancel
+ * together, so a press after the list loaded can get the same 429. Cancel's
+ * step after a wait the choice won't outlive: it ends by itself meanwhile.
+ */
+const CANCEL_AFTER_LIMIT_STEP =
+  "reload this page: the choice will have ended by itself, with no account connected.";
+
+/**
  * The network limit's 429 (the pending route answers only this limit with
  * one): the shared client-link instruction, with no button. R40 client-journey
  * L3 and its review: a wait the choice won't outlive names the step that works
  * after it, with the button its platform's row shows; without both, a wording
  * that names no button.
  */
-function rateLimitedSentence(retryAfterSeconds: number | undefined, choice: LimitedChoice, then?: string): string {
+function rateLimitedSentence(retryAfterSeconds: number | undefined, choice: LimitedChoice, cancel: boolean): string {
   const label =
     choice.platform && choice.platform in PLATFORM_LABELS
       ? PLATFORM_LABELS[choice.platform as keyof typeof PLATFORM_LABELS]
       : null;
+  const lifeSeconds = choice.lifeLeftSeconds ?? CONNECT_LINK_COOKIE_MAX_AGE_SECONDS;
+  // R41 review: "ended by itself" is said only when the wait as printed reaches the end, with no margin.
+  if (cancel) return limitReachedSentence(retryAfterSeconds, { lifeSeconds, then: CANCEL_AFTER_LIMIT_STEP, marginSeconds: 0 });
   return limitReachedSentence(retryAfterSeconds, {
-    lifeSeconds: choice.lifeLeftSeconds ?? CONNECT_LINK_COOKIE_MAX_AGE_SECONDS,
+    lifeSeconds,
     then:
-      then ??
-      (label && choice.button
+      label && choice.button
         ? `press ${choice.button} beside ${label} again.`
-        : "connect the account again from the list on this page."),
+        : "connect the account again from the list on this page.",
   });
 }
 
 /**
- * R41 client-journey L1: the limit counts the load, Connect and Cancel
- * together, so a press after the list loaded can get the same 429. Cancel's
- * step after a wait the choice won't outlive: it ends by itself meanwhile.
- */
-export const CANCEL_AFTER_LIMIT_STEP =
-  "reload this page: the choice will have ended by itself, with no account connected.";
-
-/**
  * The view for the network limit's 429 on the load, Connect or Cancel: one
  * instruction and no button, since any press within the window fails the
- * same way. `then`: the press's own step after a wait the choice won't outlive.
+ * same way. `cancel`: Cancel's own step after a wait the choice won't outlive.
  */
 export function limitedOutcome(
   retryAfterSeconds: number | undefined,
   choice: LimitedChoice,
-  then?: string,
+  cancel = false,
 ): ConnectLinkChoiceState {
-  return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, choice, then), retry: false };
+  return { status: "failed", message: rateLimitedSentence(retryAfterSeconds, choice, cancel), retry: false };
 }
 
 /** The choice for a 429, as the page knows it: platform, its row's button, life left from first seen. */
@@ -254,10 +256,10 @@ export function ConnectLinkChoice({
   const retried = useRetryFocus(state.status === "loading", statusRef, [headingRef, failedRef, goneRef]);
 
   /** A press's 429: the same view as the load's, weighed against the life the choice has left. */
-  function showLimited(response: Response, data: ChoiceAnswer, platform: string | null, then?: string) {
+  function showLimited(response: Response, data: ChoiceAnswer, platform: string | null, cancel = false) {
     const openedAt = openedAtRef.current ?? Date.now();
     const firstSeen = choiceFirstSeen(pendingId, openedAt) ?? openedAt;
-    setState(limitedOutcome(limitWaitSeconds(response, data), limitedChoice(platform, firstSeen, buttonsRef.current), then));
+    setState(limitedOutcome(limitWaitSeconds(response, data), limitedChoice(platform, firstSeen, buttonsRef.current), cancel));
   }
 
   function retry() {
@@ -314,7 +316,7 @@ export function ConnectLinkChoice({
       const data = (await response.json().catch(() => null)) as ChoiceAnswer;
       if (response.status === 429) {
         focusAfterPress(pressed, () => failedRef.current);
-        showLimited(response, data, platform, CANCEL_AFTER_LIMIT_STEP);
+        showLimited(response, data, platform, true);
         setBusy(null);
         return;
       }

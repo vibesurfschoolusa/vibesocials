@@ -296,6 +296,41 @@ describe("the /c account choice: a 429 on Connect or Cancel", () => {
     );
     expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
   });
+
+  // R41 review: "ends by itself" only when the rounded wait reaches the choice's end; Connect keeps its margin.
+  describe("the margin: Connect only", () => {
+    const seenAgo = (seconds: number) => storage([["vs-connect-choice-seen:p1", String(Date.now() - seconds * 1000)]]);
+
+    it("721 s wait with 830 s left: Cancel says reload", async () => {
+      seenAgo(70);
+      await pressAfterLoad("Cancel", limited(721));
+      expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 13 minutes.");
+    });
+
+    it("721 s wait with 830 s left: Connect says press again", async () => {
+      seenAgo(70);
+      await pressAfterLoad("Connect", limited(721), { facebook_page: "Connect" });
+      expect(container.textContent).toBe(
+        "Too many requests from this network in the last hour. Wait 13 minutes, then press Connect beside Facebook Page again.",
+      );
+    });
+
+    it("a wait beyond the life left: Cancel says it ends by itself", async () => {
+      seenAgo(70);
+      await pressAfterLoad("Cancel", limited(900));
+      expect(container.textContent).toBe(
+        "Too many requests from this network in the last hour. Wait 15 minutes, then reload this page: the choice will have ended by itself, with no account connected.",
+      );
+    });
+
+    it("a wait beyond the life left: Connect says press again", async () => {
+      seenAgo(70);
+      await pressAfterLoad("Connect", limited(900), { facebook_page: "Connect" });
+      expect(container.textContent).toBe(
+        "Too many requests from this network in the last hour. Wait 15 minutes, then press Connect beside Facebook Page again.",
+      );
+    });
+  });
 });
 
 // R39 lead review: Try again removes itself, so focus fell to the page body.

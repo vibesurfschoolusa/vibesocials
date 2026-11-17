@@ -54,6 +54,13 @@ describe("limitReachedSentence", () => {
     expect(limitReachedSentence(600, outlasts)).toBe(`${CLIENT_LINK_LIMIT_REASON} Reload this page in 10 minutes.`);
   });
 
+  // R41 review: a claim that the thing ends by itself needs the rounded wait itself to reach its end.
+  it("with no margin, says to wait only when the rounded wait reaches the life left", () => {
+    const outlasts = { lifeSeconds: 830, then: "reload this page.", marginSeconds: 0 };
+    expect(limitReachedSentence(721, outlasts)).toBe(`${CLIENT_LINK_LIMIT_REASON} Reload this page in 13 minutes.`);
+    expect(limitReachedSentence(781, outlasts)).toBe(`${CLIENT_LINK_LIMIT_REASON} Wait 14 minutes, then reload this page.`);
+  });
+
   it("the /c choice's life on the page is the server's", () => {
     expect(CONNECT_LINK_COOKIE_MAX_AGE_SECONDS * 1000).toBe(PENDING_CONNECTION_TTL_MS);
   });

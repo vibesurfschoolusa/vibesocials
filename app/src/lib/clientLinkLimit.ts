@@ -31,14 +31,17 @@ const RELOAD_MARGIN_SECONDS = 60;
 /**
  * The one instruction under a 429. `outlasts`: what the page waits for lives
  * `lifeSeconds` at most. The wait is compared as printed (whole minutes,
- * rounded up) plus the margin; one at least that long says to wait, then `then`.
+ * rounded up) plus `marginSeconds` (the reload margin unless given); one at
+ * least that long says to wait, then `then`. R41 review: a `then` that
+ * claims the thing has ended by itself passes 0, so it is said only when true.
  */
 export function limitReachedSentence(
   waitSeconds: number | undefined,
-  outlasts?: { lifeSeconds: number; then: string },
+  outlasts?: { lifeSeconds: number; then: string; marginSeconds?: number },
 ): string {
   if (!waitSeconds || waitSeconds <= 0) return `${CLIENT_LINK_LIMIT_REASON} Reload this page later.`;
-  if (outlasts && wholeMinutes(waitSeconds) * 60 + RELOAD_MARGIN_SECONDS >= outlasts.lifeSeconds) {
+  const margin = outlasts?.marginSeconds ?? RELOAD_MARGIN_SECONDS;
+  if (outlasts && wholeMinutes(waitSeconds) * 60 + margin >= outlasts.lifeSeconds) {
     return `${CLIENT_LINK_LIMIT_REASON} Wait ${minutesText(waitSeconds)}, then ${outlasts.then}`;
   }
   return `${CLIENT_LINK_LIMIT_REASON} Reload this page in ${minutesText(waitSeconds)}.`;
