@@ -161,6 +161,30 @@ describe("GET: the accounts to choose from", () => {
   });
 });
 
+// R33 client-journey L2: a choice whose place was taken meanwhile is not offered again.
+describe("GET: the place is taken", () => {
+  it("answers the connected 404 and lists no accounts", async () => {
+    h.connectionFind.mockResolvedValue({ platform: "facebook_page", needsReconnect: false, expiresAt: null, refreshToken: null });
+
+    const res = await GET(request("GET"), context());
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({
+      error: "Facebook Page is connected. There is nothing more to choose here.",
+      connected: true,
+    });
+  });
+
+  it("one that needs reconnecting still lists the accounts", async () => {
+    h.connectionFind.mockResolvedValue({ platform: "facebook_page", needsReconnect: true, expiresAt: null, refreshToken: null });
+
+    const res = await GET(request("GET"), context());
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).candidates).toHaveLength(2);
+  });
+});
+
 // R31 follow-up: the load error said only "Failed to load the accounts."
 describe("GET: a load that fails", () => {
   it("is a 500 that says to reload, naming no button", async () => {
@@ -200,6 +224,18 @@ describe("POST: the visitor's choice", () => {
       connected: true,
     });
     expect(h.saveFacebookPage).not.toHaveBeenCalled();
+    // R33 client-journey L2: the choice ends, so a reload never offers it again.
+    expect(h.pendingDeleteMany).toHaveBeenCalledWith({ where: { id: "pending-1" } });
+  });
+
+  it("rule 3 again: a failure deleting the choice still answers the 409", async () => {
+    h.connectionFind.mockResolvedValue({ needsReconnect: false });
+    h.pendingDeleteMany.mockRejectedValue(new Error("db down"));
+
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).connected).toBe(true);
   });
 
   // R6 review low 1: a reconnect through the link only ever replaces the same account.

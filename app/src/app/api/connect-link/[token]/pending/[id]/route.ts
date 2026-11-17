@@ -1,3 +1,4 @@
+import type { Platform } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { accountCheckFailedMessage, linkChoiceDifferentAccountMessage } from "@/lib/differentAccount";
@@ -50,14 +51,17 @@ interface RouteContext {
 async function notFound(request: Request, link: ActiveConnectLink): Promise<NextResponse> {
   const hint = new URL(request.url).searchParams.get("platform");
   const platform = link.platforms.find((offered) => offered === hint);
-  if (platform && (await placeTaken(link.workspaceId, platform))) {
-    return NextResponse.json(
-      { error: `${PLATFORM_LABELS[platform]} is connected. There is nothing more to choose here.`, connected: true },
-      { status: 404 },
-    );
-  }
+  if (platform && (await placeTaken(link.workspaceId, platform))) return connectedNotFound(platform);
   return NextResponse.json(
     { error: "This choice has ended: it expired, or an account was already chosen. The list below shows what is connected." },
+    { status: 404 },
+  );
+}
+
+/** The choice is over because the platform's place is taken: no buttons to offer. */
+function connectedNotFound(platform: Platform): NextResponse {
+  return NextResponse.json(
+    { error: `${PLATFORM_LABELS[platform]} is connected. There is nothing more to choose here.`, connected: true },
     { status: 404 },
   );
 }
@@ -110,8 +114,12 @@ export async function GET(request: Request, context: RouteContext) {
   try {
     const resolved = await resolve(request, context);
     if (!resolved.ok) return resolved.response;
+    // R33 client-journey L2: a working account arrived meanwhile, so a reload
+    // never offers Connect buttons that POST would refuse.
+    const { link, pending } = resolved;
+    if (await placeTaken(link.workspaceId, pending.platform)) return connectedNotFound(pending.platform);
     return NextResponse.json(
-      { platform: resolved.pending.platform, candidates: listPendingCandidates(resolved.pending.payload) },
+      { platform: pending.platform, candidates: listPendingCandidates(pending.payload) },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
@@ -137,8 +145,12 @@ export async function POST(request: Request, context: RouteContext) {
 
     // Rule 3, once more before the chosen account is saved. R32 client-journey
     // L2: `connected` tells the page the choice is over, so it ends it and
-    // reads its rows again, as for a 404.
+    // reads its rows again, as for a 404. R33 client-journey L2: the choice is
+    // deleted too (a failure is ignored: GET answers the place taken anyway).
     if (await placeTaken(link.workspaceId, pending.platform)) {
+      await deletePendingConnection(pending.id).catch((error: unknown) => {
+        logger.error("[connect-link] Couldn't delete the refused choice (ignored)", { error: errorKind(error) });
+      });
       return NextResponse.json(
         {
           error: `${PLATFORM_LABELS[pending.platform]} is already connected. Ask the person who sent you this link if it should be changed.`,

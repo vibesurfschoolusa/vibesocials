@@ -116,6 +116,21 @@ describe("the connect link page", () => {
     expect(html).not.toMatch(/>X</);
   });
 
+  // R33 new-customer L2 / pages L6a: every offered platform lost its app keys on this site.
+  it("nothing left to connect: one sentence instead of an empty list", async () => {
+    h.findLink.mockResolvedValue({ ...LINK, platforms: ["x", "pinterest"] });
+    const html = await render();
+    expect(html).toContain(
+      "Nothing can be connected through this link right now. Ask the person who sent it for a new link.",
+    );
+    expect(html).not.toContain("<ul");
+    expect(html).not.toContain("<form");
+  });
+
+  it("something to connect: no such sentence", async () => {
+    expect(await render()).not.toContain("Nothing can be connected through this link");
+  });
+
   it("a working connection shows its account name instead of a button; one that needs reconnecting shows Reconnect", async () => {
     h.listConnections.mockResolvedValue([
       { platform: "instagram", accountIdentifier: "ig-1", username: "surfco", locationName: null, needsReconnect: false },

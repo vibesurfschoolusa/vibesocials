@@ -95,7 +95,7 @@ describe("GET /api/reviews/link", () => {
     const response = await GET();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ url: LINK });
+    await expect(response.json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
     expect(mocks.fetchNewReviewUri).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
   });
@@ -115,6 +115,15 @@ describe("GET /api/reviews/link", () => {
     await expect((await GET()).json()).resolves.toEqual({ url: LINK, location: "Branch A", locationId: LOCATION });
   });
 
+  // R33 client-journey L1: an Advanced save (or one before 9 Nov) stored no title;
+  // the panel still learns which location the link is for.
+  it("always sends the saved location's id, with no title saved", async () => {
+    mocks.findFirst.mockResolvedValue(
+      connection({ metadata: { locationName: LOCATION, locationTitle: null, newReviewUri: LINK, newReviewUriFor: LOCATION } }),
+    );
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
+  });
+
   it("fetches the link when it is missing and saves it, merged onto the row as it is now", async () => {
     mocks.findFirst.mockResolvedValue(connection());
     mocks.fetchNewReviewUri.mockResolvedValue(LINK);
@@ -124,7 +133,7 @@ describe("GET /api/reviews/link", () => {
 
     const response = await GET();
 
-    await expect(response.json()).resolves.toEqual({ url: LINK });
+    await expect(response.json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
     expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access", LOCATION);
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: "conn-1" },
@@ -146,7 +155,7 @@ describe("GET /api/reviews/link", () => {
 
     const response = await GET();
 
-    await expect(response.json()).resolves.toEqual({ url: LINK });
+    await expect(response.json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
@@ -159,7 +168,7 @@ describe("GET /api/reviews/link", () => {
     mocks.fetchNewReviewUri.mockResolvedValue(LINK);
     mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
 
-    await expect((await GET()).json()).resolves.toEqual({ url: LINK });
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
     expect(mocks.fetchNewReviewUri).toHaveBeenCalledTimes(1);
   });
 
@@ -207,7 +216,7 @@ describe("GET /api/reviews/link", () => {
     mocks.fetchNewReviewUri.mockResolvedValue(LINK);
     mocks.findUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
 
-    await expect((await GET()).json()).resolves.toEqual({ url: LINK });
+    await expect((await GET()).json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
     expect(mocks.fetchNewReviewUri).toHaveBeenCalledWith("gbp-access", LOCATION);
   });
 
@@ -522,7 +531,7 @@ describe("GET /api/reviews/link and a 401 on a token that ran out on the way", (
         })
         .mockResolvedValueOnce(LINK);
 
-      await expect((await GET()).json()).resolves.toEqual({ url: LINK });
+      await expect((await GET()).json()).resolves.toEqual({ url: LINK, locationId: LOCATION });
       expect(mocks.fetchNewReviewUri.mock.calls.map(([token]) => token)).toEqual(["gbp-access", "gbp-access-2"]);
       expect(mocks.flagRejectedToken).not.toHaveBeenCalled();
     } finally {
@@ -552,7 +561,7 @@ describe("GET /api/reviews/link and the page's workspace", () => {
     const response = await GET(at("?workspaceId=ws-1"));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ url: LINK });
+    expect(await response.json()).toEqual({ url: LINK, locationId: LOCATION });
   });
 
   it("a page that sent no id (drawn before it did) is served as before", async () => {
@@ -561,6 +570,6 @@ describe("GET /api/reviews/link and the page's workspace", () => {
     const response = await GET(at(""));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ url: LINK });
+    expect(await response.json()).toEqual({ url: LINK, locationId: LOCATION });
   });
 });

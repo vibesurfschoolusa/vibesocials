@@ -20,24 +20,57 @@ import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-n
 /** A location as the panel names it: its saved name (or the shown one's resource name) and title. */
 export type LinkLocation = { id: string; title: string };
 
+/** The saved location as the route sends it: its saved name, and its title when one was saved. */
+export type SavedLinkLocation = { id: string; title: string | null };
+
+/** A location the Reviews page listed, with what the panel matches by. */
+export type ListedLinkLocation = { name: string; title: string; storeCode?: string };
+
+/** What the Reviews page hands the panel: the location its list shows, and the listed ones. */
+export type ShownLinkLocations = { shown: LinkLocation | null; listed: ListedLinkLocation[] };
+
+/** The saved location as the panel names it; `listedName`: its listed resource name, when found. */
+type NamedSavedLocation = SavedLinkLocation & { listedName?: string | null };
+
+const SAVED_IN_SETTINGS = "the location saved in Settings";
+
 /**
- * R32 client-journey L4: under the link, only while the list shows another
- * location than the saved one. The saved name may be a store code (Settings'
- * Advanced field); then the titles are compared.
+ * R33 client-journey L1: the saved location's title from the listed locations
+ * (by resource name, or a store code only one of them has, as the server's
+ * savedLocationIn), else the saved title, else none.
  */
-export function reviewLinkLocationLine(saved: LinkLocation, shown: LinkLocation | null): string | null {
-  if (!shown) return null;
-  const same = shown.id === saved.id || (!saved.id.includes("locations/") && shown.title === saved.title);
-  return same ? null : `This link is for ${saved.title}, the location saved in Settings, not for ${shown.title}.`;
+export function namedSavedLocation(saved: SavedLinkLocation, listed: readonly ListedLinkLocation[]): NamedSavedLocation {
+  const byName = listed.find((location) => location.name === saved.id);
+  const byCode = listed.filter((location) => location.storeCode === saved.id);
+  const match = byName ?? (byCode.length === 1 ? byCode[0] : undefined);
+  return match ? { id: saved.id, title: match.title, listedName: match.name } : { ...saved, listedName: null };
 }
 
-/** The location the Reviews list shows, as the panel compares it. */
+/**
+ * R32 client-journey L4: under the link, only while the list shows another
+ * location than the saved one. Found in the list, the resource names are
+ * compared; otherwise a saved store code (Settings' Advanced field) is
+ * compared by its saved title.
+ */
+export function reviewLinkLocationLine(saved: NamedSavedLocation, shown: LinkLocation | null): string | null {
+  if (!shown) return null;
+  const same = saved.listedName
+    ? shown.id === saved.listedName
+    : shown.id === saved.id || (saved.title !== null && !saved.id.includes("locations/") && shown.title === saved.title);
+  const savedPart = saved.title ? `${saved.title}, ${SAVED_IN_SETTINGS}` : SAVED_IN_SETTINGS;
+  return same ? null : `This link is for ${savedPart}, not for ${shown.title}.`;
+}
+
+/** The location the Reviews list shows, and the listed ones, as the panel compares them. */
 export function shownLinkLocation(
-  locations: readonly { name: string; title: string }[],
+  locations: readonly { name: string; title: string; storeCode?: string | null }[],
   selected: string | null,
-): LinkLocation | null {
+): ShownLinkLocations {
   const shown = selected ? locations.find((location) => location.name === selected) : undefined;
-  return shown ? { id: shown.name, title: shown.title } : null;
+  return {
+    shown: shown ? { id: shown.name, title: shown.title } : null,
+    listed: locations.map(({ name, title, storeCode }) => (storeCode ? { name, title, storeCode } : { name, title })),
+  };
 }
 
 /** The message an owner sends a customer to ask for a review; fits any kind of business. */
@@ -47,8 +80,8 @@ export function reviewRequestMessage(link: string): string {
 
 export type ReviewLinkState =
   | { status: "loading" }
-  /** `location`: the saved location's title, which the link is for (R32 client-journey L4). */
-  | { status: "ready"; url: string; location?: LinkLocation }
+  /** `location`: the saved location, which the link is for (R32 client-journey L4). */
+  | { status: "ready"; url: string; location?: SavedLinkLocation }
   | { status: "none"; reason: string; signIn?: true }
   /** R27 lead's second review: the route refused a page drawn for another workspace. */
   | { status: "workspace_changed" };
@@ -64,7 +97,7 @@ export function reviewLinkStateFrom(
   if (ok && typeof body?.url === "string") {
     const title = typeof body.location === "string" ? body.location.trim() : "";
     const id = typeof body.locationId === "string" ? body.locationId.trim() : "";
-    return title && id ? { status: "ready", url: body.url, location: { id, title } } : { status: "ready", url: body.url };
+    return id ? { status: "ready", url: body.url, location: { id, title: title || null } } : { status: "ready", url: body.url };
   }
   const reason = typeof body?.reason === "string" ? body.reason : LOAD_FAILED;
   // JJ3 lead review: the route only says an owner should sign in again;
@@ -90,8 +123,8 @@ export function ReviewLinkPanel({
   signInShownAbove?: boolean;
   /** The page's workspace notice (with Reload) already shows, so this panel adds no second Reload. */
   workspaceNoticeShownAbove?: boolean;
-  /** The location the Reviews list shows (shownLinkLocation). */
-  shownLocation?: LinkLocation | null;
+  /** The location the Reviews list shows, and the listed ones (shownLinkLocation). */
+  shownLocation?: ShownLinkLocations | null;
 }) {
   const [state, setState] = useState<ReviewLinkState>({ status: "loading" });
 
@@ -173,10 +206,13 @@ export function ReviewLinkPanelView({
   signInShownAbove?: boolean;
   /** The page's workspace notice already offers Reload: one per page. */
   workspaceNoticeShownAbove?: boolean;
-  /** The location the list above shows, compared with the saved one (R32 client-journey L4). */
-  shownLocation?: LinkLocation | null;
+  /** The location the list above shows, and the listed ones, compared with the saved one (R32 client-journey L4). */
+  shownLocation?: ShownLinkLocations | null;
 }) {
   const toast = useToast();
+  const saved =
+    state.status === "ready" && state.location ? namedSavedLocation(state.location, shownLocation?.listed ?? []) : null;
+  const locationLine = saved ? reviewLinkLocationLine(saved, shownLocation?.shown ?? null) : null;
 
   const copy = async (text: string, what: string) => {
     try {
@@ -221,12 +257,10 @@ export function ReviewLinkPanelView({
           <div className="flex min-w-0 flex-1 flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-foreground">
-                {state.location ? `Your Google review link for ${state.location.title}` : "Your Google review link"}
+                {saved ? `Your Google review link for ${saved.title ?? SAVED_IN_SETTINGS}` : "Your Google review link"}
               </span>
               {/* R32 client-journey L4: the link is always the saved location's, whichever one the list shows. */}
-              {state.location && reviewLinkLocationLine(state.location, shownLocation) ? (
-                <p className="text-sm text-muted-foreground">{reviewLinkLocationLine(state.location, shownLocation)}</p>
-              ) : null}
+              {locationLine ? <p className="text-sm text-muted-foreground">{locationLine}</p> : null}
               {/* R26 pages L6: both new-tab links show the shared visible hint in their text. */}
               {/* The hint doesn't inherit break-all: it breaks only between words. */}
               <ExternalLink

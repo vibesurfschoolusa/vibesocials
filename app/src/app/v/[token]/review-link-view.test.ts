@@ -23,6 +23,7 @@ import {
   cardRefusalStart,
   cardsShown,
   dismissFocusTarget,
+  goneLineTakesFocus,
   keepsCard,
   keptAfterReload,
   REVIEW_POST_GONE_MESSAGE,
@@ -51,7 +52,7 @@ function post(over: Partial<ReviewPostDTO> = {}): ReviewPostDTO {
 
 function render(p: ReviewPostDTO): string {
   return renderToStaticMarkup(
-    createElement("ul", null, createElement(ReviewPostCard, { post: p, token: "t", onDecided: () => {}, onStale: async () => true, reloads: 0 })),
+    createElement("ul", null, createElement(ReviewPostCard, { post: p, token: "t", onDecided: () => {}, onStale: async () => 1, reloads: 0 })),
   );
 }
 
@@ -243,7 +244,7 @@ describe("ReviewLinkView: the notice after a reload", () => {
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     const stale = source.slice(source.indexOf("const stale = useCallback("), source.indexOf("[load],", source.indexOf("const stale = useCallback(")));
-    expect(stale).toMatch(/load\(\)\.then\(\(reloaded\) => \{\s*setNotice\(staleNotice\(message, reloaded\)\);\s*return reloaded;\s*\}\)/);
+    expect(stale).toMatch(/load\(\)\.then\(\(reloaded\) => \{\s*setNotice\(staleNotice\(message, reloaded !== null\)\);\s*return reloaded;\s*\}\)/);
     expect(stale).not.toMatch(/setNotice\(message\)/);
   });
 });
@@ -264,13 +265,13 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
   });
 
   it("the reload worked: the card says to look at the new version, and keeps it", () => {
-    const line = cardLineAfterReload(cardRefusalStart(changed, 0).line, REVIEW_POST_CHANGED_MESSAGE, true);
+    const line = cardLineAfterReload(cardRefusalStart(changed, 0).line, REVIEW_POST_CHANGED_MESSAGE, 1);
     expect(shownCardLine(line, 1)).toBe(REVIEW_POST_CHANGED_MESSAGE);
     expect(shownCardLine(line, 5)).toBe(REVIEW_POST_CHANGED_MESSAGE);
   });
 
   it("the reload failed: the reload step is on screen once (the refresh alert's)", () => {
-    const line = cardLineAfterReload(cardRefusalStart(changed, 0).line, REVIEW_POST_CHANGED_MESSAGE, false);
+    const line = cardLineAfterReload(cardRefusalStart(changed, 0).line, REVIEW_POST_CHANGED_MESSAGE, null);
     const card = shownCardLine(line, 0) ?? "";
     expect(card).toBe("This post was changed after you opened this page.");
     const notice = staleNotice(REVIEW_POST_CHANGED_MESSAGE, false);
@@ -279,7 +280,7 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
   });
 
   it("a later Reload the list that works clears the card's line", () => {
-    const line = cardLineAfterReload(cardRefusalStart(changed, 3).line, REVIEW_POST_CHANGED_MESSAGE, false);
+    const line = cardLineAfterReload(cardRefusalStart(changed, 3).line, REVIEW_POST_CHANGED_MESSAGE, null);
     expect(shownCardLine(line, 3)).not.toBeNull();
     expect(shownCardLine(line, 4)).toBeNull();
   });
@@ -304,7 +305,7 @@ describe("ReviewPostCard: a post changed since the page loaded", () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
-    expect(source).toMatch(/setPosts\(data\.posts\);\s*setMore\(data\.more === true\);\s*setReloads\(\(count\) => count \+ 1\);\s*return true;/);
+    expect(source).toMatch(/setPosts\(data\.posts\);\s*setMore\(data\.more === true\);\s*const count = \+\+reloadCount\.current;\s*setReloads\(count\);\s*return count;/);
     expect(source).toContain("reloads={reloads}");
   });
 });
@@ -322,15 +323,44 @@ describe("ReviewPostCard: a post that can no longer be changed here", () => {
   });
 
   it("the reload worked: the card and the notice say what the list now shows", () => {
-    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, true);
+    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, 1);
     expect(shownCardLine(line, 1)).toBe(
       "This post can no longer be changed here. The list below is up to date.",
     );
     expect(staleNotice(locked.message, true)).toBe(shownCardLine(line, 1));
   });
 
+  // R33 client-journey L3: the post comes back on a later reload; the line goes with it.
+  it("the reload worked: a later working reload clears the line", () => {
+    const line = cardLineAfterReload(cardRefusalStart(locked, 2).line, locked.message, 4);
+    expect(line).toEqual({ text: locked.message, clearAfter: 4 });
+    expect(shownCardLine(line, 4)).toBe("This post can no longer be changed here. The list below is up to date.");
+    expect(shownCardLine(line, 5)).toBeNull();
+  });
+
+  it("gone after its own reload, listed again on a later one: no locked line over working buttons", () => {
+    const a = post({ id: "a" });
+    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, 1);
+    // Reload 1 (its own) dropped it: kept and shown gone.
+    let kept = keptAfterReload([a], []);
+    expect(cardsShown([], kept)).toEqual([{ post: a, gone: true }]);
+    // Reload 2 lists it again: let go, and its line is cleared.
+    kept = keptAfterReload(kept, [a]);
+    expect(cardsShown([a], kept)).toEqual([{ post: a, gone: false }]);
+    expect(shownCardLine(line, 2)).toBeNull();
+  });
+
+  it("a changed post's line still stays after its reload", () => {
+    const line = cardLineAfterReload(
+      cardRefusalStart({ kind: "changed", message: REVIEW_POST_CHANGED_MESSAGE }, 0).line,
+      REVIEW_POST_CHANGED_MESSAGE,
+      1,
+    );
+    expect(shownCardLine(line, 9)).toBe(REVIEW_POST_CHANGED_MESSAGE);
+  });
+
   it("the reload failed: no claim about the list, and the reload step only once (the refresh alert's)", () => {
-    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, false);
+    const line = cardLineAfterReload(cardRefusalStart(locked, 0).line, locked.message, null);
     const card = shownCardLine(line, 0) ?? "";
     expect(card).toBe(REVIEW_POST_LOCKED_MESSAGE);
     const notice = staleNotice(locked.message, false);
@@ -372,7 +402,7 @@ describe("ReviewPostCard: kept after the reload when the post left the list", ()
       createElement(
         "ul",
         null,
-        createElement(ReviewPostCard, { post: a, token: "t", onDecided: () => {}, onStale: async () => true, reloads: 0, gone: true, onDismiss: () => {} }),
+        createElement(ReviewPostCard, { post: a, token: "t", onDecided: () => {}, onStale: async () => 1, reloads: 0, gone: true, onDismiss: () => {} }),
       ),
     );
     expect(html).toContain(REVIEW_POST_GONE_MESSAGE);
@@ -388,7 +418,8 @@ describe("ReviewPostCard: kept after the reload when the post left the list", ()
     const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
     expect(source).toMatch(/readOnly=\{gone\}/);
     expect(source).toMatch(/disabled=\{gone \|\| noteTooShort \|\| noteTooLong\}/);
-    expect(source).toMatch(/if \(gone\) lineRef\.current\?\.focus\(\);/);
+    expect(source).toMatch(/if \(focusLine\) lineRef\.current\?\.focus\(\);/);
+    expect(source).toContain("const focusLine = goneLineTakesFocus(gone, ownReload, reloads);");
     // Only a refusal that reloads keeps its card; the view merges with cardsShown.
     expect(source).toContain("void onStale(outcome.message, keepsCard(outcome.message) ? post : undefined).then(");
     expect(source).toContain("cardsShown(posts, kept)");
@@ -428,6 +459,25 @@ describe("ReviewPostCard: which cards are kept, and for how long", () => {
     kept = keptAfterReload(kept, [a, b]);
     expect(kept).toEqual([]);
     expect(cardsShown([b], kept).map((card) => card.post.id)).toEqual(["b"]);
+  });
+
+  // R33 pages L6b: only the reload this card's own press started moves focus to its line.
+  it("a gone card's line takes focus only when its own press's reload dropped it", () => {
+    // Its own reload (number 3) is the latest and dropped it.
+    expect(goneLineTakesFocus(true, 3, 3)).toBe(true);
+    // Its own reload failed (none recorded); another card's reload 4 drops it.
+    expect(goneLineTakesFocus(true, null, 4)).toBe(false);
+    // Its own reload 3 listed it; another card's reload 5 drops it later.
+    expect(goneLineTakesFocus(true, 3, 5)).toBe(false);
+    expect(goneLineTakesFocus(false, 3, 3)).toBe(false);
+  });
+
+  it("the card records its own reload's number when that reload worked", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(fileURLToPath(new URL("./review-link-view.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/\.then\(\(reloaded\) => \{\s*if \(reloaded !== null\) setOwnReload\(reloaded\);/);
+    expect(source).toMatch(/useEffect\(\(\) => \{\s*if \(focusLine\) lineRef\.current\?\.focus\(\);\s*\}, \[focusLine\]\);/);
   });
 
   it("Dismiss's focus goes to the next card, else the page's heading", () => {

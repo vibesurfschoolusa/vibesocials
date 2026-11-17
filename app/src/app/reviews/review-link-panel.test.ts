@@ -197,8 +197,22 @@ describe("the review link names its location", () => {
       url: LINK,
       location: { id: A, title: "Branch A" },
     });
-    expect(reviewLinkStateFrom(true, { url: LINK, location: "", locationId: A })).toEqual({ status: "ready", url: LINK });
-    expect(reviewLinkStateFrom(true, { url: LINK, location: 7, locationId: A })).toEqual({ status: "ready", url: LINK });
+    // R33 client-journey L1: the id alone still says which location the link is for.
+    expect(reviewLinkStateFrom(true, { url: LINK, location: "", locationId: A })).toEqual({
+      status: "ready",
+      url: LINK,
+      location: { id: A, title: null },
+    });
+    expect(reviewLinkStateFrom(true, { url: LINK, location: 7, locationId: A })).toEqual({
+      status: "ready",
+      url: LINK,
+      location: { id: A, title: null },
+    });
+    expect(reviewLinkStateFrom(true, { url: LINK, locationId: A })).toEqual({
+      status: "ready",
+      url: LINK,
+      location: { id: A, title: null },
+    });
     expect(reviewLinkStateFrom(true, { url: LINK, location: "Branch A" })).toEqual({ status: "ready", url: LINK });
   });
 
@@ -234,19 +248,80 @@ describe("the review link names its location", () => {
     const view = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
     const panel = view.slice(view.indexOf("<ReviewLinkPanel"), view.indexOf("/>", view.indexOf("<ReviewLinkPanel")));
     expect(panel).toContain("shownLocation={shownLinkLocation(locations, selectedLocation)}");
-    expect(shownLinkLocation([{ name: B, title: "Branch B" }], B)).toEqual({ id: B, title: "Branch B" });
-    expect(shownLinkLocation([{ name: B, title: "Branch B" }], A)).toBeNull();
-    expect(shownLinkLocation([], null)).toBeNull();
+    expect(shownLinkLocation([{ name: B, title: "Branch B" }], B)).toEqual({
+      shown: { id: B, title: "Branch B" },
+      listed: [{ name: B, title: "Branch B" }],
+    });
+    expect(shownLinkLocation([{ name: B, title: "Branch B" }], A).shown).toBeNull();
+    expect(shownLinkLocation([], null)).toEqual({ shown: null, listed: [] });
+    // Only what the panel reads is passed on.
+    expect(shownLinkLocation([{ name: B, title: "Branch B", storeCode: "FTL-01", address: "1 Beach Rd" } as never], B).listed).toEqual([
+      { name: B, title: "Branch B", storeCode: "FTL-01" },
+    ]);
   });
 });
 
-function renderShown(shownLocation: { id: string; title: string } | null): string {
+// R33 client-journey L1: the saved location without a saved title (an Advanced
+// save, or one before 9 Nov) is named from the listed locations.
+describe("the review link names its location from the list", () => {
+  const A = "accounts/1/locations/2";
+  const B = "accounts/1/locations/5";
+  const listed = [
+    { name: A, title: "Branch A", storeCode: "FTL-01" },
+    { name: B, title: "Branch B", storeCode: "SHARED" },
+    { name: "accounts/1/locations/7", title: "Branch C", storeCode: "SHARED" },
+  ];
+  const view = (location: { id: string; title: string | null }, shown: string | null) =>
+    renderToStaticMarkup(
+      createElement(ReviewLinkPanelView, {
+        state: { status: "ready", url: LINK, location },
+        workspaceId: "ws-A",
+        isMember: false,
+        shownLocation: shownLinkLocation(listed, shown),
+      }),
+    );
+
+  it("a saved resource name takes its listed title", () => {
+    const html = view({ id: A, title: null }, A);
+    expect(html).toContain("Your Google review link for Branch A");
+    expect(html).not.toContain("not for");
+  });
+
+  it("a store code only one location has takes that location's title, and is compared by it", () => {
+    expect(view({ id: "FTL-01", title: null }, A)).toContain("Your Google review link for Branch A");
+    expect(view({ id: "FTL-01", title: null }, A)).not.toContain("not for");
+    expect(view({ id: "FTL-01", title: null }, B)).toContain(
+      "This link is for Branch A, the location saved in Settings, not for Branch B.",
+    );
+  });
+
+  it("the listed title wins over an old saved one", () => {
+    expect(view({ id: A, title: "Old name" }, A)).toContain("Your Google review link for Branch A");
+  });
+
+  it("no match (a store code two locations share, or not listed): the location saved in Settings", () => {
+    const shared = view({ id: "SHARED", title: null }, B);
+    expect(shared).toContain("Your Google review link for the location saved in Settings");
+    expect(shared).toContain("This link is for the location saved in Settings, not for Branch B.");
+    const missing = view({ id: "accounts/1/locations/99", title: null }, A);
+    expect(missing).toContain("Your Google review link for the location saved in Settings");
+    expect(missing).toContain("This link is for the location saved in Settings, not for Branch A.");
+  });
+
+  it("no match and nothing shown: the label only", () => {
+    const html = view({ id: "accounts/1/locations/99", title: null }, null);
+    expect(html).toContain("Your Google review link for the location saved in Settings");
+    expect(html).not.toContain("not for");
+  });
+});
+
+function renderShown(shown: { id: string; title: string } | null): string {
   return renderToStaticMarkup(
     createElement(ReviewLinkPanelView, {
       state: { status: "ready", url: LINK, location: { id: "accounts/1/locations/2", title: "Branch A" } },
       workspaceId: "ws-A",
       isMember: false,
-      shownLocation,
+      shownLocation: { shown, listed: [] },
     }),
   );
 }

@@ -171,79 +171,88 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           </a>
         </p>
 
-        <ul className="mt-6 divide-y rounded-[var(--radius)] border">
-          {platforms.map((platform) => {
-            const connection = byPlatform.get(platform);
-            const working = connection && !connection.needsReconnect;
-            // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, a
-            // Facebook Page's a numeric id; neither is shown.
-            const idShown = platform !== "linkedin" && platform !== "facebook_page";
-            const name = connection?.username || (idShown ? connection?.accountIdentifier : null) || null;
-            const connected = name ? `Connected: ${name}` : "Connected";
-            const form = (label: string) => (
-              <form action={action} method="post">
-                <input type="hidden" name="platform" value={platform} />
-                <Button type="submit" size="md">
-                  {label}
-                </Button>
-              </form>
-            );
-            // R7-pages M2: LinkedIn connects whichever account this browser is
-            // signed in to, without asking, so Reconnect first shows the
-            // sign-out steps (as Settings does), then the sign-in. A plain
-            // <details>: it works without JavaScript, like the rest of the page.
-            const button =
-              connection && platform === "linkedin" ? (
-                <details className="min-w-0 max-w-sm flex-1 text-right">
-                  <summary
-                    className={cn(buttonVariants({ size: "md" }), "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}
-                  >
-                    Reconnect
-                  </summary>
-                  <div className="mt-3 rounded-[var(--radius)] border p-3 text-left text-sm text-muted-foreground">
-                    <ol className="list-decimal space-y-1.5 pl-5">
-                      <li>
-                        <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="underline">
-                          Open LinkedIn sign-out
-                        </ExternalLink>{" "}
-                        and sign out in the new tab. If that tab shows a sign-in page instead, you&apos;re already
-                        signed out: close it.
-                      </li>
-                      <li>{linkedInReconnectSignInStep(connectedAccountName(connection))}</li>
-                    </ol>
-                    <div className="mt-3 flex justify-end">{form("Continue")}</div>
-                  </div>
-                </details>
-              ) : (
-                form(connection ? "Reconnect" : "Connect")
+        {/* R33 new-customer L2: every platform the link offers lost its app keys on
+            this site. Still an active link (findActiveConnectLink): the rows come
+            back when the keys do, and a flow already under way still lands here. */}
+        {platforms.length === 0 ? (
+          <p className="mt-6 text-base">
+            Nothing can be connected through this link right now. Ask the person who sent it for a new link.
+          </p>
+        ) : (
+          <ul className="mt-6 divide-y rounded-[var(--radius)] border">
+            {platforms.map((platform) => {
+              const connection = byPlatform.get(platform);
+              const working = connection && !connection.needsReconnect;
+              // R8-client-journey L2: a LinkedIn identifier is an opaque profile id, a
+              // Facebook Page's a numeric id; neither is shown.
+              const idShown = platform !== "linkedin" && platform !== "facebook_page";
+              const name = connection?.username || (idShown ? connection?.accountIdentifier : null) || null;
+              const connected = name ? `Connected: ${name}` : "Connected";
+              const form = (label: string) => (
+                <form action={action} method="post">
+                  <input type="hidden" name="platform" value={platform} />
+                  <Button type="submit" size="md">
+                    {label}
+                  </Button>
+                </form>
               );
-            return (
-              <li key={platform} className="flex min-h-14 items-center justify-between gap-3 px-4 py-3">
-                <span className="font-medium">{PLATFORM_LABELS[platform]}</span>
-                {working && connection.reconnectSoon ? (
-                  // R6 M1: it still works but can't be renewed and ends soon;
-                  // the sign-in replaces it in place (server/connectLink/link.ts).
-                  <div className="flex flex-wrap items-center justify-end gap-3">
-                    <span className="text-right text-sm text-muted-foreground">
-                      {connection.ended
-                        ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
-                        : // R8-pages L5: just reconnected with the same end date; the warning says what to do.
-                          sameEndOn?.platform === platform
-                          ? // R11-pages L3: date and time in UTC, labelled; the owners' email gives their own zone.
-                            `${connected}. Ends ${utcDisplayDateTime(sameEndOn.expiresAt)}. LinkedIn kept this end date.`
-                          : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
-                    </span>
-                    {button}
-                  </div>
-                ) : working ? (
-                  <span className="text-right text-sm text-muted-foreground">{connected}</span>
+              // R7-pages M2: LinkedIn connects whichever account this browser is
+              // signed in to, without asking, so Reconnect first shows the
+              // sign-out steps (as Settings does), then the sign-in. A plain
+              // <details>: it works without JavaScript, like the rest of the page.
+              const button =
+                connection && platform === "linkedin" ? (
+                  <details className="min-w-0 max-w-sm flex-1 text-right">
+                    <summary
+                      className={cn(buttonVariants({ size: "md" }), "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}
+                    >
+                      Reconnect
+                    </summary>
+                    <div className="mt-3 rounded-[var(--radius)] border p-3 text-left text-sm text-muted-foreground">
+                      <ol className="list-decimal space-y-1.5 pl-5">
+                        <li>
+                          <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="underline">
+                            Open LinkedIn sign-out
+                          </ExternalLink>{" "}
+                          and sign out in the new tab. If that tab shows a sign-in page instead, you&apos;re already
+                          signed out: close it.
+                        </li>
+                        <li>{linkedInReconnectSignInStep(connectedAccountName(connection))}</li>
+                      </ol>
+                      <div className="mt-3 flex justify-end">{form("Continue")}</div>
+                    </div>
+                  </details>
                 ) : (
-                  button
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                  form(connection ? "Reconnect" : "Connect")
+                );
+              return (
+                <li key={platform} className="flex min-h-14 items-center justify-between gap-3 px-4 py-3">
+                  <span className="font-medium">{PLATFORM_LABELS[platform]}</span>
+                  {working && connection.reconnectSoon ? (
+                    // R6 M1: it still works but can't be renewed and ends soon;
+                    // the sign-in replaces it in place (server/connectLink/link.ts).
+                    <div className="flex flex-wrap items-center justify-end gap-3">
+                      <span className="text-right text-sm text-muted-foreground">
+                        {connection.ended
+                          ? `${name ? `${name}. ` : ""}It stopped working: press Reconnect.`
+                          : // R8-pages L5: just reconnected with the same end date; the warning says what to do.
+                            sameEndOn?.platform === platform
+                            ? // R11-pages L3: date and time in UTC, labelled; the owners' email gives their own zone.
+                              `${connected}. Ends ${utcDisplayDateTime(sameEndOn.expiresAt)}. LinkedIn kept this end date.`
+                            : `${connected}. It stops working soon: press Reconnect to keep it posting.`}
+                      </span>
+                      {button}
+                    </div>
+                  ) : working ? (
+                    <span className="text-right text-sm text-muted-foreground">{connected}</span>
+                  ) : (
+                    button
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </ClientPageShell>
   );

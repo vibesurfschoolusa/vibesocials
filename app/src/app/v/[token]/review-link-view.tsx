@@ -67,12 +67,16 @@ export function cardRefusalStart(
 }
 
 /**
- * Once the reload answered: it worked, so the new version is on the card; it
- * failed, so the line stays as it is and the refresh alert above the list
- * gives the reload step, once.
+ * Once the reload answered (`reloaded`: its number among the reloads that
+ * worked, or null when it failed): it worked, so the new version is on the
+ * card; it failed, so the line stays as it is and the refresh alert above the
+ * list gives the reload step, once. R33 client-journey L3: the locked line
+ * goes with the next reload that works, so a post listed again never shows it
+ * over working buttons.
  */
-export function cardLineAfterReload(line: CardLine, message: string, reloaded: boolean): CardLine {
-  return reloaded ? { text: message, clearAfter: null } : line;
+export function cardLineAfterReload(line: CardLine, message: string, reloaded: number | null): CardLine {
+  if (reloaded === null) return line;
+  return { text: message, clearAfter: keepsCard(message) ? reloaded : null };
 }
 
 /** R32 lead review: on a kept card whose post the reloaded list no longer has. */
@@ -108,6 +112,15 @@ export function keptAfterReload(kept: ReviewPostDTO[], listed: ReviewPostDTO[]):
   const ids = new Set(listed.map((post) => post.id));
   const next = kept.filter((post) => !ids.has(post.id));
   return next.length === kept.length ? kept : next;
+}
+
+/**
+ * R33 pages L6b: a gone card's line takes focus only when the reload its own
+ * press started (number `ownReload`) is the one that dropped it, never another
+ * card's later reload.
+ */
+export function goneLineTakesFocus(gone: boolean, ownReload: number | null, reloads: number): boolean {
+  return gone && ownReload !== null && ownReload === reloads;
 }
 
 /** Where Dismiss sends focus: the next card, else the page's heading (read at the press). */
@@ -215,10 +228,10 @@ export function ReviewPostCard({
   onDecided: (patch: Partial<ReviewPostDTO>) => void;
   /**
    * The post changed since the page loaded: show why above the list and reload
-   * it; true when it reloaded. `keep`: the card to keep, shown gone, if the
-   * reloaded list no longer has it.
+   * it; the reload's number when it worked, else null. `keep`: the card to
+   * keep, shown gone, if the reloaded list no longer has it.
    */
-  onStale: (message: string, keep?: ReviewPostDTO) => Promise<boolean>;
+  onStale: (message: string, keep?: ReviewPostDTO) => Promise<number | null>;
   /** How many list reloads have worked (shownCardLine). */
   reloads: number;
   /** R32 lead review: kept after the reloaded list dropped its post (cardsShown). */
@@ -232,10 +245,13 @@ export function ReviewPostCard({
   const [error, setError] = useState<CardLine | null>(null);
   const shownError = gone ? REVIEW_POST_GONE_MESSAGE : shownCardLine(error, reloads);
   const lineRef = useRef<HTMLParagraphElement>(null);
+  // The number of the reload this card's own refusal started, once it worked.
+  const [ownReload, setOwnReload] = useState<number | null>(null);
   // The card the person acted on just lost its post: the line says why, and takes focus.
+  const focusLine = goneLineTakesFocus(gone, ownReload, reloads);
   useEffect(() => {
-    if (gone) lineRef.current?.focus();
-  }, [gone]);
+    if (focusLine) lineRef.current?.focus();
+  }, [focusLine]);
   const stateRef = useRef<HTMLParagraphElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
@@ -284,9 +300,10 @@ export function ReviewPostCard({
       const start = cardRefusalStart(outcome, reloads);
       setError(start.line);
       if (start.reload) {
-        void onStale(outcome.message, keepsCard(outcome.message) ? post : undefined).then((reloaded) =>
-          setError((current) => (current === start.line ? cardLineAfterReload(start.line, outcome.message, reloaded) : current)),
-        );
+        void onStale(outcome.message, keepsCard(outcome.message) ? post : undefined).then((reloaded) => {
+          if (reloaded !== null) setOwnReload(reloaded);
+          setError((current) => (current === start.line ? cardLineAfterReload(start.line, outcome.message, reloaded) : current));
+        });
       }
     } catch (error) {
       setError({
@@ -465,9 +482,11 @@ export function ReviewLinkView({ token }: { token: string }) {
   const [reloads, setReloads] = useState(0);
   // R32 lead review: cards whose refusal reloaded the list; shown gone if it dropped them.
   const [kept, setKept] = useState<ReviewPostDTO[]>([]);
+  // Numbers each reload that worked, so a card can tell its own from another's.
+  const reloadCount = useRef(0);
 
-  /** True when the list was read again. */
-  const load = useCallback(async (): Promise<boolean> => {
+  /** The reload's number when the list was read again, else null. */
+  const load = useCallback(async (): Promise<number | null> => {
     // R13-pages L2: Try again shows Loading (no posts yet) instead of the same failure.
     setError(null);
     try {
@@ -479,18 +498,19 @@ export function ReviewLinkView({ token }: { token: string }) {
         | null;
       if (!response.ok || !data?.posts) {
         setError(data?.error ?? "");
-        return false;
+        return null;
       }
       // R32 lead's second review: a kept card whose post is listed again is let go.
       const listed = data.posts;
       setKept((current) => keptAfterReload(current, listed));
       setPosts(data.posts);
       setMore(data.more === true);
-      setReloads((count) => count + 1);
-      return true;
+      const count = ++reloadCount.current;
+      setReloads(count);
+      return count;
     } catch {
       setError("");
-      return false;
+      return null;
     }
   }, [token]);
 
@@ -510,7 +530,7 @@ export function ReviewLinkView({ token }: { token: string }) {
       // Kept before the reload, so the card is never unmounted between the two renders.
       if (keep) setKept((current) => [...current.filter((p) => p.id !== keep.id), keep]);
       return load().then((reloaded) => {
-        setNotice(staleNotice(message, reloaded));
+        setNotice(staleNotice(message, reloaded !== null));
         return reloaded;
       });
     },
