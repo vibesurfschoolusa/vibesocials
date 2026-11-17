@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Ref, type RefObject } from "react";
 import Link from "next/link";
 import { UserPlus } from "lucide-react";
 
@@ -16,6 +16,7 @@ import { workspaceLink } from "@/server/notifications/links";
 import { JOIN_FAILED_MESSAGE } from "./joinMessages";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { useRetryFocus } from "@/lib/useRetryFocus";
 
 /** GET /api/invites/[token] preview shape. 404 (invalid/expired/revoked) is handled separately. */
 interface InvitePreview {
@@ -143,10 +144,11 @@ export function joinPromise(requiresApproval: boolean): string {
 }
 
 /** R11-pages L5: the states the page can end on are the whole page, so each title is its h1. */
-export function JoinUnreachable({ onRetry }: { onRetry: () => void }) {
+export function JoinUnreachable({ onRetry, stateRef }: { onRetry: () => void; stateRef?: Ref<HTMLDivElement> }) {
   return (
     <div className="mx-auto max-w-md px-4 py-16">
       <EmptyState
+        ref={stateRef}
         icon={<UserPlus />}
         headingLevel={1}
         title="We couldn't load this invite."
@@ -219,6 +221,17 @@ export function JoinSignedOut({ token }: { token: string }) {
   );
 }
 
+/** The first h1 inside `element`, depth first. */
+function firstHeadingIn(element: Element | null): HTMLElement | null {
+  if (!element) return null;
+  for (const child of Array.from(element.children ?? [])) {
+    if (child.tagName === "H1") return child as HTMLElement;
+    const found = firstHeadingIn(child);
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
  * Client-rendered join flow. The parent server component gates sign-in and
  * reads whether the workspace asks for approval.
@@ -242,6 +255,22 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
 
   const preview = load?.kind === "ok" ? load.preview : null;
 
+  // R42 pages-a L2: Try again swaps the whole page, so focus fell to the page
+  // body. It goes to the loading line while the invite is read, then to the
+  // card's h1 or the new failure's h1.
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const joinHeadingRef = useRef<HTMLHeadingElement>(null);
+  const failureRef = useRef<HTMLDivElement>(null);
+  const failureHeadingRef = useMemo<RefObject<HTMLElement | null>>(
+    () => ({
+      get current() {
+        return firstHeadingIn(failureRef.current);
+      },
+    }),
+    [],
+  );
+  const retried = useRetryFocus(load === null, statusRef, [joinHeadingRef, failureHeadingRef]);
+
   async function handleJoin() {
     setJoining(true);
     const outcome = await acceptInvite(fetch, token);
@@ -260,7 +289,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
   // empties it and fills it again), so it sits outside the branches below.
   return (
     <>
-      <p role="status" className="sr-only">
+      <p ref={statusRef} role="status" className="sr-only">
         {load ? "" : "Loading the invite…"}
       </p>
       {joinBody()}
@@ -284,7 +313,9 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
     if (load.kind === "unreachable") {
       return (
         <JoinUnreachable
+          stateRef={failureRef}
           onRetry={() => {
+            retried();
             setLoad(null);
             setAttempt((value) => value + 1);
           }}
@@ -303,7 +334,9 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
     return (
       <div className="mx-auto max-w-md px-4 py-16">
         <Card className="flex flex-col items-center gap-3 p-6 text-center">
-          <h1 className="text-lg font-semibold text-foreground">Join {preview.workspaceName}?</h1>
+          <h1 ref={joinHeadingRef} className="text-lg font-semibold text-foreground">
+            Join {preview.workspaceName}?
+          </h1>
           <p className="text-sm text-muted-foreground">{joinPromise(requiresApproval)}</p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Button onClick={handleJoin} loading={joining}>
