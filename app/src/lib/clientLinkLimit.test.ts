@@ -39,6 +39,21 @@ describe("limitReachedSentence", () => {
     expect(limitReachedSentence(300, outlasts)).toBe(`${CLIENT_LINK_LIMIT_REASON} Reload this page in 5 minutes.`);
   });
 
+  // R41 client-journey L3: the sentence rounds the wait up, so the rounded wait is compared.
+  it("compares the wait as printed, rounded up, plus a minute to reload and press", () => {
+    const outlasts = { lifeSeconds: 830, then: "press Connect beside Facebook Page again." };
+    expect(limitReachedSentence(790, outlasts)).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 14 minutes, then press Connect beside Facebook Page again.`,
+    );
+    // 13 minutes printed, plus the minute: 840 s, past the 830 s left.
+    expect(limitReachedSentence(721, outlasts)).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 13 minutes, then press Connect beside Facebook Page again.`,
+    );
+    // 12 minutes printed, plus the minute: 780 s, inside the 830 s left.
+    expect(limitReachedSentence(720, outlasts)).toBe(`${CLIENT_LINK_LIMIT_REASON} Reload this page in 12 minutes.`);
+    expect(limitReachedSentence(600, outlasts)).toBe(`${CLIENT_LINK_LIMIT_REASON} Reload this page in 10 minutes.`);
+  });
+
   it("the /c choice's life on the page is the server's", () => {
     expect(CONNECT_LINK_COOKIE_MAX_AGE_SECONDS * 1000).toBe(PENDING_CONNECTION_TTL_MS);
   });

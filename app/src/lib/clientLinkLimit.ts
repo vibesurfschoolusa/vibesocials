@@ -11,21 +11,32 @@
 /** The routes' reason; their own 429 sentences start with it (tested). */
 export const CLIENT_LINK_LIMIT_REASON = "Too many requests from this network in the last hour.";
 
+function wholeMinutes(seconds: number): number {
+  return Math.max(1, Math.ceil(seconds / 60));
+}
+
 function minutesText(seconds: number): string {
-  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  const minutes = wholeMinutes(seconds);
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }
 
 /**
+ * R41 client-journey L3: the time a reload needs after the printed wait, so
+ * the client can still reload and press before what is waited for ends.
+ */
+const RELOAD_MARGIN_SECONDS = 60;
+
+/**
  * The one instruction under a 429. `outlasts`: what the page waits for lives
- * `lifeSeconds` at most; a wait at least that long says to wait, then `then`.
+ * `lifeSeconds` at most. The wait is compared as printed (whole minutes,
+ * rounded up) plus the margin; one at least that long says to wait, then `then`.
  */
 export function limitReachedSentence(
   waitSeconds: number | undefined,
   outlasts?: { lifeSeconds: number; then: string },
 ): string {
   if (!waitSeconds || waitSeconds <= 0) return `${CLIENT_LINK_LIMIT_REASON} Reload this page later.`;
-  if (outlasts && waitSeconds >= outlasts.lifeSeconds) {
+  if (outlasts && wholeMinutes(waitSeconds) * 60 + RELOAD_MARGIN_SECONDS >= outlasts.lifeSeconds) {
     return `${CLIENT_LINK_LIMIT_REASON} Wait ${minutesText(waitSeconds)}, then ${outlasts.then}`;
   }
   return `${CLIENT_LINK_LIMIT_REASON} Reload this page in ${minutesText(waitSeconds)}.`;
