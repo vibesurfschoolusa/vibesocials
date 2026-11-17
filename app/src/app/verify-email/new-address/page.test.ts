@@ -49,27 +49,14 @@ describe("confirm new address page", () => {
   });
 
   // R29 OO1 (new-customer L3): Try again showed nothing while it ran, so a
-  // press while still offline looked dead and a second press sent a second confirm.
-  it("Try again shows it is working while the retry runs", () => {
-    const view = {
-      changed: false,
-      signOutHere: false,
-      offerRetry: true,
-      title: "T",
-      message: "M",
-      next: { href: "/settings", label: "Go to Settings" },
-    };
-    const idle = renderToStaticMarkup(createElement(NewAddressResult, { view, busy: false, onRetry: () => {} }));
-    const running = renderToStaticMarkup(createElement(NewAddressResult, { view, busy: true, onRetry: () => {} }));
-    expect(idle).not.toContain('aria-busy="true"');
-    expect(running).toMatch(/<button[^>]*aria-busy="true"[^>]*>[\s\S]*Try again/);
-  });
-
-  it("the client passes its busy flag to the answer card", async () => {
+  // press while still offline looked dead and a second press sent a second
+  // confirm. R44 pages-a L1: the loading card takes the answer's place while
+  // it runs, so there is no second Try again to press (the live test checks it).
+  it("while Try again runs, the loading card replaces the answer", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const source = readFileSync(join(__dirname, "new-address-client.tsx"), "utf8");
-    expect(source).toContain("<NewAddressResult view={view} busy={busy} onRetry={() => void confirm()} headingRef={resultHeadingRef} />");
-    expect(source).toMatch(/<Button size="sm" loading=\{busy\} onClick=\{onRetry\}>/);
+    expect(source).toContain("{view && busy ? (");
+    expect(source).toContain("<NewAddressResult view={view} onRetry={() => void confirm()} headingRef={resultHeadingRef} />");
   });
 });

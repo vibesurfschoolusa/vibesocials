@@ -24,6 +24,7 @@ import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 import { installKeeperOnFakePage } from "@/lib/focusKeeperDom.testkit";
 
 import { NewAddressClient } from "./new-address/new-address-client";
+import { UndoClient } from "./undo/undo-client";
 import { VerifyEmailClient } from "./verify-email-client";
 
 let root: Root;
@@ -190,4 +191,47 @@ describe("New address: focus after Use this email address and Try again", () => 
     expect(active().nodeName).toBe("H1");
     expect(active().textContent).toBe("This link was already used");
   });
+});
+
+// R44 pages-a L1: a Try again that got the same answer back changed nothing on
+// the page, so nothing was read out and focus stayed on Try again. The loading
+// card now takes the answer's place while it runs, so the answer is new each time.
+describe("a Try again that gets the same 429 back is announced", () => {
+  const tooMany = () =>
+    Promise.resolve(
+      Response.json(
+        { error: "Too many tries. Wait 15 minutes, then try again.", retryAfterSeconds: 900 },
+        { status: 429, headers: { "Retry-After": "900" } },
+      ),
+    );
+
+  for (const page of [
+    { name: "New address", client: NewAddressClient, button: "Use this email address", loading: "Confirming your new email…", title: "Your email wasn't changed" },
+    { name: "Undo", client: UndoClient, button: "Undo the change", loading: "Undoing the email change…", title: "The change wasn't undone" },
+  ]) {
+    it(`${page.name}: the loading line, then focus on the answer's heading again`, async () => {
+      const second = held();
+      fetchMock.mockReturnValueOnce(tooMany()).mockReturnValueOnce(second.promise);
+      await act(async () => {
+        root.render(createElement(page.client));
+      });
+      await settle();
+      await press(page.button);
+      const firstHeading = active();
+      expect(firstHeading.nodeName).toBe("H1");
+      expect(firstHeading.textContent).toBe(page.title);
+
+      await press("Try again");
+      const status = find(container, (n) => n.attributes.role === "status");
+      expect(status?.textContent).toBe(page.loading);
+      expect(active()).toBe(status);
+      expect(find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Try again")).toBeNull();
+
+      await second.give(await tooMany());
+      expect(active().nodeName).toBe("H1");
+      expect(active().textContent).toBe(page.title);
+      expect(active()).not.toBe(firstHeading);
+      expect(status?.textContent).toBe("");
+    });
+  }
 });
