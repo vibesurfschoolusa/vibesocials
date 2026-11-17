@@ -76,9 +76,14 @@ export function DashboardHome({ availablePlatforms, workspaceId, setup, notice }
       {signedIn ? (
         <Dashboard availablePlatforms={availablePlatforms} workspaceId={workspaceId} setup={setup} notice={notice} />
       ) : (
-        <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background">
           <h1 className="sr-only">Dashboard</h1>
           <Spinner size="lg" className="text-muted-foreground" />
+          {/* R42 review: under reduced motion the spinner is still, so the words
+              are on screen too; screen readers hear the status line above. */}
+          <p aria-hidden className="text-sm text-muted-foreground">
+            Loading your dashboard…
+          </p>
         </div>
       )}
     </>

@@ -49,4 +49,14 @@ describe("dashboard while the session loads", () => {
     expect(html.match(/role="status"/g)).toHaveLength(1);
     expect(html).toMatch(/<p role="status" class="sr-only">Loading your dashboard…<\/p>/);
   });
+
+  // R42 review: under reduced motion the spinner is a still icon, so the
+  // loading words are on screen beside it (hidden from screen readers, which
+  // hear the status line once).
+  it("shows the loading words beside the spinner, not only to screen readers", () => {
+    session.status = "loading";
+    const html = renderToStaticMarkup(createElement(DashboardHome, { availablePlatforms: [], workspaceId: "ws-1", setup: null }));
+    expect(html).toMatch(/<p aria-hidden="true" class="[^"]*text-muted-foreground[^"]*">Loading your dashboard…<\/p>/);
+    expect(html.match(/Loading your dashboard…/g)).toHaveLength(2);
+  });
 });
