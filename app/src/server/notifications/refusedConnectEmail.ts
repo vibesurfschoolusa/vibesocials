@@ -89,15 +89,16 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
   const found = connection;
 
   const now = new Date();
+  const day = now.toISOString().slice(0, 10);
   await sendOnceADay(
-    `refused-connect-email:${found.id}:${now.toISOString().slice(0, 10)}`,
+    `refused-connect-email:${found.id}:${day}`,
     nextUtcMidnight(now),
     async () => {
       const [workspace, owners] = await Promise.all([
         prisma.workspace.findUnique({ where: { id: params.workspaceId }, select: { name: true } }),
         prisma.workspaceMember.findMany({
           where: { workspaceId: params.workspaceId, role: "owner" },
-          select: { user: { select: { email: true } } },
+          select: { user: { select: { id: true, email: true } } },
         }),
       ]);
       if (!workspace) return false;
@@ -109,9 +110,19 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
         connectedName: connectedAccountName(toConnectionSummary(found)),
         appBaseUrl: process.env.NEXTAUTH_URL || null,
       });
+      // R38 lead review: a lost reply throws (so the day is let go) and the
+      // next try that day reuses the key, so Resend sends no second copy.
       let sent = false;
       for (const owner of owners) {
-        if (await sendEmail({ to: owner.user.email, ...email }, { label: "refused-connect" })) sent = true;
+        const went = await sendEmail(
+          { to: owner.user.email, ...email },
+          {
+            label: "refused-connect",
+            idempotencyKey: `refused-connect/${found.id}/${day}/${owner.user.id}`,
+            throwOnRetryable: true,
+          },
+        );
+        if (went) sent = true;
       }
       return sent;
     },

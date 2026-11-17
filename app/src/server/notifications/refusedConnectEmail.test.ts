@@ -102,8 +102,8 @@ describe("notifyOwnersOfRefusedConnect", () => {
     });
     h.workspaceFindUnique.mockResolvedValue({ name: "Surf Co" });
     h.memberFindMany.mockResolvedValue([
-      { user: { email: "owner-a@example.com" } },
-      { user: { email: "owner-b@example.com" } },
+      { user: { id: "owner-a", email: "owner-a@example.com" } },
+      { user: { id: "owner-b", email: "owner-b@example.com" } },
     ]);
     h.consumeFixedWindow.mockResolvedValue({ allowed: true });
     h.sendEmail.mockResolvedValue(true);
@@ -184,6 +184,33 @@ describe("notifyOwnersOfRefusedConnect", () => {
   it("one owner's send went out: the claim is kept", async () => {
     h.sendEmail.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    expect(h.releaseKey).not.toHaveBeenCalled();
+  });
+
+  // R38 lead review: a reply lost after Resend took the email can't become a second copy that day.
+  it("sends with a per-owner, per-day idempotency key and asks for retryable failures to throw", async () => {
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    expect(h.sendEmail.mock.calls.map(([, options]) => options)).toEqual([
+      { label: "refused-connect", idempotencyKey: "refused-connect/conn-1/2026-11-14/owner-a", throwOnRetryable: true },
+      { label: "refused-connect", idempotencyKey: "refused-connect/conn-1/2026-11-14/owner-b", throwOnRetryable: true },
+    ]);
+    expect(h.releaseKey).not.toHaveBeenCalled();
+  });
+
+  it("a lost reply lets the day go, and the next try the same day reuses the same keys", async () => {
+    h.sendEmail.mockRejectedValueOnce(new Error("Resend request failed before a response (network error)"));
+    await expect(notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" })).resolves.toBeUndefined();
+    expect(h.releaseKey).toHaveBeenCalledWith({ where: { key: "refused-connect-email:conn-1:2026-11-14" } });
+
+    h.releaseKey.mockClear();
+    vi.setSystemTime(new Date("2026-11-14T23:10:00.000Z"));
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    const keys = h.sendEmail.mock.calls.map(([, options]) => options.idempotencyKey);
+    expect(keys).toEqual([
+      "refused-connect/conn-1/2026-11-14/owner-a",
+      "refused-connect/conn-1/2026-11-14/owner-a",
+      "refused-connect/conn-1/2026-11-14/owner-b",
+    ]);
     expect(h.releaseKey).not.toHaveBeenCalled();
   });
 
