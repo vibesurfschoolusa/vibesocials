@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WorkspaceRole } from "@prisma/client";
 
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useAnnounce } from "@/components/ui/announcer";
 import { useToast } from "@/components/ui/toast";
 import {
   BRAND_VOICE_EXAMPLE_MAX_LENGTH,
@@ -98,9 +99,23 @@ const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
  * mid-tag without a word. The count says when the text is over; Save then
  * shows the route's own sentence. Counted as the route counts: trimmed.
  */
-function FooterFieldCount({ id, text, max }: { id: string; text: string; max: number }) {
+function FooterFieldCount({ id, label, text, max }: { id: string; label: string; text: string; max: number }) {
   const length = text.trim().length;
   const over = length - max;
+  // Lead review of R43: crossing the limit is said once each way through the
+  // page's announcer; the count itself is read with the field, never per key.
+  const announce = useAnnounce();
+  const isOver = over > 0;
+  const wasOver = useRef(isOver);
+  useEffect(() => {
+    if (wasOver.current === isOver) return;
+    wasOver.current = isOver;
+    announce(
+      isOver
+        ? `${label}: ${over.toLocaleString("en-US")} characters over the limit.`
+        : `${label}: back under the limit.`,
+    );
+  }, [isOver, over, label, announce]);
   return (
     <p id={id} className="text-xs text-muted-foreground">
       {length.toLocaleString("en-US")} of {max.toLocaleString("en-US")} characters
@@ -319,7 +334,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
                 onChange={(e) => setCompanyWebsite(e.target.value)}
                 aria-describedby="companyWebsiteCount"
               />
-              <FooterFieldCount id="companyWebsiteCount" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} />
+              <FooterFieldCount id="companyWebsiteCount" label="Company website" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} />
               <p className="text-sm text-muted-foreground">
                 Appended to every caption as: &quot;For more info visit [your website]&quot;.
               </p>
@@ -341,7 +356,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
                 rows={3}
                 aria-describedby="defaultHashtagsCount"
               />
-              <FooterFieldCount id="defaultHashtagsCount" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} />
+              <FooterFieldCount id="defaultHashtagsCount" label="Default hashtags" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} />
               <p className="text-sm text-muted-foreground">
                 Added after your website, separated by a blank line.
               </p>

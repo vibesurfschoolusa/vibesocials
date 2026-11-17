@@ -12,6 +12,11 @@ const toastError = vi.fn();
 const toastSuccess = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: toastSuccess, error: toastError }) }));
+const announce = vi.fn();
+vi.mock("@/components/ui/announcer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/announcer")>()),
+  useAnnounce: () => announce,
+}));
 // The fake DOM has no <select> options list; the Google button field is not under test here.
 vi.mock("@/components/ui/select", () => ({ Select: () => null }));
 
@@ -101,6 +106,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   toastError.mockReset();
   toastSuccess.mockReset();
+  announce.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   root = createRoot(container as unknown as HTMLElement);
 });
@@ -158,5 +164,34 @@ describe("Settings footer fields never cut a paste short", () => {
     expect(sentBody().defaultHashtags).toBe("#surf #miami");
     expect(toastError).not.toHaveBeenCalled();
     expect(toastSuccess).toHaveBeenCalledWith("Settings saved successfully!");
+  });
+});
+
+// Lead review of R43: crossing the limit is said once each way, never per keystroke.
+describe("Settings footer fields announce crossing the limit", () => {
+  it("over once, not again while still over, then back under once", async () => {
+    await mount();
+    await type("defaultHashtags", "#surf");
+    expect(announce).not.toHaveBeenCalled();
+
+    await type("defaultHashtags", LONG_HASHTAGS);
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenLastCalledWith("Default hashtags: 76 characters over the limit.");
+
+    await type("defaultHashtags", `${LONG_HASHTAGS} #more`);
+    await type("defaultHashtags", LONG_HASHTAGS.slice(0, 1050));
+    expect(announce).toHaveBeenCalledTimes(1);
+
+    await type("defaultHashtags", LONG_HASHTAGS.slice(0, 1000));
+    expect(announce).toHaveBeenCalledTimes(2);
+    expect(announce).toHaveBeenLastCalledWith("Default hashtags: back under the limit.");
+    expect(byId("defaultHashtags").attributes["aria-describedby"]).toBe("defaultHashtagsCount");
+  });
+
+  it("Company website says its own name", async () => {
+    await mount();
+    await type("companyWebsite", "a".repeat(2050));
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenLastCalledWith("Company website: 2 characters over the limit.");
   });
 });

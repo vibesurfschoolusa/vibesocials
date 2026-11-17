@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Bookmark,
   Eye,
@@ -104,8 +106,9 @@ function formatReadDay(iso: string): string {
 /**
  * R43 pages-b L3: the sync reads only posts from the last 60 days and keeps
  * old numbers when a read fails, so "once a day" is said only while every
- * shown platform was read within two days. Otherwise each platform's own
- * last read, so no date is claimed for a platform it doesn't belong to.
+ * shown platform was read within two days. Otherwise the last read's day:
+ * one line when every platform shares it, else each platform's own, so no
+ * date is claimed for a platform it doesn't belong to.
  */
 export function freshnessLine(shown: DailyResult[], now: number): string {
   const stale = shown.some((result) => {
@@ -113,10 +116,10 @@ export function freshnessLine(shown: DailyResult[], now: number): string {
     return Number.isNaN(read) || now - read > FRESH_FOR_MS;
   });
   if (!stale) return "Updated once a day.";
-  if (shown.length === 1) return `Last updated ${formatReadDay(shown[0].metric.fetchedAt)}.`;
-  return shown
-    .map((result) => `${platformLabel(result.platform)} last updated ${formatReadDay(result.metric.fetchedAt)}.`)
-    .join(" ");
+  const days = shown.map((result) => formatReadDay(result.metric.fetchedAt));
+  // One line when every platform was last read on the same local day.
+  if (days.every((day) => day === days[0])) return `Last updated ${days[0]}.`;
+  return shown.map((result, i) => `${platformLabel(result.platform)} last updated ${days[i]}.`).join(" ");
 }
 
 /**

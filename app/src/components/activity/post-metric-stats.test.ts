@@ -201,6 +201,25 @@ describe("DailyMetricStats says how fresh the numbers are", () => {
     expect(shown.endsWith(`Last updated ${day(fetchedAt)}.`)).toBe(true);
   });
 
+  it("three platforms read on the same old day: one line with that day", () => {
+    const shown = shownOn("2026-11-17T06:00:00.000Z", [
+      result({ platform: "instagram", metric: metric({ likes: 3, fetchedAt: "2026-11-01T06:00:00.000Z" }) }),
+      result({ platform: "facebook_page", externalPostId: "9_1", metric: metric({ likes: 4, fetchedAt: "2026-11-01T07:00:00.000Z" }) }),
+      result({ platform: "pinterest", metric: metric({ saves: 2, fetchedAt: "2026-11-01T08:00:00.000Z" }) }),
+    ]);
+    expect(shown.endsWith(`Last updated ${day("2026-11-01T06:00:00.000Z")}.`)).toBe(true);
+    expect(shown.match(/last updated/gi)).toHaveLength(1);
+  });
+
+  it("several platforms all fresh: Updated once a day.", () => {
+    const shown = shownOn("2026-11-17T09:00:00.000Z", [
+      result({ platform: "instagram", metric: metric({ likes: 3, fetchedAt: "2026-11-17T06:00:00.000Z" }) }),
+      result({ platform: "pinterest", metric: metric({ saves: 2, fetchedAt: "2026-11-16T06:00:00.000Z" }) }),
+    ]);
+    expect(shown.endsWith("Updated once a day.")).toBe(true);
+    expect(shown).not.toMatch(/last updated/i);
+  });
+
   it("platforms read on different days: each platform's own date, so every date is true", () => {
     const fresh = "2026-11-16T06:00:00.000Z";
     const old = "2026-11-01T06:00:00.000Z";
@@ -210,6 +229,15 @@ describe("DailyMetricStats says how fresh the numbers are", () => {
     ]);
     expect(shown).toContain(`Instagram last updated ${day(fresh)}.`);
     expect(shown).toContain(`Pinterest last updated ${day(old)}.`);
+    expect(shown.match(/last updated/gi)).toHaveLength(2);
     expect(shown).not.toContain("once a day");
+  });
+});
+
+describe("post-metric-stats is a client module", () => {
+  it("starts with \"use client\" (it holds state)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./post-metric-stats.tsx", import.meta.url), "utf8");
+    expect(source.startsWith('"use client";')).toBe(true);
   });
 });
