@@ -9,6 +9,8 @@ import type { UserSettings } from "@/lib/userSettings";
 
 import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
+import { COMPANY_WEBSITE_MAX_LENGTH, DEFAULT_HASHTAGS_MAX_LENGTH } from "@/app/api/settings/route";
+
 import { readRecentCaptions, SettingsForm } from "./settings-form";
 
 const SETTINGS: UserSettings = {
@@ -376,5 +378,14 @@ describe("readRecentCaptions", () => {
       ok: false,
       text: "Could not load your recent posts. Try again.",
     });
+  });
+});
+
+// R42 pages-a L5: the two footer fields stop at the route's limits, so its length refusal never comes.
+describe("SettingsForm — footer field limits", () => {
+  it("Company website and Default hashtags stop at the route's limits", () => {
+    const html = render(SETTINGS);
+    expect(html).toMatch(new RegExp(`<input[^>]*id="companyWebsite"[^>]*maxLength="${COMPANY_WEBSITE_MAX_LENGTH}"|<input[^>]*maxLength="${COMPANY_WEBSITE_MAX_LENGTH}"[^>]*id="companyWebsite"`, "i"));
+    expect(html).toMatch(new RegExp(`<textarea[^>]*id="defaultHashtags"[^>]*maxLength="${DEFAULT_HASHTAGS_MAX_LENGTH}"|<textarea[^>]*maxLength="${DEFAULT_HASHTAGS_MAX_LENGTH}"[^>]*id="defaultHashtags"`, "i"));
   });
 });

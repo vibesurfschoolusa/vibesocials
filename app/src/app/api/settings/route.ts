@@ -98,7 +98,7 @@ function hasKey(record: Record<string, unknown>, key: string): boolean {
  */
 function validateOptionalString(
   value: unknown,
-  fieldName: string,
+  label: string,
   maxLength: number,
 ): { ok: true; value: string | null } | { ok: false; error: string } {
   if (value === null) {
@@ -106,7 +106,7 @@ function validateOptionalString(
   }
 
   if (typeof value !== "string") {
-    return { ok: false, error: `${fieldName} must be a string` };
+    return { ok: false, error: unreadableFieldText(label) };
   }
 
   const trimmed = value.trim();
@@ -114,12 +114,24 @@ function validateOptionalString(
   if (trimmed.length > maxLength) {
     return {
       ok: false,
-      error: `${fieldName} must be ${maxLength} characters or fewer`,
+      error: `${label} can be up to ${maxLength.toLocaleString("en-US")} characters.`,
     };
   }
 
   return { ok: true, value: trimmed.length > 0 ? trimmed : null };
 }
+
+/**
+ * R42 pages-a L5: a refusal names the field as Settings shows it, never its
+ * code name. Only a page other than Settings' form (or an old copy of it) can
+ * send a wrong type, so reloading is the step that works.
+ */
+function unreadableFieldText(label: string): string {
+  return `Couldn't read ${label}. Reload the page and save again.`;
+}
+
+/** A checkbox's refusal: its label as Settings shows it, quoted. */
+const checkboxText = (label: string) => unreadableFieldText(`"${label}"`);
 
 /**
  * Validate a present `notifyOnPostComplete` value. Only called when the key
@@ -131,14 +143,14 @@ function validateOptionalString(
  */
 function validateBoolean(
   value: unknown,
-  fieldName: string,
+  label: string,
 ): { ok: true; value: boolean } | { ok: false; error: string } {
   if (value === null) {
     return { ok: true, value: NOTIFY_ON_POST_COMPLETE_DEFAULT };
   }
 
   if (typeof value !== "boolean") {
-    return { ok: false, error: `${fieldName} must be a boolean` };
+    return { ok: false, error: checkboxText(label) };
   }
 
   return { ok: true, value };
@@ -156,7 +168,7 @@ function validateBoolean(
  */
 export function parseSettingsInput(body: unknown): SettingsValidationResult {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { ok: false, error: "Request body must be a JSON object" };
+    return { ok: false, error: "Couldn't read your settings. Reload the page and save again." };
   }
 
   const record = body as Record<string, unknown>;
@@ -165,7 +177,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
   if (hasKey(record, "companyWebsite")) {
     const result = validateOptionalString(
       record.companyWebsite,
-      "companyWebsite",
+      "Company website",
       COMPANY_WEBSITE_MAX_LENGTH,
     );
     if (!result.ok) {
@@ -177,7 +189,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
   if (hasKey(record, "defaultHashtags")) {
     const result = validateOptionalString(
       record.defaultHashtags,
-      "defaultHashtags",
+      "Default hashtags",
       DEFAULT_HASHTAGS_MAX_LENGTH,
     );
     if (!result.ok) {
@@ -187,7 +199,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
   }
 
   if (hasKey(record, "notifyOnPostComplete")) {
-    const result = validateBoolean(record.notifyOnPostComplete, "notifyOnPostComplete");
+    const result = validateBoolean(record.notifyOnPostComplete, "Email me when a post finishes");
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
@@ -196,7 +208,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
 
   if (hasKey(record, "notifyDailyDigest")) {
     // Null normalizes to on, the schema default, like notifyOnPostComplete.
-    const result = validateBoolean(record.notifyDailyDigest, "notifyDailyDigest");
+    const result = validateBoolean(record.notifyDailyDigest, "Email me a daily summary");
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
@@ -205,7 +217,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
 
   if (hasKey(record, "notifyNewReviews")) {
     // Null normalizes to on, the schema default, like notifyOnPostComplete.
-    const result = validateBoolean(record.notifyNewReviews, "notifyNewReviews");
+    const result = validateBoolean(record.notifyNewReviews, "Email me when a new Google review arrives");
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
@@ -214,7 +226,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
 
   if (hasKey(record, "notifyMonthlyReport")) {
     // Null normalizes to on, the schema default, like notifyOnPostComplete.
-    const result = validateBoolean(record.notifyMonthlyReport, "notifyMonthlyReport");
+    const result = validateBoolean(record.notifyMonthlyReport, "Email me the monthly report");
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
@@ -225,7 +237,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     // An explicit `null` normalizes to off — matching the schema default, same
     // convention validateBoolean uses for notifyOnPostComplete.
     if (record.requireApproval !== null && typeof record.requireApproval !== "boolean") {
-      return { ok: false, error: "requireApproval must be a boolean" };
+      return { ok: false, error: checkboxText("Require my approval for members' posts") };
     }
     data.requireApproval = record.requireApproval === true;
   }
@@ -266,7 +278,7 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
   if (hasKey(record, "trackWebsiteLinks")) {
     // Null normalizes to off, the schema default, like requireApproval.
     if (record.trackWebsiteLinks !== null && typeof record.trackWebsiteLinks !== "boolean") {
-      return { ok: false, error: "trackWebsiteLinks must be a boolean" };
+      return { ok: false, error: checkboxText("Add tracking tags to my website link") };
     }
     data.trackWebsiteLinks = record.trackWebsiteLinks === true;
   }
@@ -348,6 +360,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: OWNER_ONLY_FOOTER_ERROR }, { status: 403 });
   }
 
+  // R42 pages-a L5: the two writes are separate, so a failure says which part was kept.
+  let workspaceSaved = false;
   try {
     if (updatesWorkspace) {
       const workspaceData: {
@@ -395,6 +409,7 @@ export async function POST(request: Request) {
         where: { id: context.workspace.id },
         data: workspaceData,
       });
+      workspaceSaved = true;
     }
 
     // The email preferences are the caller's own, open to any member.
@@ -443,9 +458,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, ...stored }, { status: 200 });
   } catch (error) {
     logger.error("[POST /api/settings] Error", { error, userId: context.user.id });
-    return NextResponse.json(
-      { error: "Failed to update settings" },
-      { status: 500 }
-    );
+    const sentence = workspaceSaved
+      ? "Your workspace settings were saved, but your email choices weren't. Save again in a moment."
+      : "Couldn't save your settings. Nothing changed. Try again in a moment.";
+    return NextResponse.json({ error: sentence }, { status: 500 });
   }
 }

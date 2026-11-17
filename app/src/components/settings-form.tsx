@@ -290,6 +290,8 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
               <Input
                 id="companyWebsite"
                 placeholder="www.example.com"
+                // R42 pages-a L5: the route's COMPANY_WEBSITE_MAX_LENGTH (settings-form.test.ts ties them).
+                maxLength={2048}
                 value={companyWebsite}
                 onChange={(e) => setCompanyWebsite(e.target.value)}
               />
@@ -309,6 +311,8 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
               <Textarea
                 id="defaultHashtags"
                 placeholder="#YourBrand #YourIndustry #YourLocation"
+                // The route's DEFAULT_HASHTAGS_MAX_LENGTH (settings-form.test.ts ties them).
+                maxLength={1024}
                 value={defaultHashtags}
                 onChange={(e) => setDefaultHashtags(e.target.value)}
                 rows={3}

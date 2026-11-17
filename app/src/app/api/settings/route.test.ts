@@ -145,7 +145,7 @@ describe("parseSettingsInput", () => {
   });
 
   it("rejects a body that is not a JSON object", () => {
-    const expected = { ok: false, error: "Request body must be a JSON object" };
+    const expected = { ok: false, error: "Couldn't read your settings. Reload the page and save again." };
     expect(parseSettingsInput("hello")).toEqual(expected);
     expect(parseSettingsInput(42)).toEqual(expected);
     expect(parseSettingsInput(true)).toEqual(expected);
@@ -156,21 +156,21 @@ describe("parseSettingsInput", () => {
   it("rejects a non-string companyWebsite", () => {
     expect(parseSettingsInput({ companyWebsite: 12345 })).toEqual({
       ok: false,
-      error: "companyWebsite must be a string",
+      error: "Couldn't read Company website. Reload the page and save again.",
     });
   });
 
   it("rejects a non-string defaultHashtags", () => {
     expect(parseSettingsInput({ defaultHashtags: { nested: true } })).toEqual({
       ok: false,
-      error: "defaultHashtags must be a string",
+      error: "Couldn't read Default hashtags. Reload the page and save again.",
     });
   });
 
   it("rejects an array value for a field", () => {
     expect(parseSettingsInput({ companyWebsite: ["example.com"] })).toEqual({
       ok: false,
-      error: "companyWebsite must be a string",
+      error: "Couldn't read Company website. Reload the page and save again.",
     });
   });
 
@@ -179,7 +179,7 @@ describe("parseSettingsInput", () => {
       parseSettingsInput({ companyWebsite: "a".repeat(COMPANY_WEBSITE_MAX_LENGTH + 1) }),
     ).toEqual({
       ok: false,
-      error: `companyWebsite must be ${COMPANY_WEBSITE_MAX_LENGTH} characters or fewer`,
+      error: "Company website can be up to 2,048 characters.",
     });
   });
 
@@ -196,7 +196,7 @@ describe("parseSettingsInput", () => {
       parseSettingsInput({ defaultHashtags: "#".repeat(DEFAULT_HASHTAGS_MAX_LENGTH + 1) }),
     ).toEqual({
       ok: false,
-      error: `defaultHashtags must be ${DEFAULT_HASHTAGS_MAX_LENGTH} characters or fewer`,
+      error: "Default hashtags can be up to 1,024 characters.",
     });
   });
 
@@ -241,11 +241,11 @@ describe("parseSettingsInput", () => {
     it("rejects a non-boolean value", () => {
       expect(parseSettingsInput({ notifyOnPostComplete: "yes" })).toEqual({
         ok: false,
-        error: "notifyOnPostComplete must be a boolean",
+        error: "Couldn't read \"Email me when a post finishes\". Reload the page and save again.",
       });
       expect(parseSettingsInput({ notifyOnPostComplete: 1 })).toEqual({
         ok: false,
-        error: "notifyOnPostComplete must be a boolean",
+        error: "Couldn't read \"Email me when a post finishes\". Reload the page and save again.",
       });
     });
   });
@@ -266,7 +266,7 @@ describe("requireApproval (approval workflow)", () => {
   it("rejects a non-boolean", () => {
     expect(parseSettingsInput({ requireApproval: "yes" })).toEqual({
       ok: false,
-      error: "requireApproval must be a boolean",
+      error: "Couldn't read \"Require my approval for members' posts\". Reload the page and save again.",
     });
   });
 
@@ -383,7 +383,7 @@ describe("notifyDailyDigest (daily problems email)", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "notifyDailyDigest must be a boolean",
+      error: "Couldn't read \"Email me a daily summary\". Reload the page and save again.",
     });
     expect(userUpdateMock).not.toHaveBeenCalled();
   });
@@ -451,7 +451,7 @@ describe("notifyNewReviews (new Google review email)", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "notifyNewReviews must be a boolean",
+      error: "Couldn't read \"Email me when a new Google review arrives\". Reload the page and save again.",
     });
     expect(userUpdateMock).not.toHaveBeenCalled();
   });
@@ -503,7 +503,7 @@ describe("notifyMonthlyReport (monthly report email)", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "notifyMonthlyReport must be a boolean",
+      error: "Couldn't read \"Email me the monthly report\". Reload the page and save again.",
     });
     expect(userUpdateMock).not.toHaveBeenCalled();
   });
@@ -586,7 +586,7 @@ describe("POST /api/settings", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "companyWebsite must be a string",
+      error: "Couldn't read Company website. Reload the page and save again.",
     });
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
     expect(userUpdateMock).not.toHaveBeenCalled();
@@ -610,7 +610,7 @@ describe("POST /api/settings", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "notifyOnPostComplete must be a boolean",
+      error: "Couldn't read \"Email me when a post finishes\". Reload the page and save again.",
     });
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
     expect(userUpdateMock).not.toHaveBeenCalled();
@@ -733,7 +733,10 @@ describe("POST /api/settings", () => {
       const response = await POST(jsonRequest({ companyWebsite: "example.com" }));
 
       expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({ error: "Failed to update settings" });
+      // R42 pages-a L5: the one update failed, so nothing changed.
+      await expect(response.json()).resolves.toEqual({
+        error: "Couldn't save your settings. Nothing changed. Try again in a moment.",
+      });
 
       consoleSpy.mockRestore();
     });
@@ -745,7 +748,25 @@ describe("POST /api/settings", () => {
       const response = await POST(jsonRequest({ notifyOnPostComplete: false }));
 
       expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({ error: "Failed to update settings" });
+      await expect(response.json()).resolves.toEqual({
+        error: "Couldn't save your settings. Nothing changed. Try again in a moment.",
+      });
+
+      consoleSpy.mockRestore();
+    });
+
+    // R42 pages-a L5: the two writes are separate, so "nothing changed" is only said when it is true.
+    it("says the workspace part was saved when only the email choices failed after it", async () => {
+      userUpdateMock.mockRejectedValue(new Error("db down"));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await POST(jsonRequest({ companyWebsite: "example.com", notifyOnPostComplete: false }));
+
+      expect(response.status).toBe(500);
+      expect(workspaceUpdateMock).toHaveBeenCalled();
+      await expect(response.json()).resolves.toEqual({
+        error: "Your workspace settings were saved, but your email choices weren't. Save again in a moment.",
+      });
 
       consoleSpy.mockRestore();
     });
@@ -948,7 +969,7 @@ describe("trackWebsiteLinks (tracking tags)", () => {
     const response = await POST(jsonRequest({ trackWebsiteLinks: "yes" }));
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "trackWebsiteLinks must be a boolean" });
+    await expect(response.json()).resolves.toEqual({ error: "Couldn't read \"Add tracking tags to my website link\". Reload the page and save again." });
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
   });
 
