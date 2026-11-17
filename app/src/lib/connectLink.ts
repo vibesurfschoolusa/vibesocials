@@ -56,8 +56,10 @@ export const CONNECT_LINK_REOPEN_MESSAGE =
 
 export const CONNECT_LINK_CREATE_LIMIT_MESSAGE = "Too many new links in the last hour. Try again later.";
 
-export const CONNECT_LINK_RATE_LIMIT_MESSAGE =
-  "Too many requests from this network in the last hour. Try again later.";
+/** The network limit's reason alone, so a page with its own instruction can say it once (R39 lead review). */
+export const CONNECT_LINK_RATE_LIMIT_REASON = "Too many requests from this network in the last hour.";
+
+export const CONNECT_LINK_RATE_LIMIT_MESSAGE = `${CONNECT_LINK_RATE_LIMIT_REASON} Try again later.`;
 
 /** The per-link limit can refuse a visitor on a fresh network, so it names the link, not the network. */
 export const CONNECT_LINK_USED_TOO_OFTEN_MESSAGE =

@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { answerLostText } from "@/lib/answerLost";
-import { CONNECT_LINK_RATE_LIMIT_MESSAGE } from "@/lib/connectLink";
+import { CONNECT_LINK_RATE_LIMIT_REASON } from "@/lib/connectLink";
 import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUncheckedMessage";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { focusAfterPress } from "@/lib/focusAfter";
@@ -40,19 +40,31 @@ const LOAD_FAILED_MESSAGE = "Couldn't load the accounts. Reload this page.";
 const LOAD_RETRY_MESSAGE = "Couldn't load the accounts. Press Try again.";
 const CHOOSE_FAILED_MESSAGE = "Couldn't connect that account. Try again.";
 
-type ChoiceAnswer = { platform?: string; candidates?: Candidate[]; error?: string; connected?: boolean } | null;
+type ChoiceAnswer = {
+  platform?: string;
+  candidates?: Candidate[];
+  error?: string;
+  connected?: boolean;
+  /** A 429 names its wait here as well as in Retry-After. */
+  retryAfterSeconds?: number;
+} | null;
 
-/** " Try again in N minutes." from the answer's Retry-After, or "" without one. */
-function waitSentence(retryAfterSeconds: number | undefined): string {
-  if (!retryAfterSeconds || retryAfterSeconds <= 0) return "";
+/**
+ * R39 lead's last look: the network limit's 429, with one instruction that
+ * says how, since the page offers no button: reload in N minutes (from the
+ * answer's Retry-After), else later. The pending route answers only this
+ * limit with a 429, so its reason is the route's own.
+ */
+function rateLimitedSentence(retryAfterSeconds: number | undefined): string {
+  if (!retryAfterSeconds || retryAfterSeconds <= 0) return `${CONNECT_LINK_RATE_LIMIT_REASON} Reload this page later.`;
   const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
-  return ` Try again in ${minutes === 1 ? "1 minute" : `${minutes} minutes`}.`;
+  return `${CONNECT_LINK_RATE_LIMIT_REASON} Reload this page in ${minutes === 1 ? "1 minute" : `${minutes} minutes`}.`;
 }
 
 /**
  * What the load answered: the accounts; for a 404, that the choice is gone
  * (the route's sentence, else reload). R39 pages L2: any other failure leaves
- * the choice waiting. A 429 says so with its wait and no button (pressing
+ * the choice waiting. A 429 says to reload after its wait, with no button (pressing
  * within the hour can't work); the couldn't-check 503 keeps its sentence and
  * Try again; anything else says only "Press Try again", so the page gives
  * one instruction (R39 lead review).
@@ -62,10 +74,7 @@ export function loadOutcome(status: number, data: ChoiceAnswer, retryAfterSecond
     return { status: "ready", platform: data.platform, candidates: data.candidates };
   }
   if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
-  if (status === 429) {
-    const sentence = data?.error || CONNECT_LINK_RATE_LIMIT_MESSAGE;
-    return { status: "failed", message: `${sentence}${waitSentence(retryAfterSeconds)}`, retry: false };
-  }
+  if (status === 429) return { status: "failed", message: rateLimitedSentence(retryAfterSeconds), retry: false };
   if (data?.error === LIMIT_UNCHECKED_MESSAGE) return { status: "failed", message: LIMIT_UNCHECKED_MESSAGE, retry: true };
   return { status: "failed", message: LOAD_RETRY_MESSAGE, retry: true };
 }

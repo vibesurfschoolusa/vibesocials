@@ -1,6 +1,7 @@
 import { createElement } from "react";
 
 import { choiceAddress } from "@/lib/choicePlatform";
+import { CONNECT_LINK_RATE_LIMIT_MESSAGE } from "@/lib/connectLink";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -252,19 +253,40 @@ describe("the account choice when the load fails but the choice may still wait (
   });
 
   // R39 lead review: a Try again pressed inside the hour can't succeed.
-  it("load: a 429 keeps the route's sentence, adds the wait, and offers no Try again", () => {
-    const limited = "Too many requests from this network in the last hour. Try again later.";
-    expect(loadOutcome(429, { error: limited }, 720)).toEqual({
+  // R39 lead's last look: one instruction, and it says how (no button, so reload).
+  it("load: a 429 names the route's reason and one instruction, reload in N minutes, and offers no Try again", () => {
+    expect(CONNECT_LINK_RATE_LIMIT_MESSAGE).toBe("Too many requests from this network in the last hour. Try again later.");
+    const body = { error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: 720 };
+    expect(loadOutcome(429, body, 720)).toEqual({
       status: "failed",
-      message: `${limited} Try again in 12 minutes.`,
+      message: "Too many requests from this network in the last hour. Reload this page in 12 minutes.",
       retry: false,
     });
-    expect(loadOutcome(429, { error: limited }, 30)).toEqual({
+    expect(loadOutcome(429, { ...body, retryAfterSeconds: 30 }, 30)).toEqual({
       status: "failed",
-      message: `${limited} Try again in 1 minute.`,
+      message: "Too many requests from this network in the last hour. Reload this page in 1 minute.",
       retry: false,
     });
-    expect(loadOutcome(429, { error: limited })).toEqual({ status: "failed", message: limited, retry: false });
+  });
+
+  it("load: a 429 without a wait says to reload later", () => {
+    expect(loadOutcome(429, { error: CONNECT_LINK_RATE_LIMIT_MESSAGE })).toEqual({
+      status: "failed",
+      message: "Too many requests from this network in the last hour. Reload this page later.",
+      retry: false,
+    });
+    expect(loadOutcome(429, null)).toEqual({
+      status: "failed",
+      message: "Too many requests from this network in the last hour. Reload this page later.",
+      retry: false,
+    });
+  });
+
+  it("no 429 sentence says try again", () => {
+    for (const wait of [undefined, 30, 720]) {
+      const outcome = loadOutcome(429, { error: CONNECT_LINK_RATE_LIMIT_MESSAGE }, wait);
+      expect(outcome.status === "failed" ? outcome.message : "").not.toMatch(/try again/i);
+    }
   });
 
   it("shows a retryable failure as an alert with a Try again button", () => {

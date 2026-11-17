@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 
 import { html, makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
+import { CONNECT_LINK_RATE_LIMIT_MESSAGE } from "@/lib/connectLink";
 import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 
 import { ConnectLinkChoice } from "./connect-link-choice";
@@ -96,6 +97,36 @@ describe("the /c account choice after a failed load", () => {
     expect(html(container)).toContain("Surf Co Kids");
     expect(container.textContent).not.toContain(UNCHECKED);
     expect(button("Try again")).toBeNull();
+  });
+
+  // R39 lead's last look: the pending route's own 429 (body and header), one instruction, no button.
+  it("a 429 with Retry-After says to reload in N minutes, with nothing to press", async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve(
+        Response.json(
+          { error: CONNECT_LINK_RATE_LIMIT_MESSAGE, retryAfterSeconds: 1500 },
+          { status: 429, headers: { "Retry-After": "1500" } },
+        ),
+      ),
+    );
+    await mount();
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 25 minutes.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+
+  it("a 429 without a wait says to reload later", async () => {
+    fetchMock.mockReturnValueOnce(answer(429, { error: CONNECT_LINK_RATE_LIMIT_MESSAGE }));
+    await mount();
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page later.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+
+  it("a 429 whose wait is only in the header still names it", async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve(Response.json({ error: CONNECT_LINK_RATE_LIMIT_MESSAGE }, { status: 429, headers: { "Retry-After": "60" } })),
+    );
+    await mount();
+    expect(container.textContent).toBe("Too many requests from this network in the last hour. Reload this page in 1 minute.");
   });
 
   it("a 404 keeps the gone sentence with nothing to press", async () => {
