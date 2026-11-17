@@ -16,6 +16,19 @@ const FOCUSABLE_SELECTOR =
 const DRAWER_HIDDEN_QUERY = "(min-width: 768px)";
 
 /**
+ * R44 review: after a width-close the menu button is hidden too, so focus
+ * goes to the sidebar shown at that width: its current page, else its first link.
+ */
+function focusSidebarLink(): boolean {
+  const link =
+    document.querySelector<HTMLElement>('aside nav[aria-label="Main"] a[aria-current="page"]') ??
+    document.querySelector<HTMLElement>('aside nav[aria-label="Main"] a[href]');
+  if (!link) return false;
+  link.focus();
+  return true;
+}
+
+/**
  * Mobile slide-over navigation. Applies the same accessibility patterns as the
  * Dialog primitive — role="dialog" + aria-modal, focus trap, Esc-to-close,
  * backdrop-click-to-close, body scroll lock, and focus restored to the trigger.
@@ -30,11 +43,14 @@ export function MobileDrawer({
   const pathname = usePathname();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Set when the width closed the drawer, so focus skips the hidden menu button.
+  const closedByWidth = useRef(false);
 
   // Scroll lock + focus management while open.
   useEffect(() => {
     if (!open) return;
 
+    closedByWidth.current = false;
     previouslyFocused.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
@@ -48,6 +64,7 @@ export function MobileDrawer({
 
     return () => {
       body.style.overflow = previousOverflow;
+      if (closedByWidth.current && focusSidebarLink()) return;
       previouslyFocused.current?.focus();
     };
   }, [open]);
@@ -57,12 +74,16 @@ export function MobileDrawer({
   useEffect(() => {
     if (!open || typeof window.matchMedia !== "function") return;
     const wide = window.matchMedia(DRAWER_HIDDEN_QUERY);
-    if (wide.matches) {
+    const closeForWidth = () => {
+      closedByWidth.current = true;
       onClose();
+    };
+    if (wide.matches) {
+      closeForWidth();
       return;
     }
     const onChange = (event: { matches: boolean }) => {
-      if (event.matches) onClose();
+      if (event.matches) closeForWidth();
     };
     wide.addEventListener("change", onChange);
     return () => wide.removeEventListener("change", onChange);

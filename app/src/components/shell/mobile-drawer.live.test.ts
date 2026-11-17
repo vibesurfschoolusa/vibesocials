@@ -22,6 +22,16 @@ let body: FakeNode & { style: Record<string, unknown> };
 let wide: boolean;
 let queries: string[];
 let mediaListeners: Set<(event: { matches: boolean }) => void>;
+let keyListeners: Set<(event: { key: string; preventDefault: () => void }) => void>;
+
+/** Something focusable: the menu button that opened the drawer, or a sidebar link. */
+class FocusTarget {
+  focus = vi.fn();
+}
+let menuButton: FocusTarget;
+let sidebarCurrent: FocusTarget | null;
+let sidebarFirst: FocusTarget;
+let selectors: string[];
 
 function Harness() {
   const [open, setOpen] = useState(true);
@@ -59,9 +69,28 @@ beforeEach(() => {
       removeEventListener: (_type: string, listener: (event: { matches: boolean }) => void) => mediaListeners.delete(listener),
     };
   };
+  keyListeners = new Set();
+  made.doc.addEventListener = (type: string, listener: (event: { key: string; preventDefault: () => void }) => void) => {
+    if (type === "keydown") keyListeners.add(listener);
+  };
+  made.doc.removeEventListener = (type: string, listener: (event: { key: string; preventDefault: () => void }) => void) => {
+    if (type === "keydown") keyListeners.delete(listener);
+  };
+  menuButton = new FocusTarget();
+  sidebarCurrent = new FocusTarget();
+  sidebarFirst = new FocusTarget();
+  selectors = [];
+  made.doc.activeElement = menuButton;
+  // The sidebar, as the app frame renders it beside the drawer.
+  made.doc.querySelector = (selector: string) => {
+    selectors.push(selector);
+    if (selector === 'aside nav[aria-label="Main"] a[aria-current="page"]') return sidebarCurrent;
+    if (selector === 'aside nav[aria-label="Main"] a[href]') return sidebarFirst;
+    return null;
+  };
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("window", win);
-  vi.stubGlobal("HTMLElement", class {});
+  vi.stubGlobal("HTMLElement", FocusTarget);
   root = createRoot(container as unknown as HTMLElement);
 });
 
@@ -81,6 +110,32 @@ describe("MobileDrawer: the phone turns sideways while it is open", () => {
     expect(html(body)).not.toContain('aria-label="Navigation"');
     expect(body.style.overflow).toBe("");
     expect(mediaListeners.size).toBe(0);
+  });
+
+  // R44 review: the menu button is md:hidden at that width, so focus would land on the body.
+  it("puts focus on the sidebar's current link, not the hidden menu button", async () => {
+    await act(async () => root.render(createElement(Harness)));
+    await turnTo(true);
+    expect(sidebarCurrent!.focus).toHaveBeenCalledTimes(1);
+    expect(menuButton.focus).not.toHaveBeenCalled();
+  });
+
+  it("with no current link, on the sidebar's first link", async () => {
+    sidebarCurrent = null;
+    await act(async () => root.render(createElement(Harness)));
+    await turnTo(true);
+    expect(sidebarFirst.focus).toHaveBeenCalledTimes(1);
+    expect(menuButton.focus).not.toHaveBeenCalled();
+  });
+
+  it("an Escape close still returns focus to the menu button", async () => {
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => {
+      for (const listener of [...keyListeners]) listener({ key: "Escape", preventDefault() {} });
+    });
+    expect(html(body)).not.toContain('aria-label="Navigation"');
+    expect(menuButton.focus).toHaveBeenCalledTimes(1);
+    expect(sidebarCurrent!.focus).not.toHaveBeenCalled();
   });
 
   it("stays open while the width stays narrow", async () => {
