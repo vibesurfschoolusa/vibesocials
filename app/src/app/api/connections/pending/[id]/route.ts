@@ -236,66 +236,30 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
   const { id } = await params;
   const owner = ownerOf(contextOrError);
 
-  // R36 review low 2: nothing is saved before the choice is read, so a failure
-  // here says to reload and try again; "may have been connected" (below) is
-  // only for a failure once the save could have happened.
-  let pending: Awaited<ReturnType<typeof loadPendingConnection>>;
-  try {
-    pending = await loadPendingConnection(id, owner);
-  } catch (error) {
-    logger.error("[POST /api/connections/pending/[id]] Couldn't read the choice", {
+  // R36 review low 2 and second look: nothing is saved before the choice is
+  // read, nor when the save is refused, so a failure there says to reload and
+  // try again. "May have been connected" is only for the save and after it.
+  const failedBeforeSave = async (error: unknown) => {
+    logger.error("[POST /api/connections/pending/[id]] Failed before anything was saved", {
       error: errorKind(error),
       pendingConnectionId: id,
     });
     return NextResponse.json({ error: await loadFailedText(request, owner.workspaceId) }, { status: 500 });
-  }
+  };
 
+  let pending: Awaited<ReturnType<typeof loadPendingConnection>>;
   try {
+    pending = await loadPendingConnection(id, owner);
     if (!pending) {
       return await notFound(request, id, ownerOf(contextOrError));
     }
+  } catch (error) {
+    return failedBeforeSave(error);
+  }
 
-    const result = await connectPendingCandidate(pending, candidateId, owner);
-    if (!result.ok && result.reason === "check_failed") {
-      return NextResponse.json({ error: accountCheckFailedMessage(result.connectedName) }, { status: 503 });
-    }
-    if (!result.ok && result.reason === "different_account") {
-      // R6 review low 1: the connection stays as it was, and so does the choice.
-      // R7 review 3: when the connected one was on the list, choosing it is the way.
-      const offered = await connectedWasOffered(pending, owner.workspaceId);
-      return NextResponse.json(
-        { error: choiceDifferentAccountMessage(pending.platform, result.signedInName, result.connectedName, offered) },
-        { status: 409 },
-      );
-    }
-    if (!result.ok) {
-      return result.reason === "unknown_candidate"
-        ? NextResponse.json(
-            { error: "That account isn't one of the choices." },
-            { status: 400 },
-          )
-        : NextResponse.json(
-            { error: "Couldn't load that account from the platform. Please try again." },
-            { status: 502 },
-          );
-    }
-
-    // R31 new-customer L3: the account is saved; a failed clean-up must not
-    // turn that into "failed". The row ends by itself (and the daily sweep
-    // deletes it).
-    await deletePendingConnection(pending.id).catch((error: unknown) => {
-      logger.error("[POST /api/connections/pending/[id]] Couldn't delete the used choice (ignored)", {
-        error: errorKind(error),
-        pendingConnectionId: id,
-      });
-    });
-
-    // R7 review 4: the dialog adds same_end to the success address, as the callback does.
-    return NextResponse.json(
-      pendingSignInEndsSoon(pending)
-        ? { ok: true, platform: pending.platform, sameEnd: true }
-        : { ok: true, platform: pending.platform },
-    );
+  let result: Awaited<ReturnType<typeof connectPendingCandidate>>;
+  try {
+    result = await connectPendingCandidate(pending, candidateId, owner);
   } catch (error) {
     logger.error("[POST /api/connections/pending/[id]] Unexpected error", {
       error: errorKind(error),
@@ -310,6 +274,54 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
       { status: 500 },
     );
   }
+
+  if (!result.ok) {
+    try {
+      return await refusedChoice(pending, result, owner.workspaceId);
+    } catch (error) {
+      return failedBeforeSave(error);
+    }
+  }
+
+  // R31 new-customer L3: the account is saved; a failed clean-up must not
+  // turn that into "failed". The row ends by itself (and the daily sweep
+  // deletes it).
+  await deletePendingConnection(pending.id).catch((error: unknown) => {
+    logger.error("[POST /api/connections/pending/[id]] Couldn't delete the used choice (ignored)", {
+      error: errorKind(error),
+      pendingConnectionId: id,
+    });
+  });
+
+  // R7 review 4: the dialog adds same_end to the success address, as the callback does.
+  return NextResponse.json(
+    pendingSignInEndsSoon(pending)
+      ? { ok: true, platform: pending.platform, sameEnd: true }
+      : { ok: true, platform: pending.platform },
+  );
+}
+
+/** The answer to a save that was refused: nothing was connected, and the choice stays. */
+async function refusedChoice(
+  pending: NonNullable<Awaited<ReturnType<typeof loadPendingConnection>>>,
+  result: Exclude<Awaited<ReturnType<typeof connectPendingCandidate>>, { ok: true }>,
+  workspaceId: string,
+): Promise<NextResponse> {
+  if (result.reason === "check_failed") {
+    return NextResponse.json({ error: accountCheckFailedMessage(result.connectedName) }, { status: 503 });
+  }
+  if (result.reason === "different_account") {
+    // R6 review low 1: the connection stays as it was, and so does the choice.
+    // R7 review 3: when the connected one was on the list, choosing it is the way.
+    const offered = await connectedWasOffered(pending, workspaceId);
+    return NextResponse.json(
+      { error: choiceDifferentAccountMessage(pending.platform, result.signedInName, result.connectedName, offered) },
+      { status: 409 },
+    );
+  }
+  return result.reason === "unknown_candidate"
+    ? NextResponse.json({ error: "That account isn't one of the choices." }, { status: 400 })
+    : NextResponse.json({ error: "Couldn't load that account from the platform. Please try again." }, { status: 502 });
 }
 
 /** DELETE → cancels the pending connect. */

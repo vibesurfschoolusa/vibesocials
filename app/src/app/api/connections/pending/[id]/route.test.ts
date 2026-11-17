@@ -641,6 +641,37 @@ describe("POST /api/connections/pending/[id]", () => {
       expectNothingSaved();
     });
 
+    // R36 second look: the "gone" answer and the different-account answer run
+    // before anything is saved, so a database error in them is never "may have been connected".
+    it("a database error while saying the choice is gone: reload and try again", async () => {
+      findUniqueMock.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("db down"));
+
+      const response = await POST(postReq({ candidateId: "ig-2" }), ctx());
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "Couldn't load your accounts. Reload the page to try again." });
+      expectNothingSaved();
+    });
+
+    it("a database error while checking the connected account was on the list: the different-account answer, nothing saved", async () => {
+      findUniqueMock.mockResolvedValue(row(FACEBOOK));
+      connectionFindUniqueMock.mockRejectedValue(new Error("db down"));
+      saveFacebookPageConnectionMock.mockResolvedValue({
+        ok: false,
+        reason: "different_account",
+        connectedName: "My Surf School",
+        signedInName: "Client Cafe",
+      });
+
+      const response = await POST(postReq({ candidateId: "page-2" }), ctx());
+
+      expect(response.status).toBe(409);
+      const { error } = (await response.json()) as { error: string };
+      expect(error).toMatch(/^You chose Client Cafe, not My Surf School/);
+      expect(error).not.toContain("may have been connected");
+      expect(deleteManyMock).not.toHaveBeenCalled();
+    });
+
     it("the Instagram save itself failing is unchanged: it may have been connected", async () => {
       findUniqueMock.mockResolvedValue(row(INSTAGRAM));
       fetchInstagramAccountDetailsMock.mockResolvedValue({ username: "clientcafe", profilePicture: null });
