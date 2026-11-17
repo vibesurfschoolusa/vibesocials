@@ -1,28 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { useRetryFocus } from "@/lib/useRetryFocus";
 
 import { attemptVerify, readAccountState, resendVerificationEmail, verifyView, type VerifyView } from "./verifyOutcome";
 
 function CardShell({
   title,
   description,
+  headingRef,
   children,
 }: {
   title: string;
   description?: string;
+  headingRef?: Ref<HTMLHeadingElement>;
   children: React.ReactNode;
 }) {
   return (
     <Card>
       <CardHeader>
-        <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">{title}</h1>
+        <h1 ref={headingRef} className="text-2xl font-semibold leading-none tracking-tight text-foreground">{title}</h1>
         {description ? <CardDescription>{description}</CardDescription> : null}
       </CardHeader>
       <CardContent>{children}</CardContent>
@@ -49,6 +52,12 @@ export function VerifyEmailClient() {
     result: null,
   });
   const started = useRef(false);
+  // R43 pages-a L2: Try again swaps the whole card, so focus fell to the logo
+  // link. It goes to the loading line while the link is checked, then to the
+  // answer's heading, as on /c, /v and Join.
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const resultHeadingRef = useRef<HTMLHeadingElement>(null);
+  const retried = useRetryFocus(view === null, statusRef, [resultHeadingRef]);
 
   // State updates happen inside the async callback, never synchronously in
   // the effect body, so each try resolves to exactly one answer.
@@ -72,17 +81,33 @@ export function VerifyEmailClient() {
     setResend({ sending: false, result });
   }
 
-  if (!view) {
-    return (
-      <CardShell title="Verifying your email">
-        <div className="flex justify-center py-4">
-          <Spinner label="Verifying your email" />
-        </div>
-      </CardShell>
-    );
-  }
-
-  return <VerifyResult view={view} resend={resend} onResend={handleResend} onRetry={() => void verify(true)} />;
+  // The status line is on the page from the first render (Try again empties
+  // it and fills it again); it says what the spinner shows.
+  return (
+    <>
+      <p ref={statusRef} role="status" className="sr-only">
+        {view ? "" : "Verifying your email…"}
+      </p>
+      {view ? (
+        <VerifyResult
+          view={view}
+          resend={resend}
+          onResend={handleResend}
+          onRetry={() => {
+            retried();
+            void verify(true);
+          }}
+          headingRef={resultHeadingRef}
+        />
+      ) : (
+        <CardShell title="Verifying your email">
+          <div className="flex justify-center py-4">
+            <Spinner />
+          </div>
+        </CardShell>
+      )}
+    </>
+  );
 }
 
 /** The answer card; exported so its markup can be checked without a browser. */
@@ -91,14 +116,16 @@ export function VerifyResult({
   resend,
   onResend,
   onRetry,
+  headingRef,
 }: {
   view: VerifyView;
   resend: { sending: boolean; result: { ok: boolean; message: string } | null };
   onResend: () => void;
   onRetry: () => void;
+  headingRef?: Ref<HTMLHeadingElement>;
 }) {
   return (
-    <CardShell title={view.title}>
+    <CardShell title={view.title} headingRef={headingRef}>
       {view.verified ? (
         <Alert variant="success" className="mb-4">
           {view.message}

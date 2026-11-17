@@ -69,7 +69,7 @@ describe("confirm new address page", () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const source = readFileSync(join(__dirname, "new-address-client.tsx"), "utf8");
-    expect(source).toContain("<NewAddressResult view={view} busy={busy} onRetry={() => void confirm()} />");
+    expect(source).toContain("<NewAddressResult view={view} busy={busy} onRetry={() => void confirm()} headingRef={resultHeadingRef} />");
     expect(source).toMatch(/<Button size="sm" loading=\{busy\} onClick=\{onRetry\}>/);
   });
 });

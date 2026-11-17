@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type Ref } from "react";
 import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { signOutChecked } from "@/lib/signOutChecked";
+import { useRetryFocus } from "@/lib/useRetryFocus";
 
 import { confirmNewAddress, type NewAddressView } from "./confirmNewAddress";
 
@@ -19,8 +20,16 @@ import { confirmNewAddress, type NewAddressView } from "./confirmNewAddress";
 export function NewAddressClient() {
   const [view, setView] = useState<NewAddressView | null>(null);
   const [busy, setBusy] = useState(false);
+  // R43 pages-a L2: the answer replaces the card's button, so focus fell to
+  // the logo link. The status line says the change is being made, and focus
+  // then goes to the answer's heading. A pressed button that stays keeps
+  // focus while busy (components/ui/button.tsx).
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const resultHeadingRef = useRef<HTMLHeadingElement>(null);
+  const pressed = useRetryFocus(busy, statusRef, [resultHeadingRef]);
 
   async function confirm() {
+    pressed();
     setBusy(true);
     const result = await confirmNewAddress(fetch, window.location.hash.slice(1));
     // Only this account's session: another signed-in account stays signed in.
@@ -30,28 +39,33 @@ export function NewAddressClient() {
     setBusy(false);
   }
 
-  if (!view) {
-    return (
-      <Card>
-        <CardHeader>
-          <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">
-            Confirm your new email
-          </h1>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Press the button to sign in with this address from now on. Every device signed in to the account is
-            signed out.
-          </p>
-          <Button className="mt-4" loading={busy} onClick={() => void confirm()}>
-            Use this email address
-          </Button>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return <NewAddressResult view={view} busy={busy} onRetry={() => void confirm()} />;
+  return (
+    <>
+      <p ref={statusRef} role="status" className="sr-only">
+        {busy ? "Confirming your new email…" : ""}
+      </p>
+      {view ? (
+        <NewAddressResult view={view} busy={busy} onRetry={() => void confirm()} headingRef={resultHeadingRef} />
+      ) : (
+        <Card>
+          <CardHeader>
+            <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">
+              Confirm your new email
+            </h1>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Press the button to sign in with this address from now on. Every device signed in to the account is
+              signed out.
+            </p>
+            <Button className="mt-4" loading={busy} onClick={() => void confirm()}>
+              Use this email address
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+    </>
+  );
 }
 
 /**
@@ -62,15 +76,17 @@ export function NewAddressResult({
   view,
   busy = false,
   onRetry,
+  headingRef,
 }: {
   view: NewAddressView;
   busy?: boolean;
   onRetry: () => void;
+  headingRef?: Ref<HTMLHeadingElement>;
 }) {
   return (
     <Card>
       <CardHeader>
-        <h1 className="text-2xl font-semibold leading-none tracking-tight text-foreground">{view.title}</h1>
+        <h1 ref={headingRef} className="text-2xl font-semibold leading-none tracking-tight text-foreground">{view.title}</h1>
       </CardHeader>
       <CardContent>
         <Alert variant={view.changed ? "success" : "danger"}>{view.message}</Alert>
