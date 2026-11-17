@@ -12,7 +12,8 @@ describe("tooManyTriesSentence (R42 pages-a L3)", () => {
     [60, "Too many tries. Wait a minute, then try again."],
     [61, "Too many tries. Wait 2 minutes, then try again."],
     [59 * 60, "Too many tries. Wait 59 minutes, then try again."],
-    [60 * 60, "Too many tries. Wait 60 minutes, then try again."],
+    // R45 second review: an hour reads "1 hour", as dailyLimitSentence and the AI line say it (waitText).
+    [60 * 60, "Too many tries. Wait 1 hour, then try again."],
   ])("at %i s says %s", (seconds, sentence) => {
     expect(tooManyTriesSentence(seconds)).toBe(sentence);
   });
