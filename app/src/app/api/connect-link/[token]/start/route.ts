@@ -2,6 +2,7 @@ import { randomBytes } from "crypto";
 
 import { NextResponse } from "next/server";
 
+import { readBodyAtMost } from "@/lib/boundedBody";
 import { CONNECT_LIMIT_CODES } from "@/lib/clientLinkLimit";
 import {
   CONNECT_LINK_STARTS_PER_HOUR,
@@ -60,6 +61,12 @@ function tooMany(
   return NextResponse.redirect(url, 303);
 }
 
+/**
+ * R45 review L3: the form is read before the per-IP limit (so a refusal can
+ * name the platform), so it is read only up to this. Our form sends one field.
+ */
+const FORM_MAX_BYTES = 4 * 1024;
+
 /** R38 new-customer L1: a limit that couldn't be checked, in this form's plain-text shape. */
 function unchecked(): NextResponse {
   return new NextResponse(LIMIT_UNCHECKED_MESSAGE, {
@@ -77,12 +84,14 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   }
 
   const { token } = await context.params;
-  let platformValue: FormDataEntryValue | null = null;
-  try {
-    platformValue = (await request.formData()).get("platform");
-  } catch {
-    platformValue = null;
+  const form = await readBodyAtMost(request, FORM_MAX_BYTES);
+  if (!form.ok && form.reason === "too_large") {
+    return new NextResponse("That request was too large. Open the link you were sent and press Connect there.", {
+      status: 413,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
   }
+  const platformValue = form.ok ? new URLSearchParams(form.bytes.toString("utf8")).get("platform") : null;
 
   const limit = await checkRateLimit({
     userId: `ip:${requestIp(request)}`,

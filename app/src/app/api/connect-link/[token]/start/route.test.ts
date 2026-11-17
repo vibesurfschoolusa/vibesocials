@@ -159,6 +159,33 @@ describe("only a deliberate press on our own page starts a flow", () => {
     expect(h.rateLimit.mock.calls[0][0]).toMatchObject({ route: "connect-link/start", failClosed: true });
   });
 
+  // R45 review L3: the form is read before the per-IP limit, so only a small one is read.
+  it("an oversized form gets the plain refusal, before any limit is counted or anything looked up", async () => {
+    const big = new URLSearchParams({ platform: "tiktok", filler: "x".repeat(5_000) }).toString();
+    for (const headers of [{}, { "content-length": String(big.length) }] as Record<string, string>[]) {
+      const res = await POST(
+        new NextRequest(`${ORIGIN}/api/connect-link/${TOKEN}/start`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": "same-origin", ...headers },
+          body: big,
+        }),
+        { params: Promise.resolve({ token: TOKEN }) },
+      );
+      expect(res.status).toBe(413);
+      expect(res.headers.get("content-type")).toContain("text/plain");
+      expect(await res.text()).toBe("That request was too large. Open the link you were sent and press Connect there.");
+      expect(res.headers.get("set-cookie")).toBeNull();
+    }
+    expect(h.rateLimit).not.toHaveBeenCalled();
+    expect(h.linkFind).not.toHaveBeenCalled();
+  });
+
+  it("a form of up to 4 KB is read as before", async () => {
+    const res = await press("tiktok");
+    expect(res.status).toBe(303);
+    expect(h.rateLimit).toHaveBeenCalled();
+  });
+
   it("a refused press naming no platform comes back without one", async () => {
     h.rateLimit.mockResolvedValue({ allowed: false });
     const to = location(await press("myspace"));
