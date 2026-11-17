@@ -1077,4 +1077,33 @@ describe("the automatic caption's refusal says no caption was written", () => {
     expect(pageSays("Too many tries. Wait 4 minutes, then try again.")).toBe(true);
     expect(pageSays("No caption was written")).toBe(false);
   });
+
+  // R44 new-customer L2: every failure of the automatic request, not only a 429.
+  const busy = () =>
+    Response.json({ error: "We couldn't check that just now. Nothing was changed. Try again in a minute." }, { status: 503 });
+  const slow = () => Response.json({ error: "The AI service took too long. Try again." }, { status: 504 });
+
+  it("automatic: a 503 starts with No caption was written", async () => {
+    await pick(photo());
+    await finishUploads();
+    await answer("/api/posts/auto-caption", busy());
+    expect(pageSays("No caption was written: we couldn't check that just now. Nothing was changed. Try again in a minute.")).toBe(true);
+  });
+
+  it("automatic: a 504 starts with No caption was written", async () => {
+    await pick(photo());
+    await finishUploads();
+    await answer("/api/posts/auto-caption", slow());
+    expect(pageSays("No caption was written: the AI service took too long. Try again.")).toBe(true);
+  });
+
+  it("a pressed Caption from media keeps the 504's own words", async () => {
+    await untickAutoCaption();
+    await pick(photo());
+    await finishUploads();
+    await press("Caption from media");
+    await answer("/api/posts/auto-caption", slow());
+    expect(pageSays("The AI service took too long. Try again.")).toBe(true);
+    expect(pageSays("No caption was written")).toBe(false);
+  });
 });

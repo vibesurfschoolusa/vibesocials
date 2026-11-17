@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { CAPTION_FAILED_MESSAGE, requestCaption } from "@/lib/captionRequest";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { sendPostRequest, submitErrorText } from "@/lib/postSubmitFailure";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
@@ -151,24 +150,11 @@ interface UploadedBlobInfo {
 type PublishMode = "now" | "schedule" | "draft";
 
 /**
- * R43 new-customer L4: a refused automatic caption (written when a file is
- * added) says the caption wasn't written before the route's own sentence.
+ * R43 new-customer L4, R44 L2: every failure of an automatic caption (written
+ * when a file is added) says the caption wasn't written before its sentence.
  */
 export function automaticCaptionRefusedText(routeSentence: string): string {
   return `No caption was written: ${routeSentence.charAt(0).toLowerCase()}${routeSentence.slice(1)}`;
-}
-
-/**
- * The request requestCaption sends, telling `onStatus` the answer's status.
- * Through fetchOrNoAnswer, so a lost answer still reads as one, and
- * requestCaption still words every failure.
- */
-function fetchKeepingStatus(onStatus: (status: number) => void): typeof fetch {
-  return async (input, init) => {
-    const response = await fetchOrNoAnswer(String(input), init);
-    onStatus(response.status);
-    return response;
-  };
 }
 
 /**
@@ -1712,8 +1698,6 @@ function CreatePostFormInner({
 
       // No answer, or one that is not JSON, reads as a sentence that the
       // caption is unchanged (lib/captionRequest.ts), never "Failed to fetch".
-      // The answer's status is kept to word a refused automatic request.
-      let answerStatus: number | null = null;
       const result = await requestCaption(
         "/api/posts/auto-caption",
         {
@@ -1723,9 +1707,7 @@ function CreatePostFormInner({
           ...(frames.length > 0 ? { frames } : {}),
         },
         "caption",
-        fetchKeepingStatus((status) => {
-          answerStatus = status;
-        }),
+        undefined,
         request.signal,
       );
 
@@ -1736,9 +1718,10 @@ function CreatePostFormInner({
 
       if (!result.ok) {
         console.error("Error generating caption from media:", result.error);
-        // R43 new-customer L4: no one pressed anything for the caption written
-        // when a file is added, so a refusal says what didn't happen, as Add many does.
-        toast.error(options.automatic && answerStatus === 429 ? automaticCaptionRefusedText(result.error) : result.error);
+        // R43 new-customer L4, R44 L2: no one pressed anything for the caption
+        // written when a file is added, so any failure says what didn't happen,
+        // as Add many does.
+        toast.error(options.automatic ? automaticCaptionRefusedText(result.error) : result.error);
         return;
       }
       const caption = result.caption;
