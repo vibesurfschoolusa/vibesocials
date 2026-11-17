@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // answering by default the tokens every row below was read with.
 const { findManyMock, findUniqueMock, updateMock, lookupOrganizationMock } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
-  findUniqueMock: vi.fn(async () => ({ accessToken: "li-token", refreshToken: null }) as unknown),
+  findUniqueMock: vi.fn<(args: { select: Record<string, boolean> }) => Promise<unknown>>(async () => ({
+    accessToken: "li-token",
+    refreshToken: null,
+  })),
   updateMock: vi.fn(),
   lookupOrganizationMock: vi.fn(),
 }));
@@ -421,14 +424,11 @@ describe("refreshLinkedInOrganizationProfiles: never writes over a newer row", (
     expect(updateMock.mock.calls[0][0].where).toEqual({ id: "conn-1", updatedAt: READ_AT });
   });
 
+  // The clean-up's own retry is in the describe below.
   it("another metadata change in between (a page choice, same tokens) is not written over", async () => {
-    for (const [lookup, metadata] of [
-      [{ id: "101", name: "Vibe Surf School" }, undefined],
-      [null, undefined],
-      [null, { organizations: [{ id: "101", name: "Old Name" }], username: "Old Name", organizationsFetchedAt: daysAgo(57) }],
-    ] as const) {
+    for (const lookup of [{ id: "101", name: "Vibe Surf School" }, null]) {
       vi.clearAllMocks();
-      findManyMock.mockResolvedValue([connection(metadata ? { metadata: { ...metadata } } : {})]);
+      findManyMock.mockResolvedValue([connection()]);
       lookupOrganizationMock.mockResolvedValue(lookup);
       // The row's updatedAt moved on, so the guarded write matches nothing.
       updateMock.mockResolvedValue({ count: 0 });
@@ -436,6 +436,100 @@ describe("refreshLinkedInOrganizationProfiles: never writes over a newer row", (
       expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
       expect(updateMock).toHaveBeenCalledTimes(1);
       expect(updateMock.mock.calls[0][0].where).toEqual({ id: "conn-1", updatedAt: READ_AT });
+    }
+  });
+});
+
+// Lead review (R35, last look): a flag-only write (refreshFailedAt,
+// markConnectionNeedsReconnect) moves updatedAt and leaves the tokens, so the
+// guarded clean-up matched nothing and an over-age name stayed, with nothing
+// bounding how often. It re-reads the row once and clears from the fresh copy;
+// a reconnect still skips it (the new connection has fresh data).
+describe("refreshLinkedInOrganizationProfiles: the eight-week clean-up after a moved row", () => {
+  const LATER = new Date("2026-11-09T11:59:30.000Z");
+  const OVER_AGE = { organizations: [{ id: "101", name: "Old Name" }], username: "Old Name", organizationsFetchedAt: daysAgo(57) };
+  const FULL_SELECT = { accessToken: true, refreshToken: true, metadata: true, updatedAt: true };
+  const fresh = (over: Record<string, unknown> = {}) => ({
+    accessToken: "li-token",
+    refreshToken: null,
+    metadata: { ...OVER_AGE, needsAnotherField: "kept" },
+    updatedAt: LATER,
+    ...over,
+  });
+
+  beforeEach(() => {
+    // No answer queued by an earlier test reaches these.
+    updateMock.mockReset();
+    updateMock.mockResolvedValue({ count: 1 });
+    // An expired token: no lookup, only the clean-up.
+    findManyMock.mockResolvedValue([connection({ expiresAt: new Date(NOW.getTime() - DAY), metadata: { ...OVER_AGE } })]);
+  });
+
+  it("a flag write in between: the clean-up lands on the retry, from the fresh copy", async () => {
+    findUniqueMock.mockImplementation(async (args: { select: Record<string, boolean> }) =>
+      args.select.metadata ? fresh() : { accessToken: "li-token", refreshToken: null },
+    );
+    updateMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 1 });
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "conn-1" }, select: FULL_SELECT });
+    expect(updateMock).toHaveBeenCalledTimes(2);
+    expect(updateMock.mock.calls[1][0]).toEqual({
+      where: { id: "conn-1", updatedAt: LATER },
+      data: {
+        metadata: {
+          organizations: [{ id: "101" }],
+          username: null,
+          organizationsFetchedAt: null,
+          needsAnotherField: "kept",
+        },
+      },
+    });
+  });
+
+  it("a reconnect in between: no clean-up", async () => {
+    findUniqueMock.mockImplementation(async (args: { select: Record<string, boolean> }) =>
+      args.select.metadata ? fresh({ accessToken: "new-token" }) : { accessToken: "li-token", refreshToken: null },
+    );
+    updateMock.mockResolvedValue({ count: 0 });
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the fresh copy was read from LinkedIn meanwhile: nothing to clear", async () => {
+    findUniqueMock.mockImplementation(async (args: { select: Record<string, boolean> }) =>
+      args.select.metadata
+        ? fresh({ metadata: { ...OVER_AGE, organizationsFetchedAt: daysAgo(0) } })
+        : { accessToken: "li-token", refreshToken: null },
+    );
+    updateMock.mockResolvedValue({ count: 0 });
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("two moves in a row: one retry, then it stops", async () => {
+    findUniqueMock.mockImplementation(async (args: { select: Record<string, boolean> }) =>
+      args.select.metadata ? fresh() : { accessToken: "li-token", refreshToken: null },
+    );
+    updateMock.mockResolvedValue({ count: 0 });
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(updateMock).toHaveBeenCalledTimes(2);
+    expect(findUniqueMock.mock.calls.filter((call) => call[0].select.metadata)).toHaveLength(1);
+  });
+
+  it("success and failure writes do not retry", async () => {
+    findManyMock.mockResolvedValue([connection()]);
+    for (const lookup of [{ id: "101", name: "Vibe Surf School" }, null]) {
+      updateMock.mockClear();
+      findUniqueMock.mockClear();
+      lookupOrganizationMock.mockResolvedValue(lookup);
+      updateMock.mockResolvedValue({ count: 0 });
+      await refreshLinkedInOrganizationProfiles(NOW);
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect(findUniqueMock.mock.calls.some((call) => call[0].select.metadata)).toBe(false);
     }
   });
 });

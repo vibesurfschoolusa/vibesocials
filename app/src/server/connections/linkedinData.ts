@@ -56,21 +56,72 @@ interface ReadRow {
  * metadata is written only while the stored tokens are still the ones this run
  * read (the rule flagRejectedToken uses; tokens are stored encrypted, so they
  * are compared after a re-read) and the row is unchanged since (updatedAt, in
- * the same statement, as saveSocialConnection does). Answers whether it wrote.
+ * the same statement, as saveSocialConnection does). Answers "written",
+ * "superseded" (the tokens changed, or the row is gone) or "moved" (same
+ * tokens, but something else wrote the row since).
  */
-async function saveMetadataIfUnchanged(read: ReadRow, metadata: LinkedInConnectionMetadata): Promise<boolean> {
+async function saveMetadataIfUnchanged(
+  read: ReadRow,
+  metadata: LinkedInConnectionMetadata,
+): Promise<"written" | "superseded" | "moved"> {
   const stored = await prisma.socialConnection.findUnique({
     where: { id: read.id },
     select: { accessToken: true, refreshToken: true },
   });
   if (!stored || stored.accessToken !== read.accessToken || stored.refreshToken !== read.refreshToken) {
-    return false;
+    return "superseded";
   }
   const { count } = await prisma.socialConnection.updateMany({
     where: { id: read.id, updatedAt: read.updatedAt },
     data: { metadata: metadata as unknown as Prisma.InputJsonValue },
   });
-  return count === 1;
+  return count === 1 ? "written" : "moved";
+}
+
+/** Whether the name was last read more than eight weeks before `now` (never read counts). */
+function isOverAge(metadata: LinkedInConnectionMetadata, now: Date): boolean {
+  const readAt = Date.parse(metadata.organizationsFetchedAt ?? "");
+  return Number.isNaN(readAt) || now.getTime() - readAt > LINKEDIN_ORG_PROFILE_MAX_AGE_MS;
+}
+
+/** The metadata without the page's name and vanity name: the ids stay. */
+function withoutProfileData(metadata: LinkedInConnectionMetadata): LinkedInConnectionMetadata {
+  return {
+    ...metadata,
+    organizations: (metadata.organizations ?? []).map((org) => ({ id: org.id })),
+    username: null,
+    organizationsFetchedAt: null,
+  };
+}
+
+/**
+ * Lead review (R35, last look): the eight-week clean-up, guarded. A flag-only
+ * write (refreshFailedAt, markConnectionNeedsReconnect) moves updatedAt but
+ * not the tokens; the clean-up then matched nothing and, with nothing bounding
+ * it, an over-age name could stay day after day. So after a "moved", the row is
+ * read again once and cleared from that copy with the same guarded write
+ * (clearing is always safe). A reconnect still skips it: the new connection
+ * has fresh data. One retry only, so two moves in a row end it for the day.
+ */
+async function clearProfileDataIfOverAge(
+  read: ReadRow,
+  metadata: LinkedInConnectionMetadata,
+  now: Date,
+): Promise<boolean> {
+  const first = await saveMetadataIfUnchanged(read, withoutProfileData(metadata));
+  if (first !== "moved") return first === "written";
+
+  const again = await prisma.socialConnection.findUnique({
+    where: { id: read.id },
+    select: { accessToken: true, refreshToken: true, metadata: true, updatedAt: true },
+  });
+  if (!again || again.accessToken !== read.accessToken || again.refreshToken !== read.refreshToken) return false;
+  // This run's try, if it made one, is kept with the fresh copy.
+  const tried = metadata.organizationsTriedAt === now.toISOString() ? { organizationsTriedAt: metadata.organizationsTriedAt } : {};
+  const fresh = { ...((again.metadata ?? {}) as LinkedInConnectionMetadata), ...tried };
+  if (!isOverAge(fresh, now) || !hasProfileData(fresh)) return false;
+  const retried = await saveMetadataIfUnchanged({ ...read, updatedAt: again.updatedAt }, withoutProfileData(fresh));
+  return retried === "written";
 }
 
 /**
@@ -147,27 +198,19 @@ export async function refreshLinkedInOrganizationProfiles(
         ...(details.name ? { name: details.name } : {}),
         ...(details.vanityName ? { vanityName: details.vanityName } : {}),
       };
+      // A row changed meanwhile is left; tomorrow's run sees it.
       const saved = await saveMetadataIfUnchanged(row, {
         ...metadata,
         organizations: [fresh, ...organizations.slice(1)],
         username: details.name ?? null,
         organizationsFetchedAt: now.toISOString(),
       });
-      if (saved) refreshed += 1;
+      if (saved === "written") refreshed += 1;
       continue;
     }
 
-    const readAt = Date.parse(metadata.organizationsFetchedAt ?? "");
-    const stale = Number.isNaN(readAt) || now.getTime() - readAt > LINKEDIN_ORG_PROFILE_MAX_AGE_MS;
-    if (stale && hasProfileData(metadata)) {
-      const saved = await saveMetadataIfUnchanged(row, {
-        ...metadata,
-        organizations: organizations.map((org) => ({ id: org.id })),
-        username: null,
-        organizationsFetchedAt: null,
-      });
-      // A row changed meanwhile was just saved fresh: tomorrow's run sees it.
-      if (saved) cleared += 1;
+    if (isOverAge(metadata, now) && hasProfileData(metadata)) {
+      if (await clearProfileDataIfOverAge(row, metadata, now)) cleared += 1;
     } else if (mayLookUp) {
       await saveMetadataIfUnchanged(row, metadata);
     }
