@@ -95,7 +95,7 @@ describe("Team: a pasted workspace name longer than the limit", () => {
     });
     expect(props(field).value).toBe(PASTED);
 
-    const countId = props(field)["aria-describedby"] as string;
+    const countId = String(props(field)["aria-describedby"]);
     const count = find(container, (n) => n.attributes.id === countId);
     expect(count?.textContent).toContain("66 of 60 characters");
 
