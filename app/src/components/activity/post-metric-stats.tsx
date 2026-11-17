@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { useState } from "react";
 import type { Platform } from "@prisma/client";
 
 import { formatNumber } from "@/lib/formatNumber";
@@ -93,10 +94,35 @@ export function dailyMetricResults(
   );
 }
 
+/** Numbers read within this long count as kept up to date by the daily read. */
+const FRESH_FOR_MS = 2 * 24 * 60 * 60 * 1000;
+
+function formatReadDay(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/**
+ * R43 pages-b L3: the sync reads only posts from the last 60 days and keeps
+ * old numbers when a read fails, so "once a day" is said only while every
+ * shown platform was read within two days. Otherwise each platform's own
+ * last read, so no date is claimed for a platform it doesn't belong to.
+ */
+export function freshnessLine(shown: DailyResult[], now: number): string {
+  const stale = shown.some((result) => {
+    const read = Date.parse(result.metric.fetchedAt);
+    return Number.isNaN(read) || now - read > FRESH_FOR_MS;
+  });
+  if (!stale) return "Updated once a day.";
+  if (shown.length === 1) return `Last updated ${formatReadDay(shown[0].metric.fetchedAt)}.`;
+  return shown
+    .map((result) => `${platformLabel(result.platform)} last updated ${formatReadDay(result.metric.fetchedAt)}.`)
+    .join(" ");
+}
+
 /**
  * 2026-11-10: the numbers of the daily platforms, one row per platform, each
  * number only when the platform gave it, then one line saying how fresh they
- * are. Renders nothing when there is nothing to show.
+ * are (freshnessLine). Renders nothing when there is nothing to show.
  */
 export function DailyMetricStats({
   results,
@@ -105,6 +131,8 @@ export function DailyMetricStats({
   results: PostJobResultDTO[];
   storyPlatforms?: readonly Platform[];
 }) {
+  // Read once, when the card first appears: a two-day line needs no ticking clock.
+  const [openedAt] = useState(() => Date.now());
   const shown = dailyMetricResults(results, storyPlatforms);
   if (shown.length === 0) return null;
   return (
@@ -122,7 +150,7 @@ export function DailyMetricStats({
           ))}
         </div>
       ))}
-      <p className="text-muted-foreground">Updated once a day.</p>
+      <p className="text-muted-foreground">{freshnessLine(shown, openedAt)}</p>
     </div>
   );
 }

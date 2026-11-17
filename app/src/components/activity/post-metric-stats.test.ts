@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PostJobResultDTO, PostMetricDTO } from "@/lib/postsDto";
 
@@ -59,6 +59,15 @@ describe("dailyMetricResults", () => {
 });
 
 describe("DailyMetricStats", () => {
+  // The day after the sample's fetchedAt: fresh numbers.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-11T08:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("shows each platform's numbers that are not null, with plain labels, and one line under them", () => {
     const html = renderToStaticMarkup(
       createElement(DailyMetricStats, {
@@ -153,5 +162,54 @@ describe("post numbers use the app's number format, whatever the browser's local
       createElement(DailyMetricStats, { results: [result({ metric: metric({ likes: value }) })] }),
     );
     expect(text(daily)).toContain(`${shown} likes`);
+  });
+});
+
+// R43 pages-b L3: numbers the sync no longer reads (posts over 60 days old, or
+// reads that keep failing) say when they were last updated.
+describe("DailyMetricStats says how fresh the numbers are", () => {
+  const shownOn = (now: string, results: PostJobResultDTO[]) => {
+    vi.setSystemTime(new Date(now));
+    return text(renderToStaticMarkup(createElement(DailyMetricStats, { results })));
+  };
+  const day = (iso: string) =>
+    new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fresh (read within two days): Updated once a day.", () => {
+    const shown = shownOn("2026-11-12T09:00:00.000Z", [result({ metric: metric({ likes: 3, fetchedAt: "2026-11-11T06:00:00.000Z" }) })]);
+    expect(shown.endsWith("Updated once a day.")).toBe(true);
+    expect(shown).not.toContain("Last updated");
+  });
+
+  it("3 days old: Last updated <date>, not once a day", () => {
+    const fetchedAt = "2026-11-09T06:00:00.000Z";
+    const shown = shownOn("2026-11-12T06:00:00.000Z", [result({ metric: metric({ likes: 3, fetchedAt }) })]);
+    expect(shown.endsWith(`Last updated ${day(fetchedAt)}.`)).toBe(true);
+    expect(shown).not.toContain("once a day");
+  });
+
+  it("a post older than 60 days: its last read's date", () => {
+    const fetchedAt = "2026-08-30T06:00:00.000Z";
+    const shown = shownOn("2026-11-17T06:00:00.000Z", [result({ metric: metric({ likes: 3, fetchedAt }) })]);
+    expect(shown.endsWith(`Last updated ${day(fetchedAt)}.`)).toBe(true);
+  });
+
+  it("platforms read on different days: each platform's own date, so every date is true", () => {
+    const fresh = "2026-11-16T06:00:00.000Z";
+    const old = "2026-11-01T06:00:00.000Z";
+    const shown = shownOn("2026-11-17T06:00:00.000Z", [
+      result({ platform: "instagram", metric: metric({ likes: 3, fetchedAt: fresh }) }),
+      result({ platform: "pinterest", metric: metric({ saves: 2, fetchedAt: old }) }),
+    ]);
+    expect(shown).toContain(`Instagram last updated ${day(fresh)}.`);
+    expect(shown).toContain(`Pinterest last updated ${day(old)}.`);
+    expect(shown).not.toContain("once a day");
   });
 });
