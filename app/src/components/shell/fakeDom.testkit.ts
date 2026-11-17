@@ -92,7 +92,8 @@ export function makeDocument() {
     body,
     documentElement: html,
     activeElement: body,
-    defaultView: { HTMLIFrameElement, document: doc },
+    // The window's listeners (the shell's theme sync) have nothing to hear here.
+    defaultView: { HTMLIFrameElement, document: doc, addEventListener() {}, removeEventListener() {} },
     addEventListener() {},
     removeEventListener() {},
     createElement: (tag: string) => node(1, tag.toUpperCase()),

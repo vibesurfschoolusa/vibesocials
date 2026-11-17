@@ -15,6 +15,7 @@ import { VerifyEmailBanner } from "./verify-email-banner";
 import { WorkspacePausedBanner } from "./workspace-paused-banner";
 import { isPublicRoute } from "./nav";
 import { SignedOutAlert, useServerSaysSignedOut } from "./signed-out-alert";
+import { installThemeSync } from "./theme-toggle";
 
 /**
  * App-wide chrome. `ToastProvider` wraps everything so toasts work on every
@@ -60,6 +61,8 @@ export function AppShell({ children, pricingPublic }: { children: ReactNode; pri
   // public pages and the bare /c, /u and /v client pages), so the page-wide
   // focus keeper is installed once here for all of them.
   useEffect(() => installFocusKeeper(), []);
+  // R42 new-customer L1: a theme chosen in another tab is applied here too.
+  useEffect(() => installThemeSync(), []);
 
   return (
     <ToastProvider>

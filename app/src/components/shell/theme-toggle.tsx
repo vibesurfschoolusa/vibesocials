@@ -47,6 +47,20 @@ function readStoredTheme(): Theme {
   }
 }
 
+/**
+ * R42 new-customer L1: a theme chosen in another tab is applied here too. The
+ * toggle (and its subscription) is mounted only while the account menu is
+ * open, and the boot script runs only on page load, so the shell installs
+ * this once for the whole page. A cleared store (key null) is "system".
+ */
+export function installThemeSync(): () => void {
+  const onStorage = (event: { key: string | null }) => {
+    if (event.key === "theme" || event.key === null) applyTheme(readStoredTheme());
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+}
+
 function getServerTheme(): Theme {
   return "system";
 }
