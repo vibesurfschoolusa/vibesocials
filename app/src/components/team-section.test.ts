@@ -13,6 +13,8 @@ import {
   LEAVE_MAYBE_LEFT_MESSAGE,
   leaveBlockedText,
   inviteFailureText,
+  MAKE_MEMBER_BLOCKED_TITLE,
+  makeMemberBlockedTitle,
   MEMBERS_LOAD_FAILED_TEXT,
   memberIsGone,
   memberRoleChanged,
@@ -283,5 +285,78 @@ describe("Team: Leave's refusals", () => {
   it("says what to do, with the card's own control", () => {
     expect(LEAVE_SOLE_OWNER_MESSAGE).toBe("You're the only owner. Reload the page, make another member an owner with Make owner, then leave.");
     expect(LEAVE_NOT_MEMBER_MESSAGE).toBe("You're no longer a member of this workspace. Reload the page.");
+  });
+});
+
+// R36 new-customer L1: Remove, Make owner and Make member on someone else change
+// who Delete account and Delete this workspace would refuse. Settings works
+// those refusals out on the server, so a successful press refreshes the server
+// parts (the card keeps its state); a failed one, which changed nothing, doesn't.
+describe("Team: a member change refreshes the delete dialogs' refusals", () => {
+  const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+  const handler = (name: string) => {
+    const start = source.indexOf(`const ${name} = useCallback`);
+    return source.slice(start, source.indexOf("}, [", start));
+  };
+  // The failure block: from the !response.ok check to its closing brace.
+  const failureEnd = (body: string) => body.indexOf("\n    }\n", body.indexOf("if (!response.ok) {"));
+
+  for (const name of ["confirmRemove", "confirmPromote", "confirmDemote"]) {
+    it(`${name}: refreshes after a success, never in the failure block`, () => {
+      const body = handler(name);
+      const end = failureEnd(body);
+      expect(end, name).toBeGreaterThan(0);
+      expect(body.slice(0, end), name).not.toContain("router.refresh()");
+      expect(body.slice(end), name).toContain("router.refresh();");
+    });
+  }
+
+  it("Make member on someone else refreshes, not only on yourself", () => {
+    const body = handler("confirmDemote");
+    const selfEnd = body.indexOf("return;", body.indexOf("if (demoteTarget.userId === currentUserId)"));
+    expect(body.slice(selfEnd)).toContain("router.refresh();");
+  });
+
+  it("each handler lists router in its dependencies", () => {
+    for (const name of ["confirmRemove", "confirmPromote"]) {
+      const start = source.indexOf(`const ${name} = useCallback`);
+      const deps = source.slice(source.indexOf("}, [", start), source.indexOf("]);", start));
+      expect(deps, name).toContain("router");
+    }
+  });
+});
+
+// R36 new-customer L2 (pages L1): a sole owner's own greyed Make member named a
+// step nobody can take. Its title follows the Leave line's rule.
+describe("Team: the owner's own greyed Make member", () => {
+  const owner = { role: "owner" };
+  const member = { role: "member" };
+
+  it("with other members: names Make owner", () => {
+    expect(makeMemberBlockedTitle([owner, member], false)).toBe(MAKE_MEMBER_BLOCKED_TITLE);
+    expect(makeMemberBlockedTitle([owner, member], true)).toBe(MAKE_MEMBER_BLOCKED_TITLE);
+    expect(MAKE_MEMBER_BLOCKED_TITLE).toContain("Make owner");
+  });
+
+  it("alone, or with a co-owner, or before the list loads: no title", () => {
+    expect(makeMemberBlockedTitle([owner], false)).toBeUndefined();
+    expect(makeMemberBlockedTitle([owner], true)).toBeUndefined();
+    expect(makeMemberBlockedTitle([owner, owner], false)).toBeUndefined();
+    expect(makeMemberBlockedTitle(null, false)).toBeUndefined();
+  });
+
+  it("the button takes its title from that rule", () => {
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    expect(source).toContain("title={makeMemberBlockedTitle(members, onlyWorkspace)}");
+  });
+
+  it("no text a person reads on the Team card says promote", () => {
+    for (const file of ["team-section.tsx", "../lib/leaveRefusals.ts"]) {
+      const source = readFileSync(join(__dirname, file), "utf8");
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      // A word a person reads; identifiers such as promoteTarget and PROMOTE_FAILED are code.
+      const words = code.match(/(?<![A-Za-z_])promot(?:e|ed|es|ing|ion)?(?![A-Za-z_])/gi) ?? [];
+      expect(words, file).toEqual([]);
+    }
   });
 });

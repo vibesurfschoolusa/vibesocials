@@ -165,6 +165,23 @@ export function leaveBlockedText(
   return soleOwnerLeaveStep(soleOwnerLeaveCase({ otherMembers, onlyWorkspace }));
 }
 
+/** R36 new-customer L2: the owner's own greyed Make member, with members to make owner. */
+export const MAKE_MEMBER_BLOCKED_TITLE = "Make another member an owner with Make owner first.";
+
+/**
+ * The title on the only owner's own disabled Make member, from the Leave line's
+ * rule (soleOwnerLeaveCase): with other members it names Make owner; alone
+ * there is no one to make an owner, so no title (the Leave line says what to do).
+ */
+export function makeMemberBlockedTitle(
+  members: ReadonlyArray<{ role: string }> | null,
+  onlyWorkspace: boolean,
+): string | undefined {
+  if (!soleOwnerKnown(members) || members === null) return undefined;
+  const otherMembers = members.filter((m) => m.role !== "owner").length;
+  return soleOwnerLeaveCase({ otherMembers, onlyWorkspace }) === "sole_owner" ? MAKE_MEMBER_BLOCKED_TITLE : undefined;
+}
+
 export const MEMBERS_LOAD_FAILED_TEXT = "Couldn't load members. Try reloading the page.";
 
 /**
@@ -943,7 +960,11 @@ function OwnerView({
     if (outcome.notice) {
       toast.info(outcome.notice);
     }
-  }, [dropMember, removeTarget, toast, workspaceId]);
+    // R36 new-customer L1: Settings works out what Delete account and Delete
+    // this workspace would refuse on the server; the server parts re-render
+    // with the new members (the card keeps its state, open dialogs their typing).
+    router.refresh();
+  }, [dropMember, removeTarget, router, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Promote
   // member -> owner only ever ADDS an owner, so patch local state in place
@@ -972,7 +993,9 @@ function OwnerView({
         : prev,
     );
     toast.success("Role updated.");
-  }, [dropMember, promoteTarget, toast, workspaceId]);
+    // R36 new-customer L1: a second owner changes what the delete dialogs refuse.
+    router.refresh();
+  }, [dropMember, promoteTarget, router, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Demote
   // owner -> member. Demoting YOURSELF drops you out of OwnerView, so on that
@@ -1024,6 +1047,8 @@ function OwnerView({
         ? prev.map((m): Member => (m.userId === demoteTarget.userId ? { ...m, role: "member" } : m))
         : prev,
     );
+    // R36 new-customer L1: one owner fewer changes what the delete dialogs refuse.
+    router.refresh();
   }, [demoteTarget, currentUserId, dropMember, router, toast, workspaceId]);
 
   // R5-security L1: one press, after a confirm (R6 L2), replaces every client
@@ -1212,7 +1237,7 @@ function OwnerView({
                       variant="ghost"
                       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                       disabled={ownerCount < 2}
-                      title={ownerCount < 2 ? "Promote another owner first." : undefined}
+                      title={makeMemberBlockedTitle(members, onlyWorkspace)}
                       onClick={() => setDemoteTarget(member)}
                     >
                       Make member
