@@ -70,17 +70,23 @@ describe("refreshLinkedInOrganizationProfiles", () => {
           organizations: [{ id: "101", name: "Vibe Surf School", vanityName: "vibe-surf-school" }],
           username: "Vibe Surf School",
           organizationsFetchedAt: NOW.toISOString(),
+          organizationsTriedAt: NOW.toISOString(),
         },
       },
     });
   });
 
-  it("keeps a name read within eight weeks when this read fails", async () => {
+  it("keeps a name read within eight weeks when this read fails, recording only the try", async () => {
     findManyMock.mockResolvedValue([connection()]);
     lookupOrganizationMock.mockResolvedValue(null);
 
     expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
-    expect(updateMock).not.toHaveBeenCalled();
+    // Lead review (R35): the name, vanity name and read time are as they were.
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "conn-1" },
+      data: { metadata: { ...connection().metadata, organizationsTriedAt: NOW.toISOString() } },
+    });
   });
 
   it("deletes the name and vanity name eight weeks after the last read, keeping the page id", async () => {
@@ -112,9 +118,18 @@ describe("refreshLinkedInOrganizationProfiles", () => {
     lookupOrganizationMock.mockResolvedValue(null);
 
     expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 1 });
+    // One write: the clean-up, with this run's try recorded.
+    expect(updateMock).toHaveBeenCalledTimes(1);
     expect(updateMock).toHaveBeenCalledWith({
       where: { id: "conn-1" },
-      data: { metadata: { organizations: [{ id: "101" }], username: null, organizationsFetchedAt: null } },
+      data: {
+        metadata: {
+          organizations: [{ id: "101" }],
+          username: null,
+          organizationsFetchedAt: null,
+          organizationsTriedAt: NOW.toISOString(),
+        },
+      },
     });
   });
 
@@ -131,7 +146,14 @@ describe("refreshLinkedInOrganizationProfiles", () => {
     expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
     expect(lookupOrganizationMock).toHaveBeenCalledTimes(1);
     expect(lookupOrganizationMock).toHaveBeenCalledWith("li-token", "202");
-    expect(updateMock).not.toHaveBeenCalled();
+    // Only the try is recorded; nothing to clear.
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock.mock.calls[0][0].data.metadata).toEqual({
+      organizations: [{ id: "202" }],
+      username: null,
+      organizationsFetchedAt: null,
+      organizationsTriedAt: NOW.toISOString(),
+    });
   });
 
   it("answers counts only, never a token", async () => {
@@ -170,8 +192,14 @@ describe("refreshLinkedInOrganizationProfiles: bounded", () => {
 
     expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 1, cleared: 0 });
     expect(lookedUp()).toEqual(["org-a", "org-b"]);
-    expect(updateMock).toHaveBeenCalledTimes(1);
-    expect(updateMock.mock.calls[0][0].where).toEqual({ id: "b" });
+    // "a" records only its try; its name stays.
+    expect(updateMock).toHaveBeenCalledTimes(2);
+    const byId = Object.fromEntries(updateMock.mock.calls.map((call) => [call[0].where.id, call[0].data.metadata]));
+    expect(byId.a.organizations).toEqual([{ id: "org-a", name: "Name a" }]);
+    expect(byId.a.username).toBe("Name a");
+    expect(byId.a.organizationsFetchedAt).toBe(daysAgo(3));
+    expect(byId.a.organizationsTriedAt).toBe(NOW.toISOString());
+    expect(byId.b.username).toBe("New B");
   });
 
   it("the cap stops the lookups", async () => {
@@ -209,7 +237,7 @@ describe("refreshLinkedInOrganizationProfiles: bounded", () => {
   it("the eight-week clean-up still runs for rows past the cap or the budget", async () => {
     const rows = [
       ...Array.from({ length: 25 }, (_, index) => row(`r${index}`, 57)),
-      row("late", 57),
+      row("z-late", 57), // ties go by id: "z-late" comes last
     ];
     findManyMock.mockResolvedValue(rows);
     let at = 0;
@@ -221,11 +249,11 @@ describe("refreshLinkedInOrganizationProfiles: bounded", () => {
     const summary = await refreshLinkedInOrganizationProfiles(NOW, () => at);
 
     expect(lookupOrganizationMock).toHaveBeenCalledTimes(25);
-    expect(lookedUp()).not.toContain("org-late");
+    expect(lookedUp()).not.toContain("org-z-late");
     expect(summary).toEqual({ refreshed: 1, cleared: 25 });
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "late" },
-      data: { metadata: { organizations: [{ id: "org-late" }], username: null, organizationsFetchedAt: null } },
+      where: { id: "z-late" },
+      data: { metadata: { organizations: [{ id: "org-z-late" }], username: null, organizationsFetchedAt: null } },
     });
 
     // Budget spent before the first lookup: no LinkedIn call, the clean-up as usual.
@@ -237,5 +265,91 @@ describe("refreshLinkedInOrganizationProfiles: bounded", () => {
     expect(await refreshLinkedInOrganizationProfiles(NOW, late)).toEqual({ refreshed: 0, cleared: 1 });
     expect(lookupOrganizationMock).not.toHaveBeenCalled();
     expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Lead review (R35): a lookup that keeps failing (lost page admin, app removed
+// on LinkedIn) writes no read time, and a row cleared at eight weeks has none,
+// so ordering by the read time alone kept those rows first every day. Rows are
+// picked by the later of last tried and last read, never-tried first, then id.
+describe("refreshLinkedInOrganizationProfiles: which rows are tried", () => {
+  type Meta = Record<string, unknown>;
+  const row = (id: string, metadata: Meta) => ({ ...connection(), id, metadata });
+  const named = (id: string, readDaysAgo: number | null, extra: Meta = {}) =>
+    row(id, {
+      organizations: [{ id: `org-${id}`, name: `Name ${id}` }],
+      username: `Name ${id}`,
+      ...(readDaysAgo === null ? {} : { organizationsFetchedAt: daysAgo(readDaysAgo) }),
+      ...extra,
+    });
+  const lookedUp = () => lookupOrganizationMock.mock.calls.map((call) => call[1] as string);
+
+  it("rows that keep failing don't starve a healthy one across two runs", async () => {
+    // 30 broken rows, already cleared (no name, no read time), and one healthy row read 50 days ago.
+    const broken = Array.from({ length: 30 }, (_, index) => {
+      const id = `x${String(index).padStart(2, "0")}`;
+      return row(id, { organizations: [{ id: `org-${id}` }], username: null, organizationsFetchedAt: null });
+    });
+    let rows = [...broken, named("healthy", 50)];
+
+    const run = async (at: Date) => {
+      vi.clearAllMocks();
+      updateMock.mockResolvedValue({});
+      findManyMock.mockResolvedValue(rows);
+      lookupOrganizationMock.mockImplementation(async (_token: string, id: string) =>
+        id === "org-healthy" ? { id, name: "Healthy" } : null,
+      );
+      await refreshLinkedInOrganizationProfiles(at);
+      // The next day's rows carry this run's writes.
+      const writes = new Map(updateMock.mock.calls.map((call) => [call[0].where.id as string, call[0].data.metadata]));
+      rows = rows.map((r) => (writes.has(r.id) ? { ...r, metadata: writes.get(r.id) } : r));
+      return lookedUp();
+    };
+
+    const first = await run(NOW);
+    expect(first).toHaveLength(25);
+    expect(first).not.toContain("org-healthy");
+    const second = await run(new Date(NOW.getTime() + DAY));
+    // The five broken rows not reached on day one go first on day two, then the healthy one.
+    expect(second.slice(0, 6)).toEqual(["org-x25", "org-x26", "org-x27", "org-x28", "org-x29", "org-healthy"]);
+    expect(rows.find((r) => r.id === "healthy")?.metadata.username).toBe("Healthy");
+  });
+
+  it("orders by the later of last tried and last read, never tried first, ties by id", async () => {
+    findManyMock.mockResolvedValue([
+      named("d", 20, { organizationsTriedAt: daysAgo(1) }), // tried yesterday: last
+      named("c", 10),
+      named("b", null),
+      named("a", null),
+      named("e", 30, { organizationsTriedAt: daysAgo(10) }), // the later is 10 days: ties with c
+    ]);
+    lookupOrganizationMock.mockResolvedValue(null);
+
+    await refreshLinkedInOrganizationProfiles(NOW);
+
+    expect(lookedUp()).toEqual(["org-a", "org-b", "org-c", "org-e", "org-d"]);
+  });
+
+  it("the order does not depend on the order the database answers in", async () => {
+    const rows = [named("m", null), named("k", null), named("l", 5), named("j", 5)];
+    lookupOrganizationMock.mockResolvedValue(null);
+    findManyMock.mockResolvedValue(rows);
+    await refreshLinkedInOrganizationProfiles(NOW);
+    const once = lookedUp();
+    vi.clearAllMocks();
+    updateMock.mockResolvedValue({});
+    lookupOrganizationMock.mockResolvedValue(null);
+    findManyMock.mockResolvedValue([...rows].reverse());
+    await refreshLinkedInOrganizationProfiles(NOW);
+    expect(lookedUp()).toEqual(once);
+    expect(once).toEqual(["org-k", "org-m", "org-j", "org-l"]);
+  });
+
+  it("a row not tried (an expired token) gets no try recorded", async () => {
+    findManyMock.mockResolvedValue([{ ...named("old", 3), expiresAt: new Date(NOW.getTime() - DAY) }]);
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(lookupOrganizationMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
