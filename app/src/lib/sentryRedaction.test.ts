@@ -303,10 +303,10 @@ describe("redactLinkTokens", () => {
     [`/api/review-link/${SECRET}/posts/p1`, "/api/review-link/[token]/posts/p1"],
     [`/api/upload-link/${SECRET}/upload`, "/api/upload-link/[token]/upload"],
     [`/api/invites/${SECRET}/accept`, "/api/invites/[token]/accept"],
-    [`https://vibesocials.wtf/c/${SECRET}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=2"],
+    [`https://vibesocials.wtf/c/${SECRET}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=[Filtered]"],
     [`GET /v/${SECRET}`, "GET /v/[token]"],
     [`POST https://vibesocials.wtf/api/invites/${SECRET}/accept`, "POST https://vibesocials.wtf/api/invites/[token]/accept"],
-    [`/c/${SECRET}?x=1`, "/c/[token]?x=1"],
+    [`/c/${SECRET}?x=1`, "/c/[token]?x=[Filtered]"],
   ])("%s becomes %s", (input, output) => {
     expect(redactLinkTokens(input)).toBe(output);
     expect(redactLinkTokens(input)).not.toContain(SECRET);
@@ -404,36 +404,40 @@ describe("redactLinkTokens: fragments and query values", () => {
     ["https://vibesocials.wtf/reset-password#RESET-SECRET", "https://vibesocials.wtf/reset-password"],
     ["https://vibesocials.wtf/verify-email/undo#UNDO-SECRET", "https://vibesocials.wtf/verify-email/undo"],
     ["/verify-email/new-address#NEW-SECRET", "/verify-email/new-address"],
-    ["/verify-email?x=1#VERIFY-SECRET", "/verify-email?x=1"],
+    ["/verify-email?x=1#VERIFY-SECRET", "/verify-email?x=[Filtered]"],
     ["navigated to /reset-password#RESET-SECRET now", "navigated to /reset-password now"],
   ])("%s loses its fragment", (input, output) => {
     expect(redactLinkTokens(input)).toBe(output);
   });
 
   it.each([
-    ["/login?callbackUrl=%2Fjoin%2FJOIN-SECRET", "/login?callbackUrl=%2Fjoin%2F%5Btoken%5D"],
+    ["/login?callbackUrl=%2Fjoin%2FJOIN-SECRET", "/login?callbackUrl=[Filtered]"],
     [
       "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET&x=1",
-      "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2F%5Btoken%5D&x=1",
+      "https://vibesocials.wtf/login?callbackUrl=[Filtered]&x=[Filtered]",
     ],
-    ["/login?callbackUrl=/c/CLIENT-SECRET", "/login?callbackUrl=%2Fc%2F%5Btoken%5D"],
+    ["/login?callbackUrl=/c/CLIENT-SECRET", "/login?callbackUrl=[Filtered]"],
     [
       "/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2FINVITE-SECRET%2Faccept",
-      "/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2F%5Btoken%5D%2Faccept",
+      "/login?callbackUrl=[Filtered]",
     ],
   ])("%s keeps no token in its query", (input, output) => {
     expect(redactLinkTokens(input)).toBe(output);
     expect(redactLinkTokens(input)).not.toMatch(/SECRET/);
   });
 
+  // R45 security L1: every query value is filtered, with or without a token in it.
   it.each([
-    "/login?callbackUrl=%2Fdashboard",
-    "https://vibesocials.wtf/login?callbackUrl=%2Fsettings%23plan2&tab=1",
-    "/posts?page=2&q=surf%20lessons",
-    "/login?callbackUrl=%E0%A4%A",
-    "div#main > button",
-  ])("%s, with no token, is unchanged", (input) => {
-    expect(redactLinkTokens(input)).toBe(input);
+    ["/login?callbackUrl=%2Fdashboard", "/login?callbackUrl=[Filtered]"],
+    ["https://vibesocials.wtf/login?callbackUrl=%2Fsettings%23plan2&tab=1", "https://vibesocials.wtf/login?callbackUrl=[Filtered]&tab=[Filtered]"],
+    ["/posts?page=2&q=surf%20lessons", "/posts?page=[Filtered]&q=[Filtered]"],
+    ["/login?callbackUrl=%E0%A4%A", "/login?callbackUrl=[Filtered]"],
+  ])("%s keeps only its query names", (input, output) => {
+    expect(redactLinkTokens(input)).toBe(output);
+  });
+
+  it("div#main > button, with no URL in it, is unchanged", () => {
+    expect(redactLinkTokens("div#main > button")).toBe("div#main > button");
   });
 
   it("an event's request URL and query string lose the fragment and the callbackUrl token", () => {
@@ -441,8 +445,8 @@ describe("redactLinkTokens: fragments and query values", () => {
       request: { url: "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET#FRAG-SECRET", query_string: "callbackUrl=%2Fjoin%2FJOIN-SECRET" },
     });
     expect(JSON.stringify(out)).not.toContain("SECRET");
-    expect(out.request?.url).toBe("https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2F%5Btoken%5D");
-    expect(out.request?.query_string).toBe("callbackUrl=%2Fjoin%2F%5Btoken%5D");
+    expect(out.request?.url).toBe("https://vibesocials.wtf/login?callbackUrl=[Filtered]");
+    expect(out.request?.query_string).toBe("callbackUrl=[Filtered]");
   });
 
   it("a navigation breadcrumb to a #token page loses the fragment", () => {
@@ -546,7 +550,7 @@ describe("redactForSentry: nothing private in the whole event", () => {
 
   it("redacts the link paths it walks into and keeps the rest", () => {
     const out = redactForSentry(event);
-    expect(out.contexts.nextjs).toEqual({ request_path: "/api/review-link/[token]?x=1", router_kind: "App Router" });
+    expect(out.contexts.nextjs).toEqual({ request_path: "/api/review-link/[token]?x=[Filtered]", router_kind: "App Router" });
     expect(out.tags).toEqual({ path: "/v/[token]", runtime: "nodejs" });
     expect(out.extra.link).toBe("/api/upload-link/[token]/upload");
     expect(out.extra.nested.deeper[0].url).toBe("/api/invites/[token]/accept");
@@ -563,7 +567,7 @@ describe("redactForSentry: nothing private in the whole event", () => {
     const plain = {
       message: "Upload failed: 50% done",
       extra: { note: "100%25 sure", list: [1, true, null, "a/b"] },
-      contexts: { nextjs: { request_path: "/dashboard?tab=2" } },
+      contexts: { nextjs: { request_path: "/dashboard" } },
       request: { url: "https://vibesocials.wtf/settings" },
     };
     expect(redactForSentry(plain)).toEqual(plain);
@@ -605,7 +609,7 @@ describe("redactForSentry: nothing private in the whole event", () => {
 
   it("a browser fetch breadcrumb to a relative path keeps the path, token redacted", () => {
     const out = redactForSentry({ category: "fetch", data: { url: "/api/review-link/REL-SECRET/posts?page=2", method: "GET" } });
-    expect(out.data).toEqual({ url: "/api/review-link/[token]/posts?page=2", method: "GET" });
+    expect(out.data).toEqual({ url: "/api/review-link/[token]/posts?page=[Filtered]", method: "GET" });
   });
 });
 
@@ -624,4 +628,51 @@ describe("SENTRY_DATA_COLLECTION", () => {
       frameContextLines: 7,
     });
   });
+});
+
+// R45 security L1: Next's http.target on the root span and the browser's
+// navigation breadcrumbs carry whole queries, so no query value reaches Sentry.
+describe("redactForSentry: every query value is filtered, every name kept", () => {
+  it.each([
+    ["/admin?q=person%40example.com", "/admin?q=[Filtered]"],
+    [
+      "/api/instagram-photo?src=https%3A%2F%2Fblob.example%2Fp.jpg&exp=1763380000&sig=SIG-SECRET",
+      "/api/instagram-photo?src=[Filtered]&exp=[Filtered]&sig=[Filtered]",
+    ],
+    [
+      "/api/webhooks/meta?hub.mode=subscribe&hub.verify_token=VERIFY-SECRET&hub.challenge=123",
+      "/api/webhooks/meta?hub.mode=[Filtered]&hub.verify_token=[Filtered]&hub.challenge=[Filtered]",
+    ],
+    [
+      "https://vibesocials.wtf/api/oauth/x/callback?oauth_token=TOKEN-SECRET&oauth_verifier=VERIFIER-SECRET",
+      "https://vibesocials.wtf/api/oauth/x/callback?oauth_token=[Filtered]&oauth_verifier=[Filtered]",
+    ],
+    [
+      "GET /api/oauth/google/callback?code=CODE-SECRET&state=STATE-SECRET",
+      "GET /api/oauth/google/callback?code=[Filtered]&state=[Filtered]",
+    ],
+  ])("%s becomes %s", (input, output) => {
+    expect(redactLinkTokens(input)).toBe(output);
+    const out = redactForSentry({
+      contexts: { trace: { op: "http.server", data: { "http.target": input } } },
+      breadcrumbs: [{ category: "navigation", data: { from: "/dashboard", to: input } }],
+    });
+    expect(out.contexts.trace.data["http.target"]).toBe(output);
+    expect(out.breadcrumbs[0].data.to).toBe(output);
+    expect(JSON.stringify(out)).not.toMatch(/SECRET|person|1763380000/);
+  });
+
+  it("a bare query string keeps its names only", () => {
+    expect(redactForSentry({ request: { query_string: "q=person%40example.com&page=2" } }).request.query_string).toBe(
+      "q=[Filtered]&page=[Filtered]",
+    );
+  });
+
+  it.each(["/dashboard", "https://vibesocials.wtf/settings", "/posts?draft", "/login?callbackUrl="])(
+    "%s, with no query value, is unchanged",
+    (input) => {
+      expect(redactLinkTokens(input)).toBe(input);
+      expect(redactForSentry({ message: input }).message).toBe(input);
+    },
+  );
 });

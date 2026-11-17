@@ -188,24 +188,25 @@ function redactLinkPaths(text: string): string {
     .replace(TOKEN_SEGMENT, `$1${LINK_TOKEN}"`);
 }
 
-/** A query value that holds a link path (`callbackUrl=%2Fjoin%2F<token>`), decoded, redacted and encoded again. */
+/** What every query value is replaced with; the names are kept. */
+export const FILTERED_VALUE = "[Filtered]";
+
+/**
+ * Every query value replaced by {@link FILTERED_VALUE}, the names kept. R45
+ * security L1: filtering only a value that held a link path let the rest
+ * through, and Next's http.target and the browser's navigation breadcrumbs
+ * carry whole queries (a search for an email address, a signed photo address,
+ * a webhook's verify token, an OAuth code or verifier).
+ */
 function redactQueryValues(text: string): string {
-  return text.replace(QUERY_VALUE, (match, name: string, value: string) => {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(value.replace(/\+/g, " "));
-    } catch {
-      return match;
-    }
-    const redacted = redactLinkPaths(decoded);
-    return redacted === decoded ? match : `${name}${encodeURIComponent(redacted)}`;
-  });
+  return text.replace(QUERY_VALUE, (match, name: string, value: string) => (value === "" ? match : `${name}${FILTERED_VALUE}`));
 }
 
 /**
- * `text` with no link token in it: every URL's or path's #fragment dropped (never
- * needed in Sentry), every query value holding a link path redacted, and the token
- * segment of every link path replaced by {@link LINK_TOKEN}.
+ * `text` with no link token and no query value in it: every URL's or path's
+ * #fragment dropped (never needed in Sentry), every query value replaced by
+ * {@link FILTERED_VALUE}, and the token segment of every link path replaced by
+ * {@link LINK_TOKEN}.
  */
 export function redactLinkTokens(text: string): string {
   return redactLinkPaths(redactQueryValues(text.replace(URL_FRAGMENT, "$1")));
