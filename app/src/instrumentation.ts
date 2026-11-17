@@ -1,6 +1,6 @@
 import type { Instrumentation } from "next";
 
-import { redactBreadcrumb, redactOutgoingSpan } from "@/lib/sentryRedaction";
+import { redactEventLinkTokens, redactServerBreadcrumb, redactServerSpan } from "@/lib/sentryRedaction";
 
 // Health track H1 — server/edge Sentry init (Next.js instrumentation hook,
 // stable since Next 15; see https://nextjs.org/docs/app/guides/instrumentation).
@@ -45,8 +45,12 @@ export async function register(): Promise<void> {
       // in span attributes. Upload sessions (the YouTube resumable session URI,
       // TikTok's upload_url, LinkedIn's part URLs) are capability URLs, so URLs are
       // redacted before either leaves the process (lib/sentryRedaction.ts).
-      beforeBreadcrumb: redactBreadcrumb,
-      beforeSendSpan: redactOutgoingSpan,
+      // R43: and an incoming path's link token (/c/, /u/, /v/, /join/ and their
+      // API routes) is replaced in spans, events, transactions and breadcrumbs.
+      beforeBreadcrumb: redactServerBreadcrumb,
+      beforeSendSpan: redactServerSpan,
+      beforeSend: redactEventLinkTokens,
+      beforeSendTransaction: redactEventLinkTokens,
     });
   }
 }

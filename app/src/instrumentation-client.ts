@@ -1,5 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 
+import { redactEventLinkTokens, redactLinkTokensInBreadcrumb } from "@/lib/sentryRedaction";
+
 // Health track H1 — client-side Sentry init.
 //
 // `instrumentation-client.ts` is a Next.js file convention (stable, no
@@ -24,6 +26,12 @@ if (dsn) {
     enabled: true,
     // Explicit (matches the default) -- see instrumentation.ts for why.
     sendDefaultPii: false,
+    // R43: the page URL carries a link's token on /c/, /u/, /v/ and /join/, and
+    // their API calls do too; it is replaced in events, the page-load
+    // transaction and navigation and fetch breadcrumbs (lib/sentryRedaction.ts).
+    beforeSend: redactEventLinkTokens,
+    beforeSendTransaction: redactEventLinkTokens,
+    beforeBreadcrumb: redactLinkTokensInBreadcrumb,
   });
 }
 

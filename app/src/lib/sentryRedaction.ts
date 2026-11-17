@@ -148,3 +148,85 @@ export function redactOutgoingSpan<T extends SpanLike>(span: T): T {
   if (typeof span.description === "string") out.description = redactUrlsIn(span.description);
   return out;
 }
+
+// R43 (lead, from security's second half): incoming paths. The client connect,
+// upload and review links and the invite link carry their token in the path
+// (/c/, /u/, /v/, /join/ and the API routes behind them), and whoever holds the
+// token can use the link. An incoming request's URL reaches Sentry in the event's
+// request, the server span, the transaction name and the browser's navigation and
+// fetch breadcrumbs, so the token segment is replaced wherever those appear.
+
+/** What a link token is replaced with. */
+export const LINK_TOKEN = "[token]";
+
+/**
+ * A link path at the start of a path: after the start of the text, a space, or
+ * an absolute URL's host. The token is the segment after the prefix.
+ */
+const LINK_TOKEN_PATH =
+  /(^|\s|\/\/[^/\s?#]+)(\/(?:c|u|v|join|api\/(?:connect-link|review-link|upload-link|invites))\/)[^/?#\s]+/g;
+
+/** `text` with the token segment of every link path in it replaced by {@link LINK_TOKEN}. */
+export function redactLinkTokens(text: string): string {
+  return text.replace(LINK_TOKEN_PATH, (_match, before: string, prefix: string) => `${before}${prefix}${LINK_TOKEN}`);
+}
+
+/** A copy of `data` with every string value passed through redactLinkTokens. */
+function redactLinkTokensInData(data: { [key: string]: unknown }): { [key: string]: unknown } {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [key, typeof value === "string" ? redactLinkTokens(value) : value]),
+  );
+}
+
+/** A breadcrumb's message and string data without link tokens (navigation from/to, fetch url). */
+export function redactLinkTokensInBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T): T {
+  const out: T = { ...breadcrumb };
+  if (typeof breadcrumb.message === "string") out.message = redactLinkTokens(breadcrumb.message);
+  if (breadcrumb.data) out.data = redactLinkTokensInData(breadcrumb.data);
+  return out;
+}
+
+/** The server's `beforeBreadcrumb`: the outgoing rules, then link tokens. */
+export function redactServerBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T): T {
+  return redactLinkTokensInBreadcrumb(redactBreadcrumb(breadcrumb));
+}
+
+/**
+ * The server's `beforeSendSpan`: an outgoing span keeps its rules
+ * ({@link redactOutgoingSpan}); any other span (an incoming request) loses the
+ * link tokens in its description and string attributes.
+ */
+export function redactServerSpan<T extends SpanLike>(span: T): T {
+  if (span.op?.startsWith("http.client")) return redactOutgoingSpan(span);
+  const out: T = { ...span, data: redactLinkTokensInData(span.data) };
+  if (typeof span.description === "string") out.description = redactLinkTokens(span.description);
+  return out;
+}
+
+/** The parts of a Sentry event these helpers read; the real `Event` is assignable to it. */
+interface EventLike {
+  transaction?: string;
+  request?: { url?: string };
+  contexts?: { trace?: { description?: string; data?: { [key: string]: unknown } } };
+}
+
+/**
+ * `beforeSend` / `beforeSendTransaction`: the request URL, the transaction name
+ * and the trace context (a transaction's root span) without link tokens. The
+ * event it was given is not modified.
+ */
+export function redactEventLinkTokens<T extends EventLike>(event: T): T {
+  const out: T = { ...event };
+  if (typeof event.transaction === "string") out.transaction = redactLinkTokens(event.transaction);
+  if (event.request && typeof event.request.url === "string") {
+    out.request = { ...event.request, url: redactLinkTokens(event.request.url) };
+  }
+  const trace = event.contexts?.trace;
+  if (trace) {
+    const redacted = { ...trace };
+    if (typeof trace.description === "string") redacted.description = redactLinkTokens(trace.description);
+    if (trace.data) redacted.data = redactLinkTokensInData(trace.data);
+    out.contexts = { ...event.contexts, trace: redacted };
+  }
+  return out;
+}

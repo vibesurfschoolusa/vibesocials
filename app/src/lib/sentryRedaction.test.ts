@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { redactBreadcrumb, redactOutgoingSpan, redactOutgoingUrl } from "./sentryRedaction";
+import {
+  LINK_TOKEN,
+  redactBreadcrumb,
+  redactEventLinkTokens,
+  redactLinkTokens,
+  redactLinkTokensInBreadcrumb,
+  redactOutgoingSpan,
+  redactOutgoingUrl,
+  redactServerSpan,
+} from "./sentryRedaction";
 
 // 2026-11-02 scale audit (jobs B3): Sentry's automatic fetch / http instrumentation
 // records the URL of every outgoing request, query included, in breadcrumbs and span
@@ -274,5 +283,116 @@ describe("redactOutgoingSpan", () => {
 
     expect(out.data).toEqual({ "url.full": "https://api.example.com/v1/x" });
     expect(out).not.toHaveProperty("description");
+  });
+});
+
+// R43 (lead, from security's second half): the client, review, upload and invite
+// links carry their token in the path, and an incoming request's URL reaches
+// Sentry in its request, its span, its transaction and the browser's
+// breadcrumbs. Whoever holds the token can use the link.
+describe("redactLinkTokens", () => {
+  const SECRET = "Tok3n-SECRET_abc";
+
+  it.each([
+    [`/c/${SECRET}`, "/c/[token]"],
+    [`/u/${SECRET}`, "/u/[token]"],
+    [`/v/${SECRET}`, "/v/[token]"],
+    [`/join/${SECRET}`, "/join/[token]"],
+    [`/api/connect-link/${SECRET}/start`, "/api/connect-link/[token]/start"],
+    [`/api/connect-link/${SECRET}/pending`, "/api/connect-link/[token]/pending"],
+    [`/api/review-link/${SECRET}`, "/api/review-link/[token]"],
+    [`/api/review-link/${SECRET}/posts/p1`, "/api/review-link/[token]/posts/p1"],
+    [`/api/upload-link/${SECRET}/upload`, "/api/upload-link/[token]/upload"],
+    [`/api/invites/${SECRET}/accept`, "/api/invites/[token]/accept"],
+    [`https://vibesocials.wtf/c/${SECRET}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=2#top"],
+    [`GET /v/${SECRET}`, "GET /v/[token]"],
+    [`POST https://vibesocials.wtf/api/invites/${SECRET}/accept`, "POST https://vibesocials.wtf/api/invites/[token]/accept"],
+    [`/c/${SECRET}?x=1`, "/c/[token]?x=1"],
+  ])("%s becomes %s", (input, output) => {
+    expect(redactLinkTokens(input)).toBe(output);
+    expect(redactLinkTokens(input)).not.toContain(SECRET);
+  });
+
+  it.each([
+    "/dashboard",
+    "/c",
+    "/c/",
+    "/settings/connections/c/abc",
+    "/api/invites",
+    "/api/posts/abc",
+    "https://vibesocials.wtf/join",
+    "/c/[token]",
+    "/vendor/v1",
+    "https://cdn.example/u",
+  ])("%s, with no link token, is unchanged", (input) => {
+    expect(redactLinkTokens(input)).toBe(input);
+  });
+
+  it("the placeholder is [token]", () => {
+    expect(LINK_TOKEN).toBe("[token]");
+  });
+});
+
+describe("redactServerSpan: incoming spans lose the token, outgoing keep their rules", () => {
+  it("an incoming request span", () => {
+    const span = {
+      op: "http.server",
+      description: "GET /c/SECRET-1",
+      data: { "url.full": "https://vibesocials.wtf/c/SECRET-1?a=1", "http.target": "/c/SECRET-1?a=1", "url.path": "/c/SECRET-1", "http.status_code": 200 },
+    };
+    const out = redactServerSpan(span);
+    expect(JSON.stringify(out)).not.toContain("SECRET-1");
+    expect(out.description).toBe("GET /c/[token]");
+    expect(out.data["http.status_code"]).toBe(200);
+    expect(span.description).toBe("GET /c/SECRET-1");
+  });
+
+  it("an outgoing span is redacted exactly as redactOutgoingSpan does", () => {
+    const span = {
+      op: "http.client",
+      description: "PUT https://www.googleapis.com/upload/youtube/v3/videos",
+      data: { "url.full": YOUTUBE_SESSION, "http.query": "?upload_id=SESSION-SECRET-1" },
+    };
+    expect(redactServerSpan(span)).toEqual(redactOutgoingSpan(span));
+  });
+});
+
+describe("redactEventLinkTokens", () => {
+  it("the request URL, the transaction and the trace context lose the token", () => {
+    const event = {
+      transaction: "GET /join/SECRET-2",
+      request: { url: "https://vibesocials.wtf/join/SECRET-2", method: "GET" },
+      contexts: { trace: { op: "http.server", description: "GET /join/SECRET-2", data: { "url.full": "https://vibesocials.wtf/join/SECRET-2", n: 1 } } },
+      message: "kept",
+    };
+    const out = redactEventLinkTokens(event);
+    expect(JSON.stringify(out)).not.toContain("SECRET-2");
+    expect(out.transaction).toBe("GET /join/[token]");
+    expect(out.request?.url).toBe("https://vibesocials.wtf/join/[token]");
+    expect(out.request?.method).toBe("GET");
+    expect(out.message).toBe("kept");
+    expect(event.transaction).toBe("GET /join/SECRET-2");
+  });
+
+  it("an event with none of them is returned as it is", () => {
+    const event: { message: string; transaction?: string } = { message: "x" };
+    expect(redactEventLinkTokens(event)).toEqual({ message: "x" });
+  });
+});
+
+describe("redactLinkTokensInBreadcrumb", () => {
+  it("a navigation breadcrumb's from and to", () => {
+    const out = redactLinkTokensInBreadcrumb({ category: "navigation", data: { from: "/", to: "/u/SECRET-3" } });
+    expect(out.data).toEqual({ from: "/", to: "/u/[token]" });
+  });
+
+  it("a fetch breadcrumb's relative URL and message", () => {
+    const out = redactLinkTokensInBreadcrumb({
+      category: "fetch",
+      message: "POST /api/upload-link/SECRET-3/upload",
+      data: { url: "/api/upload-link/SECRET-3/upload", method: "POST", status_code: 200 },
+    });
+    expect(JSON.stringify(out)).not.toContain("SECRET-3");
+    expect(out.data).toEqual({ url: "/api/upload-link/[token]/upload", method: "POST", status_code: 200 });
   });
 });
