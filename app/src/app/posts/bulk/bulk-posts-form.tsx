@@ -8,6 +8,7 @@ import { UploadCloud } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -934,10 +935,7 @@ export function BulkPostsForm({
             <p className="text-sm text-muted-foreground">Loading your platforms...</p>
           ) : connectionsError ? (
             <Alert variant="danger">
-              {connectionsError}{" "}
-              <Button variant="link" size="sm" onClick={reload}>
-                Try again
-              </Button>
+              <LoadError message={connectionsError} onRetry={reload} retryLabel="Try again" layout="inline" />
             </Alert>
           ) : offeredPlatforms.length === 0 ? (
             <NoPlatformConnectedLine isMember={isMember} onlyTikTok={tiktokConnected} />

@@ -7,6 +7,7 @@ import { CalendarClock, Copy, PlusCircle } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -1575,12 +1576,7 @@ export function QueueView({
           </>
         ) : error ? (
           <Alert variant="danger" title="Couldn't load your queue">
-            <div className="flex flex-col items-start gap-3">
-              <p>{error}</p>
-              <Button size="sm" variant="outline" onClick={handleReload}>
-                Retry
-              </Button>
-            </div>
+            <LoadError message={error} onRetry={handleReload} />
           </Alert>
         ) : (!jobs || jobs.length === 0) && view === "list" ? (
           <EmptyState

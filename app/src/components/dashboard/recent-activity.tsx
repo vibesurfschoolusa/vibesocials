@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ArrowRight, Inbox } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -83,12 +83,7 @@ export function RecentActivity({
         </>
       ) : error ? (
         <Alert variant="danger" title="Couldn't load activity">
-          <div className="flex flex-col items-start gap-3">
-            <p>{error}</p>
-            <Button size="sm" variant="outline" onClick={reload}>
-              Retry
-            </Button>
-          </div>
+          <LoadError message={error} onRetry={reload} />
         </Alert>
       ) : preview.length === 0 ? (
         <EmptyState

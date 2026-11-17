@@ -1235,7 +1235,7 @@ describe("Create: connections Retry and the status line", () => {
 
   it("Retry, which the loading skeleton replaces, keeps focus off the page body", () => {
     expect(source).toMatch(
-      /<Button\s+ref=\{connectionsRetryRef\}\s+size="sm"\s+variant="outline"\s+onClick=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => connectionsRetryRef\.current\);\s*reloadConnections\(\);/,
+      /<LoadError[\s\S]{0,200}retryRef=\{connectionsRetryRef\}\s+onRetry=\{\(event\) => \{\s*focusAfterPress\(event\.currentTarget, \(\) => connectionsRetryRef\.current\);\s*reloadConnections\(\);/,
     );
   });
 

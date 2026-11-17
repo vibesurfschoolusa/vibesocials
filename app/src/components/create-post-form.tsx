@@ -38,6 +38,7 @@ import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -2431,24 +2432,16 @@ function CreatePostFormInner({
       {untouchedStatus}
       <Card className="p-6">
         <Alert variant="danger" title="Couldn't load your connections">
-          <div className="flex flex-col items-start gap-3">
-            <p>
-              {connectionsError ?? CONNECTIONS_FAILED_TEXT} We need them to know which
-              platforms you can post to.
-            </p>
-            {/* R27 MM4: the loading skeleton replaces this button; focus goes to the next Retry or on, never the body. */}
-            <Button
-              ref={connectionsRetryRef}
-              size="sm"
-              variant="outline"
-              onClick={(event) => {
-                focusAfterPress(event.currentTarget, () => connectionsRetryRef.current);
-                reloadConnections();
-              }}
-            >
-              Retry
-            </Button>
-          </div>
+          {/* R27 MM4: the loading skeleton replaces Retry; focus goes to the next Retry or on, never the body. */}
+          <LoadError
+            message={connectionsError ?? CONNECTIONS_FAILED_TEXT}
+            detail="We need them to know which platforms you can post to."
+            retryRef={connectionsRetryRef}
+            onRetry={(event) => {
+              focusAfterPress(event.currentTarget, () => connectionsRetryRef.current);
+              reloadConnections();
+            }}
+          />
         </Alert>
       </Card>
       </>

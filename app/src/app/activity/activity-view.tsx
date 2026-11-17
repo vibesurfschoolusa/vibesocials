@@ -7,6 +7,7 @@ import { Inbox, PlusCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -125,12 +126,7 @@ function ActivityViewInner({ pageWorkspaceId }: { pageWorkspaceId: string | null
           </>
         ) : error ? (
           <Alert variant="danger" title="Couldn't load your activity">
-            <div className="flex flex-col items-start gap-3">
-              <p>{error}</p>
-              <Button size="sm" variant="outline" onClick={reload}>
-                Retry
-              </Button>
-            </div>
+            <LoadError message={error} onRetry={reload} />
           </Alert>
         ) : !jobs || jobs.length === 0 ? (
           <EmptyState

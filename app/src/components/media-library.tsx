@@ -20,6 +20,7 @@ import { CaptionCounter } from "@/components/caption-counter";
 import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import {
   Card,
   CardContent,
@@ -1029,12 +1030,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
           </>
         ) : error ? (
           <Alert variant="danger" title="Couldn't load your media">
-            <div className="flex flex-col items-start gap-3">
-              <p>{error}</p>
-              <Button size="sm" variant="outline" onClick={handleRetry}>
-                Retry
-              </Button>
-            </div>
+            <LoadError message={error} onRetry={handleRetry} />
           </Alert>
         ) : items.length === 0 && nextCursor === null ? (
           // Empty only when nothing is loaded AND no older page remains: after
