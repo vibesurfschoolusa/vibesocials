@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { forgotPasswordOutcome } from "./forgotPasswordOutcome";
+import { LIMIT_UNCHECKED_MESSAGE } from "./limitUncheckedMessage";
 
 const SENT = { kind: "sent" } as const;
 const TOO_MANY = {
@@ -54,5 +55,22 @@ describe("forgotPasswordOutcome with the route's own sentence", () => {
     expect(forgotPasswordOutcome(400, { error: 42 })).toEqual(GENERIC);
     expect(forgotPasswordOutcome(500, { error: "No account for that address." })).toEqual(GENERIC);
     expect(forgotPasswordOutcome(200, { error: "x" })).toEqual(SENT);
+  });
+});
+
+// R39 new-customer L1: the limit store failed, and the shared sentence (the
+// same for every address) says nothing was sent and when to try again.
+describe("forgotPasswordOutcome when the limit couldn't be checked", () => {
+  it("a 503 with the shared sentence shows it", () => {
+    expect(forgotPasswordOutcome(503, { error: LIMIT_UNCHECKED_MESSAGE })).toEqual({
+      kind: "error",
+      message: LIMIT_UNCHECKED_MESSAGE,
+    });
+  });
+
+  it("any other 5xx, or another 503 body, keeps its own words", () => {
+    expect(forgotPasswordOutcome(503, { error: "No account for that address." })).toEqual(GENERIC);
+    expect(forgotPasswordOutcome(503, null)).toEqual(GENERIC);
+    expect(forgotPasswordOutcome(502, { error: "x" })).toEqual(GENERIC);
   });
 });

@@ -10,13 +10,15 @@
  */
 
 import { answerLostText } from "./answerLost";
+import { LIMIT_UNCHECKED_MESSAGE } from "./limitUncheckedMessage";
 
 export type ForgotPasswordOutcome = { kind: "sent" } | { kind: "error"; message: string };
 
 /**
  * `data`: the answer's body. R28 NN2 (new-customer L3): a 400's sentence
  * ("Enter a valid email address.") depends only on what was typed, never on
- * whether an account exists, so it is shown; other bodies are not read.
+ * whether an account exists, so it is shown; so is the shared couldn't-check
+ * sentence. Other bodies are not read.
  */
 export function forgotPasswordOutcome(status: number | null, data?: { error?: unknown } | null): ForgotPasswordOutcome {
   if (status !== null && status >= 200 && status < 300) {
@@ -42,6 +44,11 @@ export function forgotPasswordOutcome(status: number | null, data?: { error?: un
   }
   if (status === 400 && typeof data?.error === "string" && data.error) {
     return { kind: "error", message: data.error };
+  }
+  // R39 new-customer L1: the limit store failed. The shared sentence is fixed,
+  // the same for every address, and says nothing was sent and when to retry.
+  if (data?.error === LIMIT_UNCHECKED_MESSAGE) {
+    return { kind: "error", message: LIMIT_UNCHECKED_MESSAGE };
   }
   return { kind: "error", message: "Something went wrong. Please try again." };
 }
