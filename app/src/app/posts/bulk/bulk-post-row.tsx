@@ -128,6 +128,12 @@ function uploadText(row: BulkRow): string | null {
  * would be lost. The box stays focusable (read-only, not disabled); when the
  * AI fails the old text stays and the box unlocks.
  */
+/** The row's caption failures, as one line; empty when there are none. */
+function captionFailureLine(row: Pick<BulkRow, "captionStatus" | "captionError" | "improveError">): string {
+  const failures = [row.captionStatus === "failed" ? row.captionError : null, row.improveError];
+  return failures.filter((text): text is string => Boolean(text)).join(" ");
+}
+
 export function captionLocked(row: Pick<BulkRow, "improving" | "captionOverwrite" | "captionStatus">): boolean {
   return row.improving || (row.captionOverwrite && (row.captionStatus === "waiting" || row.captionStatus === "writing"));
 }
@@ -239,15 +245,12 @@ export function BulkPostRow({
               if (!captionIsLocked) onCaptionChange(event.target.value);
             }}
           />
+          {/* R43 pages-a L4: one status line from the first render carries the
+              work and both failures, so each failure is announced once. A new
+              request empties it (the form clears both errors when one starts). */}
           <p role="status" id={`bulk-row-${row.id}-caption-status`} className="text-sm text-muted-foreground empty:sr-only">
-            {rewriting ? "Writing a new caption..." : ""}
+            {rewriting ? "Writing a new caption..." : captionFailureLine(row)}
           </p>
-          {row.captionStatus === "failed" ? (
-            <p className="text-sm text-muted-foreground">
-              {row.captionError ?? captionFailedText(null, undefined)}
-            </p>
-          ) : null}
-          {row.improveError ? <p className="text-sm text-muted-foreground">{row.improveError}</p> : null}
           {editable && row.upload === "done" && (row.captionStatus === "done" || row.captionStatus === "failed") ? (
             <div className="flex flex-wrap gap-2">
               {aiCaptions ? (

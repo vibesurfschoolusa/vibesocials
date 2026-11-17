@@ -675,7 +675,7 @@ export function BulkPostsForm({
   async function improveRow(id: string) {
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row || row.improving || !row.caption.trim()) return;
-    updateRow(id, { improving: true, improveError: null, sendError: null });
+    updateRow(id, { improving: true, captionError: null, improveError: null, sendError: null });
     const result = await requestImprovedCaption(row.caption, workspaceId);
     updateRow(
       id,

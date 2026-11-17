@@ -110,9 +110,10 @@ describe("Add many row: Improve", () => {
     expect(textarea(render(row()))).not.toContain("readOnly");
   });
 
-  it("a failure says so in one plain line under the box", () => {
+  it("a failure says so in one plain line under the box, in the caption's live region", () => {
     const html = render(row({ improveError: BULK_IMPROVE_FAILED_TEXT }));
-    expect(html).toContain(`<p class="text-sm text-muted-foreground">${BULK_IMPROVE_FAILED_TEXT}</p>`);
+    expect(html).toMatch(new RegExp(`<p role="status" id="bulk-row-r1-caption-status" class="[^"]*">${BULK_IMPROVE_FAILED_TEXT}</p>`));
+    expect(html.split(BULK_IMPROVE_FAILED_TEXT)).toHaveLength(2);
     expect(html).toContain("Sunny day");
   });
 });
@@ -331,5 +332,36 @@ describe("Add many row: a created draft", () => {
   it("the form clears a created draft's time through createdRowWhen", () => {
     const formSource = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
     expect(formSource).toMatch(/postId: result\.postId,\s*when: createdRowWhen\(mode, row\.when\),/);
+  });
+});
+
+// R43 pages-a L4: a caption failure was a plain line, silent for a screen
+// reader. Both failures now go in the caption's one status line, which is on
+// the page from the first render, so each is announced once.
+describe("Add many row: caption failures are announced", () => {
+  const WRITE_FAILED = "No caption was written. Write one yourself, or ask again.";
+
+  it("a Write again failure is in the status line, once", () => {
+    const html = render(row({ captionStatus: "failed", captionError: WRITE_FAILED }));
+    expect(html).toMatch(new RegExp(`<p role="status" id="bulk-row-r1-caption-status" class="[^"]*">${WRITE_FAILED}</p>`));
+    expect(html.split(WRITE_FAILED)).toHaveLength(2);
+  });
+
+  it("both failures share the one line", () => {
+    const html = render(row({ captionStatus: "failed", captionError: WRITE_FAILED, improveError: BULK_IMPROVE_FAILED_TEXT }));
+    expect(html).toMatch(
+      new RegExp(`<p role="status" id="bulk-row-r1-caption-status" class="[^"]*">${WRITE_FAILED} ${BULK_IMPROVE_FAILED_TEXT}</p>`),
+    );
+    expect(html.match(/role="status" id="bulk-row-r1-caption/g)).toHaveLength(1);
+  });
+
+  it("a new request clears the line: Write again and Improve both empty both failures when they start", () => {
+    const formSource = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(formSource).toMatch(/updateRow\(id, \{ improving: true, captionError: null, improveError: null, sendError: null \}\)/);
+    expect(formSource).toMatch(/updateRow\(id, \{ captionStatus: "waiting", captionOverwrite: true, captionError: null, improveError: null \}\)/);
+    // Once cleared, the line is empty even though the row's caption status is still "failed".
+    expect(render(row({ captionStatus: "failed", captionError: null, improving: true }))).toMatch(
+      /id="bulk-row-r1-caption-status" class="[^"]*"><\/p>/,
+    );
   });
 });
