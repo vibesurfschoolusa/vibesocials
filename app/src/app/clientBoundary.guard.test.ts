@@ -17,6 +17,21 @@ import { describe, expect, it } from "vitest";
  * Files without the directive that are only ever rendered inside client code
  * would be safe, but the scan cannot tell them from server files, so they are
  * held to the same rule: keep plain functions out of "use client" modules.
+ *
+ * Further down: components a server file renders that need the browser
+ * (handlers, hooks), and function props a server file passes to a client
+ * component.
+ *
+ * These are text scans, not a compiler. What they still cannot see:
+ * - handlers or functions passed through a spread (`{...props}`), a variable
+ *   (`render={renderRow}`), or as children (`{(row) => ...}`);
+ * - hooks called through an alias (`const use = React.useState`) or React 19's
+ *   bare `use(`;
+ * - a function prop on an element written after another prop's inline JSX on
+ *   the same element (the nearest `<Tag` before the prop is taken as its element);
+ * - side-effect imports (`import "./x"`) and require();
+ * - files outside src/app and src/components for the render scans.
+ * Every file without "use client" is treated as a server file.
  */
 
 const SRC = path.join(__dirname, "..");
@@ -156,20 +171,36 @@ describe("server code never calls a plain function from a \"use client\" module"
  * needs the browser says "use client".
  */
 
+/** The source with its comments taken out, so names in comments are not counted. */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+}
+
 /** The event-handler props and hook calls in a source, which only work in the browser. */
 export function browserOnlyCode(source: string): string[] {
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+  const code = withoutComments(source);
   const handlers = [...code.matchAll(/\s(on[A-Z]\w*)=\{/g)].map((match) => match[1]);
-  const hooks = [...code.matchAll(/(?<![.\w$])(use[A-Z]\w*)\s*\(/g)].map((match) => match[1]);
+  const hooks = [...code.matchAll(/(?:(?<![.\w$])|(?<=\bReact\.))(use[A-Z]\w*)\s*\(/g)].map((match) => match[1]);
   return [...new Set([...handlers, ...hooks])];
 }
 
-/** The project files a source imports at run time (type-only imports left out). */
+/**
+ * The project files a source loads at run time (type-only ones left out):
+ * imports, export-from re-exports (so a barrel such as components/ui/index.ts
+ * passes its importers on), and import("...") calls such as next/dynamic's.
+ */
 function runtimeImports(file: string, source: string): string[] {
+  const patterns = [
+    /import\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/g,
+    /export\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/g,
+    /(?<![.\w$])import\(\s*["']([^"']+)["']\s*\)/g,
+  ];
   const targets: string[] = [];
-  for (const match of source.matchAll(/import\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/g)) {
-    const target = resolveImport(file, match[1]);
-    if (target) targets.push(target);
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const target = resolveImport(file, match[1]);
+      if (target) targets.push(target);
+    }
   }
   return targets;
 }
@@ -196,6 +227,72 @@ export function serverRenderedBrowserCode(files: string[], read: (file: string) 
     if (isClientModule(source)) continue;
     const found = browserOnlyCode(source);
     if (found.length > 0) violations.push(`${path.relative(SRC, target)} (${found.join(", ")}) <- ${by.join(", ")}`);
+  }
+  return violations.sort();
+}
+
+/** Where a file's imported binding `local` comes from: the specifier and its exported name. */
+function importedBinding(source: string, local: string): { specifier: string; name: string } | null {
+  for (const match of source.matchAll(/import\s+(?!type\s)([^;]*?)\s+from\s+["']([^"']+)["']/g)) {
+    const clause = match[1];
+    const defaultName = /^([A-Za-z_$][\w$]*)/.exec(clause)?.[1];
+    if (defaultName === local) return { specifier: match[2], name: "default" };
+    for (const part of /\{([^}]*)\}/.exec(clause)?.[1].split(",") ?? []) {
+      if (/^type\s/.test(part.trim())) continue;
+      const [name, alias] = part.trim().split(/\s+as\s+/);
+      if (!name) continue;
+      if ((alias ?? name).trim() === local) return { specifier: match[2], name: name.trim() };
+    }
+  }
+  return null;
+}
+
+/** True when `name` exported by `file` comes from a "use client" module, following export-from. */
+function exportIsClient(file: string, name: string, read: (file: string) => string, seen = new Set<string>()): boolean {
+  if (seen.has(file)) return false;
+  seen.add(file);
+  const source = read(file);
+  if (isClientModule(source)) return true;
+  for (const match of source.matchAll(/export\s+(?:\{([^}]*)\}|\*)\s*from\s+["']([^"']+)["']/g)) {
+    const target = resolveImport(file, match[2]);
+    if (!target) continue;
+    if (match[1] === undefined) {
+      if (exportIsClient(target, name, read, seen)) return true;
+      continue;
+    }
+    for (const part of match[1].split(",")) {
+      const [original, alias] = part.trim().split(/\s+as\s+/);
+      if (original && (alias ?? original).trim() === name && exportIsClient(target, original.trim(), read, seen)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * "file: <Tag prop={function}>" for each inline function (not an on* handler,
+ * which browserOnlyCode reports) that a file without "use client" passes to a
+ * component from a "use client" module. Next cannot send a function to the
+ * browser, so the page crashes as it did in the hotfix.
+ */
+export function serverFunctionProps(files: string[], read: (file: string) => string): string[] {
+  const inScope = (file: string) => ["app", "components"].some((dir) => file.startsWith(path.join(SRC, dir) + path.sep));
+  const violations: string[] = [];
+  for (const file of files) {
+    const source = read(file);
+    if (!inScope(file) || isClientModule(source)) continue;
+    const code = withoutComments(source);
+    const inlineFunction = /\s([a-zA-Z]\w*)=\{\s*(?:async\s+)?(?:function\b|(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>)/g;
+    for (const match of code.matchAll(inlineFunction)) {
+      const prop = match[1];
+      if (/^on[A-Z]/.test(prop)) continue;
+      const tag = [...code.slice(0, match.index).matchAll(/<([A-Za-z][\w.]*)/g)].pop()?.[1];
+      if (!tag || !/^[A-Z]/.test(tag)) continue;
+      const binding = importedBinding(code, tag.split(".")[0]);
+      const target = binding && resolveImport(file, binding.specifier);
+      if (target && exportIsClient(target, binding.name, read)) {
+        violations.push(`${path.relative(SRC, file)}: <${tag} ${prop}={function}>`);
+      }
+    }
   }
   return violations.sort();
 }
@@ -238,5 +335,81 @@ describe("a component a server file renders has \"use client\" when it needs the
   it("ignores handlers and hooks named only in comments", () => {
     const commented = "// onClick={go} and useState( in a comment\n/* onChange={x} */\nexport const A = 1;\n";
     expect(scan({ [button]: commented, [page]: pageSource("") })).toEqual([]);
+  });
+});
+
+// Hotfix review lows (R33 SS1): the shapes the first scan could not see.
+describe("the boundary scan also follows", () => {
+  // Real paths, so the imports resolve; their sources are the fixtures below.
+  const panel = path.join(SRC, "components", "ui", "card.tsx");
+  const barrel = path.join(SRC, "components", "ui", "index.ts");
+  const page = path.join(SRC, "app", "reports", "page.tsx");
+  const by = path.join("app", "reports", "page.tsx");
+  const where = path.join("components", "ui", "card.tsx");
+
+  it("a hook called as React.useX(", () => {
+    const source = 'import React from "react";\nexport function Panel() { const [a] = React.useState(0); return a; }\n';
+    expect(browserOnlyCode(source)).toEqual(["useState"]);
+  });
+
+  it("a component reached through an export-from barrel", () => {
+    const sources: Record<string, string> = {
+      [page]: 'import { Panel } from "@/components/ui";\nexport default function Page() { return <Panel />; }\n',
+      [barrel]: 'export { Panel } from "@/components/ui/card";\n',
+      [panel]: 'export function Panel() { return <button onClick={() => {}} />; }\n',
+    };
+    expect(serverRenderedBrowserCode([page, barrel, panel], (file) => sources[file])).toEqual([
+      `${where} (onClick) <- ${path.join("components", "ui", "index.ts")}`,
+    ]);
+  });
+
+  it("a component loaded with next/dynamic", () => {
+    const sources: Record<string, string> = {
+      [page]:
+        'import dynamic from "next/dynamic";\nconst Panel = dynamic(() => import("@/components/ui/card"));\n' +
+        "export default function Page() { return <Panel />; }\n",
+      [panel]: 'import { useState } from "react";\nexport default function Panel() { useState(0); return null; }\n',
+    };
+    expect(serverRenderedBrowserCode([page, panel], (file) => sources[file])).toEqual([`${where} (useState) <- ${by}`]);
+  });
+
+  it("a function prop not named on* (a render prop) passed from a server file to a client component", () => {
+    const sources: Record<string, string> = {
+      [page]:
+        'import { Panel } from "@/components/ui";\n' +
+        "export default function Page() { return <Panel title=\"x\" renderRow={(row) => <p>{row}</p>} />; }\n",
+      [barrel]: 'export { Panel } from "@/components/ui/card";\n',
+      [panel]: '"use client";\nexport function Panel() { return null; }\n',
+    };
+    const files = [page, barrel, panel];
+    expect(serverFunctionProps(files, (file) => sources[file])).toEqual([`${by}: <Panel renderRow={function}>`]);
+  });
+
+  it("allows a function prop to a server component, an on* handler (the scan above has it), and a client file", () => {
+    const sources: Record<string, string> = {
+      [page]:
+        'import { Panel } from "@/components/ui/card";\n' +
+        "export default function Page() { return <Panel renderRow={function (row) { return row; }} />; }\n",
+      [panel]: "export function Panel() { return null; }\n",
+    };
+    expect(serverFunctionProps([page, panel], (file) => sources[file])).toEqual([]);
+    sources[panel] = '"use client";\nexport function Panel() { return null; }\n';
+    sources[page] = sources[page].replace("renderRow", "onRow");
+    expect(serverFunctionProps([page, panel], (file) => sources[file])).toEqual([]);
+    sources[page] = `"use client";\n${sources[page].replace("onRow", "renderRow")}`;
+    expect(serverFunctionProps([page, panel], (file) => sources[file])).toEqual([]);
+  });
+
+  it("finds no function prop passed from a server file to a client component under src/app and src/components", () => {
+    const files = ROOTS.flatMap(sourceFiles);
+    expect(serverFunctionProps(files, (file) => readFileSync(file, "utf8"))).toEqual([]);
+  });
+});
+
+// Hotfix review low: reply-form uses hooks and handlers, so it says so itself
+// rather than relying on every importer being a client file.
+describe("components that need the browser say \"use client\" themselves", () => {
+  it("reviews/reply-form.tsx", () => {
+    expect(isClientModule(readFileSync(path.join(SRC, "components", "reviews", "reply-form.tsx"), "utf8"))).toBe(true);
   });
 });
