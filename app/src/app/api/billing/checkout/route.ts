@@ -6,6 +6,7 @@ import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { isPlanKey } from "@/lib/plans";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { requireOwnerContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { startCheckout } from "@/server/billing/checkout";
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   // R43 security L1: the limit is an hour, so the refusal names the real wait.
   if (!rateLimit.allowed) return tooManyTriesResponse(rateLimit);
 

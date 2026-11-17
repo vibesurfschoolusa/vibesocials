@@ -7,6 +7,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
 
@@ -61,6 +62,7 @@ class ChangedAgain extends Error {}
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
   const rateLimit = await checkRateLimit({ userId: `ip:${ip}`, ...RATE_LIMIT, failClosed: true });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   // R43 security L3: a fixed window, so the refusal names the wait it has left.
   if (!rateLimit.allowed) return tooManyTriesResponse(rateLimit);
 

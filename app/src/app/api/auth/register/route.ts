@@ -9,6 +9,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
+import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
 import { addressHeldUntil } from "@/server/auth/undoWindow";
 
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
     ...REGISTER_RATE_LIMIT,
     failClosed: true,
   });
+  if (rateLimit.unavailable) return limitUncheckedResponse();
   // R43 new-customer L2: every try counts (typos too) against a fixed hour per
   // network, so the refusal says so and names the wait.
   if (!rateLimit.allowed) {
