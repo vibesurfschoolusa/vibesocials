@@ -48,7 +48,7 @@ import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, uploadRouteUrl } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
-import { pageWorkspaceRefusalText, withWorkspaceId } from "@/lib/workspaceChanged";
+import { pageWorkspaceRefusalText, WORKSPACE_CHANGED_SAVE_MESSAGE, withWorkspaceId } from "@/lib/workspaceChanged";
 import {
   appendMediaPage,
   buildMediaCreateBody,
@@ -440,7 +440,8 @@ export function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
           | null;
         if (cancelled) return;
         if (response.status === 409) {
-          setChangedMessage(data?.error ?? "Reload this page.");
+          // R41 second look L2: the shared switch sentence, so LoadError's step is Reload page.
+          setChangedMessage(pageWorkspaceRefusalText(data?.code) ?? WORKSPACE_CHANGED_SAVE_MESSAGE);
           setState("changed");
           return;
         }
@@ -575,7 +576,8 @@ export function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   if (state === "changed") {
     return (
       <Alert variant="warning" title="Client upload link">
-        <p>{changedMessage}</p>
+        {/* A refusal: LoadError offers Reload page, never Retry. */}
+        <LoadError message={changedMessage} onRetry={() => window.location.reload()} />
       </Alert>
     );
   }

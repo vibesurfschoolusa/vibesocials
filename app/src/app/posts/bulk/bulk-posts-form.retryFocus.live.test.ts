@@ -118,7 +118,7 @@ async function tryAgainThrough(next: () => Promise<Response>) {
     void props(retry!).onClick({ currentTarget: retry });
   });
   await settle();
-  expect(active().getAttribute?.("role") ?? active().attributes.role).toBe("status");
+  expect(active().attributes.role).toBe("status");
   expect(active().textContent).toBe("Loading your platforms...");
   await act(async () => {
     release();

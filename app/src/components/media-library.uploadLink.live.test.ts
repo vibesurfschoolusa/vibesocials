@@ -14,7 +14,7 @@ vi.mock("@vercel/blob/client", () => ({ upload: vi.fn() }));
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
-import { MISSING_WORKSPACE_ID_MESSAGE, renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
+import { MISSING_WORKSPACE_ID_MESSAGE, renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
 import { UPLOAD_LINK_LOAD_FAILED_TEXT, UPLOAD_LINK_LOAD_OFFLINE_TEXT, UploadLinkPanel } from "./media-library";
 
@@ -125,6 +125,15 @@ describe("Client upload link card when its read fails", () => {
     await mount();
     expect(alertNode()?.textContent).toContain(MISSING_WORKSPACE_ID_MESSAGE);
     expect(button("Reload page")).not.toBeNull();
+  });
+
+  // R41 second look L2: another tab switched workspace; only reloading helps.
+  it("a 409 (switched in another tab): the switch sentence with Reload page", async () => {
+    fetchMock.mockResolvedValue(renderedWorkspaceRefusal("ws-1", "ws-2") as Response);
+    await mount();
+    expect(container.textContent).toContain(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    expect(button("Reload page")).not.toBeNull();
+    expect(button("Retry")).toBeNull();
   });
 
   it("a 429: the server-problem sentence, not a missing card", async () => {
