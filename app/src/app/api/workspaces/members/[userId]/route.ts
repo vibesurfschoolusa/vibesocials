@@ -247,6 +247,16 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-owners:${workspaceId}`}))`;
 
+    // R36 lead second look: two owners demoting each other at once. The other's
+    // request may have made the caller a member already; they are told the
+    // roles changed, not that they are the only owner.
+    const callerStillOwner = await tx.workspaceMember.count({
+      where: { workspaceId, userId: context.user.id, role: "owner" },
+    });
+    if (callerStillOwner === 0) {
+      return "role_changed" as const;
+    }
+
     const ownerCount = await tx.workspaceMember.count({
       where: { workspaceId, role: "owner" },
     });
