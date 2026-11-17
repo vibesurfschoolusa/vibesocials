@@ -9,9 +9,13 @@ export const LOGIN_FAILED_MESSAGE = "Invalid email or password.";
  * the others name their limits too. R32 lead: the wait is the limiter's own
  * (the hourly per-address limit is not 15 minutes), and no number without one.
  */
-export function loginLimitedText(waitMinutes: number | null, then = "try again"): string {
-  if (waitMinutes === null) return `Too many sign-in tries. Wait a while, then ${then}.`;
-  return `Too many sign-in tries. Wait about ${waitMinutes} ${waitMinutes === 1 ? "minute" : "minutes"}, then ${then}.`;
+export function loginLimitedText(waitMinutes: number | null): string {
+  return `Too many sign-in tries. ${waitText(waitMinutes)}, then try again.`;
+}
+/** The limiter's own wait, or no number when it gave none. */
+function waitText(waitMinutes: number | null): string {
+  if (waitMinutes === null) return "Wait a while";
+  return `Wait about ${waitMinutes} ${waitMinutes === 1 ? "minute" : "minutes"}`;
 }
 /** R32 new-customer L1: authorize couldn't read the account or compare the password. */
 export const LOGIN_UNCHECKED_MESSAGE = "We couldn't check your password just now. Try again in a minute.";
@@ -34,14 +38,15 @@ export const REGISTER_SIGN_IN_UNFINISHED_MESSAGE = "Signing you in didn't finish
 
 /**
  * R33 pages L3: Register's automatic sign-in after its 201 hit the sign-in
- * limit or couldn't check the password. The account is there either way, so
- * the sentence says so, names the cause, and sends the person to Log in.
+ * limit or couldn't check the password. The 201 also comes for an email that
+ * already had an account, so the sentence claims no new one: it names the
+ * cause and sends the person to Log in.
  */
 export function registerSignInLimitedText(waitMinutes: number | null): string {
-  return `Your account is ready. ${loginLimitedText(waitMinutes, "log in")}`;
+  return `Signing you in didn't finish: there have been too many sign-in tries from this network. ${waitText(waitMinutes)}, then log in.`;
 }
 export const REGISTER_SIGN_IN_UNCHECKED_MESSAGE =
-  "Your account is ready. We couldn't check your password just now. Wait a minute, then log in.";
+  "Signing you in didn't finish: your password couldn't be checked just now. Log in again in a minute.";
 
 /** R31 (new-customer L4): an answer came, but nobody is signed in (e.g. ?csrf=true). */
 export const LOGIN_UNFINISHED_MESSAGE = "Signing you in didn't finish, so you aren't signed in. Press Sign in again.";
