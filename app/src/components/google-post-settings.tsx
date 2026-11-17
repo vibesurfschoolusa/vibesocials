@@ -54,6 +54,25 @@ function refusedWhileOver(sentence: string | null) {
   };
 }
 
+/** The options with each counted field cut to its limit: what the alert line checks. */
+function withinLimits(metadata: GoogleBusinessPostMetadata): GoogleBusinessPostMetadata {
+  const fit = (text: string | undefined, max: number) => (text === undefined ? text : text.trim().slice(0, max));
+  return {
+    ...metadata,
+    ...(metadata.event ? { event: { ...metadata.event, title: fit(metadata.event.title, GOOGLE_TITLE_MAX) ?? "" } } : {}),
+    ...(metadata.offer
+      ? {
+          offer: {
+            ...metadata.offer,
+            title: fit(metadata.offer.title, GOOGLE_TITLE_MAX) ?? "",
+            couponCode: fit(metadata.offer.couponCode, GOOGLE_COUPON_CODE_MAX),
+            terms: fit(metadata.offer.terms, GOOGLE_TERMS_MAX),
+          },
+        }
+      : {}),
+  };
+}
+
 /** What Create's button does, as the count's hint says it. */
 const ACTION = "post to Google";
 
@@ -63,7 +82,9 @@ const ACTION = "post to Google";
  * message under the fields is the same check POST /api/posts applies.
  */
 export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsProps) {
-  const check = parseGooglePostMetadata(metadata);
+  // R45 lead review: a field over its limit is said by its count (and the
+  // press refused by its validity), so the alert line keeps every other problem.
+  const check = parseGooglePostMetadata(withinLimits(metadata));
   const event: EventFields = metadata.event ?? EMPTY_DATES;
   const offer: OfferFields = metadata.offer ?? EMPTY_DATES;
   const button = metadata.button;
