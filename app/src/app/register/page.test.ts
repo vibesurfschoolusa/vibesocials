@@ -133,8 +133,13 @@ describe("Register page landmarks and failure sentences", () => {
     expect(source).toMatch(/setError\(registerFailureText\(response\.status, data\)\)/);
   });
 
-  it("caps the name field at what the workspace name can hold", () => {
-    expect(render()).toMatch(/<input[^>]*id="name"[^>]*maxLength="48"|<input[^>]*maxLength="48"[^>]*id="name"/);
+  // R44 new-customer L3: the limit (what the workspace name can hold) is
+  // counted, not enforced by maxLength, so a paste is never cut short.
+  it("counts the name field against what the workspace name can hold", () => {
+    const html = render();
+    expect(html).not.toMatch(/<input[^>]*id="name"[^>]*maxLength/);
+    expect(html).toMatch(/<input[^>]*id="name"[^>]*aria-describedby="name-count"/);
+    expect(html).toContain('<p id="name-count" class="text-xs text-muted-foreground">0 of 48 characters</p>');
   });
 });
 

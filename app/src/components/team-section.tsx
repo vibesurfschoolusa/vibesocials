@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { LoadError, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
+import { CharacterCount } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1157,9 +1158,9 @@ function OwnerView({
           <Input
             id="workspace-name"
             value={name}
-            maxLength={60}
             onChange={(event) => setName(event.target.value)}
             className="sm:max-w-sm"
+            aria-describedby="workspace-name-count"
           />
           <Button
             ref={saveNameRef}
@@ -1173,6 +1174,12 @@ function OwnerView({
             {savingName ? "Saving…" : "Save"}
           </Button>
         </div>
+        <CharacterCount
+          id="workspace-name-count"
+          label="Workspace name"
+          length={workspaceNameToSave(name).length}
+          max={WORKSPACE_NAME_MAX_LENGTH}
+        />
       </div>
 
       {/* Invite link */}
@@ -1395,6 +1402,9 @@ function OwnerView({
  * R23 new-customer L2: runs of spaces collapse, as creating a workspace does,
  * so the name the delete dialog shows (HTML collapses them) is the one stored.
  */
+/** The rename route's NAME_MAX_LENGTH (team-section.nameField.live.test.ts ties them). */
+export const WORKSPACE_NAME_MAX_LENGTH = 60;
+
 export function workspaceNameToSave(name: string): string {
   return name.replace(/\s+/g, " ").trim();
 }

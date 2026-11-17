@@ -15,6 +15,7 @@ import { contactUsHref } from "@/lib/contactUs";
 import { newestAnswer, subscribeWorkspaceChange } from "@/lib/workspaceChangeEvent";
 import { Button } from "@/components/ui/button";
 import { confirmFailureText } from "@/components/ui/dialog";
+import { CharacterCount } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
@@ -131,6 +132,9 @@ export const WORKSPACE_MAYBE_MADE_MESSAGE = answerLostText(
 );
 
 /** What a refused or unreadable Create workspace answer says. */
+/** The create route's WORKSPACE_NAME_MAX_LENGTH (account-menu.nameField.live.test.ts ties them). */
+export const NEW_WORKSPACE_NAME_MAX_LENGTH = 60;
+
 export function createWorkspaceFailureText(status: number, data: { error?: unknown } | null): string {
   if (typeof data?.error === "string" && data.error) return data.error;
   if (status >= 500) return WORKSPACE_MAYBE_MADE_MESSAGE;
@@ -176,6 +180,7 @@ export function AccountMenu() {
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
+  const newWorkspaceCountId = useId();
   const installApp = useInstallApp();
   // The operator's link (2026-11-10): whatever GET /api/workspaces sends, which
   // is nothing for everyone else, so this file names no path or label of its own.
@@ -452,10 +457,16 @@ export function AccountMenu() {
                         autoFocus
                         aria-label="New workspace name"
                         placeholder="Client or business name"
-                        maxLength={60}
                         value={newWorkspaceName}
                         onChange={(event) => setNewWorkspaceName(event.target.value)}
                         readOnly={createBusy}
+                        aria-describedby={newWorkspaceCountId}
+                      />
+                      <CharacterCount
+                        id={newWorkspaceCountId}
+                        label="New workspace name"
+                        length={newWorkspaceName.replace(/\s+/g, " ").trim().length}
+                        max={NEW_WORKSPACE_NAME_MAX_LENGTH}
                       />
                       {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}
                       <div className="flex justify-end gap-2">

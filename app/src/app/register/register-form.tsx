@@ -10,6 +10,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
+import { CharacterCount } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
@@ -31,6 +32,9 @@ export type RegisterBilling = {
   trialLine: string | null;
   agreement: { before: string; terms: string; between: string; privacy: string; after: string };
 };
+
+/** The route's REGISTER_NAME_MAX_LENGTH (register-form.nameField.live.test.ts ties them). */
+export const REGISTER_NAME_MAX_LENGTH = 48;
 
 /** What the form says when sign-up didn't go through (R5 pages L8). */
 export const REGISTER_FAILED_MESSAGE =
@@ -159,9 +163,15 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
                   id="name"
                   type="text"
                   autoComplete="name"
-                  maxLength={48}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  aria-describedby="name-count"
+                />
+                <CharacterCount
+                  id="name-count"
+                  label="Name"
+                  length={name.replace(/\s+/g, " ").trim().length}
+                  max={REGISTER_NAME_MAX_LENGTH}
                 />
               </div>
               <div className="space-y-1.5">
