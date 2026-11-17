@@ -203,6 +203,7 @@ ${PROMPT_OUTPUT_RULES}`;
 
 Create an enhanced version that's perfect for social media.${varietyBlock}`;
 
+    // bare-fetch-ok: AI provider call, headers and body bounded by its own AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS).
     const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {

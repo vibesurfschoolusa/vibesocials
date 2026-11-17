@@ -378,6 +378,7 @@ The media is a short social media video. You do not have direct access to the vi
       ];
     }
 
+    // bare-fetch-ok: AI provider call, headers and body bounded by its own AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS).
     const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -452,6 +453,7 @@ async function describePhoto(args: {
     : "Write the description in English.";
   const model = llm.visionModel;
 
+  // bare-fetch-ok: AI provider call, headers and body bounded by its own AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS).
   const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {

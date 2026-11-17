@@ -398,6 +398,7 @@ export async function syncSocialPostMetrics(
       }
       let batch: B;
       try {
+        // bare-fetch-ok: `fetch` here is this function's parameter (one platform's fetcher), not the global.
         batch = await fetch();
       } catch (error) {
         // A fetcher is best effort and should not throw; if one does, the chunk
