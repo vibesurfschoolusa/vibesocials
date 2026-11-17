@@ -10,6 +10,7 @@ import {
   soleOwnerLeaveRefusal,
 } from "@/lib/leaveRefusals";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { isOnlyWorkspace } from "@/server/account/deleteWorkspace";
@@ -83,10 +84,7 @@ export async function POST(request: Request) {
     windowMs: 5 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   // R5-security L2: the workspace carries on without the caller, so a card of

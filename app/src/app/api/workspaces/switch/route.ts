@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -32,10 +33,7 @@ export async function POST(request: Request) {
     windowMs: 5 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const body = await readJsonObject(request);

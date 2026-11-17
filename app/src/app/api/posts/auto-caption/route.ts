@@ -23,6 +23,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -166,16 +167,7 @@ export async function POST(request: Request) {
 
     if (rateLimit.unavailable) return limitUncheckedResponse();
     if (!rateLimit.allowed) {
-      return NextResponse.json(
-        {
-          error: "Too many requests, slow down.",
-          retryAfterSeconds: rateLimit.retryAfterSeconds,
-        },
-        {
-          status: 429,
-          headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-        },
-      );
+      return tooManyTriesResponse(rateLimit);
     }
 
     if (!blobUrl || typeof blobUrl !== "string" || !blobUrl.trim()) {

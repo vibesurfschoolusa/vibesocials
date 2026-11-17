@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { newWorkspaceBillingData } from "@/server/billing/newWorkspaceTrial";
 import { recordWorkspaceCreated, workspaceCreationRefusal } from "@/server/usage/usageLog";
@@ -111,10 +112,7 @@ export async function POST(request: Request) {
     windowMs: 60 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const body = await readJsonObject(request);

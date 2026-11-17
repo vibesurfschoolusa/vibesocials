@@ -46,6 +46,7 @@ import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import { REPEAT_STORY_MESSAGE, validateRepeatAt } from "@/lib/repeatSchedule";
@@ -782,16 +783,7 @@ export async function POST(request: Request) {
   });
 
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "Too many posts created recently. Please slow down.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-      },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const contentType = request.headers.get("content-type") || "";

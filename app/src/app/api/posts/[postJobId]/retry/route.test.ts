@@ -164,6 +164,8 @@ describe("POST /api/posts/[postJobId]/retry", () => {
 
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("42");
+    // R42 pages-a L3: the post card shows this word for word.
+    await expect(res.json()).resolves.toMatchObject({ error: "Too many tries. Wait a minute, then try again." });
     expect(postJobFindFirstMock).not.toHaveBeenCalled();
     expect(checkRateLimitMock).toHaveBeenCalledWith({
       userId: "user-1",

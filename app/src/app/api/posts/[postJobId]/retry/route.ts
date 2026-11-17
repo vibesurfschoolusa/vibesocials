@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { logger } from "@/lib/logger";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { isUnconfirmedResult } from "@/lib/postsDto";
@@ -123,16 +124,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   });
 
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "Too many retries recently. Please slow down.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-      },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const { postJobId } = await Promise.resolve(context.params);

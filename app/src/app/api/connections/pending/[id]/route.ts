@@ -10,6 +10,7 @@ import { shownControl, signInButton } from "@/lib/oauthResult";
 import { choiceFailedText, type ChoiceCardButton } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal, sentWorkspaceId } from "@/lib/workspaceChanged";
 import {
@@ -240,10 +241,7 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
     windowMs: 5 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const body = await readJsonObject(request);

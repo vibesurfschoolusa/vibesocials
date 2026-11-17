@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 
 import { inviteLinkWorks, MAKER_NOT_OWNER_MESSAGE } from "./inviteMaker";
 import { signedOutResponse } from "@/lib/signedOutResponse";
@@ -46,10 +47,7 @@ export async function GET(_request: Request, { params }: InviteRouteContext) {
     windowMs: 5 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const { token } = await params;

@@ -463,7 +463,7 @@ describe("POST /api/reviews/draft-response - failures a person reads", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     const limited = await post(validBody);
     expect(limited.status).toBe(429);
-    await expect(limited.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+    await expect(limited.json()).resolves.toMatchObject({ error: "Too many tries. Wait a minute, then try again." });
 
     checkRateLimitMock.mockResolvedValue({ allowed: true });
     const missing = await post({ ...validBody, reviewerName: "" });

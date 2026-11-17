@@ -15,6 +15,7 @@ import {
 } from "@/lib/approval";
 import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { DISPATCH_FAILURE } from "@/server/jobs/failPendingResults";
 import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
@@ -120,16 +121,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "Too many posts published recently. Please slow down.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-      },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const { postJobId } = await Promise.resolve(context.params);

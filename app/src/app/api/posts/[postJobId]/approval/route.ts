@@ -11,6 +11,7 @@ import {
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
@@ -138,16 +139,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     ...MUTATE_RATE_LIMIT,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "Too many requests. Please slow down.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-      },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   // Next 16 passes params as a promise — it MUST be awaited (see the post-job

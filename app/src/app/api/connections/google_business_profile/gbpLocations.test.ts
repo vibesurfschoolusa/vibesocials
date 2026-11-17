@@ -705,7 +705,7 @@ describe("rate limit", () => {
 
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("42");
-    await expect(res.json()).resolves.toEqual({ error: "Too many requests. Please slow down.", retryAfterSeconds: 42 });
+    await expect(res.json()).resolves.toEqual({ error: "Too many tries. Wait a minute, then try again.", retryAfterSeconds: 42 });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(h.findFirst).not.toHaveBeenCalled();
   });

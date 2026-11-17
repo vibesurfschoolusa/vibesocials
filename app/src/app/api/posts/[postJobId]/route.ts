@@ -8,6 +8,7 @@ import { editApprovalEffect, holdForApprovalData } from "@/lib/approval";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
 import { queueCoverBlobIfUnused } from "@/server/jobs/coverBlobs";
 import {
@@ -47,10 +48,7 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
 async function enforceMutateRateLimit(userId: string): Promise<NextResponse | null> {
   const rateLimit = await checkRateLimit({ userId, ...MUTATE_RATE_LIMIT });
   if (rateLimit.allowed) return null;
-  return NextResponse.json(
-    { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-    { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-  );
+  return tooManyTriesResponse(rateLimit);
 }
 
 type CaptionFacts = {

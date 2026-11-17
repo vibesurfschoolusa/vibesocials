@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { isExpiredTokenFailure, type GoogleFailureKind } from "@/server/googleFailure";
 import type { TokenSnapshot } from "@/server/platforms/connectionHealth";
 import { readGbpLocations, type GbpListing, type UnreadAccounts } from "@/server/platforms/gbpLocation";
@@ -35,10 +36,7 @@ const GOOGLE_ROUTE_WINDOW_MS = 5 * 60 * 1000;
 export async function googleRouteRateLimit(userId: string, route: string, limit = 60): Promise<NextResponse | null> {
   const rateLimit = await checkRateLimit({ userId, route, limit, windowMs: GOOGLE_ROUTE_WINDOW_MS });
   if (rateLimit.allowed) return null;
-  return NextResponse.json(
-    { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-    { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-  );
+  return tooManyTriesResponse(rateLimit);
 }
 
 /**

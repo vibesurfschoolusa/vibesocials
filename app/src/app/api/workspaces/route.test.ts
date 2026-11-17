@@ -235,6 +235,8 @@ describe("POST /api/workspaces", () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("120");
+    // R42 pages-a L3: the account menu shows this word for word, so it says how long.
+    await expect(response.json()).resolves.toMatchObject({ error: "Too many tries. Wait 2 minutes, then try again." });
     expect(transactionMock).not.toHaveBeenCalled();
   });
 });

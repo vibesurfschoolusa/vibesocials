@@ -24,6 +24,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { ADAPT_MAX_LENGTH_MAX, ADAPT_MAX_LENGTH_MIN } from "@/lib/platformOverrides";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
@@ -144,16 +145,7 @@ export async function POST(request: Request) {
 
     if (rateLimit.unavailable) return limitUncheckedResponse();
     if (!rateLimit.allowed) {
-      return NextResponse.json(
-        {
-          error: "Too many requests, slow down.",
-          retryAfterSeconds: rateLimit.retryAfterSeconds,
-        },
-        {
-          status: 429,
-          headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-        },
-      );
+      return tooManyTriesResponse(rateLimit);
     }
 
     if (!caption || typeof caption !== "string" || !caption.trim()) {

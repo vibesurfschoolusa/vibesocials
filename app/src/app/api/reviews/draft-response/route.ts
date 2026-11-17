@@ -16,6 +16,7 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
@@ -85,16 +86,7 @@ export async function POST(request: Request) {
 
     if (rateLimit.unavailable) return limitUncheckedResponse();
     if (!rateLimit.allowed) {
-      return NextResponse.json(
-        {
-          error: "Too many requests, slow down.",
-          retryAfterSeconds: rateLimit.retryAfterSeconds,
-        },
-        {
-          status: 429,
-          headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-        }
-      );
+      return tooManyTriesResponse(rateLimit);
     }
 
     if (!reviewerName || !starRating) {

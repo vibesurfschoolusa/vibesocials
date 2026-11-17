@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE, COVER_IMAGE_TYPES } from "@/lib/videoCover";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
@@ -124,16 +125,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return limitUncheckedResponse();
   }
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "Too many uploads. Please slow down.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
-      },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   // Parsed before the try below: a malformed body used to throw straight out

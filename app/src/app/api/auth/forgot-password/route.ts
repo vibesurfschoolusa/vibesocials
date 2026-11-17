@@ -7,6 +7,7 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 
 /**
@@ -33,14 +34,6 @@ import { limitUncheckedResponse } from "@/lib/limitUnchecked";
 
 const EMAIL_RATE_LIMIT = { route: "auth/forgot", limit: 3, windowMs: 15 * 60 * 1000 } as const;
 const IP_RATE_LIMIT = { route: "auth/forgot-ip", limit: 10, windowMs: 15 * 60 * 1000 } as const;
-
-/** Uniform "rate limited" envelope, byte-identical to the posts pattern. */
-function tooManyRequests(retryAfterSeconds: number | undefined) {
-  return NextResponse.json(
-    { error: "Too many requests. Please slow down.", retryAfterSeconds },
-    { status: 429, headers: { "Retry-After": String(retryAfterSeconds ?? 1) } },
-  );
-}
 
 export async function POST(request: Request) {
   const body = await readJsonObject(request);
@@ -70,7 +63,7 @@ export async function POST(request: Request) {
   });
   if (emailLimit.unavailable) return limitUncheckedResponse();
   if (!emailLimit.allowed) {
-    return tooManyRequests(emailLimit.retryAfterSeconds);
+    return tooManyTriesResponse(emailLimit);
   }
 
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
@@ -81,7 +74,7 @@ export async function POST(request: Request) {
   });
   if (ipLimit.unavailable) return limitUncheckedResponse();
   if (!ipLimit.allowed) {
-    return tooManyRequests(ipLimit.retryAfterSeconds);
+    return tooManyTriesResponse(ipLimit);
   }
 
   try {

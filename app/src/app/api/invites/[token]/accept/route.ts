@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/workspace";
 import { JOIN_FAILED_MESSAGE } from "@/app/join/[token]/joinMessages";
 import { notifyOwnersOfMemberJoined } from "@/server/notifications/memberJoinedEmail";
@@ -64,10 +65,7 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
 
   const rateLimit = await checkRateLimit({ userId: user.id, ...RATE_LIMIT });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const { token } = await params;

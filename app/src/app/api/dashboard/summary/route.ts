@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { withoutPairedStories } from "@/lib/countOnce";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { APPROVAL_DECIDABLE_STATUSES } from "@/lib/approval";
 import { planIncludes } from "@/lib/planFeatures";
@@ -81,10 +82,7 @@ export async function GET(request: Request) {
     windowMs: 5 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const workspaceId = context.workspace.id;

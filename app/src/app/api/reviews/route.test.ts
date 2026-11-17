@@ -203,7 +203,7 @@ describe("GET /api/reviews", () => {
     const response = await get();
 
     expect(response.status).toBe(429);
-    await expect(response.json()).resolves.toEqual({ error: "Too many requests. Please slow down.", retryAfterSeconds: 12 });
+    await expect(response.json()).resolves.toEqual({ error: "Too many tries. Wait a minute, then try again.", retryAfterSeconds: 12 });
     expect(checkRateLimitMock).toHaveBeenCalledWith({ userId: "u1", route: "reviews", limit: 60, windowMs: 300_000 });
     expect(findFirstMock).not.toHaveBeenCalled();
     expect(fetchAllReviewsMock).not.toHaveBeenCalled();

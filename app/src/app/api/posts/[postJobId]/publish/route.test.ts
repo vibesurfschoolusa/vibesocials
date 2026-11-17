@@ -183,6 +183,9 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     const res = await POST(req({}), ctx("job-1"));
     expect(res.status).toBe(429);
+    // R42 pages-a L3: the post card shows this word for word.
+    expect(res.headers.get("Retry-After")).toBe("30");
+    await expect(res.json()).resolves.toMatchObject({ error: "Too many tries. Wait a minute, then try again." });
     expect(checkRateLimitMock).toHaveBeenCalledWith(
       expect.objectContaining({ route: "posts/publish" }),
     );

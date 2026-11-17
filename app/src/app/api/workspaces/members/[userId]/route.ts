@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { requireOwnerContext } from "@/lib/workspace";
 import { THEIR_ROLE_CHANGED_MESSAGE, demoteAnswer, type DemoteAnswer } from "@/lib/memberRoleAnswer";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
@@ -194,10 +195,7 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     windowMs: 5 * 60 * 1000,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const body = await readJsonObject(request);

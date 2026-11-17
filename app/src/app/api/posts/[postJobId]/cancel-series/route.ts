@@ -5,6 +5,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { POST_GONE_TEXT, postMovedOnText } from "@/lib/postMovedOn";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 import { finishPostJob } from "@/server/jobs/failPendingResults";
@@ -49,10 +50,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     ...MUTATE_RATE_LIMIT,
   });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   const { postJobId } = await Promise.resolve(context.params);

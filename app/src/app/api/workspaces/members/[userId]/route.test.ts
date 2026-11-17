@@ -360,7 +360,7 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("120");
     await expect(response.json()).resolves.toEqual({
-      error: "Too many requests. Please slow down.",
+      error: "Too many tries. Wait 2 minutes, then try again.",
       retryAfterSeconds: 120,
     });
     expect(findFirstMock).not.toHaveBeenCalled(); // limited BEFORE any membership read

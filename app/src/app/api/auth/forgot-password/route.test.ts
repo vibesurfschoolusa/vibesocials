@@ -134,7 +134,7 @@ describe("POST /api/auth/forgot-password", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("42");
     await expect(response.json()).resolves.toEqual({
-      error: "Too many requests. Please slow down.",
+      error: "Too many tries. Wait a minute, then try again.",
       retryAfterSeconds: 42,
     });
     expect(findUniqueUserMock).not.toHaveBeenCalled();

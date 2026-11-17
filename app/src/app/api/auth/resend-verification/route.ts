@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
@@ -37,10 +38,7 @@ export async function POST() {
   // id — not an ip). Bounds email-bombing of one's own inbox to 3/15min.
   const rateLimit = await checkRateLimit({ userId: user.id, ...RATE_LIMIT });
   if (!rateLimit.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
-    );
+    return tooManyTriesResponse(rateLimit);
   }
 
   // Nothing to do — and telling the user so is not an oracle (it's their own

@@ -220,7 +220,9 @@ describe("POST /api/posts/auto-caption", () => {
       const response = await post(validBody);
 
       expect(response.status).toBe(429);
-      await expect(response.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+      // R42 pages-a L3: Create's toast shows this word for word, so it says how long.
+      expect(response.headers.get("Retry-After")).toBe("30");
+      await expect(response.json()).resolves.toMatchObject({ error: "Too many tries. Wait a minute, then try again." });
       expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -276,7 +278,7 @@ describe("POST /api/posts/auto-caption", () => {
 
       expect(response.status).toBe(429);
       expect(response.headers.get("Retry-After")).toBe("120");
-      await expect(response.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+      await expect(response.json()).resolves.toMatchObject({ error: "Too many tries. Wait 2 minutes, then try again." });
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -902,7 +904,7 @@ describe("POST /api/posts/auto-caption - failures a person reads", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
     const limited = await post(validBody);
     expect(limited.status).toBe(429);
-    await expect(limited.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+    await expect(limited.json()).resolves.toMatchObject({ error: "Too many tries. Wait a minute, then try again." });
 
     checkRateLimitMock.mockResolvedValue({ allowed: true });
     const tooLong = await post({ ...validBody, blobUrl: `${BLOB_URL}?${"a".repeat(2300)}` });
