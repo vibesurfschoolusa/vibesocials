@@ -29,6 +29,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { answerLostText } from "@/lib/answerLost";
+import { AnnouncedText } from "@/components/ui/announcer";
+import { clientLinkLoadTexts, readClientLinkCard } from "@/lib/clientLinkCardRead";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 import { CaptionCounter } from "@/components/caption-counter";
@@ -824,17 +826,31 @@ interface ReviewLinkDto {
   createdAt: string;
 }
 
+const REVIEW_LINK_LOAD_TEXTS = clientLinkLoadTexts("client review link");
+
+type ReviewLinkAnswer = { link: ReviewLinkDto | null; pausedByPlan?: boolean; workspaceBlocked?: string };
+
+function isReviewLinkAnswer(data: unknown): data is ReviewLinkAnswer {
+  return typeof data === "object" && data !== null && "link" in data;
+}
+
 /**
  * Client review link (2026-11-10): owners make, copy, replace or turn off the
  * workspace's link here, as the upload link's panel on the Media page. The
  * owner-only GET answers a member 403, and then the panel is not shown. Every
  * call carries the workspace whose posts this page shows: if another tab
  * switched workspace, the routes answer 409 and the panel shows their sentence.
+ * R42 pages-b L1: only a 403 hides it. Any other failed read says what
+ * happened, with Retry, or Reload page for a workspace refusal
+ * (readClientLinkCard), as the upload-link card does.
  */
-function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
+export function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
-  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
+  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed" | "failed">("loading");
   const [changedMessage, setChangedMessage] = useState("");
+  const [loadError, setLoadError] = useState(REVIEW_LINK_LOAD_TEXTS.failed);
+  // Bumped by Retry, so the read runs again.
+  const [attempt, setAttempt] = useState(0);
   const [pausedByPlan, setPausedByPlan] = useState(false);
   const [workspaceBlocked, setWorkspaceBlocked] = useState<string | null>(null);
   const [link, setLink] = useState<ReviewLinkDto | null>(null);
@@ -845,35 +861,33 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const response = await fetch(
-          `/api/workspaces/review-link?workspaceId=${encodeURIComponent(workspaceId)}`,
-        );
-        const data = (await response.json().catch(() => null)) as
-          | { link?: ReviewLinkDto | null; error?: string; pausedByPlan?: boolean; workspaceBlocked?: string }
-          | null;
-        if (cancelled) return;
-        if (response.status === 409) {
-          setChangedMessage(data?.error ?? "Reload this page.");
-          setState("changed");
-          return;
-        }
-        if (!response.ok) {
-          setState("hidden");
-          return;
-        }
-        setLink(data?.link ?? null);
-        setPausedByPlan(data?.pausedByPlan === true);
-        setWorkspaceBlocked(typeof data?.workspaceBlocked === "string" ? data.workspaceBlocked : null);
+      const read = await readClientLinkCard(
+        `/api/workspaces/review-link?workspaceId=${encodeURIComponent(workspaceId)}`,
+        REVIEW_LINK_LOAD_TEXTS,
+        isReviewLinkAnswer,
+      );
+      if (cancelled) return;
+      if (read.kind === "forbidden") {
+        // A member may not see the card.
+        setState("hidden");
+      } else if (read.kind === "changed") {
+        setChangedMessage(read.message);
+        setState("changed");
+      } else if (read.kind === "failed") {
+        setLoadError(read.message);
+        setState("failed");
+      } else {
+        const data = read.data;
+        setLink(data.link ?? null);
+        setPausedByPlan(data.pausedByPlan === true);
+        setWorkspaceBlocked(typeof data.workspaceBlocked === "string" ? data.workspaceBlocked : null);
         setState("ready");
-      } catch {
-        if (!cancelled) setState("hidden");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, attempt]);
 
   // client-journey L1: after a lost answer the panel reads the link again, so
   // it shows the one that works. A failed read keeps what is shown; the
@@ -976,9 +990,28 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   if (state === "changed") {
     return (
       <Alert variant="warning" title="Client review link">
-        <p>{changedMessage}</p>
+        {/* A refusal: LoadError offers Reload page, never Retry. */}
+        <LoadError message={changedMessage} onRetry={() => window.location.reload()} />
       </Alert>
     );
+  }
+  if (state === "failed") {
+    return (
+      <Alert variant="danger" title="Couldn't load the client review link">
+        <LoadError
+          message={loadError}
+          onRetry={() => {
+            setState("loading");
+            setAttempt((count) => count + 1);
+          }}
+        />
+      </Alert>
+    );
+  }
+  // After Retry, a line in the card's place says it is loading, and takes focus (LoadError).
+  // AnnouncedText, as the upload-link card's, since this view comes and goes.
+  if (state === "loading" && attempt > 0) {
+    return <AnnouncedText className="sr-only" text="Loading the client review link…" />;
   }
   if (state !== "ready") return null;
 

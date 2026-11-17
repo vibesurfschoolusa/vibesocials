@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNo
 import { Copy } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
+import { LoadError, ROLE_CHANGED_MESSAGE } from "@/components/load-error";
+import { Alert } from "@/components/ui/alert";
+import { AnnouncedText } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CONFIRM_NOTHING_SENT_MESSAGE, ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
@@ -15,6 +18,7 @@ import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { announceClientLinksReplaced } from "@/components/client-links-refresh";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { focusAfterPress } from "@/lib/focusAfter";
+import { clientLinkLoadTexts, readClientLinkCard } from "@/lib/clientLinkCardRead";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
 /**
@@ -253,9 +257,32 @@ export function ConnectLinkSectionView({
   );
 }
 
+const CONNECT_LINK_LOAD_TEXTS = clientLinkLoadTexts("client connect link");
+
+type ConnectLinkAnswer = {
+  link: ConnectLinkDto | null;
+  available?: Platform[];
+  pausedByPlan?: boolean;
+  workspaceBlocked?: string;
+};
+
+function isConnectLinkAnswer(data: unknown): data is ConnectLinkAnswer {
+  return typeof data === "object" && data !== null && "link" in data;
+}
+
+/**
+ * R42 pages-b L1: the card never hides. It is rendered for owners only, so a
+ * failed read says what happened, with Retry, and a workspace refusal or a 403
+ * (the viewer's role or workspace changed) asks for a reload
+ * (readClientLinkCard), as the upload-link card does.
+ */
 function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
-  const [state, setState] = useState<"loading" | "hidden" | "ready">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "changed" | "failed">("loading");
+  const [changedMessage, setChangedMessage] = useState("");
+  const [loadError, setLoadError] = useState(CONNECT_LINK_LOAD_TEXTS.failed);
+  // Bumped by Retry, so the read runs again.
+  const [attempt, setAttempt] = useState(0);
   const [available, setAvailable] = useState<Platform[]>([]);
   const [link, setLink] = useState<ConnectLinkDto | null>(null);
   const [pausedByPlan, setPausedByPlan] = useState(false);
@@ -268,29 +295,31 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const response = await fetch(`/api/workspaces/connect-link?workspaceId=${encodeURIComponent(workspaceId)}`);
-        const data = (await response.json().catch(() => null)) as
-          | { link?: ConnectLinkDto | null; available?: Platform[]; pausedByPlan?: boolean; workspaceBlocked?: string }
-          | null;
-        if (cancelled) return;
-        if (!response.ok || !data) {
-          setState("hidden");
-          return;
-        }
+      const read = await readClientLinkCard(
+        `/api/workspaces/connect-link?workspaceId=${encodeURIComponent(workspaceId)}`,
+        CONNECT_LINK_LOAD_TEXTS,
+        isConnectLinkAnswer,
+      );
+      if (cancelled) return;
+      if (read.kind === "forbidden" || read.kind === "changed") {
+        setChangedMessage(read.kind === "changed" ? read.message : ROLE_CHANGED_MESSAGE);
+        setState("changed");
+      } else if (read.kind === "failed") {
+        setLoadError(read.message);
+        setState("failed");
+      } else {
+        const data = read.data;
         setAvailable(data.available ?? []);
         setLink(data.link ?? null);
         setPausedByPlan(data.pausedByPlan === true);
         setWorkspaceBlocked(typeof data.workspaceBlocked === "string" ? data.workspaceBlocked : null);
         setState("ready");
-      } catch {
-        if (!cancelled) setState("hidden");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, attempt]);
 
   const onToggle = useCallback((platform: Platform) => {
     setSelected((current) =>
@@ -381,6 +410,32 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     }
   }
 
+  if (state === "changed") {
+    return (
+      <Alert variant="warning" title="Client connect link">
+        {/* A refusal: LoadError offers Reload page, never Retry. */}
+        <LoadError message={changedMessage} onRetry={() => window.location.reload()} />
+      </Alert>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <Alert variant="danger" title="Couldn't load the client connect link">
+        <LoadError
+          message={loadError}
+          onRetry={() => {
+            setState("loading");
+            setAttempt((count) => count + 1);
+          }}
+        />
+      </Alert>
+    );
+  }
+  // After Retry, a line in the card's place says it is loading, and takes focus (LoadError).
+  // AnnouncedText, as the upload-link card's, since this view comes and goes.
+  if (state === "loading" && attempt > 0) {
+    return <AnnouncedText className="sr-only" text="Loading the client connect link…" />;
+  }
   if (state !== "ready") return null;
   return (
     <ConnectLinkSectionView
