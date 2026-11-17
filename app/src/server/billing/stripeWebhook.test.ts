@@ -44,9 +44,19 @@ const m = vi.hoisted(() => ({
   failNextUpdate: false,
   collideNextUpdate: false,
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  /** The once-per-owner claims of the failed-payment notice (consumeFixedWindow), by key. */
+  claims: new Map<string, { count: number; expiresAt: Date }>(),
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: m.logger }));
+vi.mock("@/lib/rateLimit", () => ({
+  consumeFixedWindow: async ({ key, limit, resetAt }: { key: string; limit: number; resetAt: Date }) => {
+    const entry = m.claims.get(key) ?? { count: 0, expiresAt: resetAt };
+    entry.count += 1;
+    m.claims.set(key, entry);
+    return entry.count > limit ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true };
+  },
+}));
 vi.mock("@/server/notifications/email", () => ({
   sendEmail: m.sendEmail,
   isRetryableEmailError: () => true,
@@ -128,6 +138,9 @@ vi.mock("@/lib/db", () => {
   }
   const prisma = {
     ...client(m.events, m.workspaces),
+    rateLimitEntry: {
+      deleteMany: async ({ where }: { where: { key: string } }) => ({ count: Number(m.claims.delete(where.key)) }),
+    },
     $transaction: (cb: (tx: unknown) => Promise<unknown>, options?: unknown) => {
       m.txOptions.push(options);
       // One at a time, as the workspace row lock makes them.
@@ -235,6 +248,7 @@ beforeEach(() => {
   m.collideNextUpdate = false;
   m.sendEmail.mockReset();
   m.sendEmail.mockResolvedValue(true);
+  m.claims.clear();
   for (const fn of Object.values(m.logger)) fn.mockReset();
   m.workspaces.set("ws_a", row());
   m.workspaces.set("ws_b", row({ id: "ws_b", name: "Surf B", stripeCustomerId: "cus_b" }));
@@ -891,12 +905,13 @@ describe("invoice.payment_failed", () => {
     expect(m.events.size).toBe(0);
   });
 
-  // R41 security L1: sendEmail answers false, without throwing, when Resend did
-  // not take the email (a quota 429, another 4xx, no key, a bad key).
-  it("a send Resend didn't take answers 500 and records nothing; Stripe's retry sends it", async () => {
-    m.sendEmail.mockResolvedValueOnce(false);
+  // R41 lead review: the per-owner rule the trial emails use (sendOncePer), so
+  // Stripe's retry reaches only the owners not yet reached.
+  const sentTo = () => m.sendEmail.mock.calls.map(([params]) => params.to);
+
+  it("A reached and B failed retryably: 500, and the retry sends only to B", async () => {
+    m.sendEmail.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("resend 503"));
     expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(500);
-    expect(m.sendEmail).toHaveBeenCalledTimes(2);
     expect(m.events.size).toBe(0);
     expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("Stripe will send the event again"), {
       eventId: "evt_1",
@@ -905,8 +920,37 @@ describe("invoice.payment_failed", () => {
 
     m.sendEmail.mockClear();
     expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
-    expect(m.sendEmail).toHaveBeenCalledTimes(2);
+    expect(sentTo()).toEqual(["two@example.com"]);
     expect(m.events.has("evt_1")).toBe(true);
+  });
+
+  // sendEmail answers false, without throwing, when Resend refused the email
+  // for good (a 4xx, a quota 429, no key, a bad key): never counted as sent,
+  // and no retry can change it.
+  it("B refused for good: 200, recorded, and nothing more to anyone", async () => {
+    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
+    expect(sentTo()).toEqual(["one@example.com", "two@example.com"]);
+    expect(m.events.has("evt_1")).toBe(true);
+    expect(m.logger.warn).toHaveBeenCalledWith(expect.stringContaining("refused"), { eventId: "evt_1", refused: 1 });
+
+    m.sendEmail.mockClear();
+    expect(await handleStripeEvent(failed("evt_2"), ENV)).toBe(200);
+    expect(m.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("all reached: 200 and recorded", async () => {
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
+    expect(sentTo()).toEqual(["one@example.com", "two@example.com"]);
+    expect(m.events.has("evt_1")).toBe(true);
+    expect(m.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("each owner's claim is per invoice", async () => {
+    await handleStripeEvent(failed("evt_1", "in_1"), ENV);
+    await handleStripeEvent(failed("evt_2", "in_2"), ENV);
+    expect(m.sendEmail).toHaveBeenCalledTimes(4);
+    expect(m.claims.size).toBe(4);
   });
 
   it("a customer no workspace has is logged and recorded, nothing sent", async () => {

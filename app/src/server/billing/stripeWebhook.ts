@@ -2,6 +2,7 @@ import type { BillingEnv } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { sendEmail } from "@/server/notifications/email";
+import { sendOncePer } from "@/server/notifications/onceADay";
 
 import { buildPaymentFailedEmail } from "./billingEmails";
 import { reportDuplicatePriceIds } from "./priceConfig";
@@ -247,6 +248,12 @@ async function syncSubscription(
   }
 }
 
+/**
+ * How long an owner reached with an invoice's failed-payment email is skipped:
+ * past Stripe's three days of re-sending the event.
+ */
+const PAYMENT_FAILED_CLAIM_MS = 30 * 24 * 60 * 60 * 1000;
+
 async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
   const invoiceId = typeof event.data.object.id === "string" ? event.data.object.id : null;
   const customer = stripeIdOf(event.data.object.customer as StripeId | null | undefined);
@@ -273,25 +280,50 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
     }
 
     // Sent before the event is recorded, so a failed send is sent again with
-    // Stripe's retry; the per-invoice key stops Resend sending one twice.
-    // R41 security L1: an email Resend didn't take (sendEmail answers false: a
-    // quota 429, another 4xx, no key) is a failed send too; the other owners
-    // are still tried now.
+    // Stripe's retry. R41 lead review: each owner through sendOncePer, the rule
+    // the trial emails use, claimed per invoice, so the retry reaches only the
+    // owners not yet reached (the per-invoice key alone covers only 24 h).
+    // sendEmail answering false is Resend refusing for good (a 4xx, a quota
+    // 429, no key): never counted as sent, and no retry would change it.
     const email = buildPaymentFailedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
+    const resetAt = new Date(Date.now() + PAYMENT_FAILED_CLAIM_MS);
     let notSent = 0;
+    let refused = 0;
     for (const owner of workspace.members) {
-      const sent = await sendEmail(
-        { to: owner.user.email, ...email },
-        { idempotencyKey: `stripe-payment-failed/${invoiceId}/${owner.userId}`, throwOnRetryable: true },
+      let refusedForGood = false;
+      const outcome = await sendOncePer(
+        { key: `payment-failed-owner:${invoiceId}:${owner.userId}`, resetAt, keysFrom: null },
+        async () => {
+          const sent = await sendEmail(
+            { to: owner.user.email, ...email },
+            { idempotencyKey: `stripe-payment-failed/${invoiceId}/${owner.userId}`, throwOnRetryable: true },
+          );
+          refusedForGood = !sent;
+          return sent;
+        },
+        (error) =>
+          logger.error("[stripe webhook] Couldn't send the failed-payment email to one owner", {
+            eventId: event.id,
+            userId: owner.userId,
+            error: error instanceof Error ? error.name : typeof error,
+          }),
       );
-      if (!sent) notSent++;
+      if (outcome !== "failed") continue;
+      if (refusedForGood) refused++;
+      else notSent++;
     }
     if (notSent > 0) {
-      logger.error("[stripe webhook] Resend didn't take the failed-payment email; Stripe will send the event again", {
+      logger.error("[stripe webhook] The failed-payment email didn't reach every owner; Stripe will send the event again", {
         eventId: event.id,
         notSent,
       });
       return 500;
+    }
+    if (refused > 0) {
+      logger.warn("[stripe webhook] Resend refused the failed-payment email for some owners; not tried again", {
+        eventId: event.id,
+        refused,
+      });
     }
 
     await prisma.$transaction((tx) => record(tx, event, [{ id: marker, type: "invoice.payment_failed.notice" }]));
