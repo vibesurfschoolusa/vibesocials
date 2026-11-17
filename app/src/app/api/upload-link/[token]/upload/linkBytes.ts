@@ -34,7 +34,8 @@ export async function consumeUploadLinkDayBytes(
     return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)) };
   } catch (error) {
     console.error("[upload-link] Byte counter store error, failing closed", error);
-    return { allowed: false, retryAfterSeconds: 60 };
+    // R39 client-journey L1: marked, so the route says "couldn't check", never "20 GB used".
+    return { allowed: false, retryAfterSeconds: 60, unavailable: true };
   }
 }
 

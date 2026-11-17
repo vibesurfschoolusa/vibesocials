@@ -33,28 +33,101 @@ const LIMIT_RESULT_TYPE = /Promise<\s*(RateLimitResult|AiQuotaResult)\b/;
 const answersUnchecked = (text: string) =>
   text.includes("limitUncheckedResponse(") || text.includes("LIMIT_UNCHECKED_MESSAGE");
 
+/** The text from the opening character at `open` to its matching close. */
+function balancedAt(text: string, open: number, opener: string, closer: string): string {
+  let depth = 0;
+  for (let index = open; index < text.length; index++) {
+    if (text[index] === opener) depth++;
+    else if (text[index] === closer && --depth === 0) return text.slice(open, index + 1);
+  }
+  return text.slice(open);
+}
+
+/** The call's argument text, from its "(" at `open` to the matching ")". */
+const argumentsAt = (text: string, open: number) => balancedAt(text, open, "(", ")");
+
+type LimitFunction = { name: string; exported: boolean; body: string };
+
+/** Where a function's body starts after its return type at `from`: the first "{" outside `<...>` (-1 if none). */
+function bodyStart(text: string, from: number): number {
+  let angles = 0;
+  for (let index = from; index < text.length; index++) {
+    const char = text[index];
+    if (char === "<") angles++;
+    else if (char === ">" && text[index - 1] !== "=") angles--;
+    else if (char === "{" && angles === 0) return index;
+    else if (char === ";" && angles === 0) return -1;
+  }
+  return -1;
+}
+
+/** Every function declared to return a limit result, with its body. */
+function limitFunctions(text: string): LimitFunction[] {
+  const found: LimitFunction[] = [];
+  for (const match of text.matchAll(/(export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g)) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const afterParams = open + argumentsAt(text, open).length;
+    const typed = /^\s*:\s*/.exec(text.slice(afterParams));
+    if (!typed) continue;
+    const start = bodyStart(text, afterParams + typed[0].length);
+    if (start < 0 || !LIMIT_RESULT_TYPE.test(text.slice(afterParams, start))) continue;
+    found.push({ name: match[2], exported: Boolean(match[1]), body: balancedAt(text, start, "{", "}") });
+  }
+  return found;
+}
+
 /** Exported functions of a fail-closed file declared to return a limit result. */
 function wrappersIn(text: string): string[] {
-  const names: string[] = [];
-  const declaration = /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]|\n)*?\)\s*:\s*([^{]+)\{/g;
-  for (const match of text.matchAll(declaration)) {
-    if (LIMIT_RESULT_TYPE.test(match[3])) names.push(match[1]);
+  return limitFunctions(text)
+    .filter((fn) => fn.exported)
+    .map((fn) => fn.name);
+}
+
+/** The catch blocks of `body`: `catch (e) { ... }` and `.catch(...)`. */
+function catchBlocks(body: string): string[] {
+  const blocks: string[] = [];
+  for (const match of body.matchAll(/(?<!\.)\bcatch\b\s*(?:\([^)]*\))?\s*\{/g)) {
+    blocks.push(balancedAt(body, (match.index ?? 0) + match[0].length - 1, "{", "}"));
   }
-  return names;
+  for (const match of body.matchAll(/\.catch\(/g)) {
+    blocks.push(argumentsAt(body, (match.index ?? 0) + match[0].length - 1));
+  }
+  return blocks;
+}
+
+/** Each object literal in `block` that answers `allowed: false`. */
+function refusalsIn(block: string): string[] {
+  const refusals: string[] = [];
+  for (const match of block.matchAll(/allowed:\s*false/g)) {
+    let depth = 0;
+    for (let index = match.index ?? 0; index >= 0; index--) {
+      if (block[index] === "}") depth++;
+      else if (block[index] === "{" && depth-- === 0) {
+        refusals.push(balancedAt(block, index, "{", "}"));
+        break;
+      }
+    }
+  }
+  return refusals;
+}
+
+/**
+ * R39 client-journey L1: a hand-written limiter (its own counter, so neither
+ * checkRateLimit nor `failClosed: true` appears): a function declared to
+ * return a limit result that refuses from a catch, i.e. fails closed on a
+ * store error. It is held to rateLimit.ts's rule (the refusal carries
+ * `unavailable: true`), and its callers to the callers' rule.
+ */
+function handWrittenLimitersIn(text: string): Array<LimitFunction & { unmarked: boolean }> {
+  return limitFunctions(text).flatMap((fn) => {
+    const refusals = catchBlocks(fn.body).flatMap(refusalsIn);
+    if (refusals.length === 0) return [];
+    return [{ ...fn, unmarked: refusals.some((refusal) => !/unavailable:\s*true/.test(refusal)) }];
+  });
 }
 
 /** The limiters themselves; a call to one counts only with `failClosed: true`. */
 const LIMITERS = ["checkRateLimit", "consumeFixedWindow"];
-
-/** The call's argument text, from its "(" at `open` to the matching ")". */
-function argumentsAt(text: string, open: number): string {
-  let depth = 0;
-  for (let index = open; index < text.length; index++) {
-    if (text[index] === "(") depth++;
-    else if (text[index] === ")" && --depth === 0) return text.slice(open, index + 1);
-  }
-  return text.slice(open);
-}
 
 type LimitCall = { callee: string; at: number; end: number; variable: string | null; returned: boolean };
 
@@ -95,6 +168,14 @@ function guardFailures(files: SourceFile[]): string[] {
 
   const wrappers: string[] = [];
   for (const file of scanned) if (file.text.includes("failClosed: true")) wrappers.push(...wrappersIn(file.text));
+  for (const file of scanned) {
+    for (const limiter of handWrittenLimitersIn(file.text)) {
+      if (limiter.unmarked) {
+        failures.push(`${file.rel}: ${limiter.name} answers allowed: false from a catch without unavailable: true`);
+      }
+      if (!wrappers.includes(limiter.name)) wrappers.push(limiter.name);
+    }
+  }
 
   for (const file of scanned) {
     const exception = EXCEPTIONS[file.rel];
@@ -159,7 +240,78 @@ describe("every fail-closed limiter caller answers a store it couldn't read as c
     expect(files.filter((file) => file.text.includes("markUnavailable")).map((file) => file.rel)).toEqual([]);
   });
 
+  // R39 client-journey L1: a hand-written counter (no checkRateLimit, no failClosed) is a limiter too.
+  it("finds the hand-written limiters, and holds their callers to the rule", () => {
+    const limiters = files.flatMap((file) => handWrittenLimitersIn(file.text).map((fn) => fn.name));
+    expect(limiters).toEqual(expect.arrayContaining(["consumeUploadLinkDayBytes", "consumeUploadDayBytes"]));
+  });
+
   describe("the guard itself", () => {
+    // R39 client-journey L1: the upload link's byte counter answered a store error as "20 GB used".
+    const counter = (catchAnswer: string): SourceFile => ({
+      rel: "lib/someCounter.ts",
+      text: [
+        'import type { RateLimitResult } from "./rateLimit";',
+        "export async function consumeSomething(id: string, now: number = Date.now()): Promise<RateLimitResult & { unavailable?: true }> {",
+        "  try {",
+        "    const entry = await prisma.rateLimitEntry.upsert({ where: { key: id } });",
+        "    if (entry.count <= 5) return { allowed: true };",
+        "    return { allowed: false, retryAfterSeconds: 10 };",
+        "  } catch (error) {",
+        `    ${catchAnswer}`,
+        "  }",
+        "}",
+      ].join("\n"),
+    });
+    const counterCaller = (checked: boolean): SourceFile => ({
+      rel: "app/api/counted/route.ts",
+      text: [
+        'const counted = await consumeSomething("u");',
+        ...(checked ? ["if (counted.unavailable) return limitUncheckedResponse();"] : []),
+        "if (!counted.allowed) return tooMany();",
+      ].join("\n"),
+    });
+
+    it("a hand-written limiter that answers a store error as a refusal without the mark fails", () => {
+      expect(guardFailures([counter("return { allowed: false, retryAfterSeconds: 60 };"), counterCaller(true)])).toEqual([
+        "lib/someCounter.ts: consumeSomething answers allowed: false from a catch without unavailable: true",
+      ]);
+    });
+
+    it("so does one that refuses in a .catch()", () => {
+      const text = [
+        "export function countIt(id: string): Promise<RateLimitResult> {",
+        "  return prisma.rateLimitEntry.upsert({ where: { key: id } }).then(() => ({ allowed: true })).catch(() => ({ allowed: false }));",
+        "}",
+      ].join("\n");
+      expect(guardFailures([{ rel: "lib/other.ts", text }])).toEqual([
+        "lib/other.ts: countIt answers allowed: false from a catch without unavailable: true",
+      ]);
+    });
+
+    it("a hand-written limiter that marks the store error passes, and its caller must check the mark", () => {
+      const marked = counter("return { allowed: false, retryAfterSeconds: 60, unavailable: true };");
+      expect(guardFailures([marked, counterCaller(true)])).toEqual([]);
+      expect(guardFailures([marked, counterCaller(false)])).toEqual([
+        'app/api/counted/route.ts: consumeSomething result "counted" is not checked for .unavailable',
+        "app/api/counted/route.ts: doesn't answer through the shared sentence",
+      ]);
+    });
+
+    it("a limit-typed function whose catch hands on no refusal is no limiter", () => {
+      const text = [
+        "async function firstSpent(ids: string[]): Promise<AiQuotaResult | null> {",
+        "  try {",
+        "    return { allowed: false, retryAfterSeconds: 5 };",
+        "  } catch (error) {",
+        "    return null;",
+        "  }",
+        "}",
+      ].join("\n");
+      expect(handWrittenLimitersIn(text)).toEqual([]);
+      expect(guardFailures([{ rel: "lib/reads.ts", text }])).toEqual([]);
+    });
+
     const wrapper: SourceFile = {
       rel: "lib/someWrapper.ts",
       text: [

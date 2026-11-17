@@ -26,6 +26,7 @@ vi.mock("./linkBytes", () => ({
   releaseUploadLinkReservation: releaseMock,
 }));
 
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import {
   UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
@@ -340,6 +341,18 @@ describe("a request refused after it counted", () => {
     consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     await call(tokenRequest({ size: 9_000 }));
     expect(releaseMock).toHaveBeenCalledWith("link-1", { file: true, bytes: 0 });
+  });
+
+  // R39 client-journey L1: the byte counter's store failed, so no limit was reached.
+  it("a byte counter that couldn't be read answers couldn't-check, gives back the file, and signs nothing", async () => {
+    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    const response = await call(tokenRequest({ size: 9_000 }));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    await expect(response.json()).resolves.toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
+    expect(releaseMock).toHaveBeenCalledWith("link-1", { file: true, bytes: 0 });
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
+    expect(handleUploadMock).not.toHaveBeenCalled();
   });
 
   it("gives back nothing for a token it signed", async () => {

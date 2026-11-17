@@ -123,6 +123,11 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   if (!dayLimit.allowed) return tooMany(UPLOAD_LINK_DAILY_LIMIT_MESSAGE, dayLimit.retryAfterSeconds);
 
   const bytesLimit = await consumeUploadLinkDayBytes(link.id, size);
+  if (bytesLimit.unavailable) {
+    // Nothing was counted in bytes; the file the day counter took is given back.
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: 0 });
+    return limitUncheckedResponse();
+  }
   if (!bytesLimit.allowed) {
     await releaseUploadLinkReservation(link.id, { file: true, bytes: 0 });
     return tooMany(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, bytesLimit.retryAfterSeconds);

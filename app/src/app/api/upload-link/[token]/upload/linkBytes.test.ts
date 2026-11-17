@@ -84,11 +84,13 @@ describe("consumeUploadLinkDayBytes", () => {
     expect((await consumeUploadLinkDayBytes("link-1", 1024 * 1024, NOW)).allowed).toBe(true);
   });
 
-  it("fails closed when the store is down", async () => {
+  // R39 client-journey L1: a store error is marked, so the route says "couldn't check", not "20 GB used".
+  it("fails closed when the store is down, marked unavailable", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
     await expect(consumeUploadLinkDayBytes("link-1", 10, NOW)).resolves.toEqual({
       allowed: false,
       retryAfterSeconds: 60,
+      unavailable: true,
     });
   });
 });
