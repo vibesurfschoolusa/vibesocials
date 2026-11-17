@@ -209,3 +209,25 @@ describe("R45 publishing L2: a row refused for a past time keeps it", () => {
     expect(container.textContent).not.toContain(BULK_PAST_TIME_MESSAGE);
   });
 });
+
+// R45 lead review: a change to the batch's schedule is an edit too.
+describe("R45 lead review: the batch controls end a time hold", () => {
+  it("refused for a past time, First day moved to tomorrow: the row moves with the others", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2030, 5, 10, 11, 45));
+    await mountWithThreePhotos();
+    await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-10" } }));
+    await run(() => props(byId("bulk-time")).onChange({ target: { value: "12:00" } }));
+    expect(rowTimes()).toEqual(["2030-06-10T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+
+    vi.setSystemTime(new Date(2030, 5, 10, 12, 1));
+    await scheduleAll();
+    expect(posts).toBe(2);
+    expect(rowTimes()[0]).toBe("2030-06-10T12:00");
+    expect(container.textContent).toContain(BULK_PAST_TIME_MESSAGE);
+
+    await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-11" } }));
+    expect(rowTimes()).toEqual(["2030-06-11T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+    expect(container.textContent).not.toContain(BULK_PAST_TIME_MESSAGE);
+  });
+});

@@ -490,6 +490,8 @@ export function BulkPostsForm({
   function changeUseSlots(on: boolean) {
     useSlotsRef.current = on;
     setUseSlots(on);
+    // R45 lead review: a change to the batch's schedule is an edit to every row.
+    timeHeldRef.current = new Set();
     respread();
   }
 
@@ -819,10 +821,14 @@ export function BulkPostsForm({
     return () => clearTimeout(timer);
   }, [initialMedia.length]);
 
-  function changeControls(patch: Partial<BulkScheduleControls>) {
+  /** `byPerson` false: the page moved the default First day on by itself (tick). */
+  function changeControls(patch: Partial<BulkScheduleControls>, byPerson = true) {
     const next = { ...controlsRef.current, ...patch };
     controlsRef.current = next;
     setControls(next);
+    // R45 lead review: the person's change to the batch's schedule is an edit
+    // to every row, so a row held for its refused time joins the spread.
+    if (byPerson) timeHeldRef.current = new Set();
     respread();
   }
 
@@ -979,7 +985,7 @@ export function BulkPostsForm({
       { firstDay: controlsRef.current.firstDay, setByUser: firstDaySetByUserRef.current },
       current,
     );
-    if (firstDay) changeControls({ firstDay });
+    if (firstDay) changeControls({ firstDay }, false);
   });
   useEffect(() => {
     const first = setTimeout(() => tick(), 0);
