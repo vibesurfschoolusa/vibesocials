@@ -126,7 +126,8 @@ export function sendOnceADay(
  * throwOnRetryable) never stops the next one. When any threw, the first error
  * is thrown once all were tried (the first unmarked one when some were marked
  * certainly not sent, R40 lead review), so sendOncePer lets the window go when
- * the keys allow and a later try reaches them; each recipient's own
+ * the keys allow and a later try reaches them (it carries the "not sent" mark
+ * only when nobody was sent in this call); each recipient's own
  * idempotency key stops a second copy to those it already reached. Otherwise answers whether any email went.
  * `sendStarted` (sendOncePer's) is called before each send.
  */
@@ -147,6 +148,14 @@ export async function sendToEach<T>(
       if (!failure || (certainlyNotSent(failure.error) && !certainlyNotSent(error))) failure = { error };
     }
   }
-  if (failure) throw failure.error;
+  if (failure) {
+    // R40 last look: "not sent" holds for the whole call only when nobody was
+    // sent; otherwise the keys' rule decides, so a reached recipient never gets
+    // a second copy after their key is forgotten.
+    if (sent && certainlyNotSent(failure.error)) {
+      throw new Error("A send was refused after another recipient was sent", { cause: failure.error });
+    }
+    throw failure.error;
+  }
   return sent;
 }

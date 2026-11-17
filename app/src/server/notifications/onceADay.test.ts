@@ -349,7 +349,55 @@ describe("sendToEach", () => {
       return true;
     });
     await expect(sendToEach(["a", "b"], sendOne)).rejects.toBe(lost);
-    await expect(sendToEach(["a", "c"], sendOne)).rejects.toMatchObject({ emailNotSent: true });
+    await expect(sendToEach(["a", "a"], sendOne)).rejects.toMatchObject({ emailNotSent: true });
+    // Someone was sent: the mark is dropped, so the keys' rule decides.
+    const refusedAfterSent = await sendToEach(["c", "a"], sendOne).catch((error: unknown) => error);
+    expect((refusedAfterSent as { emailNotSent?: unknown }).emailNotSent).toBeUndefined();
+  });
+
+  // R40 last look (medium): a 429 after another recipient was sent must not free a window
+  // the keys can't cover, or that recipient gets a second copy later.
+  describe("a 429 (marked not sent) after a recipient was sent", () => {
+    const rateLimited = () => Object.assign(new Error("Resend rate limited the send"), { emailNotSent: true });
+    const runOnce = (window: Parameters<typeof sendOncePer>[0], sendOne: (to: string) => Promise<boolean>, to: string[]) =>
+      sendOncePer(window, (sendStarted) => sendToEach(to, sendOne, sendStarted), onError);
+
+    it("a window over 24 hours: the claim is kept", async () => {
+      const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000), keysFrom: null, perRecipientKeys: true };
+      const sendOne = vi.fn(async (to: string) => {
+        if (to === "b") throw rateLimited();
+        return true;
+      });
+      await expect(runOnce(month, sendOne, ["a", "b"])).resolves.toBe("failed");
+      expect(releaseMock).not.toHaveBeenCalled();
+    });
+
+    it("a short window with keys: released, and the next trigger reuses A's key", async () => {
+      const keyed = { key: "some-email:2026-11-17T09", resetAt: new Date(Date.now() + 30 * 60 * 1000), keysFrom: new Date(Date.now() - 30 * 60 * 1000), perRecipientKeys: true };
+      const keysUsed: string[] = [];
+      const sendOne = vi.fn(async (to: string) => {
+        keysUsed.push(`some-email/${to}`);
+        if (to === "b" && keysUsed.length === 2) throw rateLimited();
+        return true;
+      });
+      await expect(runOnce(keyed, sendOne, ["a", "b"])).resolves.toBe("failed");
+      expect(releaseMock).toHaveBeenCalledWith({ where: { key: keyed.key } });
+      await expect(runOnce(keyed, sendOne, ["a", "b"])).resolves.toBe("sent");
+      // A's own key again, so Resend sends A nothing new; B is reached.
+      expect(keysUsed).toEqual(["some-email/a", "some-email/b", "some-email/a", "some-email/b"]);
+    });
+
+    it("both recipients 429, or a single one: released, even over 24 hours", async () => {
+      const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000), keysFrom: null, perRecipientKeys: true };
+      const sendOne = vi.fn(async () => {
+        throw rateLimited();
+      });
+      for (const to of [["a", "b"], ["a"]]) {
+        releaseMock.mockClear();
+        await expect(runOnce(month, sendOne, to)).resolves.toBe("failed");
+        expect(releaseMock).toHaveBeenCalledWith({ where: { key: month.key } });
+      }
+    });
   });
 
   it("all went: true, the window is kept", async () => {
