@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WorkspaceRole } from "@prisma/client";
 
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAnnounce } from "@/components/ui/announcer";
+import { CharacterCount } from "@/components/ui/character-count";
 import { useToast } from "@/components/ui/toast";
 import {
   BRAND_VOICE_EXAMPLE_MAX_LENGTH,
@@ -94,40 +94,9 @@ function TrackingTagsField({
 const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
 
-/**
- * R43 new-customer L1: no maxLength on these boxes, so a paste is never cut
- * mid-tag without a word. The count says when the text is over; Save then
- * shows the route's own sentence. Counted as the route counts: trimmed.
- */
-function FooterFieldCount({ id, label, text, max }: { id: string; label: string; text: string; max: number }) {
-  const length = text.trim().length;
-  const over = length - max;
-  // Lead review of R43: crossing the limit is said once each way through the
-  // page's announcer; the count itself is read with the field, never per key.
-  const announce = useAnnounce();
-  const isOver = over > 0;
-  const wasOver = useRef(isOver);
-  useEffect(() => {
-    if (wasOver.current === isOver) return;
-    wasOver.current = isOver;
-    announce(
-      isOver
-        ? `${label}: ${over.toLocaleString("en-US")} characters over the limit.`
-        : `${label}: back under the limit.`,
-    );
-  }, [isOver, over, label, announce]);
-  return (
-    <p id={id} className="text-xs text-muted-foreground">
-      {length.toLocaleString("en-US")} of {max.toLocaleString("en-US")} characters
-      {over > 0 ? (
-        <span className="text-destructive">
-          {" "}
-          ({over.toLocaleString("en-US")} over). Shorten it to save.
-        </span>
-      ) : null}
-    </p>
-  );
-}
+// R43 new-customer L1: no maxLength on these boxes, so a paste is never cut
+// mid-tag without a word; the shared count (components/ui/character-count.tsx)
+// says when the text is over, counted trimmed as the route counts.
 
 const RECENT_POSTS_FAILED_TEXT = "Could not load your recent posts. Try again.";
 
@@ -334,7 +303,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
                 onChange={(e) => setCompanyWebsite(e.target.value)}
                 aria-describedby="companyWebsiteCount"
               />
-              <FooterFieldCount id="companyWebsiteCount" label="Company website" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} />
+              <CharacterCount id="companyWebsiteCount" label="Company website" text={companyWebsite} max={COMPANY_WEBSITE_MAX_LENGTH} />
               <p className="text-sm text-muted-foreground">
                 Appended to every caption as: &quot;For more info visit [your website]&quot;.
               </p>
@@ -356,7 +325,7 @@ export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: Se
                 rows={3}
                 aria-describedby="defaultHashtagsCount"
               />
-              <FooterFieldCount id="defaultHashtagsCount" label="Default hashtags" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} />
+              <CharacterCount id="defaultHashtagsCount" label="Default hashtags" text={defaultHashtags} max={DEFAULT_HASHTAGS_MAX_LENGTH} />
               <p className="text-sm text-muted-foreground">
                 Added after your website, separated by a blank line.
               </p>

@@ -132,6 +132,11 @@ export const WORKSPACE_MAYBE_MADE_MESSAGE = answerLostText(
 );
 
 /** What a refused or unreadable Create workspace answer says. */
+/** Counted as the create route counts: runs of spaces collapsed, trimmed. */
+function collapsedLength(text: string): number {
+  return text.replace(/\s+/g, " ").trim().length;
+}
+
 /** The create route's WORKSPACE_NAME_MAX_LENGTH (account-menu.nameField.live.test.ts ties them). */
 export const NEW_WORKSPACE_NAME_MAX_LENGTH = 60;
 
@@ -465,7 +470,8 @@ export function AccountMenu() {
                       <CharacterCount
                         id={newWorkspaceCountId}
                         label="New workspace name"
-                        length={newWorkspaceName.replace(/\s+/g, " ").trim().length}
+                        text={newWorkspaceName}
+                        count={collapsedLength}
                         max={NEW_WORKSPACE_NAME_MAX_LENGTH}
                       />
                       {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}

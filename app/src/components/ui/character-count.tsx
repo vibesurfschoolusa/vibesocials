@@ -4,14 +4,32 @@ import { useEffect, useRef } from "react";
 
 import { useAnnounce } from "@/components/ui/announcer";
 
+/** The routes' usual count: the text as saved, trimmed. */
+function trimmedLength(text: string): number {
+  return text.trim().length;
+}
+
 /**
- * R44 new-customer L3, the R43 footer rule for name fields: the field has no
- * maxLength, so a paste is never cut short without a word. This count, linked
- * to the field by aria-describedby, says when the text is over; the button
- * then shows the route's own sentence. `length` is counted as the route
- * counts it.
+ * R43 new-customer L1, R44 L3: the one rule for a field with no maxLength, so
+ * a paste is never cut short without a word (the Settings footer and the name
+ * fields). This count, linked to the field by aria-describedby, says when the
+ * text is over; the button then shows the route's own sentence. `count`
+ * counts as the field's route does.
  */
-export function CharacterCount({ id, label, length, max }: { id: string; label: string; length: number; max: number }) {
+export function CharacterCount({
+  id,
+  label,
+  text,
+  max,
+  count = trimmedLength,
+}: {
+  id: string;
+  label: string;
+  text: string;
+  max: number;
+  count?: (text: string) => number;
+}) {
+  const length = count(text);
   const over = length - max;
   // Crossing the limit is said once each way through the page's announcer;
   // the count itself is read with the field, never per key.

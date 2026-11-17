@@ -1177,7 +1177,8 @@ function OwnerView({
         <CharacterCount
           id="workspace-name-count"
           label="Workspace name"
-          length={workspaceNameToSave(name).length}
+          text={name}
+          count={(typed) => workspaceNameToSave(typed).length}
           max={WORKSPACE_NAME_MAX_LENGTH}
         />
       </div>

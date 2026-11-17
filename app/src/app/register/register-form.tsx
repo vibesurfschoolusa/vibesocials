@@ -33,6 +33,11 @@ export type RegisterBilling = {
   agreement: { before: string; terms: string; between: string; privacy: string; after: string };
 };
 
+/** Counted as the route counts: runs of spaces collapsed, trimmed. */
+function collapsedLength(text: string): number {
+  return text.replace(/\s+/g, " ").trim().length;
+}
+
 /** The route's REGISTER_NAME_MAX_LENGTH (register-form.nameField.live.test.ts ties them). */
 export const REGISTER_NAME_MAX_LENGTH = 48;
 
@@ -170,7 +175,8 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
                 <CharacterCount
                   id="name-count"
                   label="Name"
-                  length={name.replace(/\s+/g, " ").trim().length}
+                  text={name}
+                  count={collapsedLength}
                   max={REGISTER_NAME_MAX_LENGTH}
                 />
               </div>

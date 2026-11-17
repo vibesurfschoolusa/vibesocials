@@ -19,7 +19,7 @@ let container: FakeNode;
 
 async function show(length: number) {
   await act(async () => {
-    root.render(createElement(CharacterCount, { id: "c", label: "Workspace name", length, max: 60 }));
+    root.render(createElement(CharacterCount, { id: "c", label: "Workspace name", text: "x".repeat(length), max: 60 }));
   });
 }
 
@@ -56,6 +56,35 @@ describe("CharacterCount", () => {
     await show(40);
     expect(announce.mock.calls.at(-1)).toEqual(["Workspace name: back under the limit."]);
     expect(announce).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts trimmed text by default, or by the field's own rule", async () => {
+    await act(async () => {
+      root.render(createElement(CharacterCount, { id: "c", label: "Website", text: "  abc  ", max: 60 }));
+    });
+    expect(container.textContent).toBe("3 of 60 characters");
+    await act(async () => {
+      root.render(
+        createElement(CharacterCount, {
+          id: "c",
+          label: "Name",
+          text: " a   b ",
+          max: 60,
+          count: (text: string) => text.replace(/\s+/g, " ").trim().length,
+        }),
+      );
+    });
+    expect(container.textContent).toBe("3 of 60 characters");
+  });
+
+  // R44 lead review: one counter rule; the Settings footer uses this one.
+  it("is the only copy of the rule: Settings has none of its own", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const settings = readFileSync(join(__dirname, "../settings-form.tsx"), "utf8");
+    expect(settings).not.toContain("function FooterFieldCount");
+    expect(settings).not.toContain("over the limit");
+    expect(settings.match(/<CharacterCount /g)).toHaveLength(2);
   });
 
   it("an opening already over is not announced", async () => {
