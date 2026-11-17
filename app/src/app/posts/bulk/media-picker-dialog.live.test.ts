@@ -116,3 +116,27 @@ describe("Media picker: a reopening whose first page fails", () => {
     expect(announced.filter((line) => line !== "Loading your media…")).toEqual([]);
   });
 });
+
+// R45 pages-a L1: the error was cleared only by a good first page, so a
+// reopening showed and announced the old failure above the skeletons.
+describe("Media picker: reopened after a failure", () => {
+  it("shows no alert while the new load is still on its way", async () => {
+    reply = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    await show(true);
+    expect(text()).toContain(FIRST_LOAD_FAILED_MESSAGE);
+
+    await show(false);
+    let answer: (response: Response) => void = () => {};
+    reply = () => new Promise<Response>((resolve) => (answer = resolve));
+    await show(true);
+    expect(text()).toContain("Loading your media…");
+    expect(text()).not.toContain(FIRST_LOAD_FAILED_MESSAGE);
+
+    await act(async () => answer(Response.json({ items: ITEMS.slice(0, 2), nextCursor: null })));
+    await show(true);
+    expect(count(container, "LI")).toBe(2);
+    expect(text()).not.toContain(FIRST_LOAD_FAILED_MESSAGE);
+  });
+});

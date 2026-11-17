@@ -106,6 +106,8 @@ export function MediaPickerDialog({ workspaceId, open, onOpenChange, addedIds, r
     return () => {
       cancelled = true;
       setLoading(true);
+      // R45 pages-a L1: the next opening starts without this one's failure.
+      setError(null);
     };
   }, [open, fetchPage]);
 
