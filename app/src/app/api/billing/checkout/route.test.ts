@@ -7,6 +7,8 @@ vi.mock("@/lib/workspace", () => ({ requireOwnerContext: h.requireOwnerContext }
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.checkRateLimit }));
 vi.mock("@/server/billing/checkout", () => ({ startCheckout: h.startCheckout }));
 
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
+
 import { POST } from "./route";
 
 /** The Plan buttons send the workspace their page was rendered for (F3). */
@@ -77,6 +79,35 @@ describe("POST /api/billing/checkout and the rendered workspace", () => {
       }),
     );
     expect(response.status).toBe(400);
+    expect(h.startCheckout).not.toHaveBeenCalled();
+  });
+});
+
+// R43 security L1: the limit is 10 an hour, so the refusal says the real wait
+// (the shared tooManyTriesResponse), and a store that couldn't be read keeps
+// its own couldn't-check answer.
+describe("POST /api/billing/checkout over its limit", () => {
+  it("says the wait in minutes, with Retry-After", async () => {
+    h.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 59 * 60 - 5 });
+
+    const response = await POST(post({ plan: "starter" }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe(String(59 * 60 - 5));
+    expect(await response.json()).toEqual({
+      error: "Too many tries. Wait 59 minutes, then try again.",
+      retryAfterSeconds: 59 * 60 - 5,
+    });
+    expect(h.startCheckout).not.toHaveBeenCalled();
+  });
+
+  it("a limit store that couldn't be read: the couldn't-check 503, never a wait", async () => {
+    h.checkRateLimit.mockResolvedValue({ allowed: false, unavailable: true });
+
+    const response = await POST(post({ plan: "starter" }));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
     expect(h.startCheckout).not.toHaveBeenCalled();
   });
 });

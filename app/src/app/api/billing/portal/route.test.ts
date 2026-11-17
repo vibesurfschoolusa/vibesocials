@@ -20,6 +20,8 @@ vi.mock("@/server/billing/payerRefusal", () => ({ isWorkspacePayer: h.isWorkspac
 
 import { NextResponse } from "next/server";
 
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
+
 import { POST } from "./route";
 
 const portal = (body: unknown) =>
@@ -93,6 +95,35 @@ describe("POST /api/billing/portal and the rendered workspace", () => {
   it("400s a body without the id, and asks Stripe for nothing", async () => {
     const response = await POST(portal({}));
     expect(response.status).toBe(400);
+    expect(h.openPortal).not.toHaveBeenCalled();
+  });
+});
+
+// R43 security L1: the limit is 10 an hour, so the refusal says the real wait
+// (the shared tooManyTriesResponse), and a store that couldn't be read keeps
+// its own couldn't-check answer.
+describe("POST /api/billing/portal over its limit", () => {
+  it("says the wait in minutes, with Retry-After", async () => {
+    h.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 59 * 60 - 5 });
+
+    const response = await POST(portal({ workspaceId: "ws-1" }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe(String(59 * 60 - 5));
+    expect(await response.json()).toEqual({
+      error: "Too many tries. Wait 59 minutes, then try again.",
+      retryAfterSeconds: 59 * 60 - 5,
+    });
+    expect(h.openPortal).not.toHaveBeenCalled();
+  });
+
+  it("a limit store that couldn't be read: the couldn't-check 503, never a wait", async () => {
+    h.checkRateLimit.mockResolvedValue({ allowed: false, unavailable: true });
+
+    const response = await POST(portal({ workspaceId: "ws-1" }));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
     expect(h.openPortal).not.toHaveBeenCalled();
   });
 });
