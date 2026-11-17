@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 
 import {
   FACEBOOK_METRICS_ITEMS_PER_BATCH,
+  SOCIAL_METRICS_TIMEOUT_MS,
   countOf,
   fetchFacebookPostMetricsBatch,
 } from "./facebookMetrics";
@@ -19,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -386,5 +389,30 @@ describe("fetchFacebookPostMetricsBatch", () => {
 
   it("caps a batch at 50 requests, as Meta's batch page states", () => {
     expect(FACEBOOK_METRICS_ITEMS_PER_BATCH).toBe(50);
+  });
+});
+
+// R42 platform L2: the limit covers the body too (fetchWithinLimit), so a
+// Graph answer whose headers came and whose body stalls can't hang the step.
+describe("a stalled Graph body", () => {
+  it("is abandoned within the limit as a failed read, and the next batch is still read", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    fetchMock
+      .mockImplementationOnce(bodyNeverEnds)
+      .mockResolvedValueOnce(batchAnswer([{ code: 200, body: postBody(7, 3, 2) }]));
+
+    const settled = fetchFacebookPostMetricsBatch([{ id: "p_1", kind: "post" }], "page-token");
+    await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+    const out = await settled;
+    expect([...out.failed]).toEqual(["p_1"]);
+    expect(out.byId.size).toBe(0);
+
+    const next = await fetchFacebookPostMetricsBatch([{ id: "p_2", kind: "post" }], "page-token");
+    expect(next.byId.get("p_2")?.counts.likes).toBe(7);
+    expect(console.error).toHaveBeenCalledWith(
+      "[PostMetrics] Graph batch failed",
+      expect.objectContaining({ platform: "facebook_page", code: FETCH_TIMEOUT_CODE }),
+    );
   });
 });

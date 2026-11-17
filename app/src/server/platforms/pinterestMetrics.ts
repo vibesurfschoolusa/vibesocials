@@ -1,4 +1,4 @@
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PINTEREST_API_BASE_URL } from "@/lib/pinterestApi";
 
 import {
@@ -85,7 +85,9 @@ export async function fetchPinterestPinMetricsBatch(
     url.searchParams.set("metric_types", METRIC_TYPES.join(","));
 
     try {
-      const response = await fetchWithTimeout(
+      // R42 platform L2: the limit covers the body too, so a stalled body can't
+      // hang the daily numbers step (as linkedinMetrics).
+      const response = await fetchWithinLimit(
         url.toString(),
         { headers: { Authorization: `Bearer ${accessToken}` } },
         SOCIAL_METRICS_TIMEOUT_MS,

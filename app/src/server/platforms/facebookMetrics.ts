@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 
 import { classifyRateLimit } from "./rateLimited";
@@ -189,7 +189,9 @@ export async function graphBatch(
 ): Promise<BatchEntry[]> {
   const all = (entry: BatchEntry): BatchEntry[] => relativeUrls.map(() => entry);
   try {
-    const response = await fetchWithTimeout(
+    // R42 platform L2: the limit covers the body too, so a stalled body can't
+    // hang the daily numbers step (as linkedinMetrics).
+    const response = await fetchWithinLimit(
       `${META_GRAPH_BASE_URL}/`,
       {
         method: "POST",

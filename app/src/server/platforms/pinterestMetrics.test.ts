@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
+
+import { SOCIAL_METRICS_TIMEOUT_MS } from "./facebookMetrics";
 
 import { fetchPinterestPinMetricsBatch, pinAnalyticsRange } from "./pinterestMetrics";
 
@@ -14,6 +17,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -113,5 +117,25 @@ describe("fetchPinterestPinMetricsBatch", () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
     const out = await fetchPinterestPinMetricsBatch([pin("1")], "t", NOW);
     expect(out.byId.size + out.failed.size).toBe(0);
+  });
+});
+
+// R42 platform L2: the limit covers the body too (fetchWithinLimit).
+describe("a stalled Pinterest body", () => {
+  it("is abandoned within the limit as a failed read, and the next Pin is still read", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    fetchMock.mockImplementationOnce(bodyNeverEnds).mockResolvedValueOnce(answer({ IMPRESSION: 240 }));
+
+    const settled = fetchPinterestPinMetricsBatch([pin("1"), pin("2")], "t", NOW);
+    await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+    const out = await settled;
+
+    expect([...out.failed]).toEqual(["1"]);
+    expect(out.byId.get("2")?.counts.views).toBe(240);
+    expect(console.error).toHaveBeenCalledWith(
+      "[PostMetrics] Pinterest Pin analytics failed",
+      expect.objectContaining({ code: FETCH_TIMEOUT_CODE }),
+    );
   });
 });
