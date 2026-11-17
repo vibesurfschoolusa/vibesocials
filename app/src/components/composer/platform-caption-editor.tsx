@@ -46,6 +46,11 @@ export interface PlatformCaptionEditorProps {
    * pressed before the post was saved and the form reset is dropped.
    */
   formGeneration?: () => number;
+  /**
+   * R39 new-customer M1: Create's "AI is writing" state (useCaptionBox); an
+   * Adapt holds it while it runs, so the post can't be sent meanwhile.
+   */
+  aiWritingStarted?: () => () => void;
 }
 
 function captionCountText(count: number): string {
@@ -70,6 +75,7 @@ export function PlatformCaptionEditor({
   disabled = false,
   workspaceId,
   formGeneration,
+  aiWritingStarted,
 }: PlatformCaptionEditorProps) {
   const toast = useToast();
   const [adapting, setAdapting] = useState<Platform | null>(null);
@@ -97,6 +103,7 @@ export function PlatformCaptionEditor({
     }
     const maxLength = adaptMaxLength(platform, footer);
     setAdapting(platform);
+    const aiDone = aiWritingStarted?.();
     try {
       const response = await fetchOrNoAnswer("/api/posts/enhance-caption", {
         method: "POST",
@@ -128,6 +135,7 @@ export function PlatformCaptionEditor({
       toast.error(isNoAnswer(caught) ? adaptLostText(platformLabel(platform)) : `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
     } finally {
       setAdapting(null);
+      aiDone?.();
     }
   }
 

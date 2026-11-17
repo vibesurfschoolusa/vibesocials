@@ -33,6 +33,13 @@ vi.mock("@/lib/prepareUploadFile", async (importOriginal) => ({
 }));
 
 type Deferred = { resolve: (value: unknown) => void };
+// While `frames.hold` is set, a video's frame grab waits until the test releases it.
+const frames = vi.hoisted(() => ({ hold: false, waiting: [] as (() => void)[] }));
+vi.mock("@/lib/extractVideoFrames", () => ({
+  extractVideoFrames: () =>
+    frames.hold ? new Promise<string[]>((resolve) => frames.waiting.push(() => resolve([]))) : Promise.resolve([]),
+}));
+
 const uploads = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void }[] }));
 vi.mock("@vercel/blob/client", () => ({
   upload: (key: string) =>
@@ -47,6 +54,7 @@ import { CreatePostForm } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
+let body: FakeNode;
 const answers: Record<string, Deferred[]> = {};
 const calls: string[] = [];
 
@@ -144,6 +152,7 @@ beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
+  body = made.doc.body as FakeNode;
   vi.stubGlobal("window", made.doc.defaultView);
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("fetch", fetchMock);
@@ -160,15 +169,25 @@ beforeEach(async () => {
   Object.assign(made.doc.defaultView as object, {
     matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
     location: { href: "http://localhost/posts/new" },
+    setTimeout: (step: () => void, ms?: number) => setTimeout(step, ms),
+    clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
   });
   // The success banner scrolls itself into view after a save.
   const createNode = made.doc.createElement as (tag: string) => FakeNode;
-  Object.assign(made.doc, { createElement: (tag: string) => Object.assign(createNode(tag), { scrollIntoView() {} }) });
+  // The confirmation dialog looks for its first control and moves focus.
+  Object.assign(made.doc, {
+    createElement: (tag: string) =>
+      Object.assign(createNode(tag), { scrollIntoView() {}, focus() {}, querySelector: () => null, querySelectorAll: () => [] }),
+  });
+  vi.stubGlobal("HTMLElement", class {});
+  vi.stubGlobal("Node", class {});
   for (const key of Object.keys(answers)) delete answers[key];
   calls.length = 0;
   uploads.pending.length = 0;
   prep.hold = false;
   prep.waiting.length = 0;
+  frames.hold = false;
+  frames.waiting.length = 0;
   root = createRoot(container as unknown as HTMLElement);
   await act(async () => {
     root.render(createElement(ToastProvider, null, createElement(CreatePostForm, { workspaceId: "ws-1" })));
@@ -350,5 +369,116 @@ describe("R38 review: Improve, then a different photo", () => {
     await pick(photoB());
     await finishUploads();
     expect(captionNow()).toBe("My own words, better");
+  });
+});
+
+describe("R39 new-customer M1: nothing is posted that the person didn't see", () => {
+  const AI_WAIT = "Wait until the AI caption is ready.";
+  const submitButton = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && n.attributes?.type === "submit");
+    if (!hit) throw new Error("no submit button");
+    return hit;
+  };
+  const submitDisabled = () => (props(submitButton()).disabled as unknown) === true;
+  const pageSays = (text: string) => (body.textContent as string).includes(text);
+  const submit = () => run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
+  const dialogButton = (text: string) => {
+    const dialog = find(body, (n) => n.attributes?.role === "dialog");
+    const hit = dialog && find(dialog, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === text);
+    if (!hit) throw new Error(`no dialog button ${text}`);
+    return hit;
+  };
+  const postCalls = () => calls.filter((url) => url === "/api/posts").length;
+
+  it("Improve running: the submit waits, and says why", async () => {
+    await typeCaption("Surf lesson today");
+    await press("Improve caption");
+    expect(submitDisabled()).toBe(true);
+    expect(pageSays(AI_WAIT)).toBe(true);
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Catch a wave today!" });
+    expect(submitDisabled()).toBe(false);
+    expect(pageSays(AI_WAIT)).toBe(false);
+  });
+
+  it("Adapt running: the submit waits", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    await press("Adapt for X");
+    expect(submitDisabled()).toBe(true);
+    expect(pageSays(AI_WAIT)).toBe(true);
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Hi from X" });
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("Caption from media running: the submit waits", async () => {
+    await untickAutoCaption();
+    await pick(new File(["a"], "a.jpg", { type: "image/jpeg" }));
+    await finishUploads();
+    expect(submitDisabled()).toBe(false);
+    await press("Caption from media");
+    expect(submitDisabled()).toBe(true);
+    expect(pageSays(AI_WAIT)).toBe(true);
+    await answer("/api/posts/auto-caption", { caption: "Waves at sunrise" });
+    expect(submitDisabled()).toBe(false);
+  });
+
+  it("an AI caption lands while the confirmation is open: Publish refuses and says why", async () => {
+    // The button waits while Improve runs (above); the form's handler is
+    // called directly here, so the dialog's own check is what is tested.
+    await typeCaption("Surf lesson today, 3 pm");
+    await press("Improve caption");
+    await submit();
+    expect((props(dialogButton("Publish without a photo")).disabled as unknown)).toBeFalsy();
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Catch a wave today!" });
+    expect(captionNow()).toBe("Catch a wave today!");
+    expect((props(dialogButton("Publish without a photo")).disabled as unknown)).toBe(true);
+    expect(pageSays("The caption changed while this was open.")).toBe(true);
+    await run(() => props(dialogButton("Publish without a photo")).onClick());
+    expect(postCalls()).toBe(0);
+  });
+
+  it("an Adapt answer lands while the confirmation is open: Publish refuses", async () => {
+    await typeCaption("Hi");
+    await switchXOn();
+    await press("Adapt for X");
+    await submit();
+    await answer("/api/posts/enhance-caption", { enhancedCaption: "Hi from X" });
+    expect(xCaptionNow()).toBe("Hi from X");
+    expect((props(dialogButton("Publish without a photo")).disabled as unknown)).toBe(true);
+    await run(() => props(dialogButton("Publish without a photo")).onClick());
+    expect(postCalls()).toBe(0);
+  });
+
+  it("a normal publish: unchanged", async () => {
+    await typeCaption("Surf lesson today");
+    expect(submitDisabled()).toBe(false);
+    await submit();
+    expect((props(dialogButton("Publish without a photo")).disabled as unknown)).toBeFalsy();
+    expect(pageSays("The caption changed while this was open.")).toBe(false);
+    await run(() => props(dialogButton("Publish without a photo")).onClick());
+    expect(postCalls()).toBe(1);
+  });
+});
+
+describe("R39 publishing L1: the automatic caption reads the switch after the frame grab", () => {
+  const video = () => new File(["v"], "v.mp4", { type: "video/mp4" });
+
+  it("unticked during the frame grab: no call", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    await untickAutoCaption();
+    await run(() => frames.waiting.splice(0).forEach((go) => go()));
+    expect(autoCaptionCalls()).toBe(0);
+    expect(captionFromMediaBusy()).toBe(false);
+  });
+
+  it("ticked: the call goes after the frame grab", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(autoCaptionCalls()).toBe(0);
+    await run(() => frames.waiting.splice(0).forEach((go) => go()));
+    expect(autoCaptionCalls()).toBe(1);
   });
 });

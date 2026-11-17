@@ -43,7 +43,7 @@ import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, ConfirmFailureShown } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { fieldBaseClasses, Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -104,7 +104,7 @@ import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { captureVideoFrame } from "@/lib/captureVideoFrame";
 import { coverBlobPathname } from "@/lib/coverBlobPath";
 import { coverRequestFields, type CoverChoice, type UploadedCoverImage } from "@/lib/videoCover";
-import { coverUploadFailedText } from "@/app/posts/bulk/bulkExtras";
+import { aiSwitchOn, coverUploadFailedText } from "@/app/posts/bulk/bulkExtras";
 import {
   deriveComposerPlatforms,
   isTikTokPrivacyMissing,
@@ -477,6 +477,33 @@ export function submitButtonLabel(state: { mode: PublishMode; noFile: boolean; l
 }
 
 /**
+ * R39 new-customer M1: why the submit waits while Improve, Adapt or Caption
+ * from media is writing into the post: its answer could otherwise land behind
+ * the confirmation and be posted unread.
+ */
+export const AI_WRITING_MESSAGE = "Wait until the AI caption is ready.";
+
+/** R39 new-customer M1: what the confirmation says when the captions changed while it was open. */
+export const CAPTIONS_CHANGED_MESSAGE =
+  "The caption changed while this was open. Press Cancel, read the caption, then publish again.";
+
+/** The captions the confirmation was opened on; see captionsChangedSince. */
+export interface CaptionsAtConfirm {
+  caption: string;
+  overrides: PlatformOverrides | null;
+}
+
+/**
+ * R39 new-customer M1: the confirmation shows no caption, so it sends only the
+ * captions it was opened on. A late AI answer that changed the caption or a
+ * platform's caption since then makes it refuse.
+ */
+export function captionsChangedSince(at: CaptionsAtConfirm | null, now: CaptionsAtConfirm): boolean {
+  if (at === null) return false;
+  return at.caption !== now.caption || JSON.stringify(at.overrides ?? {}) !== JSON.stringify(now.overrides ?? {});
+}
+
+/**
  * The submit control as the form's button and the phone's publish bar both
  * show it, so the two never disagree. Disabled for exactly what disabled the
  * form's button before (M1); the reason is the first sentence the page
@@ -495,13 +522,16 @@ export function submitControl(input: {
   platformAlert: string | null;
   /** R31 pages A1: the form's error line (a refused press), shown by the bar's button too. */
   pageError: string | null;
+  /** R39 new-customer M1: an AI request is writing into the post (useCaptionBox). */
+  aiWriting: boolean;
 }): SubmitControlView {
   const counter = captionCounter(input.caption);
   // What disables the button, in the order the bar has always named them.
   const disablingReason =
     (counter.over ? `Caption is too long: ${counter.label} characters.` : null) ??
     (input.tiktokBlock ? `TikTok: ${input.tiktokBlock}` : null) ??
-    input.fileBlock;
+    input.fileBlock ??
+    (input.aiWriting ? AI_WRITING_MESSAGE : null);
   // R31 lead review: the form's line shows only while the button is enabled,
   // so an old line never hides what disables it now.
   const reason =
@@ -509,12 +539,14 @@ export function submitControl(input: {
     (disablingReason === null ? input.pageError : null) ??
     input.platformAlert ??
     disablingReason;
-  return {
+  const view = {
     label: input.buttonLabel,
     loading: input.loading,
     disabled: counter.over || input.tiktokBlock !== null || input.fileBlock !== null,
     reason,
   };
+  // Kept apart so the line above stays byte-identical (it is a frozen line).
+  return input.aiWriting ? { ...view, disabled: true } : view;
 }
 
 /**
@@ -1115,6 +1147,8 @@ function CreatePostFormInner({
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
   const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
+  // R39 new-customer M1: the captions the confirmation was opened on.
+  const [captionsAtConfirm, setCaptionsAtConfirm] = useState<CaptionsAtConfirm | null>(null);
   // Posts saved on this page: the preview list is keyed on it, so the next
   // post starts on the first selected platform's tab again.
   const [postsSaved, setPostsSaved] = useState(0);
@@ -1594,6 +1628,12 @@ function CreatePostFormInner({
     fileOverride?: File | null;
     /** True once the file this caption is for has been replaced by a newer pick. */
     isStale?: () => boolean;
+    /**
+     * R39 publishing L1: the automatic caption, not a press. It reads
+     * "Generate a caption when media is added" again right before the request,
+     * after the frame grab, so unticking meanwhile sends nothing.
+     */
+    automatic?: boolean;
   }) {
     const blob = options.blobOverride ?? uploadedBlob;
     // What the answer must still match when it comes back (captionResultApplies):
@@ -1608,6 +1648,7 @@ function CreatePostFormInner({
     }
 
     const busy = captionBusy.start();
+    const aiDone = captionBox.aiWritingStarted();
     try {
       setUploadError(null);
 
@@ -1617,6 +1658,7 @@ function CreatePostFormInner({
       const frames = blob.mimeType.startsWith("video/")
         ? await extractVideoFrames(options.fileOverride ?? uploadFile ?? blob.url)
         : [];
+      if (options.automatic && !aiSwitchOn(autoCaptionRef)) return;
 
       // No answer, or one that is not JSON, reads as a sentence that the
       // caption is unchanged (lib/captionRequest.ts), never "Failed to fetch".
@@ -1653,6 +1695,7 @@ function CreatePostFormInner({
     } finally {
       // A newer press or pick keeps the busy state it took.
       captionBusy.end(busy);
+      aiDone();
     }
   }
 
@@ -1734,6 +1777,7 @@ function CreatePostFormInner({
           blobOverride: blobInfo,
           fileOverride: nextFile,
           isStale,
+          automatic: true,
         });
       }
     } catch (err: unknown) {
@@ -1849,6 +1893,7 @@ function CreatePostFormInner({
                 blobOverride: blob,
                 fileOverride: file,
                 isStale: () => isStale() || !isCoverPhoto(key),
+                automatic: true,
               }).finally(() => {
                 if (!isStale()) setAutoCaptionLoading(false);
               });
@@ -2411,6 +2456,7 @@ function CreatePostFormInner({
     // is also confirmed when scheduled; a draft and a scheduled post with a file
     // submit directly, as before.
     if (needsSubmitConfirm({ mode: publishMode, noFile })) {
+      setCaptionsAtConfirm({ caption: uploadCaption, overrides: platformOverrides });
       setConfirmPublishOpen(true);
       return;
     }
@@ -2427,6 +2473,7 @@ function CreatePostFormInner({
     // it did here and the post hasn't been saved since (useCaptionBox); the box
     // stays editable, and what is typed meanwhile is kept.
     const press = captionBox.pressed(null);
+    const aiDone = captionBox.aiWritingStarted();
     try {
       setEnhancingCaption(true);
       setUploadError(null);
@@ -2450,6 +2497,7 @@ function CreatePostFormInner({
       toast.error(CAPTION_FAILED_MESSAGE);
     } finally {
       setEnhancingCaption(false);
+      aiDone();
     }
   }
 
@@ -2569,7 +2617,10 @@ function CreatePostFormInner({
     untouchedMessage,
     platformAlert,
     pageError: shownUploadError,
+    aiWriting: captionBox.aiWriting,
   });
+  const captionsChanged =
+    confirmPublishOpen && captionsChangedSince(captionsAtConfirm, { caption: uploadCaption, overrides: platformOverrides });
 
   return (
     <>
@@ -2895,6 +2946,7 @@ function CreatePostFormInner({
           footer={footerSettings}
           workspaceId={workspaceId}
           formGeneration={captionBox.formGeneration}
+          aiWritingStarted={captionBox.aiWritingStarted}
         />
 
         {tiktokSelected && activeMimeType && (
@@ -3143,6 +3195,12 @@ function CreatePostFormInner({
                 TikTok: {tiktokBlock}
               </p>
             ) : null}
+            {/* Below md the publish bar says it (control.reason). */}
+            {captionBox.aiWriting ? (
+              <p className="hidden text-sm text-muted-foreground md:block" role="status">
+                {AI_WRITING_MESSAGE}
+              </p>
+            ) : null}
           </div>
         </div>
       </form>
@@ -3171,10 +3229,20 @@ function CreatePostFormInner({
               <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
             ) : null}
             {confirmCopy.trail ? <span className="block">{confirmCopy.trail}</span> : null}
+            {captionsChanged ? (
+              <span role="alert" className="block font-medium text-destructive">
+                {CAPTIONS_CHANGED_MESSAGE}
+              </span>
+            ) : null}
           </span>
         }
         confirmText={confirmCopy.confirmText}
-        onConfirm={performSubmit}
+        confirmDisabled={captionsChanged}
+        onConfirm={async () => {
+          // The line above already says why; the dialog stays open.
+          if (captionsChanged) throw new ConfirmFailureShown();
+          await performSubmit();
+        }}
       />
       <PublishBar
         formId="create-post-form"

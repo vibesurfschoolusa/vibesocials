@@ -45,6 +45,9 @@ export function useCaptionBox() {
   // R38 new-customer M1: saving the post resets the form and bumps this, so
   // every answer pressed for the old post is dropped, whatever the box says.
   const generationRef = useRef(0);
+  // R39 new-customer M1: how many requests that will write into the post
+  // (Improve, Adapt, Caption from media, manual or automatic) are running.
+  const [aiRequests, setAiRequests] = useState(0);
 
   // Stable, so effects can name it as they name a state setter.
   const setCaption = useCallback((next: SetStateAction<string>) => {
@@ -71,6 +74,21 @@ export function useCaptionBox() {
   // Stable and read live, so the per-platform captions (Adapt) can hold
   // their answers to the same generation.
   const formGeneration = useCallback(() => generationRef.current, []);
+
+  /**
+   * R39 new-customer M1: a request that will write into the post holds this
+   * while it runs, so the submit waits and nothing is posted unseen. Returns
+   * the release; a second call does nothing. Stable, like setCaption.
+   */
+  const aiWritingStarted = useCallback((): (() => void) => {
+    let released = false;
+    setAiRequests((count) => count + 1);
+    return () => {
+      if (released) return;
+      released = true;
+      setAiRequests((count) => count - 1);
+    };
+  }, []);
 
   /** The form was saved and reset: answers pressed before now are dropped. */
   function formReset() {
@@ -112,5 +130,16 @@ export function useCaptionBox() {
     return true;
   }
 
-  return { caption, setCaption, lastAiCaption, forgetMediaCaption, pressed, answered, formReset, formGeneration };
+  return {
+    caption,
+    setCaption,
+    lastAiCaption,
+    forgetMediaCaption,
+    pressed,
+    answered,
+    formReset,
+    formGeneration,
+    aiWriting: aiRequests > 0,
+    aiWritingStarted,
+  };
 }

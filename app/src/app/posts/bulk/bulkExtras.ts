@@ -137,6 +137,20 @@ export function wantsAltText(row: AltTextRowState): boolean {
   return row.mimeType.startsWith("image/") && row.uploaded && row.mediaItemId === null && !row.altTextAsked;
 }
 
+/** An AI switch read live: Create's "Generate a caption when media is added", Add many's "Write captions with AI". */
+export interface AiSwitch {
+  readonly current: boolean;
+}
+
+/**
+ * R39 publishing L1: the one place an automatic AI request reads its switch.
+ * Each asks right before its fetch, after any local work (a frame grab, the
+ * caption before a description), so unticking meanwhile sends nothing more.
+ */
+export function aiSwitchOn(aiSwitch: AiSwitch): boolean {
+  return aiSwitch.current;
+}
+
 /**
  * A row's caption step, then its automatic description whatever the caption's
  * outcome (a failed caption still gets one). `describe` marks the row asked,
