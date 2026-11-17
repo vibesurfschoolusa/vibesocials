@@ -105,16 +105,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const rateLimit = await checkRateLimit({
-    userId: context.user.id,
-    route: "workspaces/create",
-    limit: 10,
-    windowMs: 60 * 60 * 1000,
-  });
-  if (!rateLimit.allowed) {
-    return tooManyTriesResponse(rateLimit);
-  }
-
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
@@ -126,6 +116,18 @@ export async function POST(request: Request) {
       { error: `Give the workspace a name of up to ${WORKSPACE_NAME_MAX_LENGTH} characters.` },
       { status: 400 },
     );
+  }
+
+  // R45 new-customer L1: the name is checked before the limit counts a try, so
+  // a name the route refuses spends none of the 10 an hour.
+  const rateLimit = await checkRateLimit({
+    userId: context.user.id,
+    route: "workspaces/create",
+    limit: 10,
+    windowMs: 60 * 60 * 1000,
+  });
+  if (!rateLimit.allowed) {
+    return tooManyTriesResponse(rateLimit);
   }
 
   const ownedCount = await prisma.workspaceMember.count({

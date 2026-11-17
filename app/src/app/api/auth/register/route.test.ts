@@ -292,6 +292,30 @@ describe("POST /api/auth/register", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  // R45 new-customer L1: a request the route refuses for its fields spends none of the network's 5 tries.
+  it("checks the fields before a try is counted: an over-long name, a bad email or a short password counts nothing", async () => {
+    for (const body of [
+      { email: "user@example.com", password: "goodpassword", name: "a".repeat(52) },
+      { email: "not-an-email", password: "goodpassword" },
+      { email: "user@example.com", password: "short" },
+      { email: "user@example.com" },
+    ]) {
+      const response = await POST(jsonRequest(body));
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+    const bad = await POST(new Request("http://localhost/api/auth/register", { method: "POST", body: "{" }));
+    expect(bad.status).toBe(400);
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("still counts a try that passes the field checks", async () => {
+    happyPathEchoingUser();
+    await POST(jsonRequest({ email: "user@example.com", password: "goodpassword", name: "Maria" }));
+    expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+    expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ route: "auth/register", limit: 5 }));
+  });
+
   it("accepts a name of exactly 48 characters", async () => {
     happyPathEchoingUser();
     const response = await POST(

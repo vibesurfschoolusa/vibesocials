@@ -27,8 +27,49 @@ const REGISTER_RATE_LIMIT = {
 const REGISTER_NAME_MAX_LENGTH = 48;
 
 export async function POST(request: Request) {
-  // IP throttle first (anonymous abuse surface). Fail closed on store errors so
-  // a DB blip cannot open unlimited signup.
+  // R45 new-customer L1: the fields are checked before the limit counts a try,
+  // as forgot-password does, so a request refused for its fields spends none of
+  // the network's tries. A malformed field reveals nothing about whether an
+  // account exists.
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
+  }
+
+  const { email: rawEmail, password, name } = body;
+
+  if (!rawEmail || !password) {
+    return NextResponse.json(
+      { error: "Email and password are required." },
+      { status: 400 },
+    );
+  }
+
+  if (typeof rawEmail !== "string" || !/^\S+@\S+\.\S+$/.test(rawEmail)) {
+    return NextResponse.json(
+      { error: "Enter a valid email address." },
+      { status: 400 },
+    );
+  }
+  if (typeof password !== "string" || password.length < 8) {
+    return NextResponse.json(
+      { error: "Password must be at least 8 characters." },
+      { status: 400 },
+    );
+  }
+
+  // Cleaned the way a workspace name is, so stray spaces never reach the
+  // workspace name ("Maria 's workspace").
+  const cleanedName = typeof name === "string" ? name.replace(/\s+/g, " ").trim() : "";
+  if (cleanedName.length > REGISTER_NAME_MAX_LENGTH) {
+    return NextResponse.json(
+      { error: `Use a name of up to ${REGISTER_NAME_MAX_LENGTH} characters, or leave it empty.` },
+      { status: 400 },
+    );
+  }
+
+  // IP throttle before any database read (anonymous abuse surface). Fail closed
+  // on store errors so a DB blip cannot open unlimited signup.
   const ip =
     (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() ||
     "unknown";
@@ -38,8 +79,9 @@ export async function POST(request: Request) {
     failClosed: true,
   });
   if (rateLimit.unavailable) return limitUncheckedResponse();
-  // R43 new-customer L2: every try counts (typos too) against a fixed hour per
-  // network, so the refusal says so and names the wait.
+  // R43 new-customer L2: every try that passes the field checks counts (a
+  // mistyped address or password too) against a fixed hour per network, so the
+  // refusal says so and names the wait.
   if (!rateLimit.allowed) {
     return tooManyTriesResponse(
       rateLimit,
@@ -47,56 +89,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // Parsed outside the try below: a malformed body is a 400, not the 500 the
-  // catch-all would turn a failed body parse into.
-  const body = await readJsonObject(request);
-  if (!body) {
-    return invalidJsonBodyResponse();
-  }
-
-  // Parsed once so the outer catch can reuse email/name for the P2002
-  // no-oracle response without re-reading the request body.
-  let parsedEmail = "";
-  let parsedDisplayName: string | null = null;
+  const email = normalizeEmail(rawEmail);
+  const displayName = cleanedName || null;
 
   try {
-    const { email: rawEmail, password, name } = body;
-
-    if (!rawEmail || !password) {
-      return NextResponse.json(
-        { error: "Email and password are required." },
-        { status: 400 },
-      );
-    }
-
-    if (typeof rawEmail !== "string" || !/^\S+@\S+\.\S+$/.test(rawEmail)) {
-      return NextResponse.json(
-        { error: "Enter a valid email address." },
-        { status: 400 },
-      );
-    }
-    if (typeof password !== "string" || password.length < 8) {
-      return NextResponse.json(
-        { error: "Password must be at least 8 characters." },
-        { status: 400 },
-      );
-    }
-
-    // Cleaned the way a workspace name is, so stray spaces never reach the
-    // workspace name ("Maria 's workspace").
-    const cleanedName = typeof name === "string" ? name.replace(/\s+/g, " ").trim() : "";
-    if (cleanedName.length > REGISTER_NAME_MAX_LENGTH) {
-      return NextResponse.json(
-        { error: `Use a name of up to ${REGISTER_NAME_MAX_LENGTH} characters, or leave it empty.` },
-        { status: 400 },
-      );
-    }
-
-    const email = normalizeEmail(rawEmail);
-    const displayName = cleanedName || null;
-    parsedEmail = email;
-    parsedDisplayName = displayName;
-
     // SEC-1 — no email-existence oracle. Body shape is identical for new and
     // existing accounts (never return a real user id — `id: "ok"` vs a cuid
     // would reintroduce an oracle). Client always attempts signIn next: a new
@@ -163,7 +159,7 @@ export async function POST(request: Request) {
         : "";
     if (code === "P2002") {
       return NextResponse.json(
-        { id: "ok", email: parsedEmail, name: parsedDisplayName },
+        { id: "ok", email, name: displayName },
         { status: 201 },
       );
     }

@@ -227,6 +227,28 @@ describe("POST /api/workspaces", () => {
     expect(creationRefusalMock).not.toHaveBeenCalled();
   });
 
+  // R45 new-customer L1: a name the route refuses spends none of the 10 tries an hour.
+  it("checks the name before a try is counted: an over-long, empty or unreadable one counts nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    for (const body of [{ name: "a".repeat(61) }, { name: "   " }, {}]) {
+      const response = await POST(createRequest(body));
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Give the workspace a name of up to 60 characters." });
+    }
+    const bad = await POST(new Request("http://localhost/api/workspaces", { method: "POST", body: "{" }));
+    expect(bad.status).toBe(400);
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("still counts a try whose name passes", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    const response = await POST(createRequest({ name: "a".repeat(60) }));
+    expect(response.status).toBe(201);
+    expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+    expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ route: "workspaces/create", limit: 10 }));
+  });
+
   it("429s with Retry-After when the create rate limit blocks", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeContext());
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
