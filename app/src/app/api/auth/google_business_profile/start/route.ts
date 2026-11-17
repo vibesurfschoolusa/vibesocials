@@ -4,6 +4,7 @@ import { GOOGLE_BUSINESS_PROFILE_SCOPES } from "@/lib/oauthScopes";
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { signedOutConnectRedirect } from "@/lib/signedOutConnect";
 
 export const runtime = "nodejs";
 
@@ -16,10 +17,7 @@ export async function GET(request: Request) {
     return contextOrRedirect;
   }
   if (!contextOrRedirect) {
-    const url = new URL(request.url);
-    url.pathname = "/login";
-    url.searchParams.set("from", "google_business_profile_connect");
-    return NextResponse.redirect(url);
+    return signedOutConnectRedirect(request.url);
   }
   const { user, workspace } = contextOrRedirect;
 

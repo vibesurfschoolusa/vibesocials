@@ -165,6 +165,22 @@ describe("Settings: a signed-in start", () => {
   });
 });
 
+// R44 pages-a L6: a Connect pressed in a tab whose session ended goes to
+// sign-in and, after it, back to Settings, where the Connect button is.
+describe("Settings: a signed-out start", () => {
+  it.each(PLATFORMS)("$platform sends the visitor to sign in, then back to Settings", async ({ platform, GET }) => {
+    h.currentUser.mockResolvedValue(null);
+
+    const res = await GET(new NextRequest(`${ORIGIN}/api/auth/${platform}/start?workspaceId=ws-1`));
+
+    const to = location(res);
+    expect(`${to.origin}${to.pathname}`).toBe(`${ORIGIN}/login`);
+    expect([...to.searchParams.entries()]).toEqual([["callbackUrl", "/settings"]]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(h.handshakeUpsert).not.toHaveBeenCalled();
+  });
+});
+
 describe("the client connect link (/c/[token]): no rendered workspace, the token decides", () => {
   const press = (platform: Platform) =>
     connectLinkStart(

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
 import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
+import { signedOutConnectRedirect } from "@/lib/signedOutConnect";
 
 /**
  * OAuth 1.0a signature generation
@@ -46,7 +47,7 @@ export async function GET(request: Request) {
     return contextOrRedirect;
   }
   if (!contextOrRedirect) {
-    return NextResponse.redirect(new URL("/login", process.env.NEXTAUTH_URL));
+    return signedOutConnectRedirect(process.env.NEXTAUTH_URL);
   }
   const { user, workspace } = contextOrRedirect;
 

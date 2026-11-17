@@ -3,6 +3,7 @@ import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { signedOutConnectRedirect } from "@/lib/signedOutConnect";
 
 export async function GET(request: NextRequest) {
   const contextOrRedirect = await requireOwnerContextForOAuthStart(
@@ -13,7 +14,7 @@ export async function GET(request: NextRequest) {
     return contextOrRedirect;
   }
   if (!contextOrRedirect) {
-    return NextResponse.redirect(new URL("/login", process.env.NEXTAUTH_URL));
+    return signedOutConnectRedirect(process.env.NEXTAUTH_URL);
   }
   const { user, workspace } = contextOrRedirect;
 
