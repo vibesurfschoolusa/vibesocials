@@ -106,7 +106,9 @@ export async function GET(request: Request) {
         scheduledFor: { gt: now },
         NOT: AWAITING_APPROVAL,
       },
-      orderBy: { scheduledFor: "asc" },
+      // A Feed and Story pair's rows share the time; the feed row names the
+      // post's platforms, so it comes first (Postgres sorts nulls last by default).
+      orderBy: [{ scheduledFor: "asc" }, { storyOfPostJobId: { sort: "asc", nulls: "first" } }],
       select: { scheduledFor: true, publishMetadata: true },
     }),
     // F4: a Google listing connected without a location (a client's connect

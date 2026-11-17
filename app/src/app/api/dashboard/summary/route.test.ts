@@ -73,12 +73,26 @@ vi.mock("@/lib/db", () => ({
         state.calls.push("postJob.count");
         return state.jobs.filter((job) => matches(job, where)).length;
       },
-      findFirst: async ({ where, orderBy }: { where: Row; orderBy: Row }) => {
+      findFirst: async ({ where, orderBy }: { where: Row; orderBy: Row | Row[] }) => {
         state.calls.push("postJob.findFirst");
-        expect(orderBy).toEqual({ scheduledFor: "asc" });
+        // Postgres order: the route's keys in turn, with an unset value last
+        // unless the key asks for nulls first.
+        const rank = (value: unknown) => (value instanceof Date ? value.getTime() : value === null ? null : String(value));
         const hits = state.jobs
           .filter((job) => matches(job, where))
-          .sort((a, b) => (a.scheduledFor as Date).getTime() - (b.scheduledFor as Date).getTime());
+          .sort((a, b) => {
+            for (const key of Array.isArray(orderBy) ? orderBy : [orderBy]) {
+              const [field, spec] = Object.entries(key)[0];
+              const { sort, nulls } =
+                typeof spec === "string" ? { sort: spec, nulls: "last" } : (spec as { sort: string; nulls: string });
+              const x = rank(a[field]);
+              const y = rank(b[field]);
+              if (x === y) continue;
+              if (x === null || y === null) return (x === null) === (nulls === "first") ? -1 : 1;
+              return (x < y ? -1 : 1) * (sort === "asc" ? 1 : -1);
+            }
+            return 0;
+          });
         return hits[0] ?? null;
       },
       // Only the matching Story halves, or the feed jobs they name (R2-client-journey L1);
@@ -433,6 +447,25 @@ describe("GET /api/dashboard/summary", () => {
       expect((await summary()).body.nextScheduled).toEqual({
         scheduledFor: ahead(2).toISOString(),
         platformCount: 2,
+      });
+    });
+
+    it("counts the feed row's platforms for a Feed and Story pair, even when the Story row is listed first", async () => {
+      const feed = job({
+        status: "scheduled",
+        scheduledFor: ahead(2),
+        publishMetadata: { targetPlatforms: ["instagram", "facebook", "linkedin", "x"] },
+      });
+      const story = job({
+        status: "scheduled",
+        scheduledFor: ahead(2),
+        storyOfPostJobId: feed.id,
+        publishMetadata: { targetPlatforms: ["instagram"] },
+      });
+      state.jobs = [story, feed];
+      expect((await summary()).body.nextScheduled).toEqual({
+        scheduledFor: ahead(2).toISOString(),
+        platformCount: 4,
       });
     });
 
