@@ -99,6 +99,7 @@ import {
   type BulkStories,
 } from "./bulkExtras";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
+import { waitSecondsOf } from "@/lib/tooManyTriesText";
 
 export interface BulkRow {
   id: string;
@@ -588,7 +589,8 @@ export function BulkPostsForm({
         updateRow(id, {
           captionStatus: "failed",
           captionOverwrite: false,
-          captionError: captionFailedText(response.ok ? null : response.status, data?.code),
+          // R42 review: the limit's own wait, from the body, else Retry-After.
+          captionError: captionFailedText(response.ok ? null : response.status, data?.code, waitSecondsOf(data, response.headers.get("Retry-After"))),
         });
         return;
       }
