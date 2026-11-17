@@ -15,9 +15,11 @@ import { buildTrialEndedEmail, buildTrialEndingEmail } from "./billingEmails";
  * exempt by their flag, and used (a connection or a post). Each owner's send
  * goes through sendOncePer, claimed until the trial date (R40 security L3), so
  * an owner already reached is skipped when a co-owner's failed send is tried
- * again the next day. The workspace marker is set once every owner is reached;
- * the idempotency key per workspace, owner and kind stops a re-run of the step
- * sending twice.
+ * again the next day. An owner counts as reached only when Resend took the
+ * email. The workspace marker is set once every owner is reached; the
+ * idempotency key per workspace, owner, kind and trial date stops a re-run of
+ * the step sending twice. The operator's change of the trial date clears both
+ * markers (admin/actions.ts), so a new date gets its own emails.
  *
  * Bounded and paced as the daily problems email is (problemDigest.ts), so the
  * step fits Vercel's limit even when every send fails retryably.
@@ -125,12 +127,18 @@ export async function runBillingReminders(
               timeZone: owner.user.timeZone,
             })
           : buildTrialEndedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
+      const trialEndsAt = workspace.trialEndsAt!;
+      // R41 security L2: keyed with the trial date, as the claim is, so a date
+      // the operator changes within 24 h of a send is a new email, not Resend's
+      // 409 for a reused key with a new body (which counts as sent).
       const send = () =>
         sendEmail(
           { to: owner.user.email, ...email },
-          { idempotencyKey: `billing/${kind}/${workspace.id}/${owner.userId}`, throwOnRetryable: true },
+          {
+            idempotencyKey: `billing/${kind}/${workspace.id}/${owner.userId}/${trialEndsAt.toISOString()}`,
+            throwOnRetryable: true,
+          },
         );
-      const trialEndsAt = workspace.trialEndsAt!;
       const outcome = await sendOncePer(
         {
           key: `billing-owner:${kind}:${workspace.id}:${owner.userId}:${trialEndsAt.toISOString()}`,
@@ -143,14 +151,15 @@ export async function runBillingReminders(
         async () => {
           if (!first) await sleep(REMINDER_SEND_INTERVAL_MS);
           first = false;
+          // R41 security L1: sendEmail's own answer, so an email Resend didn't
+          // take (a quota 429, another 4xx, no key) fails and is tried tomorrow.
           try {
-            await send();
+            return await send();
           } catch (error) {
             if (!isRetryableEmailError(error)) throw error;
             await sleep(retryDelayMs(error));
-            await send();
+            return await send();
           }
-          return true;
         },
         (error) =>
           logger.error("[billing] Couldn't send one trial email; trying again tomorrow", {

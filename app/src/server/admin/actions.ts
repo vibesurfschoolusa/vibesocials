@@ -257,6 +257,12 @@ export async function exemptWorkspace(args: { operator: Operator; workspaceId: s
 }
 
 /**
+ * R41 security L2: a new trial date gets its own reminder and ended email
+ * (reminders.ts sends only while these are null), set in the same update.
+ */
+const TRIAL_EMAILS_UNSENT = { trialReminderSentAt: null, trialEndedEmailSentAt: null } as const;
+
+/**
  * "Start or change the trial": billingExempt false and the trial end set
  * (bounds checked by validateTrialBody). The same values again record nothing.
  */
@@ -270,9 +276,10 @@ export async function startTrial(args: {
       return { status: "unchanged" as const };
     }
 
+    const dateChanged = row.trialEndsAt?.getTime() !== args.trialEndsAt.getTime();
     await tx.workspace.update({
       where: { id: row.id },
-      data: { billingExempt: false, trialEndsAt: args.trialEndsAt },
+      data: { billingExempt: false, trialEndsAt: args.trialEndsAt, ...(dateChanged ? TRIAL_EMAILS_UNSENT : {}) },
     });
     await record(tx, args.operator, row, "trial", {
       old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
@@ -295,7 +302,7 @@ export async function endTrialNow(args: { operator: Operator; workspaceId: strin
 
     await tx.workspace.update({
       where: { id: row.id },
-      data: { billingExempt: false, trialEndsAt: args.now },
+      data: { billingExempt: false, trialEndsAt: args.now, ...TRIAL_EMAILS_UNSENT },
     });
     await record(tx, args.operator, row, "trial", {
       old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },

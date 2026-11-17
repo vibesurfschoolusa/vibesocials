@@ -146,7 +146,7 @@ describe("startTrial", () => {
     expect(db.executeRaw).toHaveBeenCalledTimes(1);
     expect(db.workspaceUpdate).toHaveBeenCalledWith({
       where: { id: "ws-1" },
-      data: { billingExempt: false, trialEndsAt: END },
+      data: { billingExempt: false, trialEndsAt: END, trialReminderSentAt: null, trialEndedEmailSentAt: null },
     });
     expect(db.actionCreate.mock.calls[0][0].data).toMatchObject({
       action: "trial",
@@ -164,6 +164,24 @@ describe("startTrial", () => {
       old: { billingExempt: false, trialEndsAt: "2026-11-20T23:59:59.999Z" },
       new: { billingExempt: false, trialEndsAt: END.toISOString() },
     });
+  });
+
+  // R41 security L2: the new date gets its own reminder and ended email.
+  it("a new date after an ended trial clears both email markers in the same update", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-01T00:00:00Z") }));
+    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END });
+    expect(db.workspaceUpdate).toHaveBeenCalledTimes(1);
+    expect(db.workspaceUpdate.mock.calls[0][0].data).toEqual({
+      billingExempt: false,
+      trialEndsAt: END,
+      trialReminderSentAt: null, trialEndedEmailSentAt: null,
+    });
+  });
+
+  it("ending an exemption on the same date keeps the email markers", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true, trialEndsAt: new Date(END) }));
+    expect(await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "changed" });
+    expect(db.workspaceUpdate.mock.calls[0][0].data).toEqual({ billingExempt: false, trialEndsAt: END });
   });
 
   it("writes and records nothing when it is already so, and answers not found for no workspace", async () => {
@@ -202,7 +220,7 @@ describe("endTrialNow", () => {
     expect(db.executeRaw).toHaveBeenCalledTimes(1);
     expect(db.workspaceUpdate).toHaveBeenCalledWith({
       where: { id: "ws-1" },
-      data: { billingExempt: false, trialEndsAt: NOW },
+      data: { billingExempt: false, trialEndsAt: NOW, trialReminderSentAt: null, trialEndedEmailSentAt: null },
     });
     expect(db.actionCreate.mock.calls[0][0].data).toMatchObject({
       action: "trial",
@@ -219,7 +237,7 @@ describe("endTrialNow", () => {
     expect(await endTrialNow({ operator: OPS, workspaceId: "ws-1", now: NOW })).toEqual({ status: "changed" });
     expect(db.workspaceUpdate).toHaveBeenCalledWith({
       where: { id: "ws-1" },
-      data: { billingExempt: false, trialEndsAt: NOW },
+      data: { billingExempt: false, trialEndsAt: NOW, trialReminderSentAt: null, trialEndedEmailSentAt: null },
     });
     expect(db.actionCreate.mock.calls[0][0].data.detail).toEqual({
       old: { billingExempt: true, trialEndsAt: null },

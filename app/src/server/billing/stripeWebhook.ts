@@ -274,12 +274,24 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
 
     // Sent before the event is recorded, so a failed send is sent again with
     // Stripe's retry; the per-invoice key stops Resend sending one twice.
+    // R41 security L1: an email Resend didn't take (sendEmail answers false: a
+    // quota 429, another 4xx, no key) is a failed send too; the other owners
+    // are still tried now.
     const email = buildPaymentFailedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
+    let notSent = 0;
     for (const owner of workspace.members) {
-      await sendEmail(
+      const sent = await sendEmail(
         { to: owner.user.email, ...email },
         { idempotencyKey: `stripe-payment-failed/${invoiceId}/${owner.userId}`, throwOnRetryable: true },
       );
+      if (!sent) notSent++;
+    }
+    if (notSent > 0) {
+      logger.error("[stripe webhook] Resend didn't take the failed-payment email; Stripe will send the event again", {
+        eventId: event.id,
+        notSent,
+      });
+      return 500;
     }
 
     await prisma.$transaction((tx) => record(tx, event, [{ id: marker, type: "invoice.payment_failed.notice" }]));

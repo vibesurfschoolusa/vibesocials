@@ -234,7 +234,7 @@ beforeEach(() => {
   m.failNextUpdate = false;
   m.collideNextUpdate = false;
   m.sendEmail.mockReset();
-  m.sendEmail.mockResolvedValue(undefined);
+  m.sendEmail.mockResolvedValue(true);
   for (const fn of Object.values(m.logger)) fn.mockReset();
   m.workspaces.set("ws_a", row());
   m.workspaces.set("ws_b", row({ id: "ws_b", name: "Surf B", stripeCustomerId: "cus_b" }));
@@ -889,6 +889,24 @@ describe("invoice.payment_failed", () => {
     m.sendEmail.mockRejectedValueOnce(new Error("resend 503"));
     expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(500);
     expect(m.events.size).toBe(0);
+  });
+
+  // R41 security L1: sendEmail answers false, without throwing, when Resend did
+  // not take the email (a quota 429, another 4xx, no key, a bad key).
+  it("a send Resend didn't take answers 500 and records nothing; Stripe's retry sends it", async () => {
+    m.sendEmail.mockResolvedValueOnce(false);
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(500);
+    expect(m.sendEmail).toHaveBeenCalledTimes(2);
+    expect(m.events.size).toBe(0);
+    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("Stripe will send the event again"), {
+      eventId: "evt_1",
+      notSent: 1,
+    });
+
+    m.sendEmail.mockClear();
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
+    expect(m.sendEmail).toHaveBeenCalledTimes(2);
+    expect(m.events.has("evt_1")).toBe(true);
   });
 
   it("a customer no workspace has is logged and recorded, nothing sent", async () => {
