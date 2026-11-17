@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findManyMock, updateMock, lookupOrganizationMock } = vi.hoisted(() => ({
+// updateMock is the guarded write (updateMany); findUniqueMock the token re-read,
+// answering by default the tokens every row below was read with.
+const { findManyMock, findUniqueMock, updateMock, lookupOrganizationMock } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
+  findUniqueMock: vi.fn(async () => ({ accessToken: "li-token", refreshToken: null }) as unknown),
   updateMock: vi.fn(),
   lookupOrganizationMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
-  prisma: { socialConnection: { findMany: findManyMock, update: updateMock } },
+  prisma: { socialConnection: { findMany: findManyMock, findUnique: findUniqueMock, updateMany: updateMock } },
 }));
 
 vi.mock("./linkedinOrganizations", () => ({
@@ -25,9 +28,14 @@ const NOW = new Date("2026-11-09T12:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
 const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
 
+/** When every row below was last written, as the run read it. */
+const READ_AT = new Date("2026-11-09T11:58:00.000Z");
+
 const connection = (over: { expiresAt?: Date | null; metadata?: Record<string, unknown> } = {}) => ({
   id: "conn-1",
   accessToken: "li-token",
+  refreshToken: null,
+  updatedAt: READ_AT,
   expiresAt: "expiresAt" in over ? over.expiresAt : new Date(NOW.getTime() + 30 * DAY),
   metadata: over.metadata ?? {
     name: "LinkedIn User",
@@ -39,7 +47,8 @@ const connection = (over: { expiresAt?: Date | null; metadata?: Record<string, u
 
 beforeEach(() => {
   vi.clearAllMocks();
-  updateMock.mockResolvedValue({});
+  updateMock.mockResolvedValue({ count: 1 });
+  findUniqueMock.mockResolvedValue({ accessToken: "li-token", refreshToken: null });
 });
 
 // LinkedIn Marketing API data storage requirements (checked 2026-11-09):
@@ -59,11 +68,11 @@ describe("refreshLinkedInOrganizationProfiles", () => {
     expect(summary).toEqual({ refreshed: 1, cleared: 0 });
     expect(findManyMock).toHaveBeenCalledWith({
       where: { platform: "linkedin" },
-      select: { id: true, accessToken: true, expiresAt: true, metadata: true },
+      select: { id: true, accessToken: true, refreshToken: true, expiresAt: true, metadata: true, updatedAt: true },
     });
     expect(lookupOrganizationMock).toHaveBeenCalledWith("li-token", "101");
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "conn-1" },
+      where: { id: "conn-1", updatedAt: READ_AT },
       data: {
         metadata: {
           name: "LinkedIn User",
@@ -84,7 +93,7 @@ describe("refreshLinkedInOrganizationProfiles", () => {
     // Lead review (R35): the name, vanity name and read time are as they were.
     expect(updateMock).toHaveBeenCalledTimes(1);
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "conn-1" },
+      where: { id: "conn-1", updatedAt: READ_AT },
       data: { metadata: { ...connection().metadata, organizationsTriedAt: NOW.toISOString() } },
     });
   });
@@ -106,7 +115,7 @@ describe("refreshLinkedInOrganizationProfiles", () => {
     expect(summary).toEqual({ refreshed: 0, cleared: 1 });
     expect(lookupOrganizationMock).not.toHaveBeenCalled(); // the token has expired
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "conn-1" },
+      where: { id: "conn-1", updatedAt: READ_AT },
       data: { metadata: { organizations: [{ id: "101" }], username: null, organizationsFetchedAt: null } },
     });
   });
@@ -121,7 +130,7 @@ describe("refreshLinkedInOrganizationProfiles", () => {
     // One write: the clean-up, with this run's try recorded.
     expect(updateMock).toHaveBeenCalledTimes(1);
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "conn-1" },
+      where: { id: "conn-1", updatedAt: READ_AT },
       data: {
         metadata: {
           organizations: [{ id: "101" }],
@@ -252,13 +261,13 @@ describe("refreshLinkedInOrganizationProfiles: bounded", () => {
     expect(lookedUp()).not.toContain("org-z-late");
     expect(summary).toEqual({ refreshed: 1, cleared: 25 });
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "z-late" },
+      where: { id: "z-late", updatedAt: READ_AT },
       data: { metadata: { organizations: [{ id: "org-z-late" }], username: null, organizationsFetchedAt: null } },
     });
 
     // Budget spent before the first lookup: no LinkedIn call, the clean-up as usual.
     vi.clearAllMocks();
-    updateMock.mockResolvedValue({});
+    updateMock.mockResolvedValue({ count: 1 });
     findManyMock.mockResolvedValue([row("x", 57), row("y", 3)]);
     let calls = 0;
     const late = () => (calls++ === 0 ? 0 : LINKEDIN_ORG_REFRESH_BUDGET_MS + 1);
@@ -294,7 +303,7 @@ describe("refreshLinkedInOrganizationProfiles: which rows are tried", () => {
 
     const run = async (at: Date) => {
       vi.clearAllMocks();
-      updateMock.mockResolvedValue({});
+      updateMock.mockResolvedValue({ count: 1 });
       findManyMock.mockResolvedValue(rows);
       lookupOrganizationMock.mockImplementation(async (_token: string, id: string) =>
         id === "org-healthy" ? { id, name: "Healthy" } : null,
@@ -337,7 +346,7 @@ describe("refreshLinkedInOrganizationProfiles: which rows are tried", () => {
     await refreshLinkedInOrganizationProfiles(NOW);
     const once = lookedUp();
     vi.clearAllMocks();
-    updateMock.mockResolvedValue({});
+    updateMock.mockResolvedValue({ count: 1 });
     lookupOrganizationMock.mockResolvedValue(null);
     findManyMock.mockResolvedValue([...rows].reverse());
     await refreshLinkedInOrganizationProfiles(NOW);
@@ -351,5 +360,82 @@ describe("refreshLinkedInOrganizationProfiles: which rows are tried", () => {
     expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
     expect(lookupOrganizationMock).not.toHaveBeenCalled();
     expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+// Lead review (R35, second look): the run's copy of a row can be minutes old by
+// the time it writes. A reconnect meanwhile (another company page chosen) must
+// not get the old organizations back, or the next posts go to the old page.
+// Every write is guarded: the stored tokens are still the ones this run read
+// (the 401-flagging rule) and the row is unchanged since (updatedAt).
+describe("refreshLinkedInOrganizationProfiles: never writes over a newer row", () => {
+  const reconnected = () => findUniqueMock.mockResolvedValue({ accessToken: "new-token", refreshToken: null });
+
+  it("a reconnect after the read: no write on a success", async () => {
+    findManyMock.mockResolvedValue([connection()]);
+    lookupOrganizationMock.mockResolvedValue({ id: "101", name: "Vibe Surf School" });
+    reconnected();
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "conn-1" }, select: { accessToken: true, refreshToken: true } });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a reconnect after the read: no write on a failure", async () => {
+    findManyMock.mockResolvedValue([connection()]);
+    lookupOrganizationMock.mockResolvedValue(null);
+    reconnected();
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a reconnect after the read: no clean-up write", async () => {
+    findManyMock.mockResolvedValue([
+      connection({
+        expiresAt: new Date(NOW.getTime() - DAY),
+        metadata: { organizations: [{ id: "101", name: "Old Name" }], username: "Old Name", organizationsFetchedAt: daysAgo(57) },
+      }),
+    ]);
+    reconnected();
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("the row gone after the read: no write", async () => {
+    findManyMock.mockResolvedValue([connection()]);
+    lookupOrganizationMock.mockResolvedValue({ id: "101", name: "Vibe Surf School" });
+    findUniqueMock.mockResolvedValue(null);
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("an unchanged row writes as before, only if it is still unchanged", async () => {
+    findManyMock.mockResolvedValue([connection()]);
+    lookupOrganizationMock.mockResolvedValue({ id: "101", name: "Vibe Surf School" });
+
+    expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 1, cleared: 0 });
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock.mock.calls[0][0].where).toEqual({ id: "conn-1", updatedAt: READ_AT });
+  });
+
+  it("another metadata change in between (a page choice, same tokens) is not written over", async () => {
+    for (const [lookup, metadata] of [
+      [{ id: "101", name: "Vibe Surf School" }, undefined],
+      [null, undefined],
+      [null, { organizations: [{ id: "101", name: "Old Name" }], username: "Old Name", organizationsFetchedAt: daysAgo(57) }],
+    ] as const) {
+      vi.clearAllMocks();
+      findManyMock.mockResolvedValue([connection(metadata ? { metadata: { ...metadata } } : {})]);
+      lookupOrganizationMock.mockResolvedValue(lookup);
+      // The row's updatedAt moved on, so the guarded write matches nothing.
+      updateMock.mockResolvedValue({ count: 0 });
+
+      expect(await refreshLinkedInOrganizationProfiles(NOW)).toEqual({ refreshed: 0, cleared: 0 });
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect(updateMock.mock.calls[0][0].where).toEqual({ id: "conn-1", updatedAt: READ_AT });
+    }
   });
 });

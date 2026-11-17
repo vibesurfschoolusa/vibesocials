@@ -41,11 +41,36 @@ function hasProfileData(metadata: LinkedInConnectionMetadata): boolean {
   );
 }
 
-async function saveMetadata(id: string, metadata: LinkedInConnectionMetadata): Promise<void> {
-  await prisma.socialConnection.update({
-    where: { id },
+/** The row as this run read it: what its writes are guarded by. */
+interface ReadRow {
+  id: string;
+  accessToken: string;
+  refreshToken: string | null;
+  updatedAt: Date;
+}
+
+/**
+ * Lead review (R35): the run's copy of a row can be minutes old when it
+ * writes. A reconnect meanwhile (another company page chosen) must not get the
+ * old organizations back: linkedinClient posts as organizations[0]. So the
+ * metadata is written only while the stored tokens are still the ones this run
+ * read (the rule flagRejectedToken uses; tokens are stored encrypted, so they
+ * are compared after a re-read) and the row is unchanged since (updatedAt, in
+ * the same statement, as saveSocialConnection does). Answers whether it wrote.
+ */
+async function saveMetadataIfUnchanged(read: ReadRow, metadata: LinkedInConnectionMetadata): Promise<boolean> {
+  const stored = await prisma.socialConnection.findUnique({
+    where: { id: read.id },
+    select: { accessToken: true, refreshToken: true },
+  });
+  if (!stored || stored.accessToken !== read.accessToken || stored.refreshToken !== read.refreshToken) {
+    return false;
+  }
+  const { count } = await prisma.socialConnection.updateMany({
+    where: { id: read.id, updatedAt: read.updatedAt },
     data: { metadata: metadata as unknown as Prisma.InputJsonValue },
   });
+  return count === 1;
 }
 
 /**
@@ -85,7 +110,7 @@ export async function refreshLinkedInOrganizationProfiles(
   const startedAt = clock();
   const found = await prisma.socialConnection.findMany({
     where: { platform: "linkedin" },
-    select: { id: true, accessToken: true, expiresAt: true, metadata: true },
+    select: { id: true, accessToken: true, refreshToken: true, expiresAt: true, metadata: true, updatedAt: true },
   });
   // The times are inside the JSON metadata, so the order is set here.
   const rows = found
@@ -122,28 +147,29 @@ export async function refreshLinkedInOrganizationProfiles(
         ...(details.name ? { name: details.name } : {}),
         ...(details.vanityName ? { vanityName: details.vanityName } : {}),
       };
-      await saveMetadata(row.id, {
+      const saved = await saveMetadataIfUnchanged(row, {
         ...metadata,
         organizations: [fresh, ...organizations.slice(1)],
         username: details.name ?? null,
         organizationsFetchedAt: now.toISOString(),
       });
-      refreshed += 1;
+      if (saved) refreshed += 1;
       continue;
     }
 
     const readAt = Date.parse(metadata.organizationsFetchedAt ?? "");
     const stale = Number.isNaN(readAt) || now.getTime() - readAt > LINKEDIN_ORG_PROFILE_MAX_AGE_MS;
     if (stale && hasProfileData(metadata)) {
-      await saveMetadata(row.id, {
+      const saved = await saveMetadataIfUnchanged(row, {
         ...metadata,
         organizations: organizations.map((org) => ({ id: org.id })),
         username: null,
         organizationsFetchedAt: null,
       });
-      cleared += 1;
+      // A row changed meanwhile was just saved fresh: tomorrow's run sees it.
+      if (saved) cleared += 1;
     } else if (mayLookUp) {
-      await saveMetadata(row.id, metadata);
+      await saveMetadataIfUnchanged(row, metadata);
     }
   }
   return { refreshed, cleared };
