@@ -1,6 +1,14 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_ONLY_PERSON_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+import {
+  LEAVE_NOT_MEMBER_MESSAGE,
+  LEAVE_ONLY_PERSON_MESSAGE,
+  LEAVE_ONLY_WORKSPACE_MESSAGE,
+  LEAVE_SOLE_OWNER_MESSAGE,
+} from "@/lib/leaveRefusals";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/switch/route.test.ts). route.ts imports `@/lib/db`,
@@ -277,9 +285,15 @@ describe("POST /api/workspaces/leave", () => {
   });
 
   // R34 pages L3: alone in the workspace there is nobody to make an owner.
-  it("returns 400 with its own sentence when the caller is the only person in the workspace", async () => {
+  // Lead review: and when it is their only workspace, Delete workspace refuses
+  // (workspaceDeletionRefusal), so the way out is deleting the account.
+  type CountArgs = { where: { role?: string; workspaceId?: string; userId: unknown } };
+  const counts = (memberships: number) =>
+    countMock.mockImplementation(async ({ where }: CountArgs) => (where.workspaceId === undefined ? memberships : 0));
+
+  it("returns 400 with its own sentence when the caller is the only person here but has other workspaces", async () => {
     getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
-    countMock.mockResolvedValue(0); // no other owner, no other member
+    counts(2); // no other owner, no other member, two memberships in all
 
     const response = await POST(leaveReq());
 
@@ -289,10 +303,37 @@ describe("POST /api/workspaces/leave", () => {
       "You're the only person in this workspace. Invite someone and make them an owner, or delete the workspace.",
     );
     expect(countMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", userId: { not: "user-1" } } });
+    // The delete route's own rule: the caller's memberships, counted inside the lock.
+    expect(countMock).toHaveBeenCalledWith({ where: { userId: "user-1" } });
     expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(countMock.mock.invocationCallOrder[1]);
     expect(deleteMock).not.toHaveBeenCalled();
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 naming Delete account when the caller is the only person here and it is their only workspace", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    counts(1);
+
+    const response = await POST(leaveReq());
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: LEAVE_ONLY_WORKSPACE_MESSAGE });
+    expect(LEAVE_ONLY_WORKSPACE_MESSAGE).toBe(
+      "You're the only person in this workspace, and it's your only one. Invite someone and make them an owner, or delete your account with Delete account under Account in Settings.",
+    );
+    expect(countMock).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("the controls the only-workspace sentence names are there: Settings' Account section and its Delete account", () => {
+    const settings = readFileSync(fileURLToPath(new URL("../../../settings/page.tsx", import.meta.url)), "utf8");
+    expect(settings).toMatch(/<h2 id="account"[^>]*>Account<\/h2>/);
+    expect(settings).toContain("<AccountSection");
+    const account = readFileSync(fileURLToPath(new URL("../../../../components/account-section.tsx", import.meta.url)), "utf8");
+    expect(account).toMatch(/<Button size="sm" variant="destructive" onClick=\{\(\) => setOpen\(true\)\}>\s+Delete account\s+<\/Button>/);
   });
 
   it("lets an owner leave when another owner exists: takes the ws-owners lock FIRST, deletes own row by id, clears the cookie", async () => {

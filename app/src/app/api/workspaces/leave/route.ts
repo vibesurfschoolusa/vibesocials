@@ -4,7 +4,12 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
-import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_ONLY_PERSON_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+import {
+  LEAVE_NOT_MEMBER_MESSAGE,
+  LEAVE_ONLY_PERSON_MESSAGE,
+  LEAVE_ONLY_WORKSPACE_MESSAGE,
+  LEAVE_SOLE_OWNER_MESSAGE,
+} from "@/lib/leaveRefusals";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
@@ -111,7 +116,11 @@ export async function POST(request: Request) {
         const otherMemberCount = await tx.workspaceMember.count({
           where: { workspaceId: context.workspace.id, userId: { not: context.user.id } },
         });
-        return otherMemberCount === 0 ? ("only_person" as const) : ("sole_owner" as const);
+        if (otherMemberCount > 0) return "sole_owner" as const;
+        // Lead review (R34): the delete route's own rule (workspaceDeletionRefusal,
+        // server/account/deleteWorkspace.ts): with one membership it refuses.
+        const memberships = await tx.workspaceMember.count({ where: { userId: context.user.id } });
+        return memberships <= 1 ? ("only_workspace" as const) : ("only_person" as const);
       }
 
       const own = await tx.workspaceMember.findFirst({
@@ -129,6 +138,9 @@ export async function POST(request: Request) {
     }
     if (outcome === "only_person") {
       return NextResponse.json({ error: LEAVE_ONLY_PERSON_MESSAGE }, { status: 400 });
+    }
+    if (outcome === "only_workspace") {
+      return NextResponse.json({ error: LEAVE_ONLY_WORKSPACE_MESSAGE }, { status: 400 });
     }
     if (outcome === "not_found") {
       return NextResponse.json({ error: LEAVE_NOT_MEMBER_MESSAGE }, { status: 404 });

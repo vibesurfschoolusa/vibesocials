@@ -17,5 +17,13 @@ export const LEAVE_SOLE_OWNER_MESSAGE =
 export const LEAVE_ONLY_PERSON_MESSAGE =
   "You're the only person in this workspace. Invite someone and make them an owner, or delete the workspace.";
 
+/**
+ * Lead review (R34): alone in the workspace, and it is the person's only one,
+ * Delete workspace refuses (workspaceDeletionRefusal's last-workspace rule), so
+ * the way out is Settings, Account, Delete account.
+ */
+export const LEAVE_ONLY_WORKSPACE_MESSAGE =
+  "You're the only person in this workspace, and it's your only one. Invite someone and make them an owner, or delete your account with Delete account under Account in Settings.";
+
 /** The membership was already gone (left or removed in another tab). */
 export const LEAVE_NOT_MEMBER_MESSAGE = "You're no longer a member of this workspace. Reload the page.";
