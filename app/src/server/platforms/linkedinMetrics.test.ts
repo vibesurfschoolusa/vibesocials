@@ -12,6 +12,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -90,7 +91,7 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toContain("&shares=List(urn%3Ali%3Ashare%3A1,urn%3Ali%3Ashare%3A2)");
-    expect(fetchMock.mock.calls[1][0]).toContain("&ugcPosts=List(urn%3Ali%3AugcPost%3A3)");
+    expect(fetchMock.mock.calls[1][0]).toContain("&ugcPosts[0]=urn%3Ali%3AugcPost%3A3");
     expect(out.byId.get("urn:li:share:1")?.counts.likes).toBe(4);
     expect(out.byId.get("urn:li:share:2")?.counts.comments).toBeNull();
     expect(out.byId.get("urn:li:ugcPost:3")?.counts.views).toBe(500);
@@ -123,6 +124,113 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
     fetchMock.mockRejectedValueOnce(Object.assign(new Error("slow"), { code: FETCH_TIMEOUT_CODE }));
     const timedOut = await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:share:1"], "t");
     expect([...timedOut.failed]).toEqual(["urn:li:share:1"]);
+  });
+
+  // R41 platform L1: ugcPosts in the indexed form LinkedIn's share-statistics
+  // page shows (li-lms-2026-10, read 2026-11-17); shares stay List(...).
+  it("sends the exact URL for each kind", async () => {
+    fetchMock.mockResolvedValueOnce(answer([])).mockResolvedValueOnce(answer([]));
+    await fetchLinkedInShareStatisticsBatch(
+      ORG,
+      ["urn:li:share:1", "urn:li:share:2", "urn:li:ugcPost:3", "urn:li:ugcPost:4"],
+      "t",
+    );
+    const base =
+      "https://api.linkedin.com/rest/organizationalEntityShareStatistics?q=organizationalEntity" +
+      "&organizationalEntity=urn%3Ali%3Aorganization%3A42";
+    expect(fetchMock.mock.calls[0][0]).toBe(`${base}&shares=List(urn%3Ali%3Ashare%3A1,urn%3Ali%3Ashare%3A2)`);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `${base}&ugcPosts[0]=urn%3Ali%3AugcPost%3A3&ugcPosts[1]=urn%3Ali%3AugcPost%3A4`,
+    );
+  });
+
+  describe("a refusal's log line", () => {
+    const refusal = (status: number) =>
+      new Response(
+        JSON.stringify({
+          status,
+          serviceErrorCode: 100,
+          code: "ILLEGAL_ARGUMENT",
+          message: "Invalid param urn:li:ugcPost:3 for the page",
+          errorDetailType: "com.linkedin.common.error.BadRequest",
+          errorDetails: {
+            inputErrors: [
+              {
+                description: "Invalid value urn:li:ugcPost:3",
+                input: { inputPath: { fieldPath: "ugcPosts[0]" } },
+                code: "INVALID_VALUE",
+              },
+            ],
+          },
+        }),
+        { status },
+      );
+
+    it("a 400 is a warning naming the request, the URN count and LinkedIn's codes, with no message or URN", async () => {
+      fetchMock.mockResolvedValueOnce(refusal(400));
+      const out = await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3", "urn:li:ugcPost:4"], "t");
+      expect([...out.failed].sort()).toEqual(["urn:li:ugcPost:3", "urn:li:ugcPost:4"]);
+      expect(console.error).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      const [line, fields] = vi.mocked(console.warn).mock.calls[0];
+      expect(line).toBe("[PostMetrics] LinkedIn share statistics refused");
+      expect(fields).toEqual({
+        param: "ugcPosts",
+        urnCount: 2,
+        status: 400,
+        serviceErrorCode: 100,
+        code: "ILLEGAL_ARGUMENT",
+        inputErrors: [{ code: "INVALID_VALUE", fieldPath: "ugcPosts[0]" }],
+      });
+      expect(JSON.stringify(fields)).not.toContain("urn:");
+      expect(JSON.stringify(fields)).not.toContain("Invalid");
+    });
+
+    it("a 5xx is an error; a body that isn't LinkedIn's JSON logs no codes", async () => {
+      fetchMock.mockResolvedValueOnce(new Response("<html>bad gateway</html>", { status: 502 }));
+      await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:share:1"], "t");
+      expect(console.warn).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith("[PostMetrics] LinkedIn share statistics refused", {
+        param: "shares",
+        urnCount: 1,
+        status: 502,
+        serviceErrorCode: null,
+        code: null,
+        inputErrors: [],
+      });
+    });
+
+    it("a code or path that names a URN or carries text is left out", async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: "has spaces in it",
+            errorDetails: { inputErrors: [{ code: "urn:li:share:1", input: { inputPath: { fieldPath: "urn:li:share:1" } } }] },
+          }),
+          { status: 404 },
+        ),
+      );
+      await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:share:1"], "t");
+      expect(vi.mocked(console.warn).mock.calls[0][1]).toEqual({
+        param: "shares",
+        urnCount: 1,
+        status: 404,
+        serviceErrorCode: null,
+        code: null,
+        inputErrors: [{ code: null, fieldPath: null }],
+      });
+    });
+
+    it("no answer is an error naming the request and the URN count", async () => {
+      fetchMock.mockRejectedValueOnce(Object.assign(new Error("slow"), { code: FETCH_TIMEOUT_CODE }));
+      await fetchLinkedInShareStatisticsBatch(ORG, ["urn:li:ugcPost:3"], "t");
+      expect(console.error).toHaveBeenCalledWith("[PostMetrics] LinkedIn share statistics failed", {
+        param: "ugcPosts",
+        urnCount: 1,
+        error: "Error",
+        code: FETCH_TIMEOUT_CODE,
+      });
+    });
   });
 
   it("caps a request at a modest number of URNs", () => {

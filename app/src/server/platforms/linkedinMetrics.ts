@@ -16,7 +16,7 @@ import { classifyRateLimit } from "./rateLimited";
  * socialPostMetricsSync with the member token the app already holds.
  *
  * GET /rest/organizationalEntityShareStatistics?q=organizationalEntity
- *   &organizationalEntity={organization URN}&shares=List(...) (or ugcPosts=List(...))
+ *   &organizationalEntity={organization URN}&shares=List(...) (or ugcPosts[0]=...&ugcPosts[1]=...)
  * "Permission: rw_organization_admin - Manage organizations pages and retrieve
  * reporting data", held (oauthScopes.ts). No r_organization_social endpoint is used.
  * Lifetime statistics (no timeIntervals; "Time-bound statistics is not supported
@@ -45,12 +45,48 @@ const KINDS = [
   { param: "ugcPosts", prefix: "urn:li:ugcPost:", field: "ugcPost" },
 ] as const;
 
-/** Rest.li 2.0 list: each URN encoded, the List( , ) syntax left as is. */
-function statisticsUrl(organizationUrn: string, param: string, urns: string[]): string {
-  return (
-    `${STATISTICS_URL}?q=organizationalEntity&organizationalEntity=${encodeURIComponent(organizationUrn)}` +
-    `&${param}=List(${urns.map(encodeURIComponent).join(",")})`
-  );
+/**
+ * Each URN encoded. shares as a Rest.li 2.0 List( , ), ugcPosts indexed
+ * (ugcPosts[0]=...&ugcPosts[1]=...), each as the share-statistics page shows
+ * it (li-lms-2026-10, read 2026-11-17; R41 platform L1).
+ */
+function statisticsUrl(organizationUrn: string, param: (typeof KINDS)[number]["param"], urns: string[]): string {
+  const list =
+    param === "shares"
+      ? `&shares=List(${urns.map(encodeURIComponent).join(",")})`
+      : urns.map((urn, index) => `&${param}[${index}]=${encodeURIComponent(urn)}`).join("");
+  return `${STATISTICS_URL}?q=organizationalEntity&organizationalEntity=${encodeURIComponent(organizationUrn)}${list}`;
+}
+
+/** A code or field path as LinkedIn sends it; anything else (text, a URN) is left out. */
+function plainLabel(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_.[\]-]{1,80}$/.test(value) ? value : null;
+}
+
+/**
+ * R41 platform L1: what a refusal's log line may carry from LinkedIn's error
+ * body: its codes and the failing field paths. Never its message or
+ * descriptions, which can name a post (socialMetricsSync.ts: logs never do).
+ */
+async function refusalFields(response: Response) {
+  let body: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = JSON.parse(await response.text());
+    if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
+  } catch {
+    // Not LinkedIn's JSON (a gateway page): no codes to log.
+  }
+  const serviceErrorCode = body?.serviceErrorCode;
+  const details = body?.errorDetails as { inputErrors?: unknown } | undefined;
+  const inputErrors = Array.isArray(details?.inputErrors) ? details.inputErrors : [];
+  return {
+    serviceErrorCode: Number.isInteger(serviceErrorCode) ? (serviceErrorCode as number) : null,
+    code: plainLabel(body?.code),
+    inputErrors: inputErrors.slice(0, 5).map((item) => {
+      const entry = item as { code?: unknown; input?: { inputPath?: { fieldPath?: unknown } } } | null;
+      return { code: plainLabel(entry?.code), fieldPath: plainLabel(entry?.input?.inputPath?.fieldPath) };
+    }),
+  };
 }
 
 /**
@@ -84,8 +120,15 @@ export async function fetchLinkedInShareStatisticsBatch(
         continue;
       }
       if (!response.ok) {
-        void response.body?.cancel().catch(() => {});
-        console.error("[PostMetrics] LinkedIn share statistics refused", { status: response.status });
+        // A 4xx is this request's own (a post LinkedIn won't report on): a
+        // warning. A 5xx is LinkedIn's trouble: an error.
+        const log = response.status < 500 ? console.warn : console.error;
+        log("[PostMetrics] LinkedIn share statistics refused", {
+          param: kind.param,
+          urnCount: urns.length,
+          status: response.status,
+          ...(await refusalFields(response)),
+        });
         for (const urn of urns) batch.failed.add(urn);
         continue;
       }
@@ -118,6 +161,8 @@ export async function fetchLinkedInShareStatisticsBatch(
       }
     } catch (error) {
       console.error("[PostMetrics] LinkedIn share statistics failed", {
+        param: kind.param,
+        urnCount: urns.length,
         error: error instanceof Error ? error.name : "unknown",
         code: (error as { code?: unknown } | null)?.code,
       });
