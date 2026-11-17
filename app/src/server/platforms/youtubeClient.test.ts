@@ -262,16 +262,20 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 
-  // R37 (readGoogleErrorReasons' callers): an upload 403 whose body broke off
-  // is still a failed upload with the YouTube Studio sentence; nothing flagged.
-  it("insert 403 whose body can't be read: failed as before, nothing flagged", async () => {
+  // R38 platform-clients L1: an upload 403 whose body broke off (a quota 403
+  // among them) says nothing about the channel: the connect rule's try-later
+  // text, still a failed upload, nothing flagged.
+  it("insert 403 whose body can't be read: failed, the try-later text, nothing flagged", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     flagRejectedTokenMock.mockReset();
     stubYouTube(() => bodyBreaksOff(403));
 
     const error = (await failure()) as Error & { code?: string; status?: number; uploadScopeMissing?: boolean };
 
     expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 403 });
-    expect(publishErrorMessage("youtube", error)).toBe(YOUTUBE_REFUSED);
+    expect(publishErrorMessage("youtube", error)).toBe(
+      "YouTube isn't answering for Vibe Socials right now, so nothing was posted. Try again later.",
+    );
     expect(error.uploadScopeMissing).toBeUndefined();
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });

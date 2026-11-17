@@ -270,7 +270,7 @@ export function currentPacificMidnight(now: Date): Date {
 /**
  * Reasons under `error.errors[].reason` and `error.details[].reason`, normalized.
  * Google's shared error shape, so the Reviews routes read GBP 403s with it too
- * (googleReviews.ts readGoogleErrorReasons).
+ * (readGoogleErrorBody).
  */
 export function googleErrorReasons(body: unknown): Set<string> {
   const reasons = new Set<string>();
@@ -304,15 +304,6 @@ export async function readGoogleErrorBody(res: Response): Promise<{ reasons: str
     return { reasons: [], unreadable: true };
   }
   return { reasons: [...googleErrorReasons(parsedOrNull(text))], unreadable: false };
-}
-
-/**
- * The reasons only, for a post's 403 (googleBusinessProfileClient,
- * youtubeClient): the post failed whatever the body says, so an unreadable
- * body is no reasons there, and nothing is flagged on it.
- */
-export async function readGoogleErrorReasons(res: Response): Promise<string[]> {
-  return (await readGoogleErrorBody(res)).reasons;
 }
 
 function parsedOrNull(text: string): unknown {

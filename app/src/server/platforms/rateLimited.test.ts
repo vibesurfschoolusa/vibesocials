@@ -12,7 +12,6 @@ import {
   RATE_LIMITED_CODE,
   rateLimitedError,
   readGoogleErrorBody,
-  readGoogleErrorReasons,
   retryAtFromHeaders,
 } from "./rateLimited";
 import { bodyBreaksOff } from "@/lib/stallingFetch.testkit";
@@ -595,11 +594,5 @@ describe("readGoogleErrorBody", () => {
     const res = json(403, { error: { errors: [{ reason: "forbidden" }] } });
     await readGoogleErrorBody(res);
     await expect(res.json()).resolves.toEqual({ error: { errors: [{ reason: "forbidden" }] } });
-  });
-
-  // The posts (googleBusinessProfileClient, youtubeClient) read reasons only:
-  // a post that got a 403 failed whatever its body says.
-  it("readGoogleErrorReasons: an unreadable body is no reasons, as before", async () => {
-    await expect(readGoogleErrorReasons(bodyBreaksOff(403))).resolves.toEqual([]);
   });
 });

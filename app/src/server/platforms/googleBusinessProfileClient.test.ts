@@ -1164,6 +1164,19 @@ describe("googleBusinessProfileClient.publishText - a post without a photo", () 
     expect(error?.message).not.toContain("Check the caption");
   });
 
+  // R38 platform-clients L1: the same rule as the photo post.
+  it("a 403 on a text-only post whose body can't be read: the try-later text, status kept", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubMediaCreate(() => bodyBreaksOff(403));
+
+    const error = await failure(googleBusinessProfileClient.publishText!(textCtx()));
+
+    expect(error).toMatchObject({ code: "GBP_CREATE_POST_FAILED", status: 403 });
+    expect(error?.message).toBe(
+      "Google Business Profile isn't answering for Vibe Socials right now, so nothing was posted. Try again later.",
+    );
+  });
+
   it("a text post does not go to the gallery", () => {
     expect(buildLocalPostBody("hi", null)).toEqual({ languageCode: "en-US", topicType: "STANDARD", summary: "hi" });
   });
@@ -1307,16 +1320,20 @@ describe("googleBusinessProfileClient: a 403 on a post", () => {
     );
   });
 
-  // R37 (readGoogleErrorReasons' callers): a post's 403 whose body broke off
-  // is still a failed post with the access sentence, as before; nothing flagged.
-  it("a 403 whose body can't be read: failed, the access sentence, nothing flagged", async () => {
+  // R38 platform-clients L1: a post's 403 whose body broke off says nothing
+  // about access, so it follows the connect rule (googlePublish403 with the
+  // unreadable flag): still a failed post, nothing flagged, the try-later text.
+  it("a 403 whose body can't be read: failed, the try-later text, nothing flagged", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     flagRejectedTokenMock.mockReset();
     stubMediaCreate(() => bodyBreaksOff(403));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
 
     expect(error).toMatchObject({ code: "GBP_CREATE_POST_FAILED", status: 403 });
-    expect(publishErrorMessage("google_business_profile", error!)).toBe(GBP_ACCESS_REFUSED);
+    expect(publishErrorMessage("google_business_profile", error!)).toBe(
+      "Google Business Profile isn't answering for Vibe Socials right now, so nothing was posted. Try again later.",
+    );
     expect(flagRejectedTokenMock).not.toHaveBeenCalled();
   });
 

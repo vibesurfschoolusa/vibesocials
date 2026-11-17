@@ -108,11 +108,19 @@ export function isGoogleScopeRefusal(reasons: readonly string[]): boolean {
  * logged here and worded try-later; "scope": the token lacks the scope
  * (YouTube's own `insufficientPermissions` too); "access": anything else, the
  * connected account's access. Each client words "scope" and "access" itself.
+ * R38 platform-clients L1: `body` is readGoogleErrorBody's answer; one that
+ * couldn't be read says nothing about access, so it is "setup" (try later),
+ * the rule googleFailureKind applies on connect.
  */
 export function googlePublish403(
   platform: "google_business_profile" | "youtube",
-  reasons: readonly string[],
+  body: { reasons: readonly string[]; unreadable: boolean },
 ): "setup" | "scope" | "access" {
+  const { reasons } = body;
+  if (body.unreadable) {
+    console.warn("[Google] publish refused, its error body unreadable", { platform, status: 403, unreadable: true });
+    return "setup";
+  }
   if (isGoogleServiceRefusal(reasons)) {
     console.warn("[Google] publish refused by our own API setup or quota", { platform, status: 403, reasons });
     return "setup";

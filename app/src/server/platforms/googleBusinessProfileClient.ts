@@ -16,7 +16,7 @@ import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken, refreshGoogleTokenEarly } from "./googleTokens";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
-import { classifyRateLimit, readGoogleErrorReasons } from "./rateLimited";
+import { classifyRateLimit, readGoogleErrorBody } from "./rateLimited";
 import type {
   GoogleBusinessPostMetadata,
   PlatformClient,
@@ -82,13 +82,14 @@ async function throwGbpReconnect(connection: SocialConnection): Promise<never> {
 /**
  * R26 platform-clients L4: a 403 on a post follows the one rule for Google
  * posts (googlePublish403): our own API setup or quota reads try-later (and is
- * logged there); anything else is access, the connected Google account may no
- * longer manage the listing (GBP_ACCESS_REFUSED_TEXT). Never the post breaking
- * Google's rules. Null for any other status. Code and status are kept.
+ * logged there), as does a body that couldn't be read (R38); anything else is
+ * access, the connected Google account may no longer manage the listing
+ * (GBP_ACCESS_REFUSED_TEXT). Never the post breaking Google's rules. Null for
+ * any other status. Code and status are kept.
  */
 async function forbiddenText(response: Response): Promise<string | null> {
   if (response.status !== 403) return null;
-  return googlePublish403("google_business_profile", await readGoogleErrorReasons(response)) === "setup"
+  return googlePublish403("google_business_profile", await readGoogleErrorBody(response)) === "setup"
     ? googleSetupRefusedMessage("google_business_profile")
     : GBP_ACCESS_REFUSED_TEXT;
 }
@@ -510,7 +511,8 @@ function lookupForbidden(error: unknown): unknown {
   const reasons = Array.isArray(fields.googleReasons)
     ? fields.googleReasons.filter((reason): reason is string => typeof reason === "string")
     : [];
-  const tryLater = fields.googleBodyUnreadable === true || googlePublish403("google_business_profile", reasons) === "setup";
+  const tryLater =
+    googlePublish403("google_business_profile", { reasons, unreadable: fields.googleBodyUnreadable === true }) === "setup";
   error.message = tryLater ? googleSetupRefusedMessage("google_business_profile") : GBP_ACCESS_REFUSED_TEXT;
   return error;
 }

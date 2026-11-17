@@ -44,7 +44,7 @@ import {
 } from "./largeUpload";
 import { COVER_REQUEST_TIMEOUT_MS, fetchCoverImage } from "./coverImage";
 import { budgetedTimeout, PUBLISH_BUDGET_EXCEEDED_CODE, remainingMs } from "./publishBudget";
-import { classifyRateLimit, isRateLimitedError, readGoogleErrorReasons } from "./rateLimited";
+import { classifyRateLimit, isRateLimitedError, readGoogleErrorBody } from "./rateLimited";
 import { isNeverConnectedFetchError } from "./transientRetry";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -355,7 +355,8 @@ function youtubeUploadError(message: string, status?: number): Error & { code: s
  *
  * R26 platform-clients L4: a 403 left after that follows the one rule for
  * Google posts (googlePublish403). Our own API setup reads try-later (and is
- * logged there). A missing upload scope reads Reconnect and is marked
+ * logged there), as does a body that couldn't be read (R38), a quota 403
+ * whose body broke off among them. A missing upload scope reads Reconnect and is marked
  * `uploadScopeMissing`, so flagRejectedYouTubeToken flags the row and the card
  * shows that Reconnect. Any other 403 names no control (nothing is flagged, so
  * the card has no Reconnect): check the channel in YouTube Studio.
@@ -363,10 +364,10 @@ function youtubeUploadError(message: string, status?: number): Error & { code: s
 async function rejectedByYouTube(response: Response, prefix: string): Promise<never> {
   const limited = await classifyRateLimit("youtube", response);
   if (limited) throw limited;
-  const reasons = response.status === 403 ? await readGoogleErrorReasons(response) : null;
+  const body = response.status === 403 ? await readGoogleErrorBody(response) : null;
   await assertOk(response, { code: "YOUTUBE_UPLOAD_FAILED", prefix }).catch((error: Error) => {
-    if (!reasons) throw error;
-    const kind = googlePublish403("youtube", reasons);
+    if (!body) throw error;
+    const kind = googlePublish403("youtube", body);
     if (kind === "setup") error.message = googleSetupRefusedMessage("youtube");
     else error.message = kind === "scope" ? YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT : YOUTUBE_UPLOAD_REFUSED_TEXT;
     throw kind === "scope" ? Object.assign(error, { uploadScopeMissing: true }) : error;
