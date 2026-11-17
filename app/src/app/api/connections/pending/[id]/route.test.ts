@@ -791,6 +791,27 @@ describe("DELETE /api/connections/pending/[id]", () => {
     await expect(response.json()).resolves.toEqual({
       error: `Couldn't cancel the choice just now. You can leave it: ${phrase}.`,
     });
+    // R42 review: from the expiry the load already read, with no second read.
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed load leaves the expiry unknown and names the platform the dialog sent", async () => {
+    findUniqueMock.mockRejectedValue(new Error("db down"));
+
+    const response = await DELETE(
+      new Request("http://localhost/api/connections/pending/pending-1?platform=linkedin", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId: "ws-1" }),
+      }),
+      ctx(),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't cancel the choice just now. You can leave it: it ends by itself within 15 minutes of when you came back from LinkedIn.",
+    });
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
   });
 
   it("an expired choice gets the ended answer, never a time left", async () => {

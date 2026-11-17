@@ -76,7 +76,7 @@ function errorKind(error: unknown): { name: string; code?: string } {
 }
 
 type Resolved =
-  | { ok: true; link: ActiveConnectLink; pending: LoadedPendingConnection; expiresAt: Date }
+  | { ok: true; link: ActiveConnectLink; pending: LoadedPendingConnection }
   | { ok: false; response: NextResponse };
 
 async function resolve(request: Request, context: RouteContext): Promise<Resolved> {
@@ -104,12 +104,12 @@ async function resolve(request: Request, context: RouteContext): Promise<Resolve
     return { ok: false, response: NextResponse.json({ error: CONNECT_LINK_INACTIVE_MESSAGE }, { status: 404 }) };
   }
 
-  const stamp = await prisma.pendingConnection.findUnique({ where: { id }, select: { connectLinkId: true, expiresAt: true } });
+  const stamp = await prisma.pendingConnection.findUnique({ where: { id }, select: { connectLinkId: true } });
   if (!stamp || stamp.connectLinkId !== link.id) return { ok: false, response: await notFound(request, link) };
 
   const pending = await loadPendingConnection(id, { workspaceId: link.workspaceId, userId: link.createdById });
   if (!pending) return { ok: false, response: await notFound(request, link) };
-  return { ok: true, link, pending, expiresAt: stamp.expiresAt };
+  return { ok: true, link, pending };
 }
 
 /** GET → `{ platform, candidates: [{ id, name, detail? }] }`. Never tokens. */
@@ -126,7 +126,7 @@ export async function GET(request: Request, context: RouteContext) {
         platform: pending.platform,
         candidates: listPendingCandidates(pending.payload),
         // R42 pages-a L6: as seconds left, so /c's sentences never lean on the visitor's clock.
-        lifeLeftSeconds: Math.max(0, Math.floor((choiceLifeLeftMs(resolved.expiresAt) ?? 0) / 1000)),
+        lifeLeftSeconds: Math.max(0, Math.floor((choiceLifeLeftMs(pending.expiresAt) ?? 0) / 1000)),
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -262,7 +262,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     const platform = known?.pending.platform ?? (hint && Object.hasOwn(PLATFORM_LABELS, hint) ? (hint as Platform) : null);
     const label = platform ? PLATFORM_LABELS[platform] : null;
     return NextResponse.json(
-      { error: cancelFailedText("link", known ? choiceLifeLeftMs(known.expiresAt) : null, label) },
+      { error: cancelFailedText("link", known ? choiceLifeLeftMs(known.pending.expiresAt) : null, label) },
       { status: 500 },
     );
   }

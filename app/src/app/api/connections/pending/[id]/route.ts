@@ -18,6 +18,7 @@ import {
   deletePendingConnection,
   listPendingCandidates,
   loadPendingConnection,
+  type LoadedPendingConnection,
 } from "@/server/connections/pendingConnection";
 import { connectedWasOffered, pendingSignInEndsSoon } from "@/server/connections/choiceOutcome";
 
@@ -177,30 +178,6 @@ function hintedLabel(request: Request): string | null {
   const hint = new URL(request.url).searchParams.get("platform");
   const platform = CHOOSABLE.find((choosable) => choosable === hint);
   return platform ? PLATFORM_LABELS[platform] : null;
-}
-
-/**
- * R42 pages-a L6: a failed Cancel says when the choice really ends, from its
- * own expiry, read here (a failure seldom comes, so Cancel itself reads no
- * more). A read that fails too, or a choice not the caller's, leaves the
- * expiry unknown, and the sentence says only what is sure.
- */
-async function cancelFailedAnswer(request: Request, id: string, owner: { workspaceId: string; userId: string }) {
-  let lifeLeftMs: number | null = null;
-  let label = hintedLabel(request);
-  try {
-    const choice = await prisma.pendingConnection.findUnique({
-      where: { id },
-      select: { expiresAt: true, platform: true, workspaceId: true, userId: true },
-    });
-    if (choice && choice.workspaceId === owner.workspaceId && choice.userId === owner.userId) {
-      lifeLeftMs = choiceLifeLeftMs(choice.expiresAt);
-      label = PLATFORM_LABELS[choice.platform] ?? label;
-    }
-  } catch (error) {
-    logger.warn("[DELETE /api/connections/pending/[id]] Couldn't read the choice's expiry (ignored)", { error: errorKind(error) });
-  }
-  return NextResponse.json({ error: cancelFailedText("settings", lifeLeftMs, label) }, { status: 500 });
 }
 
 function ownerOf(context: WorkspaceContext) {
@@ -387,11 +364,14 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
 
   const { id } = await params;
 
+  // R42 pages-a L6: what the load read, so a failed Cancel says when the choice really ends.
+  let loaded: LoadedPendingConnection | null = null;
   try {
     const pending = await loadPendingConnection(id, ownerOf(contextOrError));
     if (!pending) {
       return await notFound(request, id, ownerOf(contextOrError));
     }
+    loaded = pending;
 
     await deletePendingConnection(pending.id);
 
@@ -401,6 +381,9 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return cancelFailedAnswer(request, id, ownerOf(contextOrError));
+    // Without a loaded choice the expiry is unknown, and the sentence says only what is sure.
+    const label = loaded ? PLATFORM_LABELS[loaded.platform] : hintedLabel(request);
+    const sentence = cancelFailedText("settings", loaded ? choiceLifeLeftMs(loaded.expiresAt) : null, label);
+    return NextResponse.json({ error: sentence }, { status: 500 });
   }
 }

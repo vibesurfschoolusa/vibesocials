@@ -8,6 +8,8 @@ import { answerLostText } from "@/lib/answerLost";
 import { choiceAddress, rememberChoicePlatform, rememberedChoicePlatform } from "@/lib/choicePlatform";
 import { cn } from "@/lib/cn";
 import { focusAfterPress } from "@/lib/focusAfter";
+import { cancelFailedText } from "@/lib/pendingChoiceText";
+import { PLATFORM_LABELS } from "@/lib/platforms";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { useResetOnReturnFromCache } from "@/components/returnFromCache";
@@ -94,6 +96,22 @@ export function pendingLoadFailedText(data: { error?: unknown } | null): string 
   return typeof data?.error === "string" && data.error ? data.error : "Couldn't load your accounts. Reload the page to try again.";
 }
 
+/**
+ * R42 review: Cancel's answer. One that worked, or a choice already gone,
+ * leaves for the connections list; any other answer means the choice still
+ * waits, so the dialog stays and says so: the route's sentence, else ours,
+ * naming the platform with the expiry unknown.
+ */
+export function pendingCancelOutcome(
+  status: number,
+  data: { error?: unknown } | null,
+  platform: ChoosablePlatform | null,
+): { leave: true } | { error: string } {
+  if ((status >= 200 && status < 300) || status === 404) return { leave: true };
+  if (typeof data?.error === "string" && data.error) return { error: data.error };
+  return { error: cancelFailedText("settings", null, platform ? PLATFORM_LABELS[platform] : null) };
+}
+
 /** What a refused or unreadable Connect answer says. */
 export function pendingConnectFailureText(status: number, data: { error?: string } | null): string {
   if (typeof data?.error === "string" && data.error) return data.error;
@@ -128,6 +146,8 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState<"connect" | "cancel" | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // R42 review: a refused Cancel's sentence; while it shows, Close leaves.
+  const [cancelError, setCancelError] = useState<string | null>(null);
   // Both choices end by moving to /settings; if the page comes back from the cache, its buttons do too.
   useResetOnReturnFromCache(setBusy, null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -208,21 +228,32 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
   async function handleCancel() {
     if (busy) return;
     setBusy("cancel");
+    setConnectError(null);
+    setCancelError(null);
     try {
-      await fetchOrNoAnswer(endpoint, {
+      // With the platform, so the route's fallback sentence names it.
+      const response = await fetchOrNoAnswer(choiceAddress(endpoint, load.status === "ready" ? load.platform : null), {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId }),
       });
+      const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      const outcome = pendingCancelOutcome(response.status, data, load.status === "ready" ? load.platform : null);
+      if ("error" in outcome) {
+        // R42 review: the choice still waits, so the dialog stays and says so; Close then leaves.
+        setCancelError(outcome.error);
+        setBusy(null);
+        return;
+      }
     } catch {
-      // Nothing to undo: an uncancelled choice expires on its own.
+      // No answer: nothing to undo, and an uncancelled choice expires on its own.
     }
     leave();
   }
 
   const handleClose = () => {
     if (busy) return;
-    if (load.status === "expired") {
+    if (load.status === "expired" || cancelError) {
       leave();
     } else {
       void handleCancel();
@@ -295,9 +326,9 @@ function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string
           </fieldset>
         )}
 
-        {connectError ? (
+        {connectError || cancelError ? (
           <p role="alert" className="text-xs text-destructive">
-            {connectError}
+            {connectError ?? cancelError}
           </p>
         ) : null}
       </DialogBody>

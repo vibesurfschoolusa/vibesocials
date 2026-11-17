@@ -74,7 +74,37 @@ describe("PendingConnectionDialog failure sentences", () => {
     expect(connect).toMatch(/catch \{\s+setConnectError\(PENDING_CONNECT_MAYBE\);/);
     expect(connect).toMatch(/setConnectError\(pendingConnectFailureText\(response\.status, data\)\)/);
     const cancel = source.slice(source.indexOf("async function handleCancel"), source.indexOf("const handleClose"));
-    expect(cancel).toMatch(/await fetchOrNoAnswer\(endpoint, \{\s+method: "DELETE"/);
+    // R42 review: with the platform, so the route's fallback sentence names it.
+    expect(cancel).toMatch(/await fetchOrNoAnswer\(choiceAddress\(endpoint, load\.status === "ready" \? load\.platform : null\), \{\s+method: "DELETE"/);
+  });
+});
+
+// R42 review: a refused Cancel closed the dialog as if it had worked. It now
+// stays open with the route's sentence, announced; Close then leaves.
+describe("PendingConnectionDialog: a Cancel that fails", () => {
+  it("leaves on a cancel that worked or a choice already gone", async () => {
+    const { pendingCancelOutcome } = await import("./pending-connection-dialog");
+    expect(pendingCancelOutcome(200, null, "linkedin")).toEqual({ leave: true });
+    expect(pendingCancelOutcome(404, { error: "This choice has ended." }, "linkedin")).toEqual({ leave: true });
+  });
+
+  it("stays with the route's sentence, else one that names the platform", async () => {
+    const { pendingCancelOutcome } = await import("./pending-connection-dialog");
+    const routes = "Couldn't cancel the choice just now. You can leave it: it ends by itself in 3 minutes.";
+    expect(pendingCancelOutcome(500, { error: routes }, "linkedin")).toEqual({ error: routes });
+    expect(pendingCancelOutcome(502, null, "linkedin")).toEqual({
+      error: "Couldn't cancel the choice just now. You can leave it: it ends by itself within 15 minutes of when you came back from LinkedIn.",
+    });
+  });
+
+  it("shows the failure in the announced line, and Close leaves after it", () => {
+    const source = readFileSync(join(__dirname, "pending-connection-dialog.tsx"), "utf8");
+    const cancel = source.slice(source.indexOf("async function handleCancel"), source.indexOf("const handleClose"));
+    expect(cancel).toMatch(/const outcome = pendingCancelOutcome\(response\.status, data, load\.status === "ready" \? load\.platform : null\);/);
+    expect(cancel).toMatch(/setCancelError\(outcome\.error\);/);
+    const close = source.slice(source.indexOf("const handleClose"), source.indexOf("const copy ="));
+    expect(close).toMatch(/if \(load\.status === "expired" \|\| cancelError\) \{\s+leave\(\);/);
+    expect(source).toMatch(/<p role="alert" className="text-xs text-destructive">\s+\{connectError \?\? cancelError\}/);
   });
 });
 

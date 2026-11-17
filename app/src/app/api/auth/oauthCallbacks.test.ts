@@ -956,7 +956,7 @@ describe("choosing which account to connect", () => {
 
       // Chosen later, the unread account's details are read then, and it connects.
       slow = false;
-      const chosen = await connectPendingCandidate({ id: "pending-1", platform: "instagram", payload: opened }, "ig-100", {
+      const chosen = await connectPendingCandidate({ id: "pending-1", platform: "instagram", payload: opened, expiresAt: new Date(Date.now() + 60_000) }, "ig-100", {
         userId: STATE_USER,
         workspaceId: STATE_WORKSPACE,
       });

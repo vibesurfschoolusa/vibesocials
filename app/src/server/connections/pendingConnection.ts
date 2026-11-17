@@ -94,6 +94,8 @@ export interface LoadedPendingConnection {
   id: string;
   platform: ChoosablePlatform;
   payload: PendingConnectionPayload;
+  /** When the choice ends by itself (R42 pages-a L6: a failed Cancel says the time left). */
+  expiresAt: Date;
 }
 
 /**
@@ -183,7 +185,7 @@ export async function loadPendingConnection(
     return null;
   }
 
-  return { id: row.id, platform: row.platform, payload };
+  return { id: row.id, platform: row.platform, payload, expiresAt: row.expiresAt };
 }
 
 export async function deletePendingConnection(id: string): Promise<void> {
