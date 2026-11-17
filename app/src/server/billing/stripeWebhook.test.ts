@@ -174,6 +174,11 @@ import { paysForPlan } from "@/lib/billing";
 
 import { handleStripeEvent } from "./stripeWebhook";
 
+// The real Resend error table (email.ts), so these cases follow its classes.
+const { resendErrorOutcome } = await vi.importActual<typeof import("@/server/notifications/email")>(
+  "@/server/notifications/email",
+);
+
 const ENV = {
   BILLING_ENABLED: "true",
   STRIPE_SECRET_KEY: "sk_test_example",
@@ -951,9 +956,45 @@ describe("invoice.payment_failed", () => {
     expect(m.events.has("evt_1")).toBe(true);
   });
 
-  // no key, a bad key or another 4xx: never counted as sent, and no retry can change it.
-  it("B refused for good (a bad key): 200, recorded, and nothing more to anyone", async () => {
-    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(BAD_KEY);
+  // R42 security L1: no key or a bad key is the app's set-up. Once it is fixed
+  // every owner can be told, so the webhook answers 500 and Stripe redelivers;
+  // owners already reached keep their claims and get no second copy.
+  it.each([
+    ["no key", BAD_KEY],
+    ["a 403 (a bad key or an unverified domain)", resendErrorOutcome({ name: "validation_error", statusCode: 403 })],
+    ["a 422 invalid_from_address (our sender)", resendErrorOutcome({ name: "invalid_from_address", statusCode: 422 })],
+  ])("B not sent for %s: 500, not recorded, and the redelivery sends only to B", async (_name, blocked) => {
+    expect(blocked).toEqual(BAD_KEY);
+    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(blocked);
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(500);
+    expect(sentTo()).toEqual(["one@example.com", "two@example.com"]);
+    expect(m.events.size).toBe(0);
+    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("Stripe will send the event again"), {
+      eventId: "evt_1",
+      notSent: 1,
+    });
+
+    // The key is set: Stripe's redelivery reaches B only.
+    m.sendEmail.mockClear();
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
+    expect(sentTo()).toEqual(["two@example.com"]);
+    expect(m.events.has("evt_1")).toBe(true);
+  });
+
+  it("every owner blocked by no key: 500, and the redelivery reaches both", async () => {
+    m.sendEmail.mockResolvedValueOnce(BAD_KEY).mockResolvedValueOnce(BAD_KEY);
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(500);
+    expect(m.events.size).toBe(0);
+    m.sendEmail.mockClear();
+    expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
+    expect(sentTo()).toEqual(["one@example.com", "two@example.com"]);
+  });
+
+  // Only an answer about this recipient or this message is refused for good.
+  it("B refused for good (a 422 about the message): 200, recorded, and nothing more to anyone", async () => {
+    const refused = resendErrorOutcome({ name: "invalid_attachment", statusCode: 422 });
+    expect(refused).toEqual({ sent: false, reason: "refused" });
+    m.sendEmail.mockResolvedValueOnce(true).mockResolvedValueOnce(refused);
     expect(await handleStripeEvent(failed("evt_1"), ENV)).toBe(200);
     expect(sentTo()).toEqual(["one@example.com", "two@example.com"]);
     expect(m.events.has("evt_1")).toBe(true);
