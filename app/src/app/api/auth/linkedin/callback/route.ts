@@ -20,6 +20,7 @@ import {
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
@@ -94,7 +95,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     // Exchange authorization code for access token
     console.log("[LinkedIn OAuth] Exchanging code for token", { userId });
     
-    const tokenResponse = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+    const tokenResponse = await fetchWithinLimit("https://www.linkedin.com/oauth/v2/accessToken", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -106,7 +107,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         client_secret: clientSecret,
         redirect_uri: redirectUri,
       }),
-    });
+    }, CONNECT_CALL_TIMEOUT_MS);
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();

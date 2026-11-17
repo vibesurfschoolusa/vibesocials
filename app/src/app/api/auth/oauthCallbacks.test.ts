@@ -69,7 +69,9 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
 import { createOAuthState } from "@/lib/oauthState";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
 import { openSecret } from "@/lib/tokenCrypto";
 import { GET as facebookPageGET } from "./facebook_page/callback/route";
 import { GET as gbpGET } from "./google_business_profile/callback/route";
@@ -1505,4 +1507,59 @@ describe("youtube OAuth callback: the upload permission", () => {
     const args = createMock.mock.calls[0][0] as { data: { scopes: string[] } };
     expect(args.data.scopes).toContain("https://www.googleapis.com/auth/youtube.upload");
   });
+});
+
+// R36 platform-clients L1: every call a callback makes while the person waits
+// (the token exchange first) is bounded at 15 s, headers and body, so a stall
+// is <platform>_connect_failed with its "try again", never Vercel's timeout
+// page. TikTok's callback is frozen and keeps its own exchange.
+describe("a provider that stalls during the callback", () => {
+  const isTokenExchange = (url: string) =>
+    url.includes("oauth2.googleapis.com/token") ||
+    url.includes("oauth/v2/accessToken") ||
+    url.includes("api.pinterest.com/v5/oauth/token") ||
+    (url.includes("/oauth/access_token") && !url.includes("fb_exchange_token"));
+  const STALL_POINTS: Array<{ platform: Platform; call: string; stalls: (url: string) => boolean }> = [
+    ...CASES.filter((c) => c.platform !== "tiktok").map((c) => ({
+      platform: c.platform,
+      call: "the token exchange",
+      stalls: isTokenExchange,
+    })),
+    { platform: "facebook_page", call: "the long-lived token exchange", stalls: (url) => url.includes("fb_exchange_token") },
+    { platform: "instagram", call: "the long-lived token exchange", stalls: (url) => url.includes("fb_exchange_token") },
+    { platform: "instagram", call: "the Instagram account read", stalls: (url) => url.includes("/ig-1") },
+    { platform: "youtube", call: "the channel read", stalls: (url) => url.includes("youtube/v3/channels") },
+  ];
+  const stalls = [
+    { kind: "no headers", fetch: headersNeverCome },
+    { kind: "a body that never ends", fetch: bodyNeverEnds },
+  ];
+
+  for (const point of STALL_POINTS) {
+    for (const stall of stalls) {
+      it(`${point.platform}: ${point.call} with ${stall.kind} is ${point.platform}_connect_failed after 15 seconds`, async () => {
+        const { GET, provider } = CASES.find((c) => c.platform === point.platform)!;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        abortSignalTimeoutOnFakeClock();
+        getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+        let stalled = 0;
+        fetchMock.mockImplementation((input: string | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (point.stalls(url)) {
+            stalled += 1;
+            return stall.fetch(url, init);
+          }
+          return Promise.resolve(provider(url));
+        });
+
+        const pending = GET(callbackRequest(point.platform, signedState()));
+        await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+        const res = await pending;
+
+        expect(stalled).toBe(1);
+        expect(location(res).searchParams.get("error")).toBe(`${point.platform}_connect_failed`);
+        expectNoConnectionWrites();
+      });
+    }
+  }
 });

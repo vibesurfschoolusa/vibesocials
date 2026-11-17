@@ -46,6 +46,9 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
+
 import { GET } from "./route";
 
 const ORIGIN = "https://app.example.com";
@@ -113,6 +116,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -225,6 +229,28 @@ describe("X OAuth callback: unexpected errors redirect to x_connect_failed inste
     expect(location(res).searchParams.get("error")).toBe("x_connect_failed");
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  // R36 platform-clients L1: an X that stalls (no headers, or a body that
+  // never ends) is x_connect_failed within 15 s, never Vercel's timeout page.
+  for (const stall of [
+    { kind: "no headers", fetch: headersNeverCome },
+    { kind: "a body that never ends", fetch: bodyNeverEnds },
+  ]) {
+    it(`an access-token exchange with ${stall.kind} is x_connect_failed after 15 seconds`, async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      abortSignalTimeoutOnFakeClock();
+      getCurrentUserMock.mockResolvedValue({ id: STARTER });
+      fetchMock.mockImplementation(stall.fetch);
+
+      const pending = GET(callbackRequest());
+      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
+      const res = await pending;
+      vi.useRealTimers();
+
+      expect(location(res).searchParams.get("error")).toBe("x_connect_failed");
+      expect(createMock).not.toHaveBeenCalled();
+    });
+  }
 
   it("DB failure writing the connection", async () => {
     getCurrentUserMock.mockResolvedValue({ id: STARTER });

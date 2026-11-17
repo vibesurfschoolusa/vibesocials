@@ -76,3 +76,25 @@ export async function fetchWithTimeout(
     clearTimeout(timer);
   }
 }
+
+/**
+ * R36 platform-clients L1: how long one call may take while someone waits on
+ * Connect (the OAuth callbacks and the reads they make), as pinterestAccount.ts.
+ */
+export const CONNECT_CALL_TIMEOUT_MS = 15_000;
+
+/**
+ * {@link fetchWithTimeout} whose limit also covers reading the body: the
+ * request, the headers and the last byte all fall inside `timeoutMs`. A
+ * stall throws (a FETCH_TIMEOUT before the headers, the signal's TimeoutError
+ * after), so the caller's failure path runs.
+ */
+export function fetchWithinLimit(
+  url: string | URL,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
+  return fetchWithTimeout(url, { ...init, signal }, timeoutMs);
+}

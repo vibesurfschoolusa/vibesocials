@@ -11,6 +11,7 @@ import { saveFacebookPageConnection } from "@/server/connections/saveConnection"
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
@@ -71,7 +72,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     tokenUrl.searchParams.set("redirect_uri", redirectUri);
     tokenUrl.searchParams.set("code", code);
 
-    const tokenResponse = await fetch(tokenUrl.toString());
+    const tokenResponse = await fetchWithinLimit(tokenUrl.toString(), undefined, CONNECT_CALL_TIMEOUT_MS);
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error("[FacebookPage OAuth] Token exchange failed:", errorText);
@@ -92,7 +93,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     longLivedUrl.searchParams.set("client_secret", clientSecret);
     longLivedUrl.searchParams.set("fb_exchange_token", shortLivedToken);
 
-    const longLivedResponse = await fetch(longLivedUrl.toString());
+    const longLivedResponse = await fetchWithinLimit(longLivedUrl.toString(), undefined, CONNECT_CALL_TIMEOUT_MS);
     if (!longLivedResponse.ok) {
       const errorText = await longLivedResponse.text();
       console.error(

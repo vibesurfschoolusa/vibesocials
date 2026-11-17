@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LINKEDIN_API_VERSION } from "@/lib/linkedinApi";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "@/lib/stallingFetch.testkit";
 
 import {
   findAdministeredOrganizations,
@@ -279,4 +280,40 @@ describe("lookupOrganizationByVanityName", () => {
     stubFetch(() => json({}, 404));
     expect(await lookupOrganizationByVanityName("tok", "nobody")).toBeNull();
   });
+});
+
+// R36 platform-clients L1: the vanity lookup and organizationAcls run while
+// someone waits on Connect; a LinkedIn that stalls (no headers, or a body that
+// never ends) answers null within 15 s, the callback's existing failure path.
+describe("connect reads when LinkedIn stalls", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const reads = [
+    { name: "lookupOrganizationByVanityName", run: () => lookupOrganizationByVanityName("tok", "acme") },
+    { name: "findAdministeredOrganizations", run: () => findAdministeredOrganizations("tok") },
+  ];
+  const stalls = [
+    { kind: "no headers", fetch: headersNeverCome },
+    { kind: "a body that never ends", fetch: bodyNeverEnds },
+  ];
+
+  for (const read of reads) {
+    for (const stall of stalls) {
+      it(`${read.name} answers null after 15 seconds of ${stall.kind}`, async () => {
+        vi.useFakeTimers();
+        abortSignalTimeoutOnFakeClock();
+        const fetchMock = vi.fn(stall.fetch);
+        vi.stubGlobal("fetch", fetchMock);
+
+        const answer = read.run();
+        await vi.advanceTimersByTimeAsync(LINKEDIN_LOOKUP_TIMEOUT_MS);
+
+        await expect(answer).resolves.toBeNull();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("tok");
+      });
+    }
+  }
 });

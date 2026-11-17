@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FETCH_TIMEOUT_CODE, fetchWithTimeout } from "./fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout, fetchWithinLimit } from "./fetchWithTimeout";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "./stallingFetch.testkit";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -182,5 +183,48 @@ describe("fetchWithTimeout", () => {
 
     await expect(readPromise).rejects.toMatchObject({ name: "AbortError" });
     expect(sawSignal?.aborted).toBe(true);
+  });
+});
+
+// R36 platform-clients L1: a call made while someone waits on Connect is
+// bounded from the request to the last byte of the answer, so a stall lands
+// in the caller's failure path instead of Vercel's timeout page.
+describe("fetchWithinLimit", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("the connect limit is 15 seconds, as lookupOrganization and pinterestAccount.ts", () => {
+    expect(CONNECT_CALL_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it("gives up when no headers come within the limit", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    const fetchMock = vi.fn(headersNeverCome);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const answer = fetchWithinLimit("https://example.test/token", { method: "POST" }, 15_000);
+    const settled = expect(answer).rejects.toBeDefined();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await settled;
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].method).toBe("POST");
+  });
+
+  it("gives up when the body stops coming within the limit", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.stubGlobal("fetch", vi.fn(bodyNeverEnds));
+
+    const response = await fetchWithinLimit("https://example.test/token", undefined, 15_000);
+    const read = expect(response.json()).rejects.toBeDefined();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await read;
+  });
+
+  it("still answers a provider that answers in time", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: true })));
+    const response = await fetchWithinLimit("https://example.test/token", undefined, 15_000);
+    await expect(response.json()).resolves.toEqual({ ok: true });
   });
 });

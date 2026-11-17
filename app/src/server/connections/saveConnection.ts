@@ -2,7 +2,7 @@ import { Platform, Prisma } from "@prisma/client";
 
 import { toConnectionSummary } from "@/lib/connectionSummary";
 import { prisma } from "@/lib/db";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { connectedAccountName } from "@/lib/differentAccount";
 import { platformLabel } from "@/lib/platforms";
@@ -337,7 +337,8 @@ export interface InstagramAccountDetails {
 /**
  * The Instagram account's username and picture, read with the linked Page's
  * token. `null` when Graph answers with an error (logged; it never holds the
- * token). A network failure throws.
+ * token). A network failure throws, as does a Graph that stalls past
+ * CONNECT_CALL_TIMEOUT_MS (headers or body: R36 platform-clients L1).
  */
 export async function fetchInstagramAccountDetails(
   igAccountId: string,
@@ -347,7 +348,7 @@ export async function fetchInstagramAccountDetails(
   igUrl.searchParams.set("fields", "username,profile_picture_url");
   igUrl.searchParams.set("access_token", pageAccessToken);
 
-  const igResponse = await fetch(igUrl.toString());
+  const igResponse = await fetchWithinLimit(igUrl.toString(), undefined, CONNECT_CALL_TIMEOUT_MS);
   if (!igResponse.ok) {
     const errorText = await igResponse.text();
     console.error("[Instagram OAuth] Failed to fetch IG account:", errorText);

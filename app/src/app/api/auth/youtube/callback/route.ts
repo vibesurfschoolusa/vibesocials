@@ -9,6 +9,7 @@ import { YOUTUBE_SCOPES, YOUTUBE_UPLOAD_SCOPE } from "@/lib/oauthScopes";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -73,7 +74,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     }
 
     // Exchange code for tokens
-    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    const tokenResponse = await fetchWithinLimit("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -85,7 +86,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }),
-    });
+    }, CONNECT_CALL_TIMEOUT_MS);
 
     if (!tokenResponse.ok) {
       console.error(
@@ -116,13 +117,14 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     }
 
     // Get channel info to use as accountIdentifier
-    const channelResponse = await fetch(
+    const channelResponse = await fetchWithinLimit(
       "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
       {
         headers: {
           Authorization: `Bearer ${tokenJson.access_token}`,
         },
       },
+      CONNECT_CALL_TIMEOUT_MS,
     );
 
     if (!channelResponse.ok) {

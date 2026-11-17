@@ -9,6 +9,7 @@ import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 export const runtime = "nodejs";
 
@@ -73,7 +74,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       return oauthErrorRedirect("google_business_profile", "not_configured", url.origin);
     }
 
-    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    const tokenResponse = await fetchWithinLimit("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -85,7 +86,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }),
-    });
+    }, CONNECT_CALL_TIMEOUT_MS);
 
     if (!tokenResponse.ok) {
       console.error("[GBP OAuth] Token exchange failed", {

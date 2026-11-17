@@ -1,4 +1,4 @@
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders } from "@/lib/linkedinApi";
 
 import type { LinkedInOrganization } from "./saveConnection";
@@ -138,9 +138,11 @@ export async function lookupOrganizationByVanityName(
   vanityName: string,
 ): Promise<LinkedInOrganizationDetails | null> {
   try {
-    const response = await fetch(
+    // R36 platform-clients L1: runs while someone waits on Connect; bounded headers and body.
+    const response = await fetchWithinLimit(
       `${LINKEDIN_REST_BASE_URL}/organizations?q=vanityName&vanityName=${encodeURIComponent(vanityName)}`,
       { headers: linkedinRestHeaders(accessToken) },
+      LINKEDIN_LOOKUP_TIMEOUT_MS,
     );
     if (!response.ok) {
       console.log("[LinkedIn OAuth] Vanity name lookup failed", { status: response.status });
@@ -166,10 +168,12 @@ export async function findAdministeredOrganizations(accessToken: string): Promis
   let start = 0;
   try {
     for (let page = 0; page < LINKEDIN_ACL_MAX_PAGES; page += 1) {
-      const response = await fetch(
+      // R36 platform-clients L1: as the vanity lookup, bounded headers and body.
+      const response = await fetchWithinLimit(
         `${LINKEDIN_REST_BASE_URL}/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED` +
           `&start=${start}&count=${LINKEDIN_ACL_PAGE_SIZE}`,
         { headers: linkedinRestHeaders(accessToken) },
+        LINKEDIN_LOOKUP_TIMEOUT_MS,
       );
       if (!response.ok) {
         console.log("[LinkedIn OAuth] organizationAcls failed", { status: response.status, page });

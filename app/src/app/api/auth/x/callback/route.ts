@@ -9,6 +9,7 @@ import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 import { withConnectLink } from "@/server/connectLink/callback";
 import { oauthErrorRedirect } from "@/lib/oauthErrorRedirect";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 
 /**
  * OAuth 1.0a signature generation
@@ -140,12 +141,12 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
         .map((key) => `${key}="${encodeURIComponent(oauthParams[key])}"`)
         .join(", ");
 
-    const response = await fetch(accessTokenUrl, {
+    const response = await fetchWithinLimit(accessTokenUrl, {
       method: "POST",
       headers: {
         Authorization: authHeader,
       },
-    });
+    }, CONNECT_CALL_TIMEOUT_MS);
 
     if (!response.ok) {
       const errorText = await response.text();

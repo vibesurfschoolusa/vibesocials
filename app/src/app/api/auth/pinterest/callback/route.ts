@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { refusedSaveSettingsUrl } from "@/lib/differentAccount";
 import { Platform } from "@prisma/client";
 
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { PINTEREST_SCOPES } from "@/lib/oauthScopes";
@@ -92,7 +92,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
       return oauthErrorRedirect("pinterest", "not_configured", url.origin);
     }
 
-    const tokenResponse = await fetchWithTimeout(PINTEREST_TOKEN_URL, {
+    const tokenResponse = await fetchWithinLimit(PINTEREST_TOKEN_URL, {
       method: "POST",
       headers: {
         Authorization: pinterestBasicAuthHeader(config.appId, config.appSecret),
@@ -103,7 +103,7 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
         code,
         redirect_uri: config.redirectUri,
       }),
-    });
+    }, CONNECT_CALL_TIMEOUT_MS);
 
     if (!tokenResponse.ok) {
       const errorBody = await tokenResponse.text().catch(() => "");
