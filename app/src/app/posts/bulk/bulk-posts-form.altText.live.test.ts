@@ -26,11 +26,13 @@ vi.mock("@vercel/blob/client", () => ({
 }));
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
+import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
 import { BulkPostsForm } from "./bulk-posts-form";
 import { ALT_TEXT_TOO_LONG_TEXT } from "./bulk-post-row";
 
 let root: Root;
+let doc: FocusDoc;
 let container: FakeNode;
 /** The posting times the workspace has; none means the box is not offered. */
 let slots: { day: number; time: string }[];
@@ -123,6 +125,8 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const made = makeDocument();
   container = made.container;
+  doc = made.doc as unknown as FocusDoc;
+  makeFocusable(doc);
   vi.stubGlobal("window", made.doc.defaultView);
   vi.stubGlobal("document", made.doc);
   vi.stubGlobal("fetch", fetchMock);
@@ -174,7 +178,7 @@ describe("Add many: a photo description longer than 1,000 characters", () => {
     expect(props(altField(0)).value).toBe(LONG);
     const count = byId(String(props(altField(0))["aria-describedby"]));
     const over = (LONG.length - 1000).toLocaleString("en-US");
-    expect(count.textContent).toBe(`${LONG.length.toLocaleString("en-US")} of 1,000 characters (${over} over). Shorten it to save this photo.`);
+    expect(count.textContent).toBe(`${LONG.length.toLocaleString("en-US")} of 1,000 characters (${over} over). Shorten it to schedule or save this photo.`);
   });
 
   it("its row is not sent, and says why; the other rows are sent", async () => {
@@ -183,6 +187,16 @@ describe("Add many: a photo description longer than 1,000 characters", () => {
     await saveAllAsDrafts();
     expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Three"]);
     expect(container.textContent).toContain(ALT_TEXT_TOO_LONG_TEXT);
+    // R45 lead review: the press takes the person to the field to shorten.
+    expect(doc.activeElement).toBe(altField(1));
+  });
+
+  it("Schedule all too: the row is held and its description takes the focus", async () => {
+    await mountWithThreePhotos();
+    await run(() => props(altField(2)).onChange({ target: { value: LONG } }));
+    await run(() => props(button("Schedule all")).onClick({ currentTarget: null }));
+    expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Two"]);
+    expect(doc.activeElement).toBe(altField(2));
   });
 
   it("under the limit: sent as before", async () => {
@@ -191,5 +205,6 @@ describe("Add many: a photo description longer than 1,000 characters", () => {
     await saveAllAsDrafts();
     expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Two", "Three"]);
     expect(container.textContent).not.toContain(ALT_TEXT_TOO_LONG_TEXT);
+    expect(doc.activeElement).not.toBe(altField(1));
   });
 });

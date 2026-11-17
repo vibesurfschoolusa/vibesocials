@@ -51,6 +51,8 @@ interface BulkPostRowProps {
   storyRefusal: string | null;
   /** The row's send line as shown (rowSendLine): a server refusal, or a refused press while its check still refuses. */
   sendLine: string | null;
+  /** R45 lead review: the description field, so a press refused for its length can focus it. */
+  altFieldRef?: (field: HTMLInputElement | null) => void;
   /** This video row's cover picker is the one open (one at a time: the picker's ids are fixed). */
   coverOpen: boolean;
   /** "Write captions with AI" is on (F7). Off, no Write again: it would send the file to the AI. */
@@ -168,6 +170,7 @@ export function BulkPostRow({
   minWhen,
   storyRefusal,
   sendLine,
+  altFieldRef,
   coverOpen,
   aiCaptions = true,
   onConfirmInQueue,
@@ -300,6 +303,7 @@ export function BulkPostRow({
           <div className="flex flex-col gap-1">
             <Label htmlFor={altId}>Photo description (alt text)</Label>
             <Input
+              ref={altFieldRef}
               id={altId}
               className="h-11"
               aria-describedby={`bulk-description-count-${row.id}`}
@@ -314,7 +318,7 @@ export function BulkPostRow({
               text={row.altText}
               max={ALT_TEXT_MAX}
               count={altTextStoredLength}
-              action="save this photo"
+              action="schedule or save this photo"
             />
             {/* A Media photo keeps its saved description unless the user writes
                 a new one here: it is never described automatically. With "Write

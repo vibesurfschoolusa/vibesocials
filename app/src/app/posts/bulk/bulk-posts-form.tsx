@@ -370,6 +370,8 @@ export function BulkPostsForm({
   // R45 publishing L2: rows the last press refused for a time that has passed.
   // Each keeps that time, and its line, until the person edits it.
   const timeHeldRef = useRef<ReadonlySet<string>>(new Set());
+  // R45 lead review: each photo row's description field, by row id.
+  const altFieldsRef = useRef(new Map<string, HTMLInputElement>());
   // Raw text of the "every N days" box, so it can be cleared while typing.
   const [everyDaysText, setEveryDaysText] = useState("1");
   // Once the user picks a first day it is theirs; until then it follows "tomorrow".
@@ -886,18 +888,23 @@ export function BulkPostsForm({
       const ready: string[] = [];
       const refused = new Map<string, RefusedPress>();
       const timeHeld = new Set<string>();
+      let altTooLong: string | null = null;
       for (const row of rowsToSend(rowsRef.current)) {
         const block = rowLocalBlock(row, mode, pressedAt, batchCheck);
         if (block) {
           refused.set(row.id, { mode, at: pressedAt.getTime() });
           updateRow(row.id, { sendError: null });
           if (block === BULK_PAST_TIME_MESSAGE) timeHeld.add(row.id);
+          if (block === ALT_TEXT_TOO_LONG_TEXT) altTooLong ??= row.id;
         } else {
           ready.push(row.id);
         }
       }
       setRefusedPresses(refused);
       timeHeldRef.current = timeHeld;
+      // R45 lead review: a description over its limit is the person's to
+      // shorten, so the press takes them to the first one (rows in order).
+      if (altTooLong) altFieldsRef.current.get(altTooLong)?.focus();
 
       // One after another. A created row, or one whose post may exist, is never sent again here.
       for (const id of ready) {
@@ -1341,6 +1348,10 @@ export function BulkPostsForm({
                 stories,
               })}
               sendLine={rowSendLine(row, refusedPresses.get(row.id), batchCheck)}
+              altFieldRef={(field) => {
+                if (field) altFieldsRef.current.set(row.id, field);
+                else altFieldsRef.current.delete(row.id);
+              }}
               coverOpen={coverOpenId === row.id}
               onConfirmInQueue={() => markInQueue(row.id)}
               onSendAgain={() => sendAgain(row.id)}
