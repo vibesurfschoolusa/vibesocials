@@ -9,13 +9,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * is over, with its sentence, and nothing is sent.
  */
 
-const { sent } = vi.hoisted(() => ({ sent: [] as { senderName: string; note: string }[] }));
-vi.mock("./send-file", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./send-file")>()),
-  sendClientFile: vi.fn(async (input: { senderName: string; note: string }) => {
-    sent.push({ senderName: input.senderName, note: input.note });
-  }),
+const { sent, tried, refuseNext } = vi.hoisted(() => ({
+  sent: [] as { senderName: string; note: string }[],
+  tried: [] as { file: string; senderName: string; note: string }[],
+  refuseNext: { message: null as string | null },
 }));
+vi.mock("./send-file", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./send-file")>();
+  return {
+    ...real,
+    sendClientFile: vi.fn(async (input: { file: File; senderName: string; note: string }) => {
+      tried.push({ file: input.file.name, senderName: input.senderName, note: input.note });
+      if (refuseNext.message) {
+        const message = refuseNext.message;
+        refuseNext.message = null;
+        throw new real.ClientFileError("refused", message);
+      }
+      sent.push({ senderName: input.senderName, note: input.note });
+    }),
+  };
+});
 vi.mock("@/components/ui/announcer", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/ui/announcer")>()),
   useAnnounce: () => () => {},
@@ -98,6 +111,8 @@ beforeEach(async () => {
   URL.createObjectURL = () => "blob:preview";
   URL.revokeObjectURL = () => {};
   sent.length = 0;
+  tried.length = 0;
+  refuseNext.message = null;
   root = createRoot(container as unknown as HTMLElement);
   await act(async () => {
     root.render(createElement(UploadLinkForm, { token: "t" }));
@@ -155,5 +170,28 @@ describe("/u: a name or note longer than 200 characters", () => {
     await send();
     expect(sent).toEqual([{ senderName: "Maria", note: "a".repeat(200) }]);
     expect(container.textContent).not.toContain(UPLOAD_NOTE_TOO_LONG_TEXT);
+  });
+});
+
+// R45 lead review: a refused try says to wait, then press the retry button,
+// which sends the same files with the name and note kept.
+describe("/u: after a limit refusal", () => {
+  it("the retry button sends the same file, with the name and note kept", async () => {
+    refuseNext.message = "Too many files from this network in the last hour. Wait 12 minutes, then try the files that didn't send.";
+    await pickPhoto();
+    await type("upload-link-name", "Maria");
+    await type("upload-link-note", "Sunset ones first");
+    await send();
+    expect(sent).toEqual([]);
+    const retry = find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Try the file that didn't send");
+    expect(retry).not.toBeNull();
+    expect(props(retry!).type).toBe("submit");
+
+    await send();
+    expect(tried).toEqual([
+      { file: "beach.jpg", senderName: "Maria", note: "Sunset ones first" },
+      { file: "beach.jpg", senderName: "Maria", note: "Sunset ones first" },
+    ]);
+    expect(sent).toEqual([{ senderName: "Maria", note: "Sunset ones first" }]);
   });
 });

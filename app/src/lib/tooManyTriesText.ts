@@ -12,10 +12,19 @@ export function tooManyTriesSentence(retryAfterSeconds: number | undefined, then
   if (retryAfterSeconds === undefined || !Number.isFinite(retryAfterSeconds)) {
     return `Too many tries. Wait a few minutes, then ${then}.`;
   }
-  const minutes = Math.ceil(retryAfterSeconds / 60);
-  return minutes <= 1
-    ? `Too many tries. Wait a minute, then ${then}.`
-    : `Too many tries. Wait ${minutes} minutes, then ${then}.`;
+  return `Too many tries. Wait ${waitText(retryAfterSeconds)}, then ${then}.`;
+}
+
+/**
+ * R45 lead review: the one wording of a known wait ("Wait <this>"). Whole
+ * minutes, rounded up, up to an hour; past an hour, whole hours, rounded up,
+ * so acting when it says never fails.
+ */
+export function waitText(seconds: number): string {
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes <= 1) return "a minute";
+  if (minutes <= 60) return `${minutes} minutes`;
+  return `${Math.ceil(seconds / 3600)} hours`;
 }
 
 /** The wait a 429 names: the body's `retryAfterSeconds`, else the Retry-After header's seconds. */

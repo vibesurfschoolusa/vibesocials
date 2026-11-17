@@ -13,14 +13,18 @@ export const UPLOAD_LINK_INACTIVE_MESSAGE = "This link is not active. Ask for a 
 export const UPLOAD_LINK_STORAGE_FULL_MESSAGE =
   "This workspace cannot take more files right now. Tell the person who gave you the link.";
 
-export const UPLOAD_LINK_DAILY_LIMIT_MESSAGE =
-  "This link has reached today's limit. Try again tomorrow.";
+/**
+ * R45 lead review: each limit's reason on its own, so /u (send-file.ts) puts
+ * the answer's real wait after it; the messages are the routes' sentences.
+ */
+export const UPLOAD_LINK_DAILY_LIMIT_REASON = "This link has reached today's limit.";
+export const UPLOAD_LINK_DAILY_LIMIT_MESSAGE = `${UPLOAD_LINK_DAILY_LIMIT_REASON} Try again tomorrow.`;
 
-export const UPLOAD_LINK_IP_LIMIT_MESSAGE =
-  "Too many files from this network in the last hour. Try again later.";
+export const UPLOAD_LINK_IP_LIMIT_REASON = "Too many files from this network in the last hour.";
+export const UPLOAD_LINK_IP_LIMIT_MESSAGE = `${UPLOAD_LINK_IP_LIMIT_REASON} Try again later.`;
 
-export const UPLOAD_LINK_BYTES_LIMIT_MESSAGE =
-  "This link has taken 20 GB of files today, its daily limit. Send the rest tomorrow.";
+export const UPLOAD_LINK_BYTES_LIMIT_REASON = "This link has taken 20 GB of files today, its daily limit.";
+export const UPLOAD_LINK_BYTES_LIMIT_MESSAGE = `${UPLOAD_LINK_BYTES_LIMIT_REASON} Send the rest tomorrow.`;
 
 /** Files one link takes in a UTC day, counted on the upload token and on the registration. */
 export const UPLOAD_LINK_FILES_PER_DAY = 200;
