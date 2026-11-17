@@ -9,9 +9,8 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 import {
   CHOICE_MAYBE_CONNECTED_MESSAGE,
-  CANCEL_FAILED_MESSAGE,
-  CANCEL_LOST_MESSAGE,
   ConnectLinkChoiceView,
+  cancelLostMessage,
   cancelOutcome,
   chooseFailure,
   loadOutcome,
@@ -209,10 +208,38 @@ describe("the account choice after a lost Connect answer (R30)", () => {
   });
 
   it("Cancel: any other answer stays and says it wasn't cancelled", () => {
+    // R42 pages-a L6: with no life left known, only the 15 minutes from the return is sure.
+    const unknown =
+      "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself within 15 minutes of when you came back from Instagram.";
     for (const status of [500, 502, 429]) {
-      expect(cancelOutcome(status, null, "instagram", "/c/t")).toEqual({ error: CANCEL_FAILED_MESSAGE });
+      expect(cancelOutcome(status, null, "instagram", "/c/t")).toEqual({ error: unknown });
     }
-    expect(CANCEL_FAILED_MESSAGE).not.toMatch(/cancelled/);
+    expect(unknown).not.toMatch(/cancelled/);
+  });
+
+  // R42 pages-a L6: the life the load reported, counted down on this page's own clock.
+  it("Cancel: a failure says the time the choice really has left", () => {
+    expect(cancelOutcome(502, null, "instagram", "/c/t", 3 * 60 * 1000)).toEqual({
+      error: "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself in 3 minutes.",
+    });
+    expect(cancelOutcome(502, null, "instagram", "/c/t", 30 * 1000)).toEqual({
+      error: "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself within a minute.",
+    });
+  });
+
+  it("the load keeps when the choice ends, from the route's seconds left", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-17T09:12:00Z"));
+    try {
+      expect(loadOutcome(200, { platform: "instagram", candidates: [], lifeLeftSeconds: 180 })).toEqual({
+        status: "ready",
+        platform: "instagram",
+        candidates: [],
+        endsAt: new Date("2026-11-17T09:15:00Z").getTime(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Cancel: the route's own sentence when it has one, as Connect shows", () => {
@@ -222,16 +249,17 @@ describe("the account choice after a lost Connect answer (R30)", () => {
   });
 
   it("Cancel: a lost answer may have cancelled it, and says so in the shared words", async () => {
-    expect(CANCEL_LOST_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so the choice may already be cancelled. If your connection dropped, reconnect first. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
+    expect(cancelLostMessage(3 * 60 * 1000, "instagram")).toBe(
+      "Vibe Socials' answer didn't reach you, so the choice may already be cancelled. If your connection dropped, reconnect first. Press Cancel again, or leave this page: the choice ends by itself in 3 minutes.",
     );
-    expect(await source()).toMatch(/\} catch \{\s+outcome = \{ error: CANCEL_LOST_MESSAGE \};/);
+    expect(cancelLostMessage(null, "instagram")).toMatch(/within 15 minutes of when you came back from Instagram\.$/);
+    expect(await source()).toMatch(/\} catch \{\s+outcome = \{ error: cancelLostMessage\(lifeLeft\(\), platform\) \};/);
   });
 
   it("Cancel reads the DELETE answer, asking with the platform so a used choice can say it is connected", async () => {
     const text = await source();
     expect(text).toMatch(/fetchOrNoAnswer\(choiceAddress\(base, platform\), \{ method: "DELETE" \}\)/);
-    expect(text).toMatch(/cancelOutcome\(response\.status, data, platform, page\)/);
+    expect(text).toMatch(/cancelOutcome\(response\.status, data, platform, page, lifeLeft\(\)\)/);
   });
 });
 

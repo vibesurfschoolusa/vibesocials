@@ -17,6 +17,7 @@ import {
   rememberedChoicePlatform,
 } from "@/lib/choicePlatform";
 import { focusAfterPress } from "@/lib/focusAfter";
+import { cancelFailedText, cancelLostStep } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { useRetryFocus } from "@/lib/useRetryFocus";
@@ -32,7 +33,8 @@ type Candidate = { id: string; name: string; detail?: string };
 
 export type ConnectLinkChoiceState =
   | { status: "loading" }
-  | { status: "ready"; platform: string; candidates: Candidate[] }
+  /** `endsAt`: when the choice ends by itself, on this page's clock (R42 pages-a L6), if the route said. */
+  | { status: "ready"; platform: string; candidates: Candidate[]; endsAt?: number }
   | { status: "gone"; message: string }
   /**
    * R39 pages L2: the load failed but the choice may still wait. `retry`:
@@ -54,6 +56,8 @@ type ChoiceAnswer = {
   connected?: boolean;
   /** A 429 names its wait here as well as in Retry-After. */
   retryAfterSeconds?: number;
+  /** The load's answer: the seconds the choice has left. */
+  lifeLeftSeconds?: number;
 } | null;
 
 /** What the page knows of the waiting choice when the load is refused (R40 review). */
@@ -135,7 +139,10 @@ export function loadOutcome(
   choice: LimitedChoice = {},
 ): ConnectLinkChoiceState {
   if (status >= 200 && status < 300 && data?.platform && data.candidates) {
-    return { status: "ready", platform: data.platform, candidates: data.candidates };
+    const ready = { status: "ready" as const, platform: data.platform, candidates: data.candidates };
+    const left = data.lifeLeftSeconds;
+    // Seconds left, counted from now on this page's clock, so a visitor's clock that is off never matters.
+    return typeof left === "number" && Number.isFinite(left) ? { ...ready, endsAt: Date.now() + left * 1000 } : ready;
   }
   if (status === 404) return { status: "gone", message: data?.error || LOAD_FAILED_MESSAGE };
   if (status === 429) return limitedOutcome(retryAfterSeconds, choice);
@@ -163,14 +170,20 @@ export function chooseFailure(status: number, data: ChoiceAnswer): { gone: boole
   return { gone: false, message: maySaved ? CHOICE_MAYBE_CONNECTED_MESSAGE : CHOOSE_FAILED_MESSAGE };
 }
 
-/** R30: Cancel's DELETE was refused; the choice is still waiting. */
-export const CANCEL_FAILED_MESSAGE =
-  "Couldn't cancel the choice. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.";
-/** R30: Cancel's answer was lost, so the choice may have been cancelled already. */
-export const CANCEL_LOST_MESSAGE = answerLostText(
-  "the choice may already be cancelled",
-  "Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
-);
+/** A platform's name for the sentences, if the value is one. */
+function labelOf(platform: string | null): string | null {
+  return platform && Object.hasOwn(PLATFORM_LABELS, platform)
+    ? PLATFORM_LABELS[platform as keyof typeof PLATFORM_LABELS]
+    : null;
+}
+
+/**
+ * R30: Cancel's answer was lost, so the choice may have been cancelled already.
+ * R42 pages-a L6: with the life the choice has left (null when unknown).
+ */
+export function cancelLostMessage(lifeLeftMs: number | null, platform: string | null): string {
+  return answerLostText("the choice may already be cancelled", cancelLostStep(lifeLeftMs, labelOf(platform)));
+}
 
 /**
  * R30 client-journey L2: where Cancel goes, from the DELETE answer. Only a
@@ -185,10 +198,12 @@ export function cancelOutcome(
   data: ChoiceAnswer,
   platform: string,
   page: string,
+  lifeLeftMs: number | null = null,
 ): { go: string } | { error: string } {
   if (status >= 200 && status < 300) return { go: `${page}?error=${encodeURIComponent(`${platform}_cancelled`)}` };
   if (status === 404) return { go: data?.connected === true ? `${page}?${connectedSuccessQuery(platform, false)}` : page };
-  return { error: data?.error || CANCEL_FAILED_MESSAGE };
+  // R30: refused, so the choice is still waiting; R42 pages-a L6: for the time it really has left.
+  return { error: data?.error || cancelFailedText("link", lifeLeftMs, labelOf(platform)) };
 }
 
 /**
@@ -307,6 +322,11 @@ export function ConnectLinkChoice({
     setBusy(null);
   }
 
+  /** The life the choice has left by the load's answer, or null when the route didn't say. */
+  function lifeLeft(): number | null {
+    return state.status === "ready" && state.endsAt !== undefined ? state.endsAt - Date.now() : null;
+  }
+
   async function cancel(platform: string, pressed: HTMLElement | null) {
     setBusy("cancel");
     setError(null);
@@ -320,9 +340,9 @@ export function ConnectLinkChoice({
         setBusy(null);
         return;
       }
-      outcome = cancelOutcome(response.status, data, platform, page);
+      outcome = cancelOutcome(response.status, data, platform, page, lifeLeft());
     } catch {
-      outcome = { error: CANCEL_LOST_MESSAGE };
+      outcome = { error: cancelLostMessage(lifeLeft(), platform) };
     }
     if ("go" in outcome) {
       router.push(outcome.go);

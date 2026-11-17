@@ -12,7 +12,7 @@ import {
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { choiceFailedText } from "@/lib/pendingChoiceText";
+import { cancelFailedText, choiceFailedText, choiceLifeLeftMs } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
@@ -76,7 +76,7 @@ function errorKind(error: unknown): { name: string; code?: string } {
 }
 
 type Resolved =
-  | { ok: true; link: ActiveConnectLink; pending: LoadedPendingConnection }
+  | { ok: true; link: ActiveConnectLink; pending: LoadedPendingConnection; expiresAt: Date }
   | { ok: false; response: NextResponse };
 
 async function resolve(request: Request, context: RouteContext): Promise<Resolved> {
@@ -104,12 +104,12 @@ async function resolve(request: Request, context: RouteContext): Promise<Resolve
     return { ok: false, response: NextResponse.json({ error: CONNECT_LINK_INACTIVE_MESSAGE }, { status: 404 }) };
   }
 
-  const stamp = await prisma.pendingConnection.findUnique({ where: { id }, select: { connectLinkId: true } });
+  const stamp = await prisma.pendingConnection.findUnique({ where: { id }, select: { connectLinkId: true, expiresAt: true } });
   if (!stamp || stamp.connectLinkId !== link.id) return { ok: false, response: await notFound(request, link) };
 
   const pending = await loadPendingConnection(id, { workspaceId: link.workspaceId, userId: link.createdById });
   if (!pending) return { ok: false, response: await notFound(request, link) };
-  return { ok: true, link, pending };
+  return { ok: true, link, pending, expiresAt: stamp.expiresAt };
 }
 
 /** GET → `{ platform, candidates: [{ id, name, detail? }] }`. Never tokens. */
@@ -122,7 +122,12 @@ export async function GET(request: Request, context: RouteContext) {
     const { link, pending } = resolved;
     if (await placeTaken(link.workspaceId, pending.platform)) return connectedNotFound(pending.platform);
     return NextResponse.json(
-      { platform: pending.platform, candidates: listPendingCandidates(pending.payload) },
+      {
+        platform: pending.platform,
+        candidates: listPendingCandidates(pending.payload),
+        // R42 pages-a L6: as seconds left, so /c's sentences never lean on the visitor's clock.
+        lifeLeftSeconds: Math.max(0, Math.floor((choiceLifeLeftMs(resolved.expiresAt) ?? 0) / 1000)),
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
@@ -241,20 +246,23 @@ export async function POST(request: Request, context: RouteContext) {
 
 /** DELETE → Cancel: drops the waiting choice. */
 export async function DELETE(request: Request, context: RouteContext) {
+  // R42 pages-a L6: what is known of the choice when Cancel fails, so the sentence says when it really ends.
+  let known: Extract<Resolved, { ok: true }> | null = null;
   try {
     const resolved = await resolve(request, context);
     if (!resolved.ok) return resolved.response;
+    known = resolved;
     await deletePendingConnection(resolved.pending.id);
     const response = NextResponse.json({ ok: true });
     clearConnectCookie(response);
     return response;
   } catch (error) {
     logger.error("[DELETE /api/connect-link/pending] Unexpected error", { error: errorKind(error) });
+    const hint = new URL(request.url).searchParams.get("platform");
+    const platform = known?.pending.platform ?? (hint && Object.hasOwn(PLATFORM_LABELS, hint) ? (hint as Platform) : null);
+    const label = platform ? PLATFORM_LABELS[platform] : null;
     return NextResponse.json(
-      {
-        error:
-          "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
-      },
+      { error: cancelFailedText("link", known ? choiceLifeLeftMs(known.expiresAt) : null, label) },
       { status: 500 },
     );
   }

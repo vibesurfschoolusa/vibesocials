@@ -128,6 +128,8 @@ describe("GET: the accounts to choose from", () => {
         { id: "page-1", name: "My Surf School" },
         { id: "page-2", name: "Client Cafe" },
       ],
+      // R42 pages-a L6: the life the choice has left, so /c's Cancel sentences say it.
+      lifeLeftSeconds: 600,
     });
     expect(JSON.stringify(body)).not.toContain("page-token");
     expect(JSON.stringify(body)).not.toContain(TOKEN);
@@ -373,8 +375,43 @@ describe("DELETE: Cancel", () => {
     const res = await DELETE(request("DELETE"), context());
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({
-      error: "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself in 15 minutes.",
+      error: "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself in 10 minutes.",
     });
+  });
+
+  // R42 pages-a L6: the choice lasts 15 minutes from when it was made, so the sentence says the time left.
+  it.each([
+    ["12 minutes in", 3 * 60 * 1000, "the choice ends by itself in 3 minutes"],
+    ["at 14:30", 30 * 1000, "the choice ends by itself within a minute"],
+  ])("%s: a failed cancel says the time left", async (_when, leftMs, phrase) => {
+    h.pendingFind.mockResolvedValue(pendingRow({ expiresAt: new Date(NOW.getTime() + leftMs) }));
+    h.pendingDeleteMany.mockRejectedValue(new Error("db down"));
+    const res = await DELETE(request("DELETE"), context());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: `Couldn't cancel the choice just now. Press Cancel again, or leave this page: ${phrase}.`,
+    });
+  });
+
+  it("a failure before the choice was read: within 15 minutes of coming back from the platform", async () => {
+    h.linkFind.mockRejectedValue(new Error("db down"));
+    const res = await DELETE(
+      new Request(`${ORIGIN}/api/connect-link/${TOKEN}/pending/pending-1?platform=facebook_page`, { method: "DELETE" }),
+      context(),
+    );
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error:
+        "Couldn't cancel the choice just now. Press Cancel again, or leave this page: the choice ends by itself within 15 minutes of when you came back from Facebook Page.",
+    });
+  });
+
+  it("an expired choice gets the ended answer, never a time left", async () => {
+    h.pendingFind.mockResolvedValue(pendingRow({ expiresAt: new Date(NOW.getTime() - 1000) }));
+    const res = await DELETE(request("DELETE"), context());
+    expect(res.status).toBe(404);
+    expect(h.pendingDeleteMany).toHaveBeenCalledTimes(1); // only the expired row's clean-up
+    expect((await res.json()).error).not.toMatch(/ends by itself/);
   });
 
   it("another link's choice is a 404 and is left alone", async () => {

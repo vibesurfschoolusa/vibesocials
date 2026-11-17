@@ -70,6 +70,7 @@ import type { PendingConnectionPayload } from "@/server/connections/pendingConne
 import { CONNECT_CALL_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
 import { abortSignalTimeoutOnFakeClock, headersNeverCome } from "@/lib/stallingFetch.testkit";
 import { DELETE, GET, POST } from "./route";
+import { PENDING_CONNECTION_TTL_MS } from "@/server/connections/pendingConnection";
 
 const OWNER_CONTEXT = {
   user: { id: "user-1", email: "owner@example.com", name: "Owner" },
@@ -318,7 +319,8 @@ describe("pending/[id]: the owner gate's database read fails", () => {
   const CASES: Array<[string, Handler, () => Request, string]> = [
     ["POST", POST, () => postReq({ candidateId: "page-2" }), "That account wasn't connected: something went wrong on our side. Reload the page and choose it again."],
     ["GET", GET, getReq, "Couldn't load your accounts. Reload the page to try again."],
-    ["DELETE", DELETE, deleteReq, "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes."],
+    // R42 pages-a L6: nothing was read, so the expiry is unknown; only the 15 minutes from the return is sure.
+    ["DELETE", DELETE, deleteReq, "Couldn't cancel the choice just now. You can leave it: it ends by itself within 15 minutes of when you came back from signing in."],
   ];
 
   it.each(CASES)("%s: its own sentence, a 500 with a JSON body, nothing read or saved", async (_method, handler, request, error) => {
@@ -771,8 +773,38 @@ describe("DELETE /api/connections/pending/[id]", () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
-      error: "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes.",
+      error: "Couldn't cancel the choice just now. You can leave it: it ends by itself in 10 minutes.",
     });
+  });
+
+  // R42 pages-a L6: the choice lasts 15 minutes from when it was made, so the sentence says the time left.
+  it.each([
+    ["12 minutes in", 3 * 60 * 1000, "it ends by itself in 3 minutes"],
+    ["at 14:30", 30 * 1000, "it ends by itself within a minute"],
+  ])("%s: a failed cancel says the time left", async (_when, leftMs, phrase) => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN, { expiresAt: new Date(Date.now() + leftMs) }));
+    deleteManyMock.mockRejectedValue(new Error("db down"));
+
+    const response = await DELETE(deleteReq(), ctx());
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: `Couldn't cancel the choice just now. You can leave it: ${phrase}.`,
+    });
+  });
+
+  it("an expired choice gets the ended answer, never a time left", async () => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN, { expiresAt: new Date(Date.now() - 1000) }));
+
+    const response = await DELETE(deleteReq(), ctx());
+
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/^This choice has ended/);
+  });
+
+  it("the 15 minutes the sentences assume is the choice's life", () => {
+    expect(PENDING_CONNECTION_TTL_MS).toBe(15 * 60 * 1000);
   });
 });
 

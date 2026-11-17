@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { shownControl, signInButton } from "@/lib/oauthResult";
-import { choiceFailedText, type ChoiceCardButton } from "@/lib/pendingChoiceText";
+import { cancelFailedText, choiceFailedText, choiceLifeLeftMs, type ChoiceCardButton } from "@/lib/pendingChoiceText";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
@@ -172,7 +172,36 @@ async function ownerGate(method: string, failedText: string): Promise<WorkspaceC
 
 const LOAD_FAILED_MESSAGE = "Couldn't load your accounts. Reload the page to try again.";
 
-const CANCEL_FAILED_MESSAGE = "Couldn't cancel the choice just now. You can leave it: it ends by itself in 15 minutes.";
+/** The label of the `?platform=` the dialog sends, when it names a choosable platform. */
+function hintedLabel(request: Request): string | null {
+  const hint = new URL(request.url).searchParams.get("platform");
+  const platform = CHOOSABLE.find((choosable) => choosable === hint);
+  return platform ? PLATFORM_LABELS[platform] : null;
+}
+
+/**
+ * R42 pages-a L6: a failed Cancel says when the choice really ends, from its
+ * own expiry, read here (a failure seldom comes, so Cancel itself reads no
+ * more). A read that fails too, or a choice not the caller's, leaves the
+ * expiry unknown, and the sentence says only what is sure.
+ */
+async function cancelFailedAnswer(request: Request, id: string, owner: { workspaceId: string; userId: string }) {
+  let lifeLeftMs: number | null = null;
+  let label = hintedLabel(request);
+  try {
+    const choice = await prisma.pendingConnection.findUnique({
+      where: { id },
+      select: { expiresAt: true, platform: true, workspaceId: true, userId: true },
+    });
+    if (choice && choice.workspaceId === owner.workspaceId && choice.userId === owner.userId) {
+      lifeLeftMs = choiceLifeLeftMs(choice.expiresAt);
+      label = PLATFORM_LABELS[choice.platform] ?? label;
+    }
+  } catch (error) {
+    logger.warn("[DELETE /api/connections/pending/[id]] Couldn't read the choice's expiry (ignored)", { error: errorKind(error) });
+  }
+  return NextResponse.json({ error: cancelFailedText("settings", lifeLeftMs, label) }, { status: 500 });
+}
 
 function ownerOf(context: WorkspaceContext) {
   return { workspaceId: context.workspace.id, userId: context.user.id };
@@ -347,7 +376,7 @@ async function refusedChoice(
 
 /** DELETE → cancels the pending connect. */
 export async function DELETE(request: Request, { params }: PendingRouteContext) {
-  const contextOrError = await ownerGate("DELETE", CANCEL_FAILED_MESSAGE);
+  const contextOrError = await ownerGate("DELETE", cancelFailedText("settings", null, hintedLabel(request)));
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
@@ -372,6 +401,6 @@ export async function DELETE(request: Request, { params }: PendingRouteContext) 
       error: errorKind(error),
       pendingConnectionId: id,
     });
-    return NextResponse.json({ error: CANCEL_FAILED_MESSAGE }, { status: 500 });
+    return cancelFailedAnswer(request, id, ownerOf(contextOrError));
   }
 }
