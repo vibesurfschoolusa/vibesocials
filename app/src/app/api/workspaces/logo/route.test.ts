@@ -397,7 +397,7 @@ describe("the hourly limit names its wait", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("2400");
     await expect(response.json()).resolves.toEqual({
-      error: "You've changed a logo 10 times this hour, counted across all your workspaces. Too many tries. Wait 40 minutes, then try again.",
+      error: "You've tried to change a logo 10 times this hour, counted across all your workspaces. Too many tries. Wait 40 minutes, then try again.",
       retryAfterSeconds: 2400,
     });
   });

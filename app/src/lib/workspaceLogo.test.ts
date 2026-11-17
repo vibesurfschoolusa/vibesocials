@@ -6,6 +6,7 @@ import {
   logoEndpoint,
   LOGO_ADDRESS_RESERVED_MESSAGE,
   LOGO_HELP_LINE,
+  LOGO_LIMIT_REASON,
 } from "./workspaceLogo";
 
 const HOST = "https://store1.public.blob.vercel-storage.com";
@@ -58,5 +59,12 @@ describe("logoEndpoint", () => {
 describe("LOGO_HELP_LINE", () => {
   it("says what the server accepts", () => {
     expect(LOGO_HELP_LINE).toBe("An image up to 1 MB (not SVG). It appears on your monthly report.");
+  });
+});
+
+// R45 security L2: the route counts a try before it reads the file, so failed tries count too.
+describe("LOGO_LIMIT_REASON", () => {
+  it("says tries, not changes", () => {
+    expect(LOGO_LIMIT_REASON).toBe("You've tried to change a logo 10 times this hour, counted across all your workspaces.");
   });
 });

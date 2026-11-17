@@ -22,8 +22,8 @@ export const LOGO_EMPTY_MESSAGE = "No file arrived. Choose a PNG or JPEG and try
 export const LOGO_NOT_IMAGE_MESSAGE =
   "That file isn't a picture we can read. Choose a PNG or JPEG, up to 1 MB.";
 export const LOGO_SVG_MESSAGE = "SVG files can't be used as a logo. Choose a PNG or JPEG, up to 1 MB.";
-/** R44 new-customer L1: the reason before the wait (tooManyTriesResponse); the limit is per person, across every workspace they own. */
-export const LOGO_LIMIT_REASON = `You've changed a logo ${LOGO_CHANGES_PER_HOUR} times this hour, counted across all your workspaces.`;
+/** R44 new-customer L1: the reason before the wait (tooManyTriesResponse); the limit is per person, across every workspace they own. R45 security L2: every try counts, failed ones too, so it says tries. */
+export const LOGO_LIMIT_REASON = `You've tried to change a logo ${LOGO_CHANGES_PER_HOUR} times this hour, counted across all your workspaces.`;
 export const LOGO_SAVE_FAILED_MESSAGE = "Couldn't save the logo. Nothing was changed. Try again.";
 export const LOGO_REMOVE_FAILED_MESSAGE = "Couldn't remove the logo. Nothing was changed. Try again.";
 /** R28 NN2: the change may have been made before the answer was lost, or before a gateway's 5xx. */
