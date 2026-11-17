@@ -12,8 +12,9 @@ import { captionFailedText } from "./bulk-post-row";
 describe("Add many: a caption refused by the limit", () => {
   it("passes the answer's wait to the row's sentence", () => {
     const source = readFileSync(join(__dirname, "bulk-posts-form.tsx"), "utf8");
-    expect(source).toContain(
-      'captionFailedText(response.ok ? null : response.status, data?.code, waitSecondsOf(data, response.headers.get("Retry-After")))',
+    // R45 pages-a L4: and the route's own sentence, for the daily limit.
+    expect(source.replace(/\s+/g, " ")).toContain(
+      'captionFailedText( response.ok ? null : response.status, data?.code, waitSecondsOf(data, response.headers.get("Retry-After")), data?.error, )',
     );
   });
 

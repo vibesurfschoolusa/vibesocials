@@ -60,17 +60,32 @@ export async function coverUploadFailedText(
 }
 
 /**
+ * R45 pages-a L4, L5: a route's own sentence after the page's lead-in ("No
+ * caption was written: …"), as Create says it; null when the answer carried
+ * no readable sentence. Used for the daily AI limit, whose sentence names
+ * whose budget ran out and the real wait.
+ */
+export function routeSentenceAfter(leadIn: string, routeError: unknown): string | null {
+  if (typeof routeError !== "string" || !routeError.trim()) return null;
+  const sentence = routeError.trim();
+  return `${leadIn}: ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+}
+
+/**
  * Why Improve got no new caption, by the answer's status, the way
  * captionFailedText says it for a caption (`status` null: no answer at all).
  * The server's own text stays in the console.
  */
-export function improveFailedText(status: number | null, code: unknown, waitSeconds?: number): string {
+export function improveFailedText(status: number | null, code: unknown, waitSeconds?: number, routeError?: unknown): string {
   if (status === 401) return SIGNED_OUT_ERROR;
   // R31: a page for another workspace, or from before the release.
   const workspaceText = pageWorkspaceRefusalText(code);
   if (workspaceText) return workspaceText;
   if (status === 429 && code === "AI_WORKSPACE_DAILY_LIMIT") {
-    return "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.";
+    return (
+      routeSentenceAfter("The caption was not improved", routeError) ??
+      "The caption was not improved: the AI limit has been reached for now. Edit it yourself."
+    );
   }
   if (status === 429) {
     // R42 review: the limit's own wait (up to 15 minutes), in the routes' words, when the answer names it.
@@ -114,7 +129,7 @@ export async function requestImprovedCaption(
       // The server's own text stays in the console, as for a failed caption.
       console.error("[Add many] Improve failed", { status: response.status, code: data?.code, error: data?.error });
       const wait = waitSecondsOf(data, response.headers.get("Retry-After"));
-      return { ok: false, error: improveFailedText(response.ok ? null : response.status, data?.code, wait) };
+      return { ok: false, error: improveFailedText(response.ok ? null : response.status, data?.code, wait, data?.error) };
     }
     return { ok: true, caption: data.enhancedCaption };
   } catch (error: unknown) {

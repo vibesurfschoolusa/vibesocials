@@ -31,10 +31,23 @@ describe("Add many: a caption that failed", () => {
     );
   });
 
-  it("the daily limit: its own sentence", () => {
-    expect(captionFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).toBe(
-      "No caption was written: your workspace has reached today's AI limit. Write one yourself, or try again tomorrow.",
-    );
+  // R45 pages-a L4, L5: the route's own sentence says whose budget ran out and
+  // the real wait; Add many puts its lead-in before it, as Create does.
+  it("the daily limit: the route's own sentence after the lead-in, for either budget", async () => {
+    const { aiWorkspaceLimitResponse } = await import("@/lib/aiGuards");
+    for (const budget of ["workspace", "owner"] as const) {
+      const body = (await aiWorkspaceLimitResponse(3600, budget).json()) as { code: string; error: string };
+      const text = captionFailedText(429, body.code, 3600, body.error);
+      expect(text).toBe(`No caption was written: ${body.error.charAt(0).toLowerCase()}${body.error.slice(1)}`);
+    }
+  });
+
+  it("the daily limit with no readable sentence: a neutral one, naming no budget and no day", () => {
+    for (const error of [undefined, "", 42]) {
+      const text = captionFailedText(429, "AI_WORKSPACE_DAILY_LIMIT", undefined, error);
+      expect(text).toBe("No caption was written: the AI limit has been reached for now. Write one yourself.");
+      expect(text).not.toMatch(/workspace|owner|tomorrow|today/i);
+    }
   });
 
   it("file too large: its own sentence", () => {

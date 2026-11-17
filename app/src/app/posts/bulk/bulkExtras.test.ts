@@ -302,7 +302,7 @@ describe("Add many: why Improve failed", () => {
 
   it("maps each status to its own sentence", () => {
     expect(improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).toBe(
-      "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.",
+      "The caption was not improved: the AI limit has been reached for now. Edit it yourself.",
     );
     expect(improveFailedText(429, undefined)).toBe(
       "The caption was not improved: too many requests. Wait a few minutes, then try again.",
@@ -324,7 +324,8 @@ describe("Add many: why Improve failed", () => {
 
   it("requestImprovedCaption returns the mapped sentence and never a caption on failure", async () => {
     for (const [status, body, expected] of [
-      [429, { error: "x", code: "AI_WORKSPACE_DAILY_LIMIT" }, improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")],
+      [429, { error: "Your workspace has used its AI for now.", code: "AI_WORKSPACE_DAILY_LIMIT" }, "The caption was not improved: your workspace has used its AI for now."],
+      [429, { code: "AI_WORKSPACE_DAILY_LIMIT" }, improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")],
       [429, { error: "Too many tries. Wait 4 minutes, then try again.", retryAfterSeconds: 230 }, "The caption was not improved. Too many tries. Wait 4 minutes, then try again."],
       [429, { error: "unreadable" }, improveFailedText(429, undefined)],
       [403, { error: "Paused", code: "WORKSPACE_PAUSED" }, improveFailedText(403, "WORKSPACE_PAUSED")],
@@ -336,6 +337,21 @@ describe("Add many: why Improve failed", () => {
       // Not ok: the form keeps the caption it has (it only replaces on ok).
       expect(result).toEqual({ ok: false, error: expected });
     }
+  });
+
+  // R45 pages-a L4, L5: the route's sentence names whose budget ran out and the wait.
+  it("the daily limit: the route's own sentence after the lead-in, for either budget", async () => {
+    const { aiWorkspaceLimitResponse } = await import("@/lib/aiGuards");
+    for (const budget of ["workspace", "owner"] as const) {
+      const limit = aiWorkspaceLimitResponse(3600, budget);
+      const body = (await limit.clone().json()) as { error: string };
+      const result = await requestImprovedCaption("Keep me", "ws-1", vi.fn(async () => limit) as unknown as typeof fetch);
+      expect(result).toEqual({
+        ok: false,
+        error: `The caption was not improved: ${body.error.charAt(0).toLowerCase()}${body.error.slice(1)}`,
+      });
+    }
+    expect(improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).not.toMatch(/workspace|owner|tomorrow|today/i);
   });
 
   it("no sentence has brackets", () => {

@@ -627,7 +627,12 @@ export function BulkPostsForm({
           captionStatus: "failed",
           captionOverwrite: false,
           // R42 review: the limit's own wait, from the body, else Retry-After.
-          captionError: captionFailedText(response.ok ? null : response.status, data?.code, waitSecondsOf(data, response.headers.get("Retry-After"))),
+          captionError: captionFailedText(
+            response.ok ? null : response.status,
+            data?.code,
+            waitSecondsOf(data, response.headers.get("Retry-After")),
+            data?.error,
+          ),
         });
         return;
       }
