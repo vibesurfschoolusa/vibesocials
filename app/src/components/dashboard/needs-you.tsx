@@ -37,22 +37,26 @@ const ICONS: Record<NeedsYouRowKind, LucideIcon> = {
 };
 
 /**
- * The dashboard's "Needs you" card (N1). Mounted only once the dashboard's
- * connections fetch has finished, so `hasGoogleListing` is settled on mount:
- * both fetches run once per visit and are never polled. The reviews call
+ * The dashboard's "Needs you" card (N1). Mounted once the dashboard's
+ * connections fetch has finished; if it failed, a Retry may bring the Google
+ * listing later, and the reviews call starts then. Both fetches run at most
+ * once per visit and are never polled. The reviews call
  * reaches Google, which is why it has no retry; any failure there just leaves
  * its row out. Both send the workspace the page was drawn for (R32), so a
  * tab left on it after another tab switched gets nothing, not the other's counts.
  */
 export function NeedsYou({
   workspaceId,
-  hasGoogleListing: googleOnMount,
+  hasGoogleListing: googleNow,
 }: {
   workspaceId: string | null;
   hasGoogleListing: boolean;
 }) {
-  // Read once: a later connections reload must not start a second Google call.
-  const [hasGoogleListing] = useState(googleOnMount);
+  // Latched: true from the first render that has the listing (at mount, or after
+  // the Connections card's Retry, R35 new-customer L2), never false again, so a
+  // later connections reload starts no second Google call.
+  const [hasGoogleListing, setHasGoogleListing] = useState(googleNow);
+  if (googleNow && !hasGoogleListing) setHasGoogleListing(true);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [failed, setFailed] = useState(false);
   const [reviews, setReviews] = useState<number | null>(null);
