@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { limitUncheckedResponse } from "@/lib/limitUnchecked";
+import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { followEmailChangeInStripe } from "@/server/billing/customerEmail";
 
@@ -61,16 +61,8 @@ class ChangedAgain extends Error {}
 export async function POST(request: Request) {
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
   const rateLimit = await checkRateLimit({ userId: `ip:${ip}`, ...RATE_LIMIT, failClosed: true });
-  if (rateLimit.unavailable) return limitUncheckedResponse();
-  if (!rateLimit.allowed) {
-    return NextResponse.json(
-      {
-        error: "This network has tried too many links in the last few minutes. Wait 15 minutes, then try again.",
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) } },
-    );
-  }
+  // R43 security L3: a fixed window, so the refusal names the wait it has left.
+  if (!rateLimit.allowed) return tooManyTriesResponse(rateLimit);
 
   const body = await readJsonObject(request);
   if (!body) {

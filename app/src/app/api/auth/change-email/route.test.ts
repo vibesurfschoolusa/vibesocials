@@ -100,6 +100,19 @@ describe("POST /api/auth/change-email", () => {
     expect((await POST(request(GOOD))).status).toBe(401);
   });
 
+  // R43 security L3: a fixed window, so the refusal says the wait it has left.
+  it("over the limit with a few seconds left: says a minute, with Retry-After", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 8 });
+    const response = await POST(request(GOOD));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("8");
+    await expect(response.json()).resolves.toEqual({
+      error: "Too many tries. Wait a minute, then try again.",
+      retryAfterSeconds: 8,
+    });
+    expect(requestCreateMock).not.toHaveBeenCalled();
+  });
+
   it("is rate limited per person and fails closed", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
     const response = await POST(request(GOOD));
