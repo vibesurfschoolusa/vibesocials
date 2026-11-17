@@ -11,6 +11,7 @@ import {
   connectLinkPlatformConfigured,
   describeConnectLinkResult,
 } from "@/lib/connectLink";
+import { connectAgainSentence } from "@/lib/clientLinkLimit";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
 import { SAME_END_PARAM, sameEndDateMessage } from "@/lib/connectionExpiry";
 import { prisma } from "@/lib/db";
@@ -140,7 +141,19 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
     outcome.get("success") === "google_business_profile_connected" &&
     first(query[LOCATION_CLEARED_PARAM]) !== null &&
     !working?.locationName;
-  const result = locationCleared
+  // R45 pages-a L7: a Connect press a limit refused comes back with its wait;
+  // the platform is named only when it is one, so typed text is never shown.
+  const limitedValue = first(query.platform);
+  const limitedPlatform = PLATFORM_ORDER.find((platform) => platform === limitedValue) ?? null;
+  const limitSentence = connectAgainSentence(
+    outcome.get("error"),
+    first(query.wait),
+    (limitedPlatform && signInButton(shownControl(byPlatform.get(limitedPlatform)))) || "Connect",
+    limitedPlatform ? PLATFORM_LABELS[limitedPlatform] : null,
+  );
+  const result = limitSentence
+    ? { variant: "danger" as const, message: limitSentence }
+    : locationCleared
     ? { variant: "success" as const, message: LOCATION_CLEARED_LINK_MESSAGE }
     : sameEnd?.expiresAt && working
       ? { variant: "warning" as const, message: sameEndDateMessage(working.platform) }

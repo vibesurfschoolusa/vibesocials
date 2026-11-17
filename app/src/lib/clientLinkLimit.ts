@@ -8,6 +8,7 @@
  * that does.
  */
 
+import { CONNECT_LINK_USED_TOO_OFTEN_REASON } from "./connectLink";
 import { REVIEW_LINK_DAILY_LIMIT_MESSAGE, REVIEW_LINK_DAILY_LIMIT_REASON } from "./reviewLink";
 
 /** The routes' reason; their own 429 sentences start with it (tested). */
@@ -70,6 +71,36 @@ export function dailyLimitSentence(waitSeconds: number | undefined): string {
   const hours = Math.ceil(waitSeconds / 3600);
   const wait = waitSeconds < 3600 ? minutesText(waitSeconds) : hours === 1 ? "1 hour" : `${hours} hours`;
   return `${REVIEW_LINK_DAILY_LIMIT_REASON} Reload this page in ${wait}.`;
+}
+
+/** The codes the /c start route sends the visitor back with when a limit refuses a press. */
+export const CONNECT_LIMIT_CODES = { network: "rate_limited", link: "used_too_often" } as const;
+
+/**
+ * R45 pages-a L7: the sentence on /c after the start route refused a Connect
+ * press for a limit (a plain form post, so it comes back with `?error=` and
+ * `?wait=` in the address). The wait is typed text: anything but whole seconds
+ * from 1 to the hour the limits count is "up to an hour". `button` is the
+ * row's own; `platform` its label, or null when the press named none. Null for
+ * any other code.
+ */
+export function connectAgainSentence(
+  code: string | null,
+  wait: string | null,
+  button: string,
+  platform: string | null,
+): string | null {
+  const reason =
+    code === CONNECT_LIMIT_CODES.network
+      ? CLIENT_LINK_LIMIT_REASON
+      : code === CONNECT_LIMIT_CODES.link
+        ? CONNECT_LINK_USED_TOO_OFTEN_REASON
+        : null;
+  if (!reason) return null;
+  const seconds = wait !== null && /^\d{1,5}$/.test(wait) ? Number(wait) : 0;
+  const waitText =
+    seconds > 0 && seconds <= CLIENT_LINK_LIMIT_WINDOW_SECONDS ? `Wait ${minutesText(seconds)}` : "Wait up to an hour";
+  return `${reason} ${waitText}, then press ${button}${platform ? ` beside ${platform}` : ""} again.`;
 }
 
 /** The wait a 429 names: the body's `retryAfterSeconds`, else the Retry-After header. */

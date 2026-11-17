@@ -146,12 +146,23 @@ describe("only a deliberate press on our own page starts a flow", () => {
     expect(res.status).toBe(303);
   });
 
-  it("is rate limited per network, with the network sentence", async () => {
+  // R45 pages-a L7: a plain form post, so the refusal goes back to /c with the wait, not to a text page.
+  it("is rate limited per network: back to the page with the code, the wait and the platform", async () => {
     h.rateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     const res = await press("tiktok");
-    expect(res.status).toBe(429);
-    expect(await res.text()).toBe("Too many requests from this network in the last hour. Try again later.");
+    expect(res.status).toBe(303);
+    const to = location(res);
+    expect(`${to.origin}${to.pathname}`).toBe(`${ORIGIN}/c/${TOKEN}`);
+    expect(Object.fromEntries(to.searchParams)).toEqual({ error: "rate_limited", wait: "60", platform: "tiktok" });
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(h.linkFind).not.toHaveBeenCalled();
     expect(h.rateLimit.mock.calls[0][0]).toMatchObject({ route: "connect-link/start", failClosed: true });
+  });
+
+  it("a refused press naming no platform comes back without one", async () => {
+    h.rateLimit.mockResolvedValue({ allowed: false });
+    const to = location(await press("myspace"));
+    expect(Object.fromEntries(to.searchParams)).toEqual({ error: "rate_limited", wait: "60" });
   });
 });
 
@@ -334,16 +345,16 @@ describe("the per-link start limit", () => {
     expect(h.rateLimit.mock.calls[1][0]).toMatchObject({ limit: 60, windowMs: 60 * 60 * 1000, failClosed: true });
   });
 
-  it("over the link's cap from a fresh network: 429 with the link's own sentence, nothing sent to a platform, no cookie", async () => {
+  it("over the link's cap from a fresh network: back to the page with the link's own code, nothing sent to a platform, no cookie", async () => {
     const fetchMock = vi.fn(async () => new Response("oauth_token=t&oauth_token_secret=s"));
     vi.stubGlobal("fetch", fetchMock);
     limitOnly(({ route }) => route === LINK_ROUTE);
 
     const res = await press("x", { "sec-fetch-site": "same-origin", "x-forwarded-for": "203.0.113.9" });
 
-    expect(res.status).toBe(429);
-    expect(await res.text()).toBe("This link was used too many times in the last hour. Try again later.");
-    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.status).toBe(303);
+    expect(location(res).pathname).toBe(`/c/${TOKEN}`);
+    expect(Object.fromEntries(location(res).searchParams)).toEqual({ error: "used_too_often", wait: "120", platform: "x" });
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(h.handshakeCreate).not.toHaveBeenCalled();

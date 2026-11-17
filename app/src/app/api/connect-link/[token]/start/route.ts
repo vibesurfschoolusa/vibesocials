@@ -2,11 +2,10 @@ import { randomBytes } from "crypto";
 
 import { NextResponse } from "next/server";
 
+import { CONNECT_LIMIT_CODES } from "@/lib/clientLinkLimit";
 import {
-  CONNECT_LINK_RATE_LIMIT_MESSAGE,
   CONNECT_LINK_STARTS_PER_HOUR,
   CONNECT_LINK_STARTS_PER_LINK_PER_HOUR,
-  CONNECT_LINK_USED_TOO_OFTEN_MESSAGE,
   alreadyConnectedCode,
   connectFailedCode,
   isConnectLinkTokenShape,
@@ -42,11 +41,23 @@ function backToPage(request: Request, token: string, error?: string): NextRespon
   return NextResponse.redirect(url, 303);
 }
 
-function tooMany(retryAfterSeconds: number | undefined, message = CONNECT_LINK_RATE_LIMIT_MESSAGE): NextResponse {
-  return new NextResponse(message, {
-    status: 429,
-    headers: { "content-type": "text/plain; charset=utf-8", "Retry-After": String(retryAfterSeconds ?? 60) },
-  });
+/**
+ * R45 pages-a L7: a limit's refusal goes back to the page, as every other
+ * outcome does; a plain form post would otherwise leave /c for a bare text
+ * page. The page builds the sentence from the code, the wait and the platform.
+ */
+function tooMany(
+  request: Request,
+  token: string,
+  code: (typeof CONNECT_LIMIT_CODES)[keyof typeof CONNECT_LIMIT_CODES],
+  retryAfterSeconds: number | undefined,
+  platform: FormDataEntryValue | null,
+): NextResponse {
+  const url = new URL(`/c/${encodeURIComponent(token)}`, appOrigin(request));
+  url.searchParams.set("error", code);
+  url.searchParams.set("wait", String(retryAfterSeconds ?? 60));
+  if (isPlatform(platform)) url.searchParams.set("platform", platform);
+  return NextResponse.redirect(url, 303);
 }
 
 /** R38 new-customer L1: a limit that couldn't be checked, in this form's plain-text shape. */
@@ -65,6 +76,14 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     });
   }
 
+  const { token } = await context.params;
+  let platformValue: FormDataEntryValue | null = null;
+  try {
+    platformValue = (await request.formData()).get("platform");
+  } catch {
+    platformValue = null;
+  }
+
   const limit = await checkRateLimit({
     userId: `ip:${requestIp(request)}`,
     route: "connect-link/start",
@@ -73,18 +92,12 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     failClosed: true,
   });
   if (limit.unavailable) return unchecked();
-  if (!limit.allowed) return tooMany(limit.retryAfterSeconds);
-
-  const { token } = await context.params;
-  if (!isConnectLinkTokenShape(token)) {
-    return new NextResponse("Not found", { status: 404 });
+  if (!limit.allowed) {
+    return tooMany(request, token, CONNECT_LIMIT_CODES.network, limit.retryAfterSeconds, platformValue);
   }
 
-  let platformValue: FormDataEntryValue | null = null;
-  try {
-    platformValue = (await request.formData()).get("platform");
-  } catch {
-    platformValue = null;
+  if (!isConnectLinkTokenShape(token)) {
+    return new NextResponse("Not found", { status: 404 });
   }
 
   try {
@@ -102,7 +115,9 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
       failClosed: true,
     });
     if (linkLimit.unavailable) return unchecked();
-    if (!linkLimit.allowed) return tooMany(linkLimit.retryAfterSeconds, CONNECT_LINK_USED_TOO_OFTEN_MESSAGE);
+    if (!linkLimit.allowed) {
+      return tooMany(request, token, CONNECT_LIMIT_CODES.link, linkLimit.retryAfterSeconds, platformValue);
+    }
 
     if (!isPlatform(platformValue)) return backToPage(request, token, "connect_failed");
     const platform = platformValue;

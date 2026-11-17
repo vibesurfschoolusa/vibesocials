@@ -304,6 +304,31 @@ describe("the connect link page", () => {
     });
   });
 
+  // R45 pages-a L7: a refused Connect press comes back here with its wait.
+  it("a refused press: the wait and the row's button, announced", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "tiktok", accountIdentifier: "open-1", username: "Surf TT", locationName: null, needsReconnect: true },
+    ]);
+    const html = await render({ error: "rate_limited", wait: "1500", platform: "facebook_page" });
+    expect(html).toMatch(
+      /role="alert"[^>]*>[\s\S]*?Too many requests from this network in the last hour\. Wait 25 minutes, then press Connect beside Facebook Page again\./,
+    );
+    const reconnect = await render({ error: "rate_limited", wait: "60", platform: "tiktok" });
+    expect(reconnect).toContain("Wait 1 minute, then press Reconnect beside TikTok again.");
+  });
+
+  it("the link's own limit: its own sentence", async () => {
+    const html = await render({ error: "used_too_often", wait: "120", platform: "x" });
+    expect(html).toContain("This link was used too many times in the last hour. Wait 2 minutes, then press Connect beside X again.");
+    expect(html).toContain('role="alert"');
+  });
+
+  it.each([{}, { wait: "soon" }, { wait: "999999" }])("a missing or garbage wait %o: a plain sentence", async (wait) => {
+    const html = await render({ error: "rate_limited", platform: "nonsense", ...wait });
+    expect(html).toContain("Too many requests from this network in the last hour. Wait up to an hour, then press Connect again.");
+    expect(html).not.toContain("nonsense");
+  });
+
   it("says nothing of the workspace's ids", async () => {
     const html = await render();
     expect(html).not.toContain("ws-1");

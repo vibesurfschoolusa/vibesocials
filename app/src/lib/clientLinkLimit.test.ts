@@ -6,6 +6,7 @@ import { PENDING_CONNECTION_TTL_MS } from "@/server/connections/pendingConnectio
 
 import {
   CLIENT_LINK_LIMIT_REASON,
+  connectAgainSentence,
   dailyLimitSentence,
   limitReachedSentence,
   limitWaitSeconds,
@@ -104,5 +105,41 @@ describe("limitWaitSeconds", () => {
     expect(limitWaitSeconds(headed, null)).toBe(60);
     expect(limitWaitSeconds(new Response(null, { status: 429 }), {})).toBeUndefined();
     expect(limitWaitSeconds(new Response(null, { status: 429, headers: { "Retry-After": "soon" } }), {})).toBeUndefined();
+  });
+});
+
+// R45 pages-a L7: a Connect press the start route refused comes back to /c
+// with the wait in the address, so the sentence is built from a typed value.
+describe("connectAgainSentence", () => {
+  it("the network limit: the wait, rounded up, and the button beside the platform", () => {
+    expect(connectAgainSentence("rate_limited", "1500", "Connect", "Facebook Page")).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 25 minutes, then press Connect beside Facebook Page again.`,
+    );
+    expect(connectAgainSentence("rate_limited", "20", "Reconnect", "TikTok")).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 1 minute, then press Reconnect beside TikTok again.`,
+    );
+  });
+
+  it("the link's own limit has its own reason", () => {
+    expect(connectAgainSentence("used_too_often", "120", "Connect", "X")).toBe(
+      "This link was used too many times in the last hour. Wait 2 minutes, then press Connect beside X again.",
+    );
+  });
+
+  it("no platform: the button alone", () => {
+    expect(connectAgainSentence("rate_limited", "60", "Connect", null)).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 1 minute, then press Connect again.`,
+    );
+  });
+
+  it.each([null, "", "soon", "-5", "0", "12.5e9", "3601", "Infinity"])("a wait of %j: at most the hour the limit counts", (wait) => {
+    expect(connectAgainSentence("rate_limited", wait, "Connect", "X")).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait up to an hour, then press Connect beside X again.`,
+    );
+  });
+
+  it("any other code: no sentence", () => {
+    expect(connectAgainSentence("tiktok_cancelled", "60", "Connect", "TikTok")).toBeNull();
+    expect(connectAgainSentence(null, "60", "Connect", "TikTok")).toBeNull();
   });
 });

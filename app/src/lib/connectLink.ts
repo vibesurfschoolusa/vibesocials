@@ -62,9 +62,12 @@ export const CONNECT_LINK_RATE_LIMIT_REASON = "Too many requests from this netwo
 
 export const CONNECT_LINK_RATE_LIMIT_MESSAGE = `${CONNECT_LINK_RATE_LIMIT_REASON} Try again later.`;
 
-/** The per-link limit can refuse a visitor on a fresh network, so it names the link, not the network. */
-export const CONNECT_LINK_USED_TOO_OFTEN_MESSAGE =
-  "This link was used too many times in the last hour. Try again later.";
+/**
+ * The per-link limit can refuse a visitor on a fresh network, so it names the
+ * link, not the network. R45 pages-a L7: the reason only; the /c page adds the
+ * wait (clientLinkLimit connectAgainSentence).
+ */
+export const CONNECT_LINK_USED_TOO_OFTEN_REASON = "This link was used too many times in the last hour.";
 
 export const CONNECT_LINK_PLATFORMS_REQUIRED_MESSAGE = "Choose at least one platform the link offers.";
 
