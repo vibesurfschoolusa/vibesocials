@@ -123,7 +123,7 @@ const rows: Row[] = [
     passFirst: 1,
     call: () => forgotPassword.POST(json("/api/auth/forgot-password", { email: "a@example.com" })),
   },
-  { name: "register", call: () => register.POST(json("/api/auth/register", { email: "a@example.com", password: "pw" })) },
+  { name: "register", call: () => register.POST(json("/api/auth/register", { email: "a@example.com", password: "goodpassword" })) },
   { name: "reset-password", call: () => resetPassword.POST(json("/api/auth/reset-password", { token: "t", password: "pw" })) },
   { name: "verify-email", call: () => verifyEmail.POST(json("/api/auth/verify-email", { token: "t" })) },
   { name: "billing/checkout", call: () => checkout.POST(json("/api/billing/checkout", { workspaceId: "ws-1", plan: "starter" })) },
@@ -245,13 +245,24 @@ describe("a fail-closed limit that couldn't be checked", () => {
     await expect(response.text()).resolves.toBe(LIMIT_UNCHECKED_MESSAGE);
   });
 
-  it.each([...rows, ...textRows].map((row) => [row.name, row] as const))(
+  it.each(rows.map((row) => [row.name, row] as const))(
     "%s: a real limit still answers its own 429",
     async (_name, row) => {
       limitReturns(row.passFirst ?? 0, LIMITED);
       const response = await row.call();
       expect(response.status).toBe(429);
       expect(await response.text()).not.toContain(LIMIT_UNCHECKED_MESSAGE);
+    },
+  );
+
+  // R45 pages-a L7: the start form's real limit goes back to /c with its wait.
+  it.each(textRows.map((row) => [row.name, row] as const))(
+    "%s: a real limit goes back to the page with its own code",
+    async (_name, row) => {
+      limitReturns(row.passFirst ?? 0, LIMITED);
+      const response = await row.call();
+      expect(response.status).toBe(303);
+      expect(new URL(response.headers.get("location") as string).searchParams.get("error")).toMatch(/^(rate_limited|used_too_often)$/);
     },
   );
 });

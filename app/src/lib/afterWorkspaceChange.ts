@@ -53,6 +53,9 @@ export const ONE_TIME_PARAMS: readonly string[] = [
   "media",
   // R27: Print card's page workspace; after a switch the card is the new workspace's.
   "workspaceId",
+  // R45 pages-a L7: /c's limit refusal; they go with its ?error=.
+  "wait",
+  "platform",
 ];
 
 /**
