@@ -88,6 +88,8 @@ import {
   captionThenDescribe,
   coverUploadFailedText,
   describePhotoOnce,
+  rowAiRequests,
+  type RowAiRequest,
   initialBulkGoogleMetadata,
   readAiCaptionsChoice,
   readVideoDuration,
@@ -410,6 +412,9 @@ export function BulkPostsForm({
   const [deselected, setDeselected] = useState<Set<Platform>>(new Set());
   const selectedPlatforms = offeredPlatforms.filter((platform) => !deselected.has(platform));
 
+  // R41 publishing L1, L2: each row's running AI requests, so typing in a box lets its own go.
+  const [rowRequests] = useState(rowAiRequests);
+
   function updateRows(change: (rows: BulkRow[]) => BulkRow[]) {
     const next = change(rowsRef.current);
     rowsRef.current = next;
@@ -542,11 +547,17 @@ export function BulkPostsForm({
     if (!row?.blob) return;
     const blob = row.blob;
     updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
+    // R41 publishing L1: typing in the box lets this go (onCaptionChange).
+    const request = rowRequests.start(id, "caption");
     try {
       const frames = await readRowMedia(id, row, blob);
+      if (!request.live()) return;
       // R39 publishing L1, R40 L2: turned off, or the row removed, during the
       // frame grab: nothing is sent (updating a removed row changes nothing).
-      if (!automaticRequestMayGo(aiCaptionsRef, rowsRef.current.some((r) => r.id === id))) {
+      // R41 publishing L1: nor for a box with typed text, unless Write again.
+      const now = rowsRef.current.find((r) => r.id === id);
+      const box = now && { text: now.caption, overwrite: now.captionOverwrite };
+      if (!automaticRequestMayGo(aiCaptionsRef, now !== undefined, box)) {
         updateRow(id, { captionStatus: "done", captionOverwrite: false });
         return;
       }
@@ -554,12 +565,14 @@ export function BulkPostsForm({
       // other rows' latest captions go with it and this one does not repeat them.
       const response = await fetchOrNoAnswer("/api/posts/auto-caption", {
         method: "POST",
+        signal: request.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(autoCaptionRequestBody(rowsRef.current, id, blob, frames, workspaceId)),
       });
       const data = (await response.json().catch(() => null)) as
         | { caption?: unknown; error?: unknown; code?: unknown }
         | null;
+      if (!request.live()) return;
       if (!response.ok || typeof data?.caption !== "string" || !data.caption.trim()) {
         console.error("[Add many] Caption failed", { status: response.status, code: data?.code, error: data?.error });
         updateRow(id, {
@@ -577,6 +590,8 @@ export function BulkPostsForm({
         caption: current.captionOverwrite || !current.caption.trim() ? caption : current.caption,
       }));
     } catch (error: unknown) {
+      // Let go by typing: the person's text stands, and there is nothing to say.
+      if (!request.live()) return;
       console.error("[Add many] Caption failed", error);
       updateRow(id, {
         captionStatus: "failed",
@@ -584,19 +599,39 @@ export function BulkPostsForm({
         // No answer: the AI may have written one that isn't shown. Reading the file's frames: plain sentence.
         captionError: isNoAnswer(error) ? BULK_CAPTION_LOST_TEXT : captionFailedText(null, undefined),
       });
+    } finally {
+      request.end();
     }
   }
 
   // A photo's description, right after its first caption whatever came of it:
   // one AI call per photo from the computer per batch (Write again does not ask
   // again). Optional, so a failure leaves the field empty and says nothing.
+  // R41 publishing L1: a description already typed asks nothing; typing during
+  // the call lets it go (onAltTextChange), and the typed text stays.
   async function describeRow(id: string) {
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row?.blob) return;
+    if (!automaticRequestMayGo(aiCaptionsRef, true, { text: row.altText })) {
+      updateRow(id, { altTextAsked: true });
+      return;
+    }
     updateRow(id, { altTextAsked: true, altTextWriting: true });
-    const text = await describePhotoOnce(row.blob, workspaceId);
-    // Never replace what the user typed meanwhile.
-    updateRow(id, (current) => ({ altTextWriting: false, altText: current.altText.trim() ? current.altText : text }));
+    const request = rowRequests.start(id, "altText");
+    const text = await describePhotoOnce(row.blob, workspaceId, undefined, request.signal);
+    request.end();
+    describedAs(id, row.altText, text, request);
+  }
+
+  // R41 L1 (= publishing L2): a description answer is written only while the
+  // field reads as it did at the press. One let go (typing, or a newer press)
+  // changes nothing: whatever let it go already ended the row's wait.
+  function describedAs(id: string, atPress: string, text: string, request: RowAiRequest) {
+    if (!request.live()) return;
+    updateRow(id, (current) => ({
+      altTextWriting: false,
+      ...(text && current.altText === atPress ? { altText: text } : {}),
+    }));
   }
 
   // A Media photo's "Write it for me": one AI call per press, as on Create, and
@@ -605,14 +640,19 @@ export function BulkPostsForm({
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row?.blob || row.altTextWriting) return;
     updateRow(id, { altTextWriting: true, altTextError: null });
+    // R41 L1: typing in the field lets it go (onAltTextChange), and the typed text stays.
+    const request = rowRequests.start(id, "altText");
     try {
-      const text = await requestPhotoDescription(row.blob, workspaceId);
-      updateRow(id, { altTextWriting: false, altText: text });
+      const text = await requestPhotoDescription(row.blob, workspaceId, undefined, request.signal);
+      describedAs(id, row.altText, text, request);
     } catch (error: unknown) {
+      if (!request.live()) return;
       updateRow(id, {
         altTextWriting: false,
         altTextError: error instanceof Error && error.message ? error.message : "The AI couldn't describe this photo.",
       });
+    } finally {
+      request.end();
     }
   }
 
@@ -1229,9 +1269,21 @@ export function BulkPostsForm({
               onSendAgain={() => sendAgain(row.id)}
               onCaptionChange={(caption) => {
                 if (captionLocked(row)) return;
-                updateRow(row.id, { caption, sendError: null, improveError: null });
+                // R41 publishing L1: typed text is never replaced by the
+                // automatic caption, so its request goes and the row stops waiting.
+                const letGo = caption.trim() !== "" && rowRequests.letGo(row.id, "caption");
+                updateRow(row.id, {
+                  caption,
+                  sendError: null,
+                  improveError: null,
+                  ...(letGo ? { captionStatus: "done" as const, captionOverwrite: false } : {}),
+                });
               }}
-              onAltTextChange={(altText) => updateRow(row.id, { altText, altTextError: null })}
+              onAltTextChange={(altText) => {
+                // R41 L1: an edit lets the description request go; the typed text stays.
+                const letGo = rowRequests.letGo(row.id, "altText");
+                updateRow(row.id, { altText, altTextError: null, ...(letGo ? { altTextWriting: false } : {}) });
+              }}
               onImprove={() => void improveRow(row.id)}
               onWriteDescription={() => void writeDescription(row.id)}
               onCoverOpenChange={(open) => setCoverOpenId(open ? row.id : null)}

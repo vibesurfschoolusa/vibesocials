@@ -25,6 +25,8 @@ import {
   siblingCaptions,
   wantsAltText,
   type BulkBodyRow,
+  automaticRequestMayGo,
+  rowAiRequests,
 } from "./bulkExtras";
 
 const BLOB = { url: "https://blob.example/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 10 };
@@ -580,5 +582,45 @@ describe("Add many: a page for another workspace", () => {
       error: "You switched workspace in another tab. Reload this page, then try again.",
     });
     expect(improveFailedText(400, "MISSING_WORKSPACE_ID")).toBe("This page is out of date. Reload it, then try again.");
+  });
+});
+
+describe("R41 publishing L1: an automatic request reads the box it writes into", () => {
+  const on = { current: true };
+  it("an empty box, or Write again over text: it goes", () => {
+    expect(automaticRequestMayGo(on, true, { text: "" })).toBe(true);
+    expect(automaticRequestMayGo(on, true, { text: "  " })).toBe(true);
+    expect(automaticRequestMayGo(on, true, { text: "Typed", overwrite: true })).toBe(true);
+  });
+  it("typed text without Write again: nothing is asked", () => {
+    expect(automaticRequestMayGo(on, true, { text: "Typed" })).toBe(false);
+    expect(automaticRequestMayGo(on, true, { text: "Typed", overwrite: false })).toBe(false);
+  });
+  it("no box given: only the switch and the media decide, as on Create", () => {
+    expect(automaticRequestMayGo(on, true)).toBe(true);
+    expect(automaticRequestMayGo({ current: false }, true)).toBe(false);
+    expect(automaticRequestMayGo(on, false)).toBe(false);
+  });
+});
+
+describe("R41: rowAiRequests", () => {
+  it("letting a box go aborts its request; the other box keeps its own", () => {
+    const requests = rowAiRequests();
+    const caption = requests.start("r1", "caption");
+    const alt = requests.start("r1", "altText");
+    expect(requests.letGo("r1", "caption")).toBe(true);
+    expect(caption.live()).toBe(false);
+    expect(caption.signal.aborted).toBe(true);
+    expect(alt.live()).toBe(true);
+    expect(requests.letGo("r1", "caption")).toBe(false);
+  });
+  it("an ended request is not let go, and a new press lets the old one go", () => {
+    const requests = rowAiRequests();
+    const first = requests.start("r1", "altText");
+    const second = requests.start("r1", "altText");
+    expect(first.live()).toBe(false);
+    second.end();
+    expect(second.live()).toBe(true);
+    expect(requests.letGo("r1", "altText")).toBe(false);
   });
 });

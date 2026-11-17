@@ -115,7 +115,7 @@ describe("photo description typing", () => {
   it("clears the description error when the person types", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
-    expect(source).toContain("onAltTextChange={(altText) => updateRow(row.id, { altText, altTextError: null })}");
+    expect(source).toContain("updateRow(row.id, { altText, altTextError: null, ...(letGo ? { altTextWriting: false } : {}) });");
   });
 });
 

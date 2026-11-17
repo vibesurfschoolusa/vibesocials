@@ -47,6 +47,7 @@ vi.mock("@vercel/blob/client", () => ({
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
 import { BulkPostsForm } from "./bulk-posts-form";
+import { BULK_CAPTION_LOST_TEXT } from "./bulkExtras";
 
 let root: Root;
 let container: FakeNode;
@@ -55,13 +56,19 @@ type Sent = { kind: "caption" | "describe"; resolve: (body: unknown) => void };
 const calls: Sent["kind"][] = [];
 const sent: Sent[] = [];
 
-const fetchMock = vi.fn((input: unknown, init?: { body?: unknown }) => {
+// Each AI request's signal, in order, to see it aborted when let go.
+const signals: (AbortSignal | undefined)[] = [];
+
+const fetchMock = vi.fn((input: unknown, init?: { body?: unknown; signal?: AbortSignal }) => {
   const url = String(input);
   if (url === "/api/posts/auto-caption") {
     const body = JSON.parse(String(init?.body ?? "{}")) as { purpose?: string };
     const kind = body.purpose === "altText" ? "describe" : "caption";
     calls.push(kind);
-    return new Promise<Response>((resolve) => {
+    signals.push(init?.signal);
+    // As a browser's fetch: an aborted signal rejects it.
+    return new Promise<Response>((resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
       sent.push({ kind, resolve: (b) => resolve(Response.json(b)) });
     });
   }
@@ -141,6 +148,7 @@ beforeEach(async () => {
   });
   sent.length = 0;
   calls.length = 0;
+  signals.length = 0;
   uploads.pending.length = 0;
   frames.hold = false;
   frames.waiting.length = 0;
@@ -213,5 +221,121 @@ describe("R40 publishing L2: nothing is sent for a row that is gone", () => {
     expect(find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Remove")).toBeNull();
     await releaseFrames();
     expect(countOf("caption")).toBe(0);
+  });
+});
+
+describe("R41: Add many asks nothing for a box the person has typed in, and typing ends the row's wait", () => {
+  const idsStarting = (prefix: string) => {
+    const hits: string[] = [];
+    const walk = (n: FakeNode) => {
+      const id = String(n.attributes?.id ?? "");
+      if (id.startsWith(prefix)) hits.push(id);
+      n.childNodes.forEach(walk);
+    };
+    walk(container);
+    return hits;
+  };
+  const captionBoxes = () => idsStarting("bulk-caption-");
+  const altBoxes = () => idsStarting("bulk-alt-");
+  const typeInto = (id: string, value: string) => run(() => props(byId(id)).onChange({ target: { value } }));
+  const valueOf = (id: string) => String(byId(id).value ?? byId(id).defaultValue ?? "");
+  const scheduleAll = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Schedule all");
+    if (!hit) throw new Error("no Schedule all");
+    return hit;
+  };
+  const scheduleWaits = () => (props(scheduleAll()).disabled as unknown) === true;
+
+  it("a row whose caption and description were typed before its turn: no caption and no description request", async () => {
+    await pick(photo("a"), photo("b"));
+    const [, captionB] = captionBoxes();
+    const [, altB] = altBoxes();
+    await typeInto(captionB!, "Our own words for b");
+    await typeInto(altB!, "Board waxing on the sand");
+    await finishUploads();
+    await answerNext("caption", { caption: "Waves at sunrise" });
+    await answerNext("describe", { altText: "A wave." });
+    await finishUploads();
+    expect(countOf("caption")).toBe(1);
+    expect(countOf("describe")).toBe(1);
+    expect(valueOf(captionB!)).toBe("Our own words for b");
+    expect(valueOf(altB!)).toBe("Board waxing on the sand");
+    expect(scheduleWaits()).toBe(false);
+  });
+
+  it("typing in the caption during its call: the wait ends, the fetch is aborted, the text stays", async () => {
+    await pick(video());
+    await finishUploads();
+    expect(countOf("caption")).toBe(1);
+    expect(scheduleWaits()).toBe(true);
+    const [captionBox] = captionBoxes();
+    await typeInto(captionBox!, "My own caption");
+    expect(signals[0]?.aborted).toBe(true);
+    expect(scheduleWaits()).toBe(false);
+    expect(valueOf(captionBox!)).toBe("My own caption");
+    expect((container.textContent as string).includes(BULK_CAPTION_LOST_TEXT)).toBe(false);
+  });
+
+  it("typing in the description during its automatic call: the wait ends and the typed text stays", async () => {
+    await pick(photo("a"));
+    await finishUploads();
+    await answerNext("caption", { caption: "Waves at sunrise" });
+    expect(countOf("describe")).toBe(1);
+    expect(scheduleWaits()).toBe(true);
+    const [altBox] = altBoxes();
+    await typeInto(altBox!, "Board waxing on the sand");
+    expect(signals[1]?.aborted).toBe(true);
+    expect(scheduleWaits()).toBe(false);
+    expect(valueOf(altBox!)).toBe("Board waxing on the sand");
+  });
+
+  it("empty rows are unchanged: the caption and the description land", async () => {
+    await pick(photo("a"));
+    await finishUploads();
+    await answerNext("caption", { caption: "Waves at sunrise" });
+    await answerNext("describe", { altText: "A wave breaking." });
+    const [captionBox] = captionBoxes();
+    const [altBox] = altBoxes();
+    expect(valueOf(captionBox!)).toBe("Waves at sunrise");
+    expect(valueOf(altBox!)).toBe("A wave breaking.");
+    expect(scheduleWaits()).toBe(false);
+  });
+
+  it("a Media photo's Write it for me: typing ends the wait, and the typed text stays", async () => {
+    await act(async () => root.unmount());
+    root = createRoot(container as unknown as HTMLElement);
+    const item = {
+      id: "m1",
+      storageLocation: "https://blob.example/m1.jpg",
+      originalFilename: "m1.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 10,
+      baseCaption: "",
+      perPlatformOverrides: null,
+      createdAt: "2026-11-01T00:00:00.000Z",
+      lastUsedAt: null,
+    };
+    await act(async () => {
+      root.render(
+        createElement(
+          ToastProvider,
+          null,
+          createElement(BulkPostsForm, { workspaceId: "ws-1", initialMedia: [item as never] }),
+        ),
+      );
+    });
+    await settle();
+    await answerNext("caption", { caption: "Waves at sunrise" });
+    expect(scheduleWaits()).toBe(false);
+    const write = find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Write it for me");
+    if (!write) throw new Error("no Write it for me");
+    await run(() => props(write).onClick());
+    expect(countOf("describe")).toBe(1);
+    expect(scheduleWaits()).toBe(true);
+    const [altBox] = altBoxes();
+    await typeInto(altBox!, "Board waxing on the sand");
+    expect(signals[signals.length - 1]?.aborted).toBe(true);
+    expect(scheduleWaits()).toBe(false);
+    expect(valueOf(altBox!)).toBe("Board waxing on the sand");
   });
 });

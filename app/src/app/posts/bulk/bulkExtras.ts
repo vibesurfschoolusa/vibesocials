@@ -155,9 +155,63 @@ export function aiSwitchOn(aiSwitch: AiSwitch): boolean {
  * R40 publishing L2: the one check right before an automatic AI request's
  * fetch, on Create and in Add many: its switch is still on and the media it
  * is about is still there (not removed or replaced during the frame grab).
+ *
+ * R41 publishing L1: and, given the box it writes into (Add many's row), that
+ * its answer could still be written: the box is empty, or Write again was
+ * pressed (`overwrite`). Typed text is never replaced, so nothing is asked.
  */
-export function automaticRequestMayGo(aiSwitch: AiSwitch, mediaStillThere: boolean): boolean {
+export function automaticRequestMayGo(
+  aiSwitch: AiSwitch,
+  mediaStillThere: boolean,
+  box?: { text: string; overwrite?: boolean },
+): boolean {
+  if (box && box.text.trim() && box.overwrite !== true) return false;
   return mediaStillThere && aiSwitchOn(aiSwitch);
+}
+
+/** One AI request of an Add many row (rowAiRequests). */
+export interface RowAiRequest {
+  /** Aborts the fetch when the request is let go. */
+  signal: AbortSignal;
+  /** False once it was let go (the person typed in its box): write nothing, say nothing. */
+  live(): boolean;
+  /** The request ended. Safe to call twice. */
+  end(): void;
+}
+
+/**
+ * R41 publishing L1, L2: Add many's running AI requests, one per row and box
+ * ("caption" or "altText"). Typing in a box lets its request go at once, so
+ * the row stops waiting for an answer that would be dropped; a new request in
+ * the same box lets the old one go.
+ */
+export function rowAiRequests() {
+  const running = new Map<string, AbortController>();
+  const keyOf = (id: string, box: "caption" | "altText") => `${box}:${id}`;
+  return {
+    start(id: string, box: "caption" | "altText"): RowAiRequest {
+      const key = keyOf(id, box);
+      running.get(key)?.abort();
+      const controller = new AbortController();
+      running.set(key, controller);
+      return {
+        signal: controller.signal,
+        live: () => !controller.signal.aborted,
+        end: () => {
+          if (running.get(key) === controller) running.delete(key);
+        },
+      };
+    },
+    /** Lets go of that box's request; true when one was running. */
+    letGo(id: string, box: "caption" | "altText"): boolean {
+      const key = keyOf(id, box);
+      const controller = running.get(key);
+      if (!controller) return false;
+      running.delete(key);
+      controller.abort();
+      return true;
+    },
+  };
 }
 
 /**
@@ -201,11 +255,13 @@ export async function describePhotoOnce(
   blob: UploadedBlob,
   workspaceId: string | null,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<string> {
   try {
-    return await requestPhotoDescription(blob, workspaceId, fetchImpl);
+    return await requestPhotoDescription(blob, workspaceId, fetchImpl, signal);
   } catch (error: unknown) {
-    console.error("[Add many] Photo description failed", error);
+    // Let go by typing (R41): not a failure.
+    if (!signal?.aborted) console.error("[Add many] Photo description failed", error);
     return "";
   }
 }
