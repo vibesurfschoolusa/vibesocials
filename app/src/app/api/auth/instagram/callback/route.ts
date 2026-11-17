@@ -9,6 +9,7 @@ import { isWorkspaceOwner } from "@/lib/workspace";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
 import {
   fetchInstagramAccountDetails,
+  INSTAGRAM_DETAILS_BUDGET_MS,
   saveInstagramConnection,
 } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
@@ -170,14 +171,18 @@ async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null
     // Each account's username is read for the list; one Graph error leaves
     // that row showing just its Page name.
     if (pagesWithInstagram.length > 1) {
+      // R36 review low 3: one budget for all the reads, so many accounts on a
+      // slow Graph stay inside the function's time limit. Once it is spent no
+      // read starts and those in flight end; an unread account is listed by
+      // its Page name, and the choice reads its details when it is chosen.
+      const budget = AbortSignal.timeout(INSTAGRAM_DETAILS_BUDGET_MS);
       const accounts = await mapFewAtATime(
         pagesWithInstagram,
         INSTAGRAM_DETAILS_IN_FLIGHT,
         async ({ page, igAccountId }) => {
-          const details = await fetchInstagramAccountDetails(
-            igAccountId,
-            page.access_token,
-          ).catch(() => null);
+          const details = budget.aborted
+            ? null
+            : await fetchInstagramAccountDetails(igAccountId, page.access_token, budget);
           return {
             igAccountId,
             pageId: page.id,

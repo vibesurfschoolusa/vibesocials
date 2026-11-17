@@ -76,6 +76,8 @@ import { openSecret } from "@/lib/tokenCrypto";
 import { GET as facebookPageGET } from "./facebook_page/callback/route";
 import { GET as gbpGET } from "./google_business_profile/callback/route";
 import { GET as instagramGET } from "./instagram/callback/route";
+import { INSTAGRAM_DETAILS_BUDGET_MS } from "@/server/connections/saveConnection";
+import { connectPendingCandidate, type PendingConnectionPayload } from "@/server/connections/pendingConnection";
 import { GET as linkedinGET } from "./linkedin/callback/route";
 import { GET as pinterestGET } from "./pinterest/callback/route";
 import { GET as tiktokGET } from "./tiktok/callback/route";
@@ -907,6 +909,61 @@ describe("choosing which account to connect", () => {
       expect(accounts.map((a) => a.username)).toEqual(
         pages.map((p) => (p.instagram_business_account.id === "ig-7" ? null : `user-${p.instagram_business_account.id}`)),
       );
+    });
+
+    // R36 review low 3: 5 at a time at up to 15 s each, 100 or more accounts on
+    // a slow Graph passed the 300 s function limit. The reads share one budget;
+    // an account not read in time is listed by its Page name and read when chosen.
+    it("instagram: a slow Graph with many accounts stops at the 60-second budget, lists every account, and an unread one can be chosen", async () => {
+      expect(INSTAGRAM_DETAILS_BUDGET_MS).toBe(60_000);
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(NOW);
+      abortSignalTimeoutOnFakeClock();
+      const pages = Array.from({ length: 100 }, (_, i) => ({
+        id: `page-${i + 1}`,
+        name: `Page ${i + 1}`,
+        access_token: `t-${i + 1}`,
+        instagram_business_account: { id: `ig-${i + 1}` },
+      }));
+      const base = withPagedAccounts(instagramProvider([], {}), [pages]);
+      let slow = true;
+      fetchMock.mockImplementation((input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        const ig = /\/(ig-\d+)\?/.exec(url)?.[1];
+        if (!ig) return Promise.resolve(base(url));
+        if (!slow) return Promise.resolve(json({ username: `user-${ig}` }));
+        // Each read answers in 14 s, inside its own 15-second limit.
+        return new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(json({ username: `user-${ig}` })), 14_000);
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(init.signal?.reason);
+          });
+        });
+      });
+
+      const pending = instagramGET(callbackRequest("instagram", signedState()));
+      await vi.advanceTimersByTimeAsync(INSTAGRAM_DETAILS_BUDGET_MS);
+      const res = await pending;
+
+      expectChooseRedirect(res);
+      const opened = createdPending().opened as unknown as PendingConnectionPayload & { platform: "instagram" };
+      expect(opened.accounts.map((a) => a.igAccountId)).toEqual(pages.map((p) => p.instagram_business_account.id));
+      // 4 rounds of 5 fit in 60 s; every account is listed, the rest by Page name only.
+      expect(opened.accounts.filter((a) => a.username !== null)).toHaveLength(20);
+      const unread = opened.accounts[99];
+      expect(unread).toMatchObject({ igAccountId: "ig-100", pageName: "Page 100", username: null });
+
+      // Chosen later, the unread account's details are read then, and it connects.
+      slow = false;
+      const chosen = await connectPendingCandidate({ id: "pending-1", platform: "instagram", payload: opened }, "ig-100", {
+        userId: STATE_USER,
+        workspaceId: STATE_WORKSPACE,
+      });
+      expect(chosen).toEqual({ ok: true });
+      const created = createMock.mock.calls.at(-1)?.[0] as { data: { accountIdentifier: string; metadata: { username: string } } };
+      expect(created.data.accountIdentifier).toBe("ig-100");
+      expect(created.data.metadata.username).toBe("user-ig-100");
     });
 
     it("instagram: a second page that fails says the Pages couldn't be read, not that none has Instagram", async () => {
