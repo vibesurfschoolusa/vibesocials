@@ -117,7 +117,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     windowMs: 15 * 60 * 1000,
     failClosed: true,
   });
-  if (rateLimit.unavailable) return limitUncheckedResponse();
+  if (rateLimit.unavailable) {
+    // Remembered like the other refusals: upload() drops this body, and the
+    // page asks GET why (a store that is still down just leaves the page's fallback).
+    await recordUploadRefusal(user.id, "limit-unchecked");
+    return limitUncheckedResponse();
+  }
   if (!rateLimit.allowed) {
     return NextResponse.json(
       {

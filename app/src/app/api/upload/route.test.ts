@@ -55,6 +55,7 @@ import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE, COVER_IMAGE_TYPES } from "@/lib/videoCover";
 
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 
 import {
@@ -448,6 +449,16 @@ describe("a refused upload's sentence reaches the person", () => {
     expect(res.status).toBe(503);
     await expect(res.json()).resolves.toEqual({ error: "Uploads aren't available right now. Try again in a minute." });
     await expect(shown()).resolves.not.toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+  });
+
+  // R38 lead review: the upload limit's store couldn't answer. Create shows the
+  // shared couldn't-check sentence, not the generic "The upload was refused".
+  it("an upload limit that couldn't be checked: 503, remembered, and Create shows the couldn't-check sentence", async () => {
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: LIMIT_UNCHECKED_MESSAGE });
+    await expect(shown()).resolves.toBe(LIMIT_UNCHECKED_MESSAGE);
   });
 
   it("a later upload that is signed clears the reason, so a new failure is not blamed on the old one", async () => {

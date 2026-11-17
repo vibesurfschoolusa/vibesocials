@@ -1,5 +1,6 @@
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { prisma } from "@/lib/db";
+import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { COVER_IMAGE_RULE } from "@/lib/videoCover";
 import {
   MISSING_WORKSPACE_ID_CODE,
@@ -32,7 +33,8 @@ export type UploadRefusalReason =
   | "too-large"
   | "cover-too-large"
   | "workspace-changed"
-  | "workspace-missing";
+  | "workspace-missing"
+  | "limit-unchecked";
 
 const REASONS: Record<UploadRefusalReason, { number: number; error: string; code: string }> = {
   "out-of-date": { number: 1, error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE, code: "UPLOAD_PAGE_OUT_OF_DATE" },
@@ -43,6 +45,8 @@ const REASONS: Record<UploadRefusalReason, { number: number; error: string; code
   // R31: the page is for another workspace, or from before the release.
   "workspace-changed": { number: 6, error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE },
   "workspace-missing": { number: 7, error: MISSING_WORKSPACE_ID_MESSAGE, code: MISSING_WORKSPACE_ID_CODE },
+  // R38: the upload limit's store couldn't answer (lib/limitUnchecked.ts).
+  "limit-unchecked": { number: 8, error: LIMIT_UNCHECKED_MESSAGE, code: "UPLOAD_LIMIT_UNCHECKED" },
 };
 
 function refusalKey(userId: string): string {
