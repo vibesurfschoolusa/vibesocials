@@ -95,12 +95,13 @@ describe("sendOncePer", () => {
   });
 
   // Resend keeps an idempotency key 24 hours: past that, a reused key stops no second copy.
-  it("a window longer than a day: a throw keeps the claim, while none sent still lets it go", async () => {
+  it("a window longer than a day: a throw after a send started keeps the claim, while none sent still lets it go", async () => {
     const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) };
     await expect(
       sendOncePer(
         month,
-        async () => {
+        async (sendStarted) => {
+          sendStarted();
           throw new Error("network error");
         },
         onError,
@@ -111,6 +112,66 @@ describe("sendOncePer", () => {
 
     await expect(sendOncePer(month, async () => false, onError)).resolves.toBe("failed");
     expect(releaseMock).toHaveBeenCalledWith({ where: { key: month.key } });
+  });
+
+  // R39 lead review L1+L2: nothing can have gone before a send started, whatever the window.
+  it("a window longer than a day: a throw before any send started (a failed read) lets the claim go", async () => {
+    const month = { key: "some-email:2026-11", resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) };
+    await expect(
+      sendOncePer(
+        month,
+        async () => {
+          throw new Error("db blip");
+        },
+        onError,
+      ),
+    ).resolves.toBe("failed");
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: month.key } });
+  });
+
+  it("a short window: a throw after a send started still lets the claim go", async () => {
+    await expect(
+      sendOncePer(
+        HOUR,
+        async (sendStarted) => {
+          sendStarted();
+          throw new Error("network error");
+        },
+        onError,
+      ),
+    ).resolves.toBe("failed");
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: HOUR.key } });
+  });
+
+  // R39 lead review L3: within 24 hours each recipient's key already stops a second copy.
+  it("a store error on a short window with per-recipient keys: sends once, claims and lets go nothing", async () => {
+    const shortKeyed = { ...HOUR, resetAt: new Date(Date.now() + 30 * 60 * 1000), perRecipientKeys: true as const };
+    for (const store of [
+      () => consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true }),
+      () => consumeMock.mockRejectedValueOnce(new Error("store down")),
+    ]) {
+      store();
+      const send = vi.fn(async () => true);
+      await expect(sendOncePer(shortKeyed, send, onError)).resolves.toBe("sent");
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("a store error on a long window, or without per-recipient keys: nothing sent", async () => {
+    const longKeyed = {
+      key: "some-email:2026-11",
+      resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      perRecipientKeys: true as const,
+    };
+    const shortUnkeyed = { ...HOUR, resetAt: new Date(Date.now() + 30 * 60 * 1000) };
+    for (const window of [longKeyed, shortUnkeyed]) {
+      consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+      const send = vi.fn(async () => true);
+      await expect(sendOncePer(window, send, onError)).resolves.toBe("skipped");
+      expect(send).not.toHaveBeenCalled();
+    }
+    expect(releaseMock).not.toHaveBeenCalled();
   });
 
   it("already claimed: nothing sent", async () => {
@@ -144,6 +205,19 @@ describe("sendToEach", () => {
     );
     expect(sendOne).toHaveBeenCalledTimes(2);
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("says a send started before the first send", async () => {
+    const events: string[] = [];
+    await sendToEach(
+      ["a", "b"],
+      async (to) => {
+        events.push(to);
+        return true;
+      },
+      () => events.push("started"),
+    );
+    expect(events.slice(0, 2)).toEqual(["started", "a"]);
   });
 
   it("answers whether any went when none threw", async () => {

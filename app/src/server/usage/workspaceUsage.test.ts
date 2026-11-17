@@ -370,6 +370,46 @@ describe("the limit-reached email", () => {
     }
   });
 
+  // R39 lead review L1+L2: a future day's window is long, but a failed read sent nothing.
+  it("a future day's window: the owners can't be read, so the claim is let go", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      db.postJobCount.mockResolvedValue(20);
+      db.memberFindMany.mockRejectedValue(new Error("db blip"));
+
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-14T18:00:00Z"), mode: "schedule" });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(db.releaseKey).toHaveBeenCalledWith({ where: { key: "usage-limit-email:ws-1:postsPerDay:2026-11-14" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // R39 lead review L3: a store blip sends with the keys only inside their 24 hours.
+  it("a counter store that can't answer: today's window sends with the keys, a month's sends nothing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      consumeFixedWindowMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+      db.postJobCount.mockResolvedValue(20);
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+      expect(sendEmailMock.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
+        "usage-limit/ws-1/postsPerDay/2026-11-10/owner-1",
+        "usage-limit/ws-1/postsPerDay/2026-11-10/owner-2",
+      ]);
+
+      sendEmailMock.mockClear();
+      xPostsMock.mockResolvedValue(30);
+      const refusal = await checkXMonthlyLimit("ws-1", NOW);
+      await refusal!.notifyOwners();
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(db.releaseKey).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Resend keeps an idempotency key 24 hours; past that a lost reply could become a second copy.
   it("a month's window: a failed send keeps the claim, so no owner can get a second copy that month", async () => {
     vi.useFakeTimers();

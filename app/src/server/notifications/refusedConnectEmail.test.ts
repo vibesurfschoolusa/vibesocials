@@ -223,6 +223,17 @@ describe("notifyOwnersOfRefusedConnect", () => {
     expect(h.releaseKey).toHaveBeenCalledWith({ where: { key: "refused-connect-email:conn-1:2026-11-14" } });
   });
 
+  // R39 lead review L3: the day's window is inside the keys' 24 hours, so a store blip sends with them.
+  it("a counter store that can't answer: each owner is sent once, with their key", async () => {
+    h.consumeFixedWindow.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    await notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" });
+    expect(h.sendEmail.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
+      "refused-connect/conn-1/2026-11-14/owner-a",
+      "refused-connect/conn-1/2026-11-14/owner-b",
+    ]);
+    expect(h.releaseKey).not.toHaveBeenCalled();
+  });
+
   it("never throws", async () => {
     h.sendEmail.mockRejectedValue(new Error("smtp down"));
     await expect(notifyOwnersOfRefusedConnect({ workspaceId: "ws_1", platform: "facebook_page" })).resolves.toBeUndefined();

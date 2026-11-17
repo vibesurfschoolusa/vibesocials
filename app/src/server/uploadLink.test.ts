@@ -175,10 +175,16 @@ describe("notifyOwnersOfClientUpload", () => {
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
-  it("a counter store that can't answer sends nothing", async () => {
+  // R39 lead review L3: an hour's window is inside the keys' 24 hours, so a store blip sends with them.
+  it("a counter store that can't answer: each owner is sent once, with their key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(args.now);
     consumeFixedWindowMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
     await notifyOwnersOfClientUpload(args);
-    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(sendEmailMock.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
+      "client-upload/link-1/2026-11-10T17/owner-1",
+      "client-upload/link-1/2026-11-10T17/owner-2",
+    ]);
     expect(releaseMock).not.toHaveBeenCalled();
   });
 

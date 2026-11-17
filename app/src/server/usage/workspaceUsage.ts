@@ -189,8 +189,8 @@ async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
   // R39 client-journey L2: through sendOncePer, so the window is let go again
   // when the owners can't be read or no email went, and the next refusal tries.
   await sendOncePer(
-    { key: `usage-limit-email:${workspaceId}:${kind}:${windowKey}`, resetAt: args.windowEnd },
-    async () => {
+    { key: `usage-limit-email:${workspaceId}:${kind}:${windowKey}`, resetAt: args.windowEnd, perRecipientKeys: true },
+    async (sendStarted) => {
       const [owners, planInSettings] = await Promise.all([
         prisma.workspaceMember.findMany({
           where: { workspaceId, role: "owner" },
@@ -216,7 +216,7 @@ async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
           { to: owner.user.email, ...email },
           { idempotencyKey: `usage-limit/${workspaceId}/${kind}/${windowKey}/${owner.user.id}`, throwOnRetryable: true },
         );
-      });
+      }, sendStarted);
     },
     (error) =>
       logger.error("[usage] Couldn't email the owners about a reached limit (a later refusal tries again)", {

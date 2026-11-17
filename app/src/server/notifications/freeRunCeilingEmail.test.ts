@@ -104,6 +104,23 @@ describe("notifyOperatorOfFreeRunCeiling", () => {
     expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
   });
 
+  // R39 lead review L3: the day's window is inside the keys' 24 hours, so a store blip sends with them.
+  it("a counter store that can't answer: each operator is sent once, with their key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(DAY);
+    try {
+      consumeMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+      await notifyOperatorOfFreeRunCeiling({ day: DAY, topOwners });
+      expect(sendEmailMock.mock.calls.map(([, options]) => options.idempotencyKey)).toEqual([
+        "free-run-ceiling/2026-11-14/0",
+        "free-run-ceiling/2026-11-14/1",
+      ]);
+      expect(releaseMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a counter store that fails closed sends nothing and lets nothing go", async () => {
     consumeMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     await notifyOperatorOfFreeRunCeiling({ day: DAY, topOwners });

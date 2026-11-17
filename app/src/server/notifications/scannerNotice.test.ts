@@ -82,6 +82,20 @@ describe("notifyNotSentAtScan", () => {
   // R9-publishing L1: a Feed and Story pair gets one email. The half the scan
   // could not send stays quiet while its partner is still to be sent; the
   // partner's run then sends the pair's one email.
+  // R39 lead review L3: the outcome email's key is per post, not per recipient and day,
+  // so a store blip must not send one email per post.
+  it("a counter store that can't answer sends nothing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      consumeMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+      await notifyNotSentAtScan(NOTICE, NOW);
+      expect(deliverMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a half whose partner is still to be sent sends nothing and leaves the day's key unused", async () => {
     partnerMock.mockResolvedValue(true);
     // Not handled: the scanner may still tell the recipient about another post.

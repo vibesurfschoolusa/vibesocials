@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { platformLabel } from "@/lib/platforms";
 import { sendEmail } from "@/server/notifications/email";
 import { workspaceLink } from "@/server/notifications/links";
-import { sendOnceADay, sendToEach } from "@/server/notifications/onceADay";
+import { sendOncePer, sendToEach } from "@/server/notifications/onceADay";
 
 /**
  * R7-client-journey L4: a client's reconnect through the workspace's connect
@@ -90,10 +90,9 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
 
   const now = new Date();
   const day = now.toISOString().slice(0, 10);
-  await sendOnceADay(
-    `refused-connect-email:${found.id}:${day}`,
-    nextUtcMidnight(now),
-    async () => {
+  await sendOncePer(
+    { key: `refused-connect-email:${found.id}:${day}`, resetAt: nextUtcMidnight(now), perRecipientKeys: true },
+    async (sendStarted) => {
       const [workspace, owners] = await Promise.all([
         prisma.workspace.findUnique({ where: { id: params.workspaceId }, select: { name: true } }),
         prisma.workspaceMember.findMany({
@@ -122,6 +121,7 @@ export async function notifyOwnersOfRefusedConnect(params: { workspaceId: string
             throwOnRetryable: true,
           },
         ),
+        sendStarted,
       );
     },
     onError,
