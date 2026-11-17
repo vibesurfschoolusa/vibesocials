@@ -547,11 +547,18 @@ export function BulkPostsForm({
     if (!row?.blob) return;
     const blob = row.blob;
     updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
-    // R41 publishing L1: typing in the box lets this go (onCaptionChange).
+    // R41 publishing L1: typing in the box lets this go (onCaptionChange). Lead
+    // review: only the AI part. The row's own read (a video's length, thumbnail,
+    // frames) still finishes before it counts as done, so Schedule all and the
+    // Story length check never see a video whose length isn't read yet.
     const request = rowRequests.start(id, "caption");
+    const letGoByTyping = () => updateRow(id, { captionStatus: "done", captionOverwrite: false });
     try {
       const frames = await readRowMedia(id, row, blob);
-      if (!request.live()) return;
+      if (!request.live()) {
+        letGoByTyping();
+        return;
+      }
       // R39 publishing L1, R40 L2: turned off, or the row removed, during the
       // frame grab: nothing is sent (updating a removed row changes nothing).
       // R41 publishing L1: nor for a box with typed text, unless Write again.
@@ -572,7 +579,10 @@ export function BulkPostsForm({
       const data = (await response.json().catch(() => null)) as
         | { caption?: unknown; error?: unknown; code?: unknown }
         | null;
-      if (!request.live()) return;
+      if (!request.live()) {
+        letGoByTyping();
+        return;
+      }
       if (!response.ok || typeof data?.caption !== "string" || !data.caption.trim()) {
         console.error("[Add many] Caption failed", { status: response.status, code: data?.code, error: data?.error });
         updateRow(id, {
@@ -590,8 +600,11 @@ export function BulkPostsForm({
         caption: current.captionOverwrite || !current.caption.trim() ? caption : current.caption,
       }));
     } catch (error: unknown) {
-      // Let go by typing: the person's text stands, and there is nothing to say.
-      if (!request.live()) return;
+      // Let go by typing (the fetch aborted): the person's text stands, and there is nothing to say.
+      if (!request.live()) {
+        letGoByTyping();
+        return;
+      }
       console.error("[Add many] Caption failed", error);
       updateRow(id, {
         captionStatus: "failed",
@@ -1270,14 +1283,10 @@ export function BulkPostsForm({
               onCaptionChange={(caption) => {
                 if (captionLocked(row)) return;
                 // R41 publishing L1: typed text is never replaced by the
-                // automatic caption, so its request goes and the row stops waiting.
-                const letGo = caption.trim() !== "" && rowRequests.letGo(row.id, "caption");
-                updateRow(row.id, {
-                  caption,
-                  sendError: null,
-                  improveError: null,
-                  ...(letGo ? { captionStatus: "done" as const, captionOverwrite: false } : {}),
-                });
+                // automatic caption, so its AI request goes; captionRow ends the
+                // row's wait once its own media read is done.
+                if (caption.trim() !== "") rowRequests.letGo(row.id, "caption");
+                updateRow(row.id, { caption, sendError: null, improveError: null });
               }}
               onAltTextChange={(altText) => {
                 // R41 L1: an edit lets the description request go; the typed text stays.

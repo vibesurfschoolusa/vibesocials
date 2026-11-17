@@ -13,10 +13,12 @@ vi.mock("next/link", async () => {
   return { default: ({ href, children, ...rest }: { href: string; children: unknown }) => h("a", { href, ...rest }, children as never) };
 });
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(), useRouter: () => ({ push() {}, refresh() {} }) }));
+// The connected platforms; a test may add one before it mounts the page again.
+const connected = vi.hoisted(() => ({ list: [{ platform: "x", connected: true }] }));
 vi.mock("@/hooks/useConnections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useConnections")>()),
   useConnections: () => ({
-    connections: [{ platform: "x", connected: true }],
+    connections: connected.list,
     loading: false,
     error: null,
     reload: () => {},
@@ -32,9 +34,14 @@ vi.mock("@/lib/extractVideoFrames", () => ({
   extractVideoFrames: () =>
     frames.hold ? new Promise<string[]>((resolve) => frames.waiting.push(() => resolve([]))) : Promise.resolve([]),
 }));
+// While `duration.hold` is set, reading a video's length waits until the test releases it.
+const duration = vi.hoisted(() => ({ hold: false, seconds: 5, waiting: [] as (() => void)[] }));
 vi.mock("./bulkExtras", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bulkExtras")>()),
-  readVideoDuration: () => Promise.resolve(5),
+  readVideoDuration: () =>
+    duration.hold
+      ? new Promise<number>((resolve) => duration.waiting.push(() => resolve(duration.seconds)))
+      : Promise.resolve(duration.seconds),
 }));
 const uploads = vi.hoisted(() => ({ pending: [] as (() => void)[] }));
 vi.mock("@vercel/blob/client", () => ({
@@ -152,6 +159,10 @@ beforeEach(async () => {
   uploads.pending.length = 0;
   frames.hold = false;
   frames.waiting.length = 0;
+  duration.hold = false;
+  duration.seconds = 5;
+  duration.waiting.length = 0;
+  connected.list = [{ platform: "x", connected: true }];
   root = createRoot(container as unknown as HTMLElement);
   await act(async () => {
     root.render(createElement(ToastProvider, null, createElement(BulkPostsForm, { workspaceId: "ws-1" })));
@@ -337,5 +348,86 @@ describe("R41: Add many asks nothing for a box the person has typed in, and typi
     expect(signals[signals.length - 1]?.aborted).toBe(true);
     expect(scheduleWaits()).toBe(false);
     expect(valueOf(altBox!)).toBe("Board waxing on the sand");
+  });
+});
+
+describe("R41 lead review: typing releases only the AI wait; the row's own media read still finishes", () => {
+  const scheduleAll = () => {
+    const hit = find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === "Schedule all");
+    if (!hit) throw new Error("no Schedule all");
+    return hit;
+  };
+  const scheduleWaits = () => (props(scheduleAll()).disabled as unknown) === true;
+  const captionBox = () => {
+    const hit = find(container, (n) => String(n.attributes?.id ?? "").startsWith("bulk-caption-"));
+    if (!hit) throw new Error("no caption box");
+    return String(hit.attributes.id);
+  };
+  const releaseDuration = () => run(() => duration.waiting.splice(0).forEach((go) => go()));
+  const pageSays = (text: string) => (container.textContent as string).includes(text);
+  const TOO_LONG = "Instagram Stories take videos up to 60 seconds. This one is 120 seconds.";
+
+  async function withInstagramStory() {
+    connected.list = [
+      { platform: "x", connected: true },
+      { platform: "instagram", connected: true },
+    ];
+    await act(async () => root.unmount());
+    root = createRoot(container as unknown as HTMLElement);
+    await act(async () => {
+      root.render(createElement(ToastProvider, null, createElement(BulkPostsForm, { workspaceId: "ws-1" })));
+    });
+    await settle();
+    const story = find(
+      container,
+      (n) =>
+        n.nodeName === "INPUT" &&
+        (props(n)?.name as unknown) === "placement-instagram" &&
+        (props(n)?.value as unknown) === "story",
+    );
+    if (!story) throw new Error("no Instagram Story choice");
+    await run(() => props(story).onChange());
+  }
+
+  it("typed during a video's length read: no AI call, Schedule all waits for the length, then the Story check sees it", async () => {
+    await withInstagramStory();
+    duration.hold = true;
+    duration.seconds = 120;
+    await pick(video());
+    await finishUploads();
+    expect(duration.waiting.length).toBe(1);
+    await run(() => props(byId(captionBox())).onChange({ target: { value: "My own caption" } }));
+    expect(scheduleWaits()).toBe(true);
+    expect(pageSays(TOO_LONG)).toBe(false);
+    await releaseDuration();
+    expect(countOf("caption")).toBe(0);
+    expect(scheduleWaits()).toBe(false);
+    expect(pageSays(TOO_LONG)).toBe(true);
+    expect(String(byId(captionBox()).value ?? "")).toBe("My own caption");
+  });
+
+  it("typed during a video's frame grab: no AI call, and the row waits until the frames are read", async () => {
+    frames.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(frames.waiting.length).toBe(1);
+    await run(() => props(byId(captionBox())).onChange({ target: { value: "My own caption" } }));
+    expect(scheduleWaits()).toBe(true);
+    await releaseFrames();
+    expect(countOf("caption")).toBe(0);
+    expect(scheduleWaits()).toBe(false);
+  });
+
+  it("an empty video row is unchanged: after its length read the caption is asked for and lands", async () => {
+    duration.hold = true;
+    await pick(video());
+    await finishUploads();
+    expect(scheduleWaits()).toBe(true);
+    await releaseDuration();
+    expect(countOf("caption")).toBe(1);
+    expect(scheduleWaits()).toBe(true);
+    await answerNext("caption", { caption: "Waves at sunrise" });
+    expect(String(byId(captionBox()).value ?? "")).toBe("Waves at sunrise");
+    expect(scheduleWaits()).toBe(false);
   });
 });
