@@ -24,6 +24,15 @@ export async function releaseOnceADayKey(key: string): Promise<void> {
  */
 const IDEMPOTENCY_KEY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * R40 lead review: a send the email layer marks as certainly not sent
+ * (`emailNotSent: true`, set by email.ts on Resend's 429 only). Read by the
+ * mark rather than by class, so this rule never needs email.ts loaded.
+ */
+function certainlyNotSent(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { emailNotSent?: unknown }).emailNotSent === true;
+}
+
 export type OncePerWindow = {
   key: string;
   resetAt: Date;
@@ -53,7 +62,8 @@ export type OncePerWindow = {
  * gone, its reply lost): then it is let go only with per-recipient keys and a
  * window that ends within IDEMPOTENCY_KEY_MS, where each key still stops any
  * later try being a second copy (R40 security L2). A throw before any send
- * started (a failed read) always lets it go.
+ * started (a failed read), or one marked certainly not sent (Resend's 429),
+ * always lets it go.
  *
  * A claim store that can't answer: with per-recipient keys, a window that ends
  * within IDEMPOTENCY_KEY_MS and a key first usable no more than
@@ -90,7 +100,7 @@ export async function sendOncePer(
     if (await send(() => (started = true))) return "sent";
   } catch (error) {
     onError(error);
-    if (started && !keysCoverLater) return "failed";
+    if (started && !keysCoverLater && !certainlyNotSent(error)) return "failed";
   }
   if (claimed) await releaseOnceADayKey(key);
   return "failed";
@@ -114,9 +124,10 @@ export function sendOnceADay(
  * R39 client-journey L3: the one rule for an email to several people. Sends
  * to each recipient in turn; a throw (a retryable failure under
  * throwOnRetryable) never stops the next one. When any threw, the first error
- * is thrown once all were tried, so sendOncePer lets the window go and a later
- * try reaches them; each recipient's own idempotency key stops a second copy
- * to those it already reached. Otherwise answers whether any email went.
+ * is thrown once all were tried (the first unmarked one when some were marked
+ * certainly not sent, R40 lead review), so sendOncePer lets the window go when
+ * the keys allow and a later try reaches them; each recipient's own
+ * idempotency key stops a second copy to those it already reached. Otherwise answers whether any email went.
  * `sendStarted` (sendOncePer's) is called before each send.
  */
 export async function sendToEach<T>(
@@ -131,7 +142,9 @@ export async function sendToEach<T>(
       sendStarted();
       if (await sendOne(recipient)) sent = true;
     } catch (error) {
-      failure ??= { error };
+      // An unknown outcome outranks a "not sent" one, so the window is let go
+      // only when every failed send certainly didn't go.
+      if (!failure || (certainlyNotSent(failure.error) && !certainlyNotSent(error))) failure = { error };
     }
   }
   if (failure) throw failure.error;

@@ -55,7 +55,8 @@ export async function notifyNotSentAtScan(notice: ScanNotice, now: Date = new Da
       // Any other half is done or not due yet (checked above), so none is waited for.
       // It throws only a failure a retry can fix, and only from its send (R40 security
       // L2): Resend may have taken the email, and its key is per post, so the day is
-      // kept rather than a later post sending a second notice.
+      // kept rather than a later post sending a second notice. A 429 (marked not
+      // sent) lets the day go, so the next scan tells them.
       sendStarted();
       await deliverPostOutcomeNotification({
         userId: notice.userId,

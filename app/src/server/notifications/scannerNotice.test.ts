@@ -84,6 +84,25 @@ describe("notifyNotSentAtScan", () => {
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
+  // R40 lead review: Resend's 429 means the notice was not sent, so the day is let go
+  // and the next scan sends; a 409 in flight may still send, so the day is kept.
+  it("a 429 (marked not sent) lets the day's key go, and the next scan sends", async () => {
+    const { RetryAfterError } = await import("inngest");
+    deliverMock.mockRejectedValueOnce(Object.assign(new RetryAfterError("Resend rate limited the send", 2000), { emailNotSent: true }));
+    await notifyNotSentAtScan(NOTICE, NOW);
+    expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
+
+    await notifyNotSentAtScan({ ...NOTICE, postJobId: "post-2" }, NOW);
+    expect(deliverMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a 409 in flight (not marked) keeps the day's key", async () => {
+    const { RetryAfterError } = await import("inngest");
+    deliverMock.mockRejectedValueOnce(new RetryAfterError("Resend rate limited the send (status 409)", 2000));
+    await notifyNotSentAtScan(NOTICE, NOW);
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
   // R9-publishing L1: a Feed and Story pair gets one email. The half the scan
   // could not send stays quiet while its partner is still to be sent; the
   // partner's run then sends the pair's one email.

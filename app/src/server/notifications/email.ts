@@ -97,6 +97,17 @@ export class EmailRetryableError extends Error {
   }
 }
 
+/**
+ * R40 lead review: Resend's 429 rate limit refused the email before sending, so
+ * this one RetryAfterError is marked `emailNotSent` (sendOncePer then lets its
+ * window go whatever the keys). Still a RetryAfterError, with its name and
+ * delay, so every retry reads it as before. A 409 in flight, a 5xx and a
+ * network error stay unmarked: their email may have gone.
+ */
+export class EmailRateLimitedError extends RetryAfterError {
+  readonly emailNotSent = true as const;
+}
+
 /** True for the two errors `sendEmail` throws under `throwOnRetryable`. */
 export function isRetryableEmailError(error: unknown): boolean {
   return error instanceof EmailRetryableError || error instanceof RetryAfterError;
@@ -243,6 +254,9 @@ export async function sendEmail(
     });
     const detail = `status ${error.statusCode ?? "none"}, ${error.name}`;
     if (failure === "rate_limited") {
+      if (error.statusCode === 429) {
+        throw new EmailRateLimitedError(`Resend rate limited the send (${detail})`, RATE_LIMIT_RETRY_AFTER_MS);
+      }
       throw new RetryAfterError(`Resend rate limited the send (${detail})`, RATE_LIMIT_RETRY_AFTER_MS);
     }
     throw new EmailRetryableError(`Resend send failed (${detail})`);

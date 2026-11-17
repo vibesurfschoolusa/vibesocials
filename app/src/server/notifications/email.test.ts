@@ -212,6 +212,28 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
     expect(isRetryableEmailError(error)).toBe(true);
   });
 
+  // R40 lead review: Resend refused a 429 before sending, so it alone is marked "not sent"
+  // (sendOncePer then lets its window go); it is still a RetryAfterError for every retry.
+  it("429 rate_limit_exceeded is marked not sent, and is still the same RetryAfterError", async () => {
+    sendMock.mockResolvedValueOnce(rejection(429, "rate_limit_exceeded"));
+    const error = await sendEmail(params, opts).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RetryAfterError);
+    expect((error as Error).name).toBe("RetryAfterError");
+    expect((error as { emailNotSent?: unknown }).emailNotSent).toBe(true);
+  });
+
+  it("a 409 in flight, a 5xx or a network error is not marked not sent (it may have gone)", async () => {
+    sendMock
+      .mockResolvedValueOnce(rejection(409, "concurrent_idempotent_requests"))
+      .mockResolvedValueOnce(rejection(503, "internal_server_error"))
+      .mockRejectedValueOnce(new Error("network down"));
+    for (let i = 0; i < 3; i++) {
+      const error = await sendEmail(params, opts).catch((e: unknown) => e);
+      expect(isRetryableEmailError(error)).toBe(true);
+      expect((error as { emailNotSent?: unknown }).emailNotSent).toBeUndefined();
+    }
+  });
+
   // 2026-11-02 scale audit (jobs, notifications): Resend's daily quota resets at
   // midnight UTC and the monthly quota needs a larger plan, so retrying within the
   // step's lifetime cannot help. They are logged (error level) and dropped, while

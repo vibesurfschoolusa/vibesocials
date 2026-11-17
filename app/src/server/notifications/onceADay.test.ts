@@ -176,6 +176,43 @@ describe("sendOncePer", () => {
     expect(releaseMock).not.toHaveBeenCalled();
   });
 
+  // R40 lead review: a send marked "not sent" (Resend's 429) certainly didn't go.
+  it("a throw marked not sent lets the claim go whatever the keys; unmarked ones are kept", async () => {
+    const month = {
+      key: "some-email:2026-11",
+      resetAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      keysFrom: null,
+    };
+    for (const window of [HOUR, month]) {
+      releaseMock.mockClear();
+      const notSent = Object.assign(new Error("Resend rate limited the send"), { emailNotSent: true });
+      await expect(
+        sendOncePer(
+          window,
+          async (sendStarted) => {
+            sendStarted();
+            throw notSent;
+          },
+          onError,
+        ),
+      ).resolves.toBe("failed");
+      expect(releaseMock).toHaveBeenCalledWith({ where: { key: window.key } });
+
+      releaseMock.mockClear();
+      await expect(
+        sendOncePer(
+          window,
+          async (sendStarted) => {
+            sendStarted();
+            throw Object.assign(new Error("in flight"), { emailNotSent: "yes" });
+          },
+          onError,
+        ),
+      ).resolves.toBe("failed");
+      expect(releaseMock).not.toHaveBeenCalled();
+    }
+  });
+
   it("a short window without per-recipient keys: a throw before any send started lets the claim go", async () => {
     await expect(
       sendOncePer(
@@ -300,6 +337,19 @@ describe("sendToEach", () => {
       "failed",
     );
     expect(releaseMock).toHaveBeenCalledWith({ where: { key: KEY } });
+  });
+
+  // R40 lead review: one recipient's 429 must not stand for another's unknown outcome.
+  it("throws a failure marked not sent only when every failure was", async () => {
+    const notSent = () => Object.assign(new Error("429"), { emailNotSent: true });
+    const lost = new Error("network error");
+    const sendOne = vi.fn(async (to: string) => {
+      if (to === "a") throw notSent();
+      if (to === "b") throw lost;
+      return true;
+    });
+    await expect(sendToEach(["a", "b"], sendOne)).rejects.toBe(lost);
+    await expect(sendToEach(["a", "c"], sendOne)).rejects.toMatchObject({ emailNotSent: true });
   });
 
   it("all went: true, the window is kept", async () => {
