@@ -16,6 +16,8 @@ import { qrSvg } from "@/lib/qrSvg";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { isWorkspaceChanged, WORKSPACE_CHANGED_RELOAD_MESSAGE } from "@/components/reviews/workspace-changed";
 import { WorkspaceChangedNotice } from "@/components/reviews/workspace-changed-notice";
+import { locationLabels } from "@/components/reviews/location-labels";
+import type { Location } from "@/components/reviews/types";
 
 /** A location as the panel names it: its saved name (or the shown one's resource name) and title. */
 export type LinkLocation = { id: string; title: string };
@@ -61,15 +63,23 @@ export function reviewLinkLocationLine(saved: NamedSavedLocation, shown: LinkLoc
   return same ? null : `This link is for ${savedPart}, not for ${shown.title}.`;
 }
 
-/** The location the Reviews list shows, and the listed ones, as the panel compares them. */
-export function shownLinkLocation(
-  locations: readonly { name: string; title: string; storeCode?: string | null }[],
-  selected: string | null,
-): ShownLinkLocations {
+/**
+ * The location the Reviews list shows, and the listed ones, as the panel
+ * compares them. R34 client-journey L2: each is named with the picker's own
+ * label (locationLabels: same-name branches get their address), so the
+ * heading and the "not for" line match the picker.
+ */
+export function shownLinkLocation(locations: readonly Location[], selected: string | null): ShownLinkLocations {
+  const labels = locationLabels([...locations]);
+  const label = (location: Location) => labels.get(location.name) ?? location.title;
   const shown = selected ? locations.find((location) => location.name === selected) : undefined;
   return {
-    shown: shown ? { id: shown.name, title: shown.title } : null,
-    listed: locations.map(({ name, title, storeCode }) => (storeCode ? { name, title, storeCode } : { name, title })),
+    shown: shown ? { id: shown.name, title: label(shown) } : null,
+    listed: locations.map((location) => {
+      const { name, storeCode } = location;
+      const title = label(location);
+      return storeCode ? { name, title, storeCode } : { name, title };
+    }),
   };
 }
 

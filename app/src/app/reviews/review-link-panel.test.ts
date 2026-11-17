@@ -248,14 +248,14 @@ describe("the review link names its location", () => {
     const view = readFileSync(path.join(__dirname, "reviews-view.tsx"), "utf8");
     const panel = view.slice(view.indexOf("<ReviewLinkPanel"), view.indexOf("/>", view.indexOf("<ReviewLinkPanel")));
     expect(panel).toContain("shownLocation={shownLinkLocation(locations, selectedLocation)}");
-    expect(shownLinkLocation([{ name: B, title: "Branch B" }], B)).toEqual({
+    expect(shownLinkLocation([{ name: B, locationName: "locations/5", title: "Branch B" }], B)).toEqual({
       shown: { id: B, title: "Branch B" },
       listed: [{ name: B, title: "Branch B" }],
     });
-    expect(shownLinkLocation([{ name: B, title: "Branch B" }], A).shown).toBeNull();
+    expect(shownLinkLocation([{ name: B, locationName: "locations/5", title: "Branch B" }], A).shown).toBeNull();
     expect(shownLinkLocation([], null)).toEqual({ shown: null, listed: [] });
     // Only what the panel reads is passed on.
-    expect(shownLinkLocation([{ name: B, title: "Branch B", storeCode: "FTL-01", address: "1 Beach Rd" } as never], B).listed).toEqual([
+    expect(shownLinkLocation([{ name: B, locationName: "locations/5", title: "Branch B", storeCode: "FTL-01", address: "1 Beach Rd" }], B).listed).toEqual([
       { name: B, title: "Branch B", storeCode: "FTL-01" },
     ]);
   });
@@ -267,9 +267,9 @@ describe("the review link names its location from the list", () => {
   const A = "accounts/1/locations/2";
   const B = "accounts/1/locations/5";
   const listed = [
-    { name: A, title: "Branch A", storeCode: "FTL-01" },
-    { name: B, title: "Branch B", storeCode: "SHARED" },
-    { name: "accounts/1/locations/7", title: "Branch C", storeCode: "SHARED" },
+    { name: A, locationName: "locations/2", title: "Branch A", storeCode: "FTL-01" },
+    { name: B, locationName: "locations/5", title: "Branch B", storeCode: "SHARED" },
+    { name: "accounts/1/locations/7", locationName: "locations/7", title: "Branch C", storeCode: "SHARED" },
   ];
   const view = (location: { id: string; title: string | null }, shown: string | null) =>
     renderToStaticMarkup(
@@ -312,6 +312,42 @@ describe("the review link names its location from the list", () => {
     const html = view({ id: "accounts/1/locations/99", title: null }, null);
     expect(html).toContain("Your Google review link for the location saved in Settings");
     expect(html).not.toContain("not for");
+  });
+});
+
+// R34 client-journey L2: two branches with the same name read as the picker
+// labels them (locationLabels: the address), in the heading and the line.
+describe("the review link names same-name branches as the picker does", () => {
+  const MAIN = "accounts/1/locations/2";
+  const BEACH = "accounts/1/locations/5";
+  const locations = [
+    { name: MAIN, locationName: "locations/2", title: "Joe's Pizza", address: "1 Main St" },
+    { name: BEACH, locationName: "locations/5", title: "Joe's Pizza", address: "2 Beach Rd" },
+  ];
+
+  it("both the shown and the listed entries carry the picker's labels", () => {
+    expect(shownLinkLocation(locations, BEACH)).toEqual({
+      shown: { id: BEACH, title: "Joe's Pizza (2 Beach Rd)" },
+      listed: [
+        { name: MAIN, title: "Joe's Pizza (1 Main St)" },
+        { name: BEACH, title: "Joe's Pizza (2 Beach Rd)" },
+      ],
+    });
+  });
+
+  it("the heading and the not-for line tell the two apart", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReviewLinkPanelView, {
+        state: { status: "ready", url: LINK, location: { id: MAIN, title: "Joe's Pizza" } },
+        workspaceId: "ws-A",
+        isMember: false,
+        shownLocation: shownLinkLocation(locations, BEACH),
+      }),
+    );
+    expect(html).toContain("Your Google review link for Joe&#x27;s Pizza (1 Main St)");
+    expect(html).toContain(
+      "This link is for Joe&#x27;s Pizza (1 Main St), the location saved in Settings, not for Joe&#x27;s Pizza (2 Beach Rd).",
+    );
   });
 });
 
