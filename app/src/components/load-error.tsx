@@ -81,3 +81,34 @@ export function LoadError({ message, detail, onRetry, retryLabel = "Retry", layo
     </div>
   );
 }
+
+/**
+ * R33 lead review: Load more after its last press was refused. A switch or a
+ * missing id can only be refused again, so the button is Reload page; any
+ * other failure (shown in the page's own line or toast) keeps Load more.
+ */
+export function LoadMoreButton({
+  error,
+  loading,
+  onLoadMore,
+}: {
+  /** The last Load more failure's sentence, or null. */
+  error: string | null;
+  loading: boolean;
+  onLoadMore: () => void;
+}) {
+  const reload = loadErrorAsksReload(error);
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      loading={!reload && loading}
+      onClick={() => {
+        if (reload) window.location.reload();
+        else onLoadMore();
+      }}
+    >
+      {reload ? "Reload page" : "Load more"}
+    </Button>
+  );
+}

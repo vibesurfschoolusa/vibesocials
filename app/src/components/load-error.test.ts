@@ -11,7 +11,7 @@ import {
   WORKSPACE_CHANGED_SAVE_MESSAGE,
 } from "@/lib/workspaceChanged";
 
-import { LoadError, loadErrorAsksReload } from "./load-error";
+import { LoadError, LoadMoreButton, loadErrorAsksReload } from "./load-error";
 
 /**
  * R33 pages L5: after a switch in another tab a page's read is refused with
@@ -118,7 +118,7 @@ describe("every load-error site uses LoadError", () => {
   ] as const) {
     it(name, () => {
       const raw = read(relative);
-      expect(raw).toContain('import { LoadError } from "@/components/load-error";');
+      expect(raw).toMatch(/import \{ LoadError(, LoadMoreButton)? \} from "@\/components\/load-error";/);
       expect(raw).toMatch(new RegExp(`<LoadError[^>]*message=\\{(error|connectionsError)\\}[^>]*${retry.replace(/[{}]/g, "\\$&")}`));
       // No hand-made Retry button is left beside a load error.
       expect(raw).not.toMatch(/onClick=\{(handleReload|reload|handleRetry)\}>\s*(Retry|Try again)/);
@@ -133,5 +133,61 @@ describe("every load-error site uses LoadError", () => {
     expect(card).toContain("message={connectionsError ?? CONNECTIONS_FAILED_TEXT}");
     expect(card).toContain("retryRef={connectionsRetryRef}");
     expect(card).not.toMatch(/>\s*Retry\s*</);
+  });
+});
+
+// R33 lead review: a refused Load more on a stale tab showed the switch
+// sentence under a Load more that can only fail again. After such a refusal
+// the button is Reload page; otherwise Load more, as before.
+describe("LoadMoreButton", () => {
+  it("after a switch or missing-id refusal it is Reload page, which reloads", () => {
+    for (const message of [WORKSPACE_CHANGED_SAVE_MESSAGE, MISSING_WORKSPACE_ID_MESSAGE]) {
+      const html = renderToStaticMarkup(createElement(LoadMoreButton, { error: message, loading: false, onLoadMore: () => {} }));
+      expect(html).toContain(">Reload page</button>");
+      expect(html).not.toContain("Load more");
+    }
+    const reload = vi.fn();
+    (globalThis as { window?: unknown }).window = { location: { reload } };
+    const onLoadMore = vi.fn();
+    findButton(LoadMoreButton({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, loading: false, onLoadMore }))?.props.onClick?.({});
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
+
+  it("with no error or any other failure it is Load more, which loads the next page", () => {
+    for (const error of [null, "Couldn't load more media. Press Load more to try again."]) {
+      const html = renderToStaticMarkup(createElement(LoadMoreButton, { error, loading: false, onLoadMore: () => {} }));
+      expect(html).toContain("Load more</button>");
+      expect(html).not.toContain("Reload page");
+    }
+    const reload = vi.fn();
+    (globalThis as { window?: unknown }).window = { location: { reload } };
+    const onLoadMore = vi.fn();
+    findButton(LoadMoreButton({ error: null, loading: false, onLoadMore }))?.props.onClick?.({});
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("every Load more uses LoadMoreButton", () => {
+  const read = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8");
+
+  for (const [name, relative, rule] of [
+    ["Queue", "../app/queue/queue-view.tsx", "<LoadMoreButton error={loadMoreError} loading={loadingMore} onLoadMore={loadMore} />"],
+    ["Activity", "../app/activity/activity-view.tsx", "<LoadMoreButton error={loadMoreError} loading={loadingMore} onLoadMore={loadMore} />"],
+    ["Media", "./media-library.tsx", "<LoadMoreButton error={loadMoreError} loading={loadingMore} onLoadMore={handleLoadMore} />"],
+  ] as const) {
+    it(name, () => {
+      const raw = read(relative);
+      expect(raw).toContain(rule);
+      expect(raw).not.toMatch(/>\s*Load more\s*<\/Button>/);
+    });
+  }
+
+  it("Media keeps the last Load more failure, cleared on each press", () => {
+    const raw = read("./media-library.tsx");
+    const handler = raw.slice(raw.indexOf("const handleLoadMore = useCallback("), raw.indexOf("async function handleSubmit("));
+    expect(handler).toMatch(/setLoadingMore\(true\);\s*setLoadMoreError\(null\);/);
+    expect(handler).toMatch(/const message = \(data as \{ error\?: string \} \| null\)\?\.error \?\? MEDIA_MESSAGES\.loadMoreFailed;\s*setLoadMoreError\(message\);\s*toast\.error\(message\);/);
   });
 });

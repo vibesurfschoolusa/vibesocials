@@ -20,7 +20,7 @@ import { CaptionCounter } from "@/components/caption-counter";
 import { ExternalLink } from "@/components/external-link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { LoadError } from "@/components/load-error";
+import { LoadError, LoadMoreButton } from "@/components/load-error";
 import {
   Card,
   CardContent,
@@ -695,6 +695,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   const [items, setItems] = useState<MediaItemDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The last Load more failure's sentence (shown as a toast), or null.
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   // 2026-11-01 scale audit (W11): GET /api/media is paged (60 per page).
   // `nextCursor` is the opaque token for the next, older page — null once the
   // last page is loaded (which hides "Load more"); `loadingMore` guards and
@@ -772,6 +774,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   const handleLoadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const response = await fetch(withWorkspaceId(`/api/media?cursor=${encodeURIComponent(nextCursor)}`, workspaceId));
       const data = (await response.json().catch(() => null)) as
@@ -780,7 +783,10 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         | null;
 
       if (!response.ok) {
-        toast.error((data as { error?: string } | null)?.error ?? MEDIA_MESSAGES.loadMoreFailed);
+        // Kept so a switch refusal turns Load more into Reload page (LoadMoreButton).
+        const message = (data as { error?: string } | null)?.error ?? MEDIA_MESSAGES.loadMoreFailed;
+        setLoadMoreError(message);
+        toast.error(message);
         return;
       }
 
@@ -1072,9 +1078,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
             </div>
             {nextCursor !== null ? (
               <div className="mt-4 flex justify-center">
-                <Button variant="outline" size="sm" loading={loadingMore} onClick={handleLoadMore}>
-                  Load more
-                </Button>
+                <LoadMoreButton error={loadMoreError} loading={loadingMore} onLoadMore={handleLoadMore} />
               </div>
             ) : null}
           </>

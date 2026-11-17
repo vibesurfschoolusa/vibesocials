@@ -6,8 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Inbox, PlusCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { LoadError } from "@/components/load-error";
+import { LoadError, LoadMoreButton } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -172,9 +171,7 @@ function ActivityViewInner({ pageWorkspaceId }: { pageWorkspaceId: string | null
             </div>
             {hasMore ? (
               <div className="mt-4 flex flex-col items-center gap-2">
-                <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
-                  Load more
-                </Button>
+                <LoadMoreButton error={loadMoreError} loading={loadingMore} onLoadMore={loadMore} />
               </div>
             ) : null}
           </>

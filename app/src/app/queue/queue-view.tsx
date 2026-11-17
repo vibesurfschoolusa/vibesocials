@@ -7,7 +7,7 @@ import { CalendarClock, Copy, PlusCircle } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { LoadError } from "@/components/load-error";
+import { LoadError, LoadMoreButton } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -1632,9 +1632,7 @@ export function QueueView({
                 BOTH views. */}
             {nextCursor !== null ? (
               <div className="mt-4 flex flex-col items-center gap-2">
-                <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
-                  Load more
-                </Button>
+                <LoadMoreButton error={loadMoreError} loading={loadingMore} onLoadMore={loadMore} />
               </div>
             ) : null}
           </>
