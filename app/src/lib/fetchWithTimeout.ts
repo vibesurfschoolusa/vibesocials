@@ -64,17 +64,16 @@ export async function fetchWithTimeout(
   try {
     return await fetch(url, { ...init, signal });
   } catch (error) {
-    if (timedOut) {
-      const timeoutError = new Error(
-        `Request timed out after ${timeoutMs}ms`,
-      ) as Error & { code: string };
-      timeoutError.code = FETCH_TIMEOUT_CODE;
-      throw timeoutError;
-    }
+    if (timedOut) throw fetchTimeoutError(timeoutMs);
     throw error;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The error our own limit ends a request with (`code === FETCH_TIMEOUT_CODE`). */
+function fetchTimeoutError(timeoutMs: number): Error & { code: string } {
+  return Object.assign(new Error(`Request timed out after ${timeoutMs}ms`), { code: FETCH_TIMEOUT_CODE });
 }
 
 /**
@@ -86,8 +85,14 @@ export const CONNECT_CALL_TIMEOUT_MS = 15_000;
 /**
  * {@link fetchWithTimeout} whose limit also covers reading the body: the
  * request, the headers and the last byte all fall inside `timeoutMs`. A
- * stall throws (a FETCH_TIMEOUT before the headers, the signal's TimeoutError
- * after), so the caller's failure path runs.
+ * stall throws the FETCH_TIMEOUT error, before the headers or in the body
+ * (the response's and any clone's), so the caller's failure path runs and
+ * googleFailure words it "try later". The caller's own `init.signal` still
+ * aborts with its own reason.
+ *
+ * R37 platform-clients L3: the deadline aborts with our FETCH_TIMEOUT error as
+ * its reason, which fetch hands to the rejected call and to the body stream;
+ * AbortSignal.timeout's own TimeoutError (code 23) never reaches the caller.
  */
 export function fetchWithinLimit(
   url: string | URL,
@@ -95,6 +100,8 @@ export function fetchWithinLimit(
   timeoutMs: number,
 ): Promise<Response> {
   const deadline = AbortSignal.timeout(timeoutMs);
-  const signal = init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
+  const ours = new AbortController();
+  deadline.addEventListener("abort", () => ours.abort(fetchTimeoutError(timeoutMs)), { once: true });
+  const signal = init?.signal ? AbortSignal.any([init.signal, ours.signal]) : ours.signal;
   return fetchWithTimeout(url, { ...init, signal }, timeoutMs);
 }

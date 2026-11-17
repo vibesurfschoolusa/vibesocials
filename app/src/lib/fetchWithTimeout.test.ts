@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CONNECT_CALL_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout, fetchWithinLimit } from "./fetchWithTimeout";
 import { abortSignalTimeoutOnFakeClock, bodyNeverEnds, headersNeverCome } from "./stallingFetch.testkit";
+import { googleFailureKind } from "@/server/googleFailure";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -220,6 +221,47 @@ describe("fetchWithinLimit", () => {
     const read = expect(response.json()).rejects.toBeDefined();
     await vi.advanceTimersByTimeAsync(15_000);
     await read;
+  });
+
+  // R37 platform-clients L3: our own deadline is FETCH_TIMEOUT wherever it
+  // fires, so googleFailure words it "try later" (never "other").
+  it("a stall before the headers is our FETCH_TIMEOUT, worded try later", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.stubGlobal("fetch", vi.fn(headersNeverCome));
+
+    const settled = fetchWithinLimit("https://example.test/token", undefined, 15_000).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const error = await settled;
+    expect((error as { code?: unknown }).code).toBe(FETCH_TIMEOUT_CODE);
+    expect(googleFailureKind(error)).toBe("tryLater");
+  });
+
+  it("a stall in the body is our FETCH_TIMEOUT too, on the response and on a clone", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.stubGlobal("fetch", vi.fn(bodyNeverEnds));
+
+    const response = await fetchWithinLimit("https://example.test/token", undefined, 15_000);
+    const fromClone = response.clone().text().catch((error: unknown) => error);
+    const fromBody = response.json().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(15_000);
+    for (const error of [await fromBody, await fromClone]) {
+      expect((error as { code?: unknown }).code).toBe(FETCH_TIMEOUT_CODE);
+      expect(googleFailureKind(error)).toBe("tryLater");
+    }
+  });
+
+  it("the caller's own abort is still the caller's, never our FETCH_TIMEOUT", async () => {
+    vi.stubGlobal("fetch", vi.fn(headersNeverCome));
+    const controller = new AbortController();
+    const settled = fetchWithinLimit("https://example.test/token", { signal: controller.signal }, 15_000).catch(
+      (error: unknown) => error,
+    );
+    controller.abort();
+    const error = await settled;
+    expect((error as { name?: unknown }).name).toBe("AbortError");
+    expect((error as { code?: unknown }).code).not.toBe(FETCH_TIMEOUT_CODE);
   });
 
   it("still answers a provider that answers in time", async () => {
