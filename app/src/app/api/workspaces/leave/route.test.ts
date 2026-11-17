@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/switch/route.test.ts). route.ts imports `@/lib/db`,
 // `@/lib/workspace`, `@/lib/rateLimit`, and `next/headers` at module scope,
@@ -261,9 +263,8 @@ describe("POST /api/workspaces/leave", () => {
     const response = await POST(leaveReq());
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Transfer ownership before removing yourself.",
-    });
+    // R33 lead review: names the Team card's real control (Make owner).
+    await expect(response.json()).resolves.toEqual({ error: LEAVE_SOLE_OWNER_MESSAGE });
     // The last-owner guard runs INSIDE the advisory-locked transaction; no row
     // is deleted through either path.
     expect(executeRawMock).toHaveBeenCalledTimes(1);
@@ -323,7 +324,7 @@ describe("POST /api/workspaces/leave", () => {
     const response = await POST(leaveReq());
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual({ error: LEAVE_NOT_MEMBER_MESSAGE });
     expect(deleteMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
   });
@@ -360,7 +361,7 @@ describe("POST /api/workspaces/leave", () => {
     const response = await POST(leaveReq());
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    await expect(response.json()).resolves.toEqual({ error: LEAVE_NOT_MEMBER_MESSAGE });
     expect(cookieSetMock).not.toHaveBeenCalled();
   });
 });

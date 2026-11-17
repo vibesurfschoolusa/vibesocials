@@ -43,7 +43,7 @@ export const REGISTER_SIGN_IN_UNFINISHED_MESSAGE = "Signing you in didn't finish
  * cause and sends the person to Log in.
  */
 export function registerSignInLimitedText(waitMinutes: number | null): string {
-  return `Signing you in didn't finish: there have been too many sign-in tries from this network. ${waitText(waitMinutes)}, then log in.`;
+  return `Signing you in didn't finish: there have been too many sign-in tries. ${waitText(waitMinutes)}, then log in.`;
 }
 export const REGISTER_SIGN_IN_UNCHECKED_MESSAGE =
   "Signing you in didn't finish: your password couldn't be checked just now. Log in again in a minute.";

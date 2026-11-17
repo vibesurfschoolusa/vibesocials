@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
+import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
@@ -120,10 +121,10 @@ export async function POST(request: Request) {
       return { joinLinksRevoked: await revokeOwnInvites(tx, context.workspace.id, context.user.id) };
     });
     if (outcome === "sole_owner") {
-      return NextResponse.json({ error: "Transfer ownership before removing yourself." }, { status: 400 });
+      return NextResponse.json({ error: LEAVE_SOLE_OWNER_MESSAGE }, { status: 400 });
     }
     if (outcome === "not_found") {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json({ error: LEAVE_NOT_MEMBER_MESSAGE }, { status: 404 });
     }
 
     const cookieStore = await cookies();
@@ -157,7 +158,7 @@ export async function POST(request: Request) {
   });
 
   if (count === 0) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: LEAVE_NOT_MEMBER_MESSAGE }, { status: 404 });
   }
 
   const cookieStore = await cookies();

@@ -5,8 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { renderedWorkspaceRefusal, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
+import { LEAVE_NOT_MEMBER_MESSAGE, LEAVE_SOLE_OWNER_MESSAGE } from "@/lib/leaveRefusals";
+
 import {
+  answerFailureText,
   INVITE_MAYBE_MADE_MESSAGE,
+  LEAVE_MAYBE_LEFT_MESSAGE,
   inviteFailureText,
   MEMBERS_LOAD_FAILED_TEXT,
   memberIsGone,
@@ -229,5 +233,23 @@ describe("Team: the only-owner line and Leave", () => {
     expect(leave).toContain("disabled={soleOwner}");
     expect(leave).toMatch(/\{soleOwner \? \(\s+<p[^>]*>\s+You&apos;re the only owner/);
     expect(leave).not.toContain("ownerCount");
+  });
+});
+
+// R33 lead review: Leave can now be pressed before the members list loads, so
+// the route's refusals reach the toast; each names a control on this card.
+describe("Team: Leave's refusals", () => {
+  it("shows the route's sentence", () => {
+    for (const [status, error] of [[400, LEAVE_SOLE_OWNER_MESSAGE], [404, LEAVE_NOT_MEMBER_MESSAGE]] as const) {
+      expect(answerFailureText(status, { error }, LEAVE_MAYBE_LEFT_MESSAGE, "Couldn't leave the workspace.")).toBe(error);
+    }
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    expect(source).toContain(`toast.error(answerFailureText(response.status, data, LEAVE_MAYBE_LEFT_MESSAGE, "Couldn't leave the workspace."));`);
+    expect(source).toContain("Make owner");
+  });
+
+  it("says what to do, with the card's own control", () => {
+    expect(LEAVE_SOLE_OWNER_MESSAGE).toBe("You're the only owner. Reload the page, make another member an owner with Make owner, then leave.");
+    expect(LEAVE_NOT_MEMBER_MESSAGE).toBe("You're no longer a member of this workspace. Reload the page.");
   });
 });

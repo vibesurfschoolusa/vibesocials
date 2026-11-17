@@ -92,11 +92,11 @@ describe("signInWithPassword", () => {
       signInAfterRegister(vi.fn(async () => ({ ok: false, error, status: 401, url: null })), "a@example.test", "secret12", providersAnswer);
     await expect(said(signInLimitedCode(14 * 60 + 5))).resolves.toEqual({
       ok: false,
-      error: "Signing you in didn't finish: there have been too many sign-in tries from this network. Wait about 15 minutes, then log in.",
+      error: "Signing you in didn't finish: there have been too many sign-in tries. Wait about 15 minutes, then log in.",
     });
     await expect(said(SIGN_IN_LIMITED)).resolves.toEqual({
       ok: false,
-      error: "Signing you in didn't finish: there have been too many sign-in tries from this network. Wait a while, then log in.",
+      error: "Signing you in didn't finish: there have been too many sign-in tries. Wait a while, then log in.",
     });
     await expect(said(SIGN_IN_UNCHECKED)).resolves.toEqual({ ok: false, error: REGISTER_SIGN_IN_UNCHECKED_MESSAGE });
     expect(REGISTER_SIGN_IN_UNCHECKED_MESSAGE).toBe(

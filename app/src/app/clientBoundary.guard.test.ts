@@ -265,6 +265,16 @@ function exportIsClient(file: string, name: string, read: (file: string) => stri
       if (original && (alias ?? original).trim() === name && exportIsClient(target, original.trim(), read, seen)) return true;
     }
   }
+  // `import { X } from "..."` then a separate `export { X }` (or `export { X as Y }`).
+  for (const match of source.matchAll(/export\s*\{([^}]*)\}(?!\s*from\b)/g)) {
+    for (const part of match[1].split(",")) {
+      const [local, alias] = part.trim().split(/\s+as\s+/);
+      if (!local || (alias ?? local).trim() !== name) continue;
+      const binding = importedBinding(source, local.trim());
+      const target = binding && resolveImport(file, binding.specifier);
+      if (target && exportIsClient(target, binding.name, read, seen)) return true;
+    }
+  }
   return false;
 }
 
@@ -371,6 +381,20 @@ describe("the boundary scan also follows", () => {
       [panel]: 'import { useState } from "react";\nexport default function Panel() { useState(0); return null; }\n',
     };
     expect(serverRenderedBrowserCode([page, panel], (file) => sources[file])).toEqual([`${where} (useState) <- ${by}`]);
+  });
+
+  it("a barrel that imports a component and exports it in a separate statement", () => {
+    const sources: Record<string, string> = {
+      [page]:
+        'import { Shown } from "@/components/ui";\n' +
+        "export default function Page() { return <Shown renderRow={(row) => row} />; }\n",
+      [barrel]: 'import { Panel } from "@/components/ui/card";\nexport { Panel as Shown };\n',
+      [panel]: '"use client";\nexport function Panel() { return null; }\n',
+    };
+    expect(serverFunctionProps([page, barrel, panel], (file) => sources[file])).toEqual([`${by}: <Shown renderRow={function}>`]);
+    sources[barrel] = 'import { Panel } from "@/components/ui/card";\nexport { Panel };\n';
+    sources[page] = sources[page].replace(/Shown/g, "Panel");
+    expect(serverFunctionProps([page, barrel, panel], (file) => sources[file])).toEqual([`${by}: <Panel renderRow={function}>`]);
   });
 
   it("a function prop not named on* (a render prop) passed from a server file to a client component", () => {
