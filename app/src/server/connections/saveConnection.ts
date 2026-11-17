@@ -12,7 +12,7 @@ import type { PinterestBoard } from "@/lib/pinterestApi";
 import type { PinterestAccount } from "@/server/connections/pinterestAccount";
 import { googleFailureKind, isGoogleScopeRefusal } from "@/server/googleFailure";
 import { exactStoreCodeMatches, readGbpLocations, storeCodeFilter } from "@/server/platforms/gbpLocation";
-import { readGoogleErrorReasons } from "@/server/platforms/rateLimited";
+import { googleErrorReasons } from "@/server/platforms/rateLimited";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -109,6 +109,15 @@ function locationIdOf(resourceName: string): string | null {
   return match ? match[1] : null;
 }
 
+/** A body's JSON, or null when it is empty or not JSON. */
+function parsedOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 /** What the new sign-in can do with the Business Profile location the connection posts to. */
 type GbpLocationCheck = "kept" | "unavailable" | "check_failed" | "permission_missing";
 
@@ -176,7 +185,10 @@ async function checkGbpLocation(existing: StoredConnection, accessToken: unknown
     // R27 client-journey L4: only an access 403 is another account. Our own
     // API setup or quota (googleFailureKind "tryLater") says nothing about it.
     if (response.status === 403) {
-      const googleReasons = await readGoogleErrorReasons(response);
+      // R36 second look: a body that can't be read (it stalled past the limit
+      // or broke off) says nothing about why, so it throws into the catch
+      // below: check_failed, nothing written. An empty body keeps its rule.
+      const googleReasons = [...googleErrorReasons(parsedOrNull(await response.text()))];
       if (googleFailureKind({ status: 403, googleReasons }) === "access") return "unavailable";
       // R27 lead review: a missing permission is fixed on Google's screen, not by a retry.
       if (isGoogleScopeRefusal(googleReasons)) return "permission_missing";

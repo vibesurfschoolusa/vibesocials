@@ -297,14 +297,31 @@ describe("saveSocialConnection: Google Business Profile", () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
     });
 
-    it("the location check's refusal (403): within 15 seconds, the same answer as a 403 with no readable body", async () => {
+    // R36 second look: a 403 whose body can't be read says nothing about why,
+    // so nothing is saved and the location stays (an empty 403 keeps its rule).
+    it("the location check's refusal (403) with a body that never ends: check_failed, location kept", async () => {
       h.findUnique.mockResolvedValue(withLocation);
       h.fetch.mockImplementation((input: string | URL, init?: RequestInit) =>
         bodyNeverEnds(input, init).then((res) => new Response(res.body, { status: 403 })),
       );
-      const saved = saveGbp();
-      await vi.advanceTimersByTimeAsync(CONNECT_CALL_TIMEOUT_MS);
-      await expect(saved).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+      await checkAfter15s();
+    });
+
+    it("an empty 403 is unchanged: another account, the location cleared", async () => {
+      vi.useRealTimers();
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(new Response("", { status: 403 }));
+      await expect(saveGbp()).resolves.toEqual({ ok: true, locationCleared: "Surf Co Dania" });
+    });
+
+    it("a readable 403 for a missing permission is unchanged", async () => {
+      vi.useRealTimers();
+      h.findUnique.mockResolvedValue(withLocation);
+      h.fetch.mockResolvedValue(
+        answer(403, { error: { code: 403, status: "PERMISSION_DENIED", details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } }),
+      );
+      await expect(saveGbp()).resolves.toEqual({ ok: false, reason: "permission_missing", connectedName: "Surf Co Dania" });
+      expect(h.updateMany).not.toHaveBeenCalled();
     });
 
     it("the store-code search: check_failed after 15 seconds", async () => {
