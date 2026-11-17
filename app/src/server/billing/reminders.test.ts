@@ -124,6 +124,11 @@ vi.mock("@/lib/db", () => {
 
 import { EmailRetryableError } from "@/server/notifications/email";
 
+// The real Resend error table (email.ts), so these cases follow its classes.
+const { resendErrorOutcome } = await vi.importActual<typeof import("@/server/notifications/email")>(
+  "@/server/notifications/email",
+);
+
 import {
   REMINDER_MAX_EMAILS_PER_RUN,
   REMINDER_SEND_INTERVAL_MS,
@@ -473,6 +478,10 @@ describe("runBillingReminders", () => {
   it.each([
     ["a quota 429", { sent: false, reason: "try_later" }],
     ["no key or a bad key", { sent: false, reason: "not_configured" }],
+    // R42 security L2: Resend's set-up errors, through the real table in email.ts.
+    ["a 422 invalid_from_address", resendErrorOutcome({ name: "invalid_from_address", statusCode: 422 })],
+    ["a 422 missing_required_field", resendErrorOutcome({ name: "missing_required_field", statusCode: 422 })],
+    ["a 401 restricted_api_key", resendErrorOutcome({ name: "restricted_api_key", statusCode: 401 })],
   ])("an owner not sent for %s is tried again at the next run", async (_name, answer) => {
     m.rows = [ws("a")];
     m.sendEmail.mockResolvedValueOnce(answer);

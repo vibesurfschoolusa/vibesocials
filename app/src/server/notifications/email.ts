@@ -38,24 +38,52 @@ const DEFAULT_FROM = "Vibe Socials <onboarding@resend.dev>";
 const RATE_LIMIT_RETRY_AFTER_MS = 2_000;
 
 /**
- * Resend's idempotency-key conflicts (https://resend.com/docs/dashboard/emails/idempotency-keys):
- * the same key with a different payload is 409 `invalid_idempotent_request`; the
- * same key while the first request is still running is 409
- * `concurrent_idempotent_requests`.
+ * R42 security L2: what each Resend 4xx error name means for a send, the one
+ * table every caller's outcome comes from. Source: Resend's errors page,
+ * https://resend.com/docs/api-reference/errors (read 2026-11-17). Names marked
+ * "earlier page" were on that page before and may still be answered.
+ *  - "not_configured": our request or our account set-up is wrong. It hits
+ *    every send, and once fixed every send can go, so nobody is written off.
+ *  - "quota_exceeded": the daily quota "reset[s] at midnight UTC", the monthly
+ *    one needs a larger plan: no retry within an Inngest step can succeed.
+ *  - "rate_limited": per-second limits and in-flight conflicts: retry shortly.
+ *  - "already_sent": the same idempotency key with another payload
+ *    (https://resend.com/docs/dashboard/emails/idempotency-keys): a send with
+ *    that key went out.
+ *  - "rejected": about this recipient or this message's content.
+ * A 4xx name not listed here is "rejected", so one bad address is never tried
+ * forever; any other 401 or 403 is a key or account problem ("not_configured").
  */
-const INVALID_IDEMPOTENT_REQUEST = "invalid_idempotent_request";
-const CONCURRENT_IDEMPOTENT_REQUESTS = "concurrent_idempotent_requests";
-
-/**
- * Resend's quota 429s (https://resend.com/docs/api-reference/errors): the daily
- * quota "reset[s] at midnight UTC", and the monthly quota is fixed by moving to a
- * larger plan. Unlike `rate_limit_exceeded` (per second), no retry within an
- * Inngest step's lifetime can succeed, so these are never retried.
- */
-const QUOTA_EXCEEDED_NAMES: ReadonlySet<string> = new Set([
-  "daily_quota_exceeded",
-  "monthly_quota_exceeded",
-]);
+const RESEND_4XX_NAMES: Readonly<Record<string, "not_configured" | "quota_exceeded" | "rate_limited" | "already_sent" | "rejected">> = {
+  // Our request: a malformed field (validation_error also covers an invalid
+  // key, a sandbox-only sender and an unverified `from` domain), a missing or
+  // bad parameter, a wrong endpoint or method.
+  validation_error: "not_configured",
+  missing_required_field: "not_configured",
+  missing_required_parameter: "not_configured",
+  invalid_parameter: "not_configured",
+  invalid_idempotency_key: "not_configured",
+  not_found: "not_configured",
+  method_not_allowed: "not_configured",
+  invalid_from_address: "not_configured", // earlier page: a malformed NOTIFICATIONS_FROM
+  invalid_access: "not_configured", // earlier page
+  invalid_region: "not_configured", // earlier page
+  // Our key or account.
+  missing_api_key: "not_configured",
+  invalid_api_key: "not_configured", // earlier page
+  restricted_api_key: "not_configured",
+  suspended_api_key: "not_configured",
+  invalid_permission: "not_configured",
+  // Quota and rate.
+  daily_quota_exceeded: "quota_exceeded",
+  monthly_quota_exceeded: "quota_exceeded",
+  rate_limit_exceeded: "rate_limited",
+  concurrent_idempotent_requests: "rate_limited",
+  resource_locked: "rate_limited",
+  invalid_idempotent_request: "already_sent",
+  // This message's content.
+  invalid_attachment: "rejected",
+};
 
 export interface SendEmailParams {
   to: string;
@@ -115,29 +143,20 @@ export function isRetryableEmailError(error: unknown): boolean {
 
 type ResendFailure = { name?: string; statusCode?: number | null };
 
+type ResendFailureKind = "already_sent" | "quota_exceeded" | "rate_limited" | "transient" | "not_configured" | "rejected";
+
 /**
- * What a Resend rejection means for the caller:
- *  - "already_sent": 409 `invalid_idempotent_request` - a send with this key went out;
- *  - "quota_exceeded": 429 `daily_quota_exceeded` / `monthly_quota_exceeded` -
- *    retrying cannot help before midnight UTC or a plan change;
- *  - "rate_limited": any other 429, or 409 `concurrent_idempotent_requests` (the
- *    first send is still in flight) - retry shortly;
- *  - "transient": 5xx, or no status at all (the SDK reports an unresolved request
- *    that way) - retry;
- *  - "rejected": any other 4xx - retrying cannot help.
+ * What a Resend rejection means for the caller: a 5xx, or no status at all (the
+ * SDK reports an unresolved request that way), is "transient" (retry); a 4xx
+ * reads RESEND_4XX_NAMES, then any other 429 is a rate limit, any other 401 or
+ * 403 a key problem, and the rest "rejected".
  */
-function classifyResendFailure({
-  name,
-  statusCode,
-}: ResendFailure): "already_sent" | "quota_exceeded" | "rate_limited" | "transient" | "rejected" {
-  if (statusCode === 409 && name === INVALID_IDEMPOTENT_REQUEST) return "already_sent";
-  if (statusCode === 429 && name !== undefined && QUOTA_EXCEEDED_NAMES.has(name)) {
-    return "quota_exceeded";
-  }
-  if (statusCode === 429 || (statusCode === 409 && name === CONCURRENT_IDEMPOTENT_REQUESTS)) {
-    return "rate_limited";
-  }
+function classifyResendFailure({ name, statusCode }: ResendFailure): ResendFailureKind {
   if (typeof statusCode !== "number" || statusCode >= 500) return "transient";
+  const known = name !== undefined && Object.hasOwn(RESEND_4XX_NAMES, name) ? RESEND_4XX_NAMES[name] : undefined;
+  if (known) return known;
+  if (statusCode === 429) return "rate_limited";
+  if (statusCode === 401 || statusCode === 403) return "not_configured";
   return "rejected";
 }
 
@@ -182,9 +201,11 @@ function emailKind(label: string | undefined, idempotencyKey: string | undefined
  * R41 lead review: whether the email went and, when it did not, why.
  * "try_later": a later send can go (a daily or monthly quota 429, or, without
  * throwOnRetryable, a swallowed 5xx, rate limit or network error).
- * "not_configured": no key or a bad key (a constructor error, a 401 or 403):
- * no send goes until the set-up is fixed, then every one can.
- * "refused": Resend refused this email for good (another 4xx, such as 422).
+ * "not_configured": no key, a bad key (a constructor error, a 401 or 403) or
+ * another error about our request or set-up (RESEND_4XX_NAMES): no send goes
+ * until the set-up is fixed, then every one can.
+ * "refused": Resend refused this recipient or this message for good (a 4xx
+ * about the content, or a name the table doesn't know).
  */
 export type SendEmailOutcome = { sent: true } | { sent: false; reason: "try_later" | "not_configured" | "refused" };
 
@@ -192,9 +213,6 @@ const SENT: SendEmailOutcome = { sent: true };
 const TRY_LATER: SendEmailOutcome = { sent: false, reason: "try_later" };
 const NOT_CONFIGURED: SendEmailOutcome = { sent: false, reason: "not_configured" };
 const REFUSED: SendEmailOutcome = { sent: false, reason: "refused" };
-
-/** Resend's answers to a missing or bad API key. */
-const KEY_REFUSED_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 
 /**
  * Resolves true when Resend accepted the email (or already had it under this
@@ -272,7 +290,7 @@ export async function sendEmailOutcome(
   // error log below (name and status, no recipient) even under `throwOnRetryable`.
   // 2026-11-02 scale audit (jobs, notifications): it used to be retried as a rate
   // limit, burning the step's retries against a quota that cannot reset in time.
-  if (throwOnRetryable && failure !== "rejected" && failure !== "quota_exceeded") {
+  if (throwOnRetryable && (failure === "rate_limited" || failure === "transient")) {
     logger.warn("[Notifications] Resend send failed; the step will retry", {
       kind,
       error: { name: error.name, statusCode: error.statusCode },
@@ -298,6 +316,22 @@ export async function sendEmailOutcome(
       statusCode: error.statusCode,
     },
   });
-  if (failure !== "rejected") return TRY_LATER;
-  return error.statusCode != null && KEY_REFUSED_STATUSES.has(error.statusCode) ? NOT_CONFIGURED : REFUSED;
+  return resendErrorOutcome(error);
+}
+
+/**
+ * What sendEmailOutcome resolves to, without throwOnRetryable, for Resend's
+ * answer `error`: the one mapping from RESEND_4XX_NAMES to an outcome.
+ */
+export function resendErrorOutcome(error: ResendFailure): SendEmailOutcome {
+  switch (classifyResendFailure(error)) {
+    case "already_sent":
+      return SENT;
+    case "not_configured":
+      return NOT_CONFIGURED;
+    case "rejected":
+      return REFUSED;
+    default:
+      return TRY_LATER;
+  }
 }

@@ -35,6 +35,7 @@ import { RetryAfterError } from "inngest";
 import {
   EmailRetryableError,
   isRetryableEmailError,
+  resendErrorOutcome,
   sendEmail,
   sendEmailOutcome,
 } from "@/server/notifications/email";
@@ -772,11 +773,56 @@ describe("sendEmailOutcome - why a send didn't go", () => {
     await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "not_configured" });
   });
 
-  it("another 4xx is refused for good", async () => {
-    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+  // R42 security L2: classified by Resend's error name (its errors page). An
+  // error about our request or account set-up hits every send, so it is fixed
+  // once and then every send can go: never "refused" for good.
+  it.each([
+    [422, "invalid_from_address"],
+    [422, "missing_required_field"],
+    [422, "missing_required_parameter"],
+    [422, "invalid_parameter"],
+    [422, "invalid_access"],
+    [422, "invalid_region"],
+    [400, "validation_error"],
+    [422, "validation_error"],
+    [400, "invalid_idempotency_key"],
+    [404, "not_found"],
+    [405, "method_not_allowed"],
+    [401, "restricted_api_key"],
+    [403, "suspended_api_key"],
+    [403, "invalid_permission"],
+  ])("a %i %s (our request or set-up) is not configured, and is never thrown", async (status, name) => {
+    sendMock.mockResolvedValueOnce(rejection(status, name));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "not_configured" });
+    sendMock.mockResolvedValueOnce(rejection(status, name));
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "not_configured" });
+  });
+
+  it("a 409 resource_locked is a rate limit: thrown to be retried, else try later", async () => {
+    sendMock.mockResolvedValueOnce(rejection(409, "resource_locked"));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).rejects.toBeInstanceOf(RetryAfterError);
+    sendMock.mockResolvedValueOnce(rejection(409, "resource_locked"));
+    await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "try_later" });
+  });
+
+  it("an error about this message's content (422 invalid_attachment) is refused for good", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "invalid_attachment"));
     await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
-    sendMock.mockResolvedValueOnce(rejection(400, "invalid_parameter"));
+  });
+
+  // One bad address must not be retried forever: a name Resend's page doesn't list stays refused.
+  it("a 4xx with a name the table doesn't know is refused for good", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "some_new_error"));
+    await expect(sendEmailOutcome(params, { throwOnRetryable: true })).resolves.toEqual({ sent: false, reason: "refused" });
+    sendMock.mockResolvedValueOnce(rejection(451, "security_error"));
     await expect(sendEmailOutcome(params)).resolves.toEqual({ sent: false, reason: "refused" });
+  });
+
+  it("resendErrorOutcome answers what sendEmailOutcome resolves to without throwOnRetryable", () => {
+    expect(resendErrorOutcome({ name: "invalid_from_address", statusCode: 422 })).toEqual({ sent: false, reason: "not_configured" });
+    expect(resendErrorOutcome({ name: "invalid_attachment", statusCode: 422 })).toEqual({ sent: false, reason: "refused" });
+    expect(resendErrorOutcome({ name: "daily_quota_exceeded", statusCode: 429 })).toEqual({ sent: false, reason: "try_later" });
+    expect(resendErrorOutcome({ name: "invalid_idempotent_request", statusCode: 409 })).toEqual({ sent: true });
   });
 
   it("without throwOnRetryable, a swallowed 5xx, rate limit or network error is try later", async () => {
