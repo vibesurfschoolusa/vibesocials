@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { CONNECT_LINK_COOKIE_MAX_AGE_SECONDS, CONNECT_LINK_RATE_LIMIT_MESSAGE } from "./connectLink";
-import { REVIEW_LINK_IP_LIMIT_MESSAGE } from "./reviewLink";
+import { REVIEW_LINK_DAILY_LIMIT_MESSAGE, REVIEW_LINK_DAILY_LIMIT_REASON, REVIEW_LINK_IP_LIMIT_MESSAGE } from "./reviewLink";
 import { PENDING_CONNECTION_TTL_MS } from "@/server/connections/pendingConnection";
 
-import { CLIENT_LINK_LIMIT_REASON, limitReachedSentence, limitWaitSeconds } from "./clientLinkLimit";
+import { CLIENT_LINK_LIMIT_REASON, dailyLimitSentence, limitReachedSentence, limitWaitSeconds } from "./clientLinkLimit";
 
 /**
  * R40 client-journey L2/L3: one "limit reached" view for every client link.
@@ -56,6 +56,22 @@ describe("limitReachedSentence", () => {
 
   it("the /c choice's life on the page is the server's", () => {
     expect(CONNECT_LINK_COOKIE_MAX_AGE_SECONDS * 1000).toBe(PENDING_CONNECTION_TTL_MS);
+  });
+});
+
+// R41 lead: the per-link daily 429 gets the same view, worded from its wait when it names one.
+describe("dailyLimitSentence", () => {
+  it("is the route's own sentence when no wait is known", () => {
+    expect(dailyLimitSentence(undefined)).toBe(REVIEW_LINK_DAILY_LIMIT_MESSAGE);
+    expect(dailyLimitSentence(0)).toBe(REVIEW_LINK_DAILY_LIMIT_MESSAGE);
+    expect(REVIEW_LINK_DAILY_LIMIT_MESSAGE.startsWith(REVIEW_LINK_DAILY_LIMIT_REASON)).toBe(true);
+  });
+
+  it("names the wait in hours from an hour on, else in minutes, rounded up", () => {
+    expect(dailyLimitSentence(5 * 3600)).toBe("This link has reached today's limit. Reload this page in 5 hours.");
+    expect(dailyLimitSentence(3601)).toBe("This link has reached today's limit. Reload this page in 2 hours.");
+    expect(dailyLimitSentence(3600)).toBe("This link has reached today's limit. Reload this page in 1 hour.");
+    expect(dailyLimitSentence(1500)).toBe("This link has reached today's limit. Reload this page in 25 minutes.");
   });
 });
 

@@ -42,8 +42,10 @@ export const REVIEW_VERSION_MISSING_MESSAGE = "Reload this page and try again.";
 export const REVIEW_LINK_IP_LIMIT_MESSAGE =
   "Too many requests from this network in the last hour. Try again later.";
 
-export const REVIEW_LINK_DAILY_LIMIT_MESSAGE =
-  "This link has reached today's limit. Try again tomorrow.";
+/** The daily limit's reason alone, so the page can follow it with the wait (clientLinkLimit). */
+export const REVIEW_LINK_DAILY_LIMIT_REASON = "This link has reached today's limit.";
+
+export const REVIEW_LINK_DAILY_LIMIT_MESSAGE = `${REVIEW_LINK_DAILY_LIMIT_REASON} Try again tomorrow.`;
 
 export const REVIEW_LINK_CREATE_LIMIT_MESSAGE =
   "Too many new links in the last hour. Try again later.";

@@ -8,6 +8,8 @@
  * that does.
  */
 
+import { REVIEW_LINK_DAILY_LIMIT_MESSAGE, REVIEW_LINK_DAILY_LIMIT_REASON } from "./reviewLink";
+
 /** The routes' reason; their own 429 sentences start with it (tested). */
 export const CLIENT_LINK_LIMIT_REASON = "Too many requests from this network in the last hour.";
 
@@ -40,6 +42,18 @@ export function limitReachedSentence(
     return `${CLIENT_LINK_LIMIT_REASON} Wait ${minutesText(waitSeconds)}, then ${outlasts.then}`;
   }
   return `${CLIENT_LINK_LIMIT_REASON} Reload this page in ${minutesText(waitSeconds)}.`;
+}
+
+/**
+ * R41 lead: the /v link's daily decision limit, the same view. Its wait can
+ * be most of a day, so from an hour on it is named in whole hours, rounded up;
+ * with no wait known, the route's own "Try again tomorrow."
+ */
+export function dailyLimitSentence(waitSeconds: number | undefined): string {
+  if (!waitSeconds || waitSeconds <= 0) return REVIEW_LINK_DAILY_LIMIT_MESSAGE;
+  const hours = Math.ceil(waitSeconds / 3600);
+  const wait = waitSeconds < 3600 ? minutesText(waitSeconds) : hours === 1 ? "1 hour" : `${hours} hours`;
+  return `${REVIEW_LINK_DAILY_LIMIT_REASON} Reload this page in ${wait}.`;
 }
 
 /** The wait a 429 names: the body's `retryAfterSeconds`, else the Retry-After header. */

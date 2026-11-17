@@ -6,7 +6,7 @@ import { useAnnounceOnShow } from "@/components/ui/announcer";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
+import { dailyLimitSentence, limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { fetchOrNoAnswer, isNoAnswer } from "@/lib/requestNoAnswer";
 import { useRetryFocus } from "@/lib/useRetryFocus";
@@ -18,6 +18,7 @@ import {
   REVIEW_POST_LOCKED_MESSAGE,
   REVIEW_POST_LOCKED_RELOADED_MESSAGE,
   REVIEW_NOTE_MAX,
+  REVIEW_LINK_DAILY_LIMIT_MESSAGE,
   REVIEW_LINK_IP_LIMIT_MESSAGE,
   reviewDecisionOutcome,
 } from "@/lib/reviewLink";
@@ -139,6 +140,19 @@ export function shownCardLine(line: CardLine | null, reloads: number): string | 
   if (!line) return null;
   if (line.clearAfter !== null && reloads > line.clearAfter) return null;
   return line.text;
+}
+
+/**
+ * R41: a decision's 429 from either limit (the network's hour, the link's
+ * day) refuses every press until it ends, so the card gets its one sentence,
+ * worded from the wait, and every decision is turned off. Null otherwise.
+ */
+function decisionLimitSentence(response: Response, data: unknown): string | null {
+  if (response.status !== 429) return null;
+  const error = (data as { error?: unknown } | null)?.error;
+  if (error === REVIEW_LINK_IP_LIMIT_MESSAGE) return limitReachedSentence(limitWaitSeconds(response, data));
+  if (error === REVIEW_LINK_DAILY_LIMIT_MESSAGE) return dailyLimitSentence(limitWaitSeconds(response, data));
+  return null;
 }
 
 /** The route's `already`: this request wrote nothing, as an earlier one had. */
@@ -293,10 +307,11 @@ export function ReviewPostCard({
         },
       );
       const data: unknown = await response.json().catch(() => null);
-      if (response.status === 429 && (data as { error?: unknown } | null)?.error === REVIEW_LINK_IP_LIMIT_MESSAGE) {
+      const limitSentence = decisionLimitSentence(response, data);
+      if (limitSentence) {
         // The one limit view: the wait, and no decision left to press on any card.
         focusAfterPress(pressed, () => lineRef.current);
-        setError({ text: limitReachedSentence(limitWaitSeconds(response, data)), clearAfter: null });
+        setError({ text: limitSentence, clearAfter: null });
         onLimited?.();
         return;
       }

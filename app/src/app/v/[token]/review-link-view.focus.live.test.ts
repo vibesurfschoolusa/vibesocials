@@ -242,4 +242,56 @@ describe("/v: a card decision's 429", () => {
     expect(props(find(container, (n) => n.nodeName === "TEXTAREA")!).value).toBe("Use the other photo");
     expect(props(buttons("Send")[0]).disabled).toBe(true);
   });
+  // R41 lead: the per-link daily limit refuses every decision until it ends, the same rule.
+  describe("the link's daily limit", () => {
+    const DAILY = "This link has reached today's limit. Try again tomorrow.";
+
+    it("Looks good: the wait from Retry-After, and no decision can be pressed on any card", async () => {
+      fetchMock
+        .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a"), card("b")], more: false })))
+        .mockReturnValueOnce(
+          Promise.resolve(
+            Response.json({ error: DAILY, retryAfterSeconds: 5 * 3600 }, { status: 429, headers: { "Retry-After": "18000" } }),
+          ),
+        );
+      await act(async () => {
+        root.render(createElement(ReviewLinkView, { token: "tok" }));
+      });
+      await settle();
+      await press(buttons("Looks good")[0]);
+
+      expect(container.textContent).toContain("This link has reached today's limit. Reload this page in 5 hours.");
+      for (const label of ["Looks good", "Ask for a change"]) {
+        const found = buttons(label);
+        expect(found).toHaveLength(2);
+        for (const node of found) expect(props(node).disabled).toBe(true);
+      }
+      const active = doc.activeElement as FakeNode;
+      expect(active.attributes.role).toBe("alert");
+    });
+
+    it("Send with no wait named: the route's sentence, the note stays, Send is off", async () => {
+      fetchMock
+        .mockReturnValueOnce(Promise.resolve(Response.json({ posts: [card("a")], more: false })))
+        .mockReturnValueOnce(Promise.resolve(Response.json({ error: DAILY }, { status: 429 })));
+      await act(async () => {
+        root.render(createElement(ReviewLinkView, { token: "tok" }));
+      });
+      await settle();
+      await press(buttons("Ask for a change")[0]);
+      const box = find(container, (n) => n.nodeName === "TEXTAREA")!;
+      await act(async () => {
+        void props(box).onChange({ target: { value: "Use the other photo" } });
+      });
+      const form = find(container, (n) => n.nodeName === "FORM")!;
+      await act(async () => {
+        void props(form).onSubmit({ preventDefault: () => {} });
+      });
+      await settle();
+
+      expect(container.textContent).toContain(DAILY);
+      expect(props(find(container, (n) => n.nodeName === "TEXTAREA")!).value).toBe("Use the other photo");
+      expect(props(buttons("Send")[0]).disabled).toBe(true);
+    });
+  });
 });
