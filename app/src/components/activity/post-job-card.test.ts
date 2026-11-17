@@ -170,6 +170,15 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       createElement(ToastProvider, null, createElement(PostJobCard, { job: job(overrides), onRetryAccepted: () => {} })),
     ).replace(/<!-- -->/g, "");
   const publish = (targetPlatforms: Platform[]) => ({ targetPlatforms }) as unknown as PostJobDTO["publish"];
+  // The fixture post was created 2026-11-10: pin "now" inside its 7-day window
+  // (lib/sendAgain.ts), so every test here passes whatever today's date is.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-14T12:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   // Review round 2, item 4: the job does not record why it was not sent, so the
   // card says only what is true for every cause, old jobs included.
@@ -187,15 +196,6 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
   // Coordinator follow-up 1: the honest failure gets a Send again button that
   // calls the publish route (which accepts a failed post with no results).
   describe("Send again", () => {
-    // The fixture post was created 2026-11-10: pin "now" so the 7-day rule holds.
-    beforeEach(() => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date("2026-11-14T12:00:00.000Z"));
-    });
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
     it("offers no button on a post older than a week, and says why", () => {
       const html = render({ status: "failed", results: [], createdAt: "2026-01-18T10:00:00.000Z", scheduledFor: null });
       expect(html).not.toContain("Send again</button>");
