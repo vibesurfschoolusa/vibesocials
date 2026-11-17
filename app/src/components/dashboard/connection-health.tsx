@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { LoadError } from "@/components/load-error";
 import { buttonVariants } from "@/components/ui/buttonVariants";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
@@ -47,8 +48,9 @@ export function ConnectionHealth({
   connections,
   loading,
   error,
+  reload,
   isMember = false,
-}: Pick<UseConnectionsResult, "connections" | "loading" | "error"> & { isMember?: boolean }) {
+}: Pick<UseConnectionsResult, "connections" | "loading" | "error" | "reload"> & { isMember?: boolean }) {
   const ordered = connections
     ? [...connections].sort(
         (a, b) =>
@@ -81,9 +83,11 @@ export function ConnectionHealth({
             </div>
           </>
         ) : error ? (
-          <p className="text-sm text-muted-foreground">
-            Couldn&apos;t load connection status.
-          </p>
+          // R34 pages L4: the hook's sentence and the shared step (Retry, or
+          // Reload page after a workspace refusal), so the checklist can come back.
+          <div className="text-sm text-muted-foreground">
+            <LoadError message={error} onRetry={reload} />
+          </div>
         ) : (
           <ul className="space-y-1">
             {ordered.map((connection) => (

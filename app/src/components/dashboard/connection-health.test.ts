@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+
+import { CONNECTIONS_FAILED_TEXT } from "@/hooks/useConnections";
+import { WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
 import { ConnectionHealth } from "./connection-health";
 
@@ -19,6 +23,7 @@ function render(connections: Row[]) {
       connections: connections as never,
       loading: false,
       error: null,
+      reload: () => {},
     }) as ReactElement,
   );
 }
@@ -94,6 +99,7 @@ describe("ConnectionHealth for a member", () => {
         connections: connections as never,
         loading: false,
         error: null,
+        reload: () => {},
         isMember: true,
       }) as ReactElement,
     );
@@ -131,5 +137,37 @@ describe("ConnectionHealth for a member", () => {
     expect(html).toContain("Manage connections");
     expect(rowFor(html, "TikTok")).toContain(">Connect</a>");
     expect(html).not.toContain("The workspace owner can");
+  });
+});
+
+// R34 pages L4 / new-customer L2: a failed connections read says the hook's
+// sentence and offers the shared step (Retry, or Reload page after a workspace
+// refusal), so the card and the Get started checklist can come back.
+describe("ConnectionHealth when the read failed", () => {
+  function renderError(error: string) {
+    return renderToStaticMarkup(
+      createElement(ConnectionHealth, { connections: null, loading: false, error, reload: () => {} }) as ReactElement,
+    );
+  }
+
+  it("shows the hook's sentence with Retry", () => {
+    const html = renderError(CONNECTIONS_FAILED_TEXT);
+    expect(html).toContain("We couldn&#x27;t load your connections. Try again in a moment.");
+    expect(html).toContain(">Retry</button>");
+    expect(html).not.toContain("load connection status");
+  });
+
+  it("a workspace refusal offers Reload page", () => {
+    const html = renderError(WORKSPACE_CHANGED_SAVE_MESSAGE);
+    expect(html).toContain(">Reload page</button>");
+    expect(html).not.toContain(">Retry</button>");
+  });
+
+  it("the dashboard passes the hook's whole result, reload with it", () => {
+    const home = readFileSync(new URL("./dashboard-home.tsx", import.meta.url), "utf8");
+    expect(home).toContain("const connectionsState = useConnections(workspaceId);");
+    expect(home).toContain("<ConnectionHealth {...connectionsState} ");
+    const card = readFileSync(new URL("./connection-health.tsx", import.meta.url), "utf8");
+    expect(card).toContain('Pick<UseConnectionsResult, "connections" | "loading" | "error" | "reload">');
   });
 });
