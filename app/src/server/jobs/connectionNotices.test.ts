@@ -15,9 +15,11 @@ const {
   membersFindManyMock,
   sendEmailMock,
   claims,
+  reached,
   consumeMock,
 } = vi.hoisted(() => ({
     claims: new Map<string, Date>(),
+    reached: new Set<string>(),
     consumeMock: vi.fn(),
     table: new Map<string, Record<string, unknown>>(),
     findManyMock: vi.fn(),
@@ -40,6 +42,9 @@ vi.mock("@/lib/db", () => ({
     // sendOncePer lets a claim go through this.
     rateLimitEntry: {
       deleteMany: async ({ where }: { where: { key: string } }) => ({ count: claims.delete(where.key) ? 1 : 0 }),
+      // R44: the mark a claim's send leaves once it answered.
+      upsert: async ({ where }: { where: { key: string } }) => reached.add(where.key),
+      findUnique: async ({ where }: { where: { key: string } }) => (reached.has(where.key) ? { key: where.key } : null),
     },
   },
 }));
@@ -118,6 +123,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   table.clear();
   claims.clear();
+  reached.clear();
   consumeMock.mockReset();
   consumeMock.mockImplementation(async ({ key, resetAt }: { key: string; resetAt: Date }) => {
     if (claims.has(key)) return { allowed: false, retryAfterSeconds: 60 };
@@ -443,6 +449,106 @@ describe("each owner is told once per notice", () => {
       sendEmailMock.mockClear();
       await run();
       expect(recipients()).toEqual(["owner-a@example.com"]);
+    });
+  });
+});
+
+// R44 platform L1: in the 04:45 sweep, refresh-connection's notify-owners and
+// the sweep's own connection notices can tell the same owner at once. A claim
+// still in flight is not "owner reached": the second path records nothing, so
+// when the first send then fails, the next sweep still sends.
+describe("two paths at once under the same claim", () => {
+  const TRY_LATER = { sent: false, reason: "try_later" } as const;
+  const recipients = () => sendEmailMock.mock.calls.map((call) => call[0].to);
+
+  /** The first send waits until `finish` is called with its answer (or an error to throw). */
+  function holdFirstSend(): { finish: (answer: { sent: boolean; reason?: string } | Error) => void } {
+    const held: { finish?: (answer: { sent: boolean; reason?: string } | Error) => void } = {};
+    sendEmailMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          held.finish = (answer) => (answer instanceof Error ? reject(answer) : resolve(answer));
+        }),
+    );
+    return {
+      finish: (answer) => {
+        if (!held.finish) throw new Error("the first send has not started");
+        held.finish(answer);
+      },
+    };
+  }
+
+  beforeEach(() => membersFindManyMock.mockResolvedValue([OWNERS[0]]));
+
+  describe("reconnect email", () => {
+    beforeEach(() => row("conn-1", { needsReconnect: true, refreshFailedAt: new Date(NOW.getTime() - DAY_MS) }));
+
+    it.each([
+      ["a quota answer", TRY_LATER],
+      ["a 5xx", new EmailRetryableError("Resend send failed (status 503)")],
+    ])("the first is in flight and then fails (%s): the second records nothing, and the next sweep sends", async (_name, failure) => {
+      const first = holdFirstSend();
+      const notify = notifyOwnersToReconnect("conn-1", DAY);
+      await vi.waitFor(() => expect(sendEmailMock).toHaveBeenCalledTimes(1));
+
+      expect(await sendConnectionNotices(NOW.toISOString(), DAY)).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 0 });
+      expect(table.get("conn-1")!.reconnectEmailedAt).toBeNull();
+
+      first.finish(failure);
+      if (failure instanceof Error) await expect(notify).rejects.toBe(failure);
+      else await expect(notify).resolves.toEqual({ emailed: 0 });
+      expect(table.get("conn-1")!.reconnectEmailedAt).toBeNull();
+
+      sendEmailMock.mockClear();
+      expect(await sendConnectionNotices(NOW.toISOString(), "2026-11-15")).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 1 });
+      expect(recipients()).toEqual(["owner-a@example.com"]);
+      expect(table.get("conn-1")!.reconnectEmailedAt).not.toBeNull();
+    });
+
+    it("a confirmed earlier send still counts as done: recorded, nobody emailed twice", async () => {
+      const first = holdFirstSend();
+      const notify = notifyOwnersToReconnect("conn-1", DAY);
+      await vi.waitFor(() => expect(sendEmailMock).toHaveBeenCalledTimes(1));
+      first.finish({ sent: true });
+      await notify;
+      table.get("conn-1")!.reconnectEmailedAt = null;
+
+      sendEmailMock.mockClear();
+      await sendConnectionNotices(NOW.toISOString(), DAY);
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(table.get("conn-1")!.reconnectEmailedAt).not.toBeNull();
+    });
+  });
+
+  describe("expiry warning", () => {
+    const expiresAt = new Date("2026-11-20T15:30:00.000Z");
+    beforeEach(() => row("conn-1", { expiresAt }));
+
+    it("the first is in flight and then fails: the second records nothing, and the next sweep sends", async () => {
+      const first = holdFirstSend();
+      const sweep = sendConnectionNotices(NOW.toISOString(), DAY);
+      await vi.waitFor(() => expect(sendEmailMock).toHaveBeenCalledTimes(1));
+
+      expect(await sendConnectionNotices(NOW.toISOString(), DAY)).toEqual({ warned: 0, lapsed: 0, reconnectEmails: 0 });
+      expect(table.get("conn-1")!.expiryWarnedFor).toBeNull();
+
+      first.finish(TRY_LATER);
+      await expect(sweep).resolves.toEqual({ warned: 0, lapsed: 0, reconnectEmails: 0 });
+      expect(table.get("conn-1")!.expiryWarnedFor).toBeNull();
+
+      sendEmailMock.mockClear();
+      expect(await sendConnectionNotices(NOW.toISOString(), "2026-11-15")).toEqual({ warned: 1, lapsed: 0, reconnectEmails: 0 });
+      expect(recipients()).toEqual(["owner-a@example.com"]);
+      expect(time(table.get("conn-1")!.expiryWarnedFor)).toBe(expiresAt.getTime());
+    });
+
+    it("a confirmed earlier send still counts as done", async () => {
+      await sendConnectionNotices(NOW.toISOString(), DAY);
+      table.get("conn-1")!.expiryWarnedFor = null;
+      sendEmailMock.mockClear();
+      await sendConnectionNotices(NOW.toISOString(), DAY);
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(time(table.get("conn-1")!.expiryWarnedFor)).toBe(expiresAt.getTime());
     });
   });
 });

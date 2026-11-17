@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { consumeMock, releaseMock } = vi.hoisted(() => ({ consumeMock: vi.fn(), releaseMock: vi.fn() }));
+const { consumeMock, releaseMock, markMock, readMarkMock } = vi.hoisted(() => ({
+  consumeMock: vi.fn(),
+  releaseMock: vi.fn(),
+  markMock: vi.fn(),
+  readMarkMock: vi.fn(),
+}));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeMock }));
-vi.mock("@/lib/db", () => ({ prisma: { rateLimitEntry: { deleteMany: releaseMock } } }));
+vi.mock("@/lib/db", () => ({
+  prisma: { rateLimitEntry: { deleteMany: releaseMock, upsert: markMock, findUnique: readMarkMock } },
+}));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 import { sendOnceADay, sendOncePer, sendToEach } from "./onceADay";
@@ -16,6 +23,11 @@ beforeEach(() => {
   consumeMock.mockResolvedValue({ allowed: true });
   releaseMock.mockReset();
   releaseMock.mockResolvedValue({ count: 1 });
+  markMock.mockReset();
+  markMock.mockResolvedValue({});
+  // An earlier send under a held key answered, unless a test says otherwise.
+  readMarkMock.mockReset();
+  readMarkMock.mockResolvedValue({ key: "reached" });
   onError.mockReset();
 });
 
@@ -320,6 +332,63 @@ describe("sendOncePer", () => {
     const send = vi.fn();
     await expect(sendOncePer(HOUR, send, onError)).resolves.toBe("skipped");
     expect(send).not.toHaveBeenCalled();
+  });
+
+  // R44 platform L1: "skipped" only once the earlier send has answered; a claim
+  // still in flight (or failing, about to be let go) is "held", so a caller
+  // never records a notice on it.
+  describe("a held claim: skipped only once its send answered", () => {
+    it("a send that answers writes the key's reached mark, until the window ends", async () => {
+      await expect(sendOncePer(HOUR, async () => true, onError)).resolves.toBe("sent");
+      expect(markMock).toHaveBeenCalledWith({
+        where: { key: `${HOUR.key}:reached` },
+        create: { key: `${HOUR.key}:reached`, count: 1, expiresAt: HOUR.resetAt },
+        update: {},
+      });
+    });
+
+    it("a send that fails writes no mark", async () => {
+      await sendOncePer(HOUR, async () => false, onError);
+      await sendOncePer(HOUR, async () => {
+        throw new Error("5xx");
+      }, onError);
+      expect(markMock).not.toHaveBeenCalled();
+    });
+
+    it("held with the mark: skipped; held without it: held; nothing sent either way", async () => {
+      const send = vi.fn();
+      consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+      await expect(sendOncePer(HOUR, send, onError)).resolves.toBe("skipped");
+      expect(readMarkMock).toHaveBeenCalledWith({ where: { key: `${HOUR.key}:reached` } });
+      consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+      readMarkMock.mockResolvedValueOnce(null);
+      await expect(sendOncePer(HOUR, send, onError)).resolves.toBe("held");
+      expect(send).not.toHaveBeenCalled();
+      expect(releaseMock).not.toHaveBeenCalled();
+    });
+
+    it("a mark that can't be read: held, never skipped", async () => {
+      consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+      readMarkMock.mockRejectedValueOnce(new Error("db blip"));
+      await expect(sendOncePer(HOUR, vi.fn(), onError)).resolves.toBe("held");
+    });
+
+    it("a mark that can't be written: still sent (the next try reads held, and tries again later)", async () => {
+      markMock.mockRejectedValueOnce(new Error("db blip"));
+      await expect(sendOncePer(HOUR, async () => true, onError)).resolves.toBe("sent");
+    });
+
+    it("two paths at once: the second reads held while the first is in flight, and the first then fails", async () => {
+      let finish!: (went: boolean) => void;
+      const first = sendOncePer(HOUR, () => new Promise<boolean>((resolve) => (finish = resolve)), onError);
+      await vi.waitFor(() => expect(finish).toBeDefined());
+      consumeMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
+      readMarkMock.mockResolvedValueOnce(null);
+      await expect(sendOncePer(HOUR, vi.fn(), onError)).resolves.toBe("held");
+      finish(false);
+      await expect(first).resolves.toBe("failed");
+      expect(releaseMock).toHaveBeenCalledWith({ where: { key: HOUR.key } });
+    });
   });
 });
 

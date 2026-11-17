@@ -65,8 +65,8 @@ const RECONNECT_CLAIM_MS = 30 * 24 * 60 * 60 * 1000;
  * lets that claim go, the other owners are still tried, and the first such
  * error is thrown once all were, so the step is retried.
  *
- * `sent`: owners reached in this call. `done`: none is left to try, so the
- * notice may be recorded.
+ * `sent`: owners reached in this call. `done`: every owner was reached,
+ * refused for good, or skipped as confirmed earlier, so the notice may be recorded.
  */
 async function tellEachOwnerOnce<T extends { user: { id: string } }>(
   owners: readonly T[],
@@ -97,7 +97,10 @@ async function tellEachOwnerOnce<T extends { user: { id: string } }>(
       },
     );
     if (reached) sent++;
-    if (outcome === "failed") done = false;
+    // R44 platform L1: "held" is another path's send that has not answered
+    // (refresh-connection's notify-owners and the sweep can run at once); it
+    // may yet fail, so the notice is not recorded and the next sweep looks again.
+    if (outcome === "failed" || outcome === "held") done = false;
   }
   if (retryable) throw (retryable as { error: unknown }).error;
   return { sent, done };

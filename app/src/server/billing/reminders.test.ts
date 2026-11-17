@@ -20,6 +20,8 @@ const m = vi.hoisted(() => ({
   findManyArgs: [] as unknown[],
   /** The once-per-owner claims (consumeFixedWindow), by key. */
   claims: new Map<string, { count: number; expiresAt: Date }>(),
+  /** R44: the marks a claim's send leaves once it answered (sendOncePer). */
+  reached: new Set<string>(),
   claimsDown: false,
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -83,6 +85,8 @@ vi.mock("@/lib/db", () => {
     prisma: {
       rateLimitEntry: {
         deleteMany: async ({ where }: { where: { key: string } }) => ({ count: Number(m.claims.delete(where.key)) }),
+        upsert: async ({ where }: { where: { key: string } }) => m.reached.add(where.key),
+        findUnique: async ({ where }: { where: { key: string } }) => (m.reached.has(where.key) ? { key: where.key } : null),
       },
       workspace: {
         findMany: async (args: {
@@ -164,6 +168,7 @@ beforeEach(() => {
   m.rows = [];
   m.findManyArgs = [];
   m.claims.clear();
+  m.reached.clear();
   m.claimsDown = false;
   m.sendEmail.mockReset();
   m.sendEmail.mockResolvedValue(true);
@@ -579,5 +584,40 @@ describe("runBillingReminders", () => {
         expect(args.where.OR).toEqual([{ connections: { some: {} } }, { postJobs: { some: {} } }]);
       }
     });
+  });
+});
+
+// R44 platform L1: two runs at once (a retry overlapping the cron). An owner's
+// claim held by a send that has not answered is not "reached": the second run
+// leaves the marker unset, so when the first then fails, the next run sends.
+describe("runBillingReminders: a claim still in flight", () => {
+  it("the first run is in flight and then fails: the marker stays unset, and the next run sends", async () => {
+    m.rows = [ws("a")];
+    let finish!: (answer: boolean) => void;
+    m.sendEmail.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    const first = run();
+    await vi.waitFor(() => expect(m.sendEmail).toHaveBeenCalledTimes(1));
+
+    expect(await run()).toMatchObject({ sent: 0 });
+    expect(m.rows[0].trialReminderSentAt).toBeNull();
+
+    finish(false);
+    expect(await first).toMatchObject({ sent: 0, failed: 1 });
+    expect(m.rows[0].trialReminderSentAt).toBeNull();
+
+    m.sendEmail.mockClear();
+    expect(await run()).toMatchObject({ sent: 1, failed: 0 });
+    expect(m.sendEmail).toHaveBeenCalledTimes(1);
+    expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
+  });
+
+  it("a confirmed earlier send still counts as done: the marker is set, nobody emailed twice", async () => {
+    m.rows = [ws("a")];
+    await run();
+    m.rows[0].trialReminderSentAt = null;
+    m.sendEmail.mockClear();
+    await run();
+    expect(m.sendEmail).not.toHaveBeenCalled();
+    expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
   });
 });

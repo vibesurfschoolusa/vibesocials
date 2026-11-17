@@ -311,7 +311,9 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
             error: error instanceof Error ? error.name : typeof error,
           }),
       );
-      if (outcome !== "failed") continue;
+      // R44 platform L1: "held" is another delivery's send to this owner that
+      // has not answered and may yet fail, so this one is not recorded either.
+      if (outcome === "sent" || outcome === "skipped") continue;
       if (refusedForGood) refused++;
       else notSent++;
     }

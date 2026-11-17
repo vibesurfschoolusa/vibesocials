@@ -221,6 +221,9 @@ export async function runBillingReminders(
         failed++;
         allSent = false;
       }
+      // R44 platform L1: another run's send for this owner has not answered and
+      // may yet fail, so the marker waits; the next run looks again.
+      if (outcome === "held") allSent = false;
     }
 
     if (allSent) {

@@ -46,6 +46,8 @@ const m = vi.hoisted(() => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   /** The once-per-owner claims of the failed-payment notice (consumeFixedWindow), by key. */
   claims: new Map<string, { count: number; expiresAt: Date }>(),
+  /** R44: the marks a claim's send leaves once it answered (sendOncePer). */
+  reached: new Set<string>(),
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: m.logger }));
@@ -149,6 +151,8 @@ vi.mock("@/lib/db", () => {
     ...client(m.events, m.workspaces),
     rateLimitEntry: {
       deleteMany: async ({ where }: { where: { key: string } }) => ({ count: Number(m.claims.delete(where.key)) }),
+      upsert: async ({ where }: { where: { key: string } }) => m.reached.add(where.key),
+      findUnique: async ({ where }: { where: { key: string } }) => (m.reached.has(where.key) ? { key: where.key } : null),
     },
     $transaction: (cb: (tx: unknown) => Promise<unknown>, options?: unknown) => {
       m.txOptions.push(options);
@@ -263,6 +267,7 @@ beforeEach(() => {
   m.sendEmail.mockReset();
   m.sendEmail.mockResolvedValue(true);
   m.claims.clear();
+  m.reached.clear();
   for (const fn of Object.values(m.logger)) fn.mockReset();
   m.workspaces.set("ws_a", row());
   m.workspaces.set("ws_b", row({ id: "ws_b", name: "Surf B", stripeCustomerId: "cus_b" }));
@@ -1047,5 +1052,50 @@ describe("other events and bad input", () => {
     const logged = JSON.stringify(Object.values(m.logger).flatMap((fn) => fn.mock.calls));
     expect(logged).not.toContain("sk_test_example");
     expect(logged).not.toContain("whsec_example");
+  });
+});
+
+// R44 platform L1: two deliveries for one invoice at once (Stripe can send
+// evt_1 and a later evt_2 together). An owner's claim held by a send that has
+// not answered is not "reached": the second answers 500 and records nothing,
+// so when the first then fails, the redelivery still sends.
+describe("invoice.payment_failed: a claim still in flight", () => {
+  const failed = (id: string) => ({
+    id,
+    type: "invoice.payment_failed",
+    data: { object: { id: "in_1", object: "invoice", customer: "cus_a" } },
+  });
+
+  beforeEach(() => m.owners.set("ws_a", [{ userId: "u1", email: "one@example.com" }]));
+
+  it("the first is in flight and then fails: the second answers 500, and the redelivery sends", async () => {
+    let finish!: (answer: boolean) => void;
+    m.sendEmail.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    const first = handleStripeEvent(failed("evt_1"), ENV);
+    await vi.waitFor(() => expect(m.sendEmail).toHaveBeenCalledTimes(1));
+
+    expect(await handleStripeEvent(failed("evt_2"), ENV)).toBe(500);
+    expect(m.events.size).toBe(0);
+
+    finish(false);
+    expect(await first).toBe(500);
+    expect(m.events.size).toBe(0);
+
+    m.sendEmail.mockClear();
+    expect(await handleStripeEvent(failed("evt_2"), ENV)).toBe(200);
+    expect(m.sendEmail).toHaveBeenCalledTimes(1);
+    expect(m.events.has("evt_2")).toBe(true);
+  });
+
+  it("a confirmed earlier send still counts as done: recorded, nobody emailed twice", async () => {
+    let finish!: (answer: boolean) => void;
+    m.sendEmail.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    const first = handleStripeEvent(failed("evt_1"), ENV);
+    await vi.waitFor(() => expect(m.sendEmail).toHaveBeenCalledTimes(1));
+    finish(true);
+    expect(await first).toBe(200);
+
+    expect(await handleStripeEvent(failed("evt_2"), ENV)).toBe(200);
+    expect(m.sendEmail).toHaveBeenCalledTimes(1);
   });
 });

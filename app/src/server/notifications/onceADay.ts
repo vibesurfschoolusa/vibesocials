@@ -19,6 +19,38 @@ export async function releaseOnceADayKey(key: string): Promise<void> {
 }
 
 /**
+ * R44 platform L1: a claim is held from before its send until the send answers,
+ * and a second path that finds it held can't tell from the claim alone whether
+ * the email went or is still going (and may yet fail and be let go). So a send
+ * that answered true leaves a second key, `<key>:reached`, until the window
+ * ends: a held claim with it is "skipped", one without it is "held".
+ */
+function reachedKey(key: string): string {
+  return `${key}:reached`;
+}
+
+/** Writes the reached mark. A store error is logged: the next try then reads "held" and tries later. */
+async function markReached(key: string, resetAt: Date): Promise<void> {
+  const mark = reachedKey(key);
+  try {
+    await prisma.rateLimitEntry.upsert({ where: { key: mark }, create: { key: mark, count: 1, expiresAt: resetAt }, update: {} });
+  } catch (error) {
+    logger.error("[notifications] Couldn't mark a once-per-window email as reached (a later try reads it as not yet answered)", {
+      error,
+    });
+  }
+}
+
+/** Whether the send under a held claim has answered. A store error reads as not yet. */
+async function wasReached(key: string): Promise<boolean> {
+  try {
+    return (await prisma.rateLimitEntry.findUnique({ where: { key: reachedKey(key) } })) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * How long Resend remembers an idempotency key. Inside it a reused key stops a
  * second copy; past it, it does not.
  */
@@ -32,6 +64,8 @@ const IDEMPOTENCY_KEY_MS = 24 * 60 * 60 * 1000;
 function certainlyNotSent(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { emailNotSent?: unknown }).emailNotSent === true;
 }
+
+export type OncePerOutcome = "sent" | "skipped" | "held" | "failed";
 
 export type OncePerWindow = {
   key: string;
@@ -71,14 +105,17 @@ export type OncePerWindow = {
  * Resend still remembers), it sends anyway and the keys stop repeats;
  * otherwise it sends nothing and the next trigger tries again. Never throws.
  *
- * "skipped": already sent in this window. "failed": nothing went, a send
- * threw, or the claim store failed and nothing was sent.
+ * "skipped": already sent in this window (the claim's send answered, R44).
+ * "held": the claim is held but its send has not answered: still going, or
+ * failing and about to be let go, so a caller records nothing on it and tries
+ * again later. "failed": nothing went, a send threw, or the claim store failed
+ * and nothing was sent.
  */
 export async function sendOncePer(
   window: OncePerWindow,
   send: (sendStarted: () => void) => Promise<boolean>,
   onError: (error: unknown) => void,
-): Promise<"sent" | "skipped" | "failed"> {
+): Promise<OncePerOutcome> {
   const { key, resetAt } = window;
   const now = Date.now();
   const keysCoverLater = window.perRecipientKeys === true && resetAt.getTime() - now <= IDEMPOTENCY_KEY_MS;
@@ -93,11 +130,17 @@ export async function sendOncePer(
     onError(error);
     storeDown = true;
   }
-  if (!claimed && !(storeDown && keysCoverLater && keysCoverEarlier)) return storeDown ? "failed" : "skipped";
+  if (!claimed && !(storeDown && keysCoverLater && keysCoverEarlier)) {
+    if (storeDown) return "failed";
+    return (await wasReached(key)) ? "skipped" : "held";
+  }
 
   let started = false;
   try {
-    if (await send(() => (started = true))) return "sent";
+    if (await send(() => (started = true))) {
+      await markReached(key, resetAt);
+      return "sent";
+    }
   } catch (error) {
     onError(error);
     if (started && !keysCoverLater && !certainlyNotSent(error)) return "failed";
@@ -116,7 +159,7 @@ export function sendOnceADay(
   resetAt: Date,
   send: (sendStarted: () => void) => Promise<boolean>,
   onError: (error: unknown) => void,
-): Promise<"sent" | "skipped" | "failed"> {
+): Promise<OncePerOutcome> {
   return sendOncePer({ key, resetAt, keysFrom: null }, send, onError);
 }
 
