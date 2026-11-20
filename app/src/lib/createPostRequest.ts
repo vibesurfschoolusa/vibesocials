@@ -80,6 +80,8 @@ interface CommonBodyInput {
    * when none remain the field is left out.
    */
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+  /** R48 review: the platforms sent as a Story only; their own captions are never sent (a Story has none). */
+  storyOnly?: readonly Platform[];
 }
 
 export interface UploadedBlob {
@@ -98,7 +100,7 @@ export interface BuildReusePostBodyInput extends CommonBodyInput {
 }
 
 function overridesToSend(input: CommonBodyInput): Partial<Record<Platform, string>> | null {
-  return cleanPlatformOverrides(input.perPlatformOverrides, input.baseCaption, input.platforms);
+  return cleanPlatformOverrides(input.perPlatformOverrides, input.baseCaption, input.platforms, input.storyOnly);
 }
 
 /** Body for posting a file the composer just uploaded to blob storage. */

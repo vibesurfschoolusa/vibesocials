@@ -2271,6 +2271,7 @@ function CreatePostFormInner({
           workspaceId,
           // Cleaned by the builder, the same way as for the preview.
           perPlatformOverrides: platformOverrides,
+          storyOnly: placements.storyOnly,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
@@ -2287,6 +2288,7 @@ function CreatePostFormInner({
           deferred,
           workspaceId,
           perPlatformOverrides: platformOverrides,
+          storyOnly: placements.storyOnly,
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
           youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
           googleMetadata: googleOptionsShown ? googleMetadata : undefined,
@@ -2315,6 +2317,7 @@ function CreatePostFormInner({
           workspaceId,
           // Cleaned by the builder, the same way as for the preview.
           perPlatformOverrides: platformOverrides,
+          storyOnly: placements.storyOnly,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,

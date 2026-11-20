@@ -1881,6 +1881,19 @@ describe("a Story-only platform on Create", () => {
     expect(editorPlatforms("feed")).toEqual(["instagram", "x"]);
   });
 
+  // R48 review: the request leaves a Story-only platform's own caption out; the
+  // form keeps it (the editor gets every typed caption), so Feed shows it again.
+  it("Create's file bodies leave Story-only captions out, and the form keeps them", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    for (const builder of ["buildReusePostBody", "buildPhotosPostBody", "buildUploadPostBody"]) {
+      const call = raw.slice(raw.indexOf(`postData = ${builder}({`));
+      const body = call.slice(0, call.indexOf("});"));
+      expect(body, builder).toContain("perPlatformOverrides: platformOverrides,");
+      expect(body, builder).toContain("storyOnly: placements.storyOnly,");
+    }
+    expect(raw).toContain("overrides={platformOverrides}");
+  });
+
   it("Create passes the Story-only set to the editor and the preview", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     expect(raw).toContain("platforms={queueEditorPlatforms(selectedPlatforms, placements.storyOnly).shown}");

@@ -52,6 +52,14 @@ describe("cleanPlatformOverrides", () => {
     ).toEqual({ x: "For X" });
   });
 
+  // R48 review: a Story publishes no caption, so a Story-only platform's own one is never sent.
+  it("drops entries for platforms sent as a Story only", () => {
+    expect(cleanPlatformOverrides({ instagram: "For IG", x: "For X" }, "Main", SELECTED, ["instagram"])).toEqual({
+      x: "For X",
+    });
+    expect(cleanPlatformOverrides({ instagram: "For IG" }, "Main", SELECTED, ["instagram"])).toBeNull();
+  });
+
   it("returns null when nothing is left, or nothing was given", () => {
     expect(cleanPlatformOverrides({ tiktok: "x", x: "" }, "Main", SELECTED)).toBeNull();
     expect(cleanPlatformOverrides({}, "Main", SELECTED)).toBeNull();

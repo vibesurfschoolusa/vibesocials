@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
+import { findOverlongCaption, MAX_CAPTION_CHARS } from "./captionLimits";
 import { buildPhotosPostBody, buildReusePostBody, buildUploadPostBody } from "./createPostRequest";
 
 // 2026-11-01 audit (M3) + final review (T9): the composer sends the id of the
@@ -333,5 +334,37 @@ describe("buildPhotosPostBody (07c: the Create page's attached photos)", () => {
 
   it("refuses an empty list rather than sending a post without media", () => {
     expect(() => buildPhotosPostBody({ ...input, blobs: [] })).toThrow();
+  });
+});
+
+// R48 review: a platform sent as a Story only publishes no caption, and the
+// editor no longer shows its box. Its own caption is kept in the form (a
+// switch back to Feed shows it again) but never sent, so an over-long one
+// can't make POST /api/posts refuse the send.
+describe("a Story-only platform's own caption", () => {
+  const long = "a".repeat(MAX_CAPTION_CHARS + 1);
+  const common = {
+    baseCaption: "hello",
+    platforms: ["instagram", "x"] as Platform[],
+    deferred: {},
+    workspaceId: WORKSPACE_ID,
+    perPlatformOverrides: { instagram: long, x: "for x" },
+  };
+
+  it("is left out of every file body, so the send goes through", () => {
+    for (const body of [
+      buildUploadPostBody({ ...common, blob: BLOB, storyOnly: ["instagram"] }),
+      buildReusePostBody({ ...common, mediaItemId: "media-1", storyOnly: ["instagram"] }),
+    ]) {
+      const json = sent(body);
+      expect(json.perPlatformOverrides).toEqual({ x: "for x" });
+      expect(findOverlongCaption(json as Parameters<typeof findOverlongCaption>[0])).toBeNull();
+    }
+  });
+
+  it("Feed and Story, or Feed again (not Story only): the override is sent", () => {
+    const json = sent(buildUploadPostBody({ ...common, blob: BLOB, storyOnly: [] }));
+    expect(json.perPlatformOverrides).toEqual({ instagram: long, x: "for x" });
+    expect(sent(buildUploadPostBody({ ...common, blob: BLOB })).perPlatformOverrides).toEqual({ instagram: long, x: "for x" });
   });
 });

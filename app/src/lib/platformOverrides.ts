@@ -24,19 +24,22 @@ export const ADAPT_MAX_LENGTH_MAX = 10_000;
  *
  * At publish time an override is used as written, so a whitespace-only one
  * would post a blank caption; one equal to the main caption changes nothing,
- * and one for a platform not published to is never used.
+ * and one for a platform not published to is never used. R48 review: nor is
+ * one for a platform sent as a Story only (`storyOnly`), which publishes no
+ * caption; sent, an over-long one would make the route refuse the post.
  */
 export function cleanPlatformOverrides(
   overrides: PlatformOverrides | null | undefined,
   baseCaption: string,
   selectedPlatforms: readonly Platform[],
+  storyOnly: readonly Platform[] = [],
 ): PlatformOverrides | null {
   if (!overrides) return null;
   const base = baseCaption.trim();
   const cleaned: PlatformOverrides = {};
   for (const platform of PLATFORM_ORDER) {
     const text = overrides[platform];
-    if (typeof text !== "string" || !selectedPlatforms.includes(platform)) continue;
+    if (typeof text !== "string" || !selectedPlatforms.includes(platform) || storyOnly.includes(platform)) continue;
     const trimmed = text.trim();
     if (!trimmed || trimmed === base) continue;
     cleaned[platform] = text;
