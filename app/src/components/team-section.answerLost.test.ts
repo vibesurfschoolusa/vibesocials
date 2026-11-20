@@ -55,8 +55,8 @@ const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
 
 describe("Team card: a lost answer may have gone through", () => {
   it("each text has the shared lead-in and says where to check", () => {
+    // The replace sentence is pinned below: it names where each link lives instead.
     for (const text of [
-      CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
       CLIENT_LINKS_MAYBE_OFF_MESSAGE,
       INVITE_MAYBE_REVOKED_MESSAGE,
       LEAVE_MAYBE_LEFT_MESSAGE,
@@ -68,9 +68,12 @@ describe("Team card: a lost answer may have gone through", () => {
       expect(text.startsWith(LEAD)).toBe(true);
       expect(text).toMatch(/Reload this page/);
     }
+    // R51 fix review L1: shown in an 8-second toast, so short enough to read in it.
+    expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.startsWith(LEAD)).toBe(true);
     expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so new client links may have been made, which turns the old ones off. If your connection dropped, reconnect first. Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page.",
+      "Vibe Socials' answer didn't reach you, so the client links may have been replaced. If your connection dropped, reconnect first. Copy each link again: Media, Queue, Connections.",
     );
+    expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.split(/\s+/).length).toBeLessThanOrEqual(28);
   });
 
   // A retry after it went through gets a 409 that isn't the reason.

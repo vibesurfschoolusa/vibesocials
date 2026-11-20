@@ -95,9 +95,11 @@ export function answerFailureText(status: number, data: { error?: unknown } | nu
  * have happened and where to check. Leave and Delete workspace say to reload
  * first: a retry after it went through gets a 409 that isn't the reason.
  */
+// R51 fix review L1: shown in an 8-second toast, so it names only the three
+// places each link lives (the connect card here reads its link again itself).
 export const CLIENT_LINKS_MAYBE_REPLACED_MESSAGE = answerLostText(
-  "new client links may have been made, which turns the old ones off",
-  "Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page.",
+  "the client links may have been replaced",
+  "Copy each link again: Media, Queue, Connections.",
 );
 export const CLIENT_LINKS_MAYBE_OFF_MESSAGE = answerLostText(
   "the client links may have been turned off",
