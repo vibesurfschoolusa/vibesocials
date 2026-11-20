@@ -82,6 +82,27 @@ describe("validateScheduledFor", () => {
     expect(validateScheduledFor(edge, now).ok).toBe(false);
   });
 
+  // R47 pages-a L4: the 400 that Create, the Queue's move and scheduling a
+  // draft show word for word is a sentence for people, with a step that fits
+  // each of them, and names no field.
+  it.each([
+    [undefined, "Choose a date and time to schedule this post."],
+    ["", "Choose a date and time to schedule this post."],
+    ["not-a-date", "We couldn't read the scheduled time. Choose the date and time again."],
+    [
+      "2026-07-10T11:59:00.000Z",
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+    ],
+    [
+      "2026-07-10T12:00:30.000Z",
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+    ],
+  ])("%s is refused with a plain sentence", (value, sentence) => {
+    const result = validateScheduledFor(value, now);
+    expect(result).toEqual({ ok: false, error: sentence });
+    if (!result.ok) expect(result.error).not.toMatch(/scheduledFor|scheduled_for/i);
+  });
+
   it("accepts a time comfortably in the future and returns the Date", () => {
     const future = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
     const result = validateScheduledFor(future, now);

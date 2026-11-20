@@ -937,6 +937,24 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
     );
   });
 
+  // R47 pages-a L4: Create shows this 400 word for word.
+  it.each([
+    ["", "Choose a date and time to schedule this post."],
+    ["not-a-date", "We couldn't read the scheduled time. Choose the date and time again."],
+    [
+      new Date(Date.now() - 60_000).toISOString(),
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+    ],
+  ])("a refused scheduled time (%s) answers a plain sentence", async (scheduledFor, sentence) => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", scheduledFor }),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe(sentence);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a past/invalid scheduledFor with 400 and creates nothing", async () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const response = await POST(

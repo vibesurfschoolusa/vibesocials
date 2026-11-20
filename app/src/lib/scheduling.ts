@@ -100,19 +100,23 @@ export function validateScheduledFor(
   now: Date,
   bufferMs: number = SCHEDULE_BUFFER_MS,
 ): ScheduledForValidation {
+  // R47 pages-a L4: the routes answer these as their 400 and Create, the
+  // Queue's move-time and scheduling a draft show them word for word, so each
+  // is a plain sentence whose step fits all three (a time can pass during a
+  // slow upload after the press check).
   if (typeof value !== "string" || value.trim() === "") {
-    return { ok: false, error: "scheduledFor is required to schedule a post." };
+    return { ok: false, error: "Choose a date and time to schedule this post." };
   }
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return { ok: false, error: "scheduledFor must be a valid date/time." };
+    return { ok: false, error: "We couldn't read the scheduled time. Choose the date and time again." };
   }
 
   if (date.getTime() < now.getTime() + bufferMs) {
     return {
       ok: false,
-      error: "scheduledFor must be at least a minute in the future.",
+      error: "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
     };
   }
 

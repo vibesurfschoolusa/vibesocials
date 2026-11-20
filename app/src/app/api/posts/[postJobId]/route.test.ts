@@ -299,6 +299,22 @@ describe("PATCH /api/posts/[postJobId]", () => {
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
+  // R47 pages-a L4: the Queue's move-time shows this 400 word for word.
+  it.each([
+    ["", "Choose a date and time to schedule this post."],
+    ["not-a-date", "We couldn't read the scheduled time. Choose the date and time again."],
+    [
+      new Date(Date.now() - 60_000).toISOString(),
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+    ],
+  ])("moving a scheduled post to a refused time (%s) answers a plain sentence", async (scheduledFor, sentence) => {
+    findFirstMock.mockResolvedValue({ status: "scheduled" });
+    const res = await PATCH(req({ scheduledFor }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe(sentence);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
   it("400s NOT_SCHEDULED when trying to set scheduledFor on a draft", async () => {
     findFirstMock.mockResolvedValue({ status: "draft" });
     const res = await PATCH(req({ scheduledFor: FUTURE }), ctx("job-1"));

@@ -293,6 +293,18 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     const past = new Date(Date.now() - 1000).toISOString();
     const res = await POST(req({ scheduledFor: past }), ctx("job-1"));
     expect(res.status).toBe(400);
+    // R47 pages-a L4: scheduling a draft reads the same plain sentence.
+    expect((await res.json()).error).toBe(
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+    );
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("400s on an unreadable scheduled time with a plain sentence", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    const res = await POST(req({ scheduledFor: "not-a-date" }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("We couldn't read the scheduled time. Choose the date and time again.");
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
