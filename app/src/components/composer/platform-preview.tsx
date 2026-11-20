@@ -11,6 +11,7 @@ import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { buildPlatformPreview } from "@/lib/platformPreview";
+import { STORY_NO_CAPTION } from "@/lib/storyPlacement";
 
 export interface PlatformPreviewListProps {
   /** Platforms to preview, in order — the composer's SELECTED platforms. */
@@ -30,6 +31,13 @@ export interface PlatformPreviewListProps {
   mediaMimeType: string | null;
   /** How many photos are attached (07c); above 1 the first gets a count badge. */
   mediaCount?: number;
+  /**
+   * R48 publishing L3: the platforms sent as a Story only. A Story publishes
+   * no caption, so their card shows {@link STORY_NO_CAPTION}, with no count
+   * and no over-limit mark. Feed and Story is not here: its feed post carries
+   * the caption.
+   */
+  storyOnly?: readonly Platform[];
 }
 
 /**
@@ -73,6 +81,7 @@ export function PlatformPreviewList({
   mediaUrl,
   mediaMimeType,
   mediaCount,
+  storyOnly = [],
 }: PlatformPreviewListProps) {
   const [chosen, setChosen] = useState<Platform | null>(null);
   const shown = shownPreviewPlatform(platforms, chosen);
@@ -93,6 +102,7 @@ export function PlatformPreviewList({
       mediaUrl={mediaUrl}
       mediaMimeType={mediaMimeType}
       mediaCount={mediaCount}
+      story={storyOnly.includes(shown)}
     />
   );
 
@@ -135,7 +145,7 @@ export function PlatformPreviewList({
           >
             {platforms.map((platform) => {
               const selected = platform === shown;
-              const over = buildPlatformPreview({
+              const over = !storyOnly.includes(platform) && buildPlatformPreview({
                 platform,
                 caption,
                 override: overrides?.[platform] ?? null,
@@ -182,6 +192,7 @@ function PlatformPreviewCard({
   mediaUrl,
   mediaMimeType,
   mediaCount,
+  story,
 }: {
   platform: Platform;
   caption: string;
@@ -190,8 +201,10 @@ function PlatformPreviewCard({
   mediaUrl: string | null;
   mediaMimeType: string | null;
   mediaCount?: number;
+  story: boolean;
 }) {
   const preview = buildPlatformPreview({ platform, caption, override, user });
+  const willTruncate = !story && preview.willTruncate;
   const headingId = `platform-preview-heading-${platform}`;
   const isImage = mediaMimeType?.startsWith("image/") ?? false;
   const isVideo = mediaMimeType?.startsWith("video/") ?? false;
@@ -208,7 +221,7 @@ function PlatformPreviewCard({
         <h3 id={headingId} className="text-sm font-semibold text-foreground">
           {platformLabel(platform)}
         </h3>
-        {preview.willTruncate && (
+        {willTruncate && (
           <Badge variant="warning">
             <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
             Will be shortened
@@ -245,15 +258,21 @@ function PlatformPreviewCard({
       )}
 
       {/* Wraps anywhere: a footer link with tracking tags has no break point and ran past the card on a phone. */}
-      <p className="min-h-[1.25rem] whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm text-foreground">
-        {preview.rendered || <span className="text-muted-foreground">No caption yet</span>}
-      </p>
+      {story ? (
+        <p className="text-sm text-muted-foreground">{STORY_NO_CAPTION}</p>
+      ) : (
+        <>
+          <p className="min-h-[1.25rem] whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm text-foreground">
+            {preview.rendered || <span className="text-muted-foreground">No caption yet</span>}
+          </p>
 
-      <p className="text-xs text-muted-foreground">
-        {preview.limit !== null
-          ? `${preview.charCount} / ${preview.limit} characters`
-          : `${preview.charCount} characters`}
-      </p>
+          <p className="text-xs text-muted-foreground">
+            {preview.limit !== null
+              ? `${preview.charCount} / ${preview.limit} characters`
+              : `${preview.charCount} characters`}
+          </p>
+        </>
+      )}
     </Card>
   );
 }

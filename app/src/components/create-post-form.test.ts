@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Platform } from "@prisma/client";
 import { deriveComposerPlatforms } from "@/lib/postTargets";
 import { REPEAT_X_NOTE } from "@/lib/repeatSchedule";
+import {
+  composerPlacements as composerPlacementsForTest,
+  queueEditorPlatforms as queueEditorPlatformsForTest,
+} from "@/lib/storyPlacement";
 import { selectedMediaOf } from "./composer/attached-photos";
 import { captionResultApplies } from "./composer/useCaptionBox";
 
@@ -1851,5 +1855,35 @@ describe("a pick of several photos where one has no browser type", () => {
       { name: "a.jpg", type: "image/jpeg", size: 1_000 },
     ];
     expect(photoPickProblem(0, picked.map((file) => ({ type: preparedTypeOf(file), name: file.name })))).toBeNull();
+  });
+});
+
+// R48 publishing L3: a platform set to Story only publishes no caption. The
+// caption editor leaves it out (the Queue's rule, queueEditorPlatforms) and
+// the preview shows it as "Story, no caption". Feed and Story keeps both.
+describe("a Story-only platform on Create", () => {
+  const editorPlatforms = (instagram: "feed" | "story" | "both") => {
+    const placements = composerPlacementsForTest({
+      noFile: false,
+      selected: ["instagram", "x"],
+      instagram,
+      facebook: "feed",
+    });
+    return queueEditorPlatformsForTest(["instagram", "x"], placements.storyOnly).shown;
+  };
+
+  it("Instagram Story only: the editor doesn't offer Instagram", () => {
+    expect(editorPlatforms("story")).toEqual(["x"]);
+  });
+
+  it("Feed and Story, and Story switched off again: Instagram is offered", () => {
+    expect(editorPlatforms("both")).toEqual(["instagram", "x"]);
+    expect(editorPlatforms("feed")).toEqual(["instagram", "x"]);
+  });
+
+  it("Create passes the Story-only set to the editor and the preview", () => {
+    const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
+    expect(raw).toContain("platforms={queueEditorPlatforms(selectedPlatforms, placements.storyOnly).shown}");
+    expect(raw).toContain("storyOnly={placements.storyOnly}");
   });
 });

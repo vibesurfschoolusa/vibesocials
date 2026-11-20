@@ -90,6 +90,7 @@ import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tik
 import {
   composerPlacements,
   initialPlacements,
+  queueEditorPlatforms,
   reconcilePlacement,
   storyOnlyCaptionNote,
   storyVideoLengthRefusal,
@@ -3066,7 +3067,7 @@ function CreatePostFormInner({
 
         <PlatformCaptionEditor
           idPrefix="post-platform-caption"
-          platforms={selectedPlatforms}
+          platforms={queueEditorPlatforms(selectedPlatforms, placements.storyOnly).shown}
           caption={uploadCaption}
           overrides={platformOverrides}
           onChange={setPlatformOverrides}
@@ -3196,6 +3197,7 @@ function CreatePostFormInner({
           mediaUrl={activeMediaUrl}
           mediaMimeType={activeMimeType}
           mediaCount={photoSet.length}
+          storyOnly={placements.storyOnly}
         />
 
         {/* Roadmap Phase 5 — publish timing: now / schedule / draft. */}
