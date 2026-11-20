@@ -12,6 +12,7 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "./publishOutcomes";
 
 import {
   connectionGoneMessage,
+  hasInternalDetail,
   memberReconnectMessage,
   notSentAtCreation,
   notSentSentence,
@@ -601,5 +602,51 @@ describe("sentenceForRecipient", () => {
     );
     expect(sentenceForRecipient("X refused it.", "x", "member")).toBe("X refused it.");
     expect(sentenceForRecipient(null, "x", "member")).toBeNull();
+  });
+});
+
+// R47 publishing "Text cost": the internal-detail check runs in linear time.
+// The host:port part rescanned to the end from every dot, so 100,000 crafted
+// characters took seconds. A missing fix is a quick red test, never a hung run.
+describe("hasInternalDetail on long crafted text", () => {
+  const crafted = [
+    ["dotted words with no port", "a.".repeat(50_000)],
+    ["dotted digits with no port (no group is an IP part)", "1111.".repeat(20_000)],
+    ["hyphenated dotted words", "a-b.".repeat(25_000)],
+    ["one long dotted name, a colon and no digits", `${"ab.".repeat(33_333)}x:`],
+  ] as const;
+
+  it.each(crafted)("%s: 100,000 characters in under 50 ms", (_name, text) => {
+    expect(text.length).toBeGreaterThanOrEqual(99_990);
+    const started = performance.now();
+    expect(hasInternalDetail(text)).toBe(false);
+    publishErrorMessage("linkedin", { message: text, code: "LINKEDIN_POST_FAILED" });
+    expect(performance.now() - started).toBeLessThan(50);
+  }, 5_000);
+
+  it("a host and port at the end of a long text is still found", () => {
+    const text = `${"a.".repeat(50_000)} upload to storage.example.com:443 failed`;
+    const started = performance.now();
+    expect(hasInternalDetail(text)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(50);
+  }, 5_000);
+
+  it.each([
+    "Upload to storage.example.com:443 failed",
+    "db.internal.example:5432 refused",
+    "at a.b:80",
+    "x-1.y-2.z:65535 down",
+    "connect 10.0.0.12 failed",
+  ])("still hides %s", (text) => {
+    expect(hasInternalDetail(text)).toBe(true);
+  });
+
+  it.each([
+    "Instagram refused the video: it is longer than 60 seconds.",
+    "The caption is too long. Shorten it to 3,000 characters, then retry.",
+    "Try again at 10.30",
+    "Reconnect LinkedIn in Settings, then retry.",
+  ])("still lets a plain sentence through: %s", (text) => {
+    expect(hasInternalDetail(text)).toBe(false);
   });
 });

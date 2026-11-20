@@ -322,8 +322,12 @@ const REFRESH_FAILED_CODE = /_TOKEN_REFRESH_FAILED$/;
 // Database, network and host details that must never reach the user. ECONN is
 // matched at a word start only: "Reconnect" holds the same letters (R26).
 // R38: fetchWithTimeout's "Request timed out after 30000ms" too.
+// R47 publishing "Text cost": a host and port is found by its last dotted part
+// and the port ("x.example.com:443" by "e.com:443"), with no repeat inside a
+// repeat. The old whole-name form rescanned to the end from every dot, so its
+// cost grew with the square of the text (100,000 crafted characters: 13.5 s).
 const INTERNALS =
-  /timed out after \d+\s*ms|prisma|database|can't reach|\bECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
+  /timed out after \d+\s*ms|prisma|database|can't reach|\bECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|[a-z0-9-]\.[a-z0-9-]+:\d{2,5}\b/i;
 
 /** Would publishErrorMessage hide this text as an internal detail? A client checks before adding a platform's word. */
 export function hasInternalDetail(text: string): boolean {
