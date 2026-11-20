@@ -362,15 +362,31 @@ describe("prepareUploadFile: a shrink or a converter that fails", () => {
   });
 });
 
-// Add many's row has Retry and Remove; its other sentences are the "choose" ones, unchanged.
+// Add many's refused row offers only Remove (R48 publishing L4), so its HEIC
+// sentence says to remove it and add the JPEG; a type that can't be told keeps
+// the "choose" wording, whose step names the chooser.
 describe("the addMany context", () => {
-  it("keeps the choose wording for a HEIC that won't convert and a type that can't be told", async () => {
+  it("a HEIC that won't convert: Add many's own step; a type that can't be told keeps the choose wording", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const deps = fakeDeps({ convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))) });
     await expect(prepareUploadFile(file("IMG.heic", "image/heic"), deps, "addMany")).rejects.toThrow(
-      HEIC_CONVERSION_FAILED_MESSAGE,
+      "We couldn't convert this iPhone (HEIC) photo. Remove it, export it as a JPEG, then add the JPEG with Choose photos and videos.",
     );
     await expect(prepareUploadFile(file("IMG_0042", ""), fakeDeps(), "addMany")).rejects.toThrow(NO_EXTENSION_MESSAGE);
+  });
+
+  it("the other contexts keep their HEIC sentences", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({ convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))) });
+    const heic = () => file("IMG_1234.HEIC", "image/heic");
+    await expect(prepareUploadFile(heic(), deps)).rejects.toThrow(HEIC_CONVERSION_FAILED_MESSAGE);
+    await expect(prepareUploadFile(heic(), deps, "choose")).rejects.toThrow(HEIC_CONVERSION_FAILED_MESSAGE);
+    await expect(prepareUploadFile(heic(), deps, "sendMore")).rejects.toThrow(
+      "We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG, then press Send more and choose it again.",
+    );
+    await expect(prepareUploadFile(heic(), deps, "photoPick")).rejects.toThrow(
+      "IMG_1234.HEIC: we couldn't convert this iPhone photo. Export it as a JPEG, then choose the photos again.",
+    );
   });
 });
 

@@ -72,8 +72,9 @@ export const UNKNOWN_TYPE_MESSAGE = `${CANT_TELL} ${ANY_TYPE_STEP}`;
  * gone once the files were tried and Send more brings it back. "photoPick"
  * (R47 client-journey L3): Create's pick of several photos, where the file
  * must be named and a GIF or a video would be refused anyway. "addMany" (R48
- * client-journey L1): Add many, whose failed row has Retry and Remove; it is
- * worded as "choose" except where the step must name those controls.
+ * client-journey L1): Add many, whose failed row has Remove, and Retry only
+ * for a network failure; it is worded as "choose" except where the step must
+ * name those controls (a HEIC that won't convert, a failed shrink, the converter).
  */
 export type UnknownTypeContext = "choose" | "sendMore" | "photoPick" | "addMany";
 
@@ -165,6 +166,8 @@ export const HEIC_CONVERSION_FAILED_MESSAGE = `${HEIC_FAILED} Export it as a JPE
 export function heicConversionFailedMessage(name: string, context: UnknownTypeContext = "choose"): string {
   // R48 pages-b L1: a pick of several names the photo that failed.
   if (context === "photoPick") return `${name}: we couldn't convert this iPhone photo. Export it as a JPEG, then choose the photos again.`;
+  // R48 lead: Add many's refused row offers only Remove, so "try again" can't work there.
+  if (context === "addMany") return `${HEIC_FAILED} Remove it, export it as a JPEG, then add the JPEG with Choose photos and videos.`;
   return context === "sendMore"
     ? `${HEIC_FAILED} Export it as a JPEG, then press Send more and choose it again.`
     : HEIC_CONVERSION_FAILED_MESSAGE;

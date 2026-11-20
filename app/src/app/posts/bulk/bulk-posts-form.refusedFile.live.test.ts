@@ -194,7 +194,11 @@ describe("Add many: a file refused for its own type", () => {
 
   it("a HEIC that can't be converted: its sentence and Remove, no Retry", async () => {
     await mountWith([heic("broken.heic")], []);
-    expect(container.textContent).toContain("We couldn't convert this iPhone (HEIC) photo.");
+    // R48 lead: the whole sentence, whose step works on a row with only Remove.
+    expect(container.textContent).toContain(
+      "We couldn't convert this iPhone (HEIC) photo. Remove it, export it as a JPEG, then add the JPEG with Choose photos and videos.",
+    );
+    expect(container.textContent).not.toContain("try again");
     expect(container.textContent).not.toContain("could not be decoded");
     expect(buttons("Retry")).toHaveLength(0);
     expect(buttons("Remove").length).toBeGreaterThan(0);
