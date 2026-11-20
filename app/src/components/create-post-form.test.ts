@@ -44,6 +44,8 @@ import {
   isTextPostMode,
   needsSubmitConfirm,
   nextFileLostNotice,
+  nextRefusedFile,
+  refusedFileLine,
   nextPreparingPick,
   nextPickJudgment,
   CHOOSE_FILE_MESSAGE,
@@ -1898,5 +1900,35 @@ describe("a Story-only platform on Create", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     expect(raw).toContain("platforms={queueEditorPlatforms(selectedPlatforms, placements.storyOnly).shown}");
     expect(raw).toContain("storyOnly={placements.storyOnly}");
+  });
+});
+
+describe("R51: a refused file is one stored line", () => {
+  const big = { name: "long.mp4", message: "This file is over 512 MB. Choose a shorter or smaller one." };
+  const empty = { name: "placeholder.jpg", message: "This file is empty (0 bytes). Choose another file." };
+
+  it("a refusal sets the line and takes the lost-file notice away, so no press stops for it", () => {
+    expect(nextRefusedFile(null, { type: "refused", file: big })).toEqual(big);
+    for (const state of ["none", "fresh", "seen"] as const) {
+      const next = nextFileLostNotice(state, { type: "refused", file: big });
+      expect(next).toBe("none");
+      expect(fileLostBlocksSubmit(next)).toBe(false);
+    }
+  });
+
+  it("a press and a dismissed notice keep it", () => {
+    expect(nextRefusedFile(big, { type: "pressed" })).toEqual(big);
+    expect(nextRefusedFile(big, { type: "dismissed" })).toEqual(big);
+  });
+
+  it("an attached file, a reset, a newer loss or a newer refusal clear or replace it", () => {
+    expect(nextRefusedFile(big, { type: "attached" })).toBeNull();
+    expect(nextRefusedFile(big, { type: "reset" })).toBeNull();
+    expect(nextRefusedFile(big, { type: "lost", reason: "prepare-failed" })).toBeNull();
+    expect(nextRefusedFile(big, { type: "refused", file: empty })).toEqual(empty);
+  });
+
+  it("the line names the file, then the refusal's own step", () => {
+    expect(refusedFileLine(big)).toBe("long.mp4 wasn't added. This file is over 512 MB. Choose a shorter or smaller one.");
   });
 });

@@ -687,15 +687,6 @@ export function scheduleWhenText(scheduledForLocal: string): string | null {
 export const FILE_LOST_PRESS_TOAST =
   "Nothing was sent: the photo or video could not be added. Add it again, or press the button again to post without it.";
 
-/**
- * R50 pages-b L1: the press toast after a pick refused for the file itself (over
- * 512 MB, empty). Adding it again can never work, so it gives the two steps
- * that do; `buttonLabel` is the press's own button.
- */
-export function fileRefusedPressToast(buttonLabel: string): string {
-  return `Nothing was sent: the file wasn't added. Choose another file, or press "${buttonLabel}" to post without it.`;
-}
-
 /** Shown, until a file is attached or dismissed, when a file went away by itself. */
 export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it again, or continue without one.";
 
@@ -706,15 +697,21 @@ export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it 
  */
 export type FileLostNotice = "none" | "fresh" | "seen";
 
+/** Why the file went away. A pick refused for the file itself is a "refused" event instead. */
+export type FileLostReason = "prepare-failed" | "library-failed" | "photos-failed";
+
 /**
- * Why the file went away. "file-refused" is a single pick refused for the file
- * itself: the form's line keeps the refusal's sentence, so no notice shows,
- * but the first press still stops once (R50 pages-b L1).
+ * R51 new-customer L1-L2: a single pick refused for the file itself (over 512
+ * MB, empty). Choosing it again can never work, so it is not a lost file: no
+ * notice, no stopped press (the "without a photo" button and the confirm
+ * dialog already say what goes out), only its own line until nextRefusedFile clears it.
  */
-export type FileLostReason = "prepare-failed" | "file-refused" | "library-failed" | "photos-failed";
+export type RefusedFile = { name: string; message: string };
 
 export type FileLostEvent =
   | { type: "lost"; reason: FileLostReason }
+  /** A newer refusal replaces the lost-file notice, as a newer loss replaces the refusal. */
+  | { type: "refused"; file: RefusedFile }
   | { type: "attached" }
   | { type: "dismissed" }
   /** The form emptied by the person or after a post was saved: a new post starts clean. */
@@ -723,8 +720,26 @@ export type FileLostEvent =
 
 export function nextFileLostNotice(current: FileLostNotice, event: FileLostEvent): FileLostNotice {
   if (event.type === "lost") return "fresh";
-  if (event.type === "attached" || event.type === "dismissed" || event.type === "reset") return "none";
+  if (event.type === "attached" || event.type === "dismissed" || event.type === "reset" || event.type === "refused") {
+    return "none";
+  }
   return current === "fresh" ? "seen" : current;
+}
+
+/**
+ * The refused file's line. Only something that changes the file clears it: a
+ * file, photos or a library item attached, Remove all or a saved post (reset),
+ * or a newer refusal or loss. A press, Improve caption or another error leaves it.
+ */
+export function nextRefusedFile(current: RefusedFile | null, event: FileLostEvent): RefusedFile | null {
+  if (event.type === "refused") return event.file;
+  if (event.type === "pressed" || event.type === "dismissed") return current;
+  return null;
+}
+
+/** The refused file's line: what happened to which file, then the refusal's own step. */
+export function refusedFileLine(file: RefusedFile): string {
+  return `${file.name} wasn't added. ${file.message}`;
 }
 
 export function fileLostNoticeShown(state: FileLostNotice): boolean {
@@ -1200,12 +1215,15 @@ function CreatePostFormInner({
   // A file that went away by itself (FILE_LOST_MESSAGE): stays until a file is
   // attached or the person dismisses it (nextFileLostNotice).
   const [fileLost, setFileLost] = useState<FileLostNotice>("none");
-  const [fileLostReason, setFileLostReason] = useState<FileLostReason>("prepare-failed");
-  /** The file went away by itself: the notice (or the refused line) and its one-press stop. */
-  const loseFile = (reason: FileLostReason) => {
-    setFileLostReason(reason);
-    setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason }));
+  // R51: a pick refused for the file itself; its line is drawn from here, not uploadError.
+  const [refusedFile, setRefusedFile] = useState<RefusedFile | null>(null);
+  /** Every change to the file comes here, so the notice and the refused line follow the same events. */
+  const fileEvent = (event: FileLostEvent) => {
+    setFileLost((current) => nextFileLostNotice(current, event));
+    setRefusedFile((current) => nextRefusedFile(current, event));
   };
+  /** The file went away by itself: the notice and its one-press stop. */
+  const loseFile = (reason: FileLostReason) => fileEvent({ type: "lost", reason });
   // Scrolled into view whenever the success banner appears (effect below) so
   // a submit from further down the form doesn't leave the confirmation
   // off-screen.
@@ -1509,7 +1527,7 @@ function CreatePostFormInner({
 
         const item = data.item;
         setReuseItem(item);
-        setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
+        fileEvent({ type: "attached" });
         setSingleAltText("");
         singlePhotoRef.current = item;
         // R30 new-customer L1: what was typed while the item loaded stays.
@@ -1785,7 +1803,7 @@ function CreatePostFormInner({
     // Clearing the pick is the person's own doing (or the form's reset): no
     // "file went away" notice is left over from before. A pick that then fails
     // sets it again below.
-    if (!pickedFile) setFileLost((current) => nextFileLostNotice(current, { type: "reset" }));
+    if (!pickedFile) fileEvent({ type: "reset" });
     // A new pick (or none) replaces any attached photos too, and the caption
     // the AI wrote for them (Remove all and the last photo removed come here).
     forgetMediaCaption();
@@ -1823,12 +1841,11 @@ function CreatePostFormInner({
         if (selection === fileSelectionRef.current) {
           // Clear the input so the same file can be picked again.
           setFileInputKey((key) => key + 1);
-          // R50 pages-b L1: a refusal of the file itself (over 512 MB, empty)
-          // holds on every try, so its own sentence stays and nothing says
-          // "Add it again". Any other failure may pass next time.
+          // R50 pages-b L1, R51: a refusal of the file itself (over 512 MB,
+          // empty) holds on every try, so its own sentence stays and nothing
+          // says "Add it again". Any other failure may pass next time.
           if (prepareError instanceof PrepareFileError && prepareError.kind === "file") {
-            setUploadError(prepareError.message);
-            loseFile("file-refused");
+            fileEvent({ type: "refused", file: { name: pickedFile.name, message: prepareError.message } });
           } else {
             loseFile("prepare-failed");
           }
@@ -1841,7 +1858,7 @@ function CreatePostFormInner({
         return;
       }
       setUploadFile(nextFile);
-      setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
+      fileEvent({ type: "attached" });
       singlePhotoRef.current = nextFile;
 
       const blobInfo = await ensureUploaded(nextFile);
@@ -2109,7 +2126,7 @@ function CreatePostFormInner({
       for (const { key, file } of prepared) {
         changePhotoSet((prev) => patchPhoto(prev, key, { file, status: "waiting" }));
       }
-      setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
+      fileEvent({ type: "attached" });
       queuePhotoUploads(prepared, isStale, replace);
     } catch (err: unknown) {
       if (isStale()) return;
@@ -2446,7 +2463,7 @@ function CreatePostFormInner({
       // A new post has not been tried yet (platformListAlert).
       setTriedSend(false);
       // Nor has it lost a file: an old notice must not show on the next post.
-      setFileLost((current) => nextFileLostNotice(current, { type: "reset" }));
+      fileEvent({ type: "reset" });
       // Detach the media once the post is saved. For the reuse path this
       // prevents an accidental second submit from re-posting the same item;
       // for the upload path it clears the file state as before. Clearing
@@ -2544,10 +2561,10 @@ function CreatePostFormInner({
     if (first.countsAsTry) setTriedSend(true);
     // A file just went away: the first press stops here, with the notice (and
     // any error beside it) still showing, so the person sees it before a dialog.
-    if (fileLostShown) setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
+    if (fileLostShown) fileEvent({ type: "pressed" });
     if (first.stop === "file-lost") {
       // The press did nothing else, so say why.
-      toast.error(fileLostReason === "file-refused" ? fileRefusedPressToast(pageView.buttonLabel) : FILE_LOST_PRESS_TOAST);
+      toast.error(FILE_LOST_PRESS_TOAST);
       return;
     }
     setUploadError(null);
@@ -2861,6 +2878,7 @@ function CreatePostFormInner({
         )}
 
         {shownUploadError && <Alert ref={uploadErrorRef} tabIndex={-1} variant="danger" className="scroll-mt-24">{shownUploadError}</Alert>}
+        {refusedFile ? <Alert variant="danger">{refusedFileLine(refusedFile)}</Alert> : null}
 
         <div className="space-y-1.5">
           {reuseItem ? (
@@ -3320,13 +3338,13 @@ function CreatePostFormInner({
             </div>
           ) : null}
 
-          {fileLostShown && fileLostReason !== "file-refused" ? (
+          {fileLostShown ? (
             <Alert variant="warning">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <p>{FILE_LOST_MESSAGE}</p>
                 <button
                   type="button"
-                  onClick={() => setFileLost((current) => nextFileLostNotice(current, { type: "dismissed" }))}
+                  onClick={() => fileEvent({ type: "dismissed" })}
                   className="text-xs font-medium text-primary underline-offset-4 hover:underline"
                 >
                   Dismiss

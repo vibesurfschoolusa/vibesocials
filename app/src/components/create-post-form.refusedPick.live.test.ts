@@ -3,11 +3,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * R50 pages-b L1, on the mounted Create page: a single pick refused for the
- * file itself (over 512 MB, 0 bytes) can never be added, so the line that
- * stays is the refusal's own sentence and nothing says "Add it again". The
- * first press still stops once, with a toast giving the two steps that work.
- * A pick that failed for the network keeps the lost-file notice.
+ * R50 pages-b L1, R51 new-customer L1-L2, on the mounted Create page: a single
+ * pick refused for the file itself (over 512 MB, 0 bytes) can never be added.
+ * Its line comes from one stored state that only an attached file, a library
+ * item, Remove all, a saved post or a newer refusal clears. No press stops for
+ * it: the confirm dialog and the "without a photo" button already say so. A
+ * pick that failed for the network keeps the lost-file notice and its stop.
  */
 
 vi.mock("next/link", async () => {
@@ -18,12 +19,14 @@ vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams()
 vi.mock("@/hooks/useConnections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useConnections")>()),
   useConnections: () => ({
-    connections: [{ platform: "x", connected: true }],
+    connections: conn.platforms.map((platform) => ({ platform, connected: true })),
     loading: false,
     error: null,
     reload: () => {},
   }),
 }));
+// x takes text alone; instagram does not.
+const conn = vi.hoisted(() => ({ platforms: ["x"] as string[] }));
 // The real preparation for the file refusals; `network` stands in for a converter that didn't download.
 const prep = vi.hoisted(() => ({ network: false }));
 vi.mock("@/lib/prepareUploadFile", async (importOriginal) => {
@@ -42,17 +45,24 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CreatePostForm, FILE_LOST_MESSAGE, FILE_LOST_PRESS_TOAST, fileRefusedPressToast } from "./create-post-form";
+import { CreatePostForm, FILE_LOST_MESSAGE, FILE_LOST_PRESS_TOAST, UNTOUCHED_SUBMIT_MESSAGE } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
 let body: FakeNode;
 const calls: string[] = [];
+const postBodies: Record<string, unknown>[] = [];
 
-const fetchMock = vi.fn((input: unknown) => {
+const fetchMock = vi.fn((input: unknown, init?: { body?: unknown }) => {
   const url = String(input);
   calls.push(url);
-  if (url === "/api/posts") return Promise.resolve(Response.json({ id: "job-1" }));
+  if (url === "/api/posts") {
+    postBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return Promise.resolve(Response.json({ id: "job-1" }));
+  }
+  if (url.startsWith("/api/posts/enhance-caption")) {
+    return Promise.resolve(Response.json({ enhancedCaption: "Surf lesson today, the waves were great" }));
+  }
   return Promise.resolve(Response.json({}));
 });
 
@@ -172,22 +182,32 @@ beforeEach(async () => {
   vi.stubGlobal("HTMLElement", class {});
   vi.stubGlobal("Node", class {});
   calls.length = 0;
+  postBodies.length = 0;
   prep.network = false;
+  conn.platforms = ["x"];
   root = createRoot(container as unknown as HTMLElement);
+  await mount();
+});
+
+async function mount() {
   await act(async () => {
     root.render(createElement(ToastProvider, null, createElement(CreatePostForm, { workspaceId: "ws-1" })));
   });
   await settle();
-});
+}
 
 afterEach(async () => {
   await act(async () => root.unmount());
   vi.unstubAllGlobals();
 });
 
-describe("R50 pages-b L1: a file that can never be added", () => {
+const BIG = () => sized("long.mp4", "video/mp4", 600 * 1024 * 1024);
+/** A toast that offers a press to post without the file. */
+const offersWithout = () => pageSays("to post without it");
+
+describe("R51: a refused file is a stored line, not a one-press stop", () => {
   it.each([
-    ["a 600 MB video", () => sized("long.mp4", "video/mp4", 600 * 1024 * 1024), TOO_LARGE],
+    ["a 600 MB video", () => BIG(), TOO_LARGE],
     ["a 0-byte photo", () => new File([], "placeholder.jpg", { type: "image/jpeg" }), EMPTY],
   ])("%s: the refusal's own sentence stays, and nothing says Add it again", async (_name, file, sentence) => {
     await typeCaption("Surf lesson today");
@@ -198,59 +218,111 @@ describe("R50 pages-b L1: a file that can never be added", () => {
     expect(pageSays("Add it again")).toBe(false);
   });
 
-  // The first press stops once in every mode, so the post can't go out without
-  // the file by accident; a text draft has no confirm dialog to catch it.
-  it.each([
-    ["Publish now", "Publish without a photo", true],
-    ["Schedule", "Schedule without a photo", true],
-    ["Save draft", "Save draft without a photo", false],
-  ])("%s: the first press stops with the two steps, the second goes through", async (mode, label, confirms) => {
-    await typeCaption("Surf lesson today");
-    await chooseMode(mode);
-    if (mode === "Schedule") await run(() => props(byId("post-schedule")).onChange({ target: { value: tomorrowNoon() } }));
-    await pick(sized("long.mp4", "video/mp4", 600 * 1024 * 1024));
+  it("untouched page: the press gives the page's own refusal, and the refusal line stays", async () => {
+    await pick(BIG());
+    expect(lineSays(TOO_LARGE)).toBe(true);
 
     await submit();
-    expect(pageSays(fileRefusedPressToast(label))).toBe(true);
-    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(false);
-    expect(pageSays("Add it again")).toBe(false);
-    // The refusal's own line is still on screen after the stopped press.
+    expect(lineSays(UNTOUCHED_SUBMIT_MESSAGE)).toBe(true);
+    expect(offersWithout()).toBe(false);
+    expect(lineSays(TOO_LARGE)).toBe(true);
+    expect(calls).not.toContain("/api/posts");
+
+    // A second press changes nothing either.
+    await submit();
+    expect(lineSays(TOO_LARGE)).toBe(true);
+    expect(calls).not.toContain("/api/posts");
+  });
+
+  it("text page with no platform that takes text: the normal refusal, and no toast offers to post without the file", async () => {
+    conn.platforms = ["instagram"];
+    await mount();
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+
+    await submit();
+    expect(lineSays("None of your connected platforms can publish a post without a photo or video.")).toBe(true);
+    expect(offersWithout()).toBe(false);
     expect(lineSays(TOO_LARGE)).toBe(true);
     expect(dialogShown()).toBe(false);
     expect(calls).not.toContain("/api/posts");
+  });
+
+  it.each([
+    ["Publish now", "Publish without a photo"],
+    ["Schedule", "Schedule without a photo"],
+  ])("%s: the first press opens the confirm dialog, and confirming posts text only", async (mode, label) => {
+    await typeCaption("Surf lesson today");
+    await chooseMode(mode);
+    if (mode === "Schedule") await run(() => props(byId("post-schedule")).onChange({ target: { value: tomorrowNoon() } }));
+    await pick(BIG());
+    expect(button(label)).toBeTruthy();
 
     await submit();
-    if (confirms) {
-      expect(dialogShown()).toBe(true);
-      await run(() => props(dialogButton(label)).onClick());
-    }
-    expect(calls).toContain("/api/posts");
+    expect(offersWithout()).toBe(false);
+    expect(dialogShown()).toBe(true);
+    await run(() => props(dialogButton(label)).onClick());
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0].textOnly).toBe(true);
+    expect(postBodies[0].blobUrl).toBeUndefined();
+    // A saved post clears the line.
+    expect(lineSays(TOO_LARGE)).toBe(false);
   });
 
-  it("names the press's own button in the toast", () => {
-    expect(fileRefusedPressToast("Publish without a photo")).toBe(
-      "Nothing was sent: the file wasn't added. Choose another file, or press \"Publish without a photo\" to post without it.",
-    );
+  it("Draft: the first press saves text only", async () => {
+    await typeCaption("Surf lesson today");
+    await chooseMode("Save draft");
+    await pick(BIG());
+    expect(button("Save draft without a photo")).toBeTruthy();
+
+    await submit();
+    expect(offersWithout()).toBe(false);
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0].textOnly).toBe(true);
   });
 
-  it("a network failure, then a 600 MB pick: nothing says Add it again", async () => {
+  it("Improve caption keeps the refusal line", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    await run(() => props(button("Improve caption")).onClick());
+    expect(calls.some((url) => url.startsWith("/api/posts/enhance-caption"))).toBe(true);
+    expect(lineSays(TOO_LARGE)).toBe(true);
+  });
+
+  it("picking a file that can be added clears it", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    expect(lineSays(TOO_LARGE)).toBe(true);
+    await pick(sized("beach.mp4", "video/mp4", 1024));
+    expect(lineSays(TOO_LARGE)).toBe(false);
+  });
+
+  it("a newer refusal replaces it", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    await pick(new File([], "placeholder.jpg", { type: "image/jpeg" }));
+    expect(lineSays(EMPTY)).toBe(true);
+    expect(lineSays(TOO_LARGE)).toBe(false);
+  });
+
+  it("a network failure, then a 600 MB pick: the refusal replaces the notice", async () => {
     await typeCaption("Surf lesson today");
     prep.network = true;
     await pick(new File(["a"], "beach.heic", { type: "image/heic" }));
     expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
 
     prep.network = false;
-    await pick(sized("long.mp4", "video/mp4", 600 * 1024 * 1024));
+    await pick(BIG());
     expect(lineSays(TOO_LARGE)).toBe(true);
     expect(pageSays("Add it again")).toBe(false);
 
     await submit();
-    expect(pageSays(fileRefusedPressToast("Publish without a photo"))).toBe(true);
     expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(false);
-    expect(pageSays("Add it again")).toBe(false);
+    expect(offersWithout()).toBe(false);
+    expect(dialogShown()).toBe(true);
   });
 
-  it("a network failure in preparing keeps the lost-file notice and its press toast", async () => {
+  it("a network failure in preparing keeps the lost-file notice, its press toast and its stop", async () => {
     prep.network = true;
     await typeCaption("Surf lesson today");
     await pick(new File(["a"], "beach.heic", { type: "image/heic" }));
@@ -259,6 +331,11 @@ describe("R50 pages-b L1: a file that can never be added", () => {
 
     await submit();
     expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
+    expect(dialogShown()).toBe(false);
     expect(calls).not.toContain("/api/posts");
+
+    // The second press goes on to the confirm dialog, as before.
+    await submit();
+    expect(dialogShown()).toBe(true);
   });
 });
