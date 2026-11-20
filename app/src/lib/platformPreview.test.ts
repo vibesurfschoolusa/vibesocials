@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCaptionWithFooter } from "./captionFooter";
-import { buildPlatformPreview } from "./platformPreview";
+import { buildPlatformPreview, type PlatformPreviewInput } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
 import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
 import { computeInstagramCaption } from "@/server/platforms/instagramClient";
 import { computeLinkedInCommentary } from "@/server/platforms/linkedinClient";
+import { computeTikTokCaption } from "@/server/platforms/tiktokClient";
 import { computeTweetText } from "@/server/platforms/xClient";
 import type { PublishContext } from "@/server/platforms/types";
 import { buildYouTubeVideoResource, computeYouTubeTitle } from "@/server/platforms/youtubeClient";
@@ -498,5 +499,167 @@ describe("buildPlatformPreview on other platforms, unchanged by YouTube's byte l
     expect(Object.keys(result).sort()).toEqual(["charCount", "limit", "rendered", "truncated", "willTruncate"]);
     expect(result.rendered.length).toBe(longLength);
     expect(result).toMatchObject({ charCount: longCount, limit, truncated: longCut, willTruncate: longCut });
+  });
+});
+
+// R53 platform-clients L1: Pinterest cuts the description while it is over 800
+// code points (fitPinterestDescription), so the preview counts code points and
+// shows the text that function makes. A heart, a flag or a skin tone is one
+// character on screen and 2 code points; a family of four is 7.
+describe("buildPlatformPreview on Pinterest", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf", trackWebsiteLinks: true };
+  const HINT = "Pinterest counts some emoji and accented letters as 2 or more.";
+  const codePoints = (text: string) => [...text].length;
+  const posted = (caption: string, footer: PlatformPreviewInput["user"] = null) =>
+    fitPinterestDescription(buildCaptionWithFooter(caption, footer ?? {}, "pinterest"));
+
+  it.each([
+    [799, false],
+    [800, false],
+    [801, true],
+  ] as const)("ASCII %i long: willTruncate %s, rendered as the client posts", (length, cut) => {
+    const caption = "a".repeat(length);
+    const result = buildPlatformPreview({ platform: "pinterest", caption });
+    expect(result).toEqual({
+      rendered: posted(caption),
+      charCount: length,
+      limit: 800,
+      truncated: cut,
+      willTruncate: cut,
+    });
+    expect(result.rendered).toBe(cut ? `${"a".repeat(797)}...` : caption);
+  });
+
+  it("reads the finding's 760 characters with 50 hearts as 810 / 800, and cut", () => {
+    const caption = `${"a".repeat(710)}${"❤️".repeat(50)}`;
+    expect([...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(caption)].length).toBe(760);
+    const result = buildPlatformPreview({ platform: "pinterest", caption });
+    expect(result.charCount).toBe(810);
+    expect(result.willTruncate).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(result.rendered).toBe(posted(caption));
+    expect(codePoints(result.rendered)).toBeLessThanOrEqual(800);
+    expect(result.countHint).toBe(HINT);
+  });
+
+  it.each([
+    ["a heart", "❤️", 2],
+    ["a flag", "\u{1F1FA}\u{1F1F8}", 2],
+    ["a skin tone", "\u{1F44B}\u{1F3FD}", 2],
+    ["a family", "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}", 7],
+  ] as const)("%s around 800: whole at 800 code points, cut one over", (_name, emoji, size) => {
+    const count = Math.floor(780 / size);
+    const at = `${emoji.repeat(count)}${"a".repeat(800 - count * size)}`;
+    const over = `${at}a`;
+    expect(codePoints(at)).toBe(800);
+    const whole = buildPlatformPreview({ platform: "pinterest", caption: at });
+    expect(whole).toMatchObject({ rendered: at, charCount: 800, truncated: false, willTruncate: false, countHint: HINT });
+    expect(posted(at)).toBe(at);
+    const cut = buildPlatformPreview({ platform: "pinterest", caption: over });
+    expect(cut).toMatchObject({ charCount: 801, truncated: true, willTruncate: true, countHint: HINT });
+    expect(cut.rendered).toBe(posted(over));
+    expect(cut.rendered.endsWith("...")).toBe(true);
+  });
+
+  it("counts the footer it posts, and drops the footer as the publish path does", () => {
+    const fits = buildPlatformPreview({ platform: "pinterest", caption: "Waves ❤️", user });
+    const full = buildCaptionWithFooter("Waves ❤️", user, "pinterest");
+    expect(fits.rendered).toBe(full);
+    expect(fits.charCount).toBe(codePoints(full));
+    // 390 hearts: 390 characters, 780 code points. With the footer the text
+    // is over 800 code points, so the footer goes and the caption is whole.
+    const hearts = "❤️".repeat(390);
+    const dropped = buildPlatformPreview({ platform: "pinterest", caption: hearts, user });
+    expect(dropped.rendered).toBe(hearts);
+    expect(dropped.rendered).toBe(posted(hearts, user));
+    expect(dropped).toMatchObject({ charCount: 780, willTruncate: false, truncated: false });
+  });
+
+  it("gives the hint only when something counts as more than one", () => {
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "Plain words, no marks" })).not.toHaveProperty(
+      "countHint",
+    );
+    // A precomposed é is one code point: no jump, no hint.
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "Café" })).not.toHaveProperty("countHint");
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "Café" }).countHint).toBe(HINT);
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "Waves \u{1F30A}" })).not.toHaveProperty("countHint");
+    expect(buildPlatformPreview({ platform: "pinterest", caption: "Love ❤️" }).countHint).toBe(HINT);
+  });
+});
+
+// R53: on every platform, non-ASCII text (emoji, a joined family, flags,
+// accented letters, a combining mark) is shown exactly as the platform's own
+// client posts it, and "will be shortened" is true exactly when that client cuts.
+describe("buildPlatformPreview and every client agree on non-ASCII text", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #café", trackWebsiteLinks: true };
+  const send: Record<Exclude<PlatformPreviewInput["platform"], "youtube">, (text: string) => string> = {
+    x: computeTweetText,
+    tiktok: computeTikTokCaption,
+    instagram: computeInstagramCaption,
+    linkedin: computeLinkedInCommentary,
+    facebook_page: (text) => text,
+    google_business_profile: computeGbpPostSummary,
+    pinterest: fitPinterestDescription,
+  };
+  const pieces = [
+    "❤️",
+    "\u{1F30A}",
+    "\u{1F468}‍\u{1F469}‍\u{1F467}",
+    "\u{1F1FA}\u{1F1F8}",
+    "\u{1F44B}\u{1F3FD}",
+    "café",
+    "é",
+    "ñandú",
+  ];
+  const texts = (limit: number) =>
+    pieces.flatMap((piece) => {
+      const unit = `${piece} `;
+      const near = Math.floor(limit / [...unit].length);
+      return [unit.repeat(Math.max(1, near - 30)), unit.repeat(near), unit.repeat(near + 1), unit.repeat(near * 2)];
+    });
+
+  it.each(Object.keys(send) as (keyof typeof send)[])("%s", (platform) => {
+    const limit = PLATFORM_CAPTION_LIMITS[platform].charLimit ?? 3000;
+    for (const caption of texts(limit)) {
+      for (const footer of [null, user]) {
+        const full = buildCaptionWithFooter(caption, footer ?? {}, platform);
+        const client = send[platform](full);
+        const result = buildPlatformPreview({ platform, caption, user: footer });
+        expect(result.rendered).toBe(client);
+        expect(result.willTruncate).toBe(client !== full);
+        expect(result.truncated).toBe(client !== full);
+      }
+    }
+  });
+});
+
+// R53: no platform but Pinterest and YouTube gets a count hint, and TikTok's
+// preview is as on main 632efda.
+describe("buildPlatformPreview on the other platforms, unchanged by Pinterest's unit", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
+  const long = "Glassy waves é ".repeat(250);
+
+  it("tiktok: short and long", () => {
+    const footer = "\n\nFor more info visit vibesurfschool.com\n\n#surf #waves";
+    expect(buildPlatformPreview({ platform: "tiktok", caption: short, user })).toEqual({
+      rendered: `${short}${footer}`,
+      charCount: 189,
+      limit: 2200,
+      truncated: false,
+      willTruncate: false,
+    });
+    const result = buildPlatformPreview({ platform: "tiktok", caption: long, user });
+    expect(Object.keys(result).sort()).toEqual(["charCount", "limit", "rendered", "truncated", "willTruncate"]);
+    expect(result.rendered.length).toBe(2200);
+    expect(result).toMatchObject({ charCount: 3749, limit: 2200, truncated: true, willTruncate: true });
+  });
+
+  it("no other platform gets a hint", () => {
+    for (const platform of ["x", "tiktok", "instagram", "linkedin", "facebook_page", "google_business_profile"] as const) {
+      for (const caption of [short, long, "é \u{1F468}‍\u{1F469}‍\u{1F467} ❤️"]) {
+        expect(buildPlatformPreview({ platform, caption, user })).not.toHaveProperty("countHint");
+      }
+    }
   });
 });

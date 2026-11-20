@@ -21,38 +21,38 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
   // what the composer preview predicts. Client behavior itself is separately
   // locked by xClient.test.ts / tiktokClient.test.ts.
   it("sets X's client-enforced limit to 280 graphemes with a '...' ellipsis", () => {
-    expect(PLATFORM_CAPTION_LIMITS.x).toEqual({ charLimit: 280, ellipsis: "..." });
+    expect(PLATFORM_CAPTION_LIMITS.x).toEqual({ charLimit: 280, unit: "xWeight", ellipsis: "..." });
   });
 
   it("sets TikTok's client-enforced limit to 2200 graphemes with no ellipsis", () => {
-    expect(PLATFORM_CAPTION_LIMITS.tiktok).toEqual({ charLimit: 2200 });
+    expect(PLATFORM_CAPTION_LIMITS.tiktok).toEqual({ charLimit: 2200, unit: "grapheme" });
     expect(PLATFORM_CAPTION_LIMITS.tiktok.ellipsis).toBeUndefined();
   });
 
   it("sets Instagram's client-enforced limit to 2200 graphemes with no ellipsis (2026-11-01 audit)", () => {
     // Instagram rejects a longer caption outright, which used to surface as a
     // failed publish; instagramClient.ts now truncates to this same number.
-    expect(PLATFORM_CAPTION_LIMITS.instagram).toEqual({ charLimit: 2200 });
+    expect(PLATFORM_CAPTION_LIMITS.instagram).toEqual({ charLimit: 2200, unit: "grapheme" });
     expect(PLATFORM_CAPTION_LIMITS.instagram.ellipsis).toBeUndefined();
   });
 
   it("caps a Google Business Profile post at 1,500 characters", () => {
-    expect(PLATFORM_CAPTION_LIMITS.google_business_profile).toEqual({ charLimit: 1500, ellipsis: "..." });
+    expect(PLATFORM_CAPTION_LIMITS.google_business_profile).toEqual({ charLimit: 1500, unit: "grapheme", ellipsis: "..." });
   });
 
   it("linkedin: 3000 with '...' ellipsis (fix round 1, M6)", () => {
-    expect(PLATFORM_CAPTION_LIMITS.linkedin).toEqual({ charLimit: 3000, ellipsis: "..." });
+    expect(PLATFORM_CAPTION_LIMITS.linkedin).toEqual({ charLimit: 3000, unit: "grapheme", ellipsis: "..." });
   });
 
   it("has no client-side caption limit for facebook_page", () => {
-    expect(PLATFORM_CAPTION_LIMITS.facebook_page).toEqual({ charLimit: null });
+    expect(PLATFORM_CAPTION_LIMITS.facebook_page).toEqual({ charLimit: null, unit: null });
   });
 
   // R52 platform-clients L1: YouTube's description limit is 5,000 UTF-8 bytes
   // (lib/youtubeDescription.ts). charLimit stays null: no grapheme count applies,
   // so the footer rule (captionFooter.ts) keeps YouTube's footer as before.
   it("youtube: no character limit, 5,000 UTF-8 bytes with '…'", () => {
-    expect(PLATFORM_CAPTION_LIMITS.youtube).toEqual({ charLimit: null, utf8ByteLimit: 5000, ellipsis: "…" });
+    expect(PLATFORM_CAPTION_LIMITS.youtube).toEqual({ charLimit: null, unit: "utf8Byte", utf8ByteLimit: 5000, ellipsis: "…" });
   });
 
   it("gives no other platform a byte limit", () => {
@@ -77,9 +77,26 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
   });
 
   // Pinterest refuses a Pin whose description is over 800 characters
-  // (PinCreate.description maxLength), so the client cuts it there.
-  it("Pinterest: the description limit, 800, with an ellipsis", () => {
-    expect(PLATFORM_CAPTION_LIMITS.pinterest).toEqual({ charLimit: 800, ellipsis: "..." });
+  // (PinCreate.description maxLength), so the client cuts it there. R53
+  // platform-clients L1: a JSON maxLength counts code points, and
+  // fitPinterestDescription cuts on them, so the limit is in code points.
+  it("Pinterest: the description limit, 800 code points, with an ellipsis", () => {
+    expect(PLATFORM_CAPTION_LIMITS.pinterest).toEqual({ charLimit: 800, unit: "codePoint", ellipsis: "..." });
+  });
+
+  // R53: each entry names the unit its client counts in, so the preview and
+  // counter count in it instead of guessing; null only where nothing is cut.
+  it("names every platform's unit", () => {
+    expect(Object.fromEntries(Object.entries(PLATFORM_CAPTION_LIMITS).map(([p, l]) => [p, l.unit]))).toEqual({
+      x: "xWeight",
+      tiktok: "grapheme",
+      youtube: "utf8Byte",
+      instagram: "grapheme",
+      linkedin: "grapheme",
+      facebook_page: null,
+      google_business_profile: "grapheme",
+      pinterest: "codePoint",
+    });
   });
 });
 

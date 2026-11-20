@@ -159,3 +159,26 @@ describe("PlatformPreviewList YouTube count line: incl. footer", () => {
     expect(label.endsWith(" incl. footer")).toBe(user !== null);
   });
 });
+
+// R53 platform-clients L1: Pinterest's card counts code points, as its client
+// cuts, with the counter's hint beneath; ASCII reads as before.
+describe("PlatformPreviewList Pinterest count line", () => {
+  const lines = (caption: string) =>
+    (
+      renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: ["pinterest"], caption, user: null, mediaUrl: null, mediaMimeType: null }),
+      ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
+    ).slice(1);
+  const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
+
+  it("760 characters with 50 hearts: 810 / 800 and the counter's hint", () => {
+    const caption = `${"a".repeat(710)}${"❤️".repeat(50)}`;
+    const hint = platformCaptionCounter(caption, "pinterest", null).hint;
+    expect(hint).toBe("Pinterest counts some emoji and accented letters as 2 or more.");
+    expect(lines(caption)).toEqual([line("810 / 800 characters"), line(hint as string)]);
+  });
+
+  it("ASCII: unchanged", () => {
+    expect(lines("a".repeat(790))).toEqual([line("790 / 800 characters")]);
+  });
+});

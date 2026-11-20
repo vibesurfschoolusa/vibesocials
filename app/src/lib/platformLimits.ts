@@ -7,8 +7,9 @@ import { MULTI_PHOTO_MIME_TYPES, X_MAX_PHOTOS } from "./postMedia";
  * CLIENT-ENFORCED caption length limit.
  *
  * `charLimit: number` means the corresponding client in `server/platforms/`
- * truncates the caption to that many extended grapheme clusters (via
- * `truncateGraphemes`, see `lib/truncate.ts`) before posting. `charLimit: null`
+ * truncates the caption to that many of the entry's `unit` (mostly extended
+ * grapheme clusters, via `truncateGraphemes`, see `lib/truncate.ts`) before
+ * posting. `charLimit: null`
  * means that client does NOT truncate today — whatever caption is built is
  * sent as-is (the platform's own API may enforce its own limit server-side,
  * but nothing in this codebase does it client-side).
@@ -25,12 +26,26 @@ import { MULTI_PHOTO_MIME_TYPES, X_MAX_PHOTOS } from "./postMedia";
  * call to that platform's client (see xClient.ts / tiktokClient.ts for the
  * pattern) in the SAME change that edits this map — never edit this map alone.
  */
+/**
+ * The unit a platform's client counts its caption in before it cuts (R53
+ * platform-clients L1), so the preview and counter count in it too:
+ * - `grapheme`: extended grapheme clusters, what a person sees as one character;
+ * - `xWeight`: X's weight (lib/xWeightedLength.ts), an emoji 2 and a link 23;
+ * - `codePoint`: Unicode code points, what a JSON `maxLength` counts (Pinterest);
+ *   a heart or a flag is one character and 2 code points;
+ * - `utf8Byte`: UTF-8 bytes after the angle quotes (YouTube's description).
+ */
+export type CaptionUnit = "grapheme" | "xWeight" | "codePoint" | "utf8Byte";
+
 export interface PlatformCaptionLimit {
   /**
-   * Max caption length in extended grapheme clusters, or `null` when the
-   * client sends the caption untruncated.
+   * Max caption length in `unit` (grapheme, X weight or code points), or
+   * `null` when the client sends the caption untruncated or, like YouTube,
+   * cuts it by bytes (`utf8ByteLimit`).
    */
   charLimit: number | null;
+  /** What `charLimit` (or `utf8ByteLimit`) counts; null when nothing is cut. */
+  unit: CaptionUnit | null;
   /**
    * A limit in UTF-8 bytes instead, for a client that cuts by bytes (YouTube's
    * description, lib/youtubeDescription.ts). Set only with `charLimit: null`,
@@ -45,32 +60,33 @@ export interface PlatformCaptionLimit {
 export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // X counts by weight, not graphemes (fix round 1, M5): an emoji 2, a link 23
   // (lib/xWeightedLength.ts). xClient.ts cuts with truncateXWeighted.
-  x: { charLimit: 280, ellipsis: "..." },
+  x: { charLimit: 280, unit: "xWeight", ellipsis: "..." },
   // Matches the truncateGraphemes call in server/platforms/tiktokClient.ts.
-  tiktok: { charLimit: 2200 },
+  tiktok: { charLimit: 2200, unit: "grapheme" },
   // youtubeClient.ts fits the VIDEO TITLE (a separate field, 100 chars) and
   // cuts the description, footer included, to YouTube's 5,000 BYTES with
   // fitYouTubeDescription (lib/youtubeDescription.ts), which reads this entry.
-  youtube: { charLimit: null, utf8ByteLimit: 5000, ellipsis: "…" },
+  youtube: { charLimit: null, unit: "utf8Byte", utf8ByteLimit: 5000, ellipsis: "…" },
   // Matches the truncateGraphemes call in server/platforms/instagramClient.ts
   // (computeInstagramCaption). Instagram rejects a caption over 2,200
   // characters, so before the 2026-11-01 audit an over-long caption failed the
   // whole publish; the composer preview now warns and the client truncates.
-  instagram: { charLimit: 2200 },
+  instagram: { charLimit: 2200, unit: "grapheme" },
   // Matches the truncateKeepingLinks call in server/platforms/linkedinClient.ts
   // (computeLinkedInCommentary): LinkedIn refuses commentary over 3,000
   // characters (fix round 1, M6). The footer goes first (lib/captionFooter.ts).
-  linkedin: { charLimit: 3000, ellipsis: "..." },
+  linkedin: { charLimit: 3000, unit: "grapheme", ellipsis: "..." },
   // No client-side truncation today (server/platforms/facebookPageClient.ts).
-  facebook_page: { charLimit: null },
+  facebook_page: { charLimit: null, unit: null },
   // Matches computeGbpPostSummary in server/platforms/googleBusinessProfileClient.ts.
   // A photo is published as a Business Profile post ("Update"), whose text
   // Google caps at 1,500 characters.
-  google_business_profile: { charLimit: 1500, ellipsis: "..." },
+  google_business_profile: { charLimit: 1500, unit: "grapheme", ellipsis: "..." },
   // Matches fitPinterestDescription (lib/pinterestApi.ts), which
   // server/platforms/pinterestClient.ts sends as the Pin's description:
-  // Pinterest's limit is 800 characters, and it refuses a longer one.
-  pinterest: { charLimit: 800, ellipsis: "..." },
+  // Pinterest's limit is 800 characters as a JSON maxLength counts them, code
+  // points, and it refuses a longer one.
+  pinterest: { charLimit: 800, unit: "codePoint", ellipsis: "..." },
 };
 
 

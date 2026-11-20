@@ -272,8 +272,8 @@ function PlatformPreviewCard({
                 ? `${preview.charCount} / ${preview.limit} characters`
                 : `${preview.charCount} characters`)}
           </p>
-          {/* YouTube's count runs ahead of the letters: the counter's own hint, on its own line. */}
-          {preview.byteHint ? <p className="text-xs text-muted-foreground">{preview.byteHint}</p> : null}
+          {/* YouTube's and Pinterest's counts run ahead of the letters: the counter's own hint, on its own line. */}
+          {preview.countHint ? <p className="text-xs text-muted-foreground">{preview.countHint}</p> : null}
         </>
       )}
     </Card>

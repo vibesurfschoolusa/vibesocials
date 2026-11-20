@@ -1,7 +1,8 @@
 import type { Platform } from "@prisma/client";
 
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
-import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { fitPinterestDescription, pinterestCountHint, pinterestDescriptionLength } from "@/lib/pinterestApi";
+import { type CaptionUnit, PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes, truncateKeepingLinks } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
@@ -15,6 +16,13 @@ import { fitYouTubeDescription, youtubeCountHint, youtubeDescriptionLength } fro
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 function countGraphemes(text: string): number {
   return [...graphemeSegmenter.segment(text)].length;
+}
+
+/** The text's length in the unit its platform's client cuts by (platformLimits.ts). */
+function countIn(unit: CaptionUnit | null, text: string): number {
+  if (unit === "xWeight") return xWeightedLength(text);
+  if (unit === "codePoint") return pinterestDescriptionLength(text);
+  return countGraphemes(text);
 }
 
 export interface PlatformPreviewInput {
@@ -49,8 +57,9 @@ export interface PlatformPreviewResult {
    */
   rendered: string;
   /**
-   * Length of the full caption + footer text, BEFORE truncation: X's weight on
-   * X (lib/xWeightedLength.ts), graphemes elsewhere.
+   * Length of the full caption + footer text, BEFORE truncation, in the
+   * platform's unit (platformLimits.ts): X's weight on X
+   * (lib/xWeightedLength.ts), code points on Pinterest, graphemes elsewhere.
    */
   charCount: number;
   /**
@@ -64,8 +73,11 @@ export interface PlatformPreviewResult {
    */
   byteCount?: number;
   byteLimit?: number;
-  /** Why `byteCount` runs ahead of the letters, when a character counts as more than one. */
-  byteHint?: string;
+  /**
+   * Why the count runs ahead of the characters a person sees, when one counts
+   * as more than one: YouTube (bytes) and Pinterest (code points) only.
+   */
+  countHint?: string;
   /**
    * True when `byteCount` includes the workspace's footer. YouTube always keeps
    * its footer (captionFooter.ts drops none without a character limit), so
@@ -129,42 +141,46 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     fullCaption = removeXMentions(fullCaption);
   }
 
-  const { charLimit, utf8ByteLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
-  if (input.platform === "youtube" && utf8ByteLimit !== undefined) {
+  const { charLimit, unit, utf8ByteLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
+  if (unit === "utf8Byte" && utf8ByteLimit !== undefined) {
     // R52 platform-clients L1: the description as youtubeClient.ts sends it,
     // angle quotes swapped and cut by bytes, with the client's own function.
     const rendered = fitYouTubeDescription(fullCaption);
     const byteCount = youtubeDescriptionLength(fullCaption);
     const willTruncate = byteCount > utf8ByteLimit;
-    const byteHint = youtubeCountHint(fullCaption);
+    const countHint = youtubeCountHint(fullCaption);
     return {
       rendered,
       charCount: countGraphemes(fullCaption),
       limit: null,
       byteCount,
       byteLimit: utf8ByteLimit,
-      ...(byteHint ? { byteHint } : {}),
+      ...(countHint ? { countHint } : {}),
       byteIncludesFooter: buildCaptionWithFooter("", input.user ?? {}, input.platform) !== "",
       truncated: willTruncate,
       willTruncate,
     };
   }
-  // X is counted and cut by its own weight, as computeTweetText does (fix
-  // round 1, M5); LinkedIn keeps a link whole at the cut, as
-  // computeLinkedInCommentary does; every other platform cuts by graphemes.
-  const isX = input.platform === "x";
-  const charCount = isX ? xWeightedLength(fullCaption) : countGraphemes(fullCaption);
+  // Counted in the unit the map names and cut with the client's own function:
+  // X by its weight, as computeTweetText does (fix round 1, M5); LinkedIn keeps
+  // a link whole at the cut, as computeLinkedInCommentary does; Pinterest by
+  // code points with fitPinterestDescription (R53 platform-clients L1); every
+  // other platform by graphemes.
+  const charCount = countIn(unit, fullCaption);
   let rendered = fullCaption;
   if (charLimit !== null) {
-    if (isX) rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
+    if (input.platform === "x") rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
     else if (input.platform === "linkedin") rendered = truncateKeepingLinks(fullCaption, charLimit, ellipsis);
+    else if (input.platform === "pinterest") rendered = fitPinterestDescription(fullCaption);
     else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
   }
+  const countHint = input.platform === "pinterest" ? pinterestCountHint(fullCaption) : null;
 
   return {
     rendered,
     charCount,
     limit: charLimit,
+    ...(countHint ? { countHint } : {}),
     truncated: rendered !== fullCaption,
     willTruncate: charLimit !== null && charCount > charLimit,
   };

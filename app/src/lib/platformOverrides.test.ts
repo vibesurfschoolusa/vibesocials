@@ -450,3 +450,83 @@ describe("platformCaptionCounter on YouTube: incl. footer", () => {
     }
   });
 });
+
+// R53 platform-clients L1: Pinterest is counted in code points, as
+// fitPinterestDescription cuts, and is red exactly when the Pin is cut.
+describe("platformCaptionCounter and adaptMaxLength on Pinterest", () => {
+  const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf", trackWebsiteLinks: true };
+  const HINT = "Pinterest counts some emoji and accented letters as 2 or more.";
+  const heart = "❤️";
+
+  it("reads the finding's 760 characters with 50 hearts as 810 / 800, too long, with the hint", () => {
+    const counter = platformCaptionCounter(`${"a".repeat(710)}${heart.repeat(50)}`, "pinterest", null);
+    expect(counter).toEqual({ length: 810, max: 800, over: true, label: "810 / 800", hint: HINT });
+  });
+
+  it.each([
+    [799, false, "799 / 800"],
+    [800, false, "800 / 800"],
+    [801, true, "801 / 800"],
+  ] as const)("ASCII %i long: no hint, as before", (length, over, label) => {
+    expect(platformCaptionCounter("a".repeat(length), "pinterest", null)).toEqual({ length, max: 800, over, label });
+  });
+
+  it("is over exactly when the preview says the Pin will be cut", () => {
+    for (const text of [
+      heart.repeat(400),
+      `${heart.repeat(400)}a`,
+      "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}".repeat(114),
+      `${"\u{1F1FA}\u{1F1F8}".repeat(399)}ab`,
+      "é".repeat(401),
+      "hello",
+    ]) {
+      for (const user of [null, footer]) {
+        expect(platformCaptionCounter(text, "pinterest", user).over).toBe(
+          buildPlatformPreview({ platform: "pinterest", caption: text, user }).willTruncate,
+        );
+      }
+    }
+  });
+
+  it("says incl. footer as before when the footer is posted", () => {
+    const counter = platformCaptionCounter(`Love ${heart}`, "pinterest", footer);
+    const full = buildCaptionWithFooter(`Love ${heart}`, footer, "pinterest");
+    expect(counter).toEqual({
+      length: [...full].length,
+      max: 800,
+      over: false,
+      label: `${[...full].length} / 800 incl. footer`,
+      hint: HINT,
+    });
+  });
+
+  it("gives Adapt the room left after the footer, counted in code points", () => {
+    expect(adaptMaxLength("pinterest", null)).toBe(800);
+    expect(adaptMaxLength("pinterest", { defaultHashtags: "#surf" })).toBe(800 - "\n\n#surf".length);
+    expect(adaptMaxLength("pinterest", { defaultHashtags: `#love ${heart}` })).toBe(800 - [...`\n\n#love ${heart}`].length);
+  });
+});
+
+// R53: TikTok's counter and Adapt room, pinned from main 632efda, with no hint.
+describe("platformCaptionCounter on TikTok, unchanged by Pinterest's unit", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
+  const long = "Glassy waves é ".repeat(250);
+
+  it("short, long, a family and an accent", () => {
+    expect(platformCaptionCounter(short, "tiktok", user)).toEqual({
+      length: 189,
+      max: 2200,
+      over: false,
+      label: "189 / 2,200 incl. footer",
+    });
+    expect(platformCaptionCounter(long, "tiktok", user)).toEqual({ length: 3749, max: 2200, over: true, label: "3,749 / 2,200" });
+    expect(platformCaptionCounter("é \u{1F468}‍\u{1F469}‍\u{1F467}", "tiktok", null)).toEqual({
+      length: 3,
+      max: 2200,
+      over: false,
+      label: "3 / 2,200",
+    });
+    expect(adaptMaxLength("tiktok", user)).toBe(2146);
+  });
+});

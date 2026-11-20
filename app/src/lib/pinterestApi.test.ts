@@ -9,6 +9,8 @@ import {
   parsePinterestBoards,
   pinterestBasicAuthHeader,
   pinterestConfig,
+  pinterestCountHint,
+  pinterestDescriptionLength,
   pinterestPinLink,
   readPinterestErrorCode,
 } from "./pinterestApi";
@@ -183,5 +185,34 @@ describe("readPinterestErrorCode", () => {
     expect(readPinterestErrorCode("<html>Bad gateway</html>")).toBeNull();
     expect(readPinterestErrorCode('{"code":"2"}')).toBeNull();
     expect(readPinterestErrorCode("null")).toBeNull();
+  });
+});
+
+// R53 platform-clients L1: the composer counts the description with the unit
+// fitPinterestDescription cuts on, and says why the number can jump.
+describe("pinterestDescriptionLength and pinterestCountHint", () => {
+  const HINT = "Pinterest counts some emoji and accented letters as 2 or more.";
+
+  it("counts code points: one for a letter, 2 for a heart, a flag or a skin tone, 7 for a family", () => {
+    expect(pinterestDescriptionLength("abc")).toBe(3);
+    expect(pinterestDescriptionLength("café")).toBe(4);
+    expect(pinterestDescriptionLength("❤️")).toBe(2);
+    expect(pinterestDescriptionLength("\u{1F1FA}\u{1F1F8}")).toBe(2);
+    expect(pinterestDescriptionLength("\u{1F44B}\u{1F3FD}")).toBe(2);
+    expect(pinterestDescriptionLength("\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}")).toBe(7);
+  });
+
+  it("cuts exactly when the length is over 800", () => {
+    for (const text of ["❤️".repeat(400), `${"❤️".repeat(400)}a`, "a".repeat(800), "a".repeat(801)]) {
+      expect(fitPinterestDescription(text) !== text).toBe(pinterestDescriptionLength(text) > PINTEREST_DESCRIPTION_MAX);
+    }
+  });
+
+  it("hints only when some character counts as 2 or more", () => {
+    expect(pinterestCountHint("plain words")).toBeNull();
+    expect(pinterestCountHint("café \u{1F30A}")).toBeNull();
+    expect(pinterestCountHint("love ❤️")).toBe(HINT);
+    expect(pinterestCountHint("café")).toBe(HINT);
+    expect(pinterestCountHint("\u{1F468}‍\u{1F469}‍\u{1F467}")).toBe(HINT);
   });
 });

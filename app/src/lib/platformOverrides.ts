@@ -2,6 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { captionCounter, MAX_CAPTION_CHARS } from "@/lib/captionLimits";
+import { pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { buildPlatformPreview, byteCountText } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
@@ -90,11 +91,14 @@ export function platformOverridesEqual(
   return true;
 }
 
-// The platform clients count extended grapheme clusters (lib/truncate.ts),
-// except X, which counts by its own weight (lib/xWeightedLength.ts).
+// The platform clients count in the unit the limits map names: extended
+// grapheme clusters (lib/truncate.ts), X's weight (lib/xWeightedLength.ts) or,
+// on Pinterest, code points (lib/pinterestApi.ts).
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 function platformLength(text: string, platform: Platform): number {
-  if (platform === "x") return xWeightedLength(text);
+  const { unit } = PLATFORM_CAPTION_LIMITS[platform];
+  if (unit === "xWeight") return xWeightedLength(text);
+  if (unit === "codePoint") return pinterestDescriptionLength(text);
   return [...graphemeSegmenter.segment(text)].length;
 }
 
@@ -120,8 +124,8 @@ export interface PlatformCaptionCounter {
   /** e.g. `120 / 254`. */
   label: string;
   /**
-   * YouTube only, when a character counts as more than one: why the number
-   * jumps. Shown on its own line under the count.
+   * YouTube and Pinterest only, when a character counts as more than one: why
+   * the number jumps. Shown on its own line under the count.
    */
   hint?: string;
 }
@@ -131,8 +135,9 @@ export interface PlatformCaptionCounter {
  * text that will be posted (buildPlatformPreview: footer parts that publishing
  * drops are left out, @-mentions too on X, X by its weight) against the limit,
  * and is over exactly when the preview says the post will be shortened. YouTube
- * is counted as it counts (UTF-8 bytes) against its 5,000, with a hint when a
- * character counts as more than one. Without a limit: the caption against the
+ * is counted as it counts (UTF-8 bytes) against its 5,000 and Pinterest in code
+ * points against its 800, each with a hint when a character counts as more
+ * than one. Without a limit: the caption against the
  * app's 10,000-character cap, counted as the routes count it.
  */
 export function platformCaptionCounter(
@@ -157,7 +162,7 @@ export function platformCaptionCounter(
         max: preview.byteLimit ?? limit,
         over: preview.willTruncate,
         label: bytes,
-        ...(preview.byteHint ? { hint: preview.byteHint } : {}),
+        ...(preview.countHint ? { hint: preview.countHint } : {}),
       };
     }
     return {
@@ -165,6 +170,8 @@ export function platformCaptionCounter(
       max: limit,
       over: preview.willTruncate,
       label: `${preview.charCount.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")}${incl}`,
+      // Pinterest: why its code-point count runs ahead of the characters.
+      ...(preview.countHint ? { hint: preview.countHint } : {}),
     };
   }
   // R51 publishing-flow L2: here only the routes' cap applies, so this counts

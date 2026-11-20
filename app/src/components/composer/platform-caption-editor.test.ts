@@ -103,3 +103,44 @@ describe("PlatformCaptionEditor: the count line", () => {
     expect(markup).not.toContain("t-youtube-count-hint");
   });
 });
+
+// R53 platform-clients L1: Pinterest's count is in code points, as its client
+// cuts; its hint gets the line YouTube's has. ASCII reads as before.
+describe("PlatformCaptionEditor: Pinterest's count line", () => {
+  const html = (text: string) =>
+    renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(PlatformCaptionEditor, {
+          idPrefix: "t",
+          platforms: ["pinterest"],
+          caption: "main",
+          overrides: { pinterest: text },
+          onChange: () => {},
+          workspaceId: "ws",
+          footer: null,
+        }),
+      ),
+    );
+  const countLine = (markup: string) => markup.match(/<p id="t-pinterest-count"[^>]*>.*?<\/p>/)?.[0];
+
+  it("760 characters with 50 hearts: 810 / 800 (too long), the hint on its own line", () => {
+    const markup = html(`${"a".repeat(710)}${"❤️".repeat(50)}`);
+    expect(countLine(markup)).toBe(
+      '<p id="t-pinterest-count" class="ml-auto text-xs tabular-nums text-destructive">810 / 800 (too long)</p>',
+    );
+    expect(markup).toContain(
+      '<p id="t-pinterest-count-hint" class="text-xs text-muted-foreground">Pinterest counts some emoji and accented letters as 2 or more.</p>',
+    );
+    expect(markup).toContain('aria-describedby="t-pinterest-count t-pinterest-count-hint"');
+  });
+
+  it("ASCII: the count alone, as before", () => {
+    const markup = html("a".repeat(790));
+    expect(countLine(markup)).toBe(
+      '<p id="t-pinterest-count" class="ml-auto text-xs tabular-nums text-muted-foreground">790 / 800</p>',
+    );
+    expect(markup).not.toContain("t-pinterest-count-hint");
+  });
+});

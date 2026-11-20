@@ -1,5 +1,5 @@
 import { PINTEREST_SCOPES } from "@/lib/oauthScopes";
-import { fitTitle, truncateGraphemes } from "@/lib/truncate";
+import { fitTitle, graphemeCount, truncateGraphemes } from "@/lib/truncate";
 
 /**
  * Pinterest API v5: the endpoints, limits and small pure helpers the connect
@@ -106,6 +106,27 @@ export function fitPinterestDescription(text: string): string {
     fitted = truncateGraphemes(text, graphemes, { ellipsis: "..." });
   }
   return fitted;
+}
+
+/**
+ * The description's length as Pinterest counts it, in code points: the number
+ * fitPinterestDescription cuts on, so the composer counts the same.
+ */
+export function pinterestDescriptionLength(text: string): number {
+  return codePointLength(text);
+}
+
+/**
+ * Why Pinterest's count runs ahead of the characters a person sees, or `null`
+ * when every character is one code point (R53 platform-clients L1). Shown only
+ * when some character counts as 2 or more (a heart, a flag, a skin tone, a
+ * joined family, a letter with a separate accent mark), so it is true for any
+ * text that shows it.
+ */
+export function pinterestCountHint(text: string): string | null {
+  return codePointLength(text) > graphemeCount(text)
+    ? "Pinterest counts some emoji and accented letters as 2 or more."
+    : null;
 }
 
 /**
