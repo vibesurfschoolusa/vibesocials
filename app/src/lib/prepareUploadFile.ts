@@ -57,28 +57,45 @@ export function fitWithin(width: number, height: number, maxEdge: number): { wid
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
+const CANT_TELL = "We couldn't tell what kind of file this is.";
+const ANY_TYPE_STEP = "Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
+
 /** What a file whose type can't be told is told (R45 client-journey L1: never "type ()"). */
-export const UNKNOWN_TYPE_MESSAGE =
-  "We couldn't tell what kind of file this is. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
+export const UNKNOWN_TYPE_MESSAGE = `${CANT_TELL} ${ANY_TYPE_STEP}`;
 
 /**
- * R46 client-journey L2: a file with no type whose name has no extension (a
- * photo saved as "IMG_0042"). Choosing it again fails the same way, so the
- * sentence names the step that works. A name with some other extension keeps
- * UNKNOWN_TYPE_MESSAGE: adding .mp4 to a .mkv would not make it one.
+ * Where a file whose type can't be told was picked, so the step names a
+ * control that screen has. "choose": Create's single pick, Add many and the
+ * Media library. "sendMore" (R47 client-journey L1): /u, where the picker is
+ * gone once the files were tried and Send more brings it back. "photoPick"
+ * (R47 client-journey L3): Create's pick of several photos, where the file
+ * must be named and a GIF or a video would be refused anyway.
  */
-export const NO_EXTENSION_MESSAGE =
-  "We couldn't tell what kind of file this is. If it's a photo or video, add .jpg or .mp4 to the end of its name, then choose it again. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
+export type UnknownTypeContext = "choose" | "sendMore" | "photoPick";
 
 /**
  * R46 review: the one sentence for a file whose type can't be told (no browser
- * type and no known extension), wherever it is checked: this file, the Media
- * library and Create's photo pick. A name with no extension (or none known)
- * gets the step that works.
+ * type and no known extension), wherever it is checked. R46 client-journey L2:
+ * a name with no extension (a photo saved as "IMG_0042", or "Surf day
+ * 19.11.2026", whose dot starts none) gets the step that works, since choosing
+ * it again fails the same way. A name with some other extension gets no rename
+ * step: adding .mp4 to a .mkv would not make it one.
  */
-export function unknownTypeMessage(name: string): string {
-  return extensionOf(name) === undefined ? NO_EXTENSION_MESSAGE : UNKNOWN_TYPE_MESSAGE;
+export function unknownTypeMessage(name: string, context: UnknownTypeContext = "choose"): string {
+  const hasExtension = extensionOf(name) !== undefined;
+  if (context === "photoPick") {
+    const lead = `${name}: we couldn't tell what kind of file this is.`;
+    return hasExtension
+      ? `${lead} Use a JPEG, PNG or WebP photo.`
+      : `${lead} If it's a photo, add .jpg to the end of its name, then choose the photos again.`;
+  }
+  if (hasExtension) return UNKNOWN_TYPE_MESSAGE;
+  const again = context === "sendMore" ? "then press Send more and choose it again" : "then choose it again";
+  return `${CANT_TELL} If it's a photo or video, add .jpg or .mp4 to the end of its name, ${again}. ${ANY_TYPE_STEP}`;
 }
+
+/** The sentence a typeless file whose name has no extension gets where it is chosen again. */
+export const NO_EXTENSION_MESSAGE = unknownTypeMessage("IMG_0042");
 
 /** The message for a type the upload route would refuse; "" is a type that can't be told. */
 export function unsupportedTypeMessage(type: string): string {
@@ -98,9 +115,14 @@ const TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
   webm: "video/webm",
 };
 
-/** The name's extension, lower case; undefined when it has none. */
+/**
+ * The name's extension, lower case; undefined when it has none. R47
+ * client-journey L2: an extension is 1-5 letters or digits with at least one
+ * letter, so the dot in "Surf day 19.11.2026", "Session at 10.30" or "St.
+ * Lucia sunset" starts none.
+ */
 function extensionOf(name: string): string | undefined {
-  return /\.([^./\\]+)$/.exec(name)?.[1].toLowerCase();
+  return /\.((?=[a-z0-9]*[a-z])[a-z0-9]{1,5})$/i.exec(name)?.[1].toLowerCase();
 }
 
 /**
@@ -139,6 +161,7 @@ export interface PrepareUploadDeps {
 export async function prepareUploadFile(
   file: File,
   deps: PrepareUploadDeps = browserDeps,
+  context: UnknownTypeContext = "choose",
 ): Promise<File> {
   let prepared = file;
 
@@ -158,7 +181,7 @@ export async function prepareUploadFile(
 
   const type = uploadTypeOf(prepared);
   if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(type)) {
-    throw new Error(type === "" ? unknownTypeMessage(prepared.name) : unsupportedTypeMessage(type));
+    throw new Error(type === "" ? unknownTypeMessage(prepared.name, context) : unsupportedTypeMessage(type));
   }
   if (type !== prepared.type) {
     prepared = new File([prepared], prepared.name, { type, lastModified: prepared.lastModified });

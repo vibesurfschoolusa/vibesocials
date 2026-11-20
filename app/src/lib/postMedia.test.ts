@@ -2,7 +2,7 @@ import type { Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BLOB_URL_REJECTED_MESSAGE } from "./blobUrl";
-import { NO_EXTENSION_MESSAGE, preparedTypeOf, UNKNOWN_TYPE_MESSAGE } from "./prepareUploadFile";
+import { NO_EXTENSION_MESSAGE, preparedTypeOf, UNKNOWN_TYPE_MESSAGE, unknownTypeMessage } from "./prepareUploadFile";
 import {
   addPhotos,
   MAX_POST_MEDIA,
@@ -217,13 +217,26 @@ describe("photoPickProblem (the Create page's picker)", () => {
 
   // R46 review: a type that can't be told is the one unknown-type sentence prepareUploadFile
   // gives, judged by the file's real name; it was pinned to PHOTO_TYPE_MESSAGE.
-  it("a typeless IMG_0042: the \"add .jpg or .mp4\" sentence", () => {
-    expect(photoPickProblem(0, [jpeg, picked("IMG_0042", "")])).toBe(NO_EXTENSION_MESSAGE);
+  // R47 client-journey L3: in a pick of several, the sentence names the file it
+  // means, and offers only the photo step (a GIF or a video is posted on its own).
+  it("a pick of 4 photos with a typeless IMG_0042: named, photo-only", () => {
+    expect(photoPickProblem(0, [jpeg, jpeg, picked("IMG_0042", ""), jpeg])).toBe(
+      "IMG_0042: we couldn't tell what kind of file this is. If it's a photo, add .jpg to the end of its name, then choose the photos again.",
+    );
   });
 
-  it("a typeless clip.mkv: the plain unknown-type sentence /u gives", () => {
-    expect(photoPickProblem(0, [jpeg, picked("clip.mkv", "")])).toBe(UNKNOWN_TYPE_MESSAGE);
-    expect(photoPickProblem(0, [jpeg, picked("scan.tiff", "")])).toBe(UNKNOWN_TYPE_MESSAGE);
+  it("a typeless clip.mkv: named, with the photo types only", () => {
+    expect(photoPickProblem(0, [jpeg, picked("clip.mkv", "")])).toBe(
+      "clip.mkv: we couldn't tell what kind of file this is. Use a JPEG, PNG or WebP photo.",
+    );
+    expect(photoPickProblem(0, [jpeg, picked("scan.tiff", "")])).toBe(
+      "scan.tiff: we couldn't tell what kind of file this is. Use a JPEG, PNG or WebP photo.",
+    );
+  });
+
+  it("the single pick keeps its sentence", () => {
+    expect(unknownTypeMessage("IMG_0042")).toBe(NO_EXTENSION_MESSAGE);
+    expect(unknownTypeMessage("clip.mkv")).toBe(UNKNOWN_TYPE_MESSAGE);
   });
 
   it("a typeless b.jpg plus a JPEG attaches", () => {

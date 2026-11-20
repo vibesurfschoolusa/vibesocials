@@ -12,6 +12,7 @@ import {
   jpegFileName,
   prepareUploadFile,
   preparedTypeOf,
+  unknownTypeMessage,
   unsupportedTypeMessage,
   uploadTypeOf,
   type PrepareUploadDeps,
@@ -124,8 +125,34 @@ describe("prepareUploadFile", () => {
     );
   });
 
+  // R47 client-journey L2: a dot in a name is not always an extension. A date,
+  // a time or "St. Lucia" left the name with none, and no step.
+  it("a dot that is not an extension: the step that works", async () => {
+    for (const name of ["Surf day 19.11.2026", "Session at 10.30", "St. Lucia sunset", "IMG.0042"]) {
+      await expect(prepareUploadFile(file(name, ""), fakeDeps()), name).rejects.toThrow(NO_EXTENSION_MESSAGE);
+      expect(unknownTypeMessage(name), name).toBe(NO_EXTENSION_MESSAGE);
+    }
+  });
+
+  it("a real extension keeps its behaviour: clip.mkv is refused plainly, photo.JPG goes, file.tar.gz reads as gz", async () => {
+    expect(unknownTypeMessage("clip.mkv")).toBe(UNKNOWN_TYPE_MESSAGE);
+    expect(unknownTypeMessage("file.tar.gz")).toBe(UNKNOWN_TYPE_MESSAGE);
+    expect(uploadTypeOf({ name: "photo.JPG", type: "" })).toBe("image/jpeg");
+    expect(uploadTypeOf({ name: "Surf day 19.11.2026.mp4", type: "" })).toBe("video/mp4");
+    expect((await prepareUploadFile(file("photo.JPG", ""), fakeDeps())).type).toBe("image/jpeg");
+  });
+
+  // R47 client-journey L1: on /u the picker is gone once the files were tried;
+  // "Send more" brings it back, so the step names it.
+  it("the upload link's context names Send more", () => {
+    expect(unknownTypeMessage("IMG_0042", "sendMore")).toBe(
+      "We couldn't tell what kind of file this is. If it's a photo or video, add .jpg or .mp4 to the end of its name, then press Send more and choose it again. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
+    );
+    expect(unknownTypeMessage("clip.mkv", "sendMore")).toBe(UNKNOWN_TYPE_MESSAGE);
+  });
+
   it("refuses a file whose type can't be told with a plain sentence, never \"()\"", async () => {
-    for (const name of ["clip.mkv", "IMG.0042"]) {
+    for (const name of ["clip.mkv", "file.tar.gz", "photo.heics"]) {
       await expect(prepareUploadFile(file(name, ""), fakeDeps()), name).rejects.toThrow(UNKNOWN_TYPE_MESSAGE);
     }
     expect(UNKNOWN_TYPE_MESSAGE).toBe(
