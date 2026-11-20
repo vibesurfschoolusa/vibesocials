@@ -21,24 +21,37 @@ const offline = vi.fn(async () => {
 describe("attemptVerify", () => {
   it("posts the token and reads the answer", async () => {
     const ok = respond(200, { ok: true });
-    await expect(attemptVerify(ok, "tok")).resolves.toBe("ok");
+    await expect(attemptVerify(ok, "tok")).resolves.toEqual({ attempt: "ok" });
     expect(ok).toHaveBeenCalledWith("/api/auth/verify-email", expect.objectContaining({ method: "POST", body: JSON.stringify({ token: "tok" }) }));
   });
 
   // R5 pages L7: a network failure is not an invalid link.
   it("tells apart an invalid link, too many tries, a server failure and no network", async () => {
-    await expect(attemptVerify(respond(400), "tok")).resolves.toBe("invalid");
-    await expect(attemptVerify(respond(429), "tok")).resolves.toBe("rate_limited");
-    await expect(attemptVerify(respond(500), "tok")).resolves.toBe("server");
-    await expect(attemptVerify(offline, "tok")).resolves.toBe("network");
+    await expect(attemptVerify(respond(400), "tok")).resolves.toEqual({ attempt: "invalid" });
+    await expect(attemptVerify(respond(429), "tok")).resolves.toEqual({ attempt: "rate_limited" });
+    await expect(attemptVerify(respond(500), "tok")).resolves.toEqual({ attempt: "server" });
+    await expect(attemptVerify(offline, "tok")).resolves.toEqual({ attempt: "network" });
     // R29 OO1: a gateway's page may come after the link was used: no answer, not the route's failure.
     const gateway = vi.fn(async () => new Response("<html>502</html>", { status: 502, headers: { "content-type": "text/html" } }));
-    await expect(attemptVerify(gateway as unknown as typeof fetch, "tok")).resolves.toBe("network");
+    await expect(attemptVerify(gateway as unknown as typeof fetch, "tok")).resolves.toEqual({ attempt: "network" });
+  });
+
+  // R48 pages-a L2: a 429 carries its wait, from the body or else Retry-After.
+  it("reads a 429's wait", async () => {
+    await expect(attemptVerify(respond(429, { error: "Too many tries.", retryAfterSeconds: 60 }), "tok")).resolves.toEqual({
+      attempt: "rate_limited",
+      waitSeconds: 60,
+    });
+    const header = vi.fn(async () => new Response("{}", { status: 429, headers: { "Retry-After": "240" } }));
+    await expect(attemptVerify(header as unknown as typeof fetch, "tok")).resolves.toEqual({
+      attempt: "rate_limited",
+      waitSeconds: 240,
+    });
   });
 
   it("calls a missing token invalid without asking the server", async () => {
     const spy = respond(200);
-    await expect(attemptVerify(spy, "")).resolves.toBe("invalid");
+    await expect(attemptVerify(spy, "")).resolves.toEqual({ attempt: "invalid" });
     expect(spy).not.toHaveBeenCalled();
   });
 });
@@ -146,6 +159,14 @@ describe("verifyView", () => {
     const view = verifyView("rate_limited", "unknown");
     expect(view.message).toContain("Wait 15 minutes");
     expect(view.offerRetry).toBe(false);
+  });
+
+  // R48 pages-a L2: the wait the route names, in the shared words (waitText).
+  it("too many tries: says the route's own wait", () => {
+    expect(verifyView("rate_limited", "unknown", { waitSeconds: 60 }).message).toBe(
+      "This network has tried too many links in the last few minutes, so this one wasn't checked. Wait a minute, then reload this page.",
+    );
+    expect(verifyView("rate_limited", "unknown", { waitSeconds: 600 }).message).toContain("Wait 10 minutes, then");
   });
 
   it("a server failure says to try again in a minute, and never that the link still works", () => {

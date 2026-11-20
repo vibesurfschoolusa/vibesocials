@@ -63,10 +63,10 @@ export function VerifyEmailClient() {
   // the effect body, so each try resolves to exactly one answer.
   const verify = useCallback(async (retried = false) => {
     setView(null);
-    const attempt = await attemptVerify(fetch, window.location.hash.slice(1));
+    const { attempt, waitSeconds } = await attemptVerify(fetch, window.location.hash.slice(1));
     // Only a failure needs to know who is reading (lib comment in verifyOutcome.ts).
     const account = attempt === "ok" ? "unknown" : await readAccountState(fetch);
-    setView(verifyView(attempt, account, { retried }));
+    setView(verifyView(attempt, account, { retried, waitSeconds }));
   }, []);
 
   useEffect(() => {

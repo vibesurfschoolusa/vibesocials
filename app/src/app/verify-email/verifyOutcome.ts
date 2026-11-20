@@ -10,6 +10,7 @@
 
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { waitSecondsOf, waitText } from "@/lib/tooManyTriesText";
 
 /** R28 NN2: the email may have gone before the answer was lost (this page and the banners). */
 export const VERIFY_RESEND_MAYBE_SENT_MESSAGE = answerLostText(
@@ -18,6 +19,8 @@ export const VERIFY_RESEND_MAYBE_SENT_MESSAGE = answerLostText(
 );
 
 export type VerifyAttempt = "ok" | "invalid" | "rate_limited" | "server" | "network";
+/** A try's answer; a 429 names its wait (R48 pages-a L2), when the route sent one. */
+export type VerifyAnswer = { attempt: VerifyAttempt; waitSeconds?: number };
 export type AccountState = "verified" | "unverified" | "signed_out" | "unknown";
 
 export type VerifyView = {
@@ -33,20 +36,24 @@ export type VerifyView = {
   offerRetry: boolean;
 };
 
-export async function attemptVerify(fetchImpl: typeof fetch, token: string): Promise<VerifyAttempt> {
-  if (!token) return "invalid";
+export async function attemptVerify(fetchImpl: typeof fetch, token: string): Promise<VerifyAnswer> {
+  if (!token) return { attempt: "invalid" };
   try {
     const response = await fetchOrNoAnswer(
       "/api/auth/verify-email",
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) },
       fetchImpl,
     );
-    if (response.ok) return "ok";
-    if (response.status === 429) return "rate_limited";
-    if (response.status >= 500) return "server";
-    return "invalid";
+    if (response.ok) return { attempt: "ok" };
+    if (response.status === 429) {
+      const data: unknown = await response.json().catch(() => null);
+      const waitSeconds = waitSecondsOf(data, response.headers.get("Retry-After"));
+      return waitSeconds === undefined ? { attempt: "rate_limited" } : { attempt: "rate_limited", waitSeconds };
+    }
+    if (response.status >= 500) return { attempt: "server" };
+    return { attempt: "invalid" };
   } catch {
-    return "network";
+    return { attempt: "network" };
   }
 }
 
@@ -74,7 +81,7 @@ const SEE_WHETHER_VERIFIED = "log in to see whether your address is verified";
 export function verifyView(
   attempt: VerifyAttempt,
   account: AccountState,
-  { retried = false }: { retried?: boolean } = {},
+  { retried = false, waitSeconds }: { retried?: boolean; waitSeconds?: number } = {},
 ): VerifyView {
   const signedOut = account === "signed_out";
   const next = signedOut ? LOG_IN : CONTINUE;
@@ -101,7 +108,8 @@ export function verifyView(
       ...base,
       title: "Too many tries",
       message:
-        "This network has tried too many links in the last few minutes, so this one wasn't checked. Wait 15 minutes, then reload this page.",
+        // R48 pages-a L2: the route's own wait; 15 minutes, its whole window, when it names none.
+        `This network has tried too many links in the last few minutes, so this one wasn't checked. Wait ${waitSeconds === undefined ? "15 minutes" : waitText(waitSeconds)}, then reload this page.`,
     };
   }
   if (attempt === "server") {
