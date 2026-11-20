@@ -50,8 +50,11 @@ export async function POST(request: Request) {
   });
 
   if (!membership) {
+    // R49 pages-a L4: the account menu and /workspaces show this as sent, and
+    // a list drawn before a removal can still offer the workspace; reloading
+    // either page reads the list again.
     return NextResponse.json(
-      { error: "You're not a member of that workspace." },
+      { error: "You're no longer a member of that workspace. Reload the page to see your workspaces." },
       { status: 403 },
     );
   }

@@ -123,7 +123,8 @@ describe("POST /api/workspaces/switch", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "You're not a member of that workspace.",
+      // R49 pages-a L4: the menu and /workspaces show it as sent, so it gives the step.
+      error: "You're no longer a member of that workspace. Reload the page to see your workspaces.",
     });
     expect(cookieSetMock).not.toHaveBeenCalled();
   });

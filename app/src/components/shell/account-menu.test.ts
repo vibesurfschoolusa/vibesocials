@@ -314,9 +314,9 @@ describe("switchFailureText", () => {
   });
 
   it("a refusal keeps the route's own sentence", () => {
-    expect(switchFailureText(404, { error: "You're not a member of that workspace." })).toBe(
-      "You're not a member of that workspace.",
-    );
+    // R49 pages-a L4: the route's not-a-member sentence, with its step, as sent.
+    const notAMember = "You're no longer a member of that workspace. Reload the page to see your workspaces.";
+    expect(switchFailureText(403, { error: notAMember })).toBe(notAMember);
   });
 
   it("is what the switch uses for an answered failure; no answer keeps the shared lost-answer text", () => {
