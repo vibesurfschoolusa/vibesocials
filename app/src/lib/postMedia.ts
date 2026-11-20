@@ -153,10 +153,15 @@ function aloneMessage(
   // photo set takes; the caller passes preparedTypeOf), or the ones attached.
   const pickedPhotos = picked.filter((file) => MULTI_PHOTO_MIME_TYPES.includes(file.type)).length;
   const sameKind = picked.filter((file) => (kind === "GIF" ? file.type === "image/gif" : file.type.startsWith("video/"))).length;
-  const choose = sameKind > 1 ? `Choose one ${kind} at a time` : `Choose the ${kind} by itself`;
+  // Two of a kind go one at a time, whether photos are attached or not.
+  const several = sameKind > 1;
+  const choose = several ? `Choose one ${kind} at a time` : `Choose the ${kind} by itself`;
+  const removePhotos = `Remove ${countWord(attachedCount, "the photo", "the photos")}`;
   const step =
     attachedCount > 0
-      ? `Remove ${countWord(attachedCount, "the photo", "the photos")} to post it instead, or post it separately.`
+      ? several
+        ? `${removePhotos} to post one ${kind} at a time instead, or post the ${kind}s separately.`
+        : `${removePhotos} to post it instead, or post it separately.`
       : pickedPhotos > 0
         ? `${choose}, or choose only ${countWord(pickedPhotos, "the photo", "the photos")}.`
         : `${choose}.`;

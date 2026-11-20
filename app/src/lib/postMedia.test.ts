@@ -279,6 +279,31 @@ describe("photoPickProblem (the Create page's picker)", () => {
     });
   });
 
+  // R47 second look: two of a kind go one at a time, with photos attached too (one rule).
+  describe("two videos with photos attached: one at a time", () => {
+    const video = (name: string) => ({ name, type: "video/mp4" });
+    it("two videos with 1 photo attached", () => {
+      expect(photoPickProblem(1, [video("clip1.mp4"), video("clip2.mp4")])).toBe(
+        "clip1.mp4: a video is posted on its own. Remove the photo to post one video at a time instead, or post the videos separately.",
+      );
+    });
+    it("two videos with 3 photos attached", () => {
+      expect(photoPickProblem(3, [video("clip1.mp4"), video("clip2.mp4")])).toBe(
+        "clip1.mp4: a video is posted on its own. Remove the photos to post one video at a time instead, or post the videos separately.",
+      );
+    });
+    it("a video and a GIF with photos attached: one of each kind, so the video's own step", () => {
+      expect(photoPickProblem(2, [video("clip.mp4"), { name: "wave.gif", type: "image/gif" }])).toBe(
+        "clip.mp4: a video is posted on its own. Remove the photos to post it instead, or post it separately.",
+      );
+    });
+    it("two GIFs with a photo attached", () => {
+      expect(photoPickProblem(1, [{ name: "a.gif", type: "image/gif" }, { name: "b.gif", type: "image/gif" }])).toBe(
+        "a.gif: a GIF is posted on its own. Remove the photo to post one GIF at a time instead, or post the GIFs separately.",
+      );
+    });
+  });
+
   it("names the video or GIF before the limit", () => {
     expect(photoPickProblem(9, [jpeg, { name: "clip.mp4", type: "video/mp4" }])).toContain("a video is posted on its own");
     expect(photoPickProblem(9, [jpeg, { name: "wave.gif", type: "image/gif" }])).toContain("a GIF is posted on its own");
