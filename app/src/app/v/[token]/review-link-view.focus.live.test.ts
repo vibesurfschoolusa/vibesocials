@@ -468,6 +468,17 @@ describe("/v: a card decision's 429", () => {
       expect(text).toBe(`${FAILED}Reload the list`);
     });
 
+    it("a 4xx with its own text (a revoked link's 404): the route's sentence, no refresh sentence added", async () => {
+      const REVOKED = "This link is not active. Ask for a new one.";
+      await reloadAnswers(async () => Response.json({ error: REVOKED }, { status: 404 }));
+      const alert = all((n) => n.attributes?.role === "alert" && n.nodeName === "DIV")[0];
+      const sentence = find(alert, (n) => n.nodeName === "P")!;
+      expect(sentence.textContent).toBe(REVOKED);
+      expect(container.textContent).not.toContain("Couldn't refresh the list");
+      expect(container.textContent).not.toContain("press Reload the list");
+      expect(container.textContent).not.toContain("Press Reload the list");
+    });
+
     it("a 429: the wait, and no button that can't work yet", async () => {
       await reloadAnswers(() => refused(HOURLY, 1500));
       expect(container.textContent).toContain(
