@@ -411,6 +411,9 @@ export function composerPageView(input: {
  * The first decisions of a press, in the form's order: a fresh lost-file notice
  * stops it (the notice speaks), then a file still on its way (its wait
  * sentence), then the untouched page (the sentence by the button). Null: go on.
+ * The lost-file stop guards against posting without the file by mistake, and
+ * its toast offers to post without it; on an untouched page nothing can be
+ * posted, so there the press goes on as if no notice showed (R52 L2).
  */
 export function submitFirstStep(state: {
   pageState: ComposerPageState;
@@ -422,7 +425,7 @@ export function submitFirstStep(state: {
   | { stop: "file-lost" | "untouched" | null; countsAsTry: boolean }
   | { stop: "wait"; message: string; countsAsTry: boolean } {
   const countsAsTry = pressCountsAsTry(state.pageState);
-  if (fileLostBlocksSubmit(state.fileLost)) return { stop: "file-lost", countsAsTry };
+  if (state.pageState !== "untouched" && fileLostBlocksSubmit(state.fileLost)) return { stop: "file-lost", countsAsTry };
   if (state.fileBlock) return { stop: "wait", message: state.fileBlock, countsAsTry };
   if (state.pageState === "untouched") return { stop: "untouched", countsAsTry };
   return { stop: null, countsAsTry };

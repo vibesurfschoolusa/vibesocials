@@ -960,12 +960,44 @@ describe("the form's chain: composerPageState, composerPageView, submitFirstStep
     });
   });
 
-  it("a fresh lost-file notice comes first, before the untouched stop", () => {
+  // R52 publishing-flow L2: on an untouched page nothing can be posted, so the
+  // lost-file stop's "post without it" could never come true there.
+  const waitBlock = "Wait until the file is ready, then press the button again.";
+
+  it("untouched + fresh lost-file notice: the untouched stop", () => {
     expect(submitFirstStep({ ...go, pageState: "untouched", fileLost: "fresh" })).toEqual({
-      stop: "file-lost",
+      stop: "untouched",
       countsAsTry: false,
     });
-    // Seen once: the next press goes on to the untouched stop.
+  });
+
+  it("untouched + fresh + a file on its way: the wait step", () => {
+    expect(submitFirstStep({ pageState: "untouched", fileLost: "fresh", fileBlock: waitBlock })).toEqual({
+      stop: "wait",
+      message: waitBlock,
+      countsAsTry: false,
+    });
+  });
+
+  it("text + fresh: the file-lost stop", () => {
+    expect(submitFirstStep({ ...go, pageState: "text", fileLost: "fresh" })).toEqual({
+      stop: "file-lost",
+      countsAsTry: true,
+    });
+  });
+
+  it("file (some photos attached) + fresh: the file-lost stop", () => {
+    expect(submitFirstStep({ ...go, pageState: "file", fileLost: "fresh" })).toEqual({
+      stop: "file-lost",
+      countsAsTry: true,
+    });
+  });
+
+  it("text + seen: the press goes on", () => {
+    expect(submitFirstStep({ ...go, pageState: "text", fileLost: "seen" })).toEqual({ stop: null, countsAsTry: true });
+  });
+
+  it("untouched + seen: the untouched stop", () => {
     expect(submitFirstStep({ ...go, pageState: "untouched", fileLost: "seen" })).toEqual({
       stop: "untouched",
       countsAsTry: false,

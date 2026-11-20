@@ -62,6 +62,9 @@ const fetchMock = vi.fn((input: unknown, init?: { body?: unknown }) => {
     postBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return Promise.resolve(Response.json({ id: "job-1" }));
   }
+  if (url.startsWith("/api/media/media-gone")) {
+    return Promise.resolve(Response.json({ error: "Media item not found." }, { status: 404 }));
+  }
   if (url.startsWith("/api/media/media-1")) {
     return Promise.resolve(
       Response.json({
@@ -356,6 +359,28 @@ describe("R51: a refused file is a stored line, not a one-press stop", () => {
     // The second press goes on to the confirm dialog, as before.
     await submit();
     expect(dialogShown()).toBe(true);
+  });
+});
+
+// R52 publishing-flow L2: a library item that fails to load on an empty page
+// leaves nothing that could be posted, so no press may offer to post without it.
+describe("R52: the lost-file stop only when something else can be sent", () => {
+  async function openWithItem(id: string) {
+    await act(async () => root.unmount());
+    nav.params = new URLSearchParams(`mediaItemId=${id}`);
+    root = createRoot(container as unknown as HTMLElement);
+    await mount();
+  }
+
+  it("a ?mediaItemId load failure on an empty page: the press gives the untouched sentence, no toast offers to post without it", async () => {
+    await openWithItem("media-gone");
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+
+    await submit();
+    expect(lineSays(UNTOUCHED_SUBMIT_MESSAGE)).toBe(true);
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(false);
+    expect(offersWithout()).toBe(false);
+    expect(calls).not.toContain("/api/posts");
   });
 });
 
