@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -183,6 +184,20 @@ describe("Privacy: the TikTok permissions are the ones the app asks for", () => 
     const named = [...new Set(section.match(/\b[a-z]+(?:\.[a-z]+)+(?=[\s/:])/g) ?? [])].sort();
     expect(named).toEqual(requested);
     for (const scope of requested) expect(section).toContain(`${scope}:`);
+  });
+
+  // R46 review note: user.info.basic is read for open_id and display_name only
+  // (the callback's fields); the avatar Create shows comes with the posting
+  // options asked for under video.publish.
+  it("says what each scope reads: the ID and name, then the posting options with the avatar", () => {
+    const callback = readFileSync(new URL("../api/auth/tiktok/callback/route.ts", import.meta.url), "utf8");
+    expect(callback).toContain("/v2/user/info/?fields=open_id,display_name\"");
+    const page = text();
+    expect(page).toContain("user.info.basic: your TikTok account's ID (open ID) and display name, shown so you know which account a post goes to.");
+    expect(page).not.toContain("open ID, display name and avatar");
+    expect(page).toContain(
+      "Before each post we ask TikTok for your account's current posting options (for example, which privacy levels you can use) and its name and profile picture, which the Create page shows.",
+    );
   });
 
   it("carries the date of this change", () => {

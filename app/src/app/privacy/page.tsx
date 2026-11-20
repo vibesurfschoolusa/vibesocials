@@ -123,13 +123,14 @@ export default function PrivacyPage() {
         <ul className="mt-1 list-disc space-y-1 pl-5">
           <li>
             <strong className="text-foreground">user.info.basic:</strong> your TikTok account&apos;s
-            open ID, display name and avatar, shown so you know which account a post goes to.
+            ID (open ID) and display name, shown so you know which account a post goes to.
           </li>
           <li>
             <strong className="text-foreground">video.publish:</strong> posting the
             videos you choose to your account, with the privacy, interaction and content-disclosure
             settings you select for each post. Before each post we ask TikTok for your account&apos;s
-            current posting options (for example, which privacy levels you can use).
+            current posting options (for example, which privacy levels you can use) and its name and
+            profile picture, which the Create page shows.
           </li>
         </ul>
         <p className="mt-2">
