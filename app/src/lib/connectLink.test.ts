@@ -221,6 +221,18 @@ describe("the sentence the visitor reads after a flow", () => {
     expect(describe_({ linkedin_setup: "true" })?.message).toMatch(/Super admin/);
   });
 
+  // R53 AN4: the callback answers linkedin_setup=not_found only after a page
+  // hint from Settings' setup dialog. A link flow never sends one
+  // (server/connectLink/authorize.test.ts), so on /c not_found comes only from a
+  // hand-edited address and reads as any other setup return.
+  it("linkedin_setup=not_found reads as a first setup on /c", () => {
+    for (const shown of ["connect", "reconnect"] as const) {
+      const read = (value: string) =>
+        describeConnectLinkResult(new URLSearchParams({ linkedin_setup: value }), { shown: () => shown });
+      expect(read("not_found"), shown).toEqual(read("true"));
+    }
+  });
+
   // R29 OO1 lead follow-up: /c shows Reconnect on a flagged or ending-soon row
   // (app/c/[token]/page.tsx: form(connection ? "Reconnect" : "Connect")), so
   // a cause names the button the row shows, with the page's "press".
