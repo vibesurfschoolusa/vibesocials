@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { SEND_AGAIN_MAX_AGE_DAYS, sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "./sendAgain";
+import {
+  SEND_AGAIN_MAX_AGE_DAYS,
+  sendAgainTooOld,
+  STORY_TOO_OLD_TO_SEND_MESSAGE,
+  TOO_OLD_TO_SEND_MESSAGE,
+  tooOldToSendText,
+} from "./sendAgain";
 
 // Live check after F1: a post from months ago offered Send again, which would
 // publish stale content today. Only a recent unsent post may be sent again.
@@ -34,5 +40,13 @@ describe("sendAgainTooOld", () => {
     expect(TOO_OLD_TO_SEND_MESSAGE).toBe(
       "This post was not sent, and it is too old to send again. Create it again if you still want it.",
     );
+  });
+});
+
+// R49 pages-b L1 (5b): the card and the publish route say the one too-old sentence for the job.
+describe("tooOldToSendText", () => {
+  it("names the Story for a Story half, and the post otherwise", () => {
+    expect(tooOldToSendText(true)).toBe(STORY_TOO_OLD_TO_SEND_MESSAGE);
+    expect(tooOldToSendText(false)).toBe(TOO_OLD_TO_SEND_MESSAGE);
   });
 });

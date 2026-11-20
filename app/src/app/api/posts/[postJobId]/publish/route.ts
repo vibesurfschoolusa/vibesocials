@@ -1,4 +1,4 @@
-import { sendAgainTooOld, TOO_OLD_TO_SEND_ERROR } from "@/lib/sendAgain";
+import { sendAgainTooOld, tooOldToSendText } from "@/lib/sendAgain";
 import type { PostJobStatus } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -368,7 +368,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
   // A post from weeks ago would publish stale content today (lib/sendAgain.ts).
   if (unsent && sendAgainTooOld(job, Date.now())) {
-    return NextResponse.json({ error: TOO_OLD_TO_SEND_ERROR, code: "TOO_OLD" }, { status: 409 });
+    return NextResponse.json({ error: tooOldToSendText(Boolean(job.storyOfPostJobId)), code: "TOO_OLD" }, { status: 409 });
   }
   if (
     unsent &&

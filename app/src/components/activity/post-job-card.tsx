@@ -20,7 +20,7 @@ import { answerLostText } from "@/lib/answerLost";
 import { dispatchFailedText } from "@/lib/composerSubmitOutcome";
 import { postActionRefusal, sendActionRequest } from "@/lib/queueActions";
 import { memberReconnectMessage, NOT_SENT_MESSAGE, sentenceForRecipient } from "@/lib/publishFailureText";
-import { sendAgainTooOld, STORY_TOO_OLD_TO_SEND_MESSAGE, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
+import { sendAgainTooOld, tooOldToSendText } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { retryAllPlan, type LeftOut } from "@/lib/retryAll";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
@@ -217,7 +217,7 @@ export const STORY_NOT_SENT_MESSAGE = NOT_SENT_MESSAGE.replace(/^This post/, "Th
  * form, chosen by the card's storyHalf, the too-old one included.
  */
 export function unsentLine(tooOld: boolean, storyHalf: boolean): string {
-  if (tooOld) return storyHalf ? STORY_TOO_OLD_TO_SEND_MESSAGE : TOO_OLD_TO_SEND_MESSAGE;
+  if (tooOld) return tooOldToSendText(storyHalf);
   return storyHalf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE;
 }
 

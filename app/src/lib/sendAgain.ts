@@ -17,8 +17,13 @@ export const TOO_OLD_TO_SEND_MESSAGE =
 export const STORY_TOO_OLD_TO_SEND_MESSAGE =
   "This Story was not sent, and it is too old to send again. If you still want it, create a new post with Story chosen, not Feed and Story, so the feed post is not sent twice.";
 
-/** The route's refusal for a post older than the rule allows. */
-export const TOO_OLD_TO_SEND_ERROR = "This post is too old to send again. Create it again.";
+/**
+ * R49 pages-b L1 (5b), one rule: the too-old sentence for a job, the Story's
+ * for a Story half. The Activity card and the publish route's 409 both say it.
+ */
+export function tooOldToSendText(storyHalf: boolean): string {
+  return storyHalf ? STORY_TOO_OLD_TO_SEND_MESSAGE : TOO_OLD_TO_SEND_MESSAGE;
+}
 
 type When = Date | string | null | undefined;
 
