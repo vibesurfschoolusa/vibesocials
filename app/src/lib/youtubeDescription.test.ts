@@ -46,7 +46,7 @@ describe("YouTube's description rule", () => {
 
   // R52 fix review L1: the hint is true for every text that shows it. Each
   // sample's characters really count as the hint says.
-  const GENERAL = "YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more";
+  const GENERAL = "YouTube counts accented letters, curly quotes and emoji as 2 or more.";
   const counted = (text: string) => youtubeDescriptionLength(text);
 
   it("ASCII only: no hint", () => {
@@ -69,8 +69,8 @@ describe("YouTube's description rule", () => {
   });
 
   it("names < and > only when the text has one", () => {
-    expect(youtubeCountHint("I <3 waves")).toBe("YouTube counts < and > as 3");
+    expect(youtubeCountHint("I <3 waves")).toBe("YouTube counts < and > as 3.");
     expect(counted("<")).toBe(3);
-    expect(youtubeCountHint("I <3 caf\u00e9")).toBe(`${GENERAL}, and < or > as 3`);
+    expect(youtubeCountHint("I <3 caf\u00e9")).toBe("YouTube counts accented letters, curly quotes, emoji, < and > as 2 or more.");
   });
 });

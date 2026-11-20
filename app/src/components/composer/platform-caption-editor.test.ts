@@ -93,7 +93,7 @@ describe("PlatformCaptionEditor: the count line", () => {
     expect(markup).toContain(
       `<p id="t-youtube-count-hint" class="text-xs text-muted-foreground">${counter.hint}</p>`,
     );
-    expect(counter.hint).toBe("YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more");
+    expect(counter.hint).toBe("YouTube counts accented letters, curly quotes and emoji as 2 or more.");
     expect(markup).toContain('aria-describedby="t-youtube-count t-youtube-count-hint"');
   });
 

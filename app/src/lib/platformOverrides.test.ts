@@ -346,7 +346,7 @@ describe("platformCaptionCounter and adaptMaxLength on YouTube", () => {
     expect(counter.length).toBe(5001);
     expect(counter.over).toBe(true);
     expect(counter.label).toBe("5,001 / 5,000");
-    expect(counter.hint).toBe("YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more");
+    expect(counter.hint).toBe("YouTube counts accented letters, curly quotes and emoji as 2 or more.");
   });
 
   it("names the < and > swap when the text has one", () => {
@@ -355,7 +355,7 @@ describe("platformCaptionCounter and adaptMaxLength on YouTube", () => {
       max: 5000,
       over: false,
       label: "12 / 5,000",
-      hint: "YouTube counts < and > as 3",
+      hint: "YouTube counts < and > as 3.",
     });
   });
 

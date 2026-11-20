@@ -134,7 +134,7 @@ describe("PlatformPreviewList count line", () => {
   it("youtube: an emoji-heavy post reads 5,001 / 5,000 with the hint beneath", () => {
     expect(countLines(card("youtube", `${"Waves \u{1F30A}".repeat(500)}!`, null))).toEqual([
       line("5,001 / 5,000"),
-      line("YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more"),
+      line("YouTube counts accented letters, curly quotes and emoji as 2 or more."),
     ]);
   });
 });

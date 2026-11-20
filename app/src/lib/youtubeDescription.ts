@@ -49,20 +49,15 @@ export function fitYouTubeDescription(caption: string): string {
  * Why YouTube's count runs ahead of the letters a person sees, or `null` when
  * every character counts as one. A plain hint instead of the word "bytes".
  *
- * R52 fix review L1: one general sentence, true for any text that shows it.
- * Any non-ASCII character counts 2 or more: an accented letter 2 (3 for some,
- * or when typed as a letter plus its accent), a curly quote 3, an emoji 3 for
- * the few in the old range (U+2728 sparkles) and more for the rest (a wave 4,
- * a skin tone or a flag 8, a joined surfer 13, a joined family 25). "Some
- * characters" also covers what it doesn't name (a dash, another script).
+ * R52 fix review L1: a short sentence, true for any text that shows it. Any
+ * non-ASCII character counts 2 or more: an accented letter 2 or 3, a curly
+ * quote 3, an emoji 3 or more (a wave 4, a flag 8, a joined family 25); a <
+ * or > counts 3 once swapped for its angle quote.
  */
 export function youtubeCountHint(text: string): string | null {
   const wide = /\P{ASCII}/u.test(text);
   const angle = /[<>]/.test(text);
-  if (wide) {
-    const general =
-      "YouTube counts some characters as more than one: accented letters and curly quotes as 2 or 3, emoji as 3 or more";
-    return angle ? `${general}, and < or > as 3` : general;
-  }
-  return angle ? "YouTube counts < and > as 3" : null;
+  if (wide && angle) return "YouTube counts accented letters, curly quotes, emoji, < and > as 2 or more.";
+  if (wide) return "YouTube counts accented letters, curly quotes and emoji as 2 or more.";
+  return angle ? "YouTube counts < and > as 3." : null;
 }
