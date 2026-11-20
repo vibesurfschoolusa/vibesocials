@@ -146,13 +146,14 @@ export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or
  * user learns the rule that matters. Run it again after `prepareUploadFile`:
  * an iPhone HEIC photo only counts as a JPEG once converted.
  */
-export function photoPickProblem(attachedCount: number, picked: readonly { type: string; name?: string }[]): string | null {
+export function photoPickProblem(attachedCount: number, picked: readonly { type: string; name: string }[]): string | null {
   if (picked.some((file) => file.type.startsWith("video/"))) return PHOTO_VIDEO_ALONE_MESSAGE;
   if (picked.some((file) => file.type === "image/gif")) return PHOTO_GIF_ALONE_MESSAGE;
   if (attachedCount + picked.length > MAX_POST_MEDIA) return PHOTO_LIMIT_MESSAGE;
-  // R46 review: a type that can't be told gets the shared sentence, with the step that works.
+  // R46 review: a type that can't be told gets the shared sentence, judged by the file's own
+  // name (required, so no caller can leave it out and turn "clip.mkv" into "no extension").
   const untold = picked.find((file) => file.type === "");
-  if (untold) return unknownTypeMessage(untold.name ?? "");
+  if (untold) return unknownTypeMessage(untold.name);
   if (picked.some((file) => !MULTI_PHOTO_MIME_TYPES.includes(file.type))) return PHOTO_TYPE_MESSAGE;
   return null;
 }

@@ -2,7 +2,7 @@ import type { Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BLOB_URL_REJECTED_MESSAGE } from "./blobUrl";
-import { NO_EXTENSION_MESSAGE, preparedTypeOf } from "./prepareUploadFile";
+import { NO_EXTENSION_MESSAGE, preparedTypeOf, UNKNOWN_TYPE_MESSAGE } from "./prepareUploadFile";
 import {
   addPhotos,
   MAX_POST_MEDIA,
@@ -176,14 +176,16 @@ describe("validatePostMediaList", () => {
 });
 
 describe("photoPickProblem (the Create page's picker)", () => {
-  const jpeg = { type: "image/jpeg" };
+  const jpeg = { name: "a.jpg", type: "image/jpeg" };
+  // As Create hands the pick on: the type a file will have once prepared, and its own name.
+  const picked = (name: string, type: string) => ({ type: preparedTypeOf({ name, type, size: 10 }), name });
   const many = (n: number) => Array.from({ length: n }, () => jpeg);
 
   it("allows a pick that stays within the limit, adding to what is attached", () => {
     expect(photoPickProblem(0, many(2))).toBeNull();
     expect(photoPickProblem(0, many(10))).toBeNull();
     expect(photoPickProblem(4, many(6))).toBeNull();
-    expect(photoPickProblem(1, [{ type: "image/png" }, { type: "image/webp" }])).toBeNull();
+    expect(photoPickProblem(1, [{ name: "photo", type: "image/png" }, { name: "photo", type: "image/webp" }])).toBeNull();
   });
 
   it("refuses a pick past the limit", () => {
@@ -193,41 +195,47 @@ describe("photoPickProblem (the Create page's picker)", () => {
   });
 
   it("refuses a video among photos", () => {
-    expect(photoPickProblem(2, [{ type: "video/mp4" }])).toBe(
+    expect(photoPickProblem(2, [{ name: "photo", type: "video/mp4" }])).toBe(
       "A video is posted on its own. Remove the photos first, or post the video separately.",
     );
-    expect(photoPickProblem(0, [jpeg, { type: "video/quicktime" }])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, { name: "photo", type: "video/quicktime" }])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
   });
 
   it("refuses a GIF among photos", () => {
-    expect(photoPickProblem(0, [jpeg, { type: "image/gif" }])).toBe("A GIF is posted on its own.");
-    expect(photoPickProblem(3, [{ type: "image/gif" }])).toBe(PHOTO_GIF_ALONE_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, { name: "photo", type: "image/gif" }])).toBe("A GIF is posted on its own.");
+    expect(photoPickProblem(3, [{ name: "photo", type: "image/gif" }])).toBe(PHOTO_GIF_ALONE_MESSAGE);
   });
 
   it("names the video or GIF before the limit", () => {
-    expect(photoPickProblem(9, [jpeg, { type: "video/mp4" }])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
-    expect(photoPickProblem(9, [jpeg, { type: "image/gif" }])).toBe(PHOTO_GIF_ALONE_MESSAGE);
+    expect(photoPickProblem(9, [jpeg, { name: "photo", type: "video/mp4" }])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
+    expect(photoPickProblem(9, [jpeg, { name: "photo", type: "image/gif" }])).toBe(PHOTO_GIF_ALONE_MESSAGE);
   });
 
   it("refuses any other type a photo set cannot hold (checked after HEIC is converted)", () => {
-    expect(photoPickProblem(0, [jpeg, { type: "image/heic" }])).toBe(PHOTO_TYPE_MESSAGE);
-    expect(photoPickProblem(0, [jpeg, { type: preparedTypeOf({ name: "notes.pdf", type: "application/pdf", size: 10 }) }])).toBe(
-      PHOTO_TYPE_MESSAGE,
-    );
+    expect(photoPickProblem(0, [jpeg, { name: "IMG_1.HEIC", type: "image/heic" }])).toBe(PHOTO_TYPE_MESSAGE);
   });
 
-  // R46 review: a type that can't be told ("" from preparedTypeOf, as Create hands it) is the
-  // one unknown-type sentence, with the step that works; it was pinned to PHOTO_TYPE_MESSAGE.
-  it("a typeless IMG_0042 in the pick: the shared unknown-type sentence", () => {
-    const typeless = { name: "IMG_0042", type: "", size: 10 };
-    expect(photoPickProblem(0, [jpeg, { type: preparedTypeOf(typeless) }])).toBe(NO_EXTENSION_MESSAGE);
-    expect(photoPickProblem(0, [jpeg, { type: "" }])).toBe(NO_EXTENSION_MESSAGE);
+  // R46 review: a type that can't be told is the one unknown-type sentence prepareUploadFile
+  // gives, judged by the file's real name; it was pinned to PHOTO_TYPE_MESSAGE.
+  it("a typeless IMG_0042: the \"add .jpg or .mp4\" sentence", () => {
+    expect(photoPickProblem(0, [jpeg, picked("IMG_0042", "")])).toBe(NO_EXTENSION_MESSAGE);
   });
 
-  it("a typeless clip.mp4 in the pick is a video: the existing sentence", () => {
-    expect(photoPickProblem(0, [jpeg, { type: preparedTypeOf({ name: "clip.mp4", type: "", size: 10 }) }])).toBe(
-      PHOTO_VIDEO_ALONE_MESSAGE,
-    );
+  it("a typeless clip.mkv: the plain unknown-type sentence /u gives", () => {
+    expect(photoPickProblem(0, [jpeg, picked("clip.mkv", "")])).toBe(UNKNOWN_TYPE_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, picked("scan.tiff", "")])).toBe(UNKNOWN_TYPE_MESSAGE);
+  });
+
+  it("a typeless b.jpg plus a JPEG attaches", () => {
+    expect(photoPickProblem(0, [picked("b.jpg", ""), jpeg])).toBeNull();
+  });
+
+  it("a PDF: PHOTO_TYPE_MESSAGE", () => {
+    expect(photoPickProblem(0, [jpeg, picked("notes.pdf", "application/pdf")])).toBe(PHOTO_TYPE_MESSAGE);
+  });
+
+  it("a typeless clip.mp4 is a video: the lone-video sentence", () => {
+    expect(photoPickProblem(0, [jpeg, picked("clip.mp4", "")])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
   });
 });
 

@@ -2009,7 +2009,7 @@ function CreatePostFormInner({
     // An iPhone photo counts as the JPEG it becomes; checked again after.
     const problem = photoPickProblem(
       attachedCount,
-      picked.map((file) => ({ type: preparedTypeOf(file) })),
+      picked.map((file) => ({ type: preparedTypeOf(file), name: file.name })),
     );
     if (problem) {
       setUploadError(problem);

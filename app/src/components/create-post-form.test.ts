@@ -1838,7 +1838,8 @@ describe("a pick of several photos where one has no browser type", () => {
   const body = raw.slice(raw.indexOf("async function attachPickedPhotos("), raw.indexOf("\n  }\n", raw.indexOf("async function attachPickedPhotos(")));
 
   it("attachPickedPhotos judges the pick by preparedTypeOf", () => {
-    expect(body).toContain("picked.map((file) => ({ type: preparedTypeOf(file) }))");
+    // R46 review: with the file's name, so a type that can't be told gets the right sentence.
+    expect(body).toContain("picked.map((file) => ({ type: preparedTypeOf(file), name: file.name }))");
   });
 
   it("b.jpg with no type plus a JPEG attaches", async () => {
@@ -1848,6 +1849,6 @@ describe("a pick of several photos where one has no browser type", () => {
       { name: "b.jpg", type: "", size: 1_000 },
       { name: "a.jpg", type: "image/jpeg", size: 1_000 },
     ];
-    expect(photoPickProblem(0, picked.map((file) => ({ type: preparedTypeOf(file) })))).toBeNull();
+    expect(photoPickProblem(0, picked.map((file) => ({ type: preparedTypeOf(file), name: file.name })))).toBeNull();
   });
 });
