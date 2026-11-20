@@ -10,12 +10,12 @@ export const TOO_OLD_TO_SEND_MESSAGE =
   "This post was not sent, and it is too old to send again. Create it again if you still want it.";
 
 /**
- * R49 pages-b L1: the Story half of a Feed and Story post has its own card;
- * its feed post may be out, so its step creates the Story alone (Create's
- * "post to" choice), not the whole post again.
+ * R49 pages-b L1: the Story half of a Feed and Story post has its own card,
+ * so its step creates the Story alone (Create's "post to" choice). It gives no
+ * reason: the feed half may be out, or may have failed too (R49 review).
  */
 export const STORY_TOO_OLD_TO_SEND_MESSAGE =
-  "This Story was not sent, and it is too old to send again. If you still want it, create a new post with Story chosen, not Feed and Story, so the feed post is not sent twice.";
+  "This Story was not sent, and it is too old to send again. To post it, create a new post with Story chosen.";
 
 /**
  * R49 pages-b L1 (5b), one rule: the too-old sentence for a job, the Story's

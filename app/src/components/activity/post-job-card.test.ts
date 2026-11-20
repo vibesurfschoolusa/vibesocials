@@ -236,7 +236,7 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       expect(html).not.toContain("Send again</button>");
       expect(html).toContain(STORY_TOO_OLD_TO_SEND_MESSAGE);
       expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toMatch(/^This Story was not sent, and it is too old to send again\./);
-      expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toContain("with Story chosen, not Feed and Story");
+      expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toContain("create a new post with Story chosen");
       expect(html).not.toContain(TOO_OLD_TO_SEND_MESSAGE);
       expect(html).not.toContain("This Story was not sent. Use Send again");
     });

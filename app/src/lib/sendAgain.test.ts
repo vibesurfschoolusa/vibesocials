@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -48,5 +51,24 @@ describe("tooOldToSendText", () => {
   it("names the Story for a Story half, and the post otherwise", () => {
     expect(tooOldToSendText(true)).toBe(STORY_TOO_OLD_TO_SEND_MESSAGE);
     expect(tooOldToSendText(false)).toBe(TOO_OLD_TO_SEND_MESSAGE);
+  });
+});
+
+// R49 review: a reason ("so the feed post is not sent twice") is false when the
+// feed half failed too, so the Story's sentence gives only the step.
+describe("STORY_TOO_OLD_TO_SEND_MESSAGE", () => {
+  it("says what happened and the step, with no reason clause", () => {
+    expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toBe(
+      "This Story was not sent, and it is too old to send again. To post it, create a new post with Story chosen.",
+    );
+    expect(STORY_TOO_OLD_TO_SEND_MESSAGE).not.toMatch(/feed|twice|so /i);
+  });
+
+  it("is said by the publish route's 409 and the Activity card through tooOldToSendText only", () => {
+    const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+    for (const source of [read("../app/api/posts/[postJobId]/publish/route.ts"), read("../components/activity/post-job-card.tsx")]) {
+      expect(source).toMatch(/tooOldToSendText\(/);
+      expect(source).not.toMatch(/STORY_TOO_OLD_TO_SEND_MESSAGE|TOO_OLD_TO_SEND_MESSAGE|too old to send again/);
+    }
   });
 });
