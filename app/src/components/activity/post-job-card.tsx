@@ -206,6 +206,12 @@ export function retryNotSentText(label: string): string {
   return `You're offline, so the retry of ${label} wasn't sent. Reconnect, then retry again.`;
 }
 
+/**
+ * R48 publishing L1: the Story half of a Feed and Story post has its own card
+ * and its own Send again (it sends only this half), so its card names it.
+ */
+export const STORY_NOT_SENT_MESSAGE = NOT_SENT_MESSAGE.replace(/^This post/, "This Story");
+
 export const SEND_AGAIN_NOT_SENT =
   "We couldn't reach Vibe Socials, so the post wasn't sent. Check your connection and press Send again.";
 /** R27 publishing-flow L1: no answer, or a gateway's page; the server may have taken it. */
@@ -672,7 +678,7 @@ export function PostJobCard({
           record why, so one sentence that is true for every cause. */}
       {canSendAgain || tooOldToSend ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          {tooOldToSend ? TOO_OLD_TO_SEND_MESSAGE : NOT_SENT_MESSAGE}
+          {tooOldToSend ? TOO_OLD_TO_SEND_MESSAGE : job.storyOf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE}
         </p>
       ) : null}
 

@@ -101,6 +101,12 @@ export interface BuildPostOutcomeEmailParams {
    * to label, the zero-results email says "Story" itself.
    */
   story?: boolean;
+  /**
+   * The email is about both halves of a Feed and Story pair (R48 publishing
+   * L1): with no results, it names both and the press on each card, since Send
+   * again sends only its own card's half.
+   */
+  pair?: boolean;
 }
 
 export interface PostOutcomeEmail {
@@ -222,6 +228,7 @@ export function buildPostOutcomeEmail({
   scanNotice = false,
   recipientRole = "owner",
   story = false,
+  pair = false,
 }: BuildPostOutcomeEmailParams): PostOutcomeEmail {
   const base = appBaseUrl || null;
   // Omitted cleanly (no dead link, no crash) when no base URL is available.
@@ -252,8 +259,12 @@ export function buildPostOutcomeEmail({
   // keeps that pre-existing neutral copy; only `failed` gets this dedicated
   // subject/body.
   if (results.length === 0 && status === "failed") {
-    const what = story ? "Story" : "post";
+    const what = pair ? "post and its Story" : story ? "Story" : "post";
     const headline = `Your scheduled ${what} couldn't be published`;
+    // The press is per card, as composerSubmitOutcome.ts words it ("press Send again on its card").
+    const step = pair
+      ? "This post and its Story were not sent. In Activity, press Send again on each card."
+      : `This ${what} was not sent. Open it in Activity and use Send again to try once more.`;
     const html = [
       "<div>",
       `<h1>${escapeHtml(headline)}</h1>`,
@@ -261,7 +272,7 @@ export function buildPostOutcomeEmail({
       // F1 review: no platform was tried, because no connection could take the
       // post or because our side gave up after 2 h. The job records neither
       // cause, so this says what is true for both, like the Activity card.
-      `<p>This ${what} was not sent. Open it in Activity and use Send again to try once more.</p>`,
+      `<p>${escapeHtml(step)}</p>`,
       onceADay,
       link,
       optOut,
@@ -696,6 +707,8 @@ export async function deliverPostOutcomeNotification({
       recipientRole: role,
       // The Story half emailed on its own.
       story: story === null && isStoryHalf(feed),
+      // Both halves together: only two unsent halves reach the no-results text so.
+      pair: story !== null,
     });
 
     await sendEmail(

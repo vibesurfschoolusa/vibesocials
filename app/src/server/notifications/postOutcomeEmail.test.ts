@@ -897,15 +897,18 @@ describe("deliverPostOutcomeNotification - a Feed and Story pair", () => {
       expect(keyOf(0)).not.toBe(keyOf(1));
     });
 
-    it("both halves given up: ONE couldn't-be-published email for the post, under the pair's key", async () => {
+    it("both halves given up: ONE couldn't-be-published email that names both halves and the press on each card", async () => {
       pair(givenUp(feedJob(), T0), givenUp(storyJob(), T0));
       await deliverPostOutcomeNotification({ userId: "user-1", postJobId: STORY_ID });
       await deliverPostOutcomeNotification({ userId: "user-1", postJobId: FEED_ID });
 
       expect(new Set(sendEmailMock.mock.calls.map((_call, index) => keyOf(index))).size).toBe(1);
       expect(keyOf(0)).toBe("post-outcome-pair/job-feed/first/first");
-      expect(sent(0).subject).toBe("Surf Co: your scheduled post couldn't be published");
-      expect(sent(0).html).not.toContain("Story");
+      // R48 publishing L1: Send again sends one card's half, so the email says
+      // both halves are unsent and that each card needs its own press.
+      expect(sent(0).subject).toBe("Surf Co: your scheduled post and its Story couldn't be published");
+      expect(sent(0).html).toContain("<h1>Your scheduled post and its Story couldn&#39;t be published</h1>");
+      expect(sent(0).html).toContain("This post and its Story were not sent. In Activity, press Send again on each card.");
     });
 
     it("the mirror: a Story that worked beside a feed given up: two emails too", async () => {
