@@ -19,7 +19,7 @@ interface PublishHealthResponse extends PublishHealthSummary {
   windowDays: number;
 }
 
-/** Green when everything landed, amber when some failed, red when most did. */
+/** Green from 95%, amber from 75%, red below; the rate is rounded down, so 100% means none failed. */
 function rateTone(rate: number): string {
   if (rate >= 95) return "text-success-ontint";
   if (rate >= 75) return "text-warning-ontint";

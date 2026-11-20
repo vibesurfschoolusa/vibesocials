@@ -16,7 +16,7 @@ export interface PlatformPublishHealth {
   attempted: number;
   succeeded: number;
   failed: number;
-  /** Whole percent, 0-100. */
+  /** Whole percent rounded down, 0-100: 100 only when nothing failed. */
   successRate: number;
 }
 
@@ -50,6 +50,15 @@ export interface PublishHealthCountRow {
 }
 
 /**
+ * Whole percent, rounded down, so it reads 100 only when nothing failed (R47
+ * new-customer L1: 199 of 200 rounded to a green 100%). Multiplied first, so
+ * an exact rate such as 29 of 100 isn't floored below itself by float error.
+ */
+function successRateOf(succeeded: number, attempted: number): number {
+  return Math.floor((succeeded * 100) / attempted);
+}
+
+/**
  * The summary for pre-aggregated counts. 2026-11-01 scale audit (db M5, web W16):
  * the route no longer loads rows, so the counts are exact for any tenant. The
  * caller has already applied the window; `pending` (or any other non-terminal)
@@ -78,7 +87,7 @@ export function summarizePublishHealthCounts(
         attempted,
         succeeded,
         failed,
-        successRate: Math.round((succeeded / attempted) * 100),
+        successRate: successRateOf(succeeded, attempted),
       };
     })
     // Busiest first — that's where a dip matters most.
@@ -94,7 +103,7 @@ export function summarizePublishHealthCounts(
       attempted,
       succeeded,
       failed,
-      successRate: attempted === 0 ? null : Math.round((succeeded / attempted) * 100),
+      successRate: attempted === 0 ? null : successRateOf(succeeded, attempted),
     },
   };
 }

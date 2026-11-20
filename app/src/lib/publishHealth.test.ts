@@ -20,7 +20,7 @@ describe("summarizePublishHealth", () => {
     );
 
     expect(summary.platforms).toEqual([
-      { platform: "youtube", attempted: 3, succeeded: 2, failed: 1, successRate: 67 },
+      { platform: "youtube", attempted: 3, succeeded: 2, failed: 1, successRate: 66 },
       { platform: "tiktok", attempted: 1, succeeded: 0, failed: 1, successRate: 0 },
     ]);
     // 2 of 4 succeeded (youtube 2/3, tiktok 0/1).
@@ -70,9 +70,30 @@ describe("summarizePublishHealth", () => {
     expect(summary.overall).toEqual({ attempted: 0, succeeded: 0, failed: 0, successRate: null });
   });
 
-  it("rounds the rate to a whole percent and never reports a misleading 100%", () => {
-    // 2 of 3 = 66.67 -> 67; 1 of 3 = 33.33 -> 33. A rate is only 100 when
-    // nothing failed.
+  // R47 new-customer L1: 199 of 200 rounded to 100, so the card showed a green
+  // "100% overall success" beside a failure. A rate is rounded down.
+  it("reads 100 only when nothing failed: 199 of 200 is 99, overall and per platform", () => {
+    const summary = summarizePublishHealthCounts([
+      { platform: "x", status: "success", count: 199 },
+      { platform: "x", status: "failed", count: 1 },
+    ]);
+    expect(summary.platforms[0].successRate).toBe(99);
+    expect(summary.overall.successRate).toBe(99);
+
+    const all = summarizePublishHealthCounts([{ platform: "x", status: "success", count: 200 }]);
+    expect(all.platforms[0].successRate).toBe(100);
+    expect(all.overall.successRate).toBe(100);
+
+    const third = summarizePublishHealthCounts([
+      { platform: "x", status: "success", count: 1 },
+      { platform: "x", status: "failed", count: 2 },
+    ]);
+    expect(third.platforms[0].successRate).toBe(33);
+    expect(third.overall.successRate).toBe(33);
+  });
+
+  it("rounds the rate down to a whole percent and never reports a misleading 100%", () => {
+    // 2 of 3 = 66.67 -> 66. A rate is only 100 when nothing failed.
     const summary = summarizePublishHealth(
       [
         { platform: "x", status: "success", finishedAt: inWindow },
@@ -82,7 +103,8 @@ describe("summarizePublishHealth", () => {
       NOW,
       30,
     );
-    expect(summary.overall.successRate).toBe(67);
+    expect(summary.overall.successRate).toBe(66);
+    expect(summary.platforms[0].successRate).toBe(66);
   });
 
   it("accepts Date objects as well as ISO strings", () => {
