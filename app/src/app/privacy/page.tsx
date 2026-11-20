@@ -48,6 +48,11 @@ export default function PrivacyPage() {
             and the teammates you invite.
           </li>
           <li>
+            <strong className="text-foreground">Time zone:</strong> your time zone (for example
+            America/New_York), read from your browser when you are signed in, so times in our emails
+            show in your local time.
+          </li>
+          <li>
             <strong className="text-foreground">Content you upload:</strong> the photos and videos you
             add, your captions, and the post settings you choose.
           </li>
