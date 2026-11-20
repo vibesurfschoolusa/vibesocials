@@ -1,5 +1,5 @@
 import { extensionOf, withoutExtension } from "./fileExtension";
-import { MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
+import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
 
 /**
  * Prepares a picked file in the browser before it is uploaded (create post and
@@ -184,7 +184,7 @@ function converterNotLoadedMessage(name: string, context: UnknownTypeContext): s
   return `${lead} Check your connection, then choose the photo again.`;
 }
 
-/** R48 client-journey L1: the browser couldn't redraw a photo too large to send as it is. */
+/** R48 client-journey L1: the browser couldn't redraw a photo over {@link MAX_UPLOAD_PHOTO_BYTES}. */
 function shrinkFailedMessage(name: string, context: UnknownTypeContext): string {
   const failed = "we couldn't make this photo smaller. Save it as a smaller JPEG,";
   if (context === "photoPick") return `${name}: ${failed} then choose the photos again.`;
@@ -257,11 +257,11 @@ export async function prepareUploadFile(
     try {
       prepared = await shrinkPhoto(prepared, deps);
     } catch (error) {
-      // A photo too big or damaged for this browser to redraw: as it is, when the upload takes it.
+      // A photo too big or damaged for this browser to redraw. Lead review: never
+      // sent as it is: X and Google refuse it over 5 MB, and only the re-encode
+      // drops its metadata, GPS location included.
       console.error("[prepareUploadFile] shrinking the photo failed", error);
-      if (prepared.size > MAX_MEDIA_BYTES) {
-        throw new PrepareFileError("file", shrinkFailedMessage(file.name, context));
-      }
+      throw new PrepareFileError("file", shrinkFailedMessage(file.name, context));
     }
   }
 

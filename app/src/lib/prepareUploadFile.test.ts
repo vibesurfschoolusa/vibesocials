@@ -19,7 +19,6 @@ import {
   uploadTypeOf,
   type PrepareUploadDeps,
 } from "./prepareUploadFile";
-import { MAX_MEDIA_BYTES } from "./mediaInput";
 
 const bytes = (size: number) => new Uint8Array(size);
 const file = (name: string, type: string, size = 10) => new File([bytes(size)], name, { type });
@@ -292,11 +291,6 @@ describe("uploadTypeOf / unsupportedTypeMessage", () => {
 describe("prepareUploadFile: a shrink or a converter that fails", () => {
   const RAW = "The source image could not be decoded.";
   const undecodable = () => vi.fn(async () => Promise.reject(new Error(RAW)));
-  const tooLargeToSend = (name: string) => {
-    const picked = file(name, "image/jpeg", MAX_UPLOAD_PHOTO_BYTES + 1);
-    Object.defineProperty(picked, "size", { value: MAX_MEDIA_BYTES + 1 });
-    return picked;
-  };
   async function refusal(promise: Promise<unknown>): Promise<PrepareFileError> {
     const error = await promise.then(
       () => null,
@@ -306,13 +300,9 @@ describe("prepareUploadFile: a shrink or a converter that fails", () => {
     return error as PrepareFileError;
   }
 
-  it("sends the original when a shrink fails and the original is within the upload limit", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const original = file("big.jpg", "image/jpeg", 9_000_000);
-    await expect(prepareUploadFile(original, fakeDeps({ reencodeAsJpeg: undecodable() }))).resolves.toBe(original);
-  });
-
-  it("gives the screen's plain step when a shrink fails and the original is too large to send", async () => {
+  // Lead review: never the original. Over the limit X and Google refuse it, and
+  // only the re-encode drops its metadata (GPS location included).
+  it("a 6 MB JPEG whose shrink fails is refused with the screen's plain step, never sent as it is", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const deps = fakeDeps({ reencodeAsJpeg: undecodable() });
     const steps = [
@@ -325,10 +315,17 @@ describe("prepareUploadFile: a shrink or a converter that fails", () => {
       ],
     ] as const;
     for (const [context, sentence] of steps) {
-      const error = await refusal(prepareUploadFile(tooLargeToSend("huge.jpg"), deps, context));
+      const error = await refusal(prepareUploadFile(file("huge.jpg", "image/jpeg", 6_000_000), deps, context));
       expect(error, context).toMatchObject({ kind: "file", message: sentence });
       expect(error.message).not.toContain(RAW);
     }
+  });
+
+  it("a 3 MB photo is never shrunk, so a failing re-encode doesn't touch it", async () => {
+    const deps = fakeDeps({ reencodeAsJpeg: undecodable() });
+    const original = file("small.jpg", "image/jpeg", 3_000_000);
+    await expect(prepareUploadFile(original, deps, "sendMore")).resolves.toBe(original);
+    expect(deps.reencodeAsJpeg).not.toHaveBeenCalled();
   });
 
   it("a converter that didn't download is a network failure, with a retry step", async () => {

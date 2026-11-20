@@ -11,8 +11,7 @@ import {
 } from "@/lib/uploadLink";
 
 import { NoAnswerError } from "@/lib/requestNoAnswer";
-import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
-import { HeicConverterNotLoadedError, MAX_UPLOAD_PHOTO_BYTES, PrepareFileError } from "@/lib/prepareUploadFile";
+import { HeicConverterNotLoadedError, PrepareFileError } from "@/lib/prepareUploadFile";
 
 import {
   CLIENT_FILE_MAYBE_ARRIVED_MESSAGE,
@@ -216,7 +215,8 @@ describe("sendClientFile", () => {
       expect(deps.fetch).not.toHaveBeenCalled();
     });
 
-    it("a photo that can't be made smaller: sent as it is when the upload takes it", async () => {
+    // Lead review: never sent as it is (X and Google refuse it, and it keeps its GPS location).
+    it("a 6 MB photo that can't be made smaller: the file's own kind, with Send more, and nothing sent", async () => {
       vi.spyOn(console, "error").mockImplementation(() => {});
       const undecodable = {
         convertHeicToJpeg: vi.fn(),
@@ -225,22 +225,7 @@ describe("sendClientFile", () => {
         }),
       };
       deps.prepare.mockImplementation((file: File) => prepareLinkFile(file, undecodable));
-      const big = new File([new Uint8Array(MAX_UPLOAD_PHOTO_BYTES + 1)], "big.jpg", { type: "image/jpeg" });
-      await sendClientFile(input({ file: big }), deps);
-      expect(deps.put).toHaveBeenCalledWith(expect.any(String), big, expect.anything());
-    });
-
-    it("a photo that can't be made smaller and is too large to send: the file's own kind, with Send more", async () => {
-      vi.spyOn(console, "error").mockImplementation(() => {});
-      const undecodable = {
-        convertHeicToJpeg: vi.fn(),
-        reencodeAsJpeg: vi.fn(async () => {
-          throw new Error("The source image could not be decoded.");
-        }),
-      };
-      deps.prepare.mockImplementation((file: File) => prepareLinkFile(file, undecodable));
-      const huge = new File([new Uint8Array(MAX_UPLOAD_PHOTO_BYTES + 1)], "huge.jpg", { type: "image/jpeg" });
-      Object.defineProperty(huge, "size", { value: MAX_MEDIA_BYTES + 1 });
+      const huge = new File([new Uint8Array(6_000_000)], "huge.jpg", { type: "image/jpeg" });
       const error = await sendClientFile(input({ file: huge }), deps).then(
         () => null,
         (caught: ClientFileError) => caught,
@@ -249,7 +234,9 @@ describe("sendClientFile", () => {
         kind: "file",
         message: "We couldn't make this photo smaller. Save it as a smaller JPEG, then press Send more and choose it again.",
       });
+      expect(error?.message).not.toContain("decoded");
       expect(deps.fetch).not.toHaveBeenCalled();
+      expect(deps.put).not.toHaveBeenCalled();
     });
 
     // R47 lead review: a HEIC that won't convert is refused again as it is; on /u the step names Send more.
