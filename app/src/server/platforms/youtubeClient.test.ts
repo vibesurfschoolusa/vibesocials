@@ -582,8 +582,9 @@ describe("youtubeClient.publishVideo — step deadline", () => {
       expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
     }
     // Whole-body bounds (the body is read after the headers): the token
-    // refresh's (fetchWithinLimit, R47 platform L1) and the download's.
-    expect(abortTimeoutSpy).toHaveBeenCalledTimes(2);
+    // refresh's (fetchWithinLimit, R47 platform L1), the download's, and the
+    // insert's (fetchWithinLimit, R48).
+    expect(abortTimeoutSpy).toHaveBeenCalledTimes(3);
     for (const [ms] of abortTimeoutSpy.mock.calls) expect(ms).toBeLessThanOrEqual(12_000);
   });
 

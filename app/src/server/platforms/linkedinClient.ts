@@ -424,7 +424,7 @@ async function uploadImage(
 
   // Step 1: Initialize the image upload (Images API). The answer is
   // { value: { uploadUrlExpiresAt, uploadUrl, image } }.
-  const registerResponse = await fetchWithTimeout(
+  const registerResponse = await fetchWithinLimit(
     `${LINKEDIN_IMAGES_URL}?action=initializeUpload`,
     {
       method: "POST",
@@ -504,7 +504,7 @@ async function uploadImage(
   // Step 3: Upload image to LinkedIn: a PUT to the upload URL, with the member
   // token (the Images API page points to the Assets API's "Upload the Image").
   // The token goes only to a LinkedIn host, never to any URL an answer names.
-  const uploadResponse = await fetchWithTimeout(
+  const uploadResponse = await fetchWithinLimit(
     uploadUrl,
     {
       method: "PUT",
@@ -564,7 +564,7 @@ async function uploadVideoThumbnail(registerData: unknown, thumb: Buffer, deadli
     return LINKEDIN_COVER_REFUSED_NOTE;
   }
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchWithinLimit(
       url,
       {
         method: "PUT",
@@ -656,7 +656,7 @@ async function uploadVideo(
     fileSizeBytes: videoSize,
   });
 
-  const registerResponse = await fetchWithTimeout(
+  const registerResponse = await fetchWithinLimit(
     `${LINKEDIN_VIDEOS_URL}?action=initializeUpload`,
     {
       method: "POST",
@@ -711,7 +711,7 @@ async function uploadVideo(
   // Step 3: Upload each part of the video, in byte order, keeping its ETag.
   const partIds: string[] = [];
   for (const [index, part] of upload.parts.entries()) {
-    const uploadResponse = await fetchWithTimeout(
+    const uploadResponse = await fetchWithinLimit(
       part.url,
       {
         method: "PUT",
@@ -740,7 +740,7 @@ async function uploadVideo(
   if (thumb) coverNote = await uploadVideoThumbnail(registerData, thumb, deadline);
 
   // Step 4: Finalize the upload with the parts' ETags.
-  const finalizeResponse = await fetchWithTimeout(
+  const finalizeResponse = await fetchWithinLimit(
     `${LINKEDIN_VIDEOS_URL}?action=finalizeUpload`,
     {
       method: "POST",
@@ -908,7 +908,7 @@ async function createPost(
   // remaining step budget; a spent budget throws PUBLISH_TIME_BUDGET_EXCEEDED
   // BEFORE the request is sent (safe to retry).
   const response = await commitRequest("linkedin", () =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       LINKEDIN_POSTS_URL,
       {
         method: "POST",
@@ -1269,7 +1269,7 @@ async function initializeMultipartUpload(args: {
 }): Promise<LinkedInMultipartSession> {
   const { accessToken, ownerUrn, totalBytes, connection, deadline, restart } = args;
 
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     `${LINKEDIN_VIDEOS_URL}?action=initializeUpload`,
     {
       method: "POST",
@@ -1349,7 +1349,7 @@ async function checkVideoStatus(args: {
   const { accessToken, video, connection, deadline } = args;
 
   const attempt = await attemptRequest(() =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       `${LINKEDIN_VIDEOS_URL}/${encodeURIComponent(video)}`,
       {
         method: "GET",
@@ -1631,7 +1631,7 @@ async function publishMultipart(args: {
         if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
 
         const attempt = await attemptRequest(() =>
-          fetchWithTimeout(
+          fetchWithinLimit(
             part.url,
             // No Authorization: the Videos API page's sample PUTs a part without a token.
             { method: "PUT", headers: { ...VIDEO_PART_HEADERS }, body },
@@ -1691,7 +1691,7 @@ async function publishMultipart(args: {
       // The finalize commits nothing yet (the post does), so it starts with a full window left.
       if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
       const attempt = await attemptRequest(() =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           `${LINKEDIN_VIDEOS_URL}?action=finalizeUpload`,
           {
             method: "POST",

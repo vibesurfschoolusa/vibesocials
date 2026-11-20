@@ -1,8 +1,11 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_FETCH_TIMEOUT_MS } from "@/lib/fetchWithTimeout";
+import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 import { instagramClient } from "@/server/platforms/instagramClient";
+import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // R48 platform L1 + latent pattern: every Instagram read in the publish path
 // ends within its own limit, the body included. A stalled body before
@@ -106,5 +109,40 @@ describe("Instagram publish: a body that never ends", () => {
     const out = await settleWithin(instagramClient.publishVideo(photoCtx()), 5_000);
 
     expect(out).toEqual({ value: { externalPostId: "media-1" } });
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("a stalled container body before the post is a plain failure within the limit; nothing is published", async () => {
+    const fetchMock = stubGraph({ container: bodyNeverEnds });
+
+    const out = (await settleWithin(instagramClient.publishVideo(photoCtx()), DEFAULT_FETCH_TIMEOUT_MS)) as {
+      error?: { code?: string };
+    };
+
+    expect(out.error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/media_publish"))).toBe(false);
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("a stalled status body counts as not ready yet, and the next check goes on to publish", async () => {
+    let checks = 0;
+    stubGraph({
+      status: (input, init) => (checks++ === 0 ? bodyNeverEnds(input, init) : Promise.resolve(json({ status_code: "FINISHED" }))),
+    });
+
+    const out = await settleWithin(instagramClient.publishVideo(photoCtx()), 2 * DEFAULT_FETCH_TIMEOUT_MS);
+
+    expect(out).toEqual({ value: { externalPostId: "media-1" } });
+    expect(checks).toBe(2);
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("a stalled media_publish body is PUBLISH_UNCONFIRMED within the limit and is not sent again", async () => {
+    const fetchMock = stubGraph({ publish: bodyNeverEnds });
+
+    const out = (await settleWithin(
+      withTransientRetries(() => instagramClient.publishVideo(photoCtx()), { sleep: () => Promise.resolve() }),
+      DEFAULT_FETCH_TIMEOUT_MS,
+    )) as { error?: { code?: string } };
+
+    expect(out.error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/media_publish"))).toHaveLength(1);
   }, STALL_TEST_TIMEOUT_MS);
 });

@@ -5,7 +5,7 @@ import type { PlatformClient, PublishContext, PublishResult, TextPublishContext 
 
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { STORAGE_READ_CODES, asStorageReadFailure, hasInternalDetail } from "@/lib/publishFailureText";
 import { X_MAX_PHOTOS } from "@/lib/postMedia";
@@ -129,8 +129,9 @@ export const X_UPLOAD_STATE_KIND = "x_chunked";
  *
  * => all X I/O ends by the deadline (225s): every phase that can start late is
  *    clamped to it. After it only the PostJobResult write runs (ms), so the step
- *    ends < 240s. Small JSON bodies are read after their headers and are not
- *    separately timed (same as every client).
+ *    ends < 240s. Each request's limit covers its whole body too
+ *    (fetchWithinLimit, R48; same as every client), so a stalled body ends
+ *    within that request's clamped limit.
  * Before: polling alone allowed 60 x (check_after_secs + a 30s request) > 300s,
  * and each in-step retry restarted download + upload + polling from scratch.
  *
@@ -150,8 +151,8 @@ export const X_UPLOAD_STATE_KIND = "x_chunked";
 
 // COR-2/COR-3: xClient uses oauth-1.0a request signing (see `oauth.authorize`
 // calls below). fetchWithTimeout passes `init` through unchanged except for
-// `signal` (see its docstring), so migrating `fetch(url, init)` calls here to
-// `fetchWithTimeout(url, init, timeoutMs)` preserves the exact URL/method/
+// `signal` (see its docstring), and so does fetchWithinLimit (R48), so the
+// `fetchWithinLimit(url, init, timeoutMs)` calls here preserve the exact URL/method/
 // headers/body the signature was computed over — only a composed abort
 // signal is added, which the signature does not cover.
 
@@ -269,7 +270,7 @@ async function uploadMedia(
 
   const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
-  const uploadResponse = await fetchWithTimeout(
+  const uploadResponse = await fetchWithinLimit(
     uploadUrl,
     {
       method: "POST",
@@ -337,7 +338,7 @@ async function uploadVideoChunked(
   };
 
   const initAuthHeader = oauth.toHeader(oauth.authorize(initData, token));
-  const initResponse = await fetchWithTimeout(
+  const initResponse = await fetchWithinLimit(
     uploadUrl,
     {
       method: "POST",
@@ -387,7 +388,7 @@ async function uploadVideoChunked(
     };
 
     const appendAuthHeader = oauth.toHeader(oauth.authorize(appendData, token));
-    const appendResponse = await fetchWithTimeout(
+    const appendResponse = await fetchWithinLimit(
       uploadUrl,
       {
         method: "POST",
@@ -424,7 +425,7 @@ async function uploadVideoChunked(
   };
 
   const finalizeAuthHeader = oauth.toHeader(oauth.authorize(finalizeData, token));
-  const finalizeResponse = await fetchWithTimeout(
+  const finalizeResponse = await fetchWithinLimit(
     uploadUrl,
     {
       method: "POST",
@@ -566,7 +567,7 @@ async function waitForVideoProcessing(
     const statusAuthHeader = oauth.toHeader(oauth.authorize(statusData, token));
     const statusUrl = `${uploadUrl}?${new URLSearchParams(statusData.data)}`;
 
-    const statusResponse = await fetchWithTimeout(
+    const statusResponse = await fetchWithinLimit(
       statusUrl,
       {
         method: "GET",
@@ -746,7 +747,7 @@ async function postTweet(args: {
   // do NOT fall back to v2 (that would post it a second time). Only a
   // rejection the platform answered (4xx, 429) returns and falls back.
   const v1Response = await commitRequest("x", () =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       v1Url,
       {
         method: "POST",
@@ -805,7 +806,7 @@ async function postTweet(args: {
   // v2 is a commit call too: 5xx / timeout / dropped connection after sending
   // is PUBLISH_UNCONFIRMED.
   const tweetResponse = await commitRequest("x", () =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       tweetUrl,
       {
         method: "POST",
@@ -898,7 +899,7 @@ async function setAltTexts(args: {
     }
     try {
       const authHeader = oauth.toHeader(oauth.authorize({ url: X_MEDIA_METADATA_URL, method: "POST" }, token));
-      const response = await fetchWithTimeout(
+      const response = await fetchWithinLimit(
         X_MEDIA_METADATA_URL,
         {
           method: "POST",
@@ -1052,7 +1053,7 @@ function postMediaCommand(args: {
 }): Promise<Response> {
   const { oauth, token, data, timeoutMs } = args;
   const authHeader = oauth.toHeader(oauth.authorize({ url: X_MEDIA_UPLOAD_URL, method: "POST", data }, token));
-  return fetchWithTimeout(
+  return fetchWithinLimit(
     X_MEDIA_UPLOAD_URL,
     {
       method: "POST",
@@ -1076,7 +1077,7 @@ function getMediaStatus(args: {
   const { oauth, token, mediaId, timeoutMs } = args;
   const data = { command: "STATUS", media_id: mediaId };
   const authHeader = oauth.toHeader(oauth.authorize({ url: X_MEDIA_UPLOAD_URL, method: "GET", data }, token));
-  return fetchWithTimeout(
+  return fetchWithinLimit(
     `${X_MEDIA_UPLOAD_URL}?${new URLSearchParams(data)}`,
     { method: "GET", headers: { ...authHeader } },
     timeoutMs,

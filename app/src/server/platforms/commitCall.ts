@@ -26,7 +26,7 @@ import { isNeverConnectedFetchError } from "./transientRetry";
 //   429 and other 4xx                     returned: the caller classifies the
 //                                         429 (rateLimited.ts) or fails as before
 //   2xx, body unreadable / not parseable  PUBLISH_UNCONFIRMED (readCommitBody:
-//                                         the platform answered "created")
+//   / stalled past the limit (R48)        the platform answered "created")
 //   2xx, parsed body without the post id  PUBLISH_UNCONFIRMED (requireCommitId,
 //                                         2026-11-02 scale audit)
 
@@ -64,7 +64,9 @@ function serverErrorCause(response: Response): Error & { status: number } {
 
 /**
  * Send a commit call and sort its outcome (see the table above). `send` makes
- * the request, typically `() => fetchWithTimeout(url, init, budgetedTimeout(...))`;
+ * the request, typically `() => fetchWithinLimit(url, init, budgetedTimeout(...))`,
+ * whose limit covers the body too (R48): a 2xx body that then stalls is
+ * FETCH_TIMEOUT inside readCommitBody, so PUBLISH_UNCONFIRMED;
  * it is called exactly once, so build per-attempt state (signatures, body) before
  * calling this, and never wrap it in a retry loop.
  *

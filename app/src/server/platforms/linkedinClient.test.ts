@@ -1607,9 +1607,10 @@ describe("linkedinClient — step deadline", () => {
         expect(timeout).toBeLessThanOrEqual(12_000);
         expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
       }
-      // The download also carries a whole-transfer bound (its body is read after the headers).
-      expect(abortTimeoutSpy).toHaveBeenCalledTimes(1);
-      expect(abortTimeoutSpy.mock.calls[0][0]).toBeLessThanOrEqual(12_000);
+      // R48: every request carries a whole-body bound (the download its own,
+      // the others fetchWithinLimit's), each clamped the same way.
+      expect(abortTimeoutSpy).toHaveBeenCalledTimes(5);
+      for (const [ms] of abortTimeoutSpy.mock.calls) expect(ms).toBeLessThanOrEqual(12_000);
     });
 
     it("clamps every request of an image publish to the time left (initialize, download, upload, post <= 12 s)", async () => {
@@ -1630,8 +1631,9 @@ describe("linkedinClient — step deadline", () => {
         expect(timeout).toBeLessThanOrEqual(12_000);
         expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
       }
-      expect(abortTimeoutSpy).toHaveBeenCalledTimes(1);
-      expect(abortTimeoutSpy.mock.calls[0][0]).toBeLessThanOrEqual(12_000);
+      // R48: every request carries a whole-body bound, each clamped the same way.
+      expect(abortTimeoutSpy).toHaveBeenCalledTimes(4);
+      for (const [ms] of abortTimeoutSpy.mock.calls) expect(ms).toBeLessThanOrEqual(12_000);
     });
 
     it("worst case: slow download + initialize and a hung part PUT still settle by the step deadline", async () => {

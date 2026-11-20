@@ -18,7 +18,11 @@
  * withTransientRetries and the long-running clients (X, TikTok) bound every
  * phase that can START late — a request, a poll wait, a retry — by the time
  * actually left. After the deadline only the PostJobResult write runs, so a
- * step ends within ~PUBLISH_STEP_BUDGET_MS + one DB write (< 240s).
+ * step ends within ~PUBLISH_STEP_BUDGET_MS + one DB write (< 240s). Every
+ * request reads its whole body within its own clamped limit (fetchWithinLimit,
+ * R48), so a stalled body cannot outlast the deadline either: before the commit
+ * it is a plain failure (nothing was sent); a commit's 2xx body that stalls is
+ * PUBLISH_UNCONFIRMED (readCommitBody).
  */
 
 /** How long one platform step may spend talking to the platform. */

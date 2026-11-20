@@ -2,7 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
@@ -273,7 +273,7 @@ function requestContainerStatus(options: {
   const statusUrl = new URL(`${META_GRAPH_BASE_URL}/${options.containerId}`);
   statusUrl.searchParams.set("fields", "status_code");
   statusUrl.searchParams.set("access_token", options.accessToken);
-  return fetchWithTimeout(statusUrl.toString(), undefined, options.timeoutMs);
+  return fetchWithinLimit(statusUrl.toString(), undefined, options.timeoutMs);
 }
 
 /**
@@ -701,7 +701,7 @@ async function postInstagramContainer(args: {
     containerUrl.searchParams.set(key, value);
   });
 
-  const containerResponse = await fetchWithTimeout(
+  const containerResponse = await fetchWithinLimit(
     containerUrl.toString(),
     { method: "POST" },
     budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
@@ -782,7 +782,7 @@ async function publishInstagramContainer(args: {
   // to the remaining step budget; a spent budget throws
   // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
   const publishResponse = await commitRequest("instagram", () =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       publishUrl.toString(),
       { method: "POST" },
       budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),

@@ -2,7 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult, TextPublishContext 
 import type { SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { MAX_POST_MEDIA, MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
@@ -225,7 +225,7 @@ async function publishSeveralPhotos(
     // An upload is not a commit (the photo stays unpublished), so a plain
     // fetch: a 5xx or a network failure here may be retried.
     const upload = (body: URLSearchParams) =>
-      fetchWithTimeout(
+      fetchWithinLimit(
         `${META_GRAPH_BASE_URL}/${pageId}/photos`,
         {
           method: "POST",
@@ -279,7 +279,7 @@ async function publishSeveralPhotos(
   // Checked before the commit call, so a spent step budget sends nothing.
   const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
   const response = await commitRequest("facebook_page", () =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       `${META_GRAPH_BASE_URL}/${pageId}/feed`,
       {
         method: "POST",
@@ -370,7 +370,7 @@ async function publishStory(
 
   let commitFields: Record<string, string>;
   if (isVideo) {
-    const start = await fetchWithTimeout(
+    const start = await fetchWithinLimit(
       storiesUrl,
       form({ upload_phase: "start" }),
       budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
@@ -396,7 +396,7 @@ async function publishStory(
 
     // Facebook fetches the file before it answers, so this gets the feed video's
     // longer timeout, cut short by the step's deadline.
-    const transfer = await fetchWithTimeout(
+    const transfer = await fetchWithinLimit(
       started.upload_url as string,
       {
         method: "POST",
@@ -434,7 +434,7 @@ async function publishStory(
     }
     commitFields = { video_id: videoId, upload_phase: "finish" };
   } else {
-    const upload = await fetchWithTimeout(
+    const upload = await fetchWithinLimit(
       `${META_GRAPH_BASE_URL}/${pageId}/photos`,
       form({ url: mediaItem.storageLocation, published: "false" }),
       budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
@@ -463,7 +463,7 @@ async function publishStory(
   // Checked before the commit call, so a spent step budget sends nothing.
   const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
   const response = await commitRequest("facebook_page", () =>
-    fetchWithTimeout(storiesUrl, form(commitFields), timeoutMs),
+    fetchWithinLimit(storiesUrl, form(commitFields), timeoutMs),
   );
 
   const limited = await classifyRateLimit("facebook_page", response);
@@ -573,7 +573,7 @@ export const facebookPageClient: PlatformClient = {
     // never re-run; a 4xx / 429 is returned and handled below as before.
     const send = (requestBody: URLSearchParams | FormData, timeoutMs = timeoutFor()) =>
       commitRequest("facebook_page", () =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           endpoint.toString(),
           {
             method: "POST",
@@ -583,7 +583,7 @@ export const facebookPageClient: PlatformClient = {
               : { headers: { "Content-Type": "application/x-www-form-urlencoded" } }),
             body: requestBody,
           },
-          timeoutMs,
+          timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
         ),
       );
 
@@ -691,7 +691,7 @@ export const facebookPageClient: PlatformClient = {
     // Checked before the commit call, so a spent step budget sends nothing.
     const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
     const response = await commitRequest("facebook_page", () =>
-      fetchWithTimeout(
+      fetchWithinLimit(
         `${META_GRAPH_BASE_URL}/${pageId}/feed`,
         {
           method: "POST",

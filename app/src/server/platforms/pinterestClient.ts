@@ -389,7 +389,7 @@ async function createPin(args: {
 
   const post = (body: object, requestTimeoutMs: number) =>
     commitRequest("pinterest", () =>
-      fetchWithTimeout(
+      fetchWithinLimit(
         `${PINTEREST_API_BASE_URL}/pins`,
         {
           method: "POST",
@@ -455,7 +455,7 @@ async function registerVideoUpload(
   connection: SocialConnection,
   deadline: number | undefined,
 ): Promise<RegisteredUpload> {
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     `${PINTEREST_API_BASE_URL}/media`,
     {
       method: "POST",
@@ -576,7 +576,7 @@ async function readMediaStatus(
   mediaId: string,
   timeoutMs: number,
 ): Promise<MediaStatus> {
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     `${PINTEREST_API_BASE_URL}/media/${encodeURIComponent(mediaId)}`,
     { headers: bearerHeaders(connection.accessToken) },
     timeoutMs,

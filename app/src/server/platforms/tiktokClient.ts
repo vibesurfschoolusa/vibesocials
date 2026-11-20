@@ -179,8 +179,9 @@ const TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS = 120_000;
  *
  * => all TikTok I/O ends by the deadline (225s): every phase that can start
  *    late is clamped to it. After it only the PostJobResult write runs (ms),
- *    so the step ends < 240s. Small JSON bodies are read after their headers
- *    and are not separately timed (same as every client).
+ *    so the step ends < 240s. Each request's limit covers its whole body too
+ *    (fetchWithinLimit, R48; same as every client), so a stalled body ends
+ *    within that request's clamped limit.
  * Before: 24 x (5s + up to 30s) = 840s of polling alone, x3 attempts.
  *
  * STREAMED UPLOAD (2026-11-02 scale audit, jobs B3; publishStreamed below). The same
@@ -790,7 +791,7 @@ export async function pollTikTokPublishStatus(
     let failReason: string | null = null;
     let unauthorized = false;
     try {
-      const statusRes = await fetchWithTimeout(
+      const statusRes = await fetchWithinLimit(
         `${TIKTOK_API_BASE}/v2/post/publish/status/fetch/`,
         {
           method: "POST",
@@ -876,7 +877,7 @@ export async function getTikTokCreatorInfo(
   accessToken: string,
   timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<TikTokCreatorInfo> {
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     `${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`,
     {
       method: "POST",
@@ -1059,7 +1060,7 @@ async function requestUploadInit(args: {
   const { accessToken, socialConnection, postInfo, size, chunkSize, totalChunks, deadline } = args;
 
   // Use Direct Post API with FILE_UPLOAD and captions
-  const initRes = await fetchWithTimeout(
+  const initRes = await fetchWithinLimit(
     `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
     {
       method: "POST",
@@ -1286,7 +1287,7 @@ async function publishStreamed(args: {
 
       const uploadUrl = current.uploadUrl;
       const send = () =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           uploadUrl,
           {
             method: "PUT",
@@ -1577,7 +1578,7 @@ export const tiktokClient: PlatformClient = {
       });
 
       const sendChunk = () =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           uploadUrl,
           {
             method: "PUT",

@@ -5,7 +5,7 @@ import { GBP_ACCESS_REFUSED_TEXT, googleSetupRefusedMessage } from "@/lib/publis
 import { googleFailureKind, googlePublish403, isExpiredTokenRejection, withGoogleTokenRetry } from "@/server/googleFailure";
 import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { trackedGoogleButtonUrl } from "@/lib/trackingTags";
 import { truncateGraphemes } from "@/lib/truncate";
@@ -192,7 +192,7 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     const createRes = await sendWithFreshToken(socialConnection, deadline, (token) =>
       commitRequest("google_business_profile", () =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           request.url,
           {
             method: "POST",
@@ -283,7 +283,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     // The commit call, as for a photo post: a lost answer is PUBLISH_UNCONFIRMED.
     const createRes = await sendWithFreshToken(socialConnection, deadline, (token) =>
       commitRequest("google_business_profile", () =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
           {
             method: "POST",

@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   STORAGE_READ_CODES,
   YOUTUBE_UPLOAD_NOT_ALLOWED_TEXT,
@@ -447,7 +447,7 @@ async function startUploadSession(args: {
   const { ctx, accessToken, totalBytes } = args;
   const { metadata, apiParts } = buildYouTubeVideoResource(ctx);
 
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     `${YOUTUBE_RESUMABLE_START_URL}?uploadType=resumable&part=${apiParts}`,
     {
       method: "POST",
@@ -483,7 +483,7 @@ async function startUploadSession(args: {
  * for the rest); the caller decides what it means for the upload.
  */
 async function queryUploadStatus(args: SessionRequest): Promise<UploadStatus> {
-  const response = await fetchWithTimeout(
+  const response = await fetchWithinLimit(
     args.sessionUri,
     {
       method: "PUT",
@@ -682,7 +682,7 @@ async function uploadChunks(args: {
       const lastByte = current.start + current.bytes.length - 1;
 
       const send = () =>
-        fetchWithTimeout(
+        fetchWithinLimit(
           sessionUri,
           {
             method: "PUT",
@@ -942,7 +942,7 @@ async function setYouTubeCover(
   const image = await fetchCoverImage(cover.imageUrl, ctx.deadline);
   if (!image) return YOUTUBE_COVER_FAILED_NOTE;
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchWithinLimit(
       `${YOUTUBE_THUMBNAILS_SET_URL}?videoId=${encodeURIComponent(videoId)}`,
       {
         method: "POST",
@@ -1167,7 +1167,7 @@ async function uploadYouTubeVideo(ctx: PublishContext, used: UsedToken): Promise
   // the step's remaining budget, and a spent budget throws
   // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
   const uploadResponse = await commitRequest("youtube", () =>
-    fetchWithTimeout(
+    fetchWithinLimit(
       `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
       {
         method: "POST",
