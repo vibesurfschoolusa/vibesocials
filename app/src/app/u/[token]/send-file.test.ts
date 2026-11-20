@@ -276,6 +276,44 @@ describe("sendClientFile", () => {
   });
 });
 
+// R49 publishing L1 = pages-a L2: the route refuses a file over 512 MB or of
+// 0 bytes on every try, so /u refuses it before the upload as the file's own
+// kind: no retry is offered, and the step names Send more.
+describe("sendClientFile: a file refused for its size", () => {
+  async function failure(file: File): Promise<ClientFileError | null> {
+    deps.prepare.mockImplementation(prepareLinkFile);
+    return sendClientFile(input({ file }), deps).then(
+      () => null,
+      (caught: ClientFileError) => caught,
+    );
+  }
+
+  it("a 600 MB video: the file's own kind, nothing asked of the server", async () => {
+    const video = new File(["x"], "surf-4k.mov", { type: "video/quicktime" });
+    Object.defineProperty(video, "size", { value: 600 * 1024 * 1024 });
+    expect(await failure(video)).toMatchObject({
+      kind: "file",
+      message: "This file is over 512 MB. Press Send more and choose a shorter or smaller one.",
+    });
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
+  it("a 0-byte file: the file's own kind, nothing asked of the server", async () => {
+    expect(await failure(new File([], "clip.mp4", { type: "video/mp4" }))).toMatchObject({
+      kind: "file",
+      message: "This file is empty (0 bytes). Press Send more and choose another file.",
+    });
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
+  it("a 500 MB video is sent", async () => {
+    const video = new File(["x"], "surf.mp4", { type: "video/mp4" });
+    Object.defineProperty(video, "size", { value: 500 * 1024 * 1024 });
+    expect(await failure(video)).toBeNull();
+    expect(deps.put).toHaveBeenCalledTimes(1);
+  });
+});
+
 // R45 pages-a L6, lead review: /u's limit refusals said "Try again tomorrow"
 // or "later" and never the wait the answer carries. They name the wait, then
 // the retry button's step, which keeps the files, the name and the note (a

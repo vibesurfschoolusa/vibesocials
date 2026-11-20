@@ -19,6 +19,7 @@ import {
   uploadTypeOf,
   type PrepareUploadDeps,
 } from "./prepareUploadFile";
+import { MAX_MEDIA_BYTES } from "./mediaInput";
 
 const bytes = (size: number) => new Uint8Array(size);
 const file = (name: string, type: string, size = 10) => new File([bytes(size)], name, { type });
@@ -413,5 +414,69 @@ describe("the photoPick context names the file", () => {
     await expect(prepareUploadFile(file("scan.tiff", "image/tiff"), fakeDeps(), "sendMore")).rejects.toThrow(
       "This file type (image/tiff) isn't supported. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
     );
+  });
+});
+
+// R49 publishing L1 = pages-a L2: the upload route refuses a 0-byte file and one
+// over MAX_MEDIA_BYTES, and every retry is refused the same way. So they are
+// refused here, before the upload, as the file's own kind, with each screen's step.
+describe("a file the upload route would refuse for its size", () => {
+  const MB = 1024 * 1024;
+  /** A small File that reports `size`, so no 600 MB buffer is made. */
+  function sized(name: string, type: string, size: number): File {
+    const made = file(name, type, 1);
+    Object.defineProperty(made, "size", { value: size });
+    return made;
+  }
+  const big = () => sized("surf-4k.mp4", "video/mp4", 600 * MB);
+  const empty = () => new File([], "clip.mov", { type: "video/quicktime" });
+  async function refusal(promise: Promise<unknown>): Promise<PrepareFileError> {
+    const error = await promise.then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(PrepareFileError);
+    return error as PrepareFileError;
+  }
+
+  it.each([
+    ["choose", "This file is over 512 MB. Choose a shorter or smaller one."],
+    ["sendMore", "This file is over 512 MB. Press Send more and choose a shorter or smaller one."],
+    ["photoPick", "surf-4k.mp4: this file is over 512 MB. Choose the photos again without it, or with a smaller copy."],
+    ["addMany", "This file is over 512 MB. Remove it, then add a shorter or smaller one with Choose photos and videos."],
+  ] as const)("a 600 MB video in %s: refused as the file's own, with that screen's step", async (context, message) => {
+    const error = await refusal(prepareUploadFile(big(), fakeDeps(), context));
+    expect(error.kind).toBe("file");
+    expect(error.message).toBe(message);
+  });
+
+  it.each([
+    ["choose", "This file is empty (0 bytes). Choose another file."],
+    ["sendMore", "This file is empty (0 bytes). Press Send more and choose another file."],
+    ["photoPick", "clip.mov: this file is empty (0 bytes). Choose the photos again without it."],
+    ["addMany", "This file is empty (0 bytes). Remove it, then add another with Choose photos and videos."],
+  ] as const)("a 0-byte file in %s: refused as the file's own, with that screen's step", async (context, message) => {
+    const error = await refusal(prepareUploadFile(empty(), fakeDeps(), context));
+    expect(error.kind).toBe("file");
+    expect(error.message).toBe(message);
+  });
+
+  it("a 0-byte HEIC is refused as empty, never sent to the converter", async () => {
+    const deps = fakeDeps();
+    const error = await refusal(prepareUploadFile(new File([], "IMG_1.HEIC", { type: "image/heic" }), deps));
+    expect(error.message).toBe("This file is empty (0 bytes). Choose another file.");
+    expect(deps.convertHeicToJpeg).not.toHaveBeenCalled();
+  });
+
+  it("a 500 MB video, and one of exactly the limit, pass untouched", async () => {
+    for (const size of [500 * MB, MAX_MEDIA_BYTES]) {
+      const video = sized("surf.mp4", "video/mp4", size);
+      await expect(prepareUploadFile(video, fakeDeps(), "addMany")).resolves.toBe(video);
+    }
+  });
+
+  it("the limit is the route's own constant", async () => {
+    const error = await refusal(prepareUploadFile(sized("a.mp4", "video/mp4", MAX_MEDIA_BYTES + 1), fakeDeps()));
+    expect(error.kind).toBe("file");
   });
 });

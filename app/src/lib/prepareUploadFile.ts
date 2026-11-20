@@ -1,5 +1,5 @@
 import { extensionOf, withoutExtension } from "./fileExtension";
-import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
+import { MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
 
 /**
  * Prepares a picked file in the browser before it is uploaded (create post and
@@ -14,6 +14,8 @@ import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
  * - A file the browser gave no type takes the one its name tells (uploadTypeOf).
  * - Any other type the upload route would refuse gets a clear message here,
  *   before the upload starts.
+ * - So does a file of 0 bytes, or one over MAX_MEDIA_BYTES, which the route
+ *   refuses for its size on every try (R49 publishing L1).
  *
  * Videos, GIFs and photos under the limit pass through untouched.
  */
@@ -198,6 +200,28 @@ function shrinkFailedMessage(name: string, context: UnknownTypeContext): string 
   return context === "sendMore" ? `${lead} then press Send more and choose it again.` : `${lead} then choose it again.`;
 }
 
+const MAX_MEDIA_MB = MAX_MEDIA_BYTES / (1024 * 1024);
+
+/** R49 publishing L1: a file the upload route refuses for its size; no retry can send it. */
+function tooLargeMessage(name: string, context: UnknownTypeContext): string {
+  const over = `this file is over ${MAX_MEDIA_MB} MB.`;
+  if (context === "photoPick") return `${name}: ${over} Choose the photos again without it, or with a smaller copy.`;
+  const lead = sentenceStart(over);
+  if (context === "addMany") return `${lead} Remove it, then add a shorter or smaller one with Choose photos and videos.`;
+  if (context === "sendMore") return `${lead} Press Send more and choose a shorter or smaller one.`;
+  return `${lead} Choose a shorter or smaller one.`;
+}
+
+/** R49 publishing L1: a 0-byte file (a copy that never downloaded, say), refused by the route on every try. */
+function emptyFileMessage(name: string, context: UnknownTypeContext): string {
+  const empty = "this file is empty (0 bytes).";
+  if (context === "photoPick") return `${name}: ${empty} Choose the photos again without it.`;
+  const lead = sentenceStart(empty);
+  if (context === "addMany") return `${lead} Remove it, then add another with Choose photos and videos.`;
+  if (context === "sendMore") return `${lead} Press Send more and choose another file.`;
+  return `${lead} Choose another file.`;
+}
+
 /**
  * The type `file` will have once prepareUploadFile is done, decided the same
  * way without doing the work: a HEIC becomes a JPEG, a JPEG, WebP or PNG over
@@ -222,6 +246,8 @@ export async function prepareUploadFile(
   deps: PrepareUploadDeps = browserDeps,
   context: UnknownTypeContext = "choose",
 ): Promise<File> {
+  // Before the converter: an empty file has nothing to convert.
+  if (file.size === 0) throw new PrepareFileError("file", emptyFileMessage(file.name, context));
   let prepared = file;
 
   if (isHeicFile(file)) {
@@ -267,6 +293,9 @@ export async function prepareUploadFile(
       throw new PrepareFileError("file", shrinkFailedMessage(file.name, context));
     }
   }
+
+  // Judged on what would be uploaded, by the route's own limit.
+  if (prepared.size > MAX_MEDIA_BYTES) throw new PrepareFileError("file", tooLargeMessage(file.name, context));
 
   return prepared;
 }
