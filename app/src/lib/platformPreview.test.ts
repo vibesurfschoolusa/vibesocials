@@ -507,8 +507,9 @@ describe("buildPlatformPreview on other platforms, unchanged by YouTube's byte l
 // shows the text that function makes. A heart, a flag or a skin tone is one
 // character on screen and 2 code points; a family of four is 7.
 describe("buildPlatformPreview on Pinterest", () => {
+  // countIncludesFooter: Pinterest's card shows its counter's label (unitCountText).
   const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf", trackWebsiteLinks: true };
-  const HINT = "Pinterest counts some emoji and accented letters as 2 or more.";
+  const HINT = "Pinterest counts some characters, such as emoji, as 2 or more.";
   const codePoints = (text: string) => [...text].length;
   const posted = (caption: string, footer: PlatformPreviewInput["user"] = null) =>
     fitPinterestDescription(buildCaptionWithFooter(caption, footer ?? {}, "pinterest"));
@@ -524,6 +525,7 @@ describe("buildPlatformPreview on Pinterest", () => {
       rendered: posted(caption),
       charCount: length,
       limit: 800,
+      countIncludesFooter: false,
       truncated: cut,
       willTruncate: cut,
     });

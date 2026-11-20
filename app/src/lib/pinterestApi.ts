@@ -120,12 +120,12 @@ export function pinterestDescriptionLength(text: string): number {
  * Why Pinterest's count runs ahead of the characters a person sees, or `null`
  * when every character is one code point (R53 platform-clients L1). Shown only
  * when some character counts as 2 or more (a heart, a flag, a skin tone, a
- * joined family, a letter with a separate accent mark), so it is true for any
- * text that shows it.
+ * joined family, a letter with a separate accent mark, some letters of other
+ * scripts); "some characters, such as emoji" is true for every such text.
  */
 export function pinterestCountHint(text: string): string | null {
   return codePointLength(text) > graphemeCount(text)
-    ? "Pinterest counts some emoji and accented letters as 2 or more."
+    ? "Pinterest counts some characters, such as emoji, as 2 or more."
     : null;
 }
 

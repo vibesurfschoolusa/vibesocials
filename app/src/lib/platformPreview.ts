@@ -79,11 +79,13 @@ export interface PlatformPreviewResult {
    */
   countHint?: string;
   /**
-   * True when `byteCount` includes the workspace's footer. YouTube always keeps
-   * its footer (captionFooter.ts drops none without a character limit), so
-   * this holds over the limit too, where the cut takes the footer.
+   * Only on a platform whose card shows its counter's label (YouTube,
+   * Pinterest; see `unitCountText`): true when the count includes the
+   * workspace's footer. YouTube always keeps its footer (captionFooter.ts drops
+   * none without a character limit), so this holds over the limit too, where
+   * the cut takes the footer; Pinterest's is false once the footer is dropped.
    */
-  byteIncludesFooter?: boolean;
+  countIncludesFooter?: boolean;
   /** True when `rendered` is shorter than the full (pre-truncation) text. */
   truncated: boolean;
   /**
@@ -97,14 +99,18 @@ export interface PlatformPreviewResult {
 }
 
 /**
- * "4,812 / 5,000 incl. footer" for a platform counted in bytes (YouTube), or
- * null. The caption counter and the preview card both show this, so they
- * can't differ.
+ * "4,812 / 5,000 incl. footer" for a platform whose count is not the
+ * characters a person sees: YouTube in bytes, Pinterest in code points (R53).
+ * Null elsewhere, where the card keeps its own line. The caption counter and
+ * the preview card both show this, with `countHint` beneath, so they can't differ.
  */
-export function byteCountText(preview: PlatformPreviewResult): string | null {
-  if (preview.byteCount === undefined || preview.byteLimit === undefined) return null;
-  return `${preview.byteCount.toLocaleString("en-US")} / ${preview.byteLimit.toLocaleString("en-US")}${
-    preview.byteIncludesFooter ? " incl. footer" : ""
+export function unitCountText(preview: PlatformPreviewResult): string | null {
+  if (preview.countIncludesFooter === undefined) return null;
+  const count = preview.byteCount ?? preview.charCount;
+  const limit = preview.byteLimit ?? preview.limit;
+  if (limit === null) return null;
+  return `${count.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")}${
+    preview.countIncludesFooter ? " incl. footer" : ""
   }`;
 }
 
@@ -156,7 +162,7 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
       byteCount,
       byteLimit: utf8ByteLimit,
       ...(countHint ? { countHint } : {}),
-      byteIncludesFooter: buildCaptionWithFooter("", input.user ?? {}, input.platform) !== "",
+      countIncludesFooter: buildCaptionWithFooter("", input.user ?? {}, input.platform) !== "",
       truncated: willTruncate,
       willTruncate,
     };
@@ -175,12 +181,23 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
   }
   const countHint = input.platform === "pinterest" ? pinterestCountHint(fullCaption) : null;
+  // Pinterest's card shows its counter's label (unitCountText): the footer is
+  // counted when publishing keeps it, as the counter decides.
+  const pinterest =
+    input.platform === "pinterest"
+      ? {
+          countIncludesFooter:
+            buildCaptionWithFooter(effectiveCaption, input.user ?? {}, input.platform) !==
+            buildCaptionWithFooter(effectiveCaption, {}, input.platform),
+        }
+      : {};
 
   return {
     rendered,
     charCount,
     limit: charLimit,
     ...(countHint ? { countHint } : {}),
+    ...pinterest,
     truncated: rendered !== fullCaption,
     willTruncate: charLimit !== null && charCount > charLimit,
   };

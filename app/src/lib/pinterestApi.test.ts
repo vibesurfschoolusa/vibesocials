@@ -191,7 +191,7 @@ describe("readPinterestErrorCode", () => {
 // R53 platform-clients L1: the composer counts the description with the unit
 // fitPinterestDescription cuts on, and says why the number can jump.
 describe("pinterestDescriptionLength and pinterestCountHint", () => {
-  const HINT = "Pinterest counts some emoji and accented letters as 2 or more.";
+  const HINT = "Pinterest counts some characters, such as emoji, as 2 or more.";
 
   it("counts code points: one for a letter, 2 for a heart, a flag or a skin tone, 7 for a family", () => {
     expect(pinterestDescriptionLength("abc")).toBe(3);
@@ -206,6 +206,20 @@ describe("pinterestDescriptionLength and pinterestCountHint", () => {
     for (const text of ["❤️".repeat(400), `${"❤️".repeat(400)}a`, "a".repeat(800), "a".repeat(801)]) {
       expect(fitPinterestDescription(text) !== text).toBe(pinterestDescriptionLength(text) > PINTEREST_DESCRIPTION_MAX);
     }
+  });
+
+  it.each([
+    ["an emoji", "love ❤️"],
+    ["a flag", "go \u{1F1FA}\u{1F1F8}"],
+    ["a combining accent", "café"],
+    ["a letter from another script that is 2 code points", "कि"],
+  ])("hints for %s, which counts as 2 or more", (_case, text) => {
+    expect(pinterestDescriptionLength(text)).toBeGreaterThan([...new Intl.Segmenter().segment(text)].length);
+    expect(pinterestCountHint(text)).toBe(HINT);
+  });
+
+  it("gives no hint for plain ASCII", () => {
+    expect(pinterestCountHint("Plain ASCII words, 123 <3 & more!")).toBeNull();
   });
 
   it("hints only when some character counts as 2 or more", () => {

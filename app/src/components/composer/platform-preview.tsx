@@ -10,7 +10,7 @@ import { MediaCountBadge, mediaCountBadge } from "@/components/media-thumb";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
-import { buildPlatformPreview, byteCountText } from "@/lib/platformPreview";
+import { buildPlatformPreview, unitCountText } from "@/lib/platformPreview";
 import { STORY_NO_CAPTION } from "@/lib/storyPlacement";
 
 export interface PlatformPreviewListProps {
@@ -267,7 +267,7 @@ function PlatformPreviewCard({
           </p>
 
           <p className="text-xs text-muted-foreground">
-            {byteCountText(preview) ??
+            {unitCountText(preview) ??
               (preview.limit !== null
                 ? `${preview.charCount} / ${preview.limit} characters`
                 : `${preview.charCount} characters`)}

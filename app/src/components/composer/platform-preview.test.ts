@@ -160,25 +160,71 @@ describe("PlatformPreviewList YouTube count line: incl. footer", () => {
   });
 });
 
-// R53 platform-clients L1: Pinterest's card counts code points, as its client
-// cuts, with the counter's hint beneath; ASCII reads as before.
+// R53 platform-clients L1 follow-up: Pinterest's card shows exactly what its
+// counter shows (the same number, limit and hint), from the one helper.
 describe("PlatformPreviewList Pinterest count line", () => {
-  const lines = (caption: string) =>
+  const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+  const lines = (caption: string, user: CaptionFooterUser | null = null) =>
     (
       renderToStaticMarkup(
-        createElement(PlatformPreviewList, { platforms: ["pinterest"], caption, user: null, mediaUrl: null, mediaMimeType: null }),
+        createElement(PlatformPreviewList, { platforms: ["pinterest"], caption, user, mediaUrl: null, mediaMimeType: null }),
       ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
     ).slice(1);
   const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
 
   it("760 characters with 50 hearts: 810 / 800 and the counter's hint", () => {
     const caption = `${"a".repeat(710)}${"❤️".repeat(50)}`;
-    const hint = platformCaptionCounter(caption, "pinterest", null).hint;
-    expect(hint).toBe("Pinterest counts some emoji and accented letters as 2 or more.");
-    expect(lines(caption)).toEqual([line("810 / 800 characters"), line(hint as string)]);
+    expect(lines(caption)).toEqual([
+      line("810 / 800"),
+      line("Pinterest counts some characters, such as emoji, as 2 or more."),
+    ]);
   });
 
-  it("ASCII: unchanged", () => {
-    expect(lines("a".repeat(790))).toEqual([line("790 / 800 characters")]);
+  it.each([
+    ["ASCII", "a".repeat(790), null],
+    ["ASCII over", "a".repeat(1200), null],
+    ["with a footer", "Love ❤️", footer],
+    ["footer dropped", "❤️".repeat(390), footer],
+    ["a family", "\u{1F468}‍\u{1F469}‍\u{1F467} ".repeat(150), footer],
+  ] as const)("%s: the counter's label and hint, line for line", (_case, caption, user) => {
+    const counter = platformCaptionCounter(caption, "pinterest", user);
+    const expected = [line(counter.label)];
+    if (counter.hint) expected.push(line(counter.hint));
+    expect(lines(caption, user)).toEqual(expected);
+  });
+
+  it("ASCII reads 790 / 800 with no hint", () => {
+    expect(lines("a".repeat(790))).toEqual([line("790 / 800")]);
+  });
+});
+
+// R53 follow-up: every other platform's card line, pinned from main 632efda.
+describe("PlatformPreviewList count line on the other platforms, unchanged by Pinterest's", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
+  const long = "Glassy waves é ".repeat(250);
+  const lines = (platform: Platform, caption: string) =>
+    (
+      renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: [platform], caption, user, mediaUrl: null, mediaMimeType: null }),
+      ).match(/<p class="text-xs text-muted-foreground">[^<]*<\/p>/g) ?? []
+    ).slice(1);
+  const line = (text: string) => `<p class="text-xs text-muted-foreground">${text}</p>`;
+
+  it.each([
+    ["x", ["198 / 280 characters"], ["3749 / 280 characters"]],
+    ["tiktok", ["189 / 2200 characters"], ["3749 / 2200 characters"]],
+    ["instagram", ["189 / 2200 characters"], ["3749 / 2200 characters"]],
+    ["linkedin", ["253 / 3000 characters"], ["3749 / 3000 characters"]],
+    ["facebook_page", ["253 characters"], ["3867 characters"]],
+    ["google_business_profile", ["251 / 1500 characters"], ["3749 / 1500 characters"]],
+    [
+      "youtube",
+      ["276 / 5,000 incl. footer", "YouTube counts accented letters, curly quotes, emoji, &lt; and &gt; as 2 or more."],
+      ["4,116 / 5,000 incl. footer", "YouTube counts accented letters, curly quotes and emoji as 2 or more."],
+    ],
+  ] as const)("%s", (platform, shortLines, longLines) => {
+    expect(lines(platform, short)).toEqual(shortLines.map(line));
+    expect(lines(platform, long)).toEqual(longLines.map(line));
   });
 });

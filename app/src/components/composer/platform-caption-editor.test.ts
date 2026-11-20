@@ -131,7 +131,7 @@ describe("PlatformCaptionEditor: Pinterest's count line", () => {
       '<p id="t-pinterest-count" class="ml-auto text-xs tabular-nums text-destructive">810 / 800 (too long)</p>',
     );
     expect(markup).toContain(
-      '<p id="t-pinterest-count-hint" class="text-xs text-muted-foreground">Pinterest counts some emoji and accented letters as 2 or more.</p>',
+      '<p id="t-pinterest-count-hint" class="text-xs text-muted-foreground">Pinterest counts some characters, such as emoji, as 2 or more.</p>',
     );
     expect(markup).toContain('aria-describedby="t-pinterest-count t-pinterest-count-hint"');
   });

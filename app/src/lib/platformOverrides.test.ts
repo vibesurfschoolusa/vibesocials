@@ -455,7 +455,7 @@ describe("platformCaptionCounter on YouTube: incl. footer", () => {
 // fitPinterestDescription cuts, and is red exactly when the Pin is cut.
 describe("platformCaptionCounter and adaptMaxLength on Pinterest", () => {
   const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf", trackWebsiteLinks: true };
-  const HINT = "Pinterest counts some emoji and accented letters as 2 or more.";
+  const HINT = "Pinterest counts some characters, such as emoji, as 2 or more.";
   const heart = "❤️";
 
   it("reads the finding's 760 characters with 50 hearts as 810 / 800, too long, with the hint", () => {

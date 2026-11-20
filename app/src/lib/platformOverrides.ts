@@ -4,7 +4,7 @@ import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFoo
 import { captionCounter, MAX_CAPTION_CHARS } from "@/lib/captionLimits";
 import { pinterestDescriptionLength } from "@/lib/pinterestApi";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { buildPlatformPreview, byteCountText } from "@/lib/platformPreview";
+import { buildPlatformPreview, unitCountText } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { xWeightedLength } from "@/lib/xWeightedLength";
 import { youtubeDescriptionLength } from "@/lib/youtubeDescription";
@@ -154,14 +154,14 @@ export function platformCaptionCounter(
     const footerPosted =
       preview.rendered !== buildPlatformPreview({ platform, caption: text, user: null }).rendered;
     const incl = footerPosted ? " incl. footer" : "";
-    // YouTube: the same count, limit and hint as its preview card.
-    const bytes = byteCountText(preview);
-    if (bytes !== null) {
+    // YouTube and Pinterest: the same count, limit and hint as their preview card.
+    const unitText = unitCountText(preview);
+    if (unitText !== null) {
       return {
-        length: preview.byteCount ?? 0,
+        length: preview.byteCount ?? preview.charCount,
         max: preview.byteLimit ?? limit,
         over: preview.willTruncate,
-        label: bytes,
+        label: unitText,
         ...(preview.countHint ? { hint: preview.countHint } : {}),
       };
     }
@@ -170,8 +170,6 @@ export function platformCaptionCounter(
       max: limit,
       over: preview.willTruncate,
       label: `${preview.charCount.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")}${incl}`,
-      // Pinterest: why its code-point count runs ahead of the characters.
-      ...(preview.countHint ? { hint: preview.countHint } : {}),
     };
   }
   // R51 publishing-flow L2: here only the routes' cap applies, so this counts
