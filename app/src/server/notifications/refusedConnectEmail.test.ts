@@ -94,7 +94,7 @@ describe("buildRefusedConnectEmail", () => {
       "<p>Your client used your connect link for <strong>Surf Co</strong> to reconnect Instagram, but Facebook didn&#39;t return the Page linked to @surfschool. Nothing was changed.</p>",
     );
     expect(email.html).toContain(
-      "<p>If your client should post from their own account, disconnect @surfschool in Settings, Connections; then they can connect theirs through the link. If @surfschool is the right account, use Reconnect in Settings, Connections, or ask your client to sign in with a Facebook account that manages the Page linked to @surfschool.</p>",
+      "<p>If your client should post from their own account, disconnect @surfschool in Settings, Connections; then they can connect theirs through the link. If @surfschool is the right account, use Reconnect in Settings, Connections, or ask your client to sign in with a Facebook account that manages the Page linked to @surfschool, and tick that Page when Facebook lists the Pages.</p>",
     );
     expect(email.html).not.toMatch(/signed in to a different Instagram account|sign in to @surfschool|has to be signed in to/);
   });

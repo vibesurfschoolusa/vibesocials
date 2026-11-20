@@ -71,14 +71,14 @@ describe("different account on reconnect", () => {
   // account comes from a Facebook Page linked to it; nobody signs in to it there.
   it("Settings, Instagram, after a refused reconnect: the Facebook sign-in that works", () => {
     expect(reconnectDifferentAccountMessage("instagram", "@surfschool")).toBe(
-      "Facebook didn't return the Page linked to @surfschool, so nothing changed. Sign in with a Facebook account that manages the Page linked to @surfschool to reconnect it, or use Switch account to change accounts.",
+      "Facebook didn't return the Page linked to @surfschool, so nothing changed. Sign in with a Facebook account that manages the Page linked to @surfschool, and tick that Page when Facebook lists the Pages to reconnect it, or use Switch account to change accounts.",
     );
   });
 
   it("Settings, Instagram, not offered in the list: the Facebook sign-in that works", () => {
     const sentence = choiceDifferentAccountMessage("instagram", "@otherbiz", "@surfschool", false);
     expect(sentence).toBe(
-      "You chose @otherbiz, not @surfschool, and @surfschool wasn't in the list. Sign in with a Facebook account that manages the Page linked to @surfschool to reconnect it, or use Switch account to change to @otherbiz.",
+      "You chose @otherbiz, not @surfschool, and @surfschool wasn't in the list. Sign in with a Facebook account that manages the Page linked to @surfschool, and tick that Page when Facebook lists the Pages to reconnect it, or use Switch account to change to @otherbiz.",
     );
     expect(sentence).not.toMatch(/signed in to @otherbiz|sign in to @surfschool/i);
   });

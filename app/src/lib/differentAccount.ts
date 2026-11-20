@@ -92,7 +92,11 @@ export function linkedPageNotReturned(platform: Platform, name: string): string 
 /** "sign in to <name>", or "sign in with a <platform> account that manages <the page>". */
 export function signInTo(platform: Platform, name: string): string {
   const entry = PAGE_ACCOUNT[platform];
-  return entry ? `sign in with a ${entry.account} account that manages ${managedPage(platform, name)}` : `sign in to ${name}`;
+  if (!entry) return `sign in to ${name}`;
+  const signIn = `sign in with a ${entry.account} account that manages ${managedPage(platform, name)}`;
+  // R51 second look: someone who manages the Page but left it unticked in
+  // Meta's list signed in rightly; ticking it is their step.
+  return entry.linkedPage ? `${signIn}, and tick that Page when ${entry.account} lists the Pages` : signIn;
 }
 
 function capitalized(sentence: string): string {
