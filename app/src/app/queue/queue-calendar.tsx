@@ -20,7 +20,7 @@ import {
   startJobDrag,
   summarizeOffCalendar,
 } from "@/lib/queueCalendar";
-import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
+import { SCHEDULE_BUFFER_MS, SCHEDULED_TIME_TOO_SOON_MESSAGE, localTimeZoneLabel } from "@/lib/scheduling";
 import { cardRequest, withPairNote, type QueueCard as QueueCardPost } from "./pairActions";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -157,9 +157,9 @@ export function QueueCalendar({
     if (localDayKey(new Date(job.scheduledFor)) === dayKey) return;
     const nextIso = retargetSchedule(job.scheduledFor, dayKey, new Date(), SCHEDULE_BUFFER_MS);
     if (!nextIso) {
-      toast.error(
-        "That time has already passed — pick a future day, or click the post to change its time.",
-      );
+      // R49 pages-a L3: the one too-soon sentence, by the same buffer as the
+      // edit dialog, Create, Add many and PATCH.
+      toast.error(SCHEDULED_TIME_TOO_SOON_MESSAGE);
       return;
     }
     setSavingId(job.id);
