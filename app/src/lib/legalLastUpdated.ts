@@ -52,8 +52,9 @@ export function billingOnLastUpdated(
  * 2026-11-15 (R9-pages L3): it says how long the limits' post counts are kept.
  * 2026-11-15 (FF2 review): place search and Google Maps Platform are gone with the Location field.
  * 2026-11-16 (R36 pages note): a LinkedIn page name is read again regularly, not every day.
+ * 2026-11-20 (R46 pages-a L3): TikTok names only video.publish, the scope the app asks for.
  */
-export const PRIVACY_LAST_UPDATED = "November 16, 2026";
+export const PRIVACY_LAST_UPDATED = "November 20, 2026";
 
 /**
  * The privacy policy's "Last updated": the latest of its own date, the shared

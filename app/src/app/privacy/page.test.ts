@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { privacyLastUpdated } from "@/lib/legalLastUpdated";
+import { legalDateValue, privacyLastUpdated } from "@/lib/legalLastUpdated";
 import { OPERATOR_LOCATION, OPERATOR_NAME } from "@/lib/siteInfo";
 
 import PrivacyPage from "./page";
@@ -161,8 +161,8 @@ describe("Privacy: a LinkedIn page's name", () => {
     expect(page).toContain("A name not refreshed for eight weeks is deleted; disconnecting LinkedIn deletes it at once.");
   });
 
-  it("carries the date of this change", () => {
-    expect(privacyLastUpdated(false)).toBe("November 16, 2026");
+  it("carries the date of this change or a later one", () => {
+    expect(legalDateValue(privacyLastUpdated(false))).toBeGreaterThanOrEqual(legalDateValue("November 16, 2026"));
   });
 });
 
@@ -183,5 +183,10 @@ describe("Privacy: the TikTok permissions are the ones the app asks for", () => 
     const named = [...new Set(section.match(/\b[a-z]+(?:\.[a-z]+)+(?=[\s/:])/g) ?? [])].sort();
     expect(named).toEqual(requested);
     for (const scope of requested) expect(section).toContain(`${scope}:`);
+  });
+
+  it("carries the date of this change", () => {
+    expect(privacyLastUpdated(false)).toBe("November 20, 2026");
+    expect(text()).toContain("Last updated: November 20, 2026");
   });
 });
