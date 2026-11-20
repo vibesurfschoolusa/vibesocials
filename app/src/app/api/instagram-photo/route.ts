@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { isAllowedBlobUrl } from "@/lib/blobUrl";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { FETCH_TIMEOUT_CODE, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import {
   INSTAGRAM_PHOTO_MAX_SOURCE_BYTES,
@@ -10,6 +10,13 @@ import {
 } from "@/server/platforms/instagramPhoto";
 
 export const runtime = "nodejs";
+
+/**
+ * R48: the whole read of the stored photo, body included. Instagram fetches
+ * this route while our container call (30 s) waits, so a stalled read answers
+ * a quick 504 well inside that window instead of holding the function.
+ */
+const SOURCE_READ_LIMIT_MS = 15_000;
 
 /**
  * GET /api/instagram-photo?src=<blob url>&exp=<ms>[&fit=story]&sig=<hmac>
@@ -34,7 +41,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const upstream = await fetchWithTimeout(src, {}, 20_000);
+    const upstream = await fetchWithinLimit(src, {}, SOURCE_READ_LIMIT_MS);
     if (!upstream.ok) {
       logger.warn("[InstagramPhoto] Source fetch failed", { status: upstream.status });
       return NextResponse.json({ error: "Photo unavailable" }, { status: 502 });
@@ -58,6 +65,10 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === FETCH_TIMEOUT_CODE) {
+      logger.warn("[InstagramPhoto] Source read timed out", { limitMs: SOURCE_READ_LIMIT_MS });
+      return NextResponse.json({ error: "Photo unavailable" }, { status: 504 });
+    }
     logger.error("[InstagramPhoto] Could not prepare the photo", { error });
     return NextResponse.json({ error: "Could not prepare the photo" }, { status: 500 });
   }
