@@ -68,7 +68,7 @@ describe("htmlToPlainText", () => {
         "",
         "Reconnect LinkedIn in Settings: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23connections: it takes about a minute.",
         "",
-        "If your client connected it, send them a connect link from Settings, Connections: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23connect-link.",
+        "If your client connected it, send them a connect link that offers LinkedIn: press Create link, or Replace link if you already have one, and tick LinkedIn. Both are in Settings, Connections: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23connect-link.",
         "",
         "— Vibe Socials",
       ].join("\n"),

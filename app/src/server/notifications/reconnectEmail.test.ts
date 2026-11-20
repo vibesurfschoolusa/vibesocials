@@ -76,8 +76,13 @@ describe("buildReconnectEmail", () => {
 
   // R5-client-journey L4: an agency's client often connected the account through
   // a connect link, and only they can connect it again.
-  it("says to send the client a connect link, linked to Settings, Connections through /go", () => {
-    expect(email.html).toContain("If your client connected it, send them a connect link from");
+  // R47 client-journey L4: a link that offers another platform has no row for
+  // this one, so the line names the platform and the step that adds it, true
+  // whether the workspace has a link yet (Create link) or not (Replace link).
+  it("says to send the client a connect link that offers the platform, linked to Settings, Connections through /go", () => {
+    expect(email.html).toContain(
+      "If your client connected it, send them a connect link that offers Google Business Profile: press Create link, or Replace link if you already have one, and tick Google Business Profile. Both are in ",
+    );
     expect(email.html).toContain(
       'href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23connect-link">Settings, Connections</a>.',
     );
@@ -85,7 +90,15 @@ describe("buildReconnectEmail", () => {
 
   it("names Settings, Connections without a link when appBaseUrl is null", () => {
     const noLink = buildReconnectEmail({ platformLabel: "X", workspaceId: "ws_1", workspaceName: "W", appBaseUrl: null, clientLinks: {} });
-    expect(noLink.html).toContain("If your client connected it, send them a connect link from Settings, Connections.");
+    expect(noLink.html).toContain(
+      "If your client connected it, send them a connect link that offers X: press Create link, or Replace link if you already have one, and tick X. Both are in Settings, Connections.",
+    );
+  });
+
+  it("escapes the platform name in the client line", () => {
+    const evil = buildReconnectEmail({ platformLabel: "<b>X</b>", workspaceId: "ws_1", workspaceName: "W", appBaseUrl: null, clientLinks: {} });
+    expect(evil.html).toContain("offers &lt;b&gt;X&lt;/b&gt;: press Create link");
+    expect(evil.html).not.toContain("<b>X</b>");
   });
 
   // R5-publishing M1: a connection flagged by a failed post (a Graph 190, a 401)
@@ -145,7 +158,7 @@ describe("buildExpiryWarningEmail", () => {
     expect(email.html).toContain(
       'href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23connections">Reconnect LinkedIn in Settings</a>',
     );
-    expect(email.html).toContain("If your client connected it, send them a connect link from");
+    expect(email.html).toContain("If your client connected it, send them a connect link that offers LinkedIn: press Create link");
     expect(email.html).toContain('to=%2Fsettings%23connect-link">Settings, Connections</a>.');
   });
 
@@ -189,7 +202,7 @@ describe("the client line, by what Settings offers", () => {
     it(`${name}: links on (billing off, or Growth): today's line`, () => {
       const text = htmlToPlainText(build({}).html);
       expect(text).toContain(
-        "If your client connected it, send them a connect link from Settings, Connections: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23connect-link.",
+        "If your client connected it, send them a connect link that offers LinkedIn: press Create link, or Replace link if you already have one, and tick LinkedIn. Both are in Settings, Connections: https://vibesocials.wtf/go?w=ws_1&to=%2Fsettings%23connect-link.",
       );
       expect(text).not.toContain("Growth and Pro");
     });

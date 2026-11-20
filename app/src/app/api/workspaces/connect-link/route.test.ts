@@ -35,6 +35,7 @@ vi.mock("@/lib/inviteToken", async () => {
   return { ...actual, generateInviteToken: h.generateInviteToken };
 });
 
+import { CONNECT_LINK_PLATFORM_UNAVAILABLE_MESSAGE, CONNECT_LINK_PLATFORMS_REQUIRED_MESSAGE } from "@/lib/connectLink";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
 
@@ -188,6 +189,34 @@ describe("POST: create", () => {
     expect(res.status).toBe(429);
     expect(h.rateLimit.mock.calls[0][0]).toMatchObject({ userId: "user-1", route: "workspaces/connect-link" });
     expect(h.create).not.toHaveBeenCalled();
+  });
+});
+
+// R47 client-journey L4: Replace is the same POST, with the platforms the owner ticked.
+describe("POST: replace a working link", () => {
+  beforeEach(() => {
+    h.findFirst.mockResolvedValue(linkRow({ platforms: ["instagram"] }));
+  });
+
+  it("with an added platform: the new link offers both", async () => {
+    const res = await POST(body("POST", { platforms: ["instagram", "tiktok"], workspaceId: "ws-1" }));
+    expect(res.status).toBe(200);
+    expect(h.updateMany).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", revokedAt: null }, data: { revokedAt: NOW } });
+    expect((h.create.mock.calls[0][0].data as Record<string, unknown>).platforms).toEqual(["tiktok", "instagram"]);
+  });
+
+  it("with nothing ticked: refused with Create's sentence, and the old link stays", async () => {
+    const res = await POST(body("POST", { platforms: [], workspaceId: "ws-1" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: CONNECT_LINK_PLATFORMS_REQUIRED_MESSAGE });
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("an unknown platform is refused, and the old link stays", async () => {
+    const res = await POST(body("POST", { platforms: ["instagram", "myspace"], workspaceId: "ws-1" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: CONNECT_LINK_PLATFORM_UNAVAILABLE_MESSAGE });
+    expect(h.updateMany).not.toHaveBeenCalled();
   });
 });
 

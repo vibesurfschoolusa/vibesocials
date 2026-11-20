@@ -293,12 +293,13 @@ describe("Client connect link: Replace when the site offers fewer platforms", ()
     expect(replacePlatforms(null, ["instagram"])).toEqual([]);
   });
 
-  it("the confirm names what the new link will offer when some are dropped", () => {
-    expect(replaceDescription(LINK, ["tiktok", "instagram"])).toBe(
-      "The old link stops working. Your client will need the new one.",
+  // R47 client-journey L4: the boxes may add or remove platforms, so the confirm names what is ticked.
+  it("the confirm names what the new link will offer", () => {
+    expect(replaceDescription(["tiktok", "instagram"])).toBe(
+      "The old link stops working. Your client will need the new one. It offers TikTok, Instagram.",
     );
-    expect(replaceDescription(LINK, ["instagram"])).toBe(
-      "The old link stops working. Your client will need the new one. It offers Instagram only: TikTok can't be connected on this site now.",
+    expect(replaceDescription(["instagram"])).toBe(
+      "The old link stops working. Your client will need the new one. It offers Instagram.",
     );
   });
 
@@ -312,11 +313,13 @@ describe("Client connect link: Replace when the site offers fewer platforms", ()
     expect(html).toContain("Turn off");
   });
 
-  it("the panel's Replace confirm sends replacePlatforms and words it with replaceDescription", () => {
+  it("the panel's Replace starts from replacePlatforms, and its confirm sends what is ticked", () => {
     const source = readFileSync(join(__dirname, "connect-link-section.tsx"), "utf8");
-    expect(source).toContain("() => makeLink(replacePlatforms(link, available))");
-    expect(source).toContain("replaceDescription(link, available)");
+    expect(source).toContain("setSelected(replacePlatforms(link, available));");
+    expect(source).toContain("await makeLink(selected);");
+    expect(source).toContain("replaceDescription(selected)");
     expect(source).not.toContain("makeLink(link?.platforms ?? [])");
+    expect(source).not.toContain("makeLink(replacePlatforms(");
   });
 });
 
@@ -347,5 +350,50 @@ describe("Client connect link: Offers lists only what the site still offers", ()
     const html = view({ link: LINK, available: [] });
     expect(html).not.toContain("Offers:");
     expect(html).toContain("No longer offered: TikTok, Instagram. This site can&#x27;t connect them now.");
+  });
+});
+
+// R47 client-journey L4: Replace sent the old platforms only, and the card had
+// no other way to change them, so a client whose LinkedIn needed reconnecting
+// got an Instagram-only link. Replace opens the boxes, ticked as the link is.
+describe("Client connect link: Replace can add or remove platforms", () => {
+  const LINK = {
+    url: "https://vibesocials.example/c/abc",
+    platforms: ["instagram"] as ConnectLinkViewProps["available"],
+    expiresAt: "2026-11-25T08:00:00.000Z",
+    lastUsedAt: null,
+    createdAt: "2026-11-11T08:00:00.000Z",
+  };
+  const replaceButton = (html: string) => html.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Replace link<\/button>/)![0];
+
+  it("before Replace is pressed: no boxes, as before", () => {
+    const html = view({ link: LINK, available: ["tiktok", "instagram"], selected: [] });
+    expect(html).not.toContain('type="checkbox"');
+    expect(replaceButton(html)).not.toContain('disabled=""');
+    expect(html).not.toContain(">Cancel<");
+  });
+
+  it("pressed: a box per platform the site offers, ticked as chosen, with Replace link and Cancel", () => {
+    const html = view({ link: LINK, available: ["tiktok", "instagram"], selected: ["instagram"], replacing: true });
+    expect(html).toContain("The platforms the new link offers");
+    expect(html.match(/type="checkbox"/g)).toHaveLength(2);
+    expect(html.match(/type="checkbox" checked=""/g)).toHaveLength(1);
+    expect(replaceButton(html)).not.toContain('disabled=""');
+    expect(html).toContain(">Cancel<");
+  });
+
+  it("an added platform: both ticked, and Replace link can be pressed", () => {
+    const html = view({ link: LINK, available: ["tiktok", "instagram"], selected: ["tiktok", "instagram"], replacing: true });
+    expect(html.match(/type="checkbox" checked=""/g)).toHaveLength(2);
+    expect(replaceButton(html)).not.toContain('disabled=""');
+  });
+
+  it("nothing ticked: Replace link can't be pressed, the same rule as Create link", () => {
+    const html = view({ link: LINK, available: ["tiktok", "instagram"], selected: [], replacing: true });
+    expect(replaceButton(html)).toContain('disabled=""');
+  });
+
+  it("the boxes start ticked with what the link offers now", () => {
+    expect(replacePlatforms(LINK, ["tiktok", "instagram"])).toEqual(["instagram"]);
   });
 });

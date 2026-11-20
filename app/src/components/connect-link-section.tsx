@@ -93,23 +93,21 @@ export async function changeConnectLink(
 }
 
 /**
- * R32 client-journey L3: what Replace sends. A platform the site no longer
- * offers (its settings were removed) would be refused with "Untick it", and
- * the Replace confirm has no boxes, so it is left out, as "Make new client
- * links" does (api/workspaces/client-links).
+ * R32 client-journey L3: what Replace's boxes start ticked with. A platform the
+ * site no longer offers (its settings were removed) would be refused with
+ * "Untick it", and it has no box, so it is left out, as "Make new client
+ * links" does (api/workspaces/client-links). R47 client-journey L4: the owner
+ * can then tick more or fewer.
  */
 export function replacePlatforms(link: ConnectLinkDto | null, available: readonly Platform[]): Platform[] {
   return (link?.platforms ?? []).filter((platform) => available.includes(platform));
 }
 
-/** The Replace confirm's sentence, naming what the new link offers when some are left out. */
-export function replaceDescription(link: ConnectLinkDto | null, available: readonly Platform[]): string {
+/** The Replace confirm's sentence, naming what the new link offers: the ticked platforms. */
+export function replaceDescription(platforms: readonly Platform[]): string {
   const base = "The old link stops working. Your client will need the new one.";
-  const kept = replacePlatforms(link, available);
-  const dropped = (link?.platforms ?? []).filter((platform) => !kept.includes(platform));
-  if (dropped.length === 0 || kept.length === 0) return base;
-  const names = (platforms: Platform[]) => platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ");
-  return `${base} It offers ${names(kept)} only: ${names(dropped)} can't be connected on this site now.`;
+  if (platforms.length === 0) return base;
+  return `${base} It offers ${platforms.map((platform) => PLATFORM_LABELS[platform]).join(", ")}.`;
 }
 
 /** The link's platforms the site no longer offers, in one line, or null. */
@@ -134,7 +132,15 @@ export interface ConnectLinkViewProps {
   onCopy: () => void;
   /** The new link's Copy button, which takes focus after Create link. */
   copyRef?: Ref<HTMLButtonElement>;
+  /** Replace link: the first press shows the boxes (replacing), the next opens the confirm. */
   onReplace: () => void;
+  /** R47 client-journey L4: Replace's boxes are shown, ticked as `selected`. */
+  replacing?: boolean;
+  onCancelReplace?: (event: MouseEvent<HTMLButtonElement>) => void;
+  /** The first box, which takes focus when Replace shows them. */
+  firstBoxRef?: Ref<HTMLInputElement>;
+  /** The Replace link button, which takes focus after Cancel. */
+  replaceRef?: Ref<HTMLButtonElement>;
   onTurnOff: () => void;
   /** The confirm dialog, rendered inside the card. */
   dialog?: ReactNode;
@@ -153,6 +159,10 @@ export function ConnectLinkSectionView({
   onCreate,
   onCopy,
   onReplace,
+  replacing = false,
+  onCancelReplace,
+  firstBoxRef,
+  replaceRef,
   onTurnOff,
   copyRef,
   dialog = null,
@@ -210,12 +220,33 @@ export function ConnectLinkSectionView({
             <p className="text-sm text-muted-foreground">
               {link.lastUsedAt ? `Last used ${formatDisplayDate(link.lastUsedAt)}` : "Not used yet"}
             </p>
+            {replacing ? (
+              <PlatformBoxes
+                legend="The platforms the new link offers"
+                available={available}
+                selected={selected}
+                onToggle={onToggle}
+                firstBoxRef={firstBoxRef}
+              />
+            ) : null}
             <div className="flex flex-wrap gap-2">
               {workspaceBlocked || pausedByPlan || replacePlatforms(link, available).length === 0 ? null : (
-                <Button type="button" variant="outline" size="sm" onClick={onReplace}>
+                <Button
+                  ref={replaceRef}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={replacing && selected.length === 0}
+                  onClick={onReplace}
+                >
                   Replace link
                 </Button>
               )}
+              {replacing ? (
+                <Button type="button" variant="ghost" size="sm" onClick={onCancelReplace}>
+                  Cancel
+                </Button>
+              ) : null}
               <Button type="button" variant="ghost" size="sm" onClick={onTurnOff}>
                 Turn off
               </Button>
@@ -229,19 +260,12 @@ export function ConnectLinkSectionView({
           <p className="text-sm text-muted-foreground">No platform can be connected on this site yet.</p>
         ) : (
           <>
-            <fieldset className="space-y-2">
-              <legend className="text-sm font-medium">The platforms the link offers</legend>
-              {available.map((platform) => (
-                <label key={platform} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(platform)}
-                    onChange={() => onToggle(platform)}
-                  />
-                  {PLATFORM_LABELS[platform]}
-                </label>
-              ))}
-            </fieldset>
+            <PlatformBoxes
+              legend="The platforms the link offers"
+              available={available}
+              selected={selected}
+              onToggle={onToggle}
+            />
             <Button type="button" loading={busy} disabled={selected.length === 0} onClick={onCreate}>
               Create link
             </Button>
@@ -254,6 +278,38 @@ export function ConnectLinkSectionView({
       </CardContent>
       {dialog}
     </Card>
+  );
+}
+
+/** A box per platform the site offers: Create link's, and Replace's (R47 client-journey L4). */
+function PlatformBoxes({
+  legend,
+  available,
+  selected,
+  onToggle,
+  firstBoxRef,
+}: {
+  legend: string;
+  available: Platform[];
+  selected: Platform[];
+  onToggle: (platform: Platform) => void;
+  firstBoxRef?: Ref<HTMLInputElement>;
+}) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">{legend}</legend>
+      {available.map((platform, index) => (
+        <label key={platform} className="flex items-center gap-2 text-sm">
+          <input
+            ref={index === 0 ? firstBoxRef : undefined}
+            type="checkbox"
+            checked={selected.includes(platform)}
+            onChange={() => onToggle(platform)}
+          />
+          {PLATFORM_LABELS[platform]}
+        </label>
+      ))}
+    </fieldset>
   );
 }
 
@@ -290,7 +346,15 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [selected, setSelected] = useState<Platform[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
+  const [replacing, setReplacing] = useState(false);
   const copyRef = useRef<HTMLButtonElement>(null);
+  const firstBoxRef = useRef<HTMLInputElement>(null);
+  const replaceRef = useRef<HTMLButtonElement>(null);
+
+  // Replace link stays where it was and the boxes appear above it: focus goes to the first box.
+  useEffect(() => {
+    if (replacing) firstBoxRef.current?.focus();
+  }, [replacing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -359,9 +423,8 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   );
 
   // Create and Replace are the same call: the server revokes any old link.
-  // Replace keeps the platforms the old link offered that the site still
-  // offers (replacePlatforms). Throws on failure, so the
-  // confirm dialog stays open; the toast says why.
+  // Replace sends the ticked boxes, which start as replacePlatforms. Throws on
+  // failure, so the confirm dialog stays open; the toast says why.
   const makeLink = useCallback(
     async (platforms: Platform[]) => {
       const result = await send("POST", { workspaceId, platforms });
@@ -383,6 +446,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     }
     setLink(null);
     setSelected([]);
+    setReplacing(false);
     toast.success("The link is off. It no longer works.");
   }, [send, toast, workspaceId]);
 
@@ -447,7 +511,21 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       onCreate={onCreate}
       onCopy={onCopy}
       copyRef={copyRef}
-      onReplace={() => setConfirm("replace")}
+      onReplace={() => {
+        if (replacing) {
+          setConfirm("replace");
+          return;
+        }
+        setSelected(replacePlatforms(link, available));
+        setReplacing(true);
+      }}
+      replacing={replacing}
+      onCancelReplace={(event) => {
+        focusAfterPress(event.currentTarget, () => replaceRef.current);
+        setReplacing(false);
+      }}
+      firstBoxRef={firstBoxRef}
+      replaceRef={replaceRef}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
       workspaceBlocked={workspaceBlocked}
@@ -460,12 +538,19 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
           title={confirm === "replace" ? "Replace the client connect link?" : "Turn off the client connect link?"}
           description={
             confirm === "replace"
-              ? replaceDescription(link, available)
+              ? replaceDescription(selected)
               : "The old link stops working. Accounts your client already connected stay connected."
           }
           confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
           destructive
-          onConfirm={confirm === "replace" ? () => makeLink(replacePlatforms(link, available)) : turnOff}
+          onConfirm={
+            confirm === "replace"
+              ? async () => {
+                  await makeLink(selected);
+                  setReplacing(false);
+                }
+              : turnOff
+          }
         />
       }
     />

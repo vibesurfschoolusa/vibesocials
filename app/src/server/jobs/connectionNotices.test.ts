@@ -782,8 +782,8 @@ describe("the client line follows the workspace's client links", () => {
   const PAST = new Date(NOW.getTime() - 10 * DAY_MS);
   const FUTURE = new Date(NOW.getTime() + 20 * DAY_MS);
   const cases = [
-    { name: "billing off", billing: "", ws: { name: "Acme", plan: "starter", planStatus: "active", currentPeriodEnd: FUTURE }, line: "send them a connect link from" },
-    { name: "Growth", billing: "true", ws: { name: "Acme", plan: "growth", planStatus: "active", currentPeriodEnd: FUTURE }, line: "send them a connect link from" },
+    { name: "billing off", billing: "", ws: { name: "Acme", plan: "starter", planStatus: "active", currentPeriodEnd: FUTURE }, line: "send them a connect link that offers LinkedIn" },
+    { name: "Growth", billing: "true", ws: { name: "Acme", plan: "growth", planStatus: "active", currentPeriodEnd: FUTURE }, line: "send them a connect link that offers LinkedIn" },
     { name: "Starter", billing: "true", ws: { name: "Acme", plan: "starter", planStatus: "active", currentPeriodEnd: FUTURE }, line: "connect links are part of the Growth and Pro plans" },
     { name: "an ended trial", billing: "true", ws: { name: "Acme", plan: null, trialEndsAt: PAST }, line: "Your free trial has ended. Choose Growth or Pro in Settings and your client links work again" },
     { name: "paused", billing: "", ws: { name: "Acme", pausedAt: PAST, pausedReason: null }, line: "Client links don't work right now. This workspace is paused." },

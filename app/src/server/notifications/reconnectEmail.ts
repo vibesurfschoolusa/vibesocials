@@ -39,8 +39,11 @@ function reconnectLine(platform: string, workspaceId: string, base: string | nul
  * connect link, and only the client can connect it again. R24 pages L4: the line
  * follows what Settings' connect-link group shows for this workspace (its
  * clientLinkPanelStatus), so an owner who can't make one is not told to send it.
+ * R47 client-journey L4: a link that offers other platforms has no row for this
+ * one, so the line names it and the step that adds it, whether the workspace
+ * has a link yet (Create link) or one to replace. `platform` is escaped.
  */
-function clientLine(workspaceId: string, base: string | null, clientLinks: ClientLinkPanelStatus): string {
+function clientLine(platform: string, workspaceId: string, base: string | null, clientLinks: ClientLinkPanelStatus): string {
   const need = "If your client connected it, they need a connect link to connect it again";
   if (clientLinks.workspaceBlocked) return `<p>${need}. ${escapeHtml(clientLinks.workspaceBlocked)}</p>`;
   if (clientLinks.pausedByPlan) {
@@ -52,7 +55,7 @@ function clientLine(workspaceId: string, base: string | null, clientLinks: Clien
   const place = base
     ? `<a href="${escapeHtml(workspaceLink(workspaceId, "/settings#connect-link", base))}">Settings, Connections</a>`
     : "Settings, Connections";
-  return `<p>If your client connected it, send them a connect link from ${place}.</p>`;
+  return `<p>If your client connected it, send them a connect link that offers ${platform}: press Create link, or Replace link if you already have one, and tick ${platform}. Both are in ${place}.</p>`;
 }
 
 export function buildReconnectEmail(params: {
@@ -85,7 +88,7 @@ export function buildReconnectEmail(params: {
       `<p>The ${platform} connection in <strong>${workspace}</strong> has stopped working: ${why}</p>`,
       `<p>Until it is reconnected, new and scheduled posts to ${platform} will fail.</p>`,
       reconnectLine(platform, params.workspaceId, base),
-      clientLine(params.workspaceId, base, params.clientLinks),
+      clientLine(platform, params.workspaceId, base, params.clientLinks),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };
@@ -119,7 +122,7 @@ export function buildExpiryWarningEmail(params: {
       `<p>The ${platform} connection in <strong>${workspace}</strong> stops working on ${escapeHtml(moment)}. ${platform} does not let us renew this sign-in automatically, so it has to be connected again.</p>`,
       `<p>If it is not reconnected by then, new and scheduled posts to ${platform} will fail.</p>`,
       reconnectLine(platform, params.workspaceId, base),
-      clientLine(params.workspaceId, base, params.clientLinks),
+      clientLine(platform, params.workspaceId, base, params.clientLinks),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };
