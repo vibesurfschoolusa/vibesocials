@@ -14,6 +14,7 @@ import { newWorkspaceBillingData } from "@/server/billing/newWorkspaceTrial";
 import { recordWorkspaceCreated, workspaceCreationRefusal } from "@/server/usage/usageLog";
 import { createWorkspaceWhileBlockedMessage, WORKSPACE_PAUSED_CODE, workspaceBlock } from "@/lib/workspaceStatus";
 import { signedOutResponse } from "@/lib/signedOutResponse";
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 /** The longest workspace name accepted (it shows in the account menu). */
 export const WORKSPACE_NAME_MAX_LENGTH = 60;
@@ -135,7 +136,10 @@ export async function POST(request: Request) {
   });
   if (ownedCount >= MAX_OWNED_WORKSPACES) {
     return NextResponse.json(
-      { error: `You can own up to ${MAX_OWNED_WORKSPACES} workspaces.` },
+      // R48 pages-a L3: the account menu shows this as it stands, so it gives the steps.
+      {
+        error: `You can own up to ${MAX_OWNED_WORKSPACES} workspaces. To make another, delete one you no longer use in its Settings, or write to ${SUPPORT_EMAIL} to raise the limit.`,
+      },
       { status: 409 },
     );
   }

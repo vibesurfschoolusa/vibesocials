@@ -181,6 +181,11 @@ describe("POST /api/workspaces", () => {
     const response = await POST(createRequest({ name: "One too many" }));
 
     expect(response.status).toBe(409);
+    // R48 pages-a L3: the cap gives the steps that work.
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "You can own up to 25 workspaces. To make another, delete one you no longer use in its Settings, or write to hello@vibesocials.wtf to raise the limit.",
+    });
     expect(countMock).toHaveBeenCalledWith({ where: { userId: "user-1", role: "owner" } });
     expect(transactionMock).not.toHaveBeenCalled();
   });
