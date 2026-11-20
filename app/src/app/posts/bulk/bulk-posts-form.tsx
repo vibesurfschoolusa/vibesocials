@@ -69,7 +69,7 @@ import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
-import { prepareUploadFile } from "@/lib/prepareUploadFile";
+import { PrepareFileError, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
@@ -529,18 +529,21 @@ export function BulkPostsForm({
     if (!file) return;
     updateRow(id, { upload: "working", progress: null, uploadError: null, uploadErrorKind: null, sendError: null });
     // Same preparation as Create: HEIC -> JPEG, big photos shrunk, unsupported types refused.
-    // R48 publishing L4: a refusal here is the file's own, before anything is
-    // sent, so a Retry would refuse it again: only Remove is offered.
+    // R48 publishing L4: nothing is sent yet. A refusal is the file's own, so a
+    // Retry would refuse it again and only Remove is offered; a converter that
+    // didn't download (kind "network") keeps Retry. The sentences give Add
+    // many's steps ("addMany"); anything else is never shown in the browser's words.
     let prepared: File;
     try {
-      prepared = await prepareUploadFile(file);
+      prepared = await prepareUploadFile(file, undefined, "addMany");
     } catch (error: unknown) {
-      console.error("[Add many] File refused", error);
+      console.error("[Add many] File not prepared", error);
+      const known = error instanceof PrepareFileError;
       updateRow(id, {
         upload: "failed",
         progress: null,
-        uploadErrorKind: "file",
-        uploadError: errorMessage(error, BULK_FILE_REFUSED_TEXT),
+        uploadErrorKind: known ? error.kind : "file",
+        uploadError: known ? error.message : BULK_FILE_REFUSED_TEXT,
       });
       return;
     }
