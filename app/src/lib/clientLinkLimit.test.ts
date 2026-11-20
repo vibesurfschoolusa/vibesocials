@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { CONNECT_LINK_COOKIE_MAX_AGE_SECONDS, CONNECT_LINK_RATE_LIMIT_MESSAGE } from "./connectLink";
 import { REVIEW_LINK_DAILY_LIMIT_MESSAGE, REVIEW_LINK_DAILY_LIMIT_REASON, REVIEW_LINK_IP_LIMIT_MESSAGE } from "./reviewLink";
+import { LIMIT_UNCHECKED_MESSAGE } from "./limitUncheckedMessage";
 import { PENDING_CONNECTION_TTL_MS } from "@/server/connections/pendingConnection";
 
 import {
   CLIENT_LINK_LIMIT_REASON,
+  LIMIT_UNCHECKED_REASON,
   connectAgainSentence,
   dailyLimitSentence,
   limitReachedSentence,
@@ -108,38 +110,87 @@ describe("limitWaitSeconds", () => {
   });
 });
 
-// R45 pages-a L7: a Connect press the start route refused comes back to /c
-// with the wait in the address, so the sentence is built from a typed value.
+// R45 pages-a L7 / R46 client-journey L1: a Connect press the start route
+// refused comes back to /c with the wait's end time in the address, so the
+// sentence is built from a typed value and the page's own clock: it is true
+// whenever the page is read, not only just after the press.
 describe("connectAgainSentence", () => {
-  it("the network limit: the wait, rounded up, and the button beside the platform", () => {
-    expect(connectAgainSentence("rate_limited", "1500", "Connect", "Facebook Page")).toBe(
-      `${CLIENT_LINK_LIMIT_REASON} Wait 25 minutes, then press Connect beside Facebook Page again.`,
+  // Refused at 10:15 with 45 minutes left: the limit lifts at 11:00.
+  const REFUSED_AT = Date.parse("2026-11-19T10:15:00Z");
+  const LIFTS_AT = String(Date.parse("2026-11-19T11:00:00Z") / 1000);
+
+  it("read at the refusal: the wait left, rounded up, and the button beside the platform", () => {
+    expect(connectAgainSentence("rate_limited", LIFTS_AT, "Connect", "Instagram", REFUSED_AT)).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 45 minutes, then press Connect beside Instagram again.`,
     );
-    expect(connectAgainSentence("rate_limited", "20", "Reconnect", "TikTok")).toBe(
+    expect(connectAgainSentence("rate_limited", LIFTS_AT, "Reconnect", "TikTok", Date.parse("2026-11-19T10:59:40Z"))).toBe(
       `${CLIENT_LINK_LIMIT_REASON} Wait 1 minute, then press Reconnect beside TikTok again.`,
     );
   });
 
+  it("read again at 11:00 or later: only the step, no wait and no stale reason", () => {
+    for (const at of ["2026-11-19T11:00:00Z", "2026-11-19T11:00:01Z", "2026-11-20T09:00:00Z"]) {
+      expect(connectAgainSentence("rate_limited", LIFTS_AT, "Connect", "Instagram", Date.parse(at)), at).toBe(
+        "Press Connect beside Instagram again.",
+      );
+    }
+    expect(connectAgainSentence("used_too_often", LIFTS_AT, "Connect", null, Date.parse("2026-11-19T12:00:00Z"))).toBe(
+      "Press Connect again.",
+    );
+  });
+
   it("the link's own limit has its own reason", () => {
-    expect(connectAgainSentence("used_too_often", "120", "Connect", "X")).toBe(
+    const until = String(REFUSED_AT / 1000 + 120);
+    expect(connectAgainSentence("used_too_often", until, "Connect", "X", REFUSED_AT)).toBe(
       "This link was used too many times in the last hour. Wait 2 minutes, then press Connect beside X again.",
     );
   });
 
+  // R46 pages-a L1: a limit that couldn't be checked comes back the same way, with a minute's wait.
+  it("a limit that couldn't be checked: its own reason and the minute, then only the step", () => {
+    const until = String(REFUSED_AT / 1000 + 60);
+    expect(LIMIT_UNCHECKED_MESSAGE.startsWith(LIMIT_UNCHECKED_REASON)).toBe(true);
+    expect(connectAgainSentence("limit_unchecked", until, "Connect", "Instagram", REFUSED_AT)).toBe(
+      `${LIMIT_UNCHECKED_REASON} Wait 1 minute, then press Connect beside Instagram again.`,
+    );
+    expect(connectAgainSentence("limit_unchecked", until, "Connect", "Instagram", REFUSED_AT + 60_000)).toBe(
+      "Press Connect beside Instagram again.",
+    );
+    expect(connectAgainSentence("limit_unchecked", "soon", "Connect", null, REFUSED_AT)).toBe(
+      `${LIMIT_UNCHECKED_REASON} Wait a minute, then press Connect again.`,
+    );
+  });
+
   it("no platform: the button alone", () => {
-    expect(connectAgainSentence("rate_limited", "60", "Connect", null)).toBe(
+    expect(connectAgainSentence("rate_limited", String(REFUSED_AT / 1000 + 60), "Connect", null, REFUSED_AT)).toBe(
       `${CLIENT_LINK_LIMIT_REASON} Wait 1 minute, then press Connect again.`,
     );
   });
 
-  it.each([null, "", "soon", "-5", "0", "12.5e9", "3601", "Infinity"])("a wait of %j: at most the hour the limit counts", (wait) => {
-    expect(connectAgainSentence("rate_limited", wait, "Connect", "X")).toBe(
+  // The 1-hour cap: an end further off than the hour the limits count is typed, not ours.
+  it.each([
+    null,
+    "",
+    "soon",
+    "-5",
+    "12.5e9",
+    "Infinity",
+    "1".repeat(40),
+    String(REFUSED_AT / 1000 + 3601),
+  ])("an end of %j: at most the hour the limit counts", (until) => {
+    expect(connectAgainSentence("rate_limited", until, "Connect", "X", REFUSED_AT)).toBe(
       `${CLIENT_LINK_LIMIT_REASON} Wait up to an hour, then press Connect beside X again.`,
     );
   });
 
+  it("an end exactly an hour off is still the hour", () => {
+    expect(connectAgainSentence("rate_limited", String(REFUSED_AT / 1000 + 3600), "Connect", "X", REFUSED_AT)).toBe(
+      `${CLIENT_LINK_LIMIT_REASON} Wait 60 minutes, then press Connect beside X again.`,
+    );
+  });
+
   it("any other code: no sentence", () => {
-    expect(connectAgainSentence("tiktok_cancelled", "60", "Connect", "TikTok")).toBeNull();
-    expect(connectAgainSentence(null, "60", "Connect", "TikTok")).toBeNull();
+    expect(connectAgainSentence("tiktok_cancelled", LIFTS_AT, "Connect", "TikTok", REFUSED_AT)).toBeNull();
+    expect(connectAgainSentence(null, LIFTS_AT, "Connect", "TikTok", REFUSED_AT)).toBeNull();
   });
 });

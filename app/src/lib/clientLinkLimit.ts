@@ -73,34 +73,70 @@ export function dailyLimitSentence(waitSeconds: number | undefined): string {
   return `${REVIEW_LINK_DAILY_LIMIT_REASON} Reload this page in ${wait}.`;
 }
 
-/** The codes the /c start route sends the visitor back with when a limit refuses a press. */
-export const CONNECT_LIMIT_CODES = { network: "rate_limited", link: "used_too_often" } as const;
+/**
+ * The codes the /c start route sends the visitor back with when a limit
+ * refuses a press, or (R46 pages-a L1) couldn't be checked.
+ */
+export const CONNECT_LIMIT_CODES = {
+  network: "rate_limited",
+  link: "used_too_often",
+  unchecked: "limit_unchecked",
+} as const;
+
+/** LIMIT_UNCHECKED_MESSAGE's reason, before its wait (tested). */
+export const LIMIT_UNCHECKED_REASON = "We couldn't check that just now. Nothing was changed.";
+
+/** The wait a limit that couldn't be checked asks for (the route's Retry-After). */
+export const LIMIT_UNCHECKED_WAIT_SECONDS = 60;
+
+/** Where the start route sends a refused press back to: the code, the wait's end and the platform. */
+export function connectAgainQuery(
+  code: (typeof CONNECT_LIMIT_CODES)[keyof typeof CONNECT_LIMIT_CODES],
+  waitSeconds: number,
+  nowMs: number,
+): { error: string; until: string } {
+  return { error: code, until: String(Math.ceil(nowMs / 1000) + Math.ceil(waitSeconds)) };
+}
 
 /**
  * R45 pages-a L7: the sentence on /c after the start route refused a Connect
- * press for a limit (a plain form post, so it comes back with `?error=` and
- * `?wait=` in the address). The wait is typed text: anything but whole seconds
- * from 1 to the hour the limits count is "up to an hour". `button` is the
- * row's own; `platform` its label, or null when the press named none. Null for
- * any other code.
+ * press for a limit (a plain form post, so it comes back with `?error=` in the
+ * address). R46 client-journey L1: the address carries the wait's end
+ * (`?until=`, epoch seconds), not the wait, so a reload or Back much later
+ * reads what is left by `nowMs` (the server's request time); once the end has
+ * passed, only the step is left. The end is typed text: anything but whole
+ * seconds no more than the hour the limits count ahead is "up to an hour" (a
+ * minute for a limit that couldn't be checked). `button` is the row's own;
+ * `platform` its label, or null when the press named none. Null for any other
+ * code.
  */
 export function connectAgainSentence(
   code: string | null,
-  wait: string | null,
+  until: string | null,
   button: string,
   platform: string | null,
+  nowMs: number,
 ): string | null {
   const reason =
     code === CONNECT_LIMIT_CODES.network
       ? CLIENT_LINK_LIMIT_REASON
       : code === CONNECT_LIMIT_CODES.link
         ? CONNECT_LINK_USED_TOO_OFTEN_REASON
-        : null;
+        : code === CONNECT_LIMIT_CODES.unchecked
+          ? LIMIT_UNCHECKED_REASON
+          : null;
   if (!reason) return null;
-  const seconds = wait !== null && /^\d{1,5}$/.test(wait) ? Number(wait) : 0;
+  const target = `${button}${platform ? ` beside ${platform}` : ""}`;
+  const end = until !== null && /^\d{1,12}$/.test(until) ? Number(until) : null;
+  const left = end === null ? null : end - nowMs / 1000;
+  if (left !== null && left <= 0) return `Press ${target} again.`;
   const waitText =
-    seconds > 0 && seconds <= CLIENT_LINK_LIMIT_WINDOW_SECONDS ? `Wait ${minutesText(seconds)}` : "Wait up to an hour";
-  return `${reason} ${waitText}, then press ${button}${platform ? ` beside ${platform}` : ""} again.`;
+    left !== null && left <= CLIENT_LINK_LIMIT_WINDOW_SECONDS
+      ? `Wait ${minutesText(left)}`
+      : code === CONNECT_LIMIT_CODES.unchecked
+        ? "Wait a minute"
+        : "Wait up to an hour";
+  return `${reason} ${waitText}, then press ${target} again.`;
 }
 
 /** The wait a 429 names: the body's `retryAfterSeconds`, else the Retry-After header. */

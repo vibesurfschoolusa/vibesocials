@@ -305,28 +305,72 @@ describe("the connect link page", () => {
   });
 
   // R45 pages-a L7: a refused Connect press comes back here with its wait.
-  it("a refused press: the wait and the row's button, announced", async () => {
-    h.listConnections.mockResolvedValue([
-      { platform: "tiktok", accountIdentifier: "open-1", username: "Surf TT", locationName: null, needsReconnect: true },
-    ]);
-    const html = await render({ error: "rate_limited", wait: "1500", platform: "facebook_page" });
-    expect(html).toMatch(
-      /role="alert"[^>]*>[\s\S]*?Too many requests from this network in the last hour\. Wait 25 minutes, then press Connect beside Facebook Page again\./,
+  // R46 client-journey L1: as the wait's end, read against the request's own time.
+  describe("a refused Connect press", () => {
+    const REFUSED_AT = new Date("2026-11-19T10:15:00Z");
+    const at = (seconds: number) => String(REFUSED_AT.getTime() / 1000 + seconds);
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(REFUSED_AT);
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("the wait left and the row's button, announced", async () => {
+      h.listConnections.mockResolvedValue([
+        { platform: "tiktok", accountIdentifier: "open-1", username: "Surf TT", locationName: null, needsReconnect: true },
+      ]);
+      const html = await render({ error: "rate_limited", until: at(1500), platform: "facebook_page" });
+      expect(html).toMatch(
+        /role="alert"[^>]*>[\s\S]*?Too many requests from this network in the last hour\. Wait 25 minutes, then press Connect beside Facebook Page again\./,
+      );
+      const reconnect = await render({ error: "rate_limited", until: at(60), platform: "tiktok" });
+      expect(reconnect).toContain("Wait 1 minute, then press Reconnect beside TikTok again.");
+    });
+
+    it("read at 10:15, then the same address at 11:00: the wait, then only the step", async () => {
+      const query = { error: "rate_limited", until: at(45 * 60), platform: "instagram" };
+      expect(await render(query)).toContain(
+        "Too many requests from this network in the last hour. Wait 45 minutes, then press Connect beside Instagram again.",
+      );
+      vi.setSystemTime(new Date("2026-11-19T11:00:00Z"));
+      const later = await render(query);
+      expect(later).toContain("Press Connect beside Instagram again.");
+      expect(later).not.toContain("Too many requests");
+      expect(later).not.toContain("Wait");
+    });
+
+    it("an end already past: only the step", async () => {
+      const html = await render({ error: "used_too_often", until: at(-600), platform: "x" });
+      expect(html).toContain("Press Connect beside X again.");
+      expect(html).not.toContain("used too many times");
+    });
+
+    it("the link's own limit: its own sentence", async () => {
+      const html = await render({ error: "used_too_often", until: at(120), platform: "x" });
+      expect(html).toContain("This link was used too many times in the last hour. Wait 2 minutes, then press Connect beside X again.");
+      expect(html).toContain('role="alert"');
+    });
+
+    // R46 pages-a L1: a limit that couldn't be checked comes back here too, announced.
+    it("a limit that couldn't be checked: its sentence and the minute, announced", async () => {
+      const html = await render({ error: "limit_unchecked", until: at(60), platform: "instagram" });
+      expect(html).toMatch(
+        /role="alert"[^>]*>[\s\S]*?We couldn&#x27;t check that just now\. Nothing was changed\. Wait 1 minute, then press Connect beside Instagram again\./,
+      );
+      vi.setSystemTime(new Date(REFUSED_AT.getTime() + 61_000));
+      expect(await render({ error: "limit_unchecked", until: at(60), platform: "instagram" })).toContain(
+        "Press Connect beside Instagram again.",
+      );
+    });
+
+    it.each<Record<string, string>>([{}, { until: "soon" }, { until: "999999999999" }, { until: "1".repeat(50) }, { wait: "60" }])(
+      "a missing or garbage end %o: a plain sentence",
+      async (until) => {
+        const html = await render({ error: "rate_limited", platform: "nonsense", ...until });
+        expect(html).toContain("Too many requests from this network in the last hour. Wait up to an hour, then press Connect again.");
+        expect(html).not.toContain("nonsense");
+      },
     );
-    const reconnect = await render({ error: "rate_limited", wait: "60", platform: "tiktok" });
-    expect(reconnect).toContain("Wait 1 minute, then press Reconnect beside TikTok again.");
-  });
-
-  it("the link's own limit: its own sentence", async () => {
-    const html = await render({ error: "used_too_often", wait: "120", platform: "x" });
-    expect(html).toContain("This link was used too many times in the last hour. Wait 2 minutes, then press Connect beside X again.");
-    expect(html).toContain('role="alert"');
-  });
-
-  it.each<Record<string, string>>([{}, { wait: "soon" }, { wait: "999999" }])("a missing or garbage wait %o: a plain sentence", async (wait) => {
-    const html = await render({ error: "rate_limited", platform: "nonsense", ...wait });
-    expect(html).toContain("Too many requests from this network in the last hour. Wait up to an hour, then press Connect again.");
-    expect(html).not.toContain("nonsense");
   });
 
   it("says nothing of the workspace's ids", async () => {

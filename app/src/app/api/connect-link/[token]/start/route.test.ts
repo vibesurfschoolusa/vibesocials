@@ -46,6 +46,7 @@ import { POST } from "./route";
 const ORIGIN = "https://app.example.com";
 const NOW = new Date("2026-11-11T08:00:00Z");
 const TOKEN = generateInviteToken().raw;
+const NOW_SECONDS = NOW.getTime() / 1000;
 const ALL: Platform[] = ["tiktok", "youtube", "google_business_profile", "instagram", "facebook_page", "linkedin", "pinterest", "x"];
 
 const ENV: Record<string, string> = {
@@ -146,17 +147,38 @@ describe("only a deliberate press on our own page starts a flow", () => {
     expect(res.status).toBe(303);
   });
 
-  // R45 pages-a L7: a plain form post, so the refusal goes back to /c with the wait, not to a text page.
+  // R45 pages-a L7: a plain form post, so the refusal goes back to /c, not to a text page.
+  // R46 client-journey L1: with the end of the wait, so a later reload reads what is left.
   it("is rate limited per network: back to the page with the code, the wait and the platform", async () => {
     h.rateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     const res = await press("tiktok");
     expect(res.status).toBe(303);
     const to = location(res);
     expect(`${to.origin}${to.pathname}`).toBe(`${ORIGIN}/c/${TOKEN}`);
-    expect(Object.fromEntries(to.searchParams)).toEqual({ error: "rate_limited", wait: "60", platform: "tiktok" });
+    expect(Object.fromEntries(to.searchParams)).toEqual({ error: "rate_limited", until: String(NOW_SECONDS + 60), platform: "tiktok" });
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(h.linkFind).not.toHaveBeenCalled();
     expect(h.rateLimit.mock.calls[0][0]).toMatchObject({ route: "connect-link/start", failClosed: true });
+  });
+
+  // R46 pages-a L1: a limit that couldn't be checked is a form post too: back to /c, never a bare text page.
+  it.each([
+    ["the network's", (opts: { route: string }) => opts.route === "connect-link/start"],
+    ["the link's", (opts: { route: string }) => opts.route === "connect-link/start-link"],
+  ])("%s limit couldn't be checked: back to the page with the code, a minute's end and the platform", async (_name, failing) => {
+    h.rateLimit.mockImplementation(async (opts: { route: string }) =>
+      failing(opts) ? { allowed: false, unavailable: true } : { allowed: true },
+    );
+    const res = await press("instagram");
+    expect(res.status).toBe(303);
+    const to = location(res);
+    expect(`${to.origin}${to.pathname}`).toBe(`${ORIGIN}/c/${TOKEN}`);
+    expect(Object.fromEntries(to.searchParams)).toEqual({
+      error: "limit_unchecked",
+      until: String(NOW_SECONDS + 60),
+      platform: "instagram",
+    });
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 
   // R45 review L3: the form is read before the per-IP limit, so only a small one is read.
@@ -189,7 +211,7 @@ describe("only a deliberate press on our own page starts a flow", () => {
   it("a refused press naming no platform comes back without one", async () => {
     h.rateLimit.mockResolvedValue({ allowed: false });
     const to = location(await press("myspace"));
-    expect(Object.fromEntries(to.searchParams)).toEqual({ error: "rate_limited", wait: "60" });
+    expect(Object.fromEntries(to.searchParams)).toEqual({ error: "rate_limited", until: String(NOW_SECONDS + 60) });
   });
 });
 
@@ -381,7 +403,7 @@ describe("the per-link start limit", () => {
 
     expect(res.status).toBe(303);
     expect(location(res).pathname).toBe(`/c/${TOKEN}`);
-    expect(Object.fromEntries(location(res).searchParams)).toEqual({ error: "used_too_often", wait: "120", platform: "x" });
+    expect(Object.fromEntries(location(res).searchParams)).toEqual({ error: "used_too_often", until: String(NOW_SECONDS + 120), platform: "x" });
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(h.handshakeCreate).not.toHaveBeenCalled();

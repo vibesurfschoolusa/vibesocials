@@ -143,13 +143,16 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
     !working?.locationName;
   // R45 pages-a L7: a Connect press a limit refused comes back with its wait;
   // the platform is named only when it is one, so typed text is never shown.
+  // R46 client-journey L1: the wait is its end, read against this request's
+  // time, so a reload or Back after it has passed names only the step.
   const limitedValue = first(query.platform);
   const limitedPlatform = PLATFORM_ORDER.find((platform) => platform === limitedValue) ?? null;
   const limitSentence = connectAgainSentence(
     outcome.get("error"),
-    first(query.wait),
+    first(query.until),
     (limitedPlatform && signInButton(shownControl(byPlatform.get(limitedPlatform)))) || "Connect",
     limitedPlatform ? PLATFORM_LABELS[limitedPlatform] : null,
+    Date.now(),
   );
   const result = limitSentence
     ? { variant: "danger" as const, message: limitSentence }

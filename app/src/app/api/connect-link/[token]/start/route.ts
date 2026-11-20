@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 
 import { readBodyAtMost } from "@/lib/boundedBody";
-import { CONNECT_LIMIT_CODES } from "@/lib/clientLinkLimit";
+import { CONNECT_LIMIT_CODES, LIMIT_UNCHECKED_WAIT_SECONDS, connectAgainQuery } from "@/lib/clientLinkLimit";
 import {
   CONNECT_LINK_STARTS_PER_HOUR,
   CONNECT_LINK_STARTS_PER_LINK_PER_HOUR,
@@ -14,7 +14,6 @@ import {
 } from "@/lib/connectLink";
 import { logger } from "@/lib/logger";
 import { createConnectLinkState } from "@/lib/oauthState";
-import { LIMIT_UNCHECKED_MESSAGE } from "@/lib/limitUnchecked";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requestIp } from "@/lib/uploadLink";
 import { buildLinkAuthorizeUrl, startXLinkFlow } from "@/server/connectLink/authorize";
@@ -46,6 +45,9 @@ function backToPage(request: Request, token: string, error?: string): NextRespon
  * R45 pages-a L7: a limit's refusal goes back to the page, as every other
  * outcome does; a plain form post would otherwise leave /c for a bare text
  * page. The page builds the sentence from the code, the wait and the platform.
+ * R46 client-journey L1: the address carries the wait's end, not the wait,
+ * so a reload much later reads what is left, never the wait at the press.
+ * R46 pages-a L1: a limit that couldn't be checked comes back the same way.
  */
 function tooMany(
   request: Request,
@@ -55,8 +57,9 @@ function tooMany(
   platform: FormDataEntryValue | null,
 ): NextResponse {
   const url = new URL(`/c/${encodeURIComponent(token)}`, appOrigin(request));
-  url.searchParams.set("error", code);
-  url.searchParams.set("wait", String(retryAfterSeconds ?? 60));
+  const query = connectAgainQuery(code, retryAfterSeconds ?? 60, Date.now());
+  url.searchParams.set("error", query.error);
+  url.searchParams.set("until", query.until);
   if (isPlatform(platform)) url.searchParams.set("platform", platform);
   return NextResponse.redirect(url, 303);
 }
@@ -67,12 +70,9 @@ function tooMany(
  */
 const FORM_MAX_BYTES = 4 * 1024;
 
-/** R38 new-customer L1: a limit that couldn't be checked, in this form's plain-text shape. */
-function unchecked(): NextResponse {
-  return new NextResponse(LIMIT_UNCHECKED_MESSAGE, {
-    status: 503,
-    headers: { "content-type": "text/plain; charset=utf-8", "Retry-After": "60" },
-  });
+/** R38 new-customer L1: a limit that couldn't be checked; back to the page, as a refusal is. */
+function unchecked(request: Request, token: string, platform: FormDataEntryValue | null): NextResponse {
+  return tooMany(request, token, CONNECT_LIMIT_CODES.unchecked, LIMIT_UNCHECKED_WAIT_SECONDS, platform);
 }
 
 export async function POST(request: Request, context: RouteContext): Promise<NextResponse> {
@@ -100,7 +100,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
-  if (limit.unavailable) return unchecked();
+  if (limit.unavailable) return unchecked(request, token, platformValue);
   if (!limit.allowed) {
     return tooMany(request, token, CONNECT_LIMIT_CODES.network, limit.retryAfterSeconds, platformValue);
   }
@@ -123,7 +123,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
       windowMs: 60 * 60 * 1000,
       failClosed: true,
     });
-    if (linkLimit.unavailable) return unchecked();
+    if (linkLimit.unavailable) return unchecked(request, token, platformValue);
     if (!linkLimit.allowed) {
       return tooMany(request, token, CONNECT_LIMIT_CODES.link, linkLimit.retryAfterSeconds, platformValue);
     }
