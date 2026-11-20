@@ -342,6 +342,17 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       }
     });
 
+    // R50 publishing-flow L1: the route refuses before any claim, and the post
+    // only gets older, so the card turns too-old and the press stays used.
+    it("TOO_OLD: the route's sentence, the card told it is too old, and no second press", async () => {
+      const error = TOO_OLD_TO_SEND_MESSAGE;
+      const fetcher = vi.fn().mockResolvedValueOnce(response(409, { error, code: "TOO_OLD" }));
+      const press = createSendAgain("job-9", "ws-1", fetcher, () => true);
+      await expect(press()).resolves.toEqual({ ok: false, error, tooOld: true });
+      await expect(press()).resolves.toBeNull();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
     it("publishing couldn't start and the reloaded post is still unsent: press Send again, and the press comes back", async () => {
       const body = dispatchBody(true);
       const fetcher = vi

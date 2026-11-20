@@ -236,7 +236,10 @@ export const SEND_AGAIN_STALE_NOTE =
  * The answer to one press of Send again; `null` when a press is already under
  * way or done. `refetch`: the post may have changed, so the list is read again.
  */
-export type SendAgainOutcome = { ok: true } | { ok: false; error: string; refetch?: true; note?: string } | null;
+export type SendAgainOutcome =
+  | { ok: true }
+  | { ok: false; error: string; refetch?: true; note?: string; tooOld?: true }
+  | null;
 
 /**
  * F1 follow-up: Send again on a failed post that no platform was tried for
@@ -294,6 +297,10 @@ export function createSendAgain(
       return { ok: false, error: refusal.text };
     }
     if (response.status === 404) return { ok: false, error: refusal.text, refetch: true };
+    // R50 publishing-flow L1: the route refuses a too-old post before any
+    // claim, and a post only gets older, so the press stays used and the card
+    // turns to its too-old state.
+    if (response.status === 409 && body.code === "TOO_OLD") return { ok: false, error: serverError, tooOld: true };
     // R28 publishing L1: a 409 or 429 can come after the server claimed the
     // post (nothing could be sent; prepare wrote failed rows), like a failed
     // start, so the post is read again and the list with it.
@@ -493,7 +500,9 @@ export function PostJobCard({
   // The time is read once, when the card first appears: a week-old limit does
   // not need a ticking clock, and render must stay pure.
   const [openedAt] = useState(() => Date.now());
-  const tooOldToSend = unsent && sendAgainTooOld(job, openedAt);
+  // R50 publishing-flow L1: or the route said so (TOO_OLD) after the mark passed with the card open.
+  const [toldTooOld, setToldTooOld] = useState(false);
+  const tooOldToSend = unsent && (toldTooOld || sendAgainTooOld(job, openedAt));
   const canSendAgain = unsent && !tooOldToSend && !sentAgain;
 
   const sendAgain = useCallback(async () => {
@@ -508,6 +517,7 @@ export function PostJobCard({
       return;
     }
     toast.error(outcome.error);
+    if (outcome.tooOld) setToldTooOld(true);
     setSendAgainNote(outcome.note ?? "");
     if (outcome.refetch) onRetryAccepted(job.id);
   }, [job.id, onRetryAccepted, pressSendAgain, toast]);
