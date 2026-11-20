@@ -142,6 +142,26 @@ describe("replyToReview when Google's answer stalls", () => {
     expect(googleFailureKind(error)).toBe("tryLater");
   }, STALL_TEST_TIMEOUT_MS);
 
+  // R48 lead follow-up: one rule for every outcome where the PUT may have
+  // landed. A 5xx after sending is one of them; a 4xx is a certain refusal.
+  it.each([500, 503])("a %s after the PUT is unconfirmed, with the may-be-posted sentence", async (status) => {
+    vi.useRealTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"error":{"code":500}}', { status })));
+
+    const error = await replyToReview("tok", REVIEW, "Thanks").catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ code: GBP_REPLY_UNCONFIRMED_CODE, message: REPLY_MAY_BE_POSTED_MESSAGE });
+  });
+
+  it.each([400, 403, 404, 429])("a %s is a certain refusal and keeps its own failure", async (status) => {
+    vi.useRealTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status })));
+
+    const error = await replyToReview("tok", REVIEW, "Thanks").catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ code: "GBP_REVIEWS_REPLY_FAILED", status });
+  });
+
   it("a readable answer is unchanged", async () => {
     vi.useRealTimers();
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ comment: "Thanks", updateTime: "2026-11-14T00:00:00Z" })));

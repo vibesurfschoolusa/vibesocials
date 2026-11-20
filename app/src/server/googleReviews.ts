@@ -588,9 +588,9 @@ export async function fetchNewReviewUri(
 }
 
 /**
- * R48 platform: the reply's PUT was sent and its answer was lost (a timeout, a
- * connection that dropped after connecting, a 2xx body that never ended), so
- * Google may have saved it. Not "try later": the sentence says it may be
+ * R48 platform: the reply's PUT was sent and its outcome is unknown (a timeout,
+ * a connection that dropped after connecting, a 5xx, a 2xx body that never
+ * ended), so Google may have saved it. Not "try later": the sentence says it may be
  * posted, and that posting again replaces it (a PUT), so the person knows what
  * a second press does.
  */
@@ -640,6 +640,13 @@ export async function replyToReview(
     );
   } catch (error) {
     throw replyMayHaveLanded(error) ? replyUnconfirmedError(error) : error;
+  }
+
+  // A 5xx after the PUT was sent says nothing about whether Google saved it:
+  // the same uncertain outcome as a lost answer. A 4xx is a certain refusal.
+  if (response.status >= 500) {
+    void response.body?.cancel().catch(() => {});
+    throw replyUnconfirmedError(Object.assign(new Error(`Reply answered HTTP ${response.status}`), { status: response.status }));
   }
 
   await assertGoogleOk(response, {
