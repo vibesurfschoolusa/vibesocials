@@ -395,6 +395,69 @@ describe("R52: the lost-file stop only when something else can be sent", () => {
   });
 });
 
+// R52 fix review L2: a several-photo pick where one photo fails leaves that
+// photo's own line beside the lost-file notice. A press must not wipe it while
+// the notice shows; only what clears the notice (attach, dismiss, reset) does.
+describe("R52 fix review: the failed photo's line stays while the notice shows", () => {
+  const placeholder = () => new File([], "IMG_0042.jpg", { type: "image/jpeg" });
+  const good = (name: string) => new File(["x"], name, { type: "image/jpeg" });
+  // The failed photo's own refusal (photoPickProblem / prepareUploadFile).
+  const PHOTO_LINE = EMPTY;
+  async function failedPick() {
+    await pick(good("a.jpg"), placeholder(), good("b.jpg"));
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+  }
+
+  it("untouched page: the line stays, press after press", async () => {
+    await failedPick();
+    await submit();
+    expect(lineSays(UNTOUCHED_SUBMIT_MESSAGE)).toBe(true);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+    await submit();
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+  });
+
+  it("text page: press, press again: the line stays until the post is saved", async () => {
+    await failedPick();
+    await typeCaption("Surf lesson today");
+    await submit();
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+    await submit();
+    expect(dialogShown()).toBe(true);
+    expect(lineSays(PHOTO_LINE)).toBe(true);
+    await run(() => props(dialogButton("Publish without a photo")).onClick());
+    expect(postBodies).toHaveLength(1);
+    expect(lineSays(PHOTO_LINE)).toBe(false);
+  });
+
+  it("dismissing the notice clears the line", async () => {
+    await failedPick();
+    await run(() => props(button("Dismiss")).onClick());
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    expect(lineSays(PHOTO_LINE)).toBe(false);
+  });
+
+  it("attaching a file clears the line", async () => {
+    await failedPick();
+    await pick(good("c.jpg"));
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    expect(lineSays(PHOTO_LINE)).toBe(false);
+  });
+
+  it("no notice: a press clears a stale error as before", async () => {
+    await typeCaption("Surf lesson today");
+    // A pick that breaks a rule says why and attaches nothing: no notice.
+    await pick(new File(["x"], "notes.pdf", { type: "application/pdf" }), good("d.jpg"));
+    expect(lineSays("notes.pdf")).toBe(true);
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(false);
+    await submit();
+    expect(lineSays("notes.pdf")).toBe(false);
+  });
+});
+
 // Lead review notes 1-2: the phone's bar names the refused file, and the line
 // goes for every way a file arrives, on the mounted page.
 describe("R51 review: the refused file on the phone's bar, and what clears it", () => {

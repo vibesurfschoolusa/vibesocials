@@ -1220,10 +1220,19 @@ function CreatePostFormInner({
   const [fileLost, setFileLost] = useState<FileLostNotice>("none");
   // R51: a pick refused for the file itself; its line is drawn from here, not uploadError.
   const [refusedFile, setRefusedFile] = useState<RefusedFile | null>(null);
+  // R52 fix review L2: the form line a loss set (the failed photo's own
+  // refusal). A press leaves it while the notice shows; only what clears the
+  // notice clears it, so the person still knows which photo to leave out.
+  const lostFileLineRef = useRef<string | null>(null);
   /** Every change to the file comes here, so the notice and the refused line follow the same events. */
   const fileEvent = (event: FileLostEvent) => {
     setFileLost((current) => nextFileLostNotice(current, event));
     setRefusedFile((current) => nextRefusedFile(current, event));
+    const lostLine = lostFileLineRef.current;
+    if (lostLine !== null && nextFileLostNotice("fresh", event) === "none") {
+      lostFileLineRef.current = null;
+      setUploadError((current) => (current === lostLine ? null : current));
+    }
   };
   /** The file went away by itself: the notice and its one-press stop. */
   const loseFile = (reason: FileLostReason) => fileEvent({ type: "lost", reason });
@@ -2135,9 +2144,11 @@ function CreatePostFormInner({
       if (isStale()) return;
       // Attach nothing from this pick.
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
-      setUploadError((err as Error).message || "Failed to prepare media for posting. Please try again.");
+      const line = (err as Error).message || "Failed to prepare media for posting. Please try again.";
+      setUploadError(line);
       if (photosFailureLosesFile({ attachedBefore: attachedCount })) {
         loseFile("photos-failed");
+        lostFileLineRef.current = line;
       }
       if (replace) {
         setFileInputKey((key) => key + 1);
@@ -2572,7 +2583,9 @@ function CreatePostFormInner({
       toast.error(FILE_LOST_PRESS_TOAST);
       return;
     }
-    setUploadError(null);
+    // R52 fix review L2: the failed photo's line stays while its notice shows.
+    const keepLostLine = fileLostShown ? lostFileLineRef.current : null;
+    setUploadError((current) => (current !== null && current === keepLostLine ? current : null));
     setPressRefusal(null);
     setShowSuccess(false);
     setPressCount((count) => count + 1);

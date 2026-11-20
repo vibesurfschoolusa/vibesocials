@@ -1505,7 +1505,8 @@ describe("a refused press shows its reason where the person is", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const submit = raw.slice(raw.indexOf("async function handleUploadSubmit("), raw.indexOf("async function handleEnhanceCaption("));
     // Counted with the clear, before any refusal, so the same sentence twice is shown twice.
-    expect(submit).toMatch(/setUploadError\(null\);\s*setPressRefusal\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*const pressedAt = pressClock\(\);\s*if \(first\.stop === "wait"\)/);
+    // R52 fix review L2: the clear keeps only the failed photo's line, while its notice shows.
+    expect(submit).toMatch(/setUploadError\(\(current\) => \(current !== null && current === keepLostLine \? current : null\)\);\s*setPressRefusal\(null\);\s*setShowSuccess\(false\);\s*setPressCount\(\(count\) => count \+ 1\);\s*const pressedAt = pressClock\(\);\s*if \(first\.stop === "wait"\)/);
     expect(raw).toMatch(/if \(pressCount === 0\) return;[\s\S]{0,200}revealRefusal\(uploadErrorRef\.current, reduce\);\s*\}, \[pressCount\]\);/);
     expect(raw).toMatch(/<Alert ref=\{uploadErrorRef\} tabIndex=\{-1\} variant="danger" className="scroll-mt-24">\{shownUploadError\}<\/Alert>/);
   });
