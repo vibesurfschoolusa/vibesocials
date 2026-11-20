@@ -25,6 +25,8 @@ export function copiesWorkAgainWhen(kind: ClientLinkBlockKind | null | undefined
  * the catch can follow a commit whose answer was lost, so "couldn't confirm"
  * stays; copying without a new press may hand out old links a demoted owner
  * still holds, and a second press makes new ones whatever the first did.
+ * R52 fix review L2: a failed press keeps the confirm dialog open, so the
+ * step names its button, "Make new links".
  */
 export const CLIENT_LINKS_NOT_MADE_MESSAGE =
-  "We couldn't confirm new links were made. Press Make new client links again, then copy each: upload on Media, review on Queue, connect under Connections.";
+  "We couldn't confirm new links were made. Press Make new links again, then copy each link: upload on Media, review on Queue, connect under Connections.";

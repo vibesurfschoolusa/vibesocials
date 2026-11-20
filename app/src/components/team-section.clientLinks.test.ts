@@ -95,6 +95,20 @@ describe("Make new client links", () => {
     });
   });
 
+  // R52 fix review L2: a failed press keeps the confirm dialog open (the
+  // handler throws), so both failure sentences name that dialog's button.
+  it("after a failure the dialog stays open, and the button both sentences name is in it", () => {
+    panel(ON);
+    const dialog = confirmProps.find((props) => props.title === "Make new client links?");
+    expect(dialog?.confirmText).toBe("Make new links");
+    for (const text of [CLIENT_LINKS_NOT_MADE_MESSAGE, CLIENT_LINKS_MAYBE_REPLACED_MESSAGE]) {
+      expect(text).toContain(`Press ${String(dialog?.confirmText)} again`);
+    }
+    const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
+    const handler = source.slice(source.indexOf("const replaceClientLinks"), source.indexOf("}, [", source.indexOf("const replaceClientLinks")));
+    expect(handler).toMatch(/catch \(error\) \{[\s\S]*throw new ConfirmFailureShown/);
+  });
+
   // Check 3: the Connections card shows the new connect link without a reload.
   it("after a replace, tells the page so the connect link card reads its new link; a refusal tells nothing", async () => {
     const announce = vi.fn();
@@ -133,7 +147,7 @@ describe("Make new client links", () => {
     expect(announce).not.toHaveBeenCalled();
     // R52 pages-a L1: a second press is safe either way, so it leads with it.
     const error = await requestClientLinksReplace(bare as unknown as typeof fetch, "ws-1", announce).catch((e: unknown) => e);
-    expect((error as Error).message).toContain("Press Make new client links again");
+    expect((error as Error).message).toContain("Press Make new links again");
     for (const place of ["upload on Media", "review on Queue", "connect under Connections"]) {
       expect((error as Error).message).toContain(place);
     }

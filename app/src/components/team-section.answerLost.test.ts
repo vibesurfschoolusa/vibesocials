@@ -55,7 +55,7 @@ const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
 
 /** R52 pages-a L1: a second press is safe either way, so each failure leads with it, then the three places. */
 function expectPressAgain(text: string): void {
-  expect(text).toContain("Press Make new client links again");
+  expect(text).toContain("Press Make new links again");
   for (const place of ["Media", "Queue", "Connections"]) expect(text).toContain(place);
 }
 
@@ -82,11 +82,11 @@ describe("Team card: a lost answer may have gone through", () => {
     }
     // R51 fix review L1: shown in an 8-second toast, so short enough to read in it.
     // R52 pages-a L1: the cap rises from 28 to 31 for the press-again step
-    // ("Press Make new client links again" is six words: it names the button).
+    // ("Press Make new links again" names the dialog's button).
     // Without it the owner may copy the old links a demoted owner still holds.
     expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.startsWith(LEAD)).toBe(true);
     expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so the links may have been replaced. If your connection dropped, reconnect first. Press Make new client links again, then copy each: Media, Queue, Connections.",
+      "Vibe Socials' answer didn't reach you, so the client links may have been replaced. If your connection dropped, reconnect first. Press Make new links again, then copy each: Media, Queue, Connections.",
     );
     expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.split(/\s+/).length).toBeLessThanOrEqual(31);
   });

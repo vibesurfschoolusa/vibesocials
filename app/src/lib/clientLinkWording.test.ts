@@ -30,7 +30,7 @@ describe("copiesWorkAgainWhen", () => {
 describe("CLIENT_LINKS_NOT_MADE_MESSAGE", () => {
   it("says what happened, to press Make new client links again, and where each link lives", () => {
     expect(CLIENT_LINKS_NOT_MADE_MESSAGE).toBe(
-      "We couldn't confirm new links were made. Press Make new client links again, then copy each: upload on Media, review on Queue, connect under Connections.",
+      "We couldn't confirm new links were made. Press Make new links again, then copy each link: upload on Media, review on Queue, connect under Connections.",
     );
     // Review: "Couldn't make" is false when the commit went through and only its answer was lost.
     expect(CLIENT_LINKS_NOT_MADE_MESSAGE).not.toMatch(/still work|Nothing was changed|Couldn't make/);
@@ -46,7 +46,7 @@ describe("CLIENT_LINKS_NOT_MADE_MESSAGE", () => {
   it("is the route's 500 body, with the press-again step and the three places", () => {
     const route = readFileSync(join(__dirname, "../app/api/workspaces/client-links/route.ts"), "utf8");
     expect(route).toContain("return NextResponse.json({ error: CLIENT_LINKS_NOT_MADE_MESSAGE }, { status: 500 });");
-    expect(CLIENT_LINKS_NOT_MADE_MESSAGE).toContain("Press Make new client links again");
+    expect(CLIENT_LINKS_NOT_MADE_MESSAGE).toContain("Press Make new links again");
     for (const place of ["upload on Media", "review on Queue", "connect under Connections"]) {
       expect(CLIENT_LINKS_NOT_MADE_MESSAGE).toContain(place);
     }
