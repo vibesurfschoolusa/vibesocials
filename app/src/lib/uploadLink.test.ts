@@ -156,6 +156,16 @@ describe("uploadLinkPathname", () => {
     expect(uploadLinkPathname("link-1", "C:\\photos\\a.png", "r")).toBe("ul/link-1/r-a.png");
   });
 
+  // R47 lead review: a long name keeps only a real extension (the extensionOf
+  // rule) when it is cut; a date's ".2026" is part of the name.
+  it("cuts a long name and keeps only a real extension", () => {
+    const real = uploadLinkPathname("link-1", `${"a".repeat(300)}.jpeg`, "r");
+    expect(real.endsWith("a.jpeg")).toBe(true);
+    expect(real.length).toBe("ul/link-1/r-".length + 100);
+    const date = uploadLinkPathname("link-1", `${"a".repeat(300)} 19.11.2026`, "r");
+    expect(date).toBe(`ul/link-1/r-${"a".repeat(100)}`);
+  });
+
   it("falls back to a plain name and caps a long one", () => {
     expect(uploadLinkPathname("link-1", "", "r")).toBe("ul/link-1/r-file");
     expect(uploadLinkPathname("link-1", "..", "r")).toBe("ul/link-1/r-file");

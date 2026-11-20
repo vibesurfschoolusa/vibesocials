@@ -1,3 +1,4 @@
+import { extensionOf, withoutExtension } from "./fileExtension";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
 
 /**
@@ -43,9 +44,9 @@ export function isHeicFile(file: { name: string; type: string }): boolean {
   return (type === "" || type === "application/octet-stream") && /\.(heic|heif)$/i.test(file.name);
 }
 
-/** `IMG_5252.HEIC` -> `IMG_5252.jpg`. */
+/** `IMG_5252.HEIC` -> `IMG_5252.jpg`; only a real extension is swapped, so "St. Lucia sunset" keeps its name. */
 export function jpegFileName(name: string): string {
-  const base = name.replace(/\.[^./\\]*$/, "");
+  const base = withoutExtension(name);
   return `${base || "photo"}.jpg`;
 }
 
@@ -114,16 +115,6 @@ const TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
   mov: "video/quicktime",
   webm: "video/webm",
 };
-
-/**
- * The name's extension, lower case; undefined when it has none. R47
- * client-journey L2: an extension is 1-5 letters or digits with at least one
- * letter, so the dot in "Surf day 19.11.2026", "Session at 10.30" or "St.
- * Lucia sunset" starts none.
- */
-function extensionOf(name: string): string | undefined {
-  return /\.((?=[a-z0-9]*[a-z])[a-z0-9]{1,5})$/i.exec(name)?.[1].toLowerCase();
-}
 
 /**
  * The type `file` is uploaded as: its own, or, when the browser gave none (some

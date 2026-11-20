@@ -1,3 +1,5 @@
+import { extensionOf } from "./fileExtension";
+
 /**
  * Client upload link (2026-11-10): the pure parts shared by the owner routes,
  * the two public routes under /api/upload-link/[token]/ and the /u/[token] page.
@@ -97,8 +99,9 @@ export function uploadLinkPathname(linkId: string, fileName: string, random: str
   let safe = base.replace(/[^a-zA-Z0-9.\-_]/g, "_");
   if (/^\.*$/.test(safe)) safe = "file";
   if (safe.length > STORED_NAME_MAX) {
-    const dot = safe.lastIndexOf(".");
-    const ext = dot > 0 && safe.length - dot <= 10 ? safe.slice(dot) : "";
+    // Only a real extension is kept (lib/fileExtension): a date's ".2026" is part of the name.
+    const extension = extensionOf(safe);
+    const ext = extension !== undefined && safe.length > extension.length + 1 ? safe.slice(-(extension.length + 1)) : "";
     safe = safe.slice(0, STORED_NAME_MAX - ext.length) + ext;
   }
   return `${uploadLinkStoragePrefix(linkId)}${random}-${safe}`;

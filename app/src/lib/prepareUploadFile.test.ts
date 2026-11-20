@@ -58,6 +58,16 @@ describe("jpegFileName / fitWithin", () => {
     expect(jpegFileName(".heic")).toBe("photo.jpg");
   });
 
+  // R47 lead review: only a real extension (the extensionOf rule) is swapped,
+  // so a dot in a date or a place name stays in the name.
+  it("swaps only a real extension, and keeps the rest of the name", () => {
+    expect(jpegFileName("St. Lucia sunset.heic")).toBe("St. Lucia sunset.jpg");
+    expect(jpegFileName("St. Lucia sunset")).toBe("St. Lucia sunset.jpg");
+    expect(jpegFileName("Surf day 19.11.2026")).toBe("Surf day 19.11.2026.jpg");
+    expect(jpegFileName("photo.HEIC")).toBe("photo.jpg");
+    expect(jpegFileName("a.b.png")).toBe("a.b.jpg");
+  });
+
   it("scales the longer edge down to the limit and never scales up", () => {
     expect(fitWithin(8064, 6048, 4096)).toEqual({ width: 4096, height: 3072 });
     expect(fitWithin(3024, 4032, 2048)).toEqual({ width: 1536, height: 2048 });
