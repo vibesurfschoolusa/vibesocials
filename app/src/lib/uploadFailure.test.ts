@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  BlobAccessError,
+  BlobServiceNotAvailable,
+  BlobServiceRateLimited,
+  BlobStoreSuspendedError,
+  BlobUnknownError,
+} from "@vercel/blob";
+
+import {
   explainUploadFailure,
+  isStorageRefusal,
   UPLOAD_OFFLINE_MESSAGE,
+  UPLOAD_STORAGE_REFUSED_MESSAGE,
   UPLOAD_REFUSED_MESSAGE,
   UPLOAD_STORAGE_UNREACHABLE_MESSAGE,
   UploadRefusedError,
@@ -236,5 +246,77 @@ describe("explainUploadFailure and the page's workspace", () => {
     const explained = await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", vi.fn().mockResolvedValue(refusal));
     expect(explained).toBeInstanceOf(UploadRefusedError);
     expect(explained.message).toBe(text);
+  });
+});
+
+// R53 pages-a L3: the blob client's own errors ("Vercel Blob: This store has
+// been suspended.", "...please visit https://vercel.com/help.") reached Add
+// many's and Create's rows as they were. One plain sentence instead.
+describe("a storage refusal", () => {
+  const answered = () => vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
+
+  it("the sentence is plain and names no vendor", () => {
+    expect(UPLOAD_STORAGE_REFUSED_MESSAGE).toBe("File storage didn't take the upload. Try again in a few minutes.");
+  });
+
+  it("isStorageRefusal: the blob client's own refusals, never a dropped request or a plain error", () => {
+    expect(isStorageRefusal(new BlobStoreSuspendedError())).toBe(true);
+    expect(isStorageRefusal(new BlobAccessError())).toBe(true);
+    expect(isStorageRefusal(new BlobUnknownError())).toBe(true);
+    expect(isStorageRefusal(new BlobServiceRateLimited(30))).toBe(true);
+    // A copy of the text, as a bundle may throw without the class.
+    expect(isStorageRefusal(new Error("Vercel Blob: This store has been suspended."))).toBe(true);
+    expect(isStorageRefusal(new TypeError("Failed to fetch"))).toBe(false);
+    expect(isStorageRefusal(new Error("network down"))).toBe(false);
+    // These keep their own sentences.
+    expect(isStorageRefusal(new BlobServiceNotAvailable())).toBe(false);
+    expect(isStorageRefusal(new Error("Vercel Blob: Failed to  retrieve the client token"))).toBe(false);
+    expect(isStorageRefusal("Vercel Blob: x")).toBe(false);
+  });
+
+  it.each([
+    ["suspended", new BlobStoreSuspendedError()],
+    ["access denied", new BlobAccessError()],
+    ["unknown", new BlobUnknownError()],
+    ["a rate limit", new BlobServiceRateLimited(30)],
+  ])("explainUploadFailure: %s gives the plain sentence", async (_name, error) => {
+    const explained = await explainUploadFailure(error, "ws-1", answered());
+    expect(explained).toBeInstanceOf(UploadRefusedError);
+    expect(explained.message).toBe(UPLOAD_STORAGE_REFUSED_MESSAGE);
+    expect(explained.message).not.toMatch(/Vercel|vercel\.com/);
+  });
+
+  it("the same when our own question fails or answers non-ok", async () => {
+    expect((await explainUploadFailure(new BlobStoreSuspendedError(), "ws-1", vi.fn().mockRejectedValue(new TypeError("x")))).message).toBe(
+      UPLOAD_STORAGE_REFUSED_MESSAGE,
+    );
+    expect(
+      (await explainUploadFailure(new BlobUnknownError(), "ws-1", vi.fn().mockResolvedValue(jsonResponse({}, false)))).message,
+    ).toBe(UPLOAD_STORAGE_REFUSED_MESSAGE);
+  });
+
+  it("a full workspace still wins: its own sentence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: true, error: FULL }));
+    expect((await explainUploadFailure(new BlobStoreSuspendedError(), "ws-1", fetchMock)).message).toBe(FULL);
+  });
+
+  it("unchanged: a TypeError, a plain error, not available and a refused token", async () => {
+    expect((await explainUploadFailure(new TypeError("Failed to fetch"), "ws-1", answered())).message).toBe(UPLOAD_STORAGE_UNREACHABLE_MESSAGE);
+    const plain = new Error("network down");
+    await expect(explainUploadFailure(plain, "ws-1", answered())).resolves.toBe(plain);
+    expect((await explainUploadFailure(new BlobServiceNotAvailable(), "ws-1", answered())).message).toBe(UPLOAD_STORAGE_UNREACHABLE_MESSAGE);
+    expect(
+      (await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), "ws-1", answered())).message,
+    ).toBe(UPLOAD_REFUSED_MESSAGE);
+  });
+
+  // Add many's row shows the explained error's message
+  // (app/posts/bulk/bulk-posts-form.tsx errorMessage), so for a suspended store
+  // that is the plain sentence.
+  it("Add many's row text for a suspended store is the plain sentence", async () => {
+    const rowText = (error: unknown) => (error instanceof Error && error.message ? error.message : "The upload failed. Retry it or remove it.");
+    expect(rowText(await explainUploadFailure(new BlobStoreSuspendedError(), "ws-1", answered()))).toBe(
+      "File storage didn't take the upload. Try again in a few minutes.",
+    );
   });
 });

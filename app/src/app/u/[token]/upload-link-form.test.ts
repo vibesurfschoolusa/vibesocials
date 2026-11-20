@@ -2,6 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { BlobAccessError, BlobServiceRateLimited, BlobStoreSuspendedError, BlobUnknownError } from "@vercel/blob";
+
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 import { UPLOAD_LINK_IP_LIMIT_MESSAGE, UPLOAD_LINK_IP_LIMIT_REASON } from "@/lib/uploadLink";
 
@@ -371,7 +373,8 @@ describe("UploadSummary and the rows: our side or the connection", () => {
   const CONNECTION_ROW = "The upload didn't finish. Check your connection and try again.";
   const OUR_SIDE_ROW = "The upload didn't finish: something went wrong on our side. Try again in a minute.";
   const CONNECTION_SUMMARY = "Check your connection, then try again with the button below.";
-  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again in a minute with the button below.";
+  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again in a few minutes with the button below.";
+  const STORAGE_ROW = "File storage didn't take the upload. Try again in a few minutes.";
 
   const html502 = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } });
   const json = (status: number, body: unknown) =>
@@ -379,8 +382,8 @@ describe("UploadSummary and the rows: our side or the connection", () => {
   const empty500 = () => new Response("", { status: 500 });
 
   /** The failure a file's token request ends in, as the form keeps it. */
-  async function failed(answer: () => Promise<Response>): Promise<ClientFileFailure> {
-    const deps = { prepare: async (file: File) => file, put: vi.fn(), fetch: vi.fn(answer) };
+  async function failed(answer: () => Promise<Response>, put = vi.fn()): Promise<ClientFileFailure> {
+    const deps = { prepare: async (file: File) => file, put, fetch: vi.fn(answer) };
     const file = new File(["abc"], "a.jpg", { type: "image/jpeg" });
     const error = await sendClientFile({ token: "T".repeat(43), file, senderName: "", note: "", onProgress: () => {} }, deps).catch(
       (caught: unknown) => caught,
@@ -428,6 +431,34 @@ describe("UploadSummary and the rows: our side or the connection", () => {
     const html = render(0, failures);
     expect(html).toContain(`None of the 3 files arrived. The reason is under each file. ${OUR_SIDE_SUMMARY}`);
     expect(html).not.toContain("connection");
+  });
+
+  // R53 pages-a L2: storage itself refused the upload.
+  const tokenIssued = async () => json(200, { clientToken: "ct", pathname: "ul/link-1/a.jpg" });
+  const storageRefused = (error: Error) => failed(tokenIssued, vi.fn().mockRejectedValue(error));
+
+  it("storage refusals only: the storage sentence in each row, our side in the summary", async () => {
+    const failures = [
+      await storageRefused(new BlobStoreSuspendedError()),
+      await storageRefused(new BlobAccessError()),
+      await storageRefused(new BlobUnknownError()),
+    ];
+    expect(failures.map((failure) => failure.message)).toEqual([STORAGE_ROW, STORAGE_ROW, STORAGE_ROW]);
+    const html = render(0, failures);
+    expect(html).toContain(`None of the 3 files arrived. The reason is under each file. ${OUR_SIDE_SUMMARY}`);
+    expect(html).not.toContain("connection");
+  });
+
+  it("a rate limit from storage: the storage sentence", async () => {
+    const failure = await storageRefused(new BlobServiceRateLimited(30));
+    expect(failure).toMatchObject({ kind: "network", message: STORAGE_ROW });
+    expect(render(0, [failure])).toContain(OUR_SIDE_SUMMARY);
+  });
+
+  it("a storage refusal with a dropped upload: the connection wording", async () => {
+    const failures = [await storageRefused(new BlobStoreSuspendedError()), await storageRefused(new TypeError("Failed to fetch"))];
+    expect(failures.map((failure) => failure.message)).toEqual([STORAGE_ROW, CONNECTION_ROW]);
+    expect(render(0, failures)).toContain(`None of the 2 files arrived. The reason is under each file. ${CONNECTION_SUMMARY}`);
   });
 
   it("a mix of no answer and our side: the connection wording", async () => {

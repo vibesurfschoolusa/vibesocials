@@ -10,6 +10,14 @@ import {
   UPLOAD_LINK_STORAGE_FULL_MESSAGE,
 } from "@/lib/uploadLink";
 
+import {
+  BlobAccessError,
+  BlobServiceNotAvailable,
+  BlobServiceRateLimited,
+  BlobStoreSuspendedError,
+  BlobUnknownError,
+} from "@vercel/blob";
+
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 import { HeicConverterNotLoadedError, PrepareFileError } from "@/lib/prepareUploadFile";
 
@@ -184,6 +192,38 @@ describe("sendClientFile", () => {
           message: `${UPLOAD_LINK_IP_LIMIT_REASON} Wait 2 minutes, then try the files that didn't send.`,
           ourSide: false,
         });
+      });
+    });
+
+    // R53 pages-a L2: storage itself answered put() (a BlobError): our side,
+    // never the connection; still "network", so Retry stays.
+    describe("the upload to storage", () => {
+      const STORAGE = "File storage didn't take the upload. Try again in a few minutes.";
+      const CONNECTION = "The upload didn't finish. Check your connection and try again.";
+
+      it("a TypeError: the connection", async () => {
+        deps.put.mockRejectedValue(new TypeError("Failed to fetch"));
+        expect(await failure()).toMatchObject({ kind: "network", message: CONNECTION, ourSide: false });
+      });
+
+      it.each([
+        ["suspended", new BlobStoreSuspendedError()],
+        ["access denied", new BlobAccessError()],
+        ["unknown", new BlobUnknownError()],
+        ["a rate limit", new BlobServiceRateLimited(30)],
+      ])("%s: the storage sentence, our side", async (_name, error) => {
+        deps.put.mockRejectedValue(error);
+        expect(await failure()).toMatchObject({ kind: "network", message: STORAGE, ourSide: true });
+      });
+
+      it("a plain error with no storage text: the connection, as before", async () => {
+        deps.put.mockRejectedValue(new Error("network"));
+        expect(await failure()).toMatchObject({ kind: "network", message: CONNECTION, ourSide: false });
+      });
+
+      it("not available (a dropped part): the connection, as before", async () => {
+        deps.put.mockRejectedValue(new BlobServiceNotAvailable());
+        expect(await failure()).toMatchObject({ kind: "network", message: CONNECTION, ourSide: false });
       });
     });
 

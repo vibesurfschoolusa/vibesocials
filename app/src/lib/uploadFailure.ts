@@ -43,6 +43,17 @@ export const UPLOAD_OFFLINE_MESSAGE =
 export const UPLOAD_STORAGE_UNREACHABLE_MESSAGE =
   "The file couldn't be uploaded. Vibe Socials answered, but its file storage couldn't be reached from this network. Try again, or try another connection.";
 
+/**
+ * R53 pages-a L2/L3: file storage itself answered and refused the upload (a
+ * suspended store, access denied, its rate limit, an unknown error after its
+ * retries). The blob client's own text names the vendor and links its help
+ * page, so it is never shown; this is.
+ */
+export const UPLOAD_STORAGE_REFUSED_MESSAGE = "File storage didn't take the upload. Try again in a few minutes.";
+
+// Every error @vercel/blob throws (its BlobError) starts with this.
+const BLOB_ERROR = /^Vercel Blob:/;
+
 // What the blob client throws when the token route answers non-2xx (its own
 // text has a double space in one spelling).
 const TOKEN_REFUSED = /failed to\s+retrieve the client token/i;
@@ -51,10 +62,21 @@ const TOKEN_REFUSED = /failed to\s+retrieve the client token/i;
 const BLOB_SERVICE_UNAVAILABLE = /blob service is currently not available/i;
 
 /**
+ * A storage refusal: one of the blob client's own errors, except the two that
+ * keep their own sentences (a dropped request's "not available", and a
+ * refused token). Create, Add many and /u decide by this one rule.
+ */
+export function isStorageRefusal(error: unknown): boolean {
+  if (!(error instanceof Error) || !BLOB_ERROR.test(error.message)) return false;
+  return !BLOB_SERVICE_UNAVAILABLE.test(error.message) && !TOKEN_REFUSED.test(error.message);
+}
+
+/**
  * The storage sentence when that is why the upload failed; for any other
  * refused token, UPLOAD_REFUSED_MESSAGE; for a dropped request,
  * UPLOAD_OFFLINE_MESSAGE when our own question fails too, else
- * UPLOAD_STORAGE_UNREACHABLE_MESSAGE; else the original error.
+ * UPLOAD_STORAGE_UNREACHABLE_MESSAGE; for a storage refusal,
+ * UPLOAD_STORAGE_REFUSED_MESSAGE; else the original error.
  */
 export async function explainUploadFailure(
   error: unknown,
@@ -66,7 +88,11 @@ export async function explainUploadFailure(
   // or the blob client's "not available". One rule for both, decided by
   // whether our own question below is answered.
   const dropped = original instanceof TypeError || BLOB_SERVICE_UNAVAILABLE.test(original.message);
-  const refused = TOKEN_REFUSED.test(original.message) ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE) : null;
+  const refused = TOKEN_REFUSED.test(original.message)
+    ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE)
+    : isStorageRefusal(original)
+      ? new UploadRefusedError(UPLOAD_STORAGE_REFUSED_MESSAGE)
+      : null;
   let response: Response;
   try {
     // R32: asked for the workspace the page was drawn for, as the upload itself is.

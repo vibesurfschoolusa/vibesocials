@@ -149,7 +149,7 @@ function nothingSentText(failures: ClientFileFailure[]): string {
       : `None of the ${failures.length} files arrived. The reason is under each file.`;
     // R53 pages-a L1: the connection is named when any file got no answer at all.
     return failures.every((failure) => failure.ourSide)
-      ? `${reason} Something went wrong on our side. Try again in a minute with the button below.`
+      ? `${reason} Something went wrong on our side. Try again in a few minutes with the button below.`
       : `${reason} Check your connection, then try again with the button below.`;
   }
   // A refusal is not the connection's fault: one file's reason is said here.

@@ -12,6 +12,7 @@ import {
   UPLOAD_LINK_IP_LIMIT_REASON,
 } from "@/lib/uploadLink";
 import { fetchOrNoAnswer, isNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
+import { UPLOAD_STORAGE_REFUSED_MESSAGE, isStorageRefusal } from "@/lib/uploadFailure";
 
 /**
  * One file through a client upload link, in the browser (2026-11-10): prepared
@@ -201,7 +202,10 @@ export async function sendClientFile(
       contentType: prepared.type,
       onUploadProgress: (event) => input.onProgress(event.percentage),
     });
-  } catch {
+  } catch (error) {
+    // R53 pages-a L2: storage itself answered and refused (lib/uploadFailure.ts):
+    // our side, not the connection. Still "network", so Retry stays.
+    if (isStorageRefusal(error)) throw new ClientFileError("network", UPLOAD_STORAGE_REFUSED_MESSAGE, true);
     throw new ClientFileError("network", UPLOAD_FAILED_MESSAGE);
   }
 
