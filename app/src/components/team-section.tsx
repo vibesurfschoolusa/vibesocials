@@ -497,8 +497,9 @@ export async function requestClientLinksReplace(
   announce();
   // R51 client-journey L1: an OK answer that can't be read is a lost answer,
   // as on Connections, Queue and Media. The links were replaced, so it must
-  // not read as "nothing was on" and mark them all off.
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+  // not read as "nothing was on" and mark them all off. Every answer names
+  // uploadLink (null when it was off), so one without it wasn't read either.
+  if (data === null || typeof data !== "object" || Array.isArray(data) || !("uploadLink" in data)) {
     throw new Error(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE);
   }
   return data;
