@@ -19,7 +19,9 @@ export function copiesWorkAgainWhen(kind: ClientLinkBlockKind | null | undefined
  * and as Team's own fallback. It claims nothing about the old links: a
  * connect link whose maker stopped being an owner works for nobody, and a
  * commit whose answer was lost may have replaced them all. Reading each link
- * again where it lives shows the truth either way.
+ * again where it lives shows the truth either way. R51 pages-a L1: Team shows
+ * it in a toast that closes after 8 seconds, and its panel doesn't list the
+ * links, so it stays short and names where each one lives.
  */
 export const CLIENT_LINKS_NOT_MADE_MESSAGE =
-  "We couldn't confirm the new client links were made. Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page. Then press Make new client links again if you still need new ones.";
+  "We couldn't confirm the new client links were made. Reload, then copy each link again: upload on Media, review on Queue, connect under Connections.";

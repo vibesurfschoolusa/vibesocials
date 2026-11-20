@@ -26,9 +26,15 @@ describe("copiesWorkAgainWhen", () => {
 describe("CLIENT_LINKS_NOT_MADE_MESSAGE", () => {
   it("says what happened and where to copy each link again, with no claim about the old ones", () => {
     expect(CLIENT_LINKS_NOT_MADE_MESSAGE).toBe(
-      "We couldn't confirm the new client links were made. Reload this page and copy the links again before you send one: the upload link is on the Media page, the review link on the Queue page and the connect link on this page. Then press Make new client links again if you still need new ones.",
+      "We couldn't confirm the new client links were made. Reload, then copy each link again: upload on Media, review on Queue, connect under Connections.",
     );
     // Review: "Couldn't make" is false when the commit went through and only its answer was lost.
     expect(CLIENT_LINKS_NOT_MADE_MESSAGE).not.toMatch(/still work|Nothing was changed|Couldn't make/);
+  });
+
+  // R51 pages-a L1: Team shows it only in an 8-second toast, so it must be
+  // readable in that time.
+  it("is 25 words or fewer", () => {
+    expect(CLIENT_LINKS_NOT_MADE_MESSAGE.trim().split(/\s+/).length).toBeLessThanOrEqual(25);
   });
 });
