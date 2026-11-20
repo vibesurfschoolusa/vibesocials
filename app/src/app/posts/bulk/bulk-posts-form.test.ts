@@ -327,4 +327,25 @@ describe("Add many: rowLocalBlock and the caption's length", () => {
   it("under the cap: goes", () => {
     expect(rowLocalBlock(row("Sunday session"), "schedule", at, batch)).toBeNull();
   });
+
+  // R52 fix review L1: the counter's alert under the box already says it, so
+  // the row's line does not say it a second time.
+  const press = { mode: "schedule" as const, at: at.getTime() };
+  const long = "a".repeat(10_001);
+
+  it("length the only block: the row is held, and its line is empty", () => {
+    expect(rowSendLine({ ...row(long), sendError: null }, press, batch)).toBeNull();
+    // Still held: the press stays refused until the caption is shortened.
+    const held = refusedPressesKept(new Map([["r1", press]]), [{ ...row(long), id: "r1" }], batch);
+    expect(held.has("r1")).toBe(true);
+  });
+
+  it("length and another block: the line names the other block", () => {
+    const soon = { ...row(long), when: "2026-11-20T10:00", sendError: null };
+    expect(rowLocalBlock(soon, "schedule", at, batch)).toBe(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+    expect(rowSendLine(soon, press, batch)).toBe(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+    const noPlatform = { ...row(long), sendError: null };
+    expect(rowSendLine(noPlatform, press, { ...batch, selectedPlatforms: ["youtube"] as Platform[] })).not.toBeNull();
+    expect(rowSendLine(noPlatform, press, { ...batch, selectedPlatforms: ["youtube"] as Platform[] })).not.toBe(BULK_CAPTION_TOO_LONG_MESSAGE);
+  });
 });

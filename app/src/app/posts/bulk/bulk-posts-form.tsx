@@ -77,6 +77,7 @@ import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
 import { ALT_TEXT_TOO_LONG_TEXT, BulkPostRow, altTextStoredLength, captionFailedText, captionLocked } from "./bulk-post-row";
 import { ALT_TEXT_MAX } from "@/lib/altText";
+import { captionCounter } from "@/lib/captionLimits";
 import { MediaPickerDialog } from "./media-picker-dialog";
 import { BatchSettingsFieldset } from "./batch-settings";
 import {
@@ -248,7 +249,9 @@ export function rowLocalBlock(row: RowCheck, mode: BulkFinishMode, at: Date, bat
       googleError: batch.googleError,
     }) ??
     // R45 pages-a L3: the route would cut a longer description.
-    (row.mimeType.startsWith("image/") && altTextStoredLength(row.altText ?? "") > ALT_TEXT_MAX ? ALT_TEXT_TOO_LONG_TEXT : null)
+    (row.mimeType.startsWith("image/") && altTextStoredLength(row.altText ?? "") > ALT_TEXT_MAX ? ALT_TEXT_TOO_LONG_TEXT : null) ??
+    // Last, so a row's line names any other block (rowSendLine never shows this one).
+    (captionCounter(row.caption).over ? BULK_CAPTION_TOO_LONG_MESSAGE : null)
   );
 }
 
@@ -271,7 +274,9 @@ export function rowSendLine(
 ): string | null {
   if (row.sendError) return row.sendError;
   if (!press) return null;
-  return rowLocalBlock(row, press.mode, new Date(press.at), batch);
+  const block = rowLocalBlock(row, press.mode, new Date(press.at), batch);
+  // R52 fix review L1: the caption counter's alert already says this, under the box the press focuses.
+  return block === BULK_CAPTION_TOO_LONG_MESSAGE ? null : block;
 }
 
 /** The refused presses still refusing: a row whose check passed is dropped (the same map when none is). */
@@ -944,8 +949,9 @@ export function BulkPostsForm({
           refused.set(row.id, { mode, at: pressedAt.getTime() });
           updateRow(row.id, { sendError: null });
           if (block === SCHEDULED_TIME_TOO_SOON_MESSAGE) timeHeld.add(row.id);
+          // A long caption is checked last, so look at it directly: its box is the row's first field.
+          if (captionCounter(row.caption).over) altTooLong ??= { id: row.id, field: "caption" };
           if (block === ALT_TEXT_TOO_LONG_TEXT) altTooLong ??= { id: row.id, field: "alt" };
-          if (block === BULK_CAPTION_TOO_LONG_MESSAGE) altTooLong ??= { id: row.id, field: "caption" };
         } else {
           ready.push(row.id);
         }

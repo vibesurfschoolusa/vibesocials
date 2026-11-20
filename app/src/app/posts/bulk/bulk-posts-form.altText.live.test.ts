@@ -240,16 +240,33 @@ describe("Add many: a photo description longer than 1,000 characters", () => {
 // R52 pages-a L3, publishing-flow L1: a caption over 10,000 characters is held
 // on its row before sending, so no route refusal names "baseCaption".
 describe("Add many: a caption longer than 10,000 characters", () => {
-  it("Schedule all: the other rows go; that row stays, with its sentence and its caption", async () => {
+  /** How many times the page says a caption is too long (the counter's alert, or a row line). */
+  const lengthRefusals = () => (String(container.textContent).match(/caption is too long/gi) ?? []).length;
+
+  it("Schedule all: the other rows go; that row stays, with one refusal and its caption", async () => {
     await mountWithThreePhotos();
     const long = "a".repeat(10_001);
     await run(() => props(rowInput(1, "TEXTAREA")).onChange({ target: { value: long } }));
+    // R52 fix review L1: said once, before and after the press.
+    expect(lengthRefusals()).toBe(1);
     await run(() => props(button("Schedule all")).onClick({ currentTarget: null }));
     expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Three"]);
-    expect(container.textContent).toContain(BULK_CAPTION_TOO_LONG_MESSAGE);
+    expect(lengthRefusals()).toBe(1);
+    expect(container.textContent).not.toContain(BULK_CAPTION_TOO_LONG_MESSAGE);
     expect(container.textContent).not.toContain("baseCaption");
     expect(props(rowInput(1, "TEXTAREA")).value).toBe(long);
     // As for a long description: the press takes the person to the caption to shorten.
+    expect(doc.activeElement).toBe(rowInput(1, "TEXTAREA"));
+  });
+
+  it("a long caption and a long description on one row: each reason once; the other rows go", async () => {
+    await mountWithThreePhotos();
+    await run(() => props(rowInput(1, "TEXTAREA")).onChange({ target: { value: "a".repeat(10_001) } }));
+    await run(() => props(altField(1)).onChange({ target: { value: LONG } }));
+    await run(() => props(button("Schedule all")).onClick({ currentTarget: null }));
+    expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Three"]);
+    expect(lengthRefusals()).toBe(1);
+    expect(String(container.textContent).split(ALT_TEXT_TOO_LONG_TEXT).length - 1).toBe(1);
     expect(doc.activeElement).toBe(rowInput(1, "TEXTAREA"));
   });
 
