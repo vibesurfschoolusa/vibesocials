@@ -173,28 +173,23 @@ export const CUT_MARK = "…[cut]";
 /** CUT_MARK as a pattern, for a token the cut ended. */
 const CUT_MARK_PATTERN = String.raw`…\[cut\]`;
 
-/**
- * The shortest token the four links issue: connect, upload and review links
- * (generateAccountToken) and join links (generateInviteToken) are all 32
- * random bytes as base64url, 43 characters (isConnectLinkTokenShape and its
- * siblings check exactly that). A shorter segment ("/v/1", "/api/c/settings")
- * is an ordinary path.
- */
-export const LINK_TOKEN_MIN_LENGTH = 43;
-
 /** A path separator: "/", or its encoded forms %2F and %252F, any case. */
 const SEP = String.raw`(?:\/|%2[Ff]|%252[Ff])`;
 
 /**
- * R46 last look: a link path anywhere in the text, whatever comes before it
- * (an encoded line break, a non-breaking space, a letter), with each separator
- * plain or encoded. The token is a run of base64url characters at least
- * {@link LINK_TOKEN_MIN_LENGTH} long, or any run the length cut left at the
- * end of the text. Every start is a separator and each run is scanned once.
+ * R46 last look: a link path wherever it stands in the text, whatever comes
+ * before it (an encoded line break, a non-breaking space, a letter), each
+ * separator plain or encoded. The token is the whole segment after it, at any
+ * length, up to the next "/", "?", "#" or whitespace (as main's rule), so a
+ * damaged token (cut short, a character changed, a zero-width space pasted
+ * in) is hidden too. It may run over an encoded separator, and an ordinary
+ * short segment ("/v/1") is hidden as well: both are accepted over-redaction.
+ * It stops before the length cut's mark. Each match ends where the next
+ * starts, so the pass is linear.
  */
 const LINK_TOKEN_PATH = new RegExp(
   `(${SEP}(?:c|u|v|join|api${SEP}(?:connect-link|review-link|upload-link|invites))${SEP})` +
-    `(?:[A-Za-z0-9_-]{${LINK_TOKEN_MIN_LENGTH},}|[A-Za-z0-9_-]+(?=${CUT_MARK_PATTERN}$))`,
+    String.raw`(?:(?!${CUT_MARK_PATTERN}$)[^/?#\s])+`,
   "g",
 );
 

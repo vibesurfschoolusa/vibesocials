@@ -4,7 +4,6 @@ import {
   CUT_MARK,
   FILTERED_VALUE,
   LINK_TOKEN,
-  LINK_TOKEN_MIN_LENGTH,
   MAX_REDACTED_LENGTH,
   SENTRY_DATA_COLLECTION,
   redactBreadcrumb,
@@ -321,7 +320,6 @@ describe("redactLinkTokens", () => {
     "/dashboard",
     "/c",
     "/c/",
-    "/settings/connections/c/abc",
     "/api/invites",
     "/api/posts/abc",
     "https://vibesocials.wtf/join",
@@ -557,8 +555,9 @@ describe("redactForSentry: nothing private in the whole event", () => {
     const out = redactForSentry(event);
     expect(out.contexts.nextjs).toEqual({ request_path: "/api/review-link/[token]?x=[Filtered]", router_kind: "App Router" });
     expect(out.tags).toEqual({ path: "/v/[token]", runtime: "nodejs" });
-    // R46 last look: an encoded link path is redacted where it stands, still encoded.
-    expect(out.extra.link).toBe("%2Fapi%2Fupload-link%2F[token]%2Fupload");
+    // R46 last look: an encoded link path is redacted where it stands, still
+    // encoded; the segment runs over the encoded "/" after it (accepted).
+    expect(out.extra.link).toBe("%2Fapi%2Fupload-link%2F[token]");
     expect(out.extra.nested.deeper[0].url).toBe("/api/invites/[token]/accept");
     expect(out.exception.values[0].value).toBe("lookup failed for /api/connect-link/[token]/start");
     expect(out.request.method).toBe("GET");
@@ -835,38 +834,31 @@ describe("the decoded pass survives a broken escape", () => {
   });
 });
 
-// R46 last look: link-token redaction no longer depends on what comes before
-// the path. Every link token is 32 random bytes as base64url, 43 characters.
+// R46 last look: link-token redaction does not depend on what comes before the
+// path, and takes the whole segment after it at any length, so a damaged token
+// (cut short, a character changed, a zero-width space pasted in) is hidden too.
 describe("link paths anywhere in the text", () => {
   const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdE";
-
-  it("the shortest real token is the length the redaction requires", async () => {
-    const { generateInviteToken } = await import("./inviteToken");
-    const { generateAccountToken } = await import("./accountToken");
-    const { isConnectLinkTokenShape } = await import("./connectLink");
-    const { isUploadLinkTokenShape } = await import("./uploadLink");
-    const { isReviewLinkTokenShape } = await import("./reviewLink");
-    expect(TOKEN).toHaveLength(LINK_TOKEN_MIN_LENGTH);
-    expect(generateInviteToken().raw).toHaveLength(LINK_TOKEN_MIN_LENGTH);
-    expect(generateAccountToken().raw).toHaveLength(LINK_TOKEN_MIN_LENGTH);
-    expect([isConnectLinkTokenShape(TOKEN), isUploadLinkTokenShape(TOKEN), isReviewLinkTokenShape(TOKEN)]).toEqual([true, true, true]);
-    expect(isConnectLinkTokenShape(TOKEN.slice(1))).toBe(false);
-  });
-
-  const WHITESPACE = ["%0A", "%09", "%0D%0A", "%C2%A0", "%E2%80%A8", "%E3%80%80"];
-  const PATHS = (prefix: string) => [`%2F${prefix}%2F${TOKEN}`, `/${prefix}/${TOKEN}`];
+  const DAMAGED = {
+    cut: TOKEN.slice(0, 40),
+    changed: `${TOKEN.slice(0, 20)}.${TOKEN.slice(21)}`,
+    zeroWidth: `${TOKEN.slice(0, 20)}%E2%80%8B${TOKEN.slice(20)}`,
+  };
+  const WHITESPACE = ["%0A", "%09", "%0D%0A", "%C2%A0", "%E2%80%A8", "%E3%80%80", " ", ""];
+  /** What must not show of a token: its parts on both sides of any damage. */
+  const parts = (token: string) => [token.slice(0, 12), token.slice(-12)];
 
   it.each(["c", "u", "v", "join", "api/connect-link", "api/invites"])(
-    "an encoded whitespace before an encoded or plain /%s/ path is redacted",
+    "a whole, cut, changed or zero-width-spaced token after /%s/ is redacted behind every whitespace",
     (prefix) => {
-      for (const space of WHITESPACE) {
-        for (const path of PATHS(prefix.replace("/", "%2F"))) {
-          const out = redactForSentry({ message: `x${space}${path}` }).message;
-          expect(out, `${space} ${path}`).not.toContain(TOKEN);
-          expect(out, `${space} ${path}`).toContain(LINK_TOKEN);
+      for (const token of [TOKEN, DAMAGED.cut, DAMAGED.changed, DAMAGED.zeroWidth]) {
+        for (const space of WHITESPACE) {
+          for (const path of [`%2F${prefix.replace("/", "%2F")}%2F${token}`, `/${prefix}/${token}`]) {
+            const out = redactForSentry({ message: `x${space}${path}` }).message;
+            for (const part of parts(token)) expect(out, `${space} ${path}`).not.toContain(part);
+            expect(out, `${space} ${path}`).toContain(LINK_TOKEN);
+          }
         }
-        const plain = redactForSentry({ message: `x${space}/${prefix}/${TOKEN}` }).message;
-        expect(plain).not.toContain(TOKEN);
       }
     },
   );
@@ -875,30 +867,45 @@ describe("link paths anywhere in the text", () => {
     [`€/c/${TOKEN}`, `€/c/${LINK_TOKEN}`],
     [`%252Fc%252F${TOKEN}`, `%252Fc%252F${LINK_TOKEN}`],
     [`abc/c/${TOKEN}`, `abc/c/${LINK_TOKEN}`],
-    [`%2fu%2f${TOKEN}%2Fupload`, `%2fu%2f${LINK_TOKEN}%2Fupload`],
+    [`%2fu%2f${TOKEN}?x=1`, `%2fu%2f${LINK_TOKEN}?x=${FILTERED_VALUE}`],
     [`/join%2F${TOKEN}`, `/join%2F${LINK_TOKEN}`],
+    [`/c/${DAMAGED.changed}/next`, `/c/${LINK_TOKEN}/next`],
   ])("%s is redacted", (input, output) => {
     expect(redactForSentry({ message: input }).message).toBe(output);
   });
 
-  it.each(["/v/1", "/api/c/settings", "/settings/connections/c/abc", "/u/profile-photo", "/c/2026-11-19-launch-notes", `/c/${TOKEN.slice(1)}x`.slice(0, 20)])(
-    "%s, a short last part, is left as it is",
-    (input) => {
-      expect(redactForSentry({ message: input }).message).toBe(input);
-    },
-  );
+  // Accepted over-redaction: a short ordinary segment after a link path is hidden too.
+  it.each([
+    ["/v/1", "/v/[token]"],
+    ["/api/c/settings", "/api/c/[token]"],
+    ["/settings/connections/c/abc", "/settings/connections/c/[token]"],
+  ])("%s, a short segment after a link path, reads %s", (input, output) => {
+    expect(redactForSentry({ message: input }).message).toBe(output);
+  });
 
-  it("stays fast on runs of near-token paths", () => {
-    for (const text of ["/c/x".repeat(10_000), `%2Fc%2F${"a".repeat(42)}`.repeat(800), "/c/".repeat(15_000), `/join/${"b".repeat(42)}-`.repeat(700)]) {
+  it("stays fast on runs of link paths", () => {
+    for (const text of [
+      "/c/a".repeat(40_000),
+      "/c/x".repeat(10_000),
+      `%2Fc%2F${"a".repeat(42)}`.repeat(800),
+      "/c/".repeat(15_000),
+      `/join/${"b".repeat(42)}-`.repeat(700),
+    ]) {
       const started = performance.now();
       redactForSentry({ message: text, extra: { a: text, b: [text, text] } });
       expect(performance.now() - started).toBeLessThan(50);
     }
   });
 
-  it("nothing main redacted reaches the output now", () => {
-    const tokens = Array.from({ length: 6 }, (_, i) => `${String(i).repeat(3)}${TOKEN.slice(3)}`);
-    const [a, b, c, d, e, f] = tokens;
+  it("nothing main redacted reaches the output now, whole, damaged or short", () => {
+    const tokens = [
+      ...Array.from({ length: 6 }, (_, i) => `${String(i).repeat(3)}${TOKEN.slice(3)}`),
+      DAMAGED.cut,
+      DAMAGED.changed,
+      "SHORT1",
+      "a",
+    ];
+    const [a, b, c, d, e, f, cut, changed, short, tiny] = tokens;
     const inputs = [
       `/c/${a}`,
       `GET /u/${b}?x=1`,
@@ -915,17 +922,23 @@ describe("link paths anywhere in the text", () => {
       `Upload 100% done, %2Fc%2F${a}`,
       `see /c/${b} and /u/${c} then /v/${d}`,
       `https://vibesocials.wtf/api/review-link/${e}/posts/p1`,
-      `\t/c/${f}`,
+      `	/c/${f}`,
+      `/c/${cut}`,
+      `GET https://vibesocials.wtf/u/${changed}`,
+      `%0A%2Fv%2F${cut}`,
+      `/v/${short}`,
+      `/join/${tiny}`,
+      `x /c/${changed}?a=1`,
+      `${"a".repeat(4_090)} /c/${cut}`,
     ];
     for (const input of inputs) {
       const before = mainRedactString(input);
       const now = redactForSentry({ message: input }).message;
       for (const token of tokens) {
+        if (token.length < 3) continue;
         if (input.includes(token) && !before.includes(token)) expect(now, input).not.toContain(token);
       }
-      // Nothing main kept hidden by filtering shows now either.
-      if (!before.includes("[Filtered]")) continue;
-      expect(now, input).toContain("[Filtered]");
+      if (before.includes("[Filtered]")) expect(now, input).toContain("[Filtered]");
     }
   });
 });
