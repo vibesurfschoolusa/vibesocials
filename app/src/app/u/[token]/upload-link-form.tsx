@@ -67,19 +67,27 @@ type FileState = Pick<PickedFile, "key" | "status">;
 type Kinds = Partial<Record<string, ClientFileFailureKind>>;
 
 /**
+ * R47 client-journey L1: a file refused for itself (send-file.ts's "file") is
+ * refused again as it is, so no press sends it; Send more starts over.
+ */
+function canResend(item: FileState, kinds: Kinds): boolean {
+  return item.status !== "failed" || kinds[item.key] !== "file";
+}
+
+/**
  * R29 client-journey L1: the files the next press sends. Every file not yet
  * sent, except one that may have arrived; those go only when nothing else is
  * left, from the button that warns first (retryOffer).
  */
 export function filesToSend(files: FileState[], kinds: Kinds): string[] {
-  const unsent = files.filter((item) => item.status !== "sent");
+  const unsent = files.filter((item) => item.status !== "sent" && canResend(item, kinds));
   const sure = unsent.filter((item) => item.status !== "failed" || kinds[item.key] !== "maybe");
   return (sure.length > 0 ? sure : unsent).map((item) => item.key);
 }
 
 /** The retry button after a send, and the warning shown with it; null when nothing is left to send. */
 export function retryOffer(files: FileState[], kinds: Kinds): { label: string; warning: string | null } | null {
-  const failed = files.filter((item) => item.status === "failed");
+  const failed = files.filter((item) => item.status === "failed" && canResend(item, kinds));
   if (failed.length === 0) return null;
   const sure = failed.filter((item) => kinds[item.key] !== "maybe");
   if (sure.length > 0) {
@@ -119,14 +127,14 @@ function nameList(failures: SummaryFailure[]): string {
 function uncertainText(failures: SummaryFailure[]): string {
   const maybe = failures.filter((failure) => failure.kind === "maybe");
   const unsent = failures.filter((failure) => failure.kind !== "maybe");
+  const retried = unsent.filter((failure) => failure.kind !== "file");
   const one = maybe.length === 1;
   const parts = [
     `${nameList(maybe)} may have arrived, but this page couldn't confirm ${one ? "it" : "them"}. If you send ${one ? "it" : "them"} again, ${one ? "it" : "they"} may arrive twice.`,
   ];
   if (unsent.length > 0) {
-    parts.push(
-      `${nameList(unsent)} didn't arrive: the reason is under ${unsent.length === 1 ? "it" : "each file"}. The button below tries only ${nameList(unsent)} again.`,
-    );
+    parts.push(`${nameList(unsent)} didn't arrive: the reason is under ${unsent.length === 1 ? "it" : "each file"}.`);
+    if (retried.length > 0) parts.push(`The button below tries only ${nameList(retried)} again.`);
   }
   return parts.join(" ");
 }

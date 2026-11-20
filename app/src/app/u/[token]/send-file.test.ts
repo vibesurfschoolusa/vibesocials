@@ -12,7 +12,13 @@ import {
 
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 
-import { CLIENT_FILE_MAYBE_ARRIVED_MESSAGE, ClientFileError, sendClientFile, type SendFileDeps } from "./send-file";
+import {
+  CLIENT_FILE_MAYBE_ARRIVED_MESSAGE,
+  ClientFileError,
+  prepareLinkFile,
+  sendClientFile,
+  type SendFileDeps,
+} from "./send-file";
 
 const TOKEN = "T".repeat(43);
 
@@ -176,9 +182,25 @@ describe("sendClientFile", () => {
       expect(await failure()).toMatchObject({ kind: "refused", message: "limit sentence" });
     });
 
-    it("refused when the file cannot be prepared", async () => {
+    // R47 client-journey L1: sending the same File again is refused the same way,
+    // so the file's own refusal has a kind the retry button leaves out.
+    it("the file's own kind when the file cannot be prepared", async () => {
       deps.prepare.mockRejectedValue(new Error("We couldn't convert this iPhone (HEIC) photo."));
-      expect(await failure()).toMatchObject({ kind: "refused", message: "We couldn't convert this iPhone (HEIC) photo." });
+      expect(await failure()).toMatchObject({ kind: "file", message: "We couldn't convert this iPhone (HEIC) photo." });
+    });
+
+    it("a typeless IMG_0042: the file's own kind, and the step names Send more", async () => {
+      deps.prepare.mockImplementation(prepareLinkFile);
+      const error = await sendClientFile(input({ file: new File(["abc"], "IMG_0042", { type: "" }) }), deps).then(
+        () => null,
+        (caught: ClientFileError) => caught,
+      );
+      expect(error).toMatchObject({
+        kind: "file",
+        message:
+          "We couldn't tell what kind of file this is. If it's a photo or video, add .jpg or .mp4 to the end of its name, then press Send more and choose it again. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
+      });
+      expect(deps.fetch).not.toHaveBeenCalled();
     });
   });
 });

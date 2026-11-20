@@ -39,8 +39,13 @@ export interface SendFileDeps {
   fetch: (url: string, init: RequestInit) => Promise<Response>;
 }
 
+/** Prepared as on Create, with the step for a type that can't be told naming /u's Send more. */
+export function prepareLinkFile(file: File): Promise<File> {
+  return prepareUploadFile(file, undefined, "sendMore");
+}
+
 const browserDeps: SendFileDeps = {
-  prepare: (file) => prepareUploadFile(file),
+  prepare: prepareLinkFile,
   put: (pathname, body, options) => put(pathname, body, options),
   fetch: (url, init) => fetchOrNoAnswer(url, init),
 };
@@ -53,13 +58,15 @@ export const CLIENT_FILE_MAYBE_ARRIVED_MESSAGE = answerLostText("the file may ha
  * Why a file did not arrive. "network": the request or the upload never got a
  * usable answer before the file was in storage, so nothing arrived and
  * retrying on a working connection may help. "refused": the server (link off,
- * storage full, today's limit) or the file itself said no, and the sentence
- * says why. "maybe" (R29 client-journey L1): the last step's answer was lost
+ * storage full, today's limit) said no, and the sentence says why. "file"
+ * (R47 client-journey L1): the file itself was refused before sending (its
+ * type, a HEIC that won't convert); the same File is refused again, so it is
+ * never retried and the sentence names the step that works. "maybe" (R29 client-journey L1): the last step's answer was lost
  * or unreadable, so the file may have arrived and sending it again may make a
  * copy. Set where the failure is detected, so the upload page decides from the
  * kind and never from a sentence's words.
  */
-export type ClientFileFailureKind = "network" | "refused" | "maybe";
+export type ClientFileFailureKind = "network" | "refused" | "file" | "maybe";
 
 export interface ClientFileFailure {
   kind: ClientFileFailureKind;
@@ -143,7 +150,7 @@ export async function sendClientFile(
   } catch (error) {
     // The file itself was refused (a photo that cannot be converted, a type that is not accepted).
     throw new ClientFileError(
-      "refused",
+      "file",
       error instanceof Error && error.message ? error.message : "This file can't be sent. Choose a photo or video.",
     );
   }

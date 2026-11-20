@@ -130,6 +130,14 @@ describe("UploadSummary: files that may have arrived", () => {
     expect(html).toContain("The button below tries only b.jpg again.");
   });
 
+  // R47 client-journey L1: the button never sends a file refused for itself, so the sentence doesn't say it does.
+  it("maybe beside a file refused for itself: the button isn't said to try the refused one", () => {
+    const refusedFile: ClientFileFailure = { kind: "file", message: "We couldn't tell what kind of file this is." };
+    const html = render(0, [{ ...maybe, name: "a.jpg" }, { ...refusedFile, name: "IMG_0042" }]);
+    expect(html).toContain("IMG_0042 didn&#x27;t arrive");
+    expect(html).not.toContain("The button below tries only");
+  });
+
   it("mixed with sent files: a status naming the file that may have arrived", () => {
     const html = render(2, [{ ...maybe, name: "a.jpg" }, { ...network, name: "b.jpg" }], 4);
     expect(html).toMatch(/<div role="alert" class="empty:sr-only"><\/div><div role="status"/);
@@ -171,6 +179,37 @@ describe("filesToSend and retryOffer: the retry leaves out files that may have a
     const kinds = { a: "maybe", b: "network", c: "refused" } as const;
     expect(filesToSend(files, kinds)).toEqual(["b", "c"]);
     expect(retryOffer(files, kinds)).toEqual({ label: "Try the 2 files that didn't send", warning: null });
+  });
+
+  // R47 client-journey L1: a file refused for itself (its type, a HEIC that
+  // won't convert) is refused again as it is, so no button offers it.
+  it("a file refused for itself: no retry offer for it", () => {
+    expect(retryOffer([item("a", "failed")], { a: "file" })).toBeNull();
+    expect(filesToSend([item("a", "failed")], { a: "file" })).toEqual([]);
+  });
+
+  it("a network failure is still offered for retry", () => {
+    expect(retryOffer([item("a", "failed")], { a: "network" })).toEqual({
+      label: "Try the file that didn't send",
+      warning: null,
+    });
+  });
+
+  it("one refused file plus one network failure: retry for the network one only", () => {
+    const files = [item("a", "failed"), item("b", "failed")];
+    const kinds = { a: "file", b: "network" } as const;
+    expect(retryOffer(files, kinds)).toEqual({ label: "Try the file that didn't send", warning: null });
+    expect(filesToSend(files, kinds)).toEqual(["b"]);
+  });
+
+  it("a refused file beside a maybe file: the warning button sends only the maybe one", () => {
+    const files = [item("a", "failed"), item("b", "failed")];
+    const kinds = { a: "file", b: "maybe" } as const;
+    expect(retryOffer(files, kinds)).toEqual({
+      label: "Send the file again anyway",
+      warning: "It may already have arrived: sending it again may make a second copy.",
+    });
+    expect(filesToSend(files, kinds)).toEqual(["b"]);
   });
 
   it("only maybe files left: sent again only on a button that warns first", () => {
