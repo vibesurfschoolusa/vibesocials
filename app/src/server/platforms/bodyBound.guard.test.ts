@@ -56,12 +56,10 @@ function unboundedRequests(source: string): string[] {
     const call = callText(code, match.index, match.index + match[0].length - 1);
     if (!/\bsignal:\s*AbortSignal\.timeout\(/.test(call)) found.push("fetchWithTimeout without a whole-transfer signal");
   }
-  for (const _ of code.matchAll(/(?<![\w$.])fetch\s*\(|\b(?:globalThis|window|self)\.fetch\s*\(/g)) {
-    found.push("bare fetch");
-  }
-  for (const _ of code.matchAll(/(?<![\w$.])fetchWithTimeout\b(?!\s*\()/g)) {
-    found.push("fetchWithTimeout passed as a value");
-  }
+  const bare = code.match(/(?<![\w$.])fetch\s*\(|\b(?:globalThis|window|self)\.fetch\s*\(/g) ?? [];
+  found.push(...bare.map(() => "bare fetch"));
+  const passed = code.match(/(?<![\w$.])fetchWithTimeout\b(?!\s*\()/g) ?? [];
+  found.push(...passed.map(() => "fetchWithTimeout passed as a value"));
   return found;
 }
 
