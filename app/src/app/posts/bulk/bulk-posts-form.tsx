@@ -528,11 +528,23 @@ export function BulkPostsForm({
     const file = filesRef.current.get(id);
     if (!file) return;
     updateRow(id, { upload: "working", progress: null, uploadError: null, uploadErrorKind: null, sendError: null });
-    let preparing = true;
+    // Same preparation as Create: HEIC -> JPEG, big photos shrunk, unsupported types refused.
+    // R48 publishing L4: a refusal here is the file's own, before anything is
+    // sent, so a Retry would refuse it again: only Remove is offered.
+    let prepared: File;
     try {
-      // Same preparation as Create: HEIC -> JPEG, big photos shrunk, unsupported types refused.
-      const prepared = await prepareUploadFile(file);
-      preparing = false;
+      prepared = await prepareUploadFile(file);
+    } catch (error: unknown) {
+      console.error("[Add many] File refused", error);
+      updateRow(id, {
+        upload: "failed",
+        progress: null,
+        uploadErrorKind: "file",
+        uploadError: errorMessage(error, BULK_FILE_REFUSED_TEXT),
+      });
+      return;
+    }
+    try {
       filesRef.current.set(id, prepared);
       // A photo's thumbnail is the prepared file (a HEIC original would not show).
       // A video's comes from the frames read for its caption (captionRow).
@@ -576,10 +588,8 @@ export function BulkPostsForm({
       updateRow(id, {
         upload: "failed",
         progress: null,
-        uploadErrorKind: preparing ? "file" : "network",
-        uploadError: preparing
-          ? errorMessage(error, BULK_FILE_REFUSED_TEXT)
-          : errorMessage(error, "The upload failed. Retry it or remove it."),
+        uploadErrorKind: "network",
+        uploadError: errorMessage(error, "The upload failed. Retry it or remove it."),
       });
     }
   }
