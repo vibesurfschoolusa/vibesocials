@@ -122,6 +122,14 @@ function sized(name: string, type: string, size: number): File {
   return file;
 }
 
+/** Tomorrow at 12:00 local, as a datetime-local value: always in the future. */
+function tomorrowNoon(): string {
+  const now = new Date(Date.now());
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T12:00`;
+}
+
 const TOO_LARGE = "This file is over 512 MB. Choose a shorter or smaller one.";
 const EMPTY = "This file is empty (0 bytes). Choose another file.";
 
@@ -199,7 +207,7 @@ describe("R50 pages-b L1: a file that can never be added", () => {
   ])("%s: the first press stops with the two steps, the second goes through", async (mode, label, confirms) => {
     await typeCaption("Surf lesson today");
     await chooseMode(mode);
-    if (mode === "Schedule") await run(() => props(byId("post-schedule")).onChange({ target: { value: "2099-06-10T12:00" } }));
+    if (mode === "Schedule") await run(() => props(byId("post-schedule")).onChange({ target: { value: tomorrowNoon() } }));
     await pick(sized("long.mp4", "video/mp4", 600 * 1024 * 1024));
 
     await submit();
