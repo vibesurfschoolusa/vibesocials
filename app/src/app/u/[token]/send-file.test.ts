@@ -11,6 +11,8 @@ import {
 } from "@/lib/uploadLink";
 
 import { NoAnswerError } from "@/lib/requestNoAnswer";
+import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
+import { HeicConverterNotLoadedError, MAX_UPLOAD_PHOTO_BYTES, PrepareFileError } from "@/lib/prepareUploadFile";
 
 import {
   CLIENT_FILE_MAYBE_ARRIVED_MESSAGE,
@@ -113,7 +115,7 @@ describe("sendClientFile", () => {
   });
 
   it("passes on the message when the file cannot be prepared", async () => {
-    deps.prepare.mockRejectedValue(new Error("We couldn't convert this iPhone (HEIC) photo."));
+    deps.prepare.mockRejectedValue(new PrepareFileError("file", "We couldn't convert this iPhone (HEIC) photo."));
     await expect(sendClientFile(input(), deps)).rejects.toThrow("We couldn't convert");
     expect(deps.fetch).not.toHaveBeenCalled();
   });
@@ -185,8 +187,69 @@ describe("sendClientFile", () => {
     // R47 client-journey L1: sending the same File again is refused the same way,
     // so the file's own refusal has a kind the retry button leaves out.
     it("the file's own kind when the file cannot be prepared", async () => {
-      deps.prepare.mockRejectedValue(new Error("We couldn't convert this iPhone (HEIC) photo."));
+      deps.prepare.mockRejectedValue(new PrepareFileError("file", "We couldn't convert this iPhone (HEIC) photo."));
       expect(await failure()).toMatchObject({ kind: "file", message: "We couldn't convert this iPhone (HEIC) photo." });
+    });
+
+    // R48 client-journey L1: the browser's own words never reach the client.
+    it("a preparation error that isn't ours: a plain sentence, never the browser's words", async () => {
+      deps.prepare.mockRejectedValue(new Error("The source image could not be decoded."));
+      const error = await failure();
+      expect(error.kind).toBe("file");
+      expect(error.message).not.toContain("decoded");
+      expect(error.message).toContain("press Send more and choose it again");
+    });
+
+    it("a converter that didn't download: network, so the retry is offered", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const offline = {
+        convertHeicToJpeg: vi.fn(async () => {
+          throw new HeicConverterNotLoadedError(new TypeError("Failed to fetch dynamically imported module"));
+        }),
+        reencodeAsJpeg: vi.fn(),
+      };
+      deps.prepare.mockImplementation((file: File) => prepareLinkFile(file, offline));
+      expect(await failure()).toMatchObject({
+        kind: "network",
+        message: "We couldn't load the iPhone photo converter. Check your connection and try again.",
+      });
+      expect(deps.fetch).not.toHaveBeenCalled();
+    });
+
+    it("a photo that can't be made smaller: sent as it is when the upload takes it", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const undecodable = {
+        convertHeicToJpeg: vi.fn(),
+        reencodeAsJpeg: vi.fn(async () => {
+          throw new Error("The source image could not be decoded.");
+        }),
+      };
+      deps.prepare.mockImplementation((file: File) => prepareLinkFile(file, undecodable));
+      const big = new File([new Uint8Array(MAX_UPLOAD_PHOTO_BYTES + 1)], "big.jpg", { type: "image/jpeg" });
+      await sendClientFile(input({ file: big }), deps);
+      expect(deps.put).toHaveBeenCalledWith(expect.any(String), big, expect.anything());
+    });
+
+    it("a photo that can't be made smaller and is too large to send: the file's own kind, with Send more", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const undecodable = {
+        convertHeicToJpeg: vi.fn(),
+        reencodeAsJpeg: vi.fn(async () => {
+          throw new Error("The source image could not be decoded.");
+        }),
+      };
+      deps.prepare.mockImplementation((file: File) => prepareLinkFile(file, undecodable));
+      const huge = new File([new Uint8Array(MAX_UPLOAD_PHOTO_BYTES + 1)], "huge.jpg", { type: "image/jpeg" });
+      Object.defineProperty(huge, "size", { value: MAX_MEDIA_BYTES + 1 });
+      const error = await sendClientFile(input({ file: huge }), deps).then(
+        () => null,
+        (caught: ClientFileError) => caught,
+      );
+      expect(error).toMatchObject({
+        kind: "file",
+        message: "We couldn't make this photo smaller. Save it as a smaller JPEG, then press Send more and choose it again.",
+      });
+      expect(deps.fetch).not.toHaveBeenCalled();
     });
 
     // R47 lead review: a HEIC that won't convert is refused again as it is; on /u the step names Send more.

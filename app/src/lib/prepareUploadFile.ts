@@ -1,5 +1,5 @@
 import { extensionOf, withoutExtension } from "./fileExtension";
-import { UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
+import { MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "./mediaInput";
 
 /**
  * Prepares a picked file in the browser before it is uploaded (create post and
@@ -71,9 +71,11 @@ export const UNKNOWN_TYPE_MESSAGE = `${CANT_TELL} ${ANY_TYPE_STEP}`;
  * Media library. "sendMore" (R47 client-journey L1): /u, where the picker is
  * gone once the files were tried and Send more brings it back. "photoPick"
  * (R47 client-journey L3): Create's pick of several photos, where the file
- * must be named and a GIF or a video would be refused anyway.
+ * must be named and a GIF or a video would be refused anyway. "addMany" (R48
+ * client-journey L1): Add many, whose failed row has Retry and Remove; it is
+ * worded as "choose" except where the step must name those controls.
  */
-export type UnknownTypeContext = "choose" | "sendMore" | "photoPick";
+export type UnknownTypeContext = "choose" | "sendMore" | "photoPick" | "addMany";
 
 /**
  * R46 review: the one sentence for a file whose type can't be told (no browser
@@ -98,6 +100,33 @@ export function unknownTypeMessage(name: string, context: UnknownTypeContext = "
 
 /** The sentence a typeless file whose name has no extension gets where it is chosen again. */
 export const NO_EXTENSION_MESSAGE = unknownTypeMessage("IMG_0042");
+
+/**
+ * R48 client-journey L1: how a preparation failed, so /u decides its retry
+ * from the kind and never from words. "file": the file itself is refused, and
+ * the same file is refused again. "network": the HEIC converter didn't
+ * download, so trying again on a working connection may work.
+ */
+export type PrepareFailureKind = "file" | "network";
+
+/** The only error prepareUploadFile throws: a plain sentence with the screen's step, never the browser's words. */
+export class PrepareFileError extends Error {
+  constructor(
+    readonly kind: PrepareFailureKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PrepareFileError";
+  }
+}
+
+/** Thrown by convertHeicToJpeg when the converter's code itself didn't download. */
+export class HeicConverterNotLoadedError extends Error {
+  constructor(cause: unknown) {
+    super("The HEIC converter did not load", { cause });
+    this.name = "HeicConverterNotLoadedError";
+  }
+}
 
 /** The message for a type the upload route would refuse; "" is a type that can't be told. */
 export function unsupportedTypeMessage(type: string): string {
@@ -139,6 +168,31 @@ export function heicConversionFailedMessage(context: UnknownTypeContext = "choos
     : HEIC_CONVERSION_FAILED_MESSAGE;
 }
 
+function sentenceStart(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** R48 client-journey L1: the converter didn't download; a retry on a working connection may work. */
+function converterNotLoadedMessage(name: string, context: UnknownTypeContext): string {
+  const failed = "we couldn't load the iPhone photo converter.";
+  if (context === "photoPick") return `${name}: ${failed} Check your connection, then choose the photos again.`;
+  const lead = sentenceStart(failed);
+  if (context === "sendMore") return `${lead} Check your connection and try again.`;
+  if (context === "addMany") return `${lead} Check your connection, then press Retry.`;
+  return `${lead} Check your connection, then choose the photo again.`;
+}
+
+/** R48 client-journey L1: the browser couldn't redraw a photo too large to send as it is. */
+function shrinkFailedMessage(name: string, context: UnknownTypeContext): string {
+  const failed = "we couldn't make this photo smaller. Save it as a smaller JPEG,";
+  if (context === "photoPick") return `${name}: ${failed} then choose the photos again.`;
+  if (context === "addMany") {
+    return "We couldn't make this photo smaller. Remove it, save it as a smaller JPEG, then add it with Choose photos and videos.";
+  }
+  const lead = sentenceStart(failed);
+  return context === "sendMore" ? `${lead} then press Send more and choose it again.` : `${lead} then choose it again.`;
+}
+
 /**
  * The type `file` will have once prepareUploadFile is done, decided the same
  * way without doing the work: a HEIC becomes a JPEG, a JPEG, WebP or PNG over
@@ -171,7 +225,10 @@ export async function prepareUploadFile(
       jpeg = await deps.convertHeicToJpeg(file, HEIC_JPEG_QUALITY);
     } catch (error) {
       console.error("[prepareUploadFile] HEIC conversion failed", error);
-      throw new Error(heicConversionFailedMessage(context));
+      if (error instanceof HeicConverterNotLoadedError) {
+        throw new PrepareFileError("network", converterNotLoadedMessage(file.name, context));
+      }
+      throw new PrepareFileError("file", heicConversionFailedMessage(context));
     }
     prepared = new File([jpeg], jpegFileName(file.name), {
       type: "image/jpeg",
@@ -181,14 +238,25 @@ export async function prepareUploadFile(
 
   const type = uploadTypeOf(prepared);
   if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(type)) {
-    throw new Error(type === "" ? unknownTypeMessage(prepared.name, context) : unsupportedTypeMessage(type));
+    throw new PrepareFileError(
+      "file",
+      type === "" ? unknownTypeMessage(prepared.name, context) : unsupportedTypeMessage(type),
+    );
   }
   if (type !== prepared.type) {
     prepared = new File([prepared], prepared.name, { type, lastModified: prepared.lastModified });
   }
 
   if (SHRINKABLE_TYPES.has(prepared.type) && prepared.size > MAX_UPLOAD_PHOTO_BYTES) {
-    prepared = await shrinkPhoto(prepared, deps);
+    try {
+      prepared = await shrinkPhoto(prepared, deps);
+    } catch (error) {
+      // A photo too big or damaged for this browser to redraw: as it is, when the upload takes it.
+      console.error("[prepareUploadFile] shrinking the photo failed", error);
+      if (prepared.size > MAX_MEDIA_BYTES) {
+        throw new PrepareFileError("file", shrinkFailedMessage(file.name, context));
+      }
+    }
   }
 
   return prepared;
@@ -209,7 +277,12 @@ const browserDeps: PrepareUploadDeps = {
   async convertHeicToJpeg(file, quality) {
     // Loaded only when a HEIC photo is picked (it is about 3 MB). The /csp build
     // needs no `unsafe-eval`, so a future Content-Security-Policy cannot break it.
-    const { heicTo } = await import("heic-to/csp");
+    let heicTo: typeof import("heic-to/csp").heicTo;
+    try {
+      ({ heicTo } = await import("heic-to/csp"));
+    } catch (error) {
+      throw new HeicConverterNotLoadedError(error);
+    }
     return heicTo({ blob: file, type: "image/jpeg", quality });
   },
 

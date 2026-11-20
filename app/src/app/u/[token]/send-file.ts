@@ -1,6 +1,6 @@
 import { put } from "@vercel/blob/client";
 
-import { prepareUploadFile, type PrepareUploadDeps } from "@/lib/prepareUploadFile";
+import { PrepareFileError, prepareUploadFile, type PrepareUploadDeps } from "@/lib/prepareUploadFile";
 import { answerLostText } from "@/lib/answerLost";
 import { waitSecondsOf, waitText } from "@/lib/tooManyTriesText";
 import {
@@ -50,6 +50,9 @@ const browserDeps: SendFileDeps = {
   fetch: (url, init) => fetchOrNoAnswer(url, init),
 };
 
+/** R48 client-journey L1: a preparation error that isn't prepareUploadFile's own sentence, whose words are never shown. */
+const NOT_PREPARED_MESSAGE =
+  "We couldn't get this file ready to send. Save it as a JPEG photo or an MP4 video, then press Send more and choose it again.";
 const UPLOAD_FAILED_MESSAGE = "The upload didn't finish. Check your connection and try again.";
 /** R28 NN2: the file is in storage; only the answer to registering it was lost, so it may have arrived. */
 export const CLIENT_FILE_MAYBE_ARRIVED_MESSAGE = answerLostText("the file may have arrived", "If you send it again, it may arrive twice.");
@@ -60,7 +63,8 @@ export const CLIENT_FILE_MAYBE_ARRIVED_MESSAGE = answerLostText("the file may ha
  * retrying on a working connection may help. "refused": the server (link off,
  * storage full, today's limit) said no, and the sentence says why. "file"
  * (R47 client-journey L1): the file itself was refused before sending (its
- * type, a HEIC that won't convert); the same File is refused again, so it is
+ * type, a HEIC that won't convert, a photo too large to send that can't be
+ * made smaller); the same File is refused again, so it is
  * never retried and the sentence names the step that works. "maybe" (R29 client-journey L1): the last step's answer was lost
  * or unreadable, so the file may have arrived and sending it again may make a
  * copy. Set where the failure is detected, so the upload page decides from the
@@ -148,11 +152,10 @@ export async function sendClientFile(
   try {
     prepared = await deps.prepare(input.file);
   } catch (error) {
-    // The file itself was refused (a photo that cannot be converted, a type that is not accepted).
-    throw new ClientFileError(
-      "file",
-      error instanceof Error && error.message ? error.message : "This file can't be sent. Choose a photo or video.",
-    );
+    // The file itself was refused (a photo that cannot be converted, a type that is not accepted),
+    // or, R48 client-journey L1, the HEIC converter didn't download: "network", so the retry is offered.
+    if (error instanceof PrepareFileError) throw new ClientFileError(error.kind, error.message);
+    throw new ClientFileError("file", NOT_PREPARED_MESSAGE);
   }
   const base = `/api/upload-link/${encodeURIComponent(input.token)}`;
 

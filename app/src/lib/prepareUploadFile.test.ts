@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   HEIC_CONVERSION_FAILED_MESSAGE,
   HEIC_JPEG_QUALITY,
+  HeicConverterNotLoadedError,
   MAX_UPLOAD_PHOTO_BYTES,
   NO_EXTENSION_MESSAGE,
+  PrepareFileError,
   SHRINK_ATTEMPTS,
   UNKNOWN_TYPE_MESSAGE,
   fitWithin,
@@ -17,6 +19,7 @@ import {
   uploadTypeOf,
   type PrepareUploadDeps,
 } from "./prepareUploadFile";
+import { MAX_MEDIA_BYTES } from "./mediaInput";
 
 const bytes = (size: number) => new Uint8Array(size);
 const file = (name: string, type: string, size = 10) => new File([bytes(size)], name, { type });
@@ -280,5 +283,96 @@ describe("uploadTypeOf / unsupportedTypeMessage", () => {
     expect(unsupportedTypeMessage("image/tiff")).toMatch(/^This file type \(image\/tiff\) isn't supported\./);
     expect(unsupportedTypeMessage("")).toBe(UNKNOWN_TYPE_MESSAGE);
     expect(unsupportedTypeMessage(" ")).toBe(UNKNOWN_TYPE_MESSAGE);
+  });
+});
+
+// R48 client-journey L1: a photo the browser can't redraw (a huge or damaged
+// one) threw the browser's own words ("The source image could not be
+// decoded."), and a converter that never downloaded was told to export a JPEG.
+describe("prepareUploadFile: a shrink or a converter that fails", () => {
+  const RAW = "The source image could not be decoded.";
+  const undecodable = () => vi.fn(async () => Promise.reject(new Error(RAW)));
+  const tooLargeToSend = (name: string) => {
+    const picked = file(name, "image/jpeg", MAX_UPLOAD_PHOTO_BYTES + 1);
+    Object.defineProperty(picked, "size", { value: MAX_MEDIA_BYTES + 1 });
+    return picked;
+  };
+  async function refusal(promise: Promise<unknown>): Promise<PrepareFileError> {
+    const error = await promise.then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(PrepareFileError);
+    return error as PrepareFileError;
+  }
+
+  it("sends the original when a shrink fails and the original is within the upload limit", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const original = file("big.jpg", "image/jpeg", 9_000_000);
+    await expect(prepareUploadFile(original, fakeDeps({ reencodeAsJpeg: undecodable() }))).resolves.toBe(original);
+  });
+
+  it("gives the screen's plain step when a shrink fails and the original is too large to send", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({ reencodeAsJpeg: undecodable() });
+    const steps = [
+      ["choose", "We couldn't make this photo smaller. Save it as a smaller JPEG, then choose it again."],
+      ["sendMore", "We couldn't make this photo smaller. Save it as a smaller JPEG, then press Send more and choose it again."],
+      ["photoPick", "huge.jpg: we couldn't make this photo smaller. Save it as a smaller JPEG, then choose the photos again."],
+      [
+        "addMany",
+        "We couldn't make this photo smaller. Remove it, save it as a smaller JPEG, then add it with Choose photos and videos.",
+      ],
+    ] as const;
+    for (const [context, sentence] of steps) {
+      const error = await refusal(prepareUploadFile(tooLargeToSend("huge.jpg"), deps, context));
+      expect(error, context).toMatchObject({ kind: "file", message: sentence });
+      expect(error.message).not.toContain(RAW);
+    }
+  });
+
+  it("a converter that didn't download is a network failure, with a retry step", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({
+      convertHeicToJpeg: vi.fn(async () => Promise.reject(new HeicConverterNotLoadedError(new TypeError("Failed to fetch dynamically imported module")))),
+    });
+    const steps = [
+      ["choose", "We couldn't load the iPhone photo converter. Check your connection, then choose the photo again."],
+      ["sendMore", "We couldn't load the iPhone photo converter. Check your connection and try again."],
+      ["photoPick", "IMG_1.HEIC: we couldn't load the iPhone photo converter. Check your connection, then choose the photos again."],
+      ["addMany", "We couldn't load the iPhone photo converter. Check your connection, then press Retry."],
+    ] as const;
+    for (const [context, sentence] of steps) {
+      const error = await refusal(prepareUploadFile(file("IMG_1.HEIC", "image/heic"), deps, context));
+      expect(error, context).toMatchObject({ kind: "network", message: sentence });
+      expect(error.message).not.toContain("Failed to fetch");
+    }
+  });
+
+  it("a HEIC that can't be converted keeps its sentence, and is the file's own failure", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({ convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))) });
+    const error = await refusal(prepareUploadFile(file("IMG.heic", "image/heic"), deps, "sendMore"));
+    expect(error).toMatchObject({
+      kind: "file",
+      message: "We couldn't convert this iPhone (HEIC) photo. Export it as a JPEG, then press Send more and choose it again.",
+    });
+  });
+
+  it("every refusal is a PrepareFileError of the file's own kind", async () => {
+    const error = await refusal(prepareUploadFile(file("scan.tiff", "image/tiff"), fakeDeps()));
+    expect(error.kind).toBe("file");
+  });
+});
+
+// Add many's row has Retry and Remove; its other sentences are the "choose" ones, unchanged.
+describe("the addMany context", () => {
+  it("keeps the choose wording for a HEIC that won't convert and a type that can't be told", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({ convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))) });
+    await expect(prepareUploadFile(file("IMG.heic", "image/heic"), deps, "addMany")).rejects.toThrow(
+      HEIC_CONVERSION_FAILED_MESSAGE,
+    );
+    await expect(prepareUploadFile(file("IMG_0042", ""), fakeDeps(), "addMany")).rejects.toThrow(NO_EXTENSION_MESSAGE);
   });
 });
