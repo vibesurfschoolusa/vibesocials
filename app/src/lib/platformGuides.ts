@@ -54,6 +54,7 @@ export const PLATFORM_GUIDES: Record<Platform, PlatformGuide> = {
     ],
     tips: [
       "A personal Instagram account cannot be connected.",
+      "If the Page you want is not offered: on Facebook open Settings, Business integrations, remove Vibe Socials, then connect again. Facebook then asks which Pages to share.",
       "Photos are fitted to Instagram's allowed shapes automatically.",
     ],
     status: META_REVIEW,

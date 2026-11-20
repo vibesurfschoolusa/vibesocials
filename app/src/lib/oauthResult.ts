@@ -1,4 +1,5 @@
 import type { Platform } from "@prisma/client";
+import { signInTo } from "@/lib/differentAccount";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
 /**
@@ -94,6 +95,10 @@ export function reconnectFailedText(shown: ShownControl, label: string | null): 
   return `We couldn't reconnect ${label ?? "the account"}, so ${signInLeft(shown, label)}.`;
 }
 
+function capitalized(sentence: string): string {
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
+}
+
 /** The step that tries the sign-in once more: "Click Connect again", "Click Reconnect". */
 function pressAgain(press: string, button: "Connect" | "Reconnect"): string {
   return button === "Connect" ? `${press} Connect again` : `${press} ${button}`;
@@ -119,10 +124,11 @@ const CAUSE_FIXES: Record<string, string> = {
   // (app/api/auth/linkedin/callback/route.ts).
   linkedin_no_admin_pages:
     "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page",
-  facebook_page_no_pages:
-    "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page",
-  instagram_no_instagram_account:
-    "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page",
+  // R53 new-customer L2: Facebook returns only the Pages ticked in its list
+  // (facebook_page and instagram callbacks), so an empty answer may mean none
+  // was ticked. Said as what Facebook returned, with the tick step first.
+  facebook_page_no_pages: `Facebook didn't return a Page. ${capitalized(signInTo("facebook_page", "your Facebook Page"))}`,
+  instagram_no_instagram_account: `Facebook didn't return a Page with a linked Instagram account. ${capitalized(signInTo("instagram", "your Instagram account"))}. If your Instagram professional account isn't linked to your Page yet, link it first`,
   youtube_no_channel:
     "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel",
   // Pinterest: a Pin always goes on a board, and GET /boards listed none

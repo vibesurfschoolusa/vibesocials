@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import { describeConnectLinkResult } from "./connectLink";
 import { describeOAuthResult, shownControl, type ShownControl } from "./oauthResult";
 
 describe("describeOAuthResult", () => {
@@ -206,13 +207,13 @@ describe("describeOAuthResult — real callback-route codes", () => {
       variant: "danger",
       platform: "facebook_page",
       message:
-        "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page, then click Connect again.",
+        "Facebook didn't return a Page. Sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages, then click Connect again.",
     });
     expect(describeOAuthResult({ error: "instagram_no_instagram_account", success: null })).toMatchObject({
       variant: "danger",
       platform: "instagram",
       message:
-        "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page, then click Connect again.",
+        "Facebook didn't return a Page with a linked Instagram account. Sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). If your Instagram professional account isn't linked to your Page yet, link it first, then click Connect again.",
     });
     expect(describeOAuthResult({ error: "youtube_no_channel", success: null })).toMatchObject({
       variant: "danger",
@@ -220,6 +221,40 @@ describe("describeOAuthResult — real callback-route codes", () => {
       message:
         "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel, then click Connect again.",
     });
+  });
+
+  // R53 new-customer L2: a manager who ticked no Page in Meta's list gets
+  // these too, so the sentence says only what Facebook returned, then both steps.
+  it("no Page, or no Page with Instagram, says what Facebook returned, never that the account manages none", () => {
+    for (const error of ["facebook_page_no_pages", "instagram_no_instagram_account"]) {
+      const message = describeOAuthResult({ error, success: null })!.message;
+      expect(message, error).toMatch(/^Facebook didn't return a Page/);
+      expect(message, error).toContain("when Facebook lists the Pages");
+      expect(message, error).toContain("Sign in with a Facebook account that manages");
+      expect(message, error).not.toMatch(/doesn't manage|None of the Facebook Pages/);
+    }
+    expect(
+      describeOAuthResult({ error: "instagram_no_instagram_account", success: null }, { shown: () => "reconnect" })!.message,
+    ).toBe(
+      "Facebook didn't return a Page with a linked Instagram account. Sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). If your Instagram professional account isn't linked to your Page yet, link it first, then click Reconnect. Your existing connection is unchanged.",
+    );
+  });
+
+  it("the same two on the connect link page, with its press", () => {
+    const link = (error: string) => describeConnectLinkResult(new URLSearchParams({ error }))?.message;
+    expect(link("facebook_page_no_pages")).toBe(
+      "Facebook didn't return a Page. Sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages, then press Connect again.",
+    );
+    expect(link("instagram_no_instagram_account")).toBe(
+      "Facebook didn't return a Page with a linked Instagram account. Sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). If your Instagram professional account isn't linked to your Page yet, link it first, then press Connect again.",
+    );
+    // Other causes keep their words.
+    expect(link("linkedin_no_admin_pages")).toBe(
+      "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then press Connect again.",
+    );
+    expect(link("youtube_no_channel")).toBe(
+      "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel, then press Connect again.",
+    );
   });
 
   // R44 pages-a L7: the LinkedIn callback passes LinkedIn's own code on.

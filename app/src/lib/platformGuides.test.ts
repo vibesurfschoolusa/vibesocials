@@ -21,6 +21,15 @@ describe("PLATFORM_GUIDES", () => {
     }
   });
 
+  // R53 new-customer L2: Instagram's Pages come from the same Facebook sign-in, so the same fix.
+  it("gives Instagram the Business integrations tip Facebook Page has, in the same words", () => {
+    const tip = PLATFORM_GUIDES.facebook_page.tips.find((line) => line.includes("Business integrations"));
+    expect(tip).toBe(
+      "If the Page you want is not offered: on Facebook open Settings, Business integrations, remove Vibe Socials, then connect again. Facebook then asks which Pages to share.",
+    );
+    expect(PLATFORM_GUIDES.instagram.tips).toContain(tip);
+  });
+
   it("gives every platform its own anchor", () => {
     const anchors = ALL_PLATFORMS.map((platform) => PLATFORM_GUIDES[platform].anchor);
     expect(new Set(anchors).size).toBe(ALL_PLATFORMS.length);
