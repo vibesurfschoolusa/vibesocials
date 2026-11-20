@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 
 import { QueueCalendar, clientChangeLine, offCalendarSummary } from "./queue-calendar";
+import { labelName } from "./queue-view";
 
 function job(status: string, approvalState: string, scheduledFor: string | null) {
   return { status, approvalState, scheduledFor };
@@ -133,5 +134,50 @@ describe("QueueCalendar chips name their day", () => {
     const chip = html.match(/<button[^>]*draggable[^>]*>([\s\S]*?)<\/button>/)![1];
     expect(chip).toContain(`<span class="sr-only">${date}, </span>`);
     expect(chip.replace(/<[^>]+>/g, "")).toMatch(new RegExp(`^${date}, .+ Summer sale$`));
+  });
+});
+
+// R46 pages-a L3: a chip's name carries the caption's start by the Queue's
+// 40-character rule (labelName, R5-pages L12); its title keeps the whole text.
+describe("QueueCalendar chip names are short", () => {
+  it("a 2,000-character caption gives a chip name of the rule's length plus the date", () => {
+    const now = new Date();
+    const when = new Date(now.getFullYear(), now.getMonth(), 15, 10, 0);
+    const caption = "a".repeat(2000);
+    const html = renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(QueueCalendar, {
+          jobs: [
+            {
+              id: "j1",
+              status: "scheduled",
+              createdAt: "2026-11-01T00:00:00.000Z",
+              updatedAt: "2026-11-01T00:00:00.000Z",
+              scheduledFor: when.toISOString(),
+              caption,
+              platformCaptions: null,
+              results: [],
+              media: null,
+              mediaCount: 1,
+              publish: null,
+              createdBy: null,
+              approvalState: "none",
+            },
+          ],
+          onShowList: () => {},
+          onEdit: () => {},
+          onRescheduled: () => {},
+        }),
+      ),
+    );
+    const date = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(when);
+    const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(when);
+    const button = html.match(/<button[^>]*draggable[^>]*>[\s\S]*?<\/button>/)![0];
+    const name = button.replace(/<[^>]+>/g, "");
+    expect(name).toBe(`${date}, ${time} ${labelName(caption)}`);
+    expect(labelName(caption).length).toBeLessThanOrEqual(40);
+    expect(button).toContain(`title="${caption}"`);
   });
 });

@@ -21,6 +21,9 @@ import {
 } from "@/lib/queueCalendar";
 import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
 import { cardRequest, withPairNote, type QueueCard as QueueCardPost } from "./pairActions";
+// queue-view imports this file too; labelName is a function declaration,
+// called only at render, so the cycle is safe.
+import { labelName } from "./queue-view";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -42,8 +45,10 @@ const CHIP_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
 });
 
+// R46 pages-a L3: the caption's start by the Queue's 40-character rule; the
+// chip's title keeps the whole caption.
 function chipLabel(job: QueueCardPost): string {
-  if (job.caption?.trim()) return job.caption;
+  if (job.caption?.trim()) return labelName(job.caption);
   const platforms = job.publish?.targetPlatforms;
   if (platforms?.length) return platforms.map(platformLabel).join(", ");
   return "Scheduled post";
