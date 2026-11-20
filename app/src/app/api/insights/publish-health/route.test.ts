@@ -131,7 +131,8 @@ describe("GET /api/insights/publish-health", () => {
 
     const body = await (await GET(req())).json();
 
-    expect(body.overall).toEqual({ attempted: 3, succeeded: 2, failed: 1, successRate: 67 });
+    // Rounded down (R47 new-customer L1): 2 of 3 reads 66.
+    expect(body.overall).toEqual({ attempted: 3, succeeded: 2, failed: 1, successRate: 66 });
     expect(body.platforms.map((p: { platform: string }) => p.platform)).toEqual([
       "youtube",
       "tiktok",
