@@ -1,3 +1,4 @@
+import type { Platform } from "@prisma/client";
 import type { Metadata } from "next";
 
 import { ClientPageShell } from "@/components/client-page-header";
@@ -21,12 +22,11 @@ import {
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
-  differentAccountPlatform,
   linkDifferentAccountMessage,
   linkedInReconnectSignInStep,
 } from "@/lib/differentAccount";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
-import { shownControl, signInButton } from "@/lib/oauthResult";
+import { differentAccountBanner, shownControl, signInButton } from "@/lib/oauthResult";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { utcDisplayDateTime } from "@/lib/usageLimits";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
@@ -126,8 +126,11 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
       : null;
   // R6 review low 1: the sign-in came back with another account than the one
   // connected, and nothing changed. Named by the connected account only.
-  const differentPlatform = differentAccountPlatform(outcome.get("error"));
-  const differentFrom = differentPlatform ? byPlatform.get(differentPlatform) : undefined;
+  // R53 client-journey L1: its words say "press Reconnect", so only while the
+  // row shows Reconnect; otherwise no sentence (differentAccountBanner).
+  const rowShown = (platform: Platform) => shownControl(byPlatform.get(platform));
+  const different = differentAccountBanner(outcome.get("error"), rowShown);
+  const differentFrom = different?.told ? byPlatform.get(different.platform) : undefined;
   // R7-client-journey L4: the owners are emailed where the refusal happens
   // (server/connectLink/callback.ts, the choice route), never from this page,
   // which anyone holding the link can open with any query.
@@ -160,14 +163,16 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
     ? { variant: "success" as const, message: LOCATION_CLEARED_LINK_MESSAGE }
     : sameEnd?.expiresAt && working
       ? { variant: "warning" as const, message: sameEndDateMessage(working.platform) }
-      : differentPlatform && differentFrom
-      ? { variant: "danger" as const, message: linkDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)) }
+      : different
+      ? differentFrom
+        ? { variant: "danger" as const, message: linkDifferentAccountMessage(different.platform, connectedAccountName(differentFrom)) }
+        : null
       : uncheckedFrom
         ? { variant: "danger" as const, message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)) }
         : describeConnectLinkResult(outcome, {
             locationKept: Boolean(working?.locationName),
             // R28 new-customer L6: the sentence names the button the row shows.
-            shown: (platform) => shownControl(byPlatform.get(platform)),
+            shown: rowShown,
           });
   const sameEndOn = sameEnd?.expiresAt && working ? { platform: working.platform, expiresAt: sameEnd.expiresAt } : null;
   const pendingId = first(query.choose);

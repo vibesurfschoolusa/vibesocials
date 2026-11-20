@@ -600,6 +600,81 @@ describe("SettingsPage — a reconnect with a different account", () => {
   });
 });
 
+// R53 client-journey (second half): the sentence says Reconnect and Switch
+// account, so it shows only while the row shows Reconnect. After another
+// owner reconnected, a reload or Back shows nothing.
+describe("SettingsPage — the different-account sentence follows the row's button", () => {
+  afterEach(() => {
+    findConnectionsMock.mockReset();
+    findConnectionsMock.mockResolvedValue([]);
+  });
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const youtube = (fields: Record<string, unknown>) => ({
+    platform: "youtube",
+    accountIdentifier: "chan-1",
+    metadata: { username: "Surf Co channel" },
+    needsReconnect: false,
+    expiresAt: null,
+    refreshToken: "sealed",
+    ...fields,
+  });
+  const linkedIn = (fields: Record<string, unknown>) => ({
+    platform: "linkedin",
+    accountIdentifier: "li-1",
+    metadata: { username: "Surf Co page" },
+    needsReconnect: false,
+    expiresAt: new Date(Date.now() + 200 * DAY),
+    refreshToken: null,
+    ...fields,
+  });
+  const render = async (error: string) => {
+    getWorkspaceContextMock.mockResolvedValue(context("owner"));
+    return renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({ error }) })) as ReactElement);
+  };
+  const YOUTUBE = "You signed in to a different YouTube account than Surf Co channel.";
+  const LINKEDIN = "LinkedIn connected a different page than Surf Co page, so nothing changed.";
+  // Whatever describeOAuthResult would say of the code on its own.
+  const ANY_FAILURE = /nothing changed|couldn&#x27;t|could not|Switch account/;
+
+  it("a flagged connection: the sentence", async () => {
+    findConnectionsMock.mockResolvedValue([youtube({ needsReconnect: true })]);
+    expect(await render("youtube_different_account")).toContain(YOUTUBE);
+  });
+
+  it("a connection that ends soon: the sentence", async () => {
+    findConnectionsMock.mockResolvedValue([youtube({ refreshToken: null, expiresAt: new Date(Date.now() + 2 * DAY) })]);
+    expect(await render("youtube_different_account")).toContain(YOUTUBE);
+  });
+
+  it("a working connection after the reconnect: no sentence at all", async () => {
+    findConnectionsMock.mockResolvedValue([youtube({})]);
+    const html = await render("youtube_different_account");
+    expect(html).not.toContain(YOUTUBE);
+    expect(html).not.toMatch(ANY_FAILURE);
+  });
+
+  it("no connection: no sentence at all", async () => {
+    const html = await render("youtube_different_account");
+    expect(html).not.toContain("different YouTube account");
+    expect(html).not.toMatch(ANY_FAILURE);
+  });
+
+  it("LinkedIn flagged, or ending soon: the sentence", async () => {
+    findConnectionsMock.mockResolvedValue([linkedIn({ needsReconnect: true })]);
+    expect(await render("linkedin_different_account")).toContain(LINKEDIN);
+    findConnectionsMock.mockResolvedValue([linkedIn({ expiresAt: new Date(Date.now() + 2 * DAY) })]);
+    expect(await render("linkedin_different_account")).toContain(LINKEDIN);
+  });
+
+  it("LinkedIn working after the reconnect: no sentence at all", async () => {
+    findConnectionsMock.mockResolvedValue([linkedIn({})]);
+    const html = await render("linkedin_different_account");
+    expect(html).not.toContain("Reconnect shows the steps");
+    expect(html).not.toMatch(ANY_FAILURE);
+  });
+});
+
 // R6 second review 1: the new Google sign-in couldn't be checked against the chosen location.
 describe("SettingsPage — a Business Profile reconnect that couldn't be checked", () => {
   afterEach(() => {

@@ -235,6 +235,46 @@ describe("the connect link page", () => {
     expect(html).not.toContain("This connection belongs to");
   });
 
+  // R53 client-journey L1: the sentence says "press Reconnect", so it shows
+  // only while the row's button is Reconnect, by the success sentence's rule.
+  describe("the different-account sentence follows the row's button", () => {
+    const page = (extra: Record<string, unknown>) => ({
+      platform: "facebook_page",
+      accountIdentifier: "page-1",
+      username: "Surf Co",
+      locationName: null,
+      needsReconnect: false,
+      reconnectSoon: false,
+      ended: false,
+      ...extra,
+    });
+    const SENTENCE = "If you manage Surf Co, press Reconnect";
+
+    it("a flagged connection: the sentence", async () => {
+      h.listConnections.mockResolvedValue([page({ needsReconnect: true })]);
+      expect(await render({ error: "facebook_page_different_account" })).toContain(SENTENCE);
+    });
+
+    it("a connection that ends soon: the sentence", async () => {
+      h.listConnections.mockResolvedValue([page({ reconnectSoon: true })]);
+      expect(await render({ error: "facebook_page_different_account" })).toContain(SENTENCE);
+    });
+
+    it("a working connection after the owner reconnected: no sentence at all", async () => {
+      h.listConnections.mockResolvedValue([page({})]);
+      const html = await render({ error: "facebook_page_different_account" });
+      expect(html).not.toContain(SENTENCE);
+      expect(html).not.toContain('role="alert"');
+      expect(html).toContain("Connected: Surf Co");
+    });
+
+    it("no connection: no sentence at all", async () => {
+      const html = await render({ error: "facebook_page_different_account" });
+      expect(html).not.toContain("press Reconnect");
+      expect(html).not.toContain('role="alert"');
+    });
+  });
+
   it("a Business Profile reconnect that couldn't be checked: names the location, try again", async () => {
     vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "g");
     vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "s");
@@ -525,6 +565,20 @@ describe("LinkedIn on the client's page", () => {
     expect(await render({ error: "linkedin_different_account" })).toContain(
       "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
+  });
+
+  // R53 client-journey L1: "(Reconnect shows the steps)" only while the row shows Reconnect.
+  it("a different LinkedIn account on a row that ends soon: the sentence", async () => {
+    h.listConnections.mockResolvedValue([linkedin()]);
+    expect(await render({ error: "linkedin_different_account" })).toContain("(Reconnect shows the steps)");
+  });
+
+  it("a different LinkedIn account after the owner reconnected: no sentence at all", async () => {
+    h.listConnections.mockResolvedValue([linkedin({ reconnectSoon: false })]);
+    const html = await render({ error: "linkedin_different_account" });
+    expect(html).not.toContain("Reconnect shows the steps");
+    expect(html).not.toContain('role="alert"');
+    expect(html).not.toContain("<details");
   });
 
   // Unconfirmed (client-journey): LinkedIn may give the same end date on a reconnect.

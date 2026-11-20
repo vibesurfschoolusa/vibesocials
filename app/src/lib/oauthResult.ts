@@ -1,5 +1,5 @@
 import type { Platform } from "@prisma/client";
-import { signInTo } from "@/lib/differentAccount";
+import { differentAccountPlatform, signInTo } from "@/lib/differentAccount";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
 /**
@@ -62,6 +62,21 @@ export function shownControl(
 ): ShownControl {
   if (!connection) return "connect";
   return connection.needsReconnect || connection.reconnectSoon ? "reconnect" : "connected";
+}
+
+/**
+ * R53 client-journey L1: a refused reconnect's sentence (lib/differentAccount.ts)
+ * names Reconnect and its steps, so Settings and /c tell it only while the
+ * platform's row shows Reconnect. A reload or Back after the reconnect worked
+ * keeps the code in the address; then the page says nothing, as it does for a
+ * success the connection doesn't bear out. Null for any other code.
+ */
+export function differentAccountBanner(
+  code: string | null | undefined,
+  shown: (platform: Platform) => ShownControl,
+): { platform: Platform; told: boolean } | null {
+  const platform = differentAccountPlatform(code);
+  return platform ? { platform, told: shown(platform) === "reconnect" } : null;
 }
 
 /**

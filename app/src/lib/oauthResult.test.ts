@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 import { describeConnectLinkResult } from "./connectLink";
-import { describeOAuthResult, shownControl, type ShownControl } from "./oauthResult";
+import { describeOAuthResult, differentAccountBanner, shownControl, type ShownControl } from "./oauthResult";
 
 describe("describeOAuthResult", () => {
   it("returns null when neither param is present", () => {
@@ -714,5 +714,20 @@ describe("describeOAuthResult — every sentence names only the button the row s
     const elsewhere = source.replace(helper, "");
     expect(helper).toMatch(/"Connect"/);
     expect(elsewhere).not.toMatch(/\b(Re)?[Cc]onnect again\b|[Cc]lick (Re)?Connect|[Pp]ress (Re)?Connect|"(Re)?Connect"/);
+  });
+});
+
+// R53 client-journey: one rule for Settings and /c.
+describe("differentAccountBanner", () => {
+  it("told only while the platform's row shows Reconnect", () => {
+    expect(differentAccountBanner("instagram_different_account", () => "reconnect")).toEqual({ platform: "instagram", told: true });
+    expect(differentAccountBanner("instagram_different_account", () => "connected")).toEqual({ platform: "instagram", told: false });
+    expect(differentAccountBanner("instagram_different_account", () => "connect")).toEqual({ platform: "instagram", told: false });
+  });
+
+  it("null for any other code", () => {
+    expect(differentAccountBanner("instagram_access_denied", () => "reconnect")).toBeNull();
+    expect(differentAccountBanner(null, () => "reconnect")).toBeNull();
+    expect(differentAccountBanner(undefined, () => "reconnect")).toBeNull();
   });
 });

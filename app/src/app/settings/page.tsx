@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { Platform } from "@prisma/client";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -35,13 +36,12 @@ import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull, LIMIT_OVERRIDES_SELECT, planChangeRaisesEveryLimit } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
-import { describeOAuthResult, shownControl, type OAuthResult } from "@/lib/oauthResult";
+import { describeOAuthResult, differentAccountBanner, shownControl, type OAuthResult } from "@/lib/oauthResult";
 import {
   LOCATION_CLEARED_PARAM,
   accountCheckFailedMessage,
   accountCheckFailedPlatform,
   connectedAccountName,
-  differentAccountPlatform,
   locationClearedSettingsMessage,
   reconnectDifferentAccountMessage,
 } from "@/lib/differentAccount";
@@ -132,21 +132,21 @@ export default async function SettingsPage({
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
   // R28 new-customer L6: a missing Google permission names the control the
   // platform's row shows (Connect, Reconnect, or none for a working one).
+  const rowShown = (platform: Platform) => {
+    const row = rows.find((r) => r.platform === platform);
+    return shownControl(row && { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row, new Date()) });
+  };
   let oauthResult: OAuthResult | null = describeOAuthResult(
     { error: params.error ?? null, success: params.success ?? null },
-    {
-      shown: (platform) => {
-        const row = rows.find((r) => r.platform === platform);
-        return shownControl(row && { needsReconnect: row.needsReconnect, reconnectSoon: inExpiryWarningWindow(row, new Date()) });
-      },
-    },
+    { shown: rowShown },
   );
 
   // R6 review low 1: a reconnect came back with another account and nothing
   // changed; the sentence names only the connected one, from this workspace
   // (R7-new-customer L2: nothing from the address is shown).
-  const differentPlatform = differentAccountPlatform(params.error);
-  const differentFrom = differentPlatform && connections.find((c) => c.platform === differentPlatform);
+  // R53 client-journey: only while the row shows Reconnect (differentAccountBanner).
+  const different = differentAccountBanner(params.error, rowShown);
+  const differentFrom = different?.told ? connections.find((c) => c.platform === different.platform) : undefined;
   // Anyone can type the parameter: the sentence only for a Business Profile
   // connection that really has no location chosen (R6 fourth review 1).
   const gbpWithoutLocation = connections.some((c) => c.platform === "google_business_profile" && !c.locationName);
@@ -170,12 +170,14 @@ export default async function SettingsPage({
       message: accountCheckFailedMessage(connectedAccountName(uncheckedFrom)),
     };
   }
-  if (differentPlatform && differentFrom) {
-    oauthResult = {
-      variant: "danger",
-      platform: differentPlatform,
-      message: reconnectDifferentAccountMessage(differentPlatform, connectedAccountName(differentFrom)),
-    };
+  if (different) {
+    oauthResult = differentFrom
+      ? {
+          variant: "danger",
+          platform: different.platform,
+          message: reconnectDifferentAccountMessage(different.platform, connectedAccountName(differentFrom)),
+        }
+      : null;
   }
   const now = new Date();
   // Unconfirmed (R7 client-journey): the LinkedIn callback flagged a reconnect
