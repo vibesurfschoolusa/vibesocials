@@ -17,6 +17,8 @@ vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 // aiGuards reads the AI counters before spending any (R6-security L3).
 vi.mock("@/lib/db", () => ({ prisma: { workspaceMember: { findMany: memberFindManyMock }, rateLimitEntry: { findMany: async () => [] } } }));
 
+import { aiInputTooLongMessage } from "@/lib/aiGuards";
+
 import { POST } from "./route";
 
 const CONTEXT = {
@@ -158,7 +160,7 @@ describe("POST /api/reviews/draft-response", () => {
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({
           code: "AI_INPUT_TOO_LONG",
-          error: `${field} is too long (max ${max} characters).`,
+          error: aiInputTooLongMessage(field, max),
         });
         expect(fetchMock).not.toHaveBeenCalled();
       },

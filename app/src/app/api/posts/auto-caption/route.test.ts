@@ -17,6 +17,8 @@ vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 // aiGuards reads the AI counters before spending any (R6-security L3).
 vi.mock("@/lib/db", () => ({ prisma: { postJob: { findMany: postJobFindManyMock }, workspaceMember: { findMany: memberFindManyMock }, rateLimitEntry: { findMany: async () => [] } } }));
 
+import { aiInputTooLongMessage } from "@/lib/aiGuards";
+
 import { POST } from "./route";
 
 const CONTEXT = {
@@ -110,7 +112,7 @@ describe("POST /api/posts/auto-caption", () => {
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({
           code: "AI_INPUT_TOO_LONG",
-          error: `${field} is too long (max 40 characters).`,
+          error: aiInputTooLongMessage(field, 40),
         });
         expect(fetchMock).not.toHaveBeenCalled();
       },
@@ -129,7 +131,7 @@ describe("POST /api/posts/auto-caption", () => {
       expect(urlResponse.status).toBe(400);
       await expect(urlResponse.json()).resolves.toEqual({
         code: "AI_INPUT_TOO_LONG",
-        error: "blobUrl is too long (max 2200 characters).",
+        error: "This photo's address is too long for the AI (2,200 characters at most). Write the caption yourself, or upload the photo again.",
       });
 
       const mimeResponse = await post({ ...validBody, mimeType: `image/${"x".repeat(40)}` });
@@ -910,7 +912,7 @@ describe("POST /api/posts/auto-caption - failures a person reads", () => {
     checkRateLimitMock.mockResolvedValue({ allowed: true });
     const tooLong = await post({ ...validBody, blobUrl: `${BLOB_URL}?${"a".repeat(2300)}` });
     expect(tooLong.status).toBe(400);
-    await expect(tooLong.json()).resolves.toMatchObject({ error: "blobUrl is too long (max 2200 characters)." });
+    await expect(tooLong.json()).resolves.toMatchObject({ error: "This photo's address is too long for the AI (2,200 characters at most). Write the caption yourself, or upload the photo again." });
   });
 });
 

@@ -111,7 +111,7 @@ describe("POST /api/posts/enhance-caption", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
         code: "AI_INPUT_TOO_LONG",
-        error: "caption is too long (max 2200 characters).",
+        error: "This caption is too long for the AI (2,200 characters at most). Your caption is unchanged. Shorten it, or edit it yourself.",
       });
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -517,7 +517,7 @@ describe("POST /api/posts/enhance-caption - failures a person reads", () => {
 
     checkRateLimitMock.mockResolvedValue({ allowed: true });
     const tooLong = await post({ caption: "a".repeat(2300) });
-    await expect(tooLong.json()).resolves.toMatchObject({ error: "caption is too long (max 2200 characters)." });
+    await expect(tooLong.json()).resolves.toMatchObject({ error: "This caption is too long for the AI (2,200 characters at most). Your caption is unchanged. Shorten it, or edit it yourself." });
   });
 });
 

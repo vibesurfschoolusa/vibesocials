@@ -18,6 +18,7 @@ vi.mock("@/lib/db", () => ({
 import {
   AI_LIMITS,
   AI_PROVIDER_TIMEOUT_MS,
+  aiInputTooLongMessage,
   aiInputTooLongResponse,
   aiTimeoutResponse,
   aiWorkspaceLimitResponse,
@@ -86,14 +87,56 @@ describe("findOverlongAiField", () => {
 });
 
 describe("aiInputTooLongResponse", () => {
-  it("is a 400 { code, error } with the field and limit in the message", async () => {
+  it("is a 400 { code, error } with the field's own sentence", async () => {
     const response = aiInputTooLongResponse({ field: "comment", max: 5000 });
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       code: "AI_INPUT_TOO_LONG",
-      error: "comment is too long (max 5000 characters).",
+      error: "This review is too long for the AI (5,000 characters at most). Write the reply yourself.",
     });
+  });
+});
+
+// R46 pages-a L1 (second half): Create shows this sentence word for word, so
+// it is written for people, with the number in thousands.
+describe("aiInputTooLongMessage", () => {
+  it("gives each field its own plain sentence", () => {
+    expect(aiInputTooLongMessage("caption", 2200)).toBe(
+      "This caption is too long for the AI (2,200 characters at most). Your caption is unchanged. Shorten it, or edit it yourself.",
+    );
+    expect(aiInputTooLongMessage("comment", 5000)).toBe(
+      "This review is too long for the AI (5,000 characters at most). Write the reply yourself.",
+    );
+    expect(aiInputTooLongMessage("reviewerName", 200)).toBe(
+      "The reviewer's name is too long for the AI (200 characters at most). Write the reply yourself.",
+    );
+    expect(aiInputTooLongMessage("businessName", 200)).toBe(
+      "The business name is too long for the AI (200 characters at most). Write the reply yourself.",
+    );
+    expect(aiInputTooLongMessage("tone", 40)).toBe(
+      "The tone is too long for the AI (40 characters at most). Shorten it, then try again.",
+    );
+    expect(aiInputTooLongMessage("language", 40)).toBe(
+      "The language is too long for the AI (40 characters at most). Shorten it, then try again.",
+    );
+    expect(aiInputTooLongMessage("blobUrl", 2200)).toBe(
+      "This photo's address is too long for the AI (2,200 characters at most). Write the caption yourself, or upload the photo again.",
+    );
+  });
+
+  it("a field nobody types says the request couldn't be read and the step that works", () => {
+    for (const field of ["platform", "mimeType", "starRating", "somethingNew"]) {
+      expect(aiInputTooLongMessage(field, 40), field).toBe(
+        "The AI couldn't take this request: part of it is too long. Reload the page, then try again.",
+      );
+    }
+  });
+
+  it("never names a field the way the code does", () => {
+    for (const field of ["caption", "comment", "reviewerName", "businessName", "tone", "language", "blobUrl", "mimeType"]) {
+      expect(aiInputTooLongMessage(field, 2200)).not.toMatch(/\(max |reviewerName|businessName|blobUrl|mimeType/);
+    }
   });
 });
 

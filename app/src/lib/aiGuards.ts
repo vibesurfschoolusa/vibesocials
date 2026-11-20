@@ -57,12 +57,37 @@ export function findOverlongAiField(
   return null;
 }
 
+/**
+ * R46 pages-a L1 (second half): what each field a person types is called in
+ * the refusal, and the step that works next. Create shows the sentence word
+ * for word, so it never names a field the way the code does.
+ */
+const AI_FIELD_WORDS: Record<string, { what: string; step: string }> = {
+  caption: { what: "This caption", step: "Your caption is unchanged. Shorten it, or edit it yourself." },
+  comment: { what: "This review", step: "Write the reply yourself." },
+  reviewerName: { what: "The reviewer's name", step: "Write the reply yourself." },
+  businessName: { what: "The business name", step: "Write the reply yourself." },
+  tone: { what: "The tone", step: "Shorten it, then try again." },
+  language: { what: "The language", step: "Shorten it, then try again." },
+  blobUrl: { what: "This photo's address", step: "Write the caption yourself, or upload the photo again." },
+};
+
+/** The refusal for a field nobody types (platform, mime type, star rating): only a changed page sends one. */
+const AI_REQUEST_TOO_LONG = "The AI couldn't take this request: part of it is too long. Reload the page, then try again.";
+
+/** The one sentence for a field `findOverlongAiField` flagged. */
+export function aiInputTooLongMessage(field: string, max: number): string {
+  const words = Object.hasOwn(AI_FIELD_WORDS, field) ? AI_FIELD_WORDS[field] : undefined;
+  if (!words) return AI_REQUEST_TOO_LONG;
+  return `${words.what} is too long for the AI (${max.toLocaleString("en-US")} characters at most). ${words.step}`;
+}
+
 /** `400 { code: "AI_INPUT_TOO_LONG", error }` for a field `findOverlongAiField` flagged. */
 export function aiInputTooLongResponse(overlong: { field: string; max: number }): NextResponse {
   return NextResponse.json(
     {
       code: "AI_INPUT_TOO_LONG",
-      error: `${overlong.field} is too long (max ${overlong.max} characters).`,
+      error: aiInputTooLongMessage(overlong.field, overlong.max),
     },
     { status: 400 },
   );
