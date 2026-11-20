@@ -12,6 +12,7 @@ import {
 
 import {
   BlobAccessError,
+  BlobFileTooLargeError,
   BlobServiceNotAvailable,
   BlobServiceRateLimited,
   BlobStoreSuspendedError,
@@ -214,6 +215,12 @@ describe("sendClientFile", () => {
       ])("%s: the storage sentence, our side", async (_name, error) => {
         deps.put.mockRejectedValue(error);
         expect(await failure()).toMatchObject({ kind: "network", message: STORAGE, ourSide: true });
+      });
+
+      // R53 fix review: refused for its size on every try, so the retry leaves it out.
+      it("too large: the file's own kind and the size sentence, never try again", async () => {
+        deps.put.mockRejectedValue(new BlobFileTooLargeError("max 512 MB"));
+        expect(await failure()).toMatchObject({ kind: "file", message: "File is too large (max 512 MB).", ourSide: false });
       });
 
       it("a plain error with no storage text: the connection, as before", async () => {

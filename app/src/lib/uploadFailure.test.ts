@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   BlobAccessError,
+  BlobFileTooLargeError,
   BlobServiceNotAvailable,
   BlobServiceRateLimited,
   BlobStoreSuspendedError,
@@ -11,7 +12,9 @@ import {
 import {
   explainUploadFailure,
   isStorageRefusal,
+  isStorageTooLarge,
   UPLOAD_OFFLINE_MESSAGE,
+  UPLOAD_STORAGE_TOO_LARGE_MESSAGE,
   UPLOAD_STORAGE_REFUSED_MESSAGE,
   UPLOAD_REFUSED_MESSAGE,
   UPLOAD_STORAGE_UNREACHABLE_MESSAGE,
@@ -318,5 +321,36 @@ describe("a storage refusal", () => {
     expect(rowText(await explainUploadFailure(new BlobStoreSuspendedError(), "ws-1", answered()))).toBe(
       "File storage didn't take the upload. Try again in a few minutes.",
     );
+  });
+});
+
+// R53 fix review: storage refusing a file for its size is refused on every
+// try, so it never says to try again; it says what the upload route says.
+describe("storage refusing a file for its size", () => {
+  const answered = () => vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
+
+  it("is the upload route's own sentence for an over-limit file", async () => {
+    const { UPLOAD_TOO_LARGE_MESSAGE } = await import("@/app/api/upload/uploadBudget");
+    expect(UPLOAD_STORAGE_TOO_LARGE_MESSAGE).toBe(UPLOAD_TOO_LARGE_MESSAGE);
+    expect(UPLOAD_STORAGE_TOO_LARGE_MESSAGE).not.toMatch(/try again/i);
+  });
+
+  it("isStorageTooLarge: only the size refusal", () => {
+    expect(isStorageTooLarge(new BlobFileTooLargeError("max 512 MB"))).toBe(true);
+    expect(isStorageTooLarge(new BlobStoreSuspendedError())).toBe(false);
+    expect(isStorageTooLarge(new BlobServiceRateLimited(30))).toBe(false);
+    expect(isStorageTooLarge(new Error("File is too large, but not from storage."))).toBe(false);
+  });
+
+  it("explainUploadFailure: a too-large refusal gives the size sentence", async () => {
+    const explained = await explainUploadFailure(new BlobFileTooLargeError("max 512 MB"), "ws-1", answered());
+    expect(explained).toBeInstanceOf(UploadRefusedError);
+    expect(explained.message).toBe("File is too large (max 512 MB).");
+  });
+
+  it("a rate limit and the other storage refusals keep the try-again sentence", async () => {
+    for (const error of [new BlobServiceRateLimited(30), new BlobStoreSuspendedError(), new BlobAccessError(), new BlobUnknownError()]) {
+      expect((await explainUploadFailure(error, "ws-1", answered())).message).toBe(UPLOAD_STORAGE_REFUSED_MESSAGE);
+    }
   });
 });

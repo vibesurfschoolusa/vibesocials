@@ -87,6 +87,10 @@ const TRUE_WHATEVER_ARRIVED: Array<{ file: string; constant?: string; text?: str
   { file: "app/posts/bulk/bulkExtras.ts", constant: "BULK_COVER_FAILED_TEXT", why: UPLOAD_STEP },
   { file: "app/posts/bulk/bulk-posts-form.tsx", text: "The upload failed. Retry it or remove it.", why: UPLOAD_STEP },
   { file: "app/u/[token]/send-file.ts", constant: "UPLOAD_FAILED_MESSAGE", why: `${UPLOAD_STEP} On /u the token and storage steps register nothing; the last step says the file may have arrived.` },
+  // R53 pages-a L1-L3: the same steps, when our server or file storage answered and refused.
+  { file: "app/u/[token]/send-file.ts", constant: "UPLOAD_FAILED_OUR_SIDE_MESSAGE", why: `${UPLOAD_STEP} On /u the token and storage steps register nothing; the last step says the file may have arrived.` },
+  { file: "lib/uploadFailure.ts", constant: "UPLOAD_STORAGE_REFUSED_MESSAGE", why: UPLOAD_STEP },
+  { file: "lib/uploadFailure.ts", constant: "UPLOAD_STORAGE_TOO_LARGE_MESSAGE", why: UPLOAD_STEP },
   {
     file: "components/create-post-form.tsx",
     text: "Failed to prepare media for posting.",

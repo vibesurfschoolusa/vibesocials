@@ -7,6 +7,7 @@
  * so the user reads that sentence instead of the generic failure.
  */
 
+import { MAX_MEDIA_BYTES } from "./mediaInput";
 import { SIGNED_OUT_ERROR } from "./signedOutMessage";
 import { readWorkspaceRefusalText, withWorkspaceId } from "./workspaceChanged";
 
@@ -51,8 +52,18 @@ export const UPLOAD_STORAGE_UNREACHABLE_MESSAGE =
  */
 export const UPLOAD_STORAGE_REFUSED_MESSAGE = "File storage didn't take the upload. Try again in a few minutes.";
 
+/**
+ * R53 fix review: storage refused the file for its size, which no retry
+ * changes. The upload route's own sentence for an over-limit file
+ * (app/api/upload/uploadBudget.ts UPLOAD_TOO_LARGE_MESSAGE; that module reads
+ * the database, so the text is built from the same limit here).
+ */
+export const UPLOAD_STORAGE_TOO_LARGE_MESSAGE = `File is too large (max ${MAX_MEDIA_BYTES / (1024 * 1024)} MB).`;
+
 // Every error @vercel/blob throws (its BlobError) starts with this.
 const BLOB_ERROR = /^Vercel Blob:/;
+// Its BlobFileTooLargeError.
+const BLOB_TOO_LARGE = /^Vercel Blob: File is too large\b/;
 
 // What the blob client throws when the token route answers non-2xx (its own
 // text has a double space in one spelling).
@@ -71,11 +82,17 @@ export function isStorageRefusal(error: unknown): boolean {
   return !BLOB_SERVICE_UNAVAILABLE.test(error.message) && !TOKEN_REFUSED.test(error.message);
 }
 
+/** A storage refusal for the file's size: retrying the same file can't help. */
+export function isStorageTooLarge(error: unknown): boolean {
+  return error instanceof Error && BLOB_TOO_LARGE.test(error.message);
+}
+
 /**
  * The storage sentence when that is why the upload failed; for any other
  * refused token, UPLOAD_REFUSED_MESSAGE; for a dropped request,
  * UPLOAD_OFFLINE_MESSAGE when our own question fails too, else
  * UPLOAD_STORAGE_UNREACHABLE_MESSAGE; for a storage refusal,
+ * UPLOAD_STORAGE_TOO_LARGE_MESSAGE when it was the file's size, else
  * UPLOAD_STORAGE_REFUSED_MESSAGE; else the original error.
  */
 export async function explainUploadFailure(
@@ -90,9 +107,11 @@ export async function explainUploadFailure(
   const dropped = original instanceof TypeError || BLOB_SERVICE_UNAVAILABLE.test(original.message);
   const refused = TOKEN_REFUSED.test(original.message)
     ? new UploadRefusedError(UPLOAD_REFUSED_MESSAGE)
-    : isStorageRefusal(original)
-      ? new UploadRefusedError(UPLOAD_STORAGE_REFUSED_MESSAGE)
-      : null;
+    : isStorageTooLarge(original)
+      ? new UploadRefusedError(UPLOAD_STORAGE_TOO_LARGE_MESSAGE)
+      : isStorageRefusal(original)
+        ? new UploadRefusedError(UPLOAD_STORAGE_REFUSED_MESSAGE)
+        : null;
   let response: Response;
   try {
     // R32: asked for the workspace the page was drawn for, as the upload itself is.

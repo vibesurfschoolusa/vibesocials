@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { BlobAccessError, BlobServiceRateLimited, BlobStoreSuspendedError, BlobUnknownError } from "@vercel/blob";
+import { BlobAccessError, BlobFileTooLargeError, BlobServiceRateLimited, BlobStoreSuspendedError, BlobUnknownError } from "@vercel/blob";
 
 import { NoAnswerError } from "@/lib/requestNoAnswer";
 import { UPLOAD_LINK_IP_LIMIT_MESSAGE, UPLOAD_LINK_IP_LIMIT_REASON } from "@/lib/uploadLink";
@@ -453,6 +453,14 @@ describe("UploadSummary and the rows: our side or the connection", () => {
     const failure = await storageRefused(new BlobServiceRateLimited(30));
     expect(failure).toMatchObject({ kind: "network", message: STORAGE_ROW });
     expect(render(0, [failure])).toContain(OUR_SIDE_SUMMARY);
+  });
+
+  it("too large from storage: the size sentence, no try again", async () => {
+    const failure = await storageRefused(new BlobFileTooLargeError("max 512 MB"));
+    expect(failure).toEqual({ kind: "file", message: "File is too large (max 512 MB)." });
+    const html = render(0, [failure]);
+    expect(html).toContain("The file wasn&#x27;t sent. File is too large (max 512 MB).");
+    expect(html).not.toMatch(/[Tt]ry again/);
   });
 
   it("a storage refusal with a dropped upload: the connection wording", async () => {

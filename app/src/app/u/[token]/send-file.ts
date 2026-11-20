@@ -12,7 +12,12 @@ import {
   UPLOAD_LINK_IP_LIMIT_REASON,
 } from "@/lib/uploadLink";
 import { fetchOrNoAnswer, isNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
-import { UPLOAD_STORAGE_REFUSED_MESSAGE, isStorageRefusal } from "@/lib/uploadFailure";
+import {
+  UPLOAD_STORAGE_REFUSED_MESSAGE,
+  UPLOAD_STORAGE_TOO_LARGE_MESSAGE,
+  isStorageRefusal,
+  isStorageTooLarge,
+} from "@/lib/uploadFailure";
 
 /**
  * One file through a client upload link, in the browser (2026-11-10): prepared
@@ -205,6 +210,8 @@ export async function sendClientFile(
   } catch (error) {
     // R53 pages-a L2: storage itself answered and refused (lib/uploadFailure.ts):
     // our side, not the connection. Still "network", so Retry stays.
+    // A refusal for the file's size is refused on every try: the file's own kind, no retry.
+    if (isStorageTooLarge(error)) throw new ClientFileError("file", UPLOAD_STORAGE_TOO_LARGE_MESSAGE);
     if (isStorageRefusal(error)) throw new ClientFileError("network", UPLOAD_STORAGE_REFUSED_MESSAGE, true);
     throw new ClientFileError("network", UPLOAD_FAILED_MESSAGE);
   }
