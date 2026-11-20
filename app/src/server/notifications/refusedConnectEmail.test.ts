@@ -78,6 +78,27 @@ describe("buildRefusedConnectEmail", () => {
     expect(email.html).not.toContain("sign in to Surf Co Page");
   });
 
+  // R51 pages-a L2: Instagram connects through Meta's Facebook login, from the
+  // Page linked to the account; the email says what Settings says.
+  it("instagram: the Facebook sign-in didn't return the Page linked to it", () => {
+    const email = buildRefusedConnectEmail({
+      platform: "instagram",
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      connectedName: "@surfschool",
+      appBaseUrl: BASE,
+    });
+
+    expect(email.subject).toBe("Surf Co: your client's Facebook sign-in didn't return the connected Instagram account");
+    expect(email.html).toContain(
+      "<p>Your client used your connect link for <strong>Surf Co</strong> to reconnect Instagram, but Facebook didn&#39;t return the Page linked to @surfschool. Nothing was changed.</p>",
+    );
+    expect(email.html).toContain(
+      "<p>If your client should post from their own account, disconnect @surfschool in Settings, Connections; then they can connect theirs through the link. If @surfschool is the right account, use Reconnect in Settings, Connections, or ask your client to sign in with a Facebook account that manages the Page linked to @surfschool.</p>",
+    );
+    expect(email.html).not.toMatch(/signed in to a different Instagram account|sign in to @surfschool|has to be signed in to/);
+  });
+
   it("escapes the names it shows", () => {
     const email = buildRefusedConnectEmail({
       platform: "x",

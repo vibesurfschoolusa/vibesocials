@@ -2,7 +2,13 @@ import type { Platform } from "@prisma/client";
 
 import { toConnectionSummary } from "@/lib/connectionSummary";
 import { prisma } from "@/lib/db";
-import { connectedAccountName, pageAccountLabel, signInTo } from "@/lib/differentAccount";
+import {
+  connectedAccountName,
+  linkedPageAccount,
+  linkedPageNotReturned,
+  pageAccountLabel,
+  signInTo,
+} from "@/lib/differentAccount";
 import { logger } from "@/lib/logger";
 import { platformLabel } from "@/lib/platforms";
 import { sendEmail } from "@/server/notifications/email";
@@ -44,19 +50,28 @@ export function buildRefusedConnectEmail(params: {
   // account that manages it is (lib/differentAccount.ts).
   const pageAccount = pageAccountLabel(params.platform);
   const signIn = escapeHtml(signInTo(params.platform, params.connectedName));
+  // R51 pages-a L2: Instagram is signed in to through Facebook, from the Page
+  // linked to it, so the account itself is never signed in to.
+  const viaAccount = linkedPageAccount(params.platform);
+  const notReturned = linkedPageNotReturned(params.platform, params.connectedName);
 
-  const what = pageAccount
-    ? `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in with a ${pageAccount} account for a different page than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`
-    : `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in to a different ${platform} account than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`;
+  const what = notReturned
+    ? `<p>Your client used your connect link for <strong>${workspace}</strong> to reconnect ${platform}, but ${escapeHtml(notReturned)}. Nothing was changed.</p>`
+    : pageAccount
+      ? `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in with a ${pageAccount} account for a different page than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`
+      : `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in to a different ${platform} account than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`;
   const next = pageAccount
     ? `<p>If your client should post to their own page, disconnect ${name} in Settings, Connections; then they can connect theirs through the link. If ${name} is the right page, use Reconnect in Settings, Connections, or ask your client to ${signIn}.</p>`
-    : `<p>If your client should post from their own account, disconnect ${name} in Settings, Connections; then they can connect theirs through the link. If ${name} is the right account, it has to be signed in to: use Reconnect in Settings, Connections, or ask your client to ${signIn}.</p>`;
+    : `<p>If your client should post from their own account, disconnect ${name} in Settings, Connections; then they can connect theirs through the link. If ${name} is the right account, ${notReturned ? "" : "it has to be signed in to: "}use Reconnect in Settings, Connections, or ask your client to ${signIn}.</p>`;
+  const subjectTail = viaAccount
+    ? `your client's ${viaAccount} sign-in didn't return the connected ${label} account`
+    : `your client signed in to ${pageAccount ? `${pageAccount} for a different page` : `a different ${label} account`}`;
   const link = base
     ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/settings#connections", base))}">Open Settings, Connections</a></p>`
     : "<p>Open Settings, Connections in Vibe Socials to see it.</p>";
 
   return {
-    subject: `${params.workspaceName.replace(/[\r\n]+/g, " ").trim()}: your client signed in to ${pageAccount ? `${pageAccount} for a different page` : `a different ${label} account`}`,
+    subject: `${params.workspaceName.replace(/[\r\n]+/g, " ").trim()}: ${subjectTail}`,
     html: [what, next, link, "<p>— Vibe Socials</p>"].join("\n"),
   };
 }

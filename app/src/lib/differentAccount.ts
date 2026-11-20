@@ -74,6 +74,21 @@ function managedPage(platform: Platform, name: string): string {
   return PAGE_ACCOUNT[platform]?.linkedPage ? `the Page linked to ${name}` : name;
 }
 
+/**
+ * For an account signed in through another platform's login (Instagram,
+ * through Facebook): that login's name, else null.
+ */
+export function linkedPageAccount(platform: Platform): string | null {
+  const entry = PAGE_ACCOUNT[platform];
+  return entry?.linkedPage ? entry.account : null;
+}
+
+/** "Facebook didn't return the Page linked to <name>" for such an account, else null. */
+export function linkedPageNotReturned(platform: Platform, name: string): string | null {
+  const account = linkedPageAccount(platform);
+  return account ? `${account} didn't return ${managedPage(platform, name)}` : null;
+}
+
 /** "sign in to <name>", or "sign in with a <platform> account that manages <the page>". */
 export function signInTo(platform: Platform, name: string): string {
   const entry = PAGE_ACCOUNT[platform];
@@ -113,8 +128,9 @@ export function reconnectDifferentAccountMessage(platform: Platform, connectedNa
   if (platform === "linkedin") {
     return `LinkedIn connected a different page than ${connectedName}, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. To use the other page instead, use Switch account.`;
   }
-  if (entry?.linkedPage) {
-    return `${entry.account} didn't return ${managedPage(platform, connectedName)}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;
+  const notReturned = linkedPageNotReturned(platform, connectedName);
+  if (notReturned) {
+    return `${notReturned}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;
   }
   if (entry) {
     return `${entry.account} connected a different page than ${connectedName}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change pages.`;
