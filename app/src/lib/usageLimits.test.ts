@@ -733,7 +733,7 @@ describe("stored limit sentences name a fixed reset", () => {
   ])("stored at %s: the service and new-account sentences name the next UTC midnight", (_when, at, reset) => {
     for (const sentence of [serviceDailyPostLimitAtSendMessage(at), newAccountPoolAtSendMessage(at)]) {
       expect(sentence).toContain(`Retry it ${reset}, or schedule it again.`);
-      expect(sentence).not.toMatch(/(?:today|tomorrow|tonight)/i);
+      expect(sentence).not.toMatch(/\b(?:today|tomorrow|tonight)\b/i);
     }
   });
 
@@ -746,7 +746,7 @@ describe("stored limit sentences name a fixed reset", () => {
   ])("stored at %s: the YouTube sentence names the next midnight Pacific, in UTC", (_when, at, reset) => {
     const sentence = youtubeWorkspaceDailyLimitMessage(10, at);
     expect(sentence).toContain(`Retry this upload ${reset}.`);
-    expect(sentence).not.toMatch(/(?:today|tomorrow|tonight)/i);
+    expect(sentence).not.toMatch(/\b(?:today|tomorrow|tonight)\b/i);
   });
 
   it("YouTube's reset follows daylight saving: 07:00 UTC in summer", () => {
