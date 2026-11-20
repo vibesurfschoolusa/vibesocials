@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +40,7 @@ vi.mock("@/lib/inviteToken", async () => {
 
 import { NextResponse } from "next/server";
 
+import { CLIENT_LINKS_NOT_MADE_MESSAGE } from "@/lib/clientLinkWording";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { openSecret } from "@/lib/tokenCrypto";
@@ -282,13 +285,30 @@ describe("POST /api/workspaces/client-links", () => {
     expect(m.transaction).not.toHaveBeenCalled();
   });
 
+  // R50 pages-a L1: a stopped connect link doesn't "still work", and a commit
+  // whose answer was lost may have changed them, so the answer gives the step.
   it("answers 500 with a plain sentence when the transaction fails", async () => {
     m.transaction.mockRejectedValue(new Error("db down"));
     const response = await POST(request());
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: "Couldn't make new client links. The old ones still work. Try again.",
+    await expect(response.json()).resolves.toEqual({ error: CLIENT_LINKS_NOT_MADE_MESSAGE });
+  });
+
+  it("answers the same when a write inside the transaction fails", async () => {
+    m.transaction.mockImplementation(async () => {
+      throw new Error("lock timeout");
     });
+    const response = await POST(request());
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: CLIENT_LINKS_NOT_MADE_MESSAGE });
+  });
+
+  it("defines the sentence in one place, shared with Team", () => {
+    const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+    for (const source of [read("./route.ts"), read("../../../../components/team-section.tsx")]) {
+      expect(source).toContain("CLIENT_LINKS_NOT_MADE_MESSAGE");
+      expect(source).not.toMatch(/Couldn't make new client links\./);
+    }
   });
 });
 

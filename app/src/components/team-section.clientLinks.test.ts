@@ -25,6 +25,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: 
 vi.mock("next-auth/react", () => ({ useSession: () => ({ data: null }), signOut: vi.fn() }));
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 
+import { CLIENT_LINKS_NOT_MADE_MESSAGE } from "@/lib/clientLinkWording";
 import {
   CLIENT_LINKS_MAYBE_OFF_MESSAGE,
   CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
@@ -119,6 +120,17 @@ describe("Make new client links", () => {
     );
     expect(announce).toHaveBeenCalledTimes(1);
     expect(CLIENT_LINKS_REPLACED_EVENT).toBe("vibe:client-links-replaced");
+  });
+
+  // R50 pages-a L1: a refusal without a sentence gets the shared one, which
+  // makes no claim that the old links still work.
+  it("a refusal with no sentence shows the shared not-made sentence", async () => {
+    const announce = vi.fn();
+    const bare = vi.fn(async () => new Response("", { status: 403 }));
+    await expect(requestClientLinksReplace(bare as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow(
+      CLIENT_LINKS_NOT_MADE_MESSAGE,
+    );
+    expect(announce).not.toHaveBeenCalled();
   });
 
   it("the owners' Team card holds no button before the state is read, and a member's never", () => {

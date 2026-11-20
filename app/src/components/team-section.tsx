@@ -30,7 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { answerLostText } from "@/lib/answerLost";
 import { afterWorkspaceChange } from "@/lib/afterWorkspaceChange";
-import { copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
+import { CLIENT_LINKS_NOT_MADE_MESSAGE, copiesWorkAgainWhen, type ClientLinkBlockKind } from "@/lib/clientLinkWording";
 import { formatDisplayDate } from "@/lib/displayDate";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { memberRemovalOutcome, type MemberRemovalOutcome } from "@/lib/memberRemoval";
@@ -489,7 +489,7 @@ export async function requestClientLinksReplace(
       response.status,
       data,
       CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
-      "Couldn't make new client links. The old ones still work. Try again.",
+      CLIENT_LINKS_NOT_MADE_MESSAGE,
     );
     if (text === CLIENT_LINKS_MAYBE_REPLACED_MESSAGE) announce();
     throw new Error(text);

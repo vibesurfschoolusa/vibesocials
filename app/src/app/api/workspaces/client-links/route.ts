@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { CLIENT_LINKS_NOT_MADE_MESSAGE } from "@/lib/clientLinkWording";
 import { CONNECT_LINK_TTL_MS, configuredConnectLinkPlatforms, connectLinkUrl } from "@/lib/connectLink";
 import { prisma } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
@@ -89,7 +90,6 @@ export async function GET(request: Request) {
 const CLIENT_LINKS_PER_HOUR = 10;
 /** R44 new-customer L1: the reason before the wait (tooManyTriesResponse). */
 export const CLIENT_LINKS_LIMIT_REASON = `You've made new client links ${CLIENT_LINKS_PER_HOUR} times this hour, counted across all your workspaces.`;
-const FAILED_MESSAGE = "Couldn't make new client links. The old ones still work. Try again.";
 export const CLIENT_LINKS_NOT_INCLUDED_MESSAGE =
   "This workspace's plan doesn't include client links, so new ones can't be made. To stop the old ones working, press Turn off client links.";
 const TURN_OFF_FAILED_MESSAGE = "Couldn't turn off the client links. Nothing changed. Try again.";
@@ -193,7 +193,7 @@ export async function POST(request: Request) {
     return NextResponse.json(made);
   } catch (error) {
     logger.error("[POST /api/workspaces/client-links] Unexpected error", { error, workspaceId });
-    return NextResponse.json({ error: FAILED_MESSAGE }, { status: 500 });
+    return NextResponse.json({ error: CLIENT_LINKS_NOT_MADE_MESSAGE }, { status: 500 });
   }
 }
 
