@@ -1,6 +1,7 @@
 import { ExternalLink } from "@/components/external-link";
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { signInTo } from "@/lib/differentAccount";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { PLATFORM_GUIDES } from "@/lib/platformGuides";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
@@ -99,9 +100,11 @@ export default function HelpPage() {
             {/* R8-pages L7: Settings' different-account banner links here. */}
             <li>
               <span className="text-foreground">Reconnect came back with a different account.</span>{" "}
-              Nothing changed: the connection still posts where it did. Sign in to the account that is
-              connected (for a LinkedIn or Facebook page, with an account that manages that page), then
-              press Reconnect again. LinkedIn reuses the account signed in to LinkedIn in this browser, so
+              Nothing changed: the connection still posts where it did. Press Reconnect again and sign in
+              to the account that is connected. {/* R52 pages-a L2: Settings' own step, so they can't drift. */}
+              For a LinkedIn page, {signInTo("linkedin", "that page")}. For a Facebook Page,{" "}
+              {signInTo("facebook_page", "the connected Page")}. For Instagram,{" "}
+              {signInTo("instagram", "the connected Instagram account")}. LinkedIn reuses the account signed in to LinkedIn in this browser, so
               sign out of LinkedIn first (
               <ExternalLink href={LINKEDIN_SIGN_OUT_URL} className="underline underline-offset-2">
                 open LinkedIn sign-out

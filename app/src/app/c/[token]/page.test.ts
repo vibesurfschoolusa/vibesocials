@@ -211,9 +211,12 @@ describe("the connect link page", () => {
       { platform: "facebook_page", accountIdentifier: "page-1", username: "Surf Co", locationName: null, needsReconnect: true, reconnectSoon: false, ended: false },
     ]);
     const html = await render({ error: "facebook_page_different_account", signed_in_as: "Client Cafe" });
+    // R52 client-journey L1: someone who manages the Page gets its own step first, then the owner route.
     expect(html).toContain(
-      "This connection belongs to Surf Co. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "If you manage Surf Co, press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages. If not, ask the workspace owner to disconnect it, then connect yours.",
     );
+    // The step names the button this row shows.
+    expect(html).toMatch(/value="facebook_page"[\s\S]*?Reconnect/);
     expect(html).not.toContain("Client Cafe");
   });
 

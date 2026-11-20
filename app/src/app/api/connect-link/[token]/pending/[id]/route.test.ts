@@ -254,7 +254,8 @@ describe("POST: the visitor's choice", () => {
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(
       // R7-client-journey L4: what works for a client is the owner disconnecting it.
-      "This connection belongs to My Surf School. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      // R52 client-journey L1: one who manages the Page ticks it first.
+      "If you manage My Surf School, press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages. If not, ask the workspace owner to disconnect it, then connect yours.",
     );
     expect(h.pendingDeleteMany).not.toHaveBeenCalled();
     expect(h.linkUpdate).not.toHaveBeenCalled();
@@ -447,7 +448,7 @@ describe("POST: a refused choice, by whether the connected one was on the list",
     const res = await POST(request("POST", { candidateId: "page-2" }), context());
 
     expect((await res.json()).error).toBe(
-      "This connection belongs to My Surf School. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "If you manage My Surf School, press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages. If not, ask the workspace owner to disconnect it, then connect yours.",
     );
     // R8-client-journey L3: the connected account wasn't among the choices: the owners are told.
     expect(h.notifyRefused).toHaveBeenCalledTimes(1);

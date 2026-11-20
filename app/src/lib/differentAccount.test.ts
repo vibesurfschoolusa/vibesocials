@@ -40,9 +40,14 @@ describe("different account on reconnect", () => {
   });
 
   // R8-pages L1: a Facebook Page is not signed in to; an account that manages it is.
-  it("Settings, a Facebook Page not offered in the list: sign in with an account that manages it", () => {
+  // R52 client-journey L1 / pages-a L2: someone who manages the Page but left
+  // it unticked in Facebook's list signed in rightly; ticking it is the step.
+  it("Settings, a Facebook Page not offered in the list: sign in with an account that manages it, and tick it", () => {
     expect(settingsDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School")).toBe(
-      "You chose Client Cafe, not My Surf School, and My Surf School wasn't in the list. Sign in with a Facebook account that manages My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+      "You chose Client Cafe; My Surf School wasn't listed. To reconnect it, sign in with a Facebook account that manages My Surf School and tick it when Facebook lists the Pages, or use Switch account to change to Client Cafe.",
+    );
+    expect(choiceDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School", false)).toBe(
+      settingsDifferentAccountMessage("facebook_page", "Client Cafe", "My Surf School"),
     );
   });
 
@@ -61,9 +66,9 @@ describe("different account on reconnect", () => {
     );
   });
 
-  it("Settings, Facebook Page: an account that manages the Page", () => {
+  it("Settings, Facebook Page: an account that manages the Page, and tick it", () => {
     expect(reconnectDifferentAccountMessage("facebook_page", "Surf Co Page")).toBe(
-      "Facebook connected a different page than Surf Co Page, so nothing changed. Sign in with a Facebook account that manages Surf Co Page to reconnect it, or use Switch account to change pages.",
+      "Facebook connected a different page than Surf Co Page, so nothing changed. To reconnect it, sign in with a Facebook account that manages Surf Co Page and tick it when Facebook lists the Pages, or use Switch account to change pages.",
     );
   });
 
@@ -71,21 +76,30 @@ describe("different account on reconnect", () => {
   // account comes from a Facebook Page linked to it; nobody signs in to it there.
   it("Settings, Instagram, after a refused reconnect: the Facebook sign-in that works", () => {
     expect(reconnectDifferentAccountMessage("instagram", "@surfschool")).toBe(
-      "Facebook didn't return the Page linked to @surfschool, so nothing changed. To reconnect it, sign in with a Facebook account that manages the Page linked to @surfschool and tick that Page when Facebook lists the Pages, or use Switch account to change accounts.",
+      "Facebook didn't return the Page linked to @surfschool, so nothing changed. To reconnect it, sign in with a Facebook account that manages that Page and tick it when Facebook lists the Pages (and its Instagram account, if listed), or use Switch account to change accounts.",
     );
   });
 
   it("Settings, Instagram, not offered in the list: the Facebook sign-in that works", () => {
     const sentence = choiceDifferentAccountMessage("instagram", "@otherbiz", "@surfschool", false);
     expect(sentence).toBe(
-      "You chose @otherbiz, not @surfschool, and @surfschool wasn't in the list. To reconnect it, sign in with a Facebook account that manages the Page linked to @surfschool and tick that Page when Facebook lists the Pages, or use Switch account to change to @otherbiz.",
+      "You chose @otherbiz; the Page linked to @surfschool wasn't listed. To reconnect it, sign in with a Facebook account that manages that Page and tick it when Facebook lists the Pages (and its Instagram account, if listed), or use Switch account to change to @otherbiz.",
     );
     expect(sentence).not.toMatch(/signed in to @otherbiz|sign in to @surfschool/i);
   });
 
-  it("the client's page, Instagram: says whose it is, as on every other platform", () => {
+  // R52 client-journey L1: the owner's email tells the client to tick the
+  // Page; /c told them to have it disconnected, which lets another Page's
+  // Instagram be saved silently. The client who manages it gets the same step.
+  it("the client's page, Instagram: the tick step first for the one who manages the Page, then the owner", () => {
     expect(linkDifferentAccountMessage("instagram", "@surfschool")).toBe(
-      "This connection belongs to @surfschool. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+      "If you manage the Page linked to @surfschool, press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages (and its Instagram account, if listed). If not, ask the workspace owner to disconnect it, then connect yours.",
+    );
+  });
+
+  it("the client's page, Facebook Page: the tick step first for the one who manages the page, then the owner", () => {
+    expect(linkDifferentAccountMessage("facebook_page", "Surf Co Page")).toBe(
+      "If you manage Surf Co Page, press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages. If not, ask the workspace owner to disconnect it, then connect yours.",
     );
   });
 
@@ -100,6 +114,20 @@ describe("different account on reconnect", () => {
     expect(linkDifferentAccountMessage("linkedin", "Surf Co page")).toBe(
       "This connection posts to Surf Co page. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then sign in with a LinkedIn account that manages Surf Co page. If not, ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
+  });
+
+  // R52 lead review: a banner is read at a glance, so these stay at 45 words or fewer.
+  it("the Facebook Page and Instagram sentences are 45 words or fewer", () => {
+    for (const sentence of [
+      reconnectDifferentAccountMessage("instagram", "surfschool"),
+      reconnectDifferentAccountMessage("facebook_page", "Surf Co Page"),
+      choiceDifferentAccountMessage("instagram", "otherbiz", "surfschool", false),
+      choiceDifferentAccountMessage("facebook_page", "Client Cafe", "Surf Co Page", false),
+      linkDifferentAccountMessage("instagram", "surfschool"),
+      linkDifferentAccountMessage("facebook_page", "Surf Co Page"),
+    ]) {
+      expect(sentence.split(/\s+/).length, sentence).toBeLessThanOrEqual(45);
+    }
   });
 
   it("no sentence tells anyone to sign in to a LinkedIn page", () => {
@@ -215,6 +243,18 @@ describe("a refused choice from a list", () => {
     expect(linkChoiceDifferentAccountMessage("linkedin", "My Surf School", false)).toBe(
       linkDifferentAccountMessage("linkedin", "My Surf School"),
     );
+  });
+
+  // R52 client-journey L1: the link choice's 409 carries the tick step when the Page wasn't offered.
+  it("the client's page, Instagram and Facebook Page: offered, choose it; not offered, the tick step", () => {
+    for (const platform of ["instagram", "facebook_page"] as const) {
+      expect(linkChoiceDifferentAccountMessage(platform, "surfschool", true)).toBe(
+        "Choose surfschool from the list, or ask the workspace owner to disconnect it first.",
+      );
+      const notOffered = linkChoiceDifferentAccountMessage(platform, "surfschool", false);
+      expect(notOffered).toBe(linkDifferentAccountMessage(platform, "surfschool"));
+      expect(notOffered).toContain("press Reconnect, sign in with a Facebook account that manages it and tick it when Facebook lists the Pages");
+    }
   });
 });
 

@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { signInTo } from "@/lib/differentAccount";
+
 import HelpPage from "./page";
 
 // R6-pages L5: clients connect their own accounts through the connect link.
@@ -40,13 +42,30 @@ describe("Help: when something goes wrong", () => {
     const section = html().slice(html().indexOf('id="troubleshooting"'));
     expect(section).toContain("Reconnect came back with a different account.");
     expect(section).toContain(
-      "Nothing changed: the connection still posts where it did. Sign in to the account that is connected (for a LinkedIn or Facebook page, with an account that manages that page), then press Reconnect again.",
+      "Nothing changed: the connection still posts where it did. Press Reconnect again and sign in to the account that is connected.",
     );
     expect(section).toContain(
       "LinkedIn reuses the account signed in to LinkedIn in this browser, so sign out of LinkedIn first",
     );
     expect(section).toContain('href="https://www.linkedin.com/m/logout/"');
     expect(section).toContain("To use the other account instead, use Switch account.");
+  });
+});
+
+// R52 pages-a L2: Help named no Instagram case and no tick step. It uses
+// the same sign-in step as Settings, so the two can't drift apart.
+describe("Help: a different account on Facebook Page and Instagram", () => {
+  it("names the Facebook Page and Instagram steps from the shared sign-in text", () => {
+    const section = renderToStaticMarkup(HelpPage()).split('id="troubleshooting"')[1];
+    expect(section).toContain(`For a LinkedIn page, ${signInTo("linkedin", "that page")}.`);
+    expect(section).toContain(`For a Facebook Page, ${signInTo("facebook_page", "the connected Page")}.`);
+    expect(section).toContain(`For Instagram, ${signInTo("instagram", "the connected Instagram account")}.`);
+    expect(section).toContain(
+      "For Instagram, sign in with a Facebook account that manages the Page linked to the connected Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
+    );
+    expect(section).toContain(
+      "For a Facebook Page, sign in with a Facebook account that manages the connected Page and tick it when Facebook lists the Pages.",
+    );
   });
 });
 

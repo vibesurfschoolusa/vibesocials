@@ -56,10 +56,11 @@ describe("buildRefusedConnectEmail", () => {
   });
 
   // R8-client-journey L2 / pages L1: a page is not signed in to; an account that manages it is.
+  // R52 client-journey L1: Facebook's step also ticks the Page in Facebook's list.
   it.each([
-    ["linkedin", "LinkedIn"],
-    ["facebook_page", "Facebook"],
-  ] as const)("%s: a page, managed by an account", (platform, account) => {
+    ["linkedin", "LinkedIn", ""],
+    ["facebook_page", "Facebook", " and tick it when Facebook lists the Pages"],
+  ] as const)("%s: a page, managed by an account", (platform, account, tick) => {
     const email = buildRefusedConnectEmail({
       platform,
       workspaceId: "ws_1",
@@ -73,7 +74,7 @@ describe("buildRefusedConnectEmail", () => {
       `<p>Your client used your connect link for <strong>Surf Co</strong> and signed in with a ${account} account for a different page than the one connected (<strong>Surf Co Page</strong>). Nothing was changed.</p>`,
     );
     expect(email.html).toContain(
-      `<p>If your client should post to their own page, disconnect Surf Co Page in Settings, Connections; then they can connect theirs through the link. If Surf Co Page is the right page, use Reconnect in Settings, Connections, or ask your client to sign in with a ${account} account that manages Surf Co Page.</p>`,
+      `<p>If your client should post to their own page, disconnect Surf Co Page in Settings, Connections; then they can connect theirs through the link. If Surf Co Page is the right page, use Reconnect in Settings, Connections, or ask your client to sign in with a ${account} account that manages ${tick ? "it" : "Surf Co Page"}${tick}.</p>`,
     );
     expect(email.html).not.toContain("sign in to Surf Co Page");
   });
@@ -94,9 +95,23 @@ describe("buildRefusedConnectEmail", () => {
       "<p>Your client used your connect link for <strong>Surf Co</strong> to reconnect Instagram, but Facebook didn&#39;t return the Page linked to @surfschool. Nothing was changed.</p>",
     );
     expect(email.html).toContain(
-      "<p>If your client should post from their own account, disconnect @surfschool in Settings, Connections; then they can connect theirs through the link. If @surfschool is the right account, use Reconnect in Settings, Connections, or ask your client to sign in with a Facebook account that manages the Page linked to @surfschool and tick that Page when Facebook lists the Pages.</p>",
+      "<p>If your client should post from their own account, disconnect @surfschool in Settings, Connections; then they can connect theirs through the link. If @surfschool is the right account, use Reconnect in Settings, Connections, or ask your client to sign in with a Facebook account that manages the Page linked to @surfschool and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).</p>",
     );
     expect(email.html).not.toMatch(/signed in to a different Instagram account|sign in to @surfschool|has to be signed in to/);
+  });
+
+  // R52 client-journey L1: the tick step names the connection too, escaped as before.
+  it.each(["instagram", "facebook_page"] as const)("%s: escapes the name in the tick step", (platform) => {
+    const email = buildRefusedConnectEmail({
+      platform,
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      connectedName: "<b>Surf & Co</b>",
+      appBaseUrl: BASE,
+    });
+    expect(email.html).not.toContain("<b>");
+    expect(email.html).toContain("&lt;b&gt;Surf &amp; Co&lt;/b&gt;");
+    expect(email.html).toMatch(/and tick (that Page|it) when Facebook lists the Pages/);
   });
 
   it("escapes the names it shows", () => {

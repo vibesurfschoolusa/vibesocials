@@ -603,8 +603,8 @@ describe("POST /api/connections/pending/[id]", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
       error:
-        // R8-pages L1: a Facebook Page is managed, not signed in to.
-        "You chose Client Cafe, not My Surf School, and My Surf School wasn't in the list. Sign in with a Facebook account that manages My Surf School to reconnect it, or use Switch account to change to Client Cafe.",
+        // R8-pages L1: a Facebook Page is managed, not signed in to. R52: and ticked in Facebook's list.
+        "You chose Client Cafe; My Surf School wasn't listed. To reconnect it, sign in with a Facebook account that manages My Surf School and tick it when Facebook lists the Pages, or use Switch account to change to Client Cafe.",
     });
     expect(deleteManyMock).not.toHaveBeenCalled();
   });
@@ -719,7 +719,7 @@ describe("POST /api/connections/pending/[id]", () => {
 
       expect(response.status).toBe(409);
       const { error } = (await response.json()) as { error: string };
-      expect(error).toMatch(/^You chose Client Cafe, not My Surf School/);
+      expect(error).toMatch(/^You chose Client Cafe; My Surf School wasn't listed\./);
       expect(error).not.toContain("may have been connected");
       expect(deleteManyMock).not.toHaveBeenCalled();
     });

@@ -56,11 +56,12 @@ export function connectedAccountName(connection: {
  * Page linked to it (instagram/start), so its sign-in is a Facebook account
  * that manages that Page (`linkedPage`). The platform's name for the account
  * signed in with, or no entry where the connection is the account itself.
+ * `listsPages`: the sign-in then lists the Pages to tick (Meta's dialog).
  */
-const PAGE_ACCOUNT: Partial<Record<Platform, { account: string; linkedPage?: true }>> = {
+const PAGE_ACCOUNT: Partial<Record<Platform, { account: string; linkedPage?: true; listsPages?: true }>> = {
   linkedin: { account: "LinkedIn" },
-  facebook_page: { account: "Facebook" },
-  instagram: { account: "Facebook", linkedPage: true },
+  facebook_page: { account: "Facebook", listsPages: true },
+  instagram: { account: "Facebook", linkedPage: true, listsPages: true },
 };
 
 /** The account name for a connection that is itself a page (LinkedIn, Facebook Page), else null. */
@@ -89,24 +90,36 @@ export function linkedPageNotReturned(platform: Platform, name: string): string 
   return account ? `${account} didn't return ${managedPage(platform, name)}` : null;
 }
 
-/** "sign in to <name>", or "sign in with a <platform> account that manages <the page>". */
-export function signInTo(platform: Platform, name: string): string {
+/**
+ * "sign in to <name>", or "sign in with a <platform> account that manages <the page>".
+ * `namedAs` ("it", "that Page"): for a sentence that has just named the page,
+ * the short form refers back to it instead of naming it again (R52 lead
+ * review: banners kept to 45 words). Only a sign-in that lists the Pages has one.
+ */
+export function signInTo(platform: Platform, name: string, namedAs?: string): string {
   const entry = PAGE_ACCOUNT[platform];
   if (!entry) return `sign in to ${name}`;
-  const signIn = `sign in with a ${entry.account} account that manages ${managedPage(platform, name)}`;
+  const page = entry.listsPages && namedAs ? namedAs : managedPage(platform, name);
+  const signIn = `sign in with a ${entry.account} account that manages ${page}`;
+  if (!entry.listsPages) return signIn;
   // R51 second look: someone who manages the Page but left it unticked in
-  // Meta's list signed in rightly; ticking it is their step.
-  return entry.linkedPage ? `${signIn} and tick that Page when ${entry.account} lists the Pages` : signIn;
+  // Meta's list signed in rightly; ticking it is their step. R52
+  // client-journey L1: a Facebook Page is ticked in the same list. Meta's
+  // dialog may also list Instagram accounts, which can't be checked from
+  // here, so Instagram's step is true whether or not it does.
+  const tick = entry.linkedPage && !namedAs ? "tick that Page" : "tick it";
+  const step = `${signIn} and ${tick} when ${entry.account} lists the Pages`;
+  return entry.linkedPage ? `${step} (and its Instagram account, if listed)` : step;
 }
 
 /**
- * "<Sign in ...> to reconnect it". R51 last look: after Instagram's longer
- * step, a trailing "to reconnect it" reads as part of Facebook's list, so
- * there it comes first.
+ * "<Sign in ...> to reconnect it". R51 last look: after a tick step, a
+ * trailing "to reconnect it" reads as part of Facebook's list, so there it
+ * comes first.
  */
-function reconnectStep(platform: Platform, name: string): string {
-  return PAGE_ACCOUNT[platform]?.linkedPage
-    ? `To reconnect it, ${signInTo(platform, name)}`
+function reconnectStep(platform: Platform, name: string, namedAs?: string): string {
+  return PAGE_ACCOUNT[platform]?.listsPages
+    ? `To reconnect it, ${signInTo(platform, name, namedAs)}`
     : `${capitalized(signInTo(platform, name))} to reconnect it`;
 }
 
@@ -125,12 +138,15 @@ export function linkedInReconnectSignInStep(pageName: string): string {
  * platform's own answer on the server.
  */
 export function settingsDifferentAccountMessage(platform: Platform, signedInName: string, connectedName: string): string {
-  // Facebook Page and Instagram (through Facebook) are chosen from a list after the sign-in.
-  const what =
-    platform === "facebook_page" || platform === "instagram"
-      ? `You chose ${signedInName}, not ${connectedName}, and ${connectedName} wasn't in the list.`
-      : `You signed in to ${signedInName}, not ${connectedName}.`;
-  return `${what} ${reconnectStep(platform, connectedName)}, or use Switch account to change to ${signedInName}.`;
+  // Facebook Page and Instagram (through Facebook) are chosen from a list
+  // after the sign-in. For Instagram the page named is the Facebook Page, so
+  // the step can call it "that Page".
+  const entry = PAGE_ACCOUNT[platform];
+  const what = entry?.listsPages
+    ? `You chose ${signedInName}; ${managedPage(platform, connectedName)} wasn't listed.`
+    : `You signed in to ${signedInName}, not ${connectedName}.`;
+  const step = reconnectStep(platform, connectedName, entry?.linkedPage ? "that Page" : undefined);
+  return `${what} ${step}, or use Switch account to change to ${signedInName}.`;
 }
 
 /**
@@ -145,7 +161,8 @@ export function reconnectDifferentAccountMessage(platform: Platform, connectedNa
   }
   const notReturned = linkedPageNotReturned(platform, connectedName);
   if (notReturned) {
-    return `${notReturned}, so nothing changed. ${reconnectStep(platform, connectedName)}, or use Switch account to change accounts.`;
+    // The first sentence names the Page, so the step calls it "that Page".
+    return `${notReturned}, so nothing changed. ${reconnectStep(platform, connectedName, "that Page")}, or use Switch account to change accounts.`;
   }
   if (entry) {
     return `${entry.account} connected a different page than ${connectedName}, so nothing changed. ${reconnectStep(platform, connectedName)}, or use Switch account to change pages.`;
@@ -157,12 +174,21 @@ export function reconnectDifferentAccountMessage(platform: Platform, connectedNa
 /**
  * The client's /c page. R7-client-journey L4: a client can't switch the
  * account (that needs the connected account's own sign-in); what works is the
- * owner disconnecting it, then the client connecting theirs.
+ * owner disconnecting it, then the client connecting theirs. R52
+ * client-journey L1: for a page, someone who manages it may only have signed
+ * in wrongly or left it unticked, so their own step comes first, as in the
+ * owners' email. /c only offers a sign-in for a flagged or ending connection,
+ * and that row's button is Reconnect. R52 lead review: kept to 45 words, so
+ * it opens with the page it names and says where to disconnect only to the
+ * owner, who knows it.
  */
 export function linkDifferentAccountMessage(platform: Platform, connectedName: string): string {
   const owner = "ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.";
   if (platform === "linkedin") {
     return `This connection posts to ${connectedName}. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. If not, ${owner}`;
+  }
+  if (PAGE_ACCOUNT[platform]?.listsPages) {
+    return `If you manage ${managedPage(platform, connectedName)}, press Reconnect, ${signInTo(platform, connectedName, "it")}. If not, ask the workspace owner to disconnect it, then connect yours.`;
   }
   return `This connection belongs to ${connectedName}. ${capitalized(owner)}`;
 }

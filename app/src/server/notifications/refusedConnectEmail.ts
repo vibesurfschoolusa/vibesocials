@@ -49,7 +49,9 @@ export function buildRefusedConnectEmail(params: {
   // R8-client-journey L2: a LinkedIn or Facebook page is not signed in to; an
   // account that manages it is (lib/differentAccount.ts).
   const pageAccount = pageAccountLabel(params.platform);
-  const signIn = escapeHtml(signInTo(params.platform, params.connectedName));
+  // R52 lead review: a page's sentence has just named it ("If <name> is the
+  // right page"), so the short form refers back; LinkedIn's has none.
+  const signIn = escapeHtml(signInTo(params.platform, params.connectedName, pageAccount ? "it" : undefined));
   // R51 pages-a L2: Instagram is signed in to through Facebook, from the Page
   // linked to it, so the account itself is never signed in to.
   const viaAccount = linkedPageAccount(params.platform);
