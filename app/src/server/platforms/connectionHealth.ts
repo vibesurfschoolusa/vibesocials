@@ -1,3 +1,5 @@
+import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
+
 // Roadmap Phase 4: connection health / reconnect flag.
 //
 // `SocialConnection.expiresAt` is only the short-lived access-token expiry
@@ -198,6 +200,18 @@ export function isTerminalRefreshFailure(
 }
 
 /**
+ * For a token refresh's defensive body read (`.catch(rethrowFetchTimeout)`): a
+ * body that broke off reads as "", but one the request's limit ended
+ * (fetchWithinLimit) stays FETCH_TIMEOUT. R47 platform L1: an answer that was
+ * never read whole says nothing about the grant, so it never flags a
+ * connection, and the caller's timeout handling (skip, try later) runs.
+ */
+export function rethrowFetchTimeout(error: unknown): string {
+  if ((error as { code?: unknown } | null)?.code === FETCH_TIMEOUT_CODE) throw error;
+  return "";
+}
+
+/**
  * The OAuth `error` code (RFC 6749 §5.2, e.g. `"invalid_grant"`) from a failed
  * token-endpoint response, or `undefined` when the body is not such JSON.
  * Reads a CLONE, so the caller can still consume the body (e.g. assertOk).
@@ -206,7 +220,7 @@ export async function readOAuthErrorCode(response: Response): Promise<string | u
   const body = await response
     .clone()
     .text()
-    .catch(() => "");
+    .catch(rethrowFetchTimeout);
   try {
     const parsed: unknown = JSON.parse(body);
     if (parsed && typeof parsed === "object") {

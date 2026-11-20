@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import {
   flagTerminalRefreshFailure,
@@ -154,7 +154,9 @@ export async function refreshGoogleToken(
     connectionId: connection.id,
   });
 
-  const response = await fetchWithTimeout(
+  // R47 platform L1: the limit covers the body too, so a stalled answer ends as
+  // FETCH_TIMEOUT (nothing written or flagged) instead of hanging the caller.
+  const response = await fetchWithinLimit(
     GOOGLE_TOKEN_ENDPOINT,
     {
       method: "POST",

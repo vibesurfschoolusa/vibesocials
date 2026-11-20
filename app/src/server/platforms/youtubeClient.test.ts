@@ -581,9 +581,10 @@ describe("youtubeClient.publishVideo — step deadline", () => {
       expect(timeout).toBeLessThanOrEqual(12_000);
       expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
     }
-    // The download's whole-transfer bound (the body is read after the headers).
-    expect(abortTimeoutSpy).toHaveBeenCalledTimes(1);
-    expect(abortTimeoutSpy.mock.calls[0][0]).toBeLessThanOrEqual(12_000);
+    // Whole-body bounds (the body is read after the headers): the token
+    // refresh's (fetchWithinLimit, R47 platform L1) and the download's.
+    expect(abortTimeoutSpy).toHaveBeenCalledTimes(2);
+    for (const [ms] of abortTimeoutSpy.mock.calls) expect(ms).toBeLessThanOrEqual(12_000);
   });
 
   it("worst case: slow refresh + download and a hung insert still settle by the step deadline", async () => {

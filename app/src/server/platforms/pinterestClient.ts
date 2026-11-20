@@ -1,7 +1,12 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
-import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  FETCH_TIMEOUT_CODE,
+  fetchWithinLimit,
+  fetchWithTimeout,
+} from "@/lib/fetchWithTimeout";
 import {
   PINTEREST_API_BASE_URL,
   PINTEREST_LINK_MAX,
@@ -22,6 +27,7 @@ import {
   connectionTokenChangedError,
   flagRejectedToken,
   flagTerminalRefreshFailure,
+  rethrowFetchTimeout,
   type TokenSnapshot,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
@@ -212,7 +218,8 @@ export async function refreshPinterestToken(
   // Throws (before anything is sent) when the step budget is spent.
   const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, opts?.deadline);
 
-  const response = await fetchWithTimeout(
+  // R47 platform L1: the limit covers the body too; a stall is FETCH_TIMEOUT.
+  const response = await fetchWithinLimit(
     PINTEREST_TOKEN_URL,
     {
       method: "POST",
@@ -225,7 +232,7 @@ export async function refreshPinterestToken(
     timeoutMs,
   );
 
-  const rawBody = await response.text().catch(() => "");
+  const rawBody = await response.text().catch(rethrowFetchTimeout);
   let tokenData: PinterestTokenResponse | null = null;
   try {
     const parsed: unknown = JSON.parse(rawBody);

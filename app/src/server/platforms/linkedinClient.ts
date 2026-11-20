@@ -4,7 +4,7 @@ import type { MediaItem, SocialConnection } from "@prisma/client";
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, photoSetFormatsReason, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
 import { truncateKeepingLinks } from "@/lib/truncate";
@@ -286,7 +286,8 @@ export async function refreshLinkedInToken(
 
   console.log("[LinkedIn] Refreshing access token", { connectionId: connection.id });
 
-  const response = await fetchWithTimeout(
+  // R47 platform L1: the limit covers the body too; a stall is FETCH_TIMEOUT.
+  const response = await fetchWithinLimit(
     LINKEDIN_TOKEN_ENDPOINT,
     {
       method: "POST",

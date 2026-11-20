@@ -7,7 +7,12 @@ import {
   refreshGoogleToken,
   refreshGoogleTokenEarly,
 } from "@/server/platforms/googleTokens";
+import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
+
+// A missing bound must be a quick red test, never a hung run.
+const STALL_TEST_TIMEOUT_MS = 5_000;
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest; refreshGoogleToken
@@ -643,4 +648,59 @@ describe("refreshGoogleTokenEarly with the real refresh and invalid_grant", () =
     expect(error).toMatchObject({ code: "GOOGLE_TOKEN_REFRESH_FAILED", oauthError: "invalid_grant" });
     expect(reviewsErrorBody(error, "Fallback.", "owner")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true, signIn: true });
   });
+});
+
+// R47 platform L1: the token request's limit covers the body too
+// (fetchWithinLimit), so a refresh whose headers came and whose body stalls
+// ends as FETCH_TIMEOUT instead of hanging the hourly numbers step.
+describe("refreshGoogleToken: a stalled body", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function stallAfterHeaders(status: number) {
+    return (_input: string | URL, init?: RequestInit): Promise<Response> => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error":'));
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+        },
+      });
+      return Promise.resolve(new Response(body, { status, headers: { "content-type": "application/json" } }));
+    };
+  }
+
+  async function settleWithin(promise: Promise<unknown>, ms: number): Promise<unknown> {
+    const settled = promise.then(
+      () => "resolved",
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    return Promise.race([settled, Promise.resolve("still waiting")]);
+  }
+
+  it("a 200 whose body never ends rejects with FETCH_TIMEOUT within the limit, and writes nothing", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.spyOn(logger, "info").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(bodyNeverEnds));
+
+    const out = await settleWithin(refreshGoogleToken(makeConnection()), DEFAULT_FETCH_TIMEOUT_MS);
+
+    expect(out).toMatchObject({ code: FETCH_TIMEOUT_CODE });
+    expect(updateMock).not.toHaveBeenCalled();
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("an error body that never ends is bounded too: FETCH_TIMEOUT, and the connection is not flagged", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.spyOn(logger, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(stallAfterHeaders(400)));
+
+    const out = await settleWithin(refreshGoogleToken(makeConnection()), DEFAULT_FETCH_TIMEOUT_MS);
+
+    expect(out).toMatchObject({ code: FETCH_TIMEOUT_CODE });
+    expect(updateMock).not.toHaveBeenCalled();
+  }, STALL_TEST_TIMEOUT_MS);
 });

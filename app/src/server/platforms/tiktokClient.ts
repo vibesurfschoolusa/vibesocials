@@ -1,7 +1,7 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { asStorageReadFailure } from "@/lib/publishFailureText";
 import { truncateGraphemes } from "@/lib/truncate";
@@ -13,6 +13,7 @@ import {
   flagRejectedToken,
   flagTerminalRefreshFailure,
   isTerminalRefreshFailure,
+  rethrowFetchTimeout,
   type TokenSnapshot,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
@@ -565,7 +566,8 @@ export async function refreshTikTokToken(
 
   console.log("[TikTok] Refreshing access token", { connectionId: connection.id });
 
-  const response = await fetchWithTimeout(
+  // R47 platform L1: the limit covers the body too; a stall is FETCH_TIMEOUT.
+  const response = await fetchWithinLimit(
     TIKTOK_TOKEN_ENDPOINT,
     {
       method: "POST",
@@ -584,7 +586,7 @@ export async function refreshTikTokToken(
 
   // Parse defensively: a proxy/5xx page is not JSON, and TikTok can report an
   // OAuth error in the body of an HTTP 200.
-  const rawBody = await response.text().catch(() => "");
+  const rawBody = await response.text().catch(rethrowFetchTimeout);
   let tokenData: TikTokRefreshResponse | null = null;
   try {
     const parsed: unknown = JSON.parse(rawBody);

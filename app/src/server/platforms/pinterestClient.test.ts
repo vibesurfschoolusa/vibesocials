@@ -38,7 +38,9 @@ vi.mock("@/lib/fetchWithTimeout", async () => {
   const actual = await vi.importActual<typeof import("@/lib/fetchWithTimeout")>(
     "@/lib/fetchWithTimeout",
   );
-  return { ...actual, fetchWithTimeout: fetchMock };
+  // The token refresh reads through fetchWithinLimit (the body's own limit is
+  // covered in tokenRefreshStall.test.ts); here both reach the one mock.
+  return { ...actual, fetchWithTimeout: fetchMock, fetchWithinLimit: fetchMock };
 });
 
 // The per-connection refresh lock needs a database; here a refresh just runs.
