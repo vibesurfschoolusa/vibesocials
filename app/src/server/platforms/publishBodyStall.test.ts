@@ -33,7 +33,7 @@ vi.mock("@/server/platforms/connectionRefresh", () => ({
   refreshConnectionToken: (connection: unknown, refresh: (current: unknown) => Promise<unknown>) => refresh(connection),
 }));
 
-import { facebookPageClient } from "./facebookPageClient";
+import { FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS, facebookPageClient } from "./facebookPageClient";
 import { googleBusinessProfileClient } from "./googleBusinessProfileClient";
 import { linkedinClient } from "./linkedinClient";
 import { pinterestClient } from "./pinterestClient";
@@ -188,6 +188,18 @@ describe("X: a body that never ends", () => {
     expect(tweets(calls)).toBe(0);
   }, STALL_TEST_TIMEOUT_MS);
 
+  // R48 review low 3: v1.1's refusal is read before v2 is sent. A stalled
+  // refusal body still ends within the limit and leads to exactly one v2 send.
+  it("a v1.1 refusal whose body stalls leads to exactly one v2 send, which posts", async () => {
+    const { calls } = stub(routes({ v1: stalls(403) }));
+
+    const out = await after(2 * DEFAULT_FETCH_TIMEOUT_MS, xClient.publishVideo(ctx(connection("x"), "video/mp4")));
+
+    expect(out).toEqual({ value: { externalPostId: "tweet-2" } });
+    expect(calls("statuses/update.json")).toBe(1);
+    expect(calls("/2/tweets")).toBe(1);
+  }, STALL_TEST_TIMEOUT_MS);
+
   it("a stalled tweet body is PUBLISH_UNCONFIRMED, sent once, with no v2 fallback", async () => {
     const { calls } = stub(routes({ v1: stalls() }));
 
@@ -339,6 +351,68 @@ describe("Facebook Page: a body that never ends", () => {
 
     expect(error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
     expect(calls("/page-1/feed")).toBe(1);
+  }, STALL_TEST_TIMEOUT_MS);
+});
+
+describe("Facebook Page: a stalled refusal before a resend", () => {
+  const fb = () => connection("facebook_page", { refreshToken: null, accountIdentifier: "page-1", metadata: { pageName: "Acme" } });
+  const bodies: unknown[] = [];
+  const recorded =
+    (handler: Handler): Handler =>
+    (input, init) => {
+      bodies.push(init?.body);
+      return handler(input, init);
+    };
+  beforeEach(() => {
+    bodies.length = 0;
+  });
+
+  // R48 review low 3: refusedForDescription reads the 4xx from a clone. A
+  // stalled one still ends within the limit, and the photo goes once more
+  // without its description.
+  it("a photo refused with its description and a stalled body is sent once more without it", async () => {
+    let sends = 0;
+    stub([
+      [
+        has("/page-1/photos"),
+        recorded((input, init) => (sends++ === 0 ? stalls(400)(input, init) : Promise.resolve(json({ id: "photo-9", post_id: "page-1_post-9" })))),
+      ],
+    ]);
+    const withDescription = ctx(fb(), "image/jpeg");
+    const item = { ...withDescription.mediaItem, altText: "A surfer on a small wave" } as MediaItem;
+
+    const out = await after(
+      2 * DEFAULT_FETCH_TIMEOUT_MS,
+      facebookPageClient.publishVideo({ ...withDescription, mediaItem: item, mediaItems: [item] }),
+    );
+
+    expect(out).toMatchObject({ value: { externalPostId: expect.any(String) } });
+    expect(bodies).toHaveLength(2);
+    expect(String(bodies[0])).toContain("alt_text_custom");
+    expect(String(bodies[1])).not.toContain("alt_text_custom");
+  }, STALL_TEST_TIMEOUT_MS);
+
+  // refusedForThumb likewise: the video goes once more without its cover.
+  it("a video refused with its cover and a stalled body is sent once more without it", async () => {
+    let sends = 0;
+    stub([
+      [has("cover.jpg"), answer(() => new Response(new Uint8Array([7, 7])))],
+      [
+        has("/page-1/videos"),
+        recorded((input, init) => (sends++ === 0 ? stalls(400)(input, init) : Promise.resolve(json({ id: "video-1" })))),
+      ],
+    ]);
+
+    // A video's send has the video upload's limit.
+    const out = await after(
+      2 * FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS,
+      facebookPageClient.publishVideo(ctx(fb(), "video/mp4", { cover: { timeMs: 900, imageUrl: "https://blob.example.com/cover.jpg" } })),
+    );
+
+    expect(out).toMatchObject({ value: { externalPostId: "video-1" } });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBeInstanceOf(FormData);
+    expect(bodies[1]).toBeInstanceOf(URLSearchParams);
   }, STALL_TEST_TIMEOUT_MS);
 });
 
