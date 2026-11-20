@@ -70,7 +70,7 @@ import type { MediaItemDto } from "@/lib/mediaDto";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { PrepareFileError, prepareUploadFile } from "@/lib/prepareUploadFile";
-import { localDateTimeToUtcIso, localTimeZoneLabel, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
+import { localDateTimeToUtcIso, localTimeZoneLabel, SCHEDULE_BUFFER_MS, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
@@ -1015,10 +1015,21 @@ export function BulkPostsForm({
             }),
           });
         } else if (result.outcome === "refused") {
-          // R48 pages-a L1: the server's too-soon answer holds the row as the
-          // press's own check does, so the time it names is the one shown.
-          if (result.error === SCHEDULED_TIME_TOO_SOON_MESSAGE) timeHeldRef.current = new Set([...timeHeldRef.current, id]);
-          updateRow(id, { sending: false, sendError: result.error });
+          // R48 pages-a L1, R49 pages-a L1: the server's too-soon answer is the
+          // press's own refusal, timed at the answer: the row is held for its
+          // time, and its line is judged live (rowSendLine), so it goes once
+          // the row's time changes. A browser clock behind the server's would
+          // judge the same time fine, so the press is timed no earlier than
+          // the server's answer makes true.
+          if (result.error === SCHEDULED_TIME_TOO_SOON_MESSAGE) {
+            timeHeldRef.current = new Set([...timeHeldRef.current, id]);
+            const sentFor = scheduledFor ? Date.parse(scheduledFor) : Number.NaN;
+            const answeredAt = Number.isNaN(sentFor) ? Date.now() : Math.max(Date.now(), sentFor - SCHEDULE_BUFFER_MS + 1);
+            setRefusedPresses((current) => new Map(current).set(id, { mode, at: answeredAt }));
+            updateRow(id, { sending: false });
+          } else {
+            updateRow(id, { sending: false, sendError: result.error });
+          }
         } else {
           updateRow(id, { sending: false, uncertain: true, uncertainMode: mode });
         }

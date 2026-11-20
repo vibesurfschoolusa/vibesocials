@@ -36,7 +36,7 @@ let container: FakeNode;
 let slots: { day: number; time: string }[];
 let posts: number;
 /** What the nth POST answers: a post, a refusal, or no answer at all. */
-let answers: ("ok" | "refused" | "tooSoon" | "lost")[];
+let answers: ("ok" | "refused" | "tooSoon" | "tooSoonSlowClock" | "lost")[];
 
 const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
   const url = String(input);
@@ -46,6 +46,8 @@ const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
     const answer = answers[posts - 1] ?? "ok";
     if (answer === "lost") throw new TypeError("Failed to fetch");
     // The server's own too-soon refusal (validateScheduledFor).
+    // The server's clock is ahead of this browser's: it refuses a time the page still thinks is far enough off.
+    if (answer === "tooSoonSlowClock") return Response.json({ error: SCHEDULED_TIME_TOO_SOON_MESSAGE }, { status: 400 });
     if (answer === "tooSoon") {
       // The answer comes after 12:00 has passed.
       vi.setSystemTime(new Date(2030, 5, 10, 12, 1));
@@ -257,5 +259,61 @@ describe("R45 lead review: the batch controls end a time hold", () => {
     await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-11" } }));
     expect(rowTimes()).toEqual(["2030-06-11T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
     expect(container.textContent).not.toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+  });
+});
+
+// R49 pages-a L1: the server's too-soon answer is a refused press timed at the
+// answer, so its line is judged live and goes once the row's time changes.
+describe("R49 pages-a L1: the server's too-soon line goes when the row moves", () => {
+  it("server too-soon, then First day moved to tomorrow: the line is gone and the row moves", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2030, 5, 10, 11, 45));
+    await mountWithThreePhotos();
+    await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-10" } }));
+    await run(() => props(byId("bulk-time")).onChange({ target: { value: "12:00" } }));
+    expect(rowTimes()).toEqual(["2030-06-10T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+
+    // The press passes row 1; the server answers after 12:00.
+    answers = ["tooSoon", "ok", "ok"];
+    await scheduleAll();
+    expect(posts).toBe(3);
+    expect(rowTimes()).toEqual(["2030-06-10T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+
+    await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-11" } }));
+    expect(rowTimes()).toEqual(["2030-06-11T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
+    expect(container.textContent).not.toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+  });
+
+  it("server too-soon and no change: the line stays through later renders", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2030, 5, 10, 11, 45));
+    await mountWithThreePhotos();
+    await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-10" } }));
+    await run(() => props(byId("bulk-time")).onChange({ target: { value: "12:00" } }));
+
+    answers = ["tooSoon", "ok", "ok"];
+    await scheduleAll();
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+
+    // A change elsewhere on the page (the AI captions switch) renders the rows again.
+    vi.setSystemTime(new Date(2030, 5, 10, 12, 5));
+    await run(() => props(byId("bulk-ai-captions")).onChange({ target: { checked: true } }));
+    expect(rowTimes()[0]).toBe("2030-06-10T12:00");
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+  });
+
+  it("server too-soon while this browser's clock is behind: the line is still shown", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2030, 5, 10, 11, 58, 30));
+    await mountWithThreePhotos();
+    await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-10" } }));
+    await run(() => props(byId("bulk-time")).onChange({ target: { value: "12:00" } }));
+
+    answers = ["tooSoonSlowClock", "ok", "ok"];
+    await scheduleAll();
+    expect(posts).toBe(3);
+    expect(rowTimes()[0]).toBe("2030-06-10T12:00");
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 });
