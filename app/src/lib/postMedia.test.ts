@@ -9,10 +9,8 @@ import {
   movePhoto,
   MULTI_PHOTO_MIME_TYPES,
   multiPhotoPlatformNotes,
-  PHOTO_GIF_ALONE_MESSAGE,
   PHOTO_LIMIT_MESSAGE,
   PHOTO_TYPE_MESSAGE,
-  PHOTO_VIDEO_ALONE_MESSAGE,
   photoPickProblem,
   removePhoto,
   validatePostMediaList,
@@ -194,21 +192,39 @@ describe("photoPickProblem (the Create page's picker)", () => {
     expect(photoPickProblem(10, many(1))).toBe(PHOTO_LIMIT_MESSAGE);
   });
 
-  it("refuses a video among photos", () => {
-    expect(photoPickProblem(2, [{ name: "photo", type: "video/mp4" }])).toBe(
-      "A video is posted on its own. Remove the photos first, or post the video separately.",
+  // R47 pages-a L6: the sentence's step fits the case. A mixed pick with nothing
+  // attached has no photos on screen to remove; one added to attached photos does.
+  // Where several files were picked, it names the one it means.
+  it("a mixed pick with nothing attached, video: choose it by itself, or only the photos", () => {
+    expect(photoPickProblem(0, [jpeg, { name: "clip.mp4", type: "video/mp4" }])).toBe(
+      "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photos.",
     );
-    expect(photoPickProblem(0, [jpeg, { name: "photo", type: "video/quicktime" }])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
   });
 
-  it("refuses a GIF among photos", () => {
-    expect(photoPickProblem(0, [jpeg, { name: "photo", type: "image/gif" }])).toBe("A GIF is posted on its own.");
-    expect(photoPickProblem(3, [{ name: "photo", type: "image/gif" }])).toBe(PHOTO_GIF_ALONE_MESSAGE);
+  it("a mixed pick with nothing attached, GIF: choose it by itself, or only the photos", () => {
+    expect(photoPickProblem(0, [jpeg, { name: "wave.gif", type: "image/gif" }])).toBe(
+      "wave.gif: a GIF is posted on its own. Choose the GIF by itself, or choose only the photos.",
+    );
+  });
+
+  it("a video added to attached photos: remove the photos, or post it separately", () => {
+    expect(photoPickProblem(2, [{ name: "clip.mp4", type: "video/mp4" }])).toBe(
+      "A video is posted on its own. Remove the photos to post it instead, or post it separately.",
+    );
+    expect(photoPickProblem(2, [jpeg, { name: "clip.mov", type: "video/quicktime" }])).toBe(
+      "clip.mov: a video is posted on its own. Remove the photos to post it instead, or post it separately.",
+    );
+  });
+
+  it("a GIF added to attached photos: remove the photos, or post it separately", () => {
+    expect(photoPickProblem(3, [{ name: "wave.gif", type: "image/gif" }])).toBe(
+      "A GIF is posted on its own. Remove the photos to post it instead, or post it separately.",
+    );
   });
 
   it("names the video or GIF before the limit", () => {
-    expect(photoPickProblem(9, [jpeg, { name: "photo", type: "video/mp4" }])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
-    expect(photoPickProblem(9, [jpeg, { name: "photo", type: "image/gif" }])).toBe(PHOTO_GIF_ALONE_MESSAGE);
+    expect(photoPickProblem(9, [jpeg, { name: "clip.mp4", type: "video/mp4" }])).toContain("a video is posted on its own");
+    expect(photoPickProblem(9, [jpeg, { name: "wave.gif", type: "image/gif" }])).toContain("a GIF is posted on its own");
   });
 
   it("refuses any other type a photo set cannot hold (checked after HEIC is converted)", () => {
@@ -248,7 +264,9 @@ describe("photoPickProblem (the Create page's picker)", () => {
   });
 
   it("a typeless clip.mp4 is a video: the lone-video sentence", () => {
-    expect(photoPickProblem(0, [jpeg, picked("clip.mp4", "")])).toBe(PHOTO_VIDEO_ALONE_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, picked("clip.mp4", "")])).toBe(
+      "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photos.",
+    );
   });
 });
 

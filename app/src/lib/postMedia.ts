@@ -135,9 +135,20 @@ export function validatePostMediaList(entries: unknown): PostMediaListResult {
 // The same rules as above, told to the user before anything uploads.
 
 export const PHOTO_LIMIT_MESSAGE = `You can attach up to ${MAX_POST_MEDIA} photos.`;
-export const PHOTO_VIDEO_ALONE_MESSAGE =
-  "A video is posted on its own. Remove the photos first, or post the video separately.";
-export const PHOTO_GIF_ALONE_MESSAGE = "A GIF is posted on its own.";
+
+/**
+ * R47 pages-a L6: a video or GIF in a photo pick, with the step that fits.
+ * With nothing attached (a mixed pick attaches nothing) there are no photos on
+ * screen to remove, so the step is to choose again; with photos attached, it
+ * is to remove them. Where several files were picked, the file is named.
+ */
+function aloneMessage(kind: "video" | "GIF", name: string, attachedCount: number, pickedCount: number): string {
+  const step =
+    attachedCount === 0
+      ? `Choose the ${kind} by itself, or choose only the photos.`
+      : "Remove the photos to post it instead, or post it separately.";
+  return pickedCount > 1 ? `${name}: a ${kind} is posted on its own. ${step}` : `A ${kind} is posted on its own. ${step}`;
+}
 export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or WebP images only.";
 
 /**
@@ -147,8 +158,10 @@ export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or
  * an iPhone HEIC photo only counts as a JPEG once converted.
  */
 export function photoPickProblem(attachedCount: number, picked: readonly { type: string; name: string }[]): string | null {
-  if (picked.some((file) => file.type.startsWith("video/"))) return PHOTO_VIDEO_ALONE_MESSAGE;
-  if (picked.some((file) => file.type === "image/gif")) return PHOTO_GIF_ALONE_MESSAGE;
+  const video = picked.find((file) => file.type.startsWith("video/"));
+  if (video) return aloneMessage("video", video.name, attachedCount, picked.length);
+  const gif = picked.find((file) => file.type === "image/gif");
+  if (gif) return aloneMessage("GIF", gif.name, attachedCount, picked.length);
   if (attachedCount + picked.length > MAX_POST_MEDIA) return PHOTO_LIMIT_MESSAGE;
   // R46 review: a type that can't be told gets the shared sentence, judged by the file's own
   // name (required, so no caller can leave it out and turn "clip.mkv" into "no extension").
