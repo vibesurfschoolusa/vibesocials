@@ -209,8 +209,15 @@ export type AccessUser = { email: string; emailVerifiedAt: Date | null; googleLi
  */
 export type AccessContext = { user: AccessUser; workspace: WorkspaceStatusFields; role: WorkspaceViewerRole };
 
+/**
+ * R53 fix review L1: the sign-up email can fail without the sign-up failing, so
+ * the sentence claims no link was sent. It shows in the shell's confirm banner
+ * and as every gated route's 403; either way that banner, with its "Send the
+ * link again" button, is at the top of the page.
+ */
 export function emailUnconfirmedMessage(email: string): string {
-  return `Confirm your email address to start posting. We sent a link to ${email}.`;
+  const address = email ? ` (${email})` : "";
+  return `Confirm your email address${address} to start posting. If the link didn't arrive, press Send the link again at the top of the page.`;
 }
 
 /**

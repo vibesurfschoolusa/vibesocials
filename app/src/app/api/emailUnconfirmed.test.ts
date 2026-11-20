@@ -180,7 +180,7 @@ describe("routes that create or move work, billing on, an unconfirmed address", 
     expect(result).toEqual({
       status: 403,
       body: {
-        error: "Confirm your email address to start posting. We sent a link to new@example.com.",
+        error: "Confirm your email address (new@example.com) to start posting. If the link didn't arrive, press Send the link again at the top of the page.",
         code: "EMAIL_UNCONFIRMED",
       },
     });

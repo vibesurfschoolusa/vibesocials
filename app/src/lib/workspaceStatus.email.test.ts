@@ -32,7 +32,7 @@ const ACTIVE = { ...EXEMPT_OLD, plan: "starter", planStatus: "active", currentPe
 const ENDED_TRIAL = { ...EXEMPT_OLD, trialEndsAt: new Date(NOW.getTime() - DAY) };
 const PAUSED = { pausedAt: new Date("2026-12-09T00:00:00Z"), pausedReason: "Unpaid invoice." };
 
-const SENTENCE = "Confirm your email address to start posting. We sent a link to new@example.com.";
+const SENTENCE = "Confirm your email address (new@example.com) to start posting. If the link didn't arrive, press Send the link again at the top of the page.";
 
 beforeEach(() => {
   vi.stubEnv("BILLING_ENABLED", "true");

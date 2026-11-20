@@ -108,7 +108,7 @@ describe("GET /api/workspaces/status with billing on", () => {
       context("owner", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }, { emailVerifiedAt: null, googleLinkedAt: null }),
     );
     expect(await (await GET(req())).json()).toEqual({
-      blockedMessage: "Confirm your email address to start posting. We sent a link to new@example.com.",
+      blockedMessage: "Confirm your email address (new@example.com) to start posting. If the link didn't arrive, press Send the link again at the top of the page.",
       emailUnconfirmed: true,
     });
   });
