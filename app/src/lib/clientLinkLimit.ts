@@ -95,7 +95,9 @@ export function connectAgainQuery(
   waitSeconds: number,
   nowMs: number,
 ): { error: string; until: string } {
-  return { error: code, until: String(Math.ceil(nowMs / 1000) + Math.ceil(waitSeconds)) };
+  // The sentence rounds what is left up to whole minutes; rounding the press time up as well
+  // would make a minute's wait read "2 minutes" (R46 review).
+  return { error: code, until: String(Math.floor(nowMs / 1000) + Math.ceil(waitSeconds)) };
 }
 
 /**

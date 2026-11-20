@@ -8,6 +8,7 @@ import { PENDING_CONNECTION_TTL_MS } from "@/server/connections/pendingConnectio
 import {
   CLIENT_LINK_LIMIT_REASON,
   LIMIT_UNCHECKED_REASON,
+  connectAgainQuery,
   connectAgainSentence,
   dailyLimitSentence,
   limitReachedSentence,
@@ -181,6 +182,31 @@ describe("connectAgainSentence", () => {
     expect(connectAgainSentence("rate_limited", until, "Connect", "X", REFUSED_AT)).toBe(
       `${CLIENT_LINK_LIMIT_REASON} Wait up to an hour, then press Connect beside X again.`,
     );
+  });
+
+  // R46 review: the end is the press time plus the wait, rounded once (by the sentence), so a
+  // press off a whole second never reads a minute longer than the route asked for.
+  describe("the end the route sends, read back", () => {
+    const PRESSED_MS = Date.parse("2026-11-19T10:15:00Z") + 100_123;
+    const sentence = (code: "limit_unchecked" | "rate_limited", wait: number, readAtMs: number) =>
+      connectAgainSentence(code, connectAgainQuery(code, wait, PRESSED_MS).until, "Connect", "Instagram", readAtMs);
+
+    it("a minute's couldn't-check wait, the page drawn 300 ms later: 1 minute", () => {
+      expect(sentence("limit_unchecked", 60, PRESSED_MS + 300)).toBe(
+        `${LIMIT_UNCHECKED_REASON} Wait 1 minute, then press Connect beside Instagram again.`,
+      );
+    });
+
+    it("a 2,700 s network wait read at once: 45 minutes", () => {
+      expect(sentence("rate_limited", 2700, PRESSED_MS)).toBe(
+        `${CLIENT_LINK_LIMIT_REASON} Wait 45 minutes, then press Connect beside Instagram again.`,
+      );
+    });
+
+    it("read after the end: only the step", () => {
+      expect(sentence("limit_unchecked", 60, PRESSED_MS + 60_000)).toBe("Press Connect beside Instagram again.");
+      expect(sentence("rate_limited", 2700, PRESSED_MS + 2_700_000)).toBe("Press Connect beside Instagram again.");
+    });
   });
 
   it("an end exactly an hour off is still the hour", () => {
