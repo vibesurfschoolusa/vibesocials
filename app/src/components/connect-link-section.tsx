@@ -356,13 +356,20 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   // Bumped by Retry, so the read runs again.
   const [attempt, setAttempt] = useState(0);
   const [available, setAvailable] = useState<Platform[]>([]);
-  const [link, setLink] = useState<ConnectLinkDto | null>(null);
+  const [link, setShownLink] = useState<ConnectLinkDto | null>(null);
   const [pausedByPlan, setPausedByPlan] = useState(false);
   const [workspaceBlocked, setWorkspaceBlocked] = useState<string | null>(null);
   const [selected, setSelected] = useState<Platform[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
   const [replacing, setReplacing] = useState(false);
+  // R48 pages-b L2: Replace's boxes belong to a link. Every change of the link
+  // goes through here, so with no link there is nothing being replaced, and a
+  // later new link never comes up with the old boxes and Cancel.
+  const setLink = useCallback((next: ConnectLinkDto | null) => {
+    setShownLink(next);
+    if (!next) setReplacing(false);
+  }, []);
   const copyRef = useRef<HTMLButtonElement>(null);
   const firstBoxRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLButtonElement>(null);
@@ -401,7 +408,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, attempt]);
+  }, [workspaceId, attempt, setLink]);
 
   const onToggle = useCallback((platform: Platform) => {
     setSelected((current) =>
@@ -420,7 +427,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     } catch {
       // Still no connection: the sentence already says to reload.
     }
-  }, [workspaceId]);
+  }, [setLink, workspaceId]);
 
   /** The link route; offline or a lost answer said in a toast (and thrown, so a confirm stays open). */
   const send = useCallback(
@@ -453,7 +460,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       setLink(result.link);
       toast.success("New link ready. Copy it and send it to your client.");
     },
-    [send, toast, workspaceId],
+    [send, setLink, toast, workspaceId],
   );
 
   const turnOff = useCallback(async () => {
@@ -464,9 +471,8 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
     }
     setLink(null);
     setSelected([]);
-    setReplacing(false);
     toast.success("The link is off. It no longer works.");
-  }, [send, toast, workspaceId]);
+  }, [send, setLink, toast, workspaceId]);
 
   async function onCreate(event?: MouseEvent<HTMLButtonElement>) {
     const pressed = event?.currentTarget ?? null;
