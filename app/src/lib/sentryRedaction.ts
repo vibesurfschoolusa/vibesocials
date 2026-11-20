@@ -302,50 +302,22 @@ function cutLong(text: string): string {
   return `${text.slice(0, end).replace(/%[0-9A-Fa-f]?$/, "")}${CUT_MARK}`;
 }
 
-/** A run of %XX escapes. */
-const ESCAPE_RUN = /(?:%[0-9A-Fa-f]{2})+/g;
-const ESCAPE = /%[0-9A-Fa-f]{2}/g;
-/** The most escapes one character takes in UTF-8. */
-const MAX_ESCAPES_PER_CHARACTER = 4;
-
-/** A run decodeURIComponent refused: each character that decodes does, and an invalid escape stays as it is. */
-function decodeRunByCharacter(run: string): string {
-  const escapes = run.match(ESCAPE) ?? [];
-  let out = "";
-  let index = 0;
-  while (index < escapes.length) {
-    let taken = 0;
-    for (let count = Math.min(MAX_ESCAPES_PER_CHARACTER, escapes.length - index); count >= 1 && taken === 0; count -= 1) {
-      try {
-        out += decodeURIComponent(escapes.slice(index, index + count).join(""));
-        taken = count;
-      } catch {
-        // Not a whole character; try fewer escapes.
-      }
-    }
-    if (taken === 0) {
-      out += escapes[index];
-      taken = 1;
-    }
-    index += taken;
-  }
-  return out;
-}
+/**
+ * The escapes of the characters URL structure is made of: space, " # & + , /
+ * : = ? @ [ ] { } (the last six for the router-state tree's JSON). Tokens are
+ * plain URL-safe characters, so these are all the decoded pass needs.
+ */
+const STRUCTURE_ESCAPE = /%(2[0236BbCcFf]|3[AaDdFf]|40|5[BbDd]|7[BbDd])/g;
 
 /**
- * R46 review: decodeURIComponent that never throws. A stray "%" ("100%") or
- * a cut inside an escape made it throw, and the string then skipped the
- * decoded redaction. Each valid %XX run decodes, valid UTF-8 included; an
- * invalid or partial escape is left as it is.
+ * R46 last look: the one decoding redaction uses. decodeURIComponent threw on
+ * a stray "%" or a cut escape, and decoding by character cost a throw per
+ * invalid escape; this replaces only the structure escapes, in one linear
+ * pass, and never throws. Every other escape, non-ASCII included, stays as it
+ * is in the text.
  */
-function decodeEscapes(text: string): string {
-  return text.replace(ESCAPE_RUN, (run) => {
-    try {
-      return decodeURIComponent(run);
-    } catch {
-      return decodeRunByCharacter(run);
-    }
-  });
+function decodeStructure(text: string): string {
+  return text.replace(STRUCTURE_ESCAPE, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 /** `text` through redactLinkTokens, and decoded first when only the decoded form shows a token. */
@@ -357,7 +329,7 @@ function redactString(input: string): string {
   // R45 review L2: the decoded form is the redacted text decoded, so a value
   // filtered here stays filtered whole, whatever it would have decoded to.
   if (!redacted.includes("%")) return redacted;
-  const decoded = decodeEscapes(redacted);
+  const decoded = decodeStructure(redacted);
   if (decoded === redacted) return redacted;
   const decodedRedacted = redactDecodedLinkTokens(decoded);
   return decodedRedacted === decoded ? redacted : decodedRedacted;

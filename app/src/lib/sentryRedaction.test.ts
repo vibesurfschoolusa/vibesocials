@@ -777,11 +777,52 @@ describe("the decoded pass survives a broken escape", () => {
     expect(out).toContain("100%");
   });
 
-  it("an invalid UTF-8 escape is left as it is, and the valid ones around it decode", () => {
-    const out = redactForSentry({ message: "bad %E5%AF then %2Fc%2FSECRETTOKENVALUE and caf%C3%A9" }).message;
+  // R46 last look: only the escapes of URL structure decode; a non-ASCII or
+  // invalid escape stays as it is in the text.
+  it("a non-ASCII, partial or invalid escape is left as it is beside a decoded token", () => {
+    const out = redactForSentry({ message: "bad %E5%AF %E2%82 %zz then %2Fc%2FSECRETTOKENVALUE and caf%C3%A9" }).message;
     expect(out).not.toContain("SECRETTOKENVALUE");
-    expect(out).toContain("%E5%AF");
-    expect(out).toContain("café");
+    expect(out).toContain(`/c/${LINK_TOKEN}`);
+    expect(out).toContain("%E5%AF %E2%82 %zz");
+    expect(out).toContain("caf%C3%A9");
+  });
+
+  it("encoded /c/, /u/, /join/ and /v/ tokens are redacted at every padding from 4,060 to 4,099", () => {
+    for (const prefix of ["c", "u", "join", "v"]) {
+      const link = `see %2F${prefix}%2FSECRETTOKENVALUE now`;
+      for (let length = 4060; length <= 4099; length += 1) {
+        for (const tail of ["%2F".repeat(20), "%E2%82".repeat(10), "100%".repeat(10), "%zz".repeat(10)]) {
+          const text = `${link} ${"a".repeat(Math.max(0, length - link.length - 1))}${tail}`;
+          const out = redactForSentry({ message: text }).message;
+          const at = `${prefix} ${length} ${tail.slice(0, 6)}`;
+          expect(out, at).not.toContain("SECRETTOKENVALUE");
+          expect(out, at).toContain(`/${prefix}/${LINK_TOKEN}`);
+          if (out.endsWith(CUT_MARK)) expect(out.slice(0, -CUT_MARK.length), at).not.toMatch(/%[0-9A-Fa-f]?$/);
+        }
+      }
+    }
+  });
+
+  it("a whole event of ?%FF… or ?%E2%82… (URL and 20 breadcrumbs) redacts in under 50 ms", () => {
+    for (const run of ["%FF", "%E2%82"]) {
+      const url = `https://vibesocials.wtf/api/media?${run.repeat(Math.ceil(4096 / run.length))}`;
+      const event = {
+        request: { url },
+        transaction: `GET ${url}`,
+        breadcrumbs: Array.from({ length: 20 }, () => ({ category: "navigation", data: { from: url, to: url } })),
+      };
+      const started = performance.now();
+      redactForSentry(event);
+      expect(performance.now() - started, run).toBeLessThan(50);
+    }
+  });
+
+  it("40,000 % characters and 40,000 %2 pairs stay fast", () => {
+    for (const text of ["%".repeat(40_000), "%2".repeat(40_000)]) {
+      const started = performance.now();
+      redactForSentry({ message: text });
+      expect(performance.now() - started).toBeLessThan(50);
+    }
   });
 
   it("stays fast on a long run of broken escapes", () => {
