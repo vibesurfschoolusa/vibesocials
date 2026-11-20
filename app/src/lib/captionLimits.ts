@@ -25,7 +25,7 @@ const OVERRIDE_FIELD = "perPlatformOverrides.";
 /**
  * The 400 `error` text, and the composer's inline message when called with
  * "Caption". `field` is `baseCaption` or `perPlatformOverrides.<platform>` on
- * the API. R51 publishing-flow L2: a platform's own caption is read on Create's
+ * the API; anything but a platform's own caption is the main caption. R51 publishing-flow L2: a platform's own caption is read on Create's
  * own-caption box, so it is named by the platform's name, with the step.
  */
 export function captionTooLongMessage(field: string): string {
@@ -34,7 +34,9 @@ export function captionTooLongMessage(field: string): string {
   if (platform && (PLATFORM_ORDER as readonly string[]).includes(platform)) {
     return `${platformLabel(platform as Platform)}'s own caption is too long: keep it to ${max} characters.`;
   }
-  return `${field} is too long (max ${max} characters).`;
+  // R52 pages-a L3: "baseCaption" is a code field's name; every caller that is
+  // not a platform's own caption means the main caption (Create, Queue, Media, Add many).
+  return `Your caption is too long: keep it to ${max} characters.`;
 }
 
 /**

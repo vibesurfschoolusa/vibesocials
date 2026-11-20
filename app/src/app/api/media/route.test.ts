@@ -424,7 +424,7 @@ describe("POST /api/media", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
         code: "CAPTION_TOO_LONG",
-        error: "baseCaption is too long (max 10,000 characters).",
+        error: "Your caption is too long: keep it to 10,000 characters.",
       });
       expect(createMock).not.toHaveBeenCalled();
     });

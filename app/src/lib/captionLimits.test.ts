@@ -18,10 +18,14 @@ describe("constants", () => {
 });
 
 describe("captionTooLongMessage", () => {
-  it("names the field and the cap", () => {
-    expect(captionTooLongMessage("baseCaption")).toBe(
-      "baseCaption is too long (max 10,000 characters).",
-    );
+  // R52 pages-a L3: Add many showed "baseCaption is too long", a code field's name.
+  it("the main caption, in plain words, with the step", () => {
+    expect(captionTooLongMessage("baseCaption")).toBe("Your caption is too long: keep it to 10,000 characters.");
+  });
+
+  it("any field that isn't a platform's own caption reads the same", () => {
+    expect(captionTooLongMessage("somethingElse")).toBe("Your caption is too long: keep it to 10,000 characters.");
+    expect(captionTooLongMessage("perPlatformOverrides.myspace")).toBe("Your caption is too long: keep it to 10,000 characters.");
   });
 
   // R51 publishing-flow L2: a platform's own caption is named in plain words, with the step.
@@ -36,7 +40,7 @@ describe("captionTooLongMessage", () => {
   });
 
   it("doubles as the composer's inline message", () => {
-    expect(captionTooLongMessage("Caption")).toBe("Caption is too long (max 10,000 characters).");
+    expect(captionTooLongMessage("Caption")).toBe("Your caption is too long: keep it to 10,000 characters.");
   });
 });
 
