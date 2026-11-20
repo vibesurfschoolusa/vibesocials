@@ -328,7 +328,6 @@ export function QueueCalendar({
                           onDragEnd={() => setDragJobId(null)}
                           onClick={() => onEdit(job)}
                           disabled={savingId === job.id}
-                          title={job.caption ?? undefined}
                           className={cn(
                             "w-full cursor-grab truncate rounded-[calc(var(--radius)-0.125rem)] border border-primary/40 bg-primary/10 px-1.5 py-1 text-left text-xs text-foreground outline-none transition-colors hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
                             savingId === job.id && "cursor-wait",
@@ -342,7 +341,9 @@ export function QueueCalendar({
                               ? TIME_FORMAT.format(new Date(job.scheduledFor))
                               : ""}
                           </span>{" "}
-                          {chipLabel(job)}
+                          {/* R47 pages-a L1: the whole caption shows on hover from here; on the
+                              button a title is read as its description on every focus. */}
+                          <span title={job.caption ?? undefined}>{chipLabel(job)}</span>
                         </button>
                       ))}
                     </div>

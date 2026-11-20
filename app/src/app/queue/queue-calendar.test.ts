@@ -138,7 +138,7 @@ describe("QueueCalendar chips name their day", () => {
 });
 
 // R46 pages-a L3: a chip's name carries the caption's start by the Queue's
-// 40-character rule (labelName, R5-pages L12); its title keeps the whole text.
+// 40-character rule (labelName, R5-pages L12); its caption span's title keeps the whole text.
 describe("QueueCalendar chip names are short", () => {
   it("a 2,000-character caption gives a chip name of the rule's length plus the date", () => {
     const now = new Date();
@@ -178,6 +178,11 @@ describe("QueueCalendar chip names are short", () => {
     const name = button.replace(/<[^>]+>/g, "");
     expect(name).toBe(`${date}, ${time} ${labelName(caption)}`);
     expect(labelName(caption).length).toBeLessThanOrEqual(40);
-    expect(button).toContain(`title="${caption}"`);
+    // R47 pages-a L1: a title on the button is read as its description, so a
+    // screen reader heard the whole caption on focus. The caption span keeps it
+    // for a sighted hover.
+    const openTag = button.match(/^<button[^>]*>/)![0];
+    expect(openTag).not.toContain("title=");
+    expect(button).toContain(`<span title="${caption}">${labelName(caption)}</span>`);
   });
 });
