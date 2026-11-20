@@ -2,7 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
@@ -858,7 +858,9 @@ async function fetchInstagramPermalink(
     const url = new URL(`${META_GRAPH_BASE_URL}/${mediaId}`);
     url.searchParams.set("fields", "permalink");
     url.searchParams.set("access_token", accessToken);
-    const response = await fetchWithTimeout(
+    // R48 platform L1: the limit covers the body too, so a stalled answer
+    // cannot hold the step (and a live post) until the platform cap kills it.
+    const response = await fetchWithinLimit(
       url.toString(),
       { method: "GET" },
       budgetedTimeout(INSTAGRAM_PERMALINK_TIMEOUT_MS, deadline),
