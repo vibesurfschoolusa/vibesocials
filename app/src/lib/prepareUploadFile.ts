@@ -61,6 +61,15 @@ export function fitWithin(width: number, height: number, maxEdge: number): { wid
 export const UNKNOWN_TYPE_MESSAGE =
   "We couldn't tell what kind of file this is. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
 
+/**
+ * R46 client-journey L2: a file with no type whose name has no extension (a
+ * photo saved as "IMG_0042"). Choosing it again fails the same way, so the
+ * sentence names the step that works. A name with some other extension keeps
+ * UNKNOWN_TYPE_MESSAGE: adding .mp4 to a .mkv would not make it one.
+ */
+export const NO_EXTENSION_MESSAGE =
+  "We couldn't tell what kind of file this is. If it's a photo or video, add .jpg or .mp4 to the end of its name, then choose it again. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
+
 /** The message for a type the upload route would refuse; "" is a type that can't be told. */
 export function unsupportedTypeMessage(type: string): string {
   if (type.trim() === "") return UNKNOWN_TYPE_MESSAGE;
@@ -79,6 +88,11 @@ const TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
   webm: "video/webm",
 };
 
+/** The name's extension, lower case; undefined when it has none. */
+function extensionOf(name: string): string | undefined {
+  return /\.([^./\\]+)$/.exec(name)?.[1].toLowerCase();
+}
+
 /**
  * The type `file` is uploaded as: its own, or, when the browser gave none (some
  * phones give a video or an extensionless photo no type), the one its name's
@@ -86,7 +100,7 @@ const TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
  */
 export function uploadTypeOf(file: { name: string; type: string }): string {
   if (file.type !== "" && file.type !== "application/octet-stream") return file.type;
-  const extension = /\.([^./\\]+)$/.exec(file.name)?.[1].toLowerCase();
+  const extension = extensionOf(file.name);
   return extension !== undefined && Object.hasOwn(TYPE_BY_EXTENSION, extension) ? TYPE_BY_EXTENSION[extension] : "";
 }
 
@@ -134,6 +148,7 @@ export async function prepareUploadFile(
 
   const type = uploadTypeOf(prepared);
   if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(type)) {
+    if (type === "" && extensionOf(prepared.name) === undefined) throw new Error(NO_EXTENSION_MESSAGE);
     throw new Error(unsupportedTypeMessage(type));
   }
   if (type !== prepared.type) {

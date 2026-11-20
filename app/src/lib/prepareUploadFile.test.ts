@@ -4,6 +4,7 @@ import {
   HEIC_CONVERSION_FAILED_MESSAGE,
   HEIC_JPEG_QUALITY,
   MAX_UPLOAD_PHOTO_BYTES,
+  NO_EXTENSION_MESSAGE,
   SHRINK_ATTEMPTS,
   UNKNOWN_TYPE_MESSAGE,
   fitWithin,
@@ -112,8 +113,19 @@ describe("prepareUploadFile", () => {
     expect((await prepareUploadFile(file("a.JPEG", "application/octet-stream"), fakeDeps())).type).toBe("image/jpeg");
   });
 
+  // R46 client-journey L2: a photo saved with no extension can't be told by its
+  // name, and choosing it again fails the same way; the sentence names the step that works.
+  it("a file with no type and no extension: the step that works, with the type list", async () => {
+    for (const name of ["IMG_0042", "notes."]) {
+      await expect(prepareUploadFile(file(name, ""), fakeDeps()), name).rejects.toThrow(NO_EXTENSION_MESSAGE);
+    }
+    expect(NO_EXTENSION_MESSAGE).toBe(
+      "We couldn't tell what kind of file this is. If it's a photo or video, add .jpg or .mp4 to the end of its name, then choose it again. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
+    );
+  });
+
   it("refuses a file whose type can't be told with a plain sentence, never \"()\"", async () => {
-    for (const name of ["IMG_0042", "clip.mkv", "notes."]) {
+    for (const name of ["clip.mkv", "IMG.0042"]) {
       await expect(prepareUploadFile(file(name, ""), fakeDeps()), name).rejects.toThrow(UNKNOWN_TYPE_MESSAGE);
     }
     expect(UNKNOWN_TYPE_MESSAGE).toBe(
