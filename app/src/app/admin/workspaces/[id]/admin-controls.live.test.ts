@@ -93,3 +93,36 @@ describe("Pause and Resume are announced", () => {
     expect(statusText()).toBe("It was not paused.");
   });
 });
+
+// R46 pages-a L4: the pause reason has no maxLength that cuts a paste short.
+// Its count says when it is over, and the press is refused with the route's
+// own sentence (validatePauseBody), as every other counted field is.
+describe("the pause reason is never cut short", () => {
+  it("a 400-character paste stays whole, the count shows it, and the press is refused with the route's sentence", async () => {
+    const { PAUSE_REASON_MAX_LENGTH, validatePauseBody } = await import("@/server/admin/actions");
+    await act(async () => root.render(createElement(AdminPauseControls, { workspaceId: "ws-1", paused: false })));
+    const reason = find(container, (n) => n.nodeName === "TEXTAREA")!;
+    const focus = vi.fn();
+    reason.focus = focus;
+    const pasted = "r".repeat(400);
+    await act(async () => {
+      props(reason).onChange({ target: { value: pasted } });
+    });
+    expect(props(reason).maxLength).toBeUndefined();
+    expect(props(reason).value).toBe(pasted);
+    const countId = reason.attributes["aria-describedby"];
+    expect(countId).toBeTruthy();
+    const count = find(container, (n) => n.attributes.id === countId)!;
+    expect(count.textContent).toBe(
+      `400 of ${PAUSE_REASON_MAX_LENGTH} characters (100 over). Shorten it to pause the workspace.`,
+    );
+    await press("Pause workspace");
+    const refusal = validatePauseBody({ reason: pasted });
+    expect(refusal.ok).toBe(false);
+    expect(statusText()).toBe((refusal as { error: string }).error);
+    expect(statusText()).toBe("Keep the reason to 300 characters.");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(props(reason).value).toBe(pasted);
+  });
+});

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { CharacterCount, refuseOverLimit } from "@/components/ui/character-count";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -101,16 +102,34 @@ export function AdminLimitsForm({ workspaceId, fields }: { workspaceId: string; 
   );
 }
 
+/**
+ * R46 pages-a L4: the pause route's limit and sentence (validatePauseBody in
+ * the server's admin actions, which this client file can't import; a test
+ * holds the two equal). The field has no maxLength, so a paste stays whole.
+ */
+const PAUSE_REASON_MAX = 300;
+const PAUSE_REASON_TOO_LONG = `Keep the reason to ${PAUSE_REASON_MAX} characters.`;
+
 /** Pause with a reason, or resume. */
 export function AdminPauseControls({ workspaceId, paused }: { workspaceId: string; paused: boolean }) {
   const router = useRouter();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
 
   async function act(kind: "pause" | "resume") {
     if (kind === "pause" && !reason.trim()) {
       setMessage("Give a reason. The workspace's members will read it.");
+      return;
+    }
+    if (
+      kind === "pause" &&
+      refuseOverLimit(
+        [{ text: reason, max: PAUSE_REASON_MAX, sentence: PAUSE_REASON_TOO_LONG, field: reasonRef.current }],
+        setMessage,
+      )
+    ) {
       return;
     }
     setBusy(true);
@@ -151,12 +170,20 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
         <>
           <Label htmlFor="pause-reason">Reason (the workspace&apos;s members read this)</Label>
           <Textarea
+            ref={reasonRef}
             id="pause-reason"
-            maxLength={300}
             rows={2}
             value={reason}
             onChange={(event) => setReason(event.target.value.replace(/[\r\n]+/g, " "))}
             disabled={busy}
+            aria-describedby="pause-reason-count"
+          />
+          <CharacterCount
+            id="pause-reason-count"
+            label="Reason"
+            text={reason}
+            max={PAUSE_REASON_MAX}
+            action="pause the workspace"
           />
           <p className="text-sm text-muted-foreground">
             Scheduled posts that come due while paused are marked failed and can be retried after you resume.
