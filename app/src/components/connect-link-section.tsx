@@ -122,6 +122,8 @@ export function droppedPlatformsLine(link: ConnectLinkDto, available: readonly P
 export const REPLACE_NONE_OFFERED_MESSAGE =
   "No platform can be connected on this site now, so there is nothing to tick for a new link. Press Turn off to stop this one, or Cancel to keep it.";
 
+const REPLACE_NONE_ID = "connect-link-replace-none";
+
 export interface ConnectLinkViewProps {
   available: Platform[];
   link: ConnectLinkDto | null;
@@ -222,7 +224,10 @@ export function ConnectLinkSectionView({
             </p>
             {/* R47 lead review: Replace is always offered; with no box to tick it says so. */}
             {replacing && available.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{REPLACE_NONE_OFFERED_MESSAGE}</p>
+              // R47 review: focus goes to Cancel, which this describes; read out as it appears.
+              <div id={REPLACE_NONE_ID}>
+                <AnnouncedText className="text-sm text-muted-foreground" text={REPLACE_NONE_OFFERED_MESSAGE} />
+              </div>
             ) : replacing ? (
               <PlatformBoxes
                 legend="The platforms the new link offers"
@@ -246,7 +251,14 @@ export function ConnectLinkSectionView({
                 </Button>
               )}
               {replacing ? (
-                <Button ref={cancelRef} type="button" variant="ghost" size="sm" onClick={onCancelReplace}>
+                <Button
+                  ref={cancelRef}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-describedby={available.length === 0 ? REPLACE_NONE_ID : undefined}
+                  onClick={onCancelReplace}
+                >
                   Cancel
                 </Button>
               ) : null}
