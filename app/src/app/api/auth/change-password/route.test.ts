@@ -140,6 +140,36 @@ describe("POST /api/auth/change-password", () => {
     expect(userUpdateMock).not.toHaveBeenCalled();
   });
 
+  // R46 security L3: bcrypt would ignore everything past byte 72.
+  it("refuses a new password over 72 bytes with the plain sentence", async () => {
+    for (const newPassword of ["x".repeat(73), "密".repeat(25)]) {
+      const response = await POST(request({ currentPassword: "old-password", newPassword }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Use a shorter password: at most 72 bytes. Accented and non-Latin letters count as 2 to 3 bytes.",
+      });
+    }
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a new password of exactly 72 bytes (24 CJK characters)", async () => {
+    const response = await POST(request({ currentPassword: "old-password", newPassword: "密".repeat(24) }));
+    expect(response.status).toBe(200);
+  });
+
+  it("refuses, as the same password, a change that edits only past byte 72 of a long current one", async () => {
+    const longCurrent = `${"x".repeat(72)}-made-before-the-rule`;
+    getCurrentUserMock.mockResolvedValue(user({ passwordHash: await bcrypt.hash(longCurrent, 4) }));
+
+    const response = await POST(request({ currentPassword: longCurrent, newPassword: "x".repeat(72) }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Your new password must be different from your current one.",
+    });
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
   it("writes a new hash and bumps sessionVersion in a transaction, then emails the user", async () => {
     const response = await POST(request({ currentPassword: "old-password", newPassword: "new-password" }));
 

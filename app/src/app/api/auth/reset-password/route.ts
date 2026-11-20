@@ -9,6 +9,7 @@ import { clearLoginLimitForNetwork } from "@/lib/loginLimit";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
+import { newPasswordProblem } from "@/lib/passwordRule";
 
 /**
  * POST /api/auth/reset-password — the consume half of the password reset flow
@@ -60,11 +61,9 @@ export async function POST(request: Request) {
 
   // New-password rule byte-matches the register route (SEC-1: reveals nothing
   // about the token — it's purely about the submitted password).
-  if (typeof password !== "string" || password.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters." },
-      { status: 400 },
-    );
+  const passwordProblem = newPasswordProblem(password);
+  if (passwordProblem) {
+    return NextResponse.json({ error: passwordProblem }, { status: 400 });
   }
 
   // A missing/empty token is just an invalid token — same uniform 400, no DB hit.
@@ -103,7 +102,7 @@ export async function POST(request: Request) {
       // Hashing only AFTER the token is claimed, so an invalid/raced token
       // never costs a bcrypt. The op is rare, so the short-lived transaction
       // held during hashing is fine.
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password as string, 10);
 
       await tx.user.update({
         where: { id: record.userId },

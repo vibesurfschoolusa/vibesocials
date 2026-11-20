@@ -9,6 +9,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
+import { newPasswordProblem, sameToBcrypt } from "@/lib/passwordRule";
 import { signedOutResponse } from "@/lib/signedOutResponse";
 
 /**
@@ -53,8 +54,9 @@ export async function POST(request: Request) {
   }
 
   // Same rule as register and reset-password.
-  if (typeof newPassword !== "string" || newPassword.length < 8) {
-    return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+  const passwordProblem = newPasswordProblem(newPassword);
+  if (passwordProblem) {
+    return NextResponse.json({ error: passwordProblem }, { status: 400 });
   }
 
   if (
@@ -64,7 +66,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Your current password is not correct." }, { status: 400 });
   }
 
-  if (newPassword === currentPassword) {
+  // bcrypt reads only the first 72 bytes, so an edit past them changes nothing.
+  if (sameToBcrypt(newPassword as string, currentPassword)) {
     return NextResponse.json(
       { error: "Your new password must be different from your current one." },
       { status: 400 },
@@ -72,7 +75,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const passwordHash = await bcrypt.hash(newPassword as string, 10);
     await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: user.id },

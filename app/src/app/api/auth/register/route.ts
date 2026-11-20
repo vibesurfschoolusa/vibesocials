@@ -10,6 +10,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { tooManyTriesResponse } from "@/lib/tooManyTries";
 import { limitUncheckedResponse } from "@/lib/limitUnchecked";
+import { newPasswordProblem } from "@/lib/passwordRule";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
 import { addressHeldUntil } from "@/server/auth/undoWindow";
 
@@ -51,11 +52,9 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (typeof password !== "string" || password.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters." },
-      { status: 400 },
-    );
+  const passwordProblem = newPasswordProblem(password);
+  if (passwordProblem) {
+    return NextResponse.json({ error: passwordProblem }, { status: 400 });
   }
 
   // Cleaned the way a workspace name is, so stray spaces never reach the
@@ -111,7 +110,7 @@ export async function POST(request: Request) {
       return NextResponse.json(registerOkBody(email, displayName), { status: 201 });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password as string, 10);
 
     // Registration creates the User and its personal workspace + owner
     // membership atomically (design doc §2), so a mid-way failure never

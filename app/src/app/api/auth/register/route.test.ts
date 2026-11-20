@@ -154,6 +154,22 @@ describe("POST /api/auth/register", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  // R46 security L3: bcrypt would ignore everything past byte 72.
+  it("refuses a password over 72 bytes before a try is counted, and accepts exactly 72", async () => {
+    for (const password of ["x".repeat(73), "密".repeat(25)]) {
+      const response = await POST(jsonRequest({ email: "user@example.com", password }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Use a shorter password: at most 72 bytes. Accented and non-Latin letters count as 2 to 3 bytes.",
+      });
+    }
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+
+    const ok = await POST(jsonRequest({ email: "user@example.com", password: "密".repeat(24) }));
+    expect(ok.status).not.toBe(400);
+  });
+
   it("returns the same 201 shape when a user with that email already exists (no oracle)", async () => {
     findUniqueMock.mockResolvedValue({ id: "existing-user", email: "user@example.com" });
 

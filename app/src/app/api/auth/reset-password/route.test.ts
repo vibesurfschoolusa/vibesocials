@@ -132,6 +132,24 @@ describe("POST /api/auth/reset-password", () => {
     expect(findUniqueTokenMock).not.toHaveBeenCalled();
   });
 
+  // R46 security L3: bcrypt would ignore everything past byte 72.
+  it("refuses a password over 72 bytes with the plain sentence and never reads the token", async () => {
+    for (const password of ["x".repeat(73), "密".repeat(25)]) {
+      const response = await POST(req({ token: RAW_TOKEN, password }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Use a shorter password: at most 72 bytes. Accented and non-Latin letters count as 2 to 3 bytes.",
+      });
+    }
+    expect(findUniqueTokenMock).not.toHaveBeenCalled();
+    expect(bcryptHashMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a password of exactly 72 bytes", async () => {
+    const response = await POST(req({ token: RAW_TOKEN, password: "x".repeat(72) }));
+    expect(response.status).toBe(200);
+  });
+
   it("returns the uniform 400 for a missing token", async () => {
     const response = await POST(req({ password: "brandnewpassword" }));
 

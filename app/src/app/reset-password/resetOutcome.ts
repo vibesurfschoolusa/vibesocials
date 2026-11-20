@@ -10,6 +10,7 @@
  */
 
 import { answerLostText } from "@/lib/answerLost";
+import { newPasswordProblem } from "@/lib/passwordRule";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 
 /** R5 pages L8: what the form says when the reset didn't go through. */
@@ -26,6 +27,15 @@ export const RESET_MAYBE_CHANGED_MESSAGE = answerLostText(
 
 /** The route's rate-limit window (api/auth/reset-password RATE_LIMIT), when the answer names no wait. */
 const RATE_WINDOW_SECONDS = 15 * 60;
+
+/**
+ * The form's own checks before it sends. Every 400 from the route reads as a
+ * dead link, so these must refuse whatever the route's password rule refuses.
+ */
+export function resetFormProblem(password: string, confirm: string): string | null {
+  if (password !== confirm) return "Passwords don't match.";
+  return newPasswordProblem(password);
+}
 
 export type ResetOutcome = { kind: "done" } | { kind: "invalid_link" } | { kind: "error"; message: string };
 

@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { signOutChecked } from "@/lib/signOutChecked";
 
-import { signOutAfterReset, submitReset } from "./resetOutcome";
+import { resetFormProblem, signOutAfterReset, submitReset } from "./resetOutcome";
 
 function CardShell({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
@@ -112,12 +112,9 @@ function ResetPasswordCard({ token, onLinkDead }: { token: string; onLinkDead: (
     setError(null);
 
     // Client-side guards (server re-validates both — defense in depth).
-    if (password !== confirm) {
-      setError("Passwords don't match.");
-      return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+    const problem = resetFormProblem(password, confirm);
+    if (problem) {
+      setError(problem);
       return;
     }
 

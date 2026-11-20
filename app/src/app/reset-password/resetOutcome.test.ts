@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RESET_FAILED_MESSAGE, RESET_MAYBE_CHANGED_MESSAGE, signOutAfterReset, submitReset } from "./resetOutcome";
+import { RESET_FAILED_MESSAGE, RESET_MAYBE_CHANGED_MESSAGE, resetFormProblem, signOutAfterReset, submitReset } from "./resetOutcome";
 
 function respond(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
   return vi.fn(
@@ -113,5 +113,22 @@ describe("signOutAfterReset", () => {
       throw new Error("offline");
     });
     await expect(signOutAfterReset({ kind: "done" }, signOut)).resolves.toBeUndefined();
+  });
+});
+
+// R46 security L3: the route refuses a password over 72 bytes, and every 400
+// reads as a dead link here, so the form refuses it first with the route's sentence.
+describe("resetFormProblem", () => {
+  it("refuses a password over 72 bytes with the route's sentence", () => {
+    const long = "密".repeat(25);
+    expect(resetFormProblem(long, long)).toBe(
+      "Use a shorter password: at most 72 bytes. Accented and non-Latin letters count as 2 to 3 bytes.",
+    );
+  });
+
+  it("keeps the match and 8-character checks, and passes a good password", () => {
+    expect(resetFormProblem("goodpassword", "goodpasswore")).toBe("Passwords don't match.");
+    expect(resetFormProblem("short", "short")).toBe("Password must be at least 8 characters.");
+    expect(resetFormProblem("x".repeat(72), "x".repeat(72))).toBeNull();
   });
 });
