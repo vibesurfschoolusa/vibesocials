@@ -31,20 +31,39 @@ vi.mock("@/components/ui/dialog", () => {
   };
 });
 
-import { LINKEDIN_PAGE_NOT_FOUND, LinkedInSetupDialog } from "./linkedin-setup-dialog";
+import { LINKEDIN_PAGE_NOT_FOUND, LinkedInSetupDialog, latestTry } from "./linkedin-setup-dialog";
 
 const NOT_FOUND_TEXT =
   "LinkedIn didn't find that page. Check the page's URL (it looks like linkedin.com/company/your-page) and try again. If it still isn't found, write to us at hello@vibesocials.wtf.";
 
-function rendered(query: string, stored?: string): string {
+const KEY = "linkedin-setup-address";
+
+function fakeStorage(stored?: string) {
+  const map = new Map<string, string>(stored === undefined ? [] : [[KEY, stored]]);
+  return {
+    map,
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => void map.set(key, value),
+    removeItem: (key: string) => void map.delete(key),
+  };
+}
+
+const blocked = {
+  getItem: () => {
+    throw new Error("SecurityError");
+  },
+  setItem: () => {
+    throw new Error("SecurityError");
+  },
+  removeItem: () => {
+    throw new Error("SecurityError");
+  },
+};
+
+function rendered(query: string, stored?: string | typeof blocked): string {
   navigation.query = query;
-  const storage = new Map<string, string>(stored === undefined ? [] : [["linkedin-setup-address", stored]]);
   vi.stubGlobal("window", {
-    sessionStorage: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-      removeItem: (key: string) => storage.delete(key),
-    },
+    sessionStorage: typeof stored === "object" ? blocked : fakeStorage(stored),
     addEventListener: () => {},
     removeEventListener: () => {},
   });
@@ -80,12 +99,59 @@ describe("LinkedInSetupDialog: why it came back", () => {
     expect(html).toMatch(/id="vanity-name"[^>]*value="linkedin.com\/company\/acme-surff"/);
   });
 
-  it("not found with no address kept (storage cleared or blocked): the reason still shows", () => {
-    expect(decoded(rendered("linkedin_setup=not_found"))).toContain(NOT_FOUND_TEXT);
+  // R53 fix review L2: Back to an old not_found after a later try connected
+  // showed the old reason and address while the row said Connected.
+  it("not found with nothing kept (a later try ended the stored copy): no reason, an empty field", () => {
+    const html = decoded(rendered("linkedin_setup=not_found"));
+    expect(html).not.toContain("didn't find that page");
+    expect(html).toMatch(/id="vanity-name"[^>]*value=""/);
+  });
+
+  it("blocked storage: no crash, the address's reason, and an empty field", () => {
+    const html = decoded(rendered("linkedin_setup=not_found", blocked));
+    expect(html).toContain(NOT_FOUND_TEXT);
+    expect(html).toMatch(/id="vanity-name"[^>]*value=""/);
   });
 
   it("closed (no linkedin_setup) and reopened on a first try: no stale reason", () => {
     expect(rendered("")).toBe("");
     expect(decoded(rendered("linkedin_setup=true"))).not.toContain("didn't find that page");
+  });
+});
+
+// R53 fix review L2: the reason and the kept address belong to the latest try.
+// Every page load the dialog sits on that isn't a not_found return (a success,
+// a choice, an error, a first try) ends the stored copy.
+describe("latestTry", () => {
+  it("not_found then reload: the reason and the address", () => {
+    const storage = fakeStorage("acme-surff");
+    expect(latestTry("not_found", () => storage)).toEqual({ reason: true, address: "acme-surff" });
+    expect(latestTry("not_found", () => storage)).toEqual({ reason: true, address: "acme-surff" });
+  });
+
+  it("not_found, a corrected Continue, Back from LinkedIn: that try's address", () => {
+    const storage = fakeStorage("acme-surff");
+    storage.setItem(KEY, "acme-surf");
+    expect(latestTry("not_found", () => storage)).toEqual({ reason: true, address: "acme-surf" });
+  });
+
+  it("not_found, then a success, then Back: no reason and no address", () => {
+    const storage = fakeStorage("acme-surf");
+    expect(latestTry(null, () => storage)).toEqual({ reason: false, address: "" });
+    expect(storage.map.has(KEY)).toBe(false);
+    expect(latestTry("not_found", () => storage)).toEqual({ reason: false, address: "" });
+  });
+
+  it("a first try ends an older copy too", () => {
+    const storage = fakeStorage("acme-surff");
+    expect(latestTry("true", () => storage)).toEqual({ reason: false, address: "" });
+    expect(storage.map.has(KEY)).toBe(false);
+  });
+
+  it("blocked storage, or none at all: no crash; not_found keeps the address's reason, with an empty field", () => {
+    for (const read of [() => blocked, () => { throw new ReferenceError("window is not defined"); }]) {
+      expect(latestTry("not_found", read)).toEqual({ reason: true, address: "" });
+      expect(latestTry(null, read)).toEqual({ reason: false, address: "" });
+    }
   });
 });

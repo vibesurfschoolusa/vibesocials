@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Alert } from "@/components/ui/alert";
@@ -19,7 +19,7 @@ import { Label } from "@/components/ui/label";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
-import { useResetOnReturnFromCache } from "@/components/returnFromCache";
+import { onReturnFromCache } from "@/components/returnFromCache";
 
 const noSubscription = () => () => {};
 
@@ -32,17 +32,34 @@ export const LINKEDIN_PAGE_NOT_FOUND = `LinkedIn didn't find that page. Check th
 // show what was tried. Only a convenience: blocked storage leaves the field empty.
 const ADDRESS_KEY = "linkedin-setup-address";
 
-function keptAddress(): string {
+type StoredAddress = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+const browserStorage = (): StoredAddress => window.sessionStorage;
+
+/**
+ * R53 fix review L2: the reason and the kept address belong to the latest try.
+ * Back to an old not_found after a later try connected showed both, while the
+ * row said Connected. So any load that isn't a not_found return (a success, a
+ * choice, an error, a first try) ends the stored copy, and a not_found return
+ * shows the reason only while the copy is there. Unreadable storage can't
+ * tell, so there the address's not_found is trusted, with an empty field.
+ */
+export function latestTry(setup: string | null, storage: () => StoredAddress): { reason: boolean; address: string } {
   try {
-    return window.sessionStorage.getItem(ADDRESS_KEY) ?? "";
+    const kept = storage();
+    if (setup !== NOT_FOUND) {
+      kept.removeItem(ADDRESS_KEY);
+      return { reason: false, address: "" };
+    }
+    const address = kept.getItem(ADDRESS_KEY);
+    return { reason: address !== null, address: address ?? "" };
   } catch {
-    return "";
+    return { reason: setup === NOT_FOUND, address: "" };
   }
 }
 
 function keepAddress(address: string): void {
   try {
-    window.sessionStorage.setItem(ADDRESS_KEY, address);
+    browserStorage().setItem(ADDRESS_KEY, address);
   } catch {
     // Not kept; the field starts empty if LinkedIn doesn't find the page.
   }
@@ -59,12 +76,25 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const notFound = setup === NOT_FOUND;
   const showSetup = hydrated && (setup === "true" || notFound);
 
-  const [vanityName, setVanityName] = useState(() => (notFound ? keptAddress() : ""));
+  // latestTry is idempotent, so reading it for both states is the same answer.
+  const [vanityName, setVanityName] = useState(() => latestTry(setup, browserStorage).address);
   const [isConnecting, setIsConnecting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [reasonShown, setReasonShown] = useState(() => latestTry(setup, browserStorage).reason);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Continue leaves for LinkedIn; Back may bring this page back from the cache.
-  useResetOnReturnFromCache(setIsConnecting, false);
+  // Continue leaves for LinkedIn; Back may bring this page back from the cache,
+  // after a later try that may have connected (and ended the stored copy).
+  useEffect(
+    () =>
+      onReturnFromCache(window, () => {
+        setIsConnecting(false);
+        if (!notFound) return;
+        const latest = latestTry(setup, browserStorage);
+        setReasonShown(latest.reason);
+        setVanityName(latest.address);
+      }),
+    [notFound, setup],
+  );
 
   // Closing clears the trigger query param (?linkedin_setup=) so the dialog
   // stays closed. Blocked while a redirect is in flight.
@@ -129,7 +159,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
         </DialogDescription>
       </DialogHeader>
       <DialogBody className="flex flex-col gap-5">
-        {notFound && <Alert variant="danger">{LINKEDIN_PAGE_NOT_FOUND}</Alert>}
+        {notFound && reasonShown && <Alert variant="danger">{LINKEDIN_PAGE_NOT_FOUND}</Alert>}
         <Alert variant="info" title="Company pages only">
           This app posts to LinkedIn company pages, not personal profiles. The LinkedIn account
           signed in to this browser is the one being connected, and it must be an administrator
