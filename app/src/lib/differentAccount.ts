@@ -96,7 +96,18 @@ export function signInTo(platform: Platform, name: string): string {
   const signIn = `sign in with a ${entry.account} account that manages ${managedPage(platform, name)}`;
   // R51 second look: someone who manages the Page but left it unticked in
   // Meta's list signed in rightly; ticking it is their step.
-  return entry.linkedPage ? `${signIn}, and tick that Page when ${entry.account} lists the Pages` : signIn;
+  return entry.linkedPage ? `${signIn} and tick that Page when ${entry.account} lists the Pages` : signIn;
+}
+
+/**
+ * "<Sign in ...> to reconnect it". R51 last look: after Instagram's longer
+ * step, a trailing "to reconnect it" reads as part of Facebook's list, so
+ * there it comes first.
+ */
+function reconnectStep(platform: Platform, name: string): string {
+  return PAGE_ACCOUNT[platform]?.linkedPage
+    ? `To reconnect it, ${signInTo(platform, name)}`
+    : `${capitalized(signInTo(platform, name))} to reconnect it`;
 }
 
 function capitalized(sentence: string): string {
@@ -119,7 +130,7 @@ export function settingsDifferentAccountMessage(platform: Platform, signedInName
     platform === "facebook_page" || platform === "instagram"
       ? `You chose ${signedInName}, not ${connectedName}, and ${connectedName} wasn't in the list.`
       : `You signed in to ${signedInName}, not ${connectedName}.`;
-  return `${what} ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change to ${signedInName}.`;
+  return `${what} ${reconnectStep(platform, connectedName)}, or use Switch account to change to ${signedInName}.`;
 }
 
 /**
@@ -134,13 +145,13 @@ export function reconnectDifferentAccountMessage(platform: Platform, connectedNa
   }
   const notReturned = linkedPageNotReturned(platform, connectedName);
   if (notReturned) {
-    return `${notReturned}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;
+    return `${notReturned}, so nothing changed. ${reconnectStep(platform, connectedName)}, or use Switch account to change accounts.`;
   }
   if (entry) {
-    return `${entry.account} connected a different page than ${connectedName}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change pages.`;
+    return `${entry.account} connected a different page than ${connectedName}, so nothing changed. ${reconnectStep(platform, connectedName)}, or use Switch account to change pages.`;
   }
   const what = `You signed in to a different ${platformLabel(platform)} account than ${connectedName}.`;
-  return `${what} ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;
+  return `${what} ${reconnectStep(platform, connectedName)}, or use Switch account to change accounts.`;
 }
 
 /**
