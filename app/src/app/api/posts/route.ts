@@ -578,6 +578,7 @@ export async function GET(request: Request) {
                 },
               }
             : {}),
+          ...(job.storyOfPostJobId ? { storyHalf: true } : {}),
           ...(hasStory.has(job.id) ? { alsoAsStory: true } : {}),
           ...(livePartnerOf(job) ? { pairHalf: livePartnerOf(job) } : {}),
           ...(placeByJobId.has(job.id)

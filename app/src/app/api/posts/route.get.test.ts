@@ -1529,6 +1529,28 @@ describe("GET /api/posts - a Feed and Story pair", () => {
     expect(body.jobs[0]).toHaveProperty("storyOf");
   });
 
+  // R48 review: the Story half is told apart whatever became of its feed half,
+  // so its Activity card can name the Story with the feed post cancelled.
+  it("marks the Story half as a Story with its feed post cancelled, and never a feed post", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([
+        { ...jobWithYouTube(), id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at },
+        { ...jobWithYouTube(), id: "feed-2", storyOfPostJobId: null, scheduledFor: at },
+      ])
+      .mockResolvedValueOnce([
+        // The read leaves out cancelled halves (status not cancelled), so feed-1 is not found.
+        { id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at, status: "failed", publishMetadata: null },
+        { id: "feed-2", storyOfPostJobId: null, scheduledFor: at, status: "failed", publishMetadata: null },
+      ]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+    const byId = new Map(body.jobs.map((job) => [job.id, job]));
+
+    expect(byId.get("story-1")).not.toHaveProperty("storyOf");
+    expect(byId.get("story-1")).toHaveProperty("storyHalf", true);
+    expect(byId.get("feed-2")).not.toHaveProperty("storyHalf");
+  });
+
   it("marks a feed post whose Story sits on another page (the pair split across pages)", async () => {
     postJobFindManyMock
       // This page has only the feed post; its Story was created after it and is on the previous page.

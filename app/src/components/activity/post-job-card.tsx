@@ -678,7 +678,7 @@ export function PostJobCard({
           record why, so one sentence that is true for every cause. */}
       {canSendAgain || tooOldToSend ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          {tooOldToSend ? TOO_OLD_TO_SEND_MESSAGE : job.storyOf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE}
+          {tooOldToSend ? TOO_OLD_TO_SEND_MESSAGE : job.storyHalf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE}
         </p>
       ) : null}
 

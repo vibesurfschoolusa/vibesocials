@@ -236,6 +236,12 @@ export interface PostJobDTO {
   storyOf?: { id: string; scheduledFor: string | null };
   alsoAsStory?: boolean;
   /**
+   * R48 review: this job is the Story half of a Feed and Story post
+   * (storyOfPostJobId), whatever became of its feed half. Unlike `storyOf`,
+   * kept with the feed post cancelled or gone, so the card words it a Story.
+   */
+  storyHalf?: boolean;
+  /**
    * Review of R3: this half's partner while it is a draft or scheduled (the
    * Story of a feed post, or the feed post of a Story): its state, time and
    * platforms (a feed post with no chosen platforms: null). Absent with no

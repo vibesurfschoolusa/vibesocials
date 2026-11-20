@@ -196,13 +196,21 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
   // R48 publishing L1: Send again sends one card's half, so the Story half's
   // card says it is the Story, and the feed half's card stays "This post".
   it("names the Story on an unsent Story half's card, and not on its feed half's", () => {
-    const storyCard = render({ status: "failed", results: [], storyOf: { id: "job-feed", scheduledFor: null } });
+    const storyCard = render({ status: "failed", results: [], storyHalf: true, storyOf: { id: "job-feed", scheduledFor: null } });
     expect(storyCard).toContain("This Story was not sent. Use Send again to try once more.");
     expect(storyCard).not.toContain(NOT_SENT_MESSAGE);
 
     const feedCard = render({ status: "failed", results: [] });
     expect(feedCard).toContain(NOT_SENT_MESSAGE);
     expect(feedCard).not.toContain("This Story was not sent");
+  });
+
+  // R48 review: with its feed post cancelled the Story half has no storyOf
+  // (that names a live partner), but it is still the Story.
+  it("names the Story when its feed post was cancelled", () => {
+    const storyCard = render({ status: "failed", results: [], storyHalf: true });
+    expect(storyCard).toContain("This Story was not sent. Use Send again to try once more.");
+    expect(storyCard).not.toContain(NOT_SENT_MESSAGE);
   });
 
   // Coordinator follow-up 1: the honest failure gets a Send again button that
