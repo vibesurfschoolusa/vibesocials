@@ -345,6 +345,14 @@ export const UNTOUCHED_SUBMIT_MESSAGE = "Add a photo or video, or write the text
 /** Where no connected platform takes text alone, offering text would lead nowhere. */
 export const UNTOUCHED_FILE_ONLY_MESSAGE = "Add a photo or video.";
 
+/**
+ * No connected platform takes text alone, so a post without a photo or video
+ * can go nowhere. The untouched sentence and the lost-file stop both read this.
+ */
+export function textGoesNowhere(connected: readonly Platform[]): boolean {
+  return connected.length > 0 && !connected.some(platformAcceptsTextOnly);
+}
+
 /** The sentence by the button after a press on the untouched page, or null. */
 export function untouchedSubmitMessage(state: {
   untouched: boolean;
@@ -352,8 +360,7 @@ export function untouchedSubmitMessage(state: {
   connected: readonly Platform[];
 }): string | null {
   if (!state.untouched || !state.pressed) return null;
-  const textGoesNowhere = state.connected.length > 0 && !state.connected.some(platformAcceptsTextOnly);
-  return textGoesNowhere ? UNTOUCHED_FILE_ONLY_MESSAGE : UNTOUCHED_SUBMIT_MESSAGE;
+  return textGoesNowhere(state.connected) ? UNTOUCHED_FILE_ONLY_MESSAGE : UNTOUCHED_SUBMIT_MESSAGE;
 }
 
 /**
@@ -412,8 +419,10 @@ export function composerPageView(input: {
  * stops it (the notice speaks), then a file still on its way (its wait
  * sentence), then the untouched page (the sentence by the button). Null: go on.
  * The lost-file stop guards against posting without the file by mistake, and
- * its toast offers to post without it; on an untouched page nothing can be
- * posted, so there the press goes on as if no notice showed (R52 L2).
+ * its toast offers to post without it. Where that offer could not come true the
+ * press goes on as if no notice showed: on an untouched page nothing can be
+ * posted (R52 L2), and where no connected platform takes text alone the press
+ * reaches the refusal that names why (R53 L1).
  */
 export function submitFirstStep(state: {
   pageState: ComposerPageState;
@@ -421,11 +430,13 @@ export function submitFirstStep(state: {
   fileLost: FileLostNotice;
   /** fileSubmitBlock for a single pick or a shared file still on its way, or null. */
   fileBlock: string | null;
+  connected: readonly Platform[];
 }):
   | { stop: "file-lost" | "untouched" | null; countsAsTry: boolean }
   | { stop: "wait"; message: string; countsAsTry: boolean } {
   const countsAsTry = pressCountsAsTry(state.pageState);
-  if (state.pageState !== "untouched" && fileLostBlocksSubmit(state.fileLost)) return { stop: "file-lost", countsAsTry };
+  const withoutItCanGo = state.pageState !== "untouched" && !textGoesNowhere(state.connected);
+  if (withoutItCanGo && fileLostBlocksSubmit(state.fileLost)) return { stop: "file-lost", countsAsTry };
   if (state.fileBlock) return { stop: "wait", message: state.fileBlock, countsAsTry };
   if (state.pageState === "untouched") return { stop: "untouched", countsAsTry };
   return { stop: null, countsAsTry };
@@ -692,6 +703,13 @@ export const FILE_LOST_PRESS_TOAST =
 
 /** Shown, until a file is attached or dismissed, when a file went away by itself. */
 export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it again, or continue without one.";
+/** The notice where no connected platform takes text alone: going on without the file can go nowhere (R53 L1). */
+export const FILE_LOST_FILE_ONLY_MESSAGE = "The photo or video could not be added. Add it again.";
+
+/** The lost-file notice's sentence: it offers to go on without the file only where that can be sent. */
+export function fileLostMessage(connected: readonly Platform[]): string {
+  return textGoesNowhere(connected) ? FILE_LOST_FILE_ONLY_MESSAGE : FILE_LOST_MESSAGE;
+}
 
 /**
  * The "file went away" notice: none, fresh (not yet pressed past), or seen (the
@@ -2594,6 +2612,7 @@ function CreatePostFormInner({
       pageState,
       fileLost: fileLostShown ? fileLost : "none",
       fileBlock: sendCheck.fileBlock,
+      connected: connectedPlatforms,
     });
     if (first.countsAsTry) setTriedSend(true);
     // A file just went away: the first press stops here, with the notice (and
@@ -3382,7 +3401,7 @@ function CreatePostFormInner({
           {fileLostShown ? (
             <Alert variant="warning">
               <div className="flex flex-wrap items-start justify-between gap-2">
-                <p>{FILE_LOST_MESSAGE}</p>
+                <p>{fileLostMessage(connectedPlatforms)}</p>
                 <button
                   type="button"
                   onClick={() => fileEvent({ type: "dismissed" })}

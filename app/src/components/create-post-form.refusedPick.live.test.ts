@@ -47,7 +47,13 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CreatePostForm, FILE_LOST_MESSAGE, FILE_LOST_PRESS_TOAST, UNTOUCHED_SUBMIT_MESSAGE } from "./create-post-form";
+import {
+  CreatePostForm,
+  FILE_LOST_FILE_ONLY_MESSAGE,
+  FILE_LOST_MESSAGE,
+  FILE_LOST_PRESS_TOAST,
+  UNTOUCHED_SUBMIT_MESSAGE,
+} from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
@@ -392,6 +398,30 @@ describe("R52: the lost-file stop only when something else can be sent", () => {
     expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
     expect(dialogShown()).toBe(false);
     expect(calls).not.toContain("/api/posts");
+  });
+});
+
+// R53 publishing-flow L1: with only Instagram connected nothing can go without
+// the file, so neither the notice nor the press may offer to post without it.
+describe("R53: the lost-file stop only when a post without the file could go", () => {
+  it("only Instagram, text typed, a ?mediaItemId load failure: the press gives the refusal, no toast offers to post without it", async () => {
+    await act(async () => root.unmount());
+    conn.platforms = ["instagram"];
+    nav.params = new URLSearchParams("mediaItemId=media-gone");
+    root = createRoot(container as unknown as HTMLElement);
+    await mount();
+    await typeCaption("Surf lesson today");
+    expect(lineSays(FILE_LOST_FILE_ONLY_MESSAGE)).toBe(true);
+    expect(lineSays("continue without one")).toBe(false);
+
+    await submit();
+    expect(lineSays("None of your connected platforms can publish a post without a photo or video.")).toBe(true);
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(false);
+    expect(offersWithout()).toBe(false);
+    expect(dialogShown()).toBe(false);
+    expect(calls).not.toContain("/api/posts");
+    // The notice stays as it was.
+    expect(lineSays(FILE_LOST_FILE_ONLY_MESSAGE)).toBe(true);
   });
 });
 

@@ -37,6 +37,8 @@ import {
   composerPageState,
   composerPageView,
   FILE_LOST_MESSAGE,
+  FILE_LOST_FILE_ONLY_MESSAGE,
+  fileLostMessage,
   fileLostBlocksSubmit,
   fileLostNoticeShown,
   fileSubmitBlock,
@@ -974,7 +976,7 @@ describe("the form's chain: composerPageState, composerPageView, submitFirstStep
     expect(v.buttonLabel).toBe("Publish post");
   });
 
-  const go = { fileLost: "none" as const, fileBlock: null };
+  const go = { fileLost: "none" as const, fileBlock: null, connected };
 
   it("untouched: the press stops with the sentence and is not a try", () => {
     expect(submitFirstStep({ ...go, pageState: view("").pageState })).toEqual({ stop: "untouched", countsAsTry: false });
@@ -1000,7 +1002,7 @@ describe("the form's chain: composerPageState, composerPageView, submitFirstStep
   });
 
   it("untouched + fresh + a file on its way: the wait step", () => {
-    expect(submitFirstStep({ pageState: "untouched", fileLost: "fresh", fileBlock: waitBlock })).toEqual({
+    expect(submitFirstStep({ pageState: "untouched", fileLost: "fresh", fileBlock: waitBlock, connected })).toEqual({
       stop: "wait",
       message: waitBlock,
       countsAsTry: false,
@@ -1029,6 +1031,62 @@ describe("the form's chain: composerPageState, composerPageView, submitFirstStep
     expect(submitFirstStep({ ...go, pageState: "untouched", fileLost: "seen" })).toEqual({
       stop: "untouched",
       countsAsTry: false,
+    });
+  });
+
+  // R53 publishing-flow L1: the stop's toast and the notice offer to post
+  // without the file; where no connected platform takes text alone, the
+  // second press could only be refused, so neither may offer it.
+  describe("R53: only file-only platforms connected", () => {
+    const fileOnly: Platform[] = ["instagram", "tiktok"];
+    const textView = (platforms: Platform[]) =>
+      composerPageView({
+        pageState: "text",
+        connected: platforms,
+        deselected: new Set(),
+        mimeType: null,
+        mode: "now",
+        loading: false,
+        triedSend: true,
+      });
+
+    it("text page + fresh: no stop, the refusal that names the cause, and a notice without \"continue without one\"", () => {
+      expect(submitFirstStep({ ...go, connected: fileOnly, pageState: "text", fileLost: "fresh" })).toEqual({
+        stop: null,
+        countsAsTry: true,
+      });
+      const v = textView(fileOnly);
+      expect(noFileSubmitError({ caption: "Hi", selectedCount: v.selected.length, allDisabled: v.allDisabled })).toBe(
+        "None of your connected platforms can publish a post without a photo or video. Add a photo or video.",
+      );
+      expect(fileLostMessage(fileOnly)).toBe("The photo or video could not be added. Add it again.");
+      expect(fileLostMessage(fileOnly)).toBe(FILE_LOST_FILE_ONLY_MESSAGE);
+      expect(fileLostMessage(fileOnly)).not.toContain("continue without one");
+    });
+
+    it("with a platform that takes text (Facebook Page): the stop and its toast, as now", () => {
+      const withText: Platform[] = [...fileOnly, "facebook_page"];
+      expect(submitFirstStep({ ...go, connected: withText, pageState: "text", fileLost: "fresh" })).toEqual({
+        stop: "file-lost",
+        countsAsTry: true,
+      });
+      expect(fileLostMessage(withText)).toBe(FILE_LOST_MESSAGE);
+      const v = textView(withText);
+      expect(noFileSubmitError({ caption: "Hi", selectedCount: v.selected.length, allDisabled: v.allDisabled })).toBeNull();
+    });
+
+    it("untouched page: the untouched step, as now", () => {
+      expect(submitFirstStep({ ...go, connected: fileOnly, pageState: "untouched", fileLost: "fresh" })).toEqual({
+        stop: "untouched",
+        countsAsTry: false,
+      });
+    });
+
+    it("text page + seen: no stop", () => {
+      expect(submitFirstStep({ ...go, connected: fileOnly, pageState: "text", fileLost: "seen" })).toEqual({
+        stop: null,
+        countsAsTry: true,
+      });
     });
   });
 
