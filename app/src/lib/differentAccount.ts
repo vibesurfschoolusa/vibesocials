@@ -51,19 +51,33 @@ export function connectedAccountName(connection: {
 
 /**
  * R8-client-journey L2 / pages L1: a LinkedIn page and a Facebook Page are
- * not signed in to; an account that manages them is. The platform's name for
- * that account, or null where the connection is the account itself.
+ * not signed in to; an account that manages them is. R51 pages-a L2: an
+ * Instagram account comes through Meta's Facebook login, from the Facebook
+ * Page linked to it (instagram/start), so its sign-in is a Facebook account
+ * that manages that Page (`linkedPage`). The platform's name for the account
+ * signed in with, or no entry where the connection is the account itself.
  */
-const PAGE_ACCOUNT_LABEL: Partial<Record<Platform, string>> = { linkedin: "LinkedIn", facebook_page: "Facebook" };
+const PAGE_ACCOUNT: Partial<Record<Platform, { account: string; linkedPage?: true }>> = {
+  linkedin: { account: "LinkedIn" },
+  facebook_page: { account: "Facebook" },
+  instagram: { account: "Facebook", linkedPage: true },
+};
 
+/** The account name for a connection that is itself a page (LinkedIn, Facebook Page), else null. */
 export function pageAccountLabel(platform: Platform): string | null {
-  return PAGE_ACCOUNT_LABEL[platform] ?? null;
+  const entry = PAGE_ACCOUNT[platform];
+  return entry && !entry.linkedPage ? entry.account : null;
 }
 
-/** "sign in to <name>", or for a page "sign in with a <platform> account that manages <name>". */
+/** What the signed-in account has to manage: the page itself, or the Page linked to an Instagram account. */
+function managedPage(platform: Platform, name: string): string {
+  return PAGE_ACCOUNT[platform]?.linkedPage ? `the Page linked to ${name}` : name;
+}
+
+/** "sign in to <name>", or "sign in with a <platform> account that manages <the page>". */
 export function signInTo(platform: Platform, name: string): string {
-  const account = PAGE_ACCOUNT_LABEL[platform];
-  return account ? `sign in with a ${account} account that manages ${name}` : `sign in to ${name}`;
+  const entry = PAGE_ACCOUNT[platform];
+  return entry ? `sign in with a ${entry.account} account that manages ${managedPage(platform, name)}` : `sign in to ${name}`;
 }
 
 function capitalized(sentence: string): string {
@@ -81,8 +95,9 @@ export function linkedInReconnectSignInStep(pageName: string): string {
  * platform's own answer on the server.
  */
 export function settingsDifferentAccountMessage(platform: Platform, signedInName: string, connectedName: string): string {
+  // Facebook Page and Instagram (through Facebook) are chosen from a list after the sign-in.
   const what =
-    platform === "facebook_page"
+    platform === "facebook_page" || platform === "instagram"
       ? `You chose ${signedInName}, not ${connectedName}, and ${connectedName} wasn't in the list.`
       : `You signed in to ${signedInName}, not ${connectedName}.`;
   return `${what} ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change to ${signedInName}.`;
@@ -94,12 +109,15 @@ export function settingsDifferentAccountMessage(platform: Platform, signedInName
  * signing in to the right one takes a sign-out first (Reconnect shows the steps).
  */
 export function reconnectDifferentAccountMessage(platform: Platform, connectedName: string): string {
-  const pageAccount = PAGE_ACCOUNT_LABEL[platform];
+  const entry = PAGE_ACCOUNT[platform];
   if (platform === "linkedin") {
     return `LinkedIn connected a different page than ${connectedName}, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. To use the other page instead, use Switch account.`;
   }
-  if (pageAccount) {
-    return `${pageAccount} connected a different page than ${connectedName}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change pages.`;
+  if (entry?.linkedPage) {
+    return `${entry.account} didn't return ${managedPage(platform, connectedName)}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;
+  }
+  if (entry) {
+    return `${entry.account} connected a different page than ${connectedName}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change pages.`;
   }
   const what = `You signed in to a different ${platformLabel(platform)} account than ${connectedName}.`;
   return `${what} ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;

@@ -67,6 +67,28 @@ describe("different account on reconnect", () => {
     );
   });
 
+  // R51 pages-a L2: Instagram's sign-in is Meta's Facebook login, and the
+  // account comes from a Facebook Page linked to it; nobody signs in to it there.
+  it("Settings, Instagram, after a refused reconnect: the Facebook sign-in that works", () => {
+    expect(reconnectDifferentAccountMessage("instagram", "@surfschool")).toBe(
+      "Facebook didn't return the Page linked to @surfschool, so nothing changed. Sign in with a Facebook account that manages the Page linked to @surfschool to reconnect it, or use Switch account to change accounts.",
+    );
+  });
+
+  it("Settings, Instagram, not offered in the list: the Facebook sign-in that works", () => {
+    const sentence = choiceDifferentAccountMessage("instagram", "@otherbiz", "@surfschool", false);
+    expect(sentence).toBe(
+      "You chose @otherbiz, not @surfschool, and @surfschool wasn't in the list. Sign in with a Facebook account that manages the Page linked to @surfschool to reconnect it, or use Switch account to change to @otherbiz.",
+    );
+    expect(sentence).not.toMatch(/signed in to @otherbiz|sign in to @surfschool/i);
+  });
+
+  it("the client's page, Instagram: says whose it is, as on every other platform", () => {
+    expect(linkDifferentAccountMessage("instagram", "@surfschool")).toBe(
+      "This connection belongs to @surfschool. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
+    );
+  });
+
   // R7-client-journey L4: the client can't switch it; the owner can disconnect it.
   it("the client's page: says whose it is and what works", () => {
     expect(linkDifferentAccountMessage("youtube", "Surf Co channel")).toBe(
