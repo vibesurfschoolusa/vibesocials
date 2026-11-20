@@ -70,6 +70,16 @@ export const UNKNOWN_TYPE_MESSAGE =
 export const NO_EXTENSION_MESSAGE =
   "We couldn't tell what kind of file this is. If it's a photo or video, add .jpg or .mp4 to the end of its name, then choose it again. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.";
 
+/**
+ * R46 review: the one sentence for a file whose type can't be told (no browser
+ * type and no known extension), wherever it is checked: this file, the Media
+ * library and Create's photo pick. A name with no extension (or none known)
+ * gets the step that works.
+ */
+export function unknownTypeMessage(name: string): string {
+  return extensionOf(name) === undefined ? NO_EXTENSION_MESSAGE : UNKNOWN_TYPE_MESSAGE;
+}
+
 /** The message for a type the upload route would refuse; "" is a type that can't be told. */
 export function unsupportedTypeMessage(type: string): string {
   if (type.trim() === "") return UNKNOWN_TYPE_MESSAGE;
@@ -148,8 +158,7 @@ export async function prepareUploadFile(
 
   const type = uploadTypeOf(prepared);
   if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(type)) {
-    if (type === "" && extensionOf(prepared.name) === undefined) throw new Error(NO_EXTENSION_MESSAGE);
-    throw new Error(unsupportedTypeMessage(type));
+    throw new Error(type === "" ? unknownTypeMessage(prepared.name) : unsupportedTypeMessage(type));
   }
   if (type !== prepared.type) {
     prepared = new File([prepared], prepared.name, { type, lastModified: prepared.lastModified });

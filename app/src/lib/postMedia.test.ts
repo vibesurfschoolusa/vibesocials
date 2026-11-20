@@ -2,6 +2,7 @@ import type { Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BLOB_URL_REJECTED_MESSAGE } from "./blobUrl";
+import { NO_EXTENSION_MESSAGE, preparedTypeOf } from "./prepareUploadFile";
 import {
   addPhotos,
   MAX_POST_MEDIA,
@@ -209,8 +210,24 @@ describe("photoPickProblem (the Create page's picker)", () => {
   });
 
   it("refuses any other type a photo set cannot hold (checked after HEIC is converted)", () => {
-    expect(photoPickProblem(0, [jpeg, { type: "" }])).toBe(PHOTO_TYPE_MESSAGE);
     expect(photoPickProblem(0, [jpeg, { type: "image/heic" }])).toBe(PHOTO_TYPE_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, { type: preparedTypeOf({ name: "notes.pdf", type: "application/pdf", size: 10 }) }])).toBe(
+      PHOTO_TYPE_MESSAGE,
+    );
+  });
+
+  // R46 review: a type that can't be told ("" from preparedTypeOf, as Create hands it) is the
+  // one unknown-type sentence, with the step that works; it was pinned to PHOTO_TYPE_MESSAGE.
+  it("a typeless IMG_0042 in the pick: the shared unknown-type sentence", () => {
+    const typeless = { name: "IMG_0042", type: "", size: 10 };
+    expect(photoPickProblem(0, [jpeg, { type: preparedTypeOf(typeless) }])).toBe(NO_EXTENSION_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, { type: "" }])).toBe(NO_EXTENSION_MESSAGE);
+  });
+
+  it("a typeless clip.mp4 in the pick is a video: the existing sentence", () => {
+    expect(photoPickProblem(0, [jpeg, { type: preparedTypeOf({ name: "clip.mp4", type: "", size: 10 }) }])).toBe(
+      PHOTO_VIDEO_ALONE_MESSAGE,
+    );
   });
 });
 

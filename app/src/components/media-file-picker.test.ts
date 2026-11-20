@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@vercel/blob/client", () => ({ upload: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {} }) }));
 
-import { MediaFilePicker, MEDIA_ACCEPT, pickDroppedFile, takePickedFile } from "./media-library";
+import { NO_EXTENSION_MESSAGE } from "@/lib/prepareUploadFile";
+
+import { libraryFileProblem, MediaFilePicker, MEDIA_ACCEPT, pickDroppedFile, takePickedFile } from "./media-library";
 
 const file = (name: string, type: string, size = 2048) => ({ name, type, size }) as File;
 const render = (f: File | null) =>
@@ -51,8 +53,35 @@ describe("pickDroppedFile", () => {
     });
   });
 
+  // R46 review: a file whose type can't be told gets the one sentence prepareUploadFile gives,
+  // with the step that works, not "only image or video files".
+  it("a typeless IMG_0042: the shared sentence with the step that works", () => {
+    expect(pickDroppedFile([file("IMG_0042", "")])).toEqual({ error: NO_EXTENSION_MESSAGE });
+  });
+
+  it("a typeless photo.jpg is taken by its name", () => {
+    const f = file("photo.jpg", "");
+    expect(pickDroppedFile([f])).toEqual({ file: f });
+  });
+
   it("ignores an empty drop", () => {
     expect(pickDroppedFile([])).toEqual({});
+  });
+});
+
+// R46 review: the one check the drop and the Upload press both make.
+describe("libraryFileProblem", () => {
+  it("a typeless IMG_0042: the shared sentence", () => {
+    expect(libraryFileProblem(file("IMG_0042", ""))).toBe(NO_EXTENSION_MESSAGE);
+  });
+
+  it("a typeless photo.jpg: accepted", () => {
+    expect(libraryFileProblem(file("photo.jpg", ""))).toBeNull();
+    expect(libraryFileProblem(file("IMG_1.HEIC", ""))).toBeNull();
+  });
+
+  it("notes.pdf (application/pdf): the existing refusal", () => {
+    expect(libraryFileProblem(file("notes.pdf", "application/pdf"))).toBe("Only image or video files can be added to the library.");
   });
 });
 

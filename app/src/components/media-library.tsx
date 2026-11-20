@@ -44,7 +44,7 @@ import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
 import { bulkHandoffHref, toggleMediaSelection } from "@/lib/bulkMedia";
 import { BULK_MAX_FILES } from "@/lib/bulkPosts";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
-import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
+import { isHeicFile, prepareUploadFile, unknownTypeMessage, uploadTypeOf } from "@/lib/prepareUploadFile";
 import { explainUploadFailure, UPLOAD_OFFLINE_MESSAGE, uploadRouteUrl } from "@/lib/uploadFailure";
 import { countWord } from "@/lib/plural";
 import { SIGNED_OUT_ERROR } from "@/lib/signedOutMessage";
@@ -165,14 +165,27 @@ function formatBytes(bytes: number): string {
 /** Same list the file input is given; dropped files are held to it too. */
 export const MEDIA_ACCEPT = "video/*,image/*";
 
+/**
+ * The one check a dropped file and the Upload press both make, before the
+ * upload. A HEIC photo the browser gave no type is converted later, not
+ * refused here. R46 review: the type is judged as /u judges it (uploadTypeOf:
+ * a typeless "photo.jpg" is a JPEG), and one that can't be told gets the
+ * shared sentence with the step that works.
+ */
+export function libraryFileProblem(file: { name: string; type: string }): string | null {
+  if (isHeicFile(file)) return null;
+  const type = uploadTypeOf(file);
+  if (type === "") return unknownTypeMessage(file.name);
+  if (!type.startsWith("image/") && !type.startsWith("video/")) return "Only image or video files can be added to the library.";
+  return null;
+}
+
 /** The first dropped file, or the plain error the upload itself gives for a type it would refuse. */
 export function pickDroppedFile(files: ArrayLike<File>): { file?: File; error?: string } {
   const file = files[0];
   if (!file) return {};
-  if (!isHeicFile(file) && !file.type.startsWith("image/") && !file.type.startsWith("video/")) {
-    return { error: "Only image or video files can be added to the library." };
-  }
-  return { file };
+  const problem = libraryFileProblem(file);
+  return problem ? { error: problem } : { file };
 }
 
 /**
@@ -861,9 +874,9 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     // Client-side guard first, ahead of the (bandwidth-costing) upload —
     // mirrors the server-side check in POST /api/media so a mismatched file
     // never reaches the blob store.
-    // A HEIC photo the browser gave no type is converted below, not refused here.
-    if (!isHeicFile(file) && !file.type.startsWith("image/") && !file.type.startsWith("video/")) {
-      toast.error("Only image or video files can be added to the library.");
+    const typeProblem = libraryFileProblem(file);
+    if (typeProblem) {
+      toast.error(typeProblem);
       return;
     }
 
