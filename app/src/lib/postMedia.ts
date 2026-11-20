@@ -149,12 +149,17 @@ function aloneMessage(
   attachedCount: number,
   picked: readonly { type: string }[],
 ): string {
-  // The step counts what is on screen: the photos picked with it, or the ones attached.
-  const pickedPhotos = picked.filter((file) => !file.type.startsWith("video/") && file.type !== "image/gif").length;
+  // The step counts what is on screen: the photos picked with it (only types a
+  // photo set takes; the caller passes preparedTypeOf), or the ones attached.
+  const pickedPhotos = picked.filter((file) => MULTI_PHOTO_MIME_TYPES.includes(file.type)).length;
+  const sameKind = picked.filter((file) => (kind === "GIF" ? file.type === "image/gif" : file.type.startsWith("video/"))).length;
+  const choose = sameKind > 1 ? `Choose one ${kind} at a time` : `Choose the ${kind} by itself`;
   const step =
-    attachedCount === 0
-      ? `Choose the ${kind} by itself, or choose only ${countWord(pickedPhotos, "the photo", "the photos")}.`
-      : `Remove ${countWord(attachedCount, "the photo", "the photos")} to post it instead, or post it separately.`;
+    attachedCount > 0
+      ? `Remove ${countWord(attachedCount, "the photo", "the photos")} to post it instead, or post it separately.`
+      : pickedPhotos > 0
+        ? `${choose}, or choose only ${countWord(pickedPhotos, "the photo", "the photos")}.`
+        : `${choose}.`;
   return picked.length > 1 ? `${name}: a ${kind} is posted on its own. ${step}` : `A ${kind} is posted on its own. ${step}`;
 }
 export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or WebP images only.";

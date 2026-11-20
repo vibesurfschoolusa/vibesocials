@@ -247,6 +247,38 @@ describe("photoPickProblem (the Create page's picker)", () => {
     );
   });
 
+  // R47 review: only real photos count for "choose only the photos", and a pick
+  // with none has no photo half; two videos are told one goes at a time.
+  describe("the mixed-pick step counts only the photos this pick can take", () => {
+    const video = (name: string) => ({ name, type: "video/mp4" });
+    it("two videos: one video at a time, no photo half", () => {
+      expect(photoPickProblem(0, [video("clip1.mp4"), video("clip2.mp4")])).toBe(
+        "clip1.mp4: a video is posted on its own. Choose one video at a time.",
+      );
+    });
+    it("a video and a GIF: the video by itself, no photo half", () => {
+      expect(photoPickProblem(0, [video("clip.mp4"), { name: "wave.gif", type: "image/gif" }])).toBe(
+        "clip.mp4: a video is posted on its own. Choose the video by itself.",
+      );
+    });
+    it("a video and a typeless file: the typeless file is not a photo", () => {
+      expect(photoPickProblem(0, [video("clip.mp4"), picked("IMG_0042", "")])).toBe(
+        "clip.mp4: a video is posted on its own. Choose the video by itself.",
+      );
+      expect(photoPickProblem(0, [video("clip.mp4"), picked("notes.pdf", "application/pdf")])).toBe(
+        "clip.mp4: a video is posted on its own. Choose the video by itself.",
+      );
+    });
+    it("a video and 1 photo; a video and 3 photos", () => {
+      expect(photoPickProblem(0, [video("clip.mp4"), jpeg])).toBe(
+        "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photo.",
+      );
+      expect(photoPickProblem(0, [video("clip.mp4"), jpeg, jpeg, jpeg])).toBe(
+        "clip.mp4: a video is posted on its own. Choose the video by itself, or choose only the photos.",
+      );
+    });
+  });
+
   it("names the video or GIF before the limit", () => {
     expect(photoPickProblem(9, [jpeg, { name: "clip.mp4", type: "video/mp4" }])).toContain("a video is posted on its own");
     expect(photoPickProblem(9, [jpeg, { name: "wave.gif", type: "image/gif" }])).toContain("a GIF is posted on its own");
