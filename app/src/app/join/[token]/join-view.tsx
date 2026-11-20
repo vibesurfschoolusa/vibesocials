@@ -16,6 +16,7 @@ import { workspaceLink } from "@/server/notifications/links";
 import { JOIN_FAILED_MESSAGE } from "./joinMessages";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { tooManyTriesSentence, waitSecondsOf } from "@/lib/tooManyTriesText";
 import { useRetryFocus } from "@/lib/useRetryFocus";
 
 /** GET /api/invites/[token] preview shape. 404 (invalid/expired/revoked) is handled separately. */
@@ -29,7 +30,7 @@ export type InviteLoad =
   | { kind: "ok"; preview: InvitePreview }
   | { kind: "invalid"; message?: string }
   | { kind: "signedOut" }
-  | { kind: "unreachable" };
+  | { kind: "unreachable"; message: string };
 
 /** The dead-link state, with the 404 body's sentence when it has one (R10-pages L3). */
 async function invalidFrom(response: Response): Promise<{ kind: "invalid"; message?: string }> {
@@ -49,24 +50,39 @@ export function invalidInviteDescription(message: string | undefined): string {
   return message && message !== GENERIC_INVALID_BODY ? message : INVALID_INVITE_DESCRIPTION;
 }
 
+/** The unreachable state's sentence when the preview got no answer at all. */
+export const JOIN_OFFLINE_DESCRIPTION = "The link may be fine. Check your internet connection, then press Try again.";
+/** R52 pages-a L5: an answer came, so the connection works; the failure is ours. */
+export const JOIN_LOAD_FAILED_DESCRIPTION = "Something went wrong on our side. Press Try again in a minute.";
+
 /**
  * Reads the invite preview. Only a 404 means the link is dead (the uniform
  * shape for invalid, expired or revoked: no oracle beyond validity). No
  * network, a server failure or too many tries is "unreachable": the link may
  * be fine, so the page offers Try again instead of calling it invalid
- * (R5 pages L7). A 401 is signed out (R11 review).
+ * (R5 pages L7). A 401 is signed out (R11 review). R52 pages-a L5: only no
+ * answer at all blames the connection; a 429 names its wait, so Try again is
+ * pressed when it can work.
  */
 export async function loadInvite(fetchImpl: typeof fetch, token: string): Promise<InviteLoad> {
+  let response: Response;
   try {
-    const response = await fetchImpl(`/api/invites/${token}`);
-    if (response.status === 404) return await invalidFrom(response);
-    // R11 review: signed out in another tab; the same state as Join's 401.
-    if (response.status === 401) return { kind: "signedOut" };
-    if (!response.ok) return { kind: "unreachable" };
-    return { kind: "ok", preview: (await response.json()) as InvitePreview };
+    response = await fetchImpl(`/api/invites/${token}`);
   } catch {
-    return { kind: "unreachable" };
+    return { kind: "unreachable", message: JOIN_OFFLINE_DESCRIPTION };
   }
+  if (response.status === 404) return await invalidFrom(response);
+  // R11 review: signed out in another tab; the same state as Join's 401.
+  if (response.status === 401) return { kind: "signedOut" };
+  const data = (await response.json().catch(() => null)) as InvitePreview | null;
+  if (response.status === 429) {
+    const wait = waitSecondsOf(data, response.headers.get("Retry-After"));
+    return { kind: "unreachable", message: tooManyTriesSentence(wait, "press Try again") };
+  }
+  if (!response.ok || !data || typeof data !== "object") {
+    return { kind: "unreachable", message: JOIN_LOAD_FAILED_DESCRIPTION };
+  }
+  return { kind: "ok", preview: data };
 }
 
 export { JOIN_FAILED_MESSAGE };
@@ -144,14 +160,14 @@ export function joinPromise(requiresApproval: boolean): string {
 }
 
 /** R11-pages L5: the states the page can end on are the whole page, so each title is its h1. */
-export function JoinUnreachable({ onRetry }: { onRetry: () => void }) {
+export function JoinUnreachable({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="mx-auto max-w-md px-4 py-16">
       <EmptyState
         icon={<UserPlus />}
         headingLevel={1}
         title="We couldn't load this invite."
-        description="The link may be fine. Check your internet connection, then press Try again."
+        description={message}
         action={<Button onClick={onRetry}>Try again</Button>}
       />
     </div>
@@ -312,6 +328,7 @@ export function JoinView({ token, requiresApproval = false }: { token: string; r
     if (load.kind === "unreachable") {
       return (
         <JoinUnreachable
+          message={load.message}
           onRetry={() => {
             retried();
             setLoad(null);

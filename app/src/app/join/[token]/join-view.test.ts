@@ -20,7 +20,9 @@ import {
   INVALID_INVITE_DESCRIPTION,
   invalidInviteDescription,
   JOIN_FAILED_MESSAGE,
+  JOIN_LOAD_FAILED_DESCRIPTION,
   JOIN_MAYBE_JOINED_MESSAGE,
+  JOIN_OFFLINE_DESCRIPTION,
   JOIN_SIGNED_OUT_MESSAGE,
   JoinAlreadyMember,
   JoinDeadLink,
@@ -66,13 +68,61 @@ describe("loadInvite", () => {
     await expect(loadInvite(notJson, "tok")).resolves.toEqual({ kind: "invalid" });
   });
 
-  it("tells a network or server failure apart from an invalid link", async () => {
+  // R52 pages-a L5: only no answer at all says to check the connection. A
+  // server failure or a 429 came over a working connection.
+  it("no answer at all (the fetch threw): check your connection", async () => {
     const offline = vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
-    await expect(loadInvite(offline, "tok")).resolves.toEqual({ kind: "unreachable" });
-    await expect(loadInvite(respond(500), "tok")).resolves.toEqual({ kind: "unreachable" });
-    await expect(loadInvite(respond(429), "tok")).resolves.toEqual({ kind: "unreachable" });
+    await expect(loadInvite(offline, "tok")).resolves.toEqual({ kind: "unreachable", message: JOIN_OFFLINE_DESCRIPTION });
+    expect(JOIN_OFFLINE_DESCRIPTION).toBe("The link may be fine. Check your internet connection, then press Try again.");
+  });
+
+  it("a 500 with JSON: it failed on our side, try again in a minute", async () => {
+    await expect(loadInvite(respond(500, { error: "Internal error" }), "tok")).resolves.toEqual({
+      kind: "unreachable",
+      message: JOIN_LOAD_FAILED_DESCRIPTION,
+    });
+    expect(JOIN_LOAD_FAILED_DESCRIPTION).toBe("Something went wrong on our side. Press Try again in a minute.");
+    expect(JOIN_LOAD_FAILED_DESCRIPTION).not.toContain("connection");
+  });
+
+  it("a 5xx that isn't JSON (a gateway page): the same", async () => {
+    const html = vi.fn(
+      async () => new Response("<html>Bad gateway</html>", { status: 504, headers: { "content-type": "text/html" } }),
+    ) as unknown as typeof fetch;
+    await expect(loadInvite(html, "tok")).resolves.toEqual({ kind: "unreachable", message: JOIN_LOAD_FAILED_DESCRIPTION });
+  });
+
+  it("an OK answer that can't be read: the same, not the connection", async () => {
+    const unreadable = vi.fn(async () => new Response("<html></html>", { status: 200 })) as unknown as typeof fetch;
+    await expect(loadInvite(unreadable, "tok")).resolves.toEqual({
+      kind: "unreachable",
+      message: JOIN_LOAD_FAILED_DESCRIPTION,
+    });
+  });
+
+  it("a 429 with retryAfterSeconds: says how long to wait, in the shared wait words", async () => {
+    await expect(
+      loadInvite(respond(429, { error: "Too many tries. Wait 5 minutes, then try again.", retryAfterSeconds: 290 }), "tok"),
+    ).resolves.toEqual({ kind: "unreachable", message: "Too many tries. Wait 5 minutes, then press Try again." });
+  });
+
+  it("a 429 with only Retry-After: the header's wait", async () => {
+    const limited = vi.fn(
+      async () => new Response("{}", { status: 429, headers: { "content-type": "application/json", "Retry-After": "120" } }),
+    ) as unknown as typeof fetch;
+    await expect(loadInvite(limited, "tok")).resolves.toEqual({
+      kind: "unreachable",
+      message: "Too many tries. Wait 2 minutes, then press Try again.",
+    });
+  });
+
+  it("a 429 without a wait: a few minutes", async () => {
+    await expect(loadInvite(respond(429), "tok")).resolves.toEqual({
+      kind: "unreachable",
+      message: "Too many tries. Wait a few minutes, then press Try again.",
+    });
   });
 
   // R11 review: signed out in another tab before the preview loaded; the same state as Join's 401.
@@ -286,9 +336,16 @@ describe("join states", () => {
   });
 
   it("the unreachable invite has its title as the page's h1", () => {
-    const page = html(createElement(JoinUnreachable, { onRetry: () => {} }));
+    const page = html(createElement(JoinUnreachable, { message: JOIN_OFFLINE_DESCRIPTION, onRetry: () => {} }));
     expect(page).toMatch(/<h1[^>]*>We couldn&#x27;t load this invite\.<\/h1>/);
     expect(page).toContain("Try again");
+  });
+
+  // R52 pages-a L5: the state shows the sentence loadInvite chose.
+  it("the unreachable invite shows the reason it was given", () => {
+    const page = html(createElement(JoinUnreachable, { message: JOIN_LOAD_FAILED_DESCRIPTION, onRetry: () => {} }));
+    expect(page).toContain("Something went wrong on our side. Press Try again in a minute.");
+    expect(page).not.toContain("internet connection");
   });
 
   it("signed out: says so, with an h1 and a sign-in link back to this invite", () => {

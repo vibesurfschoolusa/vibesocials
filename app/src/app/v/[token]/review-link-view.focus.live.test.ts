@@ -469,3 +469,74 @@ describe("/v: a card decision's 429", () => {
     });
   });
 });
+
+// R52 pages-a L5: only no answer at all says to check the connection. A
+// server failure came over a working connection, and a 429 says its wait.
+describe("/v: why the first load failed", () => {
+  const OFFLINE = "Couldn't load the posts. Check your connection and try again.";
+  const FAILED = "Couldn't load the posts: something went wrong on our side. Try again in a minute.";
+
+  async function firstLoad(answer: () => Promise<Response>): Promise<string> {
+    fetchMock.mockImplementationOnce(answer);
+    await act(async () => {
+      root.render(createElement(ReviewLinkView, { token: "tok" }));
+    });
+    await settle();
+    const alert = find(container, (n) => n.attributes?.role === "alert");
+    return alert ? (alert.textContent as string) : (container.textContent as string);
+  }
+
+  it("a fetch that threw: check your connection", async () => {
+    expect(
+      await firstLoad(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    ).toBe(OFFLINE);
+  });
+
+  it("a 500 with JSON: the route's own sentence, as before", async () => {
+    expect(await firstLoad(async () => Response.json({ error: UNCHECKED }, { status: 500 }))).toBe(UNCHECKED);
+  });
+
+  it("a 500 with JSON but no sentence: it failed on our side", async () => {
+    expect(await firstLoad(async () => Response.json({}, { status: 500 }))).toBe(FAILED);
+  });
+
+  it("a 5xx that isn't JSON (a gateway page): it failed on our side, not the connection", async () => {
+    expect(
+      await firstLoad(
+        async () => new Response("<html>Gateway Timeout</html>", { status: 504, headers: { "content-type": "text/html" } }),
+      ),
+    ).toBe(FAILED);
+  });
+
+  it("a 429 with retryAfterSeconds: the shared wait words, no button", async () => {
+    expect(
+      await firstLoad(async () =>
+        Response.json({ error: "Too many requests from this network in the last hour. Try again later.", retryAfterSeconds: 600 }, { status: 429 }),
+      ),
+    ).toContain("Too many requests from this network in the last hour. Reload this page in 10 minutes.");
+    expect(find(container, (n) => n.nodeName === "BUTTON")).toBeNull();
+  });
+
+  it("a 429 without a wait: reload later", async () => {
+    expect(await firstLoad(async () => new Response("", { status: 429 }))).toContain(
+      "Too many requests from this network in the last hour. Reload this page later.",
+    );
+  });
+
+  it("a 404 and a 401: the route's own sentence, unchanged", async () => {
+    expect(await firstLoad(async () => Response.json({ error: "This link has expired." }, { status: 404 }))).toBe(
+      "This link has expired.",
+    );
+    await act(async () => root.unmount());
+    root = createRoot(container as unknown as HTMLElement);
+    expect(await firstLoad(async () => Response.json({ error: "Signed out." }, { status: 401 }))).toBe("Signed out.");
+  });
+
+  it("OK: shows what it loaded", async () => {
+    await firstLoad(async () => Response.json({ posts: [], more: false }));
+    expect(container.textContent).toContain("Nothing is scheduled for the next 60 days.");
+    expect(find(container, (n) => n.attributes?.role === "alert")).toBeNull();
+  });
+});

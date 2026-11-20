@@ -8,7 +8,10 @@ import { limitReachedSentence, limitWaitSeconds } from "@/lib/clientLinkLimit";
 import type { PublicMonthlyReport } from "@/lib/monthlyReport";
 import { useRetryFocus } from "@/lib/useRetryFocus";
 
+/** The load got no answer at all (the fetch threw). */
 const LOAD_FAILED_MESSAGE = "Couldn't load the report. Check your connection and try again.";
+/** R52 pages-a L5: an answer came but failed, with no sentence of its own (a gateway's 504 page). */
+const LOAD_FAILED_SERVER_MESSAGE = "Couldn't load the report: something went wrong on our side. Try again in a minute.";
 
 /**
  * The page's h1 until a report is shown, which carries its own (R12-pages L6).
@@ -36,7 +39,7 @@ function firstHeadingIn(element: Element | null): HTMLElement | null {
  */
 export function ClientReportView({ token, month }: { token: string; month: string }) {
   const [report, setReport] = useState<PublicMonthlyReport | null>(null);
-  // A failed load: the server's sentence, or "" for no answer (network).
+  // A failed load: the server's sentence (or ours for one without), or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
   // R40 client-journey L2: the error is the network limit's, which a press can't clear.
   const [limited, setLimited] = useState(false);
@@ -56,7 +59,7 @@ export function ClientReportView({ token, month }: { token: string; month: strin
         return;
       }
       if (!response.ok || !data || typeof data.month !== "string") {
-        setError(data?.error ?? "");
+        setError(typeof data?.error === "string" && data.error ? data.error : LOAD_FAILED_SERVER_MESSAGE);
         return;
       }
       setReport(data);

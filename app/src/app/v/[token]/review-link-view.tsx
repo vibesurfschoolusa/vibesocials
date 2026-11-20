@@ -207,8 +207,10 @@ export function alreadyStood(data: unknown): boolean {
   return Boolean(data && typeof data === "object" && (data as { already?: unknown }).already === true);
 }
 
-/** Shown when the first load failed. */
+/** Shown when the first load got no answer at all (the fetch threw). */
 const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
+/** R52 pages-a L5: an answer came but failed, with no sentence of its own (a gateway's 504 page). */
+const LOAD_FAILED_SERVER_MESSAGE = "Couldn't load the posts: something went wrong on our side. Try again in a minute.";
 
 /** R7-client-journey L5: under the list when it holds the first 100 of more. */
 export const REVIEW_MORE_SENTENCE = `Showing the next ${REVIEW_LIST_MAX} scheduled posts; more appear as these go out.`;
@@ -569,7 +571,7 @@ export function ReviewPostCard({
 export function ReviewLinkView({ token }: { token: string }) {
   const [posts, setPosts] = useState<ReviewPostDTO[] | null>(null);
   const [more, setMore] = useState(false);
-  // A failed load: the server's sentence, or "" for no answer (network).
+  // A failed load: the server's sentence (or ours for one without), or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
   // R40 client-journey L2: the error is the network limit's, which a press can't clear.
   const [limited, setLimited] = useState(false);
@@ -662,7 +664,7 @@ export function ReviewLinkView({ token }: { token: string }) {
         return null;
       }
       if (!response.ok || !data?.posts) {
-        setError(data?.error ?? "");
+        setError(typeof data?.error === "string" && data.error ? data.error : LOAD_FAILED_SERVER_MESSAGE);
         return null;
       }
       // R32 lead's second review: a kept card whose post is listed again is let go.
