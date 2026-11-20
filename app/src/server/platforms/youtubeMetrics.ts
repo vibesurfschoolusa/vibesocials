@@ -1,4 +1,5 @@
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
+import { SOCIAL_METRICS_TIMEOUT_MS } from "@/server/platforms/facebookMetrics";
 import { classifyRateLimit } from "@/server/platforms/rateLimited";
 
 /**
@@ -123,10 +124,13 @@ export async function fetchYouTubeVideoStatistics(
 ): Promise<YouTubeMetricsFetchResult> {
   try {
     const url = `${YOUTUBE_VIDEOS_ENDPOINT}?part=statistics&id=${encodeURIComponent(videoId)}`;
-    const response = await fetchWithTimeout(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    // R46 platform L1: the limit covers the body too, so a stalled answer
+    // can't hang the numbers step.
+    const response = await fetchWithinLimit(
+      url,
+      { method: "GET", headers: { Authorization: `Bearer ${accessToken}` } },
+      SOCIAL_METRICS_TIMEOUT_MS,
+    );
 
     if (!response.ok) {
       // Read the body for SERVER logs only; never surface it (SEC — could echo
@@ -196,10 +200,13 @@ export async function fetchYouTubeVideoStatisticsBatch(
 
   try {
     const url = `${YOUTUBE_VIDEOS_ENDPOINT}?part=statistics&id=${videoIds.map(encodeURIComponent).join(",")}`;
-    const response = await fetchWithTimeout(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    // R46 platform L1: the limit covers the body too, so a stalled answer
+    // can't hang the numbers step.
+    const response = await fetchWithinLimit(
+      url,
+      { method: "GET", headers: { Authorization: `Bearer ${accessToken}` } },
+      SOCIAL_METRICS_TIMEOUT_MS,
+    );
 
     if (!response.ok) {
       // classifyRateLimit reads a CLONE of the body, so it is still readable here.

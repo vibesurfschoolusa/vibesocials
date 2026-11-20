@@ -6,6 +6,9 @@ import {
   hasAnyStatistic,
   parseYouTubeStatistics,
 } from "@/server/platforms/youtubeMetrics";
+import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
+
+import { SOCIAL_METRICS_TIMEOUT_MS } from "./facebookMetrics";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -327,5 +330,66 @@ describe("fetchYouTubeVideoStatisticsBatch (2026-11-01 scale audit, jobs: 50 ids
       code: "YOUTUBE_METRICS_FETCH_ERROR",
       quotaExceeded: false,
     });
+  });
+});
+
+// R46 platform L1: the limit covers the body too (fetchWithinLimit), so an
+// answer whose headers came and whose body stalls can't hang the numbers step.
+describe("a stalled YouTube body", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function stallErrorBody(status: number) {
+    return (_input: string | URL, init?: RequestInit): Promise<Response> => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error":'));
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+        },
+      });
+      return Promise.resolve(new Response(body, { status }));
+    };
+  }
+
+  it("batch: a 200 body that never ends is abandoned within the limit as a failed read", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(bodyNeverEnds));
+
+    const settled = fetchYouTubeVideoStatisticsBatch(["vid1", "vid2"], "access-token");
+    await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+
+    const out = await Promise.race([settled, Promise.resolve("still waiting" as const)]);
+    expect(out).toEqual({ ok: false, code: "YOUTUBE_METRICS_FETCH_ERROR", quotaExceeded: false });
+  });
+
+  it("batch: an error body that never ends is abandoned within the limit too", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(stallErrorBody(500)));
+
+    const settled = fetchYouTubeVideoStatisticsBatch(["vid1"], "access-token");
+    await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+
+    const out = await Promise.race([settled, Promise.resolve("still waiting" as const)]);
+    expect(out).toMatchObject({ ok: false, quotaExceeded: false });
+  });
+
+  it("single video: a 200 body that never ends is abandoned within the limit as a failed read", async () => {
+    vi.useFakeTimers();
+    abortSignalTimeoutOnFakeClock();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(bodyNeverEnds));
+
+    const settled = fetchYouTubeVideoStatistics("vid1", "access-token");
+    await vi.advanceTimersByTimeAsync(SOCIAL_METRICS_TIMEOUT_MS);
+
+    const out = await Promise.race([settled, Promise.resolve("still waiting" as const)]);
+    expect(out).toMatchObject({ ok: false, code: "YOUTUBE_METRICS_FETCH_ERROR" });
   });
 });
