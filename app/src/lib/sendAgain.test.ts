@@ -47,19 +47,39 @@ describe("sendAgainTooOld", () => {
 });
 
 // R49 pages-b L1 (5b): the card and the publish route say the one too-old sentence for the job.
+// R50 pages-b L2: the Story's names its platforms, since Create starts with
+// every connected platform ticked and the step must not post the feed again.
 describe("tooOldToSendText", () => {
-  it("names the Story for a Story half, and the post otherwise", () => {
+  it("names Instagram for an Instagram Story half", () => {
+    expect(tooOldToSendText(true, ["instagram"])).toBe(
+      "This Story was not sent, and it is too old to send again. To post it, create a new post to Instagram only, with Story chosen.",
+    );
+  });
+
+  it("names both platforms for a Story on Instagram and Facebook", () => {
+    expect(tooOldToSendText(true, ["facebook_page", "instagram"])).toBe(
+      "This Story was not sent, and it is too old to send again. To post it, create a new post to Instagram and Facebook Page only, with Story chosen.",
+    );
+  });
+
+  it("falls back to a step that still ticks only the Story's platform when the list is empty or unknown", () => {
+    expect(tooOldToSendText(true, [])).toBe(STORY_TOO_OLD_TO_SEND_MESSAGE);
+    expect(tooOldToSendText(true, null)).toBe(STORY_TOO_OLD_TO_SEND_MESSAGE);
     expect(tooOldToSendText(true)).toBe(STORY_TOO_OLD_TO_SEND_MESSAGE);
+  });
+
+  it("keeps the feed post's sentence, whatever platforms are passed", () => {
     expect(tooOldToSendText(false)).toBe(TOO_OLD_TO_SEND_MESSAGE);
+    expect(tooOldToSendText(false, ["instagram"])).toBe(TOO_OLD_TO_SEND_MESSAGE);
   });
 });
 
 // R49 review: a reason ("so the feed post is not sent twice") is false when the
 // feed half failed too, so the Story's sentence gives only the step.
 describe("STORY_TOO_OLD_TO_SEND_MESSAGE", () => {
-  it("says what happened and the step, with no reason clause", () => {
+  it("says what happened and a step that ticks only the Story's platform, with no reason clause", () => {
     expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toBe(
-      "This Story was not sent, and it is too old to send again. To post it, create a new post with Story chosen.",
+      "This Story was not sent, and it is too old to send again. To post it, create a new post with only the Story's platform ticked and Story chosen.",
     );
     expect(STORY_TOO_OLD_TO_SEND_MESSAGE).not.toMatch(/feed|twice|so /i);
   });

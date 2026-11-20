@@ -125,7 +125,7 @@ describe("PostJobCard - Send again pressed after the 7-day mark", () => {
     await mount(story);
 
     vi.setSystemTime(new Date("2026-11-18T12:00:00.000Z"));
-    const sentence = tooOldToSendText(true);
+    const sentence = tooOldToSendText(true, ["instagram"]);
     fetchMock.mockResolvedValue(Response.json({ error: sentence, code: "TOO_OLD" }, { status: 409 }));
     await press();
 

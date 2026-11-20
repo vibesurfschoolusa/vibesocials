@@ -168,7 +168,9 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
   const render = (overrides: Partial<PostJobDTO>) =>
     renderToStaticMarkup(
       createElement(ToastProvider, null, createElement(PostJobCard, { job: job(overrides), onRetryAccepted: () => {} })),
-    ).replace(/<!-- -->/g, "");
+    )
+      .replace(/<!-- -->/g, "")
+      .replace(/&#x27;/g, "'");
   const publish = (targetPlatforms: Platform[]) => ({ targetPlatforms }) as unknown as PostJobDTO["publish"];
   // The fixture post was created 2026-11-10: pin "now" inside its 7-day window
   // (lib/sendAgain.ts), so every test here passes whatever today's date is.
@@ -236,9 +238,24 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
       expect(html).not.toContain("Send again</button>");
       expect(html).toContain(STORY_TOO_OLD_TO_SEND_MESSAGE);
       expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toMatch(/^This Story was not sent, and it is too old to send again\./);
-      expect(STORY_TOO_OLD_TO_SEND_MESSAGE).toContain("create a new post with Story chosen");
       expect(html).not.toContain(TOO_OLD_TO_SEND_MESSAGE);
       expect(html).not.toContain("This Story was not sent. Use Send again");
+    });
+
+    // R50 pages-b L2: the card has no results, so no badges; its sentence names the Story's platforms.
+    it("names the Story's platforms on a too-old Story half's card", () => {
+      const html = render({
+        status: "failed",
+        results: [],
+        storyHalf: true,
+        storyPlatforms: ["instagram"],
+        createdAt: "2026-01-18T10:00:00.000Z",
+        scheduledFor: null,
+      });
+      expect(html).toContain(
+        "This Story was not sent, and it is too old to send again. To post it, create a new post to Instagram only, with Story chosen.",
+      );
+      expect(html).not.toContain(STORY_TOO_OLD_TO_SEND_MESSAGE);
     });
 
     it("keeps the too-old sentence of a feed post as it was", () => {

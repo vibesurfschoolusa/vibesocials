@@ -216,8 +216,8 @@ export const STORY_NOT_SENT_MESSAGE = NOT_SENT_MESSAGE.replace(/^This post/, "Th
  * R49 pages-b L1, one rule: each not-sent sentence on the card has a Story
  * form, chosen by the card's storyHalf, the too-old one included.
  */
-export function unsentLine(tooOld: boolean, storyHalf: boolean): string {
-  if (tooOld) return tooOldToSendText(storyHalf);
+export function unsentLine(tooOld: boolean, storyHalf: boolean, storyPlatforms?: readonly Platform[]): string {
+  if (tooOld) return tooOldToSendText(storyHalf, storyPlatforms);
   return storyHalf ? STORY_NOT_SENT_MESSAGE : NOT_SENT_MESSAGE;
 }
 
@@ -697,7 +697,7 @@ export function PostJobCard({
           record why, so one sentence that is true for every cause. */}
       {canSendAgain || tooOldToSend ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          {unsentLine(tooOldToSend, job.storyHalf === true)}
+          {unsentLine(tooOldToSend, job.storyHalf === true, job.storyPlatforms)}
         </p>
       ) : null}
 

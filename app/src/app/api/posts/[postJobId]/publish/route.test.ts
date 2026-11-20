@@ -85,6 +85,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
 import { prisma } from "@/lib/db";
 
 import { STORY_TOO_OLD_TO_SEND_MESSAGE, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
+import { unsentLine } from "@/components/activity/post-job-card";
 
 import { POST } from "./route";
 
@@ -494,6 +495,28 @@ describe("POST /api/posts/[postJobId]/publish", () => {
 
       expect(res.status).toBe(409);
       await expect(res.json()).resolves.toEqual({ error: STORY_TOO_OLD_TO_SEND_MESSAGE, code: "TOO_OLD" });
+      expect(updateManyMock).not.toHaveBeenCalled();
+    });
+
+    // R50 pages-b L2: the same sentence the card gives for the same job, with
+    // the Story's platforms from its publishMetadata.
+    it("names the Story's platforms from the job, the same sentence as the card", async () => {
+      findFirstMock.mockResolvedValue(
+        jobRow({
+          status: "failed",
+          _count: { results: 0 },
+          storyOfPostJobId: "job-feed",
+          publishMetadata: { instagram: { placement: "story" }, targetPlatforms: ["instagram"] },
+          scheduledFor: new Date(Date.now() - 8 * 86_400_000),
+        }),
+      );
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      const sentence = "This Story was not sent, and it is too old to send again. To post it, create a new post to Instagram only, with Story chosen.";
+      await expect(res.json()).resolves.toEqual({ error: sentence, code: "TOO_OLD" });
+      expect(unsentLine(true, true, ["instagram"])).toBe(sentence);
       expect(updateManyMock).not.toHaveBeenCalled();
     });
 

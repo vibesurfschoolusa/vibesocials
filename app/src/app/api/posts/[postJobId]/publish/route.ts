@@ -368,7 +368,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
   // A post from weeks ago would publish stale content today (lib/sendAgain.ts).
   if (unsent && sendAgainTooOld(job, Date.now())) {
-    return NextResponse.json({ error: tooOldToSendText(Boolean(job.storyOfPostJobId)), code: "TOO_OLD" }, { status: 409 });
+    return NextResponse.json({ error: tooOldToSendText(Boolean(job.storyOfPostJobId), storyPlatformsOf(job.publishMetadata)), code: "TOO_OLD" }, { status: 409 });
   }
   if (
     unsent &&
