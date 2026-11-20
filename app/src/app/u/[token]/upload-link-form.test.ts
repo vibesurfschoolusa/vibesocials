@@ -12,6 +12,7 @@ import {
   UploadLinkForm,
   UploadSummary,
   failureOf,
+  summaryFailures,
   filesToSend,
   pressWatchTarget,
   retryOffer,
@@ -473,5 +474,73 @@ describe("UploadSummary and the rows: our side or the connection", () => {
     const failures = [await failed(async () => html502()), await failed(threw), await failed(async () => empty500())];
     expect(failures.map((failure) => failure.message)).toEqual([OUR_SIDE_ROW, CONNECTION_ROW, OUR_SIDE_ROW]);
     expect(render(0, failures)).toContain(`None of the 3 files arrived. The reason is under each file. ${CONNECTION_SUMMARY}`);
+  });
+});
+
+// R53 fix review M1: the form kept only each failure's kind and rebuilt the
+// rest, so `ourSide` never reached the summary. summaryFailures is the form's
+// own mapping from its state to the summary, fed what sendClientFile throws.
+describe("summaryFailures: the form's failed files, as the summary reads them", () => {
+  const CONNECTION_SUMMARY = "Check your connection, then try again with the button below.";
+  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again in a few minutes with the button below.";
+  const html502 = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } });
+  const tokenIssued = () =>
+    new Response(JSON.stringify({ clientToken: "ct", pathname: "ul/link-1/a.jpg" }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  async function stateAfter(answers: Array<{ fetch: () => Promise<Response>; put?: () => Promise<{ url: string }> }>) {
+    const files = answers.map((_, at) => ({
+      key: `k${at}`,
+      file: new File(["abc"], `file-${at + 1}.jpg`, { type: "image/jpeg" }),
+      status: "failed" as const,
+      progress: 0,
+      error: null as string | null,
+    }));
+    const failures: Record<string, ClientFileFailure> = {};
+    for (const [at, answer] of answers.entries()) {
+      const deps = { prepare: async (file: File) => file, put: vi.fn(answer.put ?? (async () => ({ url: "u" }))), fetch: vi.fn(answer.fetch) };
+      const error = await sendClientFile({ token: "T".repeat(43), file: files[at].file, senderName: "", note: "", onProgress: () => {} }, deps).catch(
+        (caught: unknown) => caught,
+      );
+      // As the form's catch does: the row's sentence on the file, the whole failure by its key.
+      failures[files[at].key] = failureOf(error);
+      files[at].error = failures[files[at].key].message;
+    }
+    return summaryFailures(files, failures);
+  }
+  const summary = (failures: SummaryFailure[]) =>
+    renderToStaticMarkup(createElement(UploadSummary, { sentCount: 0, failures, total: failures.length }));
+
+  it("3 files all failing on our side (an HTML 502, an empty 500, a suspended store): no connection step", async () => {
+    const failures = await stateAfter([
+      { fetch: async () => html502() },
+      { fetch: async () => new Response("", { status: 500 }) },
+      { fetch: async () => tokenIssued(), put: () => Promise.reject(new BlobStoreSuspendedError()) },
+    ]);
+    expect(failures.map((failure) => [failure.name, failure.kind, failure.ourSide])).toEqual([
+      ["file-1.jpg", "network", true],
+      ["file-2.jpg", "network", true],
+      ["file-3.jpg", "network", true],
+    ]);
+    const html = summary(failures);
+    expect(html).toContain(`None of the 3 files arrived. The reason is under each file. ${OUR_SIDE_SUMMARY}`);
+    expect(html).not.toContain("connection");
+  });
+
+  it("a mix with a file that got no answer: the connection step stays", async () => {
+    const failures = await stateAfter([
+      { fetch: async () => html502() },
+      { fetch: () => Promise.reject(new NoAnswerError(new TypeError("Failed to fetch"))) },
+      { fetch: async () => tokenIssued(), put: () => Promise.reject(new BlobStoreSuspendedError()) },
+    ]);
+    expect(summary(failures)).toContain(`None of the 3 files arrived. The reason is under each file. ${CONNECTION_SUMMARY}`);
+  });
+
+  it("only failed files, and a failed file with no failure kept reads as maybe with its own sentence", () => {
+    const file = (name: string) => new File(["abc"], name, { type: "image/jpeg" });
+    const files = [
+      { key: "a", file: file("a.jpg"), status: "sent" as const, progress: 100, error: null },
+      { key: "b", file: file("b.jpg"), status: "failed" as const, progress: 0, error: "Row sentence." },
+    ];
+    expect(summaryFailures(files, {})).toEqual([{ name: "b.jpg", kind: "maybe", message: "Row sentence." }]);
   });
 });

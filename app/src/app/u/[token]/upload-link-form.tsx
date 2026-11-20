@@ -65,6 +65,27 @@ export function failureOf(error: unknown): ClientFileFailure {
 /** A failed file as the summary names it. */
 export type SummaryFailure = ClientFileFailure & { name: string };
 
+/**
+ * R53 fix review M1: the failed files as the summary reads them, from the
+ * whole failure each kept (`ourSide` included), so it reads what the rows do.
+ * A failed file with none kept may have arrived, with its row's sentence.
+ */
+export function summaryFailures(
+  files: Pick<PickedFile, "key" | "file" | "status" | "error">[],
+  failures: Partial<Record<string, ClientFileFailure>>,
+): SummaryFailure[] {
+  return files.flatMap((item) => {
+    if (item.status !== "failed") return [];
+    const failure = failures[item.key] ?? { kind: "maybe" as const, message: item.error ?? UNKNOWN_FAILURE_MESSAGE };
+    return [{ ...failure, name: item.file.name }];
+  });
+}
+
+/** Each failed file's kind, by its key, for the retry rules. */
+function kindsOf(failures: Partial<Record<string, ClientFileFailure>>): Kinds {
+  return Object.fromEntries(Object.entries(failures).map(([key, failure]) => [key, failure?.kind]));
+}
+
 type FileState = Pick<PickedFile, "key" | "status">;
 type Kinds = Partial<Record<string, ClientFileFailureKind>>;
 
@@ -243,7 +264,8 @@ export function UploadLinkForm({ token }: { token: string }) {
   const [dragging, setDragging] = useState(false);
   const [dropNote, setDropNote] = useState<string | null>(null);
   // Why each failed file failed, by file key (PickedFile carries the sentence only).
-  const [failureKinds, setFailureKinds] = useState<Record<string, ClientFileFailure["kind"]>>({});
+  const [failures, setFailures] = useState<Partial<Record<string, ClientFileFailure>>>({});
+  const failureKinds = kindsOf(failures);
   const sendRef = useRef<HTMLButtonElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -294,7 +316,7 @@ export function UploadLinkForm({ token }: { token: string }) {
         update(item.key, { status: "sent", progress: 100 });
       } catch (error) {
         const failure = failureOf(error);
-        setFailureKinds((prev) => ({ ...prev, [item.key]: failure.kind }));
+        setFailures((prev) => ({ ...prev, [item.key]: failure }));
         update(item.key, { status: "failed", error: failure.message });
       }
     }
@@ -310,7 +332,7 @@ export function UploadLinkForm({ token }: { token: string }) {
   function startOver(pressed: HTMLElement | null) {
     focusAfterPress(pressed, () => nameRef.current);
     setFiles([]);
-    setFailureKinds({});
+    setFailures({});
     // R30 client-journey L4: the old "left out" note goes with the old files.
     setDropNote(null);
     setPhase("picking");
@@ -334,21 +356,7 @@ export function UploadLinkForm({ token }: { token: string }) {
       <div ref={summaryRef} tabIndex={-1} className={cn("outline-none", phase !== "done" && "mb-0")}>
         <UploadSummary
           sentCount={phase === "done" ? sentCount : 0}
-          failures={
-            phase === "done"
-              ? files.flatMap((item) =>
-                  item.status === "failed"
-                    ? [
-                        {
-                          name: item.file.name,
-                          kind: failureKinds[item.key] ?? "maybe",
-                          message: item.error ?? UNKNOWN_FAILURE_MESSAGE,
-                        },
-                      ]
-                    : [],
-                )
-              : []
-          }
+          failures={phase === "done" ? summaryFailures(files, failures) : []}
           total={files.length}
         />
       </div>
