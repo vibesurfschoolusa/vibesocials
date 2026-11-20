@@ -83,7 +83,7 @@ import {
   photoPickProblem,
   removePhoto,
 } from "@/lib/postMedia";
-import { preparedTypeOf, prepareUploadFile } from "@/lib/prepareUploadFile";
+import { PrepareFileError, preparedTypeOf, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { platformAcceptsTextOnly, textPostsEnabled } from "@/lib/platformLimits";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
@@ -1801,7 +1801,14 @@ function CreatePostFormInner({
         if (selection === fileSelectionRef.current) {
           // Clear the input so the same file can be picked again.
           setFileInputKey((key) => key + 1);
-          setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "prepare-failed" }));
+          // R50 pages-b L1: a refusal of the file itself (over 512 MB, empty)
+          // holds on every try, so its own sentence stays and nothing says
+          // "Add it again". Any other failure may pass next time.
+          if (prepareError instanceof PrepareFileError && prepareError.kind === "file") {
+            setUploadError(prepareError.message);
+          } else {
+            setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "prepare-failed" }));
+          }
         }
         throw prepareError;
       }
