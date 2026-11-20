@@ -13,6 +13,7 @@ import { focusAfterPress } from "@/lib/focusAfter";
 import { answerLostText } from "@/lib/answerLost";
 import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
 import type { UploadedBlob } from "@/lib/createPostRequest";
+import { prepareUploadFile, type PrepareUploadDeps } from "@/lib/prepareUploadFile";
 
 /**
  * The Create page's attached photos (07c): a row of thumbnails, each with
@@ -246,6 +247,15 @@ export interface PreparePhotosDeps {
   isStale(): boolean;
   /** False once the user removed that placeholder. */
   isAttached(key: string): boolean;
+}
+
+/**
+ * R48 pages-b L1: one photo of a pick of several, prepared as on Create's
+ * single pick, with every refusal naming the file and the pick's step.
+ * `deps` for tests.
+ */
+export function preparePickedPhoto(file: File, deps?: PrepareUploadDeps): Promise<File> {
+  return prepareUploadFile(file, deps, "photoPick");
 }
 
 /**

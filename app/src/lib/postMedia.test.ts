@@ -10,7 +10,7 @@ import {
   MULTI_PHOTO_MIME_TYPES,
   multiPhotoPlatformNotes,
   PHOTO_LIMIT_MESSAGE,
-  PHOTO_TYPE_MESSAGE,
+  photoTypeMessage,
   photoPickProblem,
   removePhoto,
   validatePostMediaList,
@@ -310,11 +310,11 @@ describe("photoPickProblem (the Create page's picker)", () => {
   });
 
   it("refuses any other type a photo set cannot hold (checked after HEIC is converted)", () => {
-    expect(photoPickProblem(0, [jpeg, { name: "IMG_1.HEIC", type: "image/heic" }])).toBe(PHOTO_TYPE_MESSAGE);
+    expect(photoPickProblem(0, [jpeg, { name: "IMG_1.HEIC", type: "image/heic" }])).toBe(photoTypeMessage("IMG_1.HEIC"));
   });
 
   // R46 review: a type that can't be told is the one unknown-type sentence prepareUploadFile
-  // gives, judged by the file's real name; it was pinned to PHOTO_TYPE_MESSAGE.
+  // gives, judged by the file's real name; it was pinned to the photo-type sentence.
   // R47 client-journey L3: in a pick of several, the sentence names the file it
   // means, and offers only the photo step (a GIF or a video is posted on its own).
   it("a pick of 4 photos with a typeless IMG_0042: named, photo-only", () => {
@@ -341,8 +341,15 @@ describe("photoPickProblem (the Create page's picker)", () => {
     expect(photoPickProblem(0, [picked("b.jpg", ""), jpeg])).toBeNull();
   });
 
-  it("a PDF: PHOTO_TYPE_MESSAGE", () => {
-    expect(photoPickProblem(0, [jpeg, picked("notes.pdf", "application/pdf")])).toBe(PHOTO_TYPE_MESSAGE);
+  it("a PDF: the photo-type sentence, naming it", () => {
+    expect(photoPickProblem(0, [jpeg, picked("notes.pdf", "application/pdf")])).toBe(photoTypeMessage("notes.pdf"));
+  });
+
+  // R48 new-customer L1: the sentence names the first file that isn't a JPEG, PNG or WebP photo.
+  it("JPEGs plus one TIFF: the sentence names the TIFF", () => {
+    expect(photoPickProblem(0, [jpeg, jpeg, picked("scan.tiff", "image/tiff"), picked("b.avif", "image/avif")])).toBe(
+      "scan.tiff: a post with several photos takes JPEG, PNG or WebP photos only. Save it as a JPEG, then choose the photos again.",
+    );
   });
 
   it("a typeless clip.mp4 is a video: the lone-video sentence", () => {

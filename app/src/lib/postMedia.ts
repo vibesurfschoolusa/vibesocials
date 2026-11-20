@@ -167,7 +167,10 @@ function aloneMessage(
         : `${choose}.`;
   return picked.length > 1 ? `${name}: a ${kind} is posted on its own. ${step}` : `A ${kind} is posted on its own. ${step}`;
 }
-export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or WebP images only.";
+/** R48 new-customer L1: names the file a pick of several photos can't hold, with the pick's step. */
+export function photoTypeMessage(name: string): string {
+  return `${name}: a post with several photos takes JPEG, PNG or WebP photos only. Save it as a JPEG, then choose the photos again.`;
+}
 
 /**
  * Why a pick of several photos (or photos added to ones already attached)
@@ -186,7 +189,8 @@ export function photoPickProblem(attachedCount: number, picked: readonly { type:
   // R47 client-journey L3: several files are picked, so it names the file, with the photo step only.
   const untold = picked.find((file) => file.type === "");
   if (untold) return unknownTypeMessage(untold.name, "photoPick");
-  if (picked.some((file) => !MULTI_PHOTO_MIME_TYPES.includes(file.type))) return PHOTO_TYPE_MESSAGE;
+  const notPhoto = picked.find((file) => !MULTI_PHOTO_MIME_TYPES.includes(file.type));
+  if (notPhoto) return photoTypeMessage(notPhoto.name);
   return null;
 }
 

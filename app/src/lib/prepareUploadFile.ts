@@ -162,7 +162,9 @@ const HEIC_FAILED = "We couldn't convert this iPhone (HEIC) photo.";
 export const HEIC_CONVERSION_FAILED_MESSAGE = `${HEIC_FAILED} Export it as a JPEG and try again.`;
 
 /** R47 lead review: the HEIC refusal's step names the control the screen has, as unknownTypeMessage does. */
-export function heicConversionFailedMessage(context: UnknownTypeContext = "choose"): string {
+export function heicConversionFailedMessage(name: string, context: UnknownTypeContext = "choose"): string {
+  // R48 pages-b L1: a pick of several names the photo that failed.
+  if (context === "photoPick") return `${name}: we couldn't convert this iPhone photo. Export it as a JPEG, then choose the photos again.`;
   return context === "sendMore"
     ? `${HEIC_FAILED} Export it as a JPEG, then press Send more and choose it again.`
     : HEIC_CONVERSION_FAILED_MESSAGE;
@@ -228,7 +230,7 @@ export async function prepareUploadFile(
       if (error instanceof HeicConverterNotLoadedError) {
         throw new PrepareFileError("network", converterNotLoadedMessage(file.name, context));
       }
-      throw new PrepareFileError("file", heicConversionFailedMessage(context));
+      throw new PrepareFileError("file", heicConversionFailedMessage(file.name, context));
     }
     prepared = new File([jpeg], jpegFileName(file.name), {
       type: "image/jpeg",
@@ -240,7 +242,11 @@ export async function prepareUploadFile(
   if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(type)) {
     throw new PrepareFileError(
       "file",
-      type === "" ? unknownTypeMessage(prepared.name, context) : unsupportedTypeMessage(type),
+      type === ""
+        ? unknownTypeMessage(prepared.name, context)
+        : context === "photoPick"
+          ? `${prepared.name}: this file type (${type}) isn't supported. Use a JPEG, PNG or WebP photo.`
+          : unsupportedTypeMessage(type),
     );
   }
   if (type !== prepared.type) {

@@ -376,3 +376,29 @@ describe("the addMany context", () => {
     await expect(prepareUploadFile(file("IMG_0042", ""), fakeDeps(), "addMany")).rejects.toThrow(NO_EXTENSION_MESSAGE);
   });
 });
+
+// R48 pages-b L1: in a pick of several, every refusal of preparation names the file first.
+describe("the photoPick context names the file", () => {
+  it("a HEIC that won't convert", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({ convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))) });
+    await expect(prepareUploadFile(file("IMG_1234.HEIC", "image/heic"), deps, "photoPick")).rejects.toThrow(
+      "IMG_1234.HEIC: we couldn't convert this iPhone photo. Export it as a JPEG, then choose the photos again.",
+    );
+  });
+
+  it("a type the upload refuses", async () => {
+    await expect(prepareUploadFile(file("scan.tiff", "image/tiff"), fakeDeps(), "photoPick")).rejects.toThrow(
+      "scan.tiff: this file type (image/tiff) isn't supported. Use a JPEG, PNG or WebP photo.",
+    );
+  });
+
+  it("the single pick and /u keep their sentences", async () => {
+    await expect(prepareUploadFile(file("scan.tiff", "image/tiff"), fakeDeps())).rejects.toThrow(
+      "This file type (image/tiff) isn't supported. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
+    );
+    await expect(prepareUploadFile(file("scan.tiff", "image/tiff"), fakeDeps(), "sendMore")).rejects.toThrow(
+      "This file type (image/tiff) isn't supported. Use a JPEG, PNG, GIF or WebP photo, or an MP4, MOV or WebM video.",
+    );
+  });
+});

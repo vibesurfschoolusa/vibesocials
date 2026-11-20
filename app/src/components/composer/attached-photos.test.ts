@@ -13,6 +13,7 @@ import {
   photoSetProgress,
   photoSetReady,
   preparePhotos,
+  preparePickedPhoto,
   PreparingPhotosStatus,
   removeAllClearsCaption,
   removeAllTitle,
@@ -419,6 +420,31 @@ describe("preparePhotos", () => {
         isAttached: () => true,
       }),
     ).rejects.toThrow("We couldn't convert this iPhone (HEIC) photo.");
+  });
+
+  // R48 pages-b L1 = publishing L2 = new-customer L1: a pick of several says which photo failed.
+  it("6 photos with one HEIC that won't convert: the sentence names it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = {
+      convertHeicToJpeg: vi.fn(async () => Promise.reject(new Error("libheif: bad box"))),
+      reencodeAsJpeg: vi.fn(),
+    };
+    const six = ["a.jpg", "b.jpg", "c.jpg", "IMG_1234.HEIC", "e.jpg", "f.jpg"].map((name, index) => ({
+      key: `p${index}`,
+      file: new File(["x"], name, { type: name.endsWith(".HEIC") ? "image/heic" : "image/jpeg" }),
+    }));
+    await expect(
+      preparePhotos(six, {
+        prepare: (file) => preparePickedPhoto(file, deps),
+        isStale: () => false,
+        isAttached: () => true,
+      }),
+    ).rejects.toThrow("IMG_1234.HEIC: we couldn't convert this iPhone photo. Export it as a JPEG, then choose the photos again.");
+  });
+
+  it("Create's pick of several prepares each photo with the named sentences", () => {
+    const raw = readFileSync(new URL("../create-post-form.tsx", import.meta.url), "utf8");
+    expect(raw).toContain("prepare: (file) => preparePickedPhoto(file),");
   });
 });
 

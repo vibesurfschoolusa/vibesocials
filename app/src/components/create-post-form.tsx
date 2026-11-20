@@ -17,6 +17,7 @@ import {
   PhotoDescriptionField,
   photoSetReady,
   preparePhotos,
+  preparePickedPhoto,
   PreparingPhotosStatus,
   removeAllClearsCaption,
   selectedMediaOf,
@@ -2065,7 +2066,7 @@ function CreatePostFormInner({
 
     try {
       const prepared = await preparePhotos(placeholders, {
-        prepare: (file) => prepareUploadFile(file),
+        prepare: (file) => preparePickedPhoto(file),
         isStale,
         isAttached: isPhotoAttached,
       });
