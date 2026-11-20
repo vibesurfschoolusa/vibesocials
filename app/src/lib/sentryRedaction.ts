@@ -298,7 +298,54 @@ function cutLong(text: string): string {
   // Never half a surrogate pair.
   const last = text.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${text.slice(0, end)}${CUT_MARK}`;
+  // Nor half a %XX escape (R46 review).
+  return `${text.slice(0, end).replace(/%[0-9A-Fa-f]?$/, "")}${CUT_MARK}`;
+}
+
+/** A run of %XX escapes. */
+const ESCAPE_RUN = /(?:%[0-9A-Fa-f]{2})+/g;
+const ESCAPE = /%[0-9A-Fa-f]{2}/g;
+/** The most escapes one character takes in UTF-8. */
+const MAX_ESCAPES_PER_CHARACTER = 4;
+
+/** A run decodeURIComponent refused: each character that decodes does, and an invalid escape stays as it is. */
+function decodeRunByCharacter(run: string): string {
+  const escapes = run.match(ESCAPE) ?? [];
+  let out = "";
+  let index = 0;
+  while (index < escapes.length) {
+    let taken = 0;
+    for (let count = Math.min(MAX_ESCAPES_PER_CHARACTER, escapes.length - index); count >= 1 && taken === 0; count -= 1) {
+      try {
+        out += decodeURIComponent(escapes.slice(index, index + count).join(""));
+        taken = count;
+      } catch {
+        // Not a whole character; try fewer escapes.
+      }
+    }
+    if (taken === 0) {
+      out += escapes[index];
+      taken = 1;
+    }
+    index += taken;
+  }
+  return out;
+}
+
+/**
+ * R46 review: decodeURIComponent that never throws. A stray "%" ("100%") or
+ * a cut inside an escape made it throw, and the string then skipped the
+ * decoded redaction. Each valid %XX run decodes, valid UTF-8 included; an
+ * invalid or partial escape is left as it is.
+ */
+function decodeEscapes(text: string): string {
+  return text.replace(ESCAPE_RUN, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return decodeRunByCharacter(run);
+    }
+  });
 }
 
 /** `text` through redactLinkTokens, and decoded first when only the decoded form shows a token. */
@@ -310,12 +357,7 @@ function redactString(input: string): string {
   // R45 review L2: the decoded form is the redacted text decoded, so a value
   // filtered here stays filtered whole, whatever it would have decoded to.
   if (!redacted.includes("%")) return redacted;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(redacted);
-  } catch {
-    return redacted;
-  }
+  const decoded = decodeEscapes(redacted);
   if (decoded === redacted) return redacted;
   const decodedRedacted = redactDecodedLinkTokens(decoded);
   return decodedRedacted === decoded ? redacted : decodedRedacted;

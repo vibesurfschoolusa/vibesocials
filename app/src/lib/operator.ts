@@ -66,11 +66,12 @@ export const ADMIN_RATE_LIMITS = {
 
 export type AdminRequestKind = keyof typeof ADMIN_RATE_LIMITS;
 
-/** What the refusal says was used up, before the wait. */
-const ADMIN_LIMIT_REASONS: Record<AdminRequestKind, string> = {
-  read: "Too many pages opened this hour.",
-  change: "Too many changes this hour.",
-};
+/**
+ * What requireOperator's refusal says was used up, before the wait. Only the
+ * change routes go through it; the two admin pages count their reads with
+ * checkAdminRateLimit and word their own refusal.
+ */
+const ADMIN_CHANGE_LIMIT_REASON = "Too many changes this hour.";
 
 /** Counts one admin request against the operator's hourly budget. */
 export async function checkAdminRateLimit(
@@ -85,14 +86,14 @@ export async function checkAdminRateLimit(
  * non-operator gets the plain 404 before any rate-limit write, so nothing about
  * them differs from a request to a route that does not exist.
  */
-export async function requireOperator(kind: AdminRequestKind): Promise<Operator | NextResponse> {
+export async function requireOperator(kind: "change"): Promise<Operator | NextResponse> {
   const operator = await getOperator();
   if (!operator) return adminNotFoundResponse();
 
   const limit = await checkAdminRateLimit(operator, kind);
   if (limit.unavailable) return limitUncheckedResponse();
   // R46 pages-a L2 (second half): a fixed hourly window, so the refusal names the real wait.
-  if (!limit.allowed) return tooManyTriesResponse(limit, ADMIN_LIMIT_REASONS[kind]);
+  if (!limit.allowed) return tooManyTriesResponse(limit, ADMIN_CHANGE_LIMIT_REASON);
   return operator;
 }
 

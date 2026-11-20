@@ -752,3 +752,41 @@ describe("redaction time on long crafted text", () => {
     expect(redactLinkTokens("/p?a?b=1")).toBe(`/p?a?b=${FILTERED_VALUE}`);
   });
 });
+
+// R46 review: a cut inside a %XX escape, or a stray "%", made decodeURIComponent
+// throw, and the string went out without the decoded redaction.
+describe("the decoded pass survives a broken escape", () => {
+  const ENCODED_LINK = "see %2Fc%2FSECRETTOKENVALUE now";
+
+  it("a token padded to 4,081-4,094 characters is redacted wherever the cut lands", () => {
+    for (let length = 4081; length <= 4094; length += 1) {
+      const text = `${ENCODED_LINK} ${"a".repeat(length - ENCODED_LINK.length - 1)}${"%2F".repeat(10)}`;
+      expect(text.length).toBeGreaterThan(MAX_REDACTED_LENGTH);
+      const out = redactForSentry({ message: text }).message;
+      expect(out, String(length)).not.toContain("SECRETTOKENVALUE");
+      expect(out, String(length)).toContain(`/c/${LINK_TOKEN}`);
+      expect(out.endsWith(CUT_MARK), String(length)).toBe(true);
+      // No half escape is left before the mark.
+      expect(out.slice(0, -CUT_MARK.length), String(length)).not.toMatch(/%[0-9A-Fa-f]?$/);
+    }
+  });
+
+  it("a string with 100% and an encoded /c/ link is redacted", () => {
+    const out = redactForSentry({ message: `Upload 100% done, ${ENCODED_LINK}` }).message;
+    expect(out).not.toContain("SECRETTOKENVALUE");
+    expect(out).toContain("100%");
+  });
+
+  it("an invalid UTF-8 escape is left as it is, and the valid ones around it decode", () => {
+    const out = redactForSentry({ message: "bad %E5%AF then %2Fc%2FSECRETTOKENVALUE and caf%C3%A9" }).message;
+    expect(out).not.toContain("SECRETTOKENVALUE");
+    expect(out).toContain("%E5%AF");
+    expect(out).toContain("café");
+  });
+
+  it("stays fast on a long run of broken escapes", () => {
+    const started = performance.now();
+    redactForSentry({ message: `${"%E5".repeat(1_300)} %2Fc%2FSECRET` });
+    expect(performance.now() - started).toBeLessThan(50);
+  });
+});

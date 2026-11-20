@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getCurrentUserMock, checkRateLimitMock } = vi.hoisted(() => ({
@@ -9,7 +12,7 @@ vi.mock("./rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 
 import { NextResponse } from "next/server";
 
-import { adminNotFoundResponse, getOperator, isOperatorUser, parseAdminEmails, requireOperator } from "./operator";
+import { adminNotFoundResponse, checkAdminRateLimit, getOperator, isOperatorUser, parseAdminEmails, requireOperator } from "./operator";
 
 function user(email: string, verified = true) {
   return {
@@ -144,7 +147,7 @@ describe("requireOperator", () => {
   it("answers a non-operator with the plain 404 and counts nothing", async () => {
     process.env.ADMIN_EMAILS = "ops@example.com";
     getCurrentUserMock.mockResolvedValue(user("someone@example.com"));
-    const result = await requireOperator("read");
+    const result = await requireOperator("change");
     expect(result).toBeInstanceOf(NextResponse);
     expect((result as NextResponse).status).toBe(404);
     expect(checkRateLimitMock).not.toHaveBeenCalled();
@@ -154,7 +157,8 @@ describe("requireOperator", () => {
     process.env.ADMIN_EMAILS = "ops@example.com";
     getCurrentUserMock.mockResolvedValue(user("ops@example.com"));
 
-    expect(await requireOperator("read")).toEqual({ userId: "user-1", email: "ops@example.com" });
+    // The two admin pages count reads themselves and word their own refusal.
+    await checkAdminRateLimit({ userId: "user-1", email: "ops@example.com" }, "read");
     expect(checkRateLimitMock).toHaveBeenLastCalledWith({
       userId: "user-1",
       route: "admin/read",
@@ -163,7 +167,7 @@ describe("requireOperator", () => {
       failClosed: true,
     });
 
-    await requireOperator("change");
+    expect(await requireOperator("change")).toEqual({ userId: "user-1", email: "ops@example.com" });
     expect(checkRateLimitMock).toHaveBeenLastCalledWith({
       userId: "user-1",
       route: "admin/change",
@@ -184,6 +188,11 @@ describe("requireOperator", () => {
 
   // R46 pages-a L2 (second half): the hour is a fixed window, so the refusal names the real wait.
   it("over the limit at 40 minutes left: names the wait, with Retry-After", async () => {
+    // Only changes go through requireOperator, so its one reason is about changes.
+    const source = readFileSync(join(__dirname, "operator.ts"), "utf8");
+    expect(source).not.toContain("pages opened");
+    expect(source).toMatch(/export async function requireOperator\(kind: "change"\)/);
+
     process.env.ADMIN_EMAILS = "ops@example.com";
     getCurrentUserMock.mockResolvedValue(user("ops@example.com"));
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 2400 });
@@ -193,12 +202,6 @@ describe("requireOperator", () => {
     expect(change.headers.get("Retry-After")).toBe("2400");
     await expect(change.json()).resolves.toEqual({
       error: "Too many changes this hour. Too many tries. Wait 40 minutes, then try again.",
-      retryAfterSeconds: 2400,
-    });
-
-    const read = (await requireOperator("read")) as NextResponse;
-    await expect(read.json()).resolves.toEqual({
-      error: "Too many pages opened this hour. Too many tries. Wait 40 minutes, then try again.",
       retryAfterSeconds: 2400,
     });
   });
