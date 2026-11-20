@@ -7,7 +7,6 @@ import {
   BULK_NOT_UPLOADED_MESSAGE,
   BULK_NO_PLATFORMS_MESSAGE,
   BULK_NO_TIME_MESSAGE,
-  BULK_PAST_TIME_MESSAGE,
   BULK_MAYBE_CREATED_MESSAGE,
   BULK_DRAFTS_NOTE,
   BULK_YOUTUBE_PRIVACY_DEFAULT,
@@ -36,7 +35,7 @@ import {
   tomorrowLocalDate,
   youtubePrivacyShown,
 } from "./bulkPosts";
-import { localDateTimeToUtcIso } from "./scheduling";
+import { localDateTimeToUtcIso, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "./scheduling";
 
 describe("BULK_MAX_FILES", () => {
   it("is 20, and the refusal says so", () => {
@@ -494,9 +493,16 @@ describe("rowSendBlock", () => {
   });
 
   it("refuses to schedule a time less than a minute after the press, and lets a draft through", () => {
-    expect(BULK_PAST_TIME_MESSAGE).toBe("Pick a time in the future.");
-    expect(rowSendBlock(sendable({ when: "2026-11-10T11:00" }), "schedule", pressedAt())).toBe(BULK_PAST_TIME_MESSAGE);
-    expect(rowSendBlock(sendable({ when: "2026-11-10T12:00" }), "schedule", pressedAt())).toBe(BULK_PAST_TIME_MESSAGE);
+    // R48 pages-a L1: the one too-soon sentence the server and the other pages say.
+    expect(SCHEDULED_TIME_TOO_SOON_MESSAGE).toBe(
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
+    );
+    // 40 seconds away, and in the past: the same sentence.
+    expect(rowSendBlock(sendable({ when: "2026-11-10T12:00" }), "schedule", new Date(2026, 10, 10, 11, 59, 20))).toBe(
+      SCHEDULED_TIME_TOO_SOON_MESSAGE,
+    );
+    expect(rowSendBlock(sendable({ when: "2026-11-10T11:00" }), "schedule", pressedAt())).toBe(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+    expect(rowSendBlock(sendable({ when: "2026-11-10T12:00" }), "schedule", pressedAt())).toBe(SCHEDULED_TIME_TOO_SOON_MESSAGE);
     expect(rowSendBlock(sendable({ when: "2026-11-10T12:01" }), "schedule", pressedAt())).toBeNull();
     expect(rowSendBlock(sendable({ when: "2026-11-10T11:00" }), "draft", pressedAt())).toBeNull();
   });
@@ -505,7 +511,7 @@ describe("rowSendBlock", () => {
     const row = sendable({ when: "2026-11-11T18:00" });
 
     expect(rowSendBlock(row, "schedule", pressedAt())).toBeNull();
-    expect(rowSendBlock(row, "schedule", new Date(2026, 10, 11, 18, 30))).toBe(BULK_PAST_TIME_MESSAGE);
+    expect(rowSendBlock(row, "schedule", new Date(2026, 10, 11, 18, 30))).toBe(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 });
 

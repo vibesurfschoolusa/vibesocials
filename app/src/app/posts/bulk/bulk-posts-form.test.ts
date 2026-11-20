@@ -11,7 +11,8 @@ vi.mock("@/hooks/useConnections", () => ({
 
 import type { Platform } from "@prisma/client";
 
-import { BULK_EMPTY_CAPTION_MESSAGE, BULK_PAST_TIME_MESSAGE, refreshedFirstDay } from "@/lib/bulkPosts";
+import { BULK_EMPTY_CAPTION_MESSAGE, refreshedFirstDay } from "@/lib/bulkPosts";
+import { SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { localTimeZoneLabel } from "@/lib/scheduling";
 
 import { BulkPostsForm, NoPlatformConnectedLine, refusedPressesKept, rowSendLine, type BulkBatchCheck } from "./bulk-posts-form";
@@ -268,7 +269,7 @@ describe("Add many: a row's refusal shows only while the row still refuses", () 
     expect(rowSendLine(video, { mode: "schedule", at: at + 5_000 }, batch())).toBe(story);
     expect(rowSendLine({ ...video, caption: " " }, press, batch())).toBe(BULK_EMPTY_CAPTION_MESSAGE);
     // The time is judged against the clock at the press.
-    expect(rowSendLine({ ...video, when: "2026-11-20T10:00" }, press, batch({ stories: feed }))).toBe(BULK_PAST_TIME_MESSAGE);
+    expect(rowSendLine({ ...video, when: "2026-11-20T10:00" }, press, batch({ stories: feed }))).toBe(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 
   it("a row that was not refused, or was refused by the server, shows that as it is", () => {

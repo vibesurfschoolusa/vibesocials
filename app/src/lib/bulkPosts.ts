@@ -3,7 +3,7 @@ import type { Platform } from "@prisma/client";
 import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
 import { platformAcceptsMedia } from "@/lib/platformLimits";
 import { nextFreeSlots, type PostingSlot } from "@/lib/postingSlots";
-import { SCHEDULE_BUFFER_MS, toDateTimeLocalValue } from "@/lib/scheduling";
+import { SCHEDULE_BUFFER_MS, SCHEDULED_TIME_TOO_SOON_MESSAGE, toDateTimeLocalValue } from "@/lib/scheduling";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 
 /**
@@ -25,7 +25,6 @@ export const BULK_NOT_UPLOADED_MESSAGE = "This file has not uploaded. Retry it o
 export const BULK_NO_PLATFORMS_MESSAGE =
   "None of the chosen platforms takes this kind of file. Choose another platform or remove it.";
 export const BULK_NO_TIME_MESSAGE = "Pick a date and time for this post.";
-export const BULK_PAST_TIME_MESSAGE = "Pick a time in the future.";
 export const BULK_MAYBE_CREATED_MESSAGE =
   "This post may have been created. Check the Queue before sending it again.";
 export const BULK_DRAFTS_NOTE = "Drafts are saved without a time. Set each one's time in the Queue.";
@@ -243,7 +242,8 @@ export function rowSendBlock(row: BulkSendableRow, mode: BulkFinishMode, now: Da
   if (mode === "schedule") {
     const at = row.when ? new Date(row.when).getTime() : Number.NaN;
     if (Number.isNaN(at)) return BULK_NO_TIME_MESSAGE;
-    if (at < now.getTime() + SCHEDULE_BUFFER_MS) return BULK_PAST_TIME_MESSAGE;
+    // R48 pages-a L1: the server's sentence for the same rule, so the two agree.
+    if (at < now.getTime() + SCHEDULE_BUFFER_MS) return SCHEDULED_TIME_TOO_SOON_MESSAGE;
   }
   return null;
 }

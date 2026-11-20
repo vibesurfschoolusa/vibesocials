@@ -27,7 +27,7 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { BULK_PAST_TIME_MESSAGE } from "@/lib/bulkPosts";
+import { SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { BulkPostsForm } from "./bulk-posts-form";
 
 let root: Root;
@@ -36,7 +36,7 @@ let container: FakeNode;
 let slots: { day: number; time: string }[];
 let posts: number;
 /** What the nth POST answers: a post, a refusal, or no answer at all. */
-let answers: ("ok" | "refused" | "lost")[];
+let answers: ("ok" | "refused" | "tooSoon" | "lost")[];
 
 const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
   const url = String(input);
@@ -45,6 +45,12 @@ const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
     posts += 1;
     const answer = answers[posts - 1] ?? "ok";
     if (answer === "lost") throw new TypeError("Failed to fetch");
+    // The server's own too-soon refusal (validateScheduledFor).
+    if (answer === "tooSoon") {
+      // The answer comes after 12:00 has passed.
+      vi.setSystemTime(new Date(2030, 5, 10, 12, 1));
+      return Response.json({ error: SCHEDULED_TIME_TOO_SOON_MESSAGE }, { status: 400 });
+    }
     return answer === "refused"
       ? Response.json({ error: "That post was refused." }, { status: 400 })
       : Response.json({ postJob: { id: `post-${posts}` } });
@@ -201,12 +207,34 @@ describe("R45 publishing L2: a row refused for a past time keeps it", () => {
     await scheduleAll();
     expect(posts).toBe(2);
     expect(rowTimes()).toEqual(["2030-06-10T12:00", "2030-06-10T18:00", "2030-06-11T12:00"]);
-    expect(container.textContent).toContain(BULK_PAST_TIME_MESSAGE);
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
 
     // An edit to the row lets it take the next free posting time.
     await run(() => props(rowInput(0, "TEXTAREA")).onChange({ target: { value: "One, edited" } }));
     expect(rowTimes()).toEqual(["2030-06-11T18:00", "2030-06-10T18:00", "2030-06-11T12:00"]);
-    expect(container.textContent).not.toContain(BULK_PAST_TIME_MESSAGE);
+    expect(container.textContent).not.toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
+  });
+});
+
+// R48 pages-a L1: the server's too-soon 400 is held as the page's own check is.
+describe("R48 pages-a L1: a row the server refused as too soon keeps its time", () => {
+  it("keeps its time and the shared sentence while the others are scheduled", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2030, 5, 10, 11, 45));
+    slots = [0, 1, 2, 3, 4, 5, 6].flatMap((day) => [
+      { day, time: "12:00" },
+      { day, time: "18:00" },
+    ]);
+    await mountWithThreePhotos();
+    await usePostingTimes();
+    expect(rowTimes()).toEqual(["2030-06-10T12:00", "2030-06-10T18:00", "2030-06-11T12:00"]);
+
+    // The press passes row 1; by the server's answer its time is too soon.
+    answers = ["tooSoon", "ok", "ok"];
+    await scheduleAll();
+    expect(posts).toBe(3);
+    expect(rowTimes()).toEqual(["2030-06-10T12:00", "2030-06-10T18:00", "2030-06-11T12:00"]);
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 });
 
@@ -224,10 +252,10 @@ describe("R45 lead review: the batch controls end a time hold", () => {
     await scheduleAll();
     expect(posts).toBe(2);
     expect(rowTimes()[0]).toBe("2030-06-10T12:00");
-    expect(container.textContent).toContain(BULK_PAST_TIME_MESSAGE);
+    expect(container.textContent).toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
 
     await run(() => props(byId("bulk-first-day")).onChange({ target: { value: "2030-06-11" } }));
     expect(rowTimes()).toEqual(["2030-06-11T12:00", "2030-06-11T12:00", "2030-06-12T12:00"]);
-    expect(container.textContent).not.toContain(BULK_PAST_TIME_MESSAGE);
+    expect(container.textContent).not.toContain(SCHEDULED_TIME_TOO_SOON_MESSAGE);
   });
 });

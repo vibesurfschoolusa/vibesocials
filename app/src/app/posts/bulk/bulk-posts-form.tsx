@@ -20,7 +20,6 @@ import {
   BULK_DRAFTS_NOTE,
   BULK_MAX_FILES,
   BULK_NO_TIME_MESSAGE,
-  BULK_PAST_TIME_MESSAGE,
   BULK_TIKTOK_NOTE,
   BULK_TOO_MANY_FILES_MESSAGE,
   BULK_YOUTUBE_PRIVACY_DEFAULT,
@@ -71,7 +70,7 @@ import type { MediaItemDto } from "@/lib/mediaDto";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
-import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
+import { localDateTimeToUtcIso, localTimeZoneLabel, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { readScheduledTimes, type ScheduledTimes } from "@/lib/scheduledTimesRead";
 import { explainUploadFailure, uploadRouteUrl } from "@/lib/uploadFailure";
 import { SetPostingTimesPrompt } from "@/components/posting-times-prompt";
@@ -907,7 +906,7 @@ export function BulkPostsForm({
         if (block) {
           refused.set(row.id, { mode, at: pressedAt.getTime() });
           updateRow(row.id, { sendError: null });
-          if (block === BULK_PAST_TIME_MESSAGE) timeHeld.add(row.id);
+          if (block === SCHEDULED_TIME_TOO_SOON_MESSAGE) timeHeld.add(row.id);
           if (block === ALT_TEXT_TOO_LONG_TEXT) altTooLong ??= row.id;
         } else {
           ready.push(row.id);
@@ -983,6 +982,9 @@ export function BulkPostsForm({
             }),
           });
         } else if (result.outcome === "refused") {
+          // R48 pages-a L1: the server's too-soon answer holds the row as the
+          // press's own check does, so the time it names is the one shown.
+          if (result.error === SCHEDULED_TIME_TOO_SOON_MESSAGE) timeHeldRef.current = new Set([...timeHeldRef.current, id]);
           updateRow(id, { sending: false, sendError: result.error });
         } else {
           updateRow(id, { sending: false, uncertain: true, uncertainMode: mode });
