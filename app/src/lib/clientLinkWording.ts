@@ -21,7 +21,10 @@ export function copiesWorkAgainWhen(kind: ClientLinkBlockKind | null | undefined
  * commit whose answer was lost may have replaced them all. Reading each link
  * again where it lives shows the truth either way. R51 pages-a L1: Team shows
  * it in a toast that closes after 8 seconds, and its panel doesn't list the
- * links, so it stays short and names where each one lives.
+ * links, so it stays short and names where each one lives. R52 pages-a L1:
+ * the catch can follow a commit whose answer was lost, so "couldn't confirm"
+ * stays; copying without a new press may hand out old links a demoted owner
+ * still holds, and a second press makes new ones whatever the first did.
  */
 export const CLIENT_LINKS_NOT_MADE_MESSAGE =
-  "We couldn't confirm the new client links were made. Reload, then copy each link again: upload on Media, review on Queue, connect under Connections.";
+  "We couldn't confirm new links were made. Press Make new client links again, then copy each: upload on Media, review on Queue, connect under Connections.";

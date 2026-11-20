@@ -131,6 +131,20 @@ describe("Make new client links", () => {
       CLIENT_LINKS_NOT_MADE_MESSAGE,
     );
     expect(announce).not.toHaveBeenCalled();
+    // R52 pages-a L1: a second press is safe either way, so it leads with it.
+    const error = await requestClientLinksReplace(bare as unknown as typeof fetch, "ws-1", announce).catch((e: unknown) => e);
+    expect((error as Error).message).toContain("Press Make new client links again");
+    for (const place of ["upload on Media", "review on Queue", "connect under Connections"]) {
+      expect((error as Error).message).toContain(place);
+    }
+  });
+
+  // R52 pages-a L1: a refusal that names its own reason is shown unchanged.
+  it("a 4xx with the route's own sentence shows that sentence, unchanged", async () => {
+    const said = "Too many tries. Wait 12 minutes, then try again.";
+    const refused = vi.fn(async () => new Response(JSON.stringify({ error: said }), { status: 429 }));
+    const error = await requestClientLinksReplace(refused as unknown as typeof fetch, "ws-1", vi.fn()).catch((e: unknown) => e);
+    expect((error as Error).message).toBe(said);
   });
 
   it("the owners' Team card holds no button before the state is read, and a member's never", () => {

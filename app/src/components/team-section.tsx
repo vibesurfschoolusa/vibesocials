@@ -97,9 +97,11 @@ export function answerFailureText(status: number, data: { error?: unknown } | nu
  */
 // R51 fix review L1: shown in an 8-second toast, so it names only the three
 // places each link lives (the connect card here reads its link again itself).
+// R52 pages-a L1: a second press is safe whatever the first did, and copying
+// without one may hand out the old links, so the step leads with it.
 export const CLIENT_LINKS_MAYBE_REPLACED_MESSAGE = answerLostText(
-  "the client links may have been replaced",
-  "Copy each link again: Media, Queue, Connections.",
+  "the links may have been replaced",
+  "Press Make new client links again, then copy each: Media, Queue, Connections.",
 );
 export const CLIENT_LINKS_MAYBE_OFF_MESSAGE = answerLostText(
   "the client links may have been turned off",

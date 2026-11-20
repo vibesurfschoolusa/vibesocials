@@ -53,6 +53,18 @@ import {
 const LEAD = answerLostText("x", "y").split(" so x.")[0];
 const source = readFileSync(join(__dirname, "team-section.tsx"), "utf8");
 
+/** R52 pages-a L1: a second press is safe either way, so each failure leads with it, then the three places. */
+function expectPressAgain(text: string): void {
+  expect(text).toContain("Press Make new client links again");
+  for (const place of ["Media", "Queue", "Connections"]) expect(text).toContain(place);
+}
+
+async function replaceError(response: Response): Promise<string> {
+  const fetchImpl = vi.fn(async () => response);
+  const error = await requestClientLinksReplace(fetchImpl as unknown as typeof fetch, "ws-1", vi.fn()).catch((e: unknown) => e);
+  return (error as Error).message;
+}
+
 describe("Team card: a lost answer may have gone through", () => {
   it("each text has the shared lead-in and says where to check", () => {
     // The replace sentence is pinned below: it names where each link lives instead.
@@ -69,11 +81,14 @@ describe("Team card: a lost answer may have gone through", () => {
       expect(text).toMatch(/Reload this page/);
     }
     // R51 fix review L1: shown in an 8-second toast, so short enough to read in it.
+    // R52 pages-a L1: the cap rises from 28 to 31 for the press-again step
+    // ("Press Make new client links again" is six words: it names the button).
+    // Without it the owner may copy the old links a demoted owner still holds.
     expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.startsWith(LEAD)).toBe(true);
     expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE).toBe(
-      "Vibe Socials' answer didn't reach you, so the client links may have been replaced. If your connection dropped, reconnect first. Copy each link again: Media, Queue, Connections.",
+      "Vibe Socials' answer didn't reach you, so the links may have been replaced. If your connection dropped, reconnect first. Press Make new client links again, then copy each: Media, Queue, Connections.",
     );
-    expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.split(/\s+/).length).toBeLessThanOrEqual(28);
+    expect(CLIENT_LINKS_MAYBE_REPLACED_MESSAGE.split(/\s+/).length).toBeLessThanOrEqual(31);
   });
 
   // A retry after it went through gets a 409 that isn't the reason.
@@ -110,6 +125,19 @@ describe("Team card: a lost answer may have gone through", () => {
       );
       expect(announce).toHaveBeenCalledTimes(1);
     }
+  });
+
+  // R52 pages-a L1: each lost answer says to press again, then where each link lives.
+  it("Make new client links: a 5xx that isn't JSON says to press again", async () => {
+    expectPressAgain(await replaceError(new Response("<html>Bad gateway</html>", { status: 502 })));
+  });
+
+  it("Make new client links: an unreadable 200 says to press again", async () => {
+    expectPressAgain(await replaceError(new Response("<html>ok</html>", { status: 200 })));
+  });
+
+  it("Make new client links: a 200 without uploadLink says to press again", async () => {
+    expectPressAgain(await replaceError(new Response(JSON.stringify({ reviewLink: null }), { status: 200 })));
   });
 
   it("Make new client links: a readable OK answer is returned as it is, and announced", async () => {
