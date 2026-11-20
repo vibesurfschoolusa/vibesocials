@@ -308,19 +308,112 @@ describe("platformCaptionCounter and adaptMaxLength with tracking tags", () => {
 // R51 publishing-flow L2: with no limit of its own a platform's caption meets
 // only the routes' 10,000 cap, so the counter counts as they do (UTF-16 units).
 describe("platformCaptionCounter without a platform limit", () => {
-  it.each(["facebook_page", "youtube"] as const)("%s: 9,200 letters and 500 emoji read over", (platform) => {
+  it.each(["facebook_page"] as const)("%s: 9,200 letters and 500 emoji read over", (platform) => {
     const counter = platformCaptionCounter(`${"a".repeat(9200)}${"🌊".repeat(500)}`, platform, null);
     expect(counter.length).toBe(10_200);
     expect(counter.over).toBe(true);
     expect(counter.label).toBe("10,200 / 10,000");
   });
 
-  it.each(["facebook_page", "youtube"] as const)("%s: the counter and the server agree at 10,000 and 10,001 units", (platform) => {
+  it.each(["facebook_page"] as const)("%s: the counter and the server agree at 10,000 and 10,001 units", (platform) => {
     for (const text of [`${"a".repeat(9998)}🌊`, `${"a".repeat(9999)}🌊`, "a".repeat(10_000), "a".repeat(10_001)]) {
       const serverRefuses = findOverlongCaption({ perPlatformOverrides: { [platform]: text } }) !== null;
       expect(platformCaptionCounter(text, platform, null).over).toBe(serverRefuses);
     }
     expect(platformCaptionCounter("a".repeat(10_000), platform, null).over).toBe(false);
     expect(platformCaptionCounter("a".repeat(10_001), platform, null).over).toBe(true);
+  });
+});
+
+// R52 platform-clients L1: YouTube's description is counted against its 5,000
+// UTF-8 bytes, red exactly when the preview says it will be shortened.
+describe("platformCaptionCounter and adaptMaxLength on YouTube", () => {
+  const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf", trackWebsiteLinks: true };
+
+  it.each([
+    [4812, false, "4,812 / 5,000"],
+    [5000, false, "5,000 / 5,000"],
+    [5001, true, "5,001 / 5,000"],
+  ] as const)("ASCII %i long reads against 5,000", (length, over, label) => {
+    const text = "a".repeat(length);
+    expect(platformCaptionCounter(text, "youtube", null)).toEqual({ length, max: 5000, over, label });
+    expect(buildPlatformPreview({ platform: "youtube", caption: text }).willTruncate).toBe(over);
+  });
+
+  it("reads a short description full of emoji as over, and says why the number jumps", () => {
+    const text = `${"Waves \u{1F30A}".repeat(500)}!`; // 4,001 UTF-16 units, 5,001 counted
+    const counter = platformCaptionCounter(text, "youtube", null);
+    expect(counter.length).toBe(5001);
+    expect(counter.over).toBe(true);
+    expect(counter.label).toBe("5,001 / 5,000 · YouTube counts most emoji as 4 and an accented letter as 2");
+  });
+
+  it("names the < and > swap when the text has one", () => {
+    expect(platformCaptionCounter("I <3 waves", "youtube", null).label).toBe("12 / 5,000 · YouTube counts a < or > as 3");
+  });
+
+  it("says incl. footer as before, and the footer can push it over", () => {
+    const short = platformCaptionCounter("hello", "youtube", footer);
+    const full = buildCaptionWithFooter("hello", footer, "youtube");
+    expect(short.label).toBe(`${full.length} / 5,000 incl. footer`);
+    expect(short.over).toBe(false);
+    const pushed = platformCaptionCounter("a".repeat(4950), "youtube", footer);
+    expect(pushed.over).toBe(true);
+    expect(pushed.label.endsWith(" incl. footer")).toBe(true);
+    expect(platformCaptionCounter("a".repeat(4950), "youtube", null).over).toBe(false);
+  });
+
+  it("is over exactly when the preview says the post will be shortened", () => {
+    for (const text of ["hi", "é".repeat(2500), "é".repeat(2501), `${"a".repeat(4900)}\u{1F30A}`, "<".repeat(1667), "<".repeat(1666)]) {
+      for (const user of [null, footer]) {
+        expect(platformCaptionCounter(text, "youtube", user).over).toBe(
+          buildPlatformPreview({ platform: "youtube", caption: text, user }).willTruncate,
+        );
+      }
+    }
+  });
+
+  it("is over whenever the server's 10,000 cap refuses it", () => {
+    for (const text of ["a".repeat(10_001), "\u{1F30A}".repeat(5001)]) {
+      expect(findOverlongCaption({ perPlatformOverrides: { youtube: text } })).not.toBeNull();
+      expect(platformCaptionCounter(text, "youtube", null).over).toBe(true);
+    }
+  });
+
+  it("gives Adapt for YouTube the room left after the footer, as YouTube counts it", () => {
+    expect(adaptMaxLength("youtube", null)).toBe(5000);
+    const footerText = buildCaptionWithFooter("", footer, "youtube");
+    expect(adaptMaxLength("youtube", footer)).toBe(5000 - footerText.length);
+    expect(adaptMaxLength("youtube", { defaultHashtags: "#café" })).toBe(5000 - "\n\n#café".length - 1);
+  });
+});
+
+// R52: every other platform's counter and Adapt room are as they were. Values
+// pinned from main f796e2e.
+describe("platformCaptionCounter and adaptMaxLength on other platforms, unchanged", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
+  const long = "Glassy waves é ".repeat(250);
+
+  it.each([
+    ["x", "198 / 280 incl. footer", 280, "3,749 / 280", true, 221],
+    ["instagram", "189 / 2,200 incl. footer", 2200, "3,749 / 2,200", true, 2146],
+    ["linkedin", "253 / 3,000 incl. footer", 3000, "3,749 / 3,000", true, 2946],
+    ["facebook_page", "139 / 10,000", 10_000, "3,750 / 10,000", false, undefined],
+    ["google_business_profile", "251 / 1,500 incl. footer", 1500, "3,749 / 1,500", true, 1446],
+  ] as const)("%s", (platform, shortLabel, max, longLabel, longOver, adapt) => {
+    expect(platformCaptionCounter(short, platform, user)).toEqual({
+      length: Number(shortLabel.split(" ")[0].replace(",", "")),
+      max,
+      over: false,
+      label: shortLabel,
+    });
+    expect(platformCaptionCounter(long, platform, user)).toEqual({
+      length: Number(longLabel.split(" ")[0].replace(",", "")),
+      max,
+      over: longOver,
+      label: longLabel,
+    });
+    expect(adaptMaxLength(platform, user)).toBe(adapt);
   });
 });

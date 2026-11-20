@@ -44,9 +44,21 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
     expect(PLATFORM_CAPTION_LIMITS.linkedin).toEqual({ charLimit: 3000, ellipsis: "..." });
   });
 
-  it("has no client-side caption limit for youtube, facebook_page", () => {
-    expect(PLATFORM_CAPTION_LIMITS.youtube.charLimit).toBeNull();
-    expect(PLATFORM_CAPTION_LIMITS.facebook_page.charLimit).toBeNull();
+  it("has no client-side caption limit for facebook_page", () => {
+    expect(PLATFORM_CAPTION_LIMITS.facebook_page).toEqual({ charLimit: null });
+  });
+
+  // R52 platform-clients L1: YouTube's description limit is 5,000 UTF-8 bytes
+  // (lib/youtubeDescription.ts). charLimit stays null: no grapheme count applies,
+  // so the footer rule (captionFooter.ts) keeps YouTube's footer as before.
+  it("youtube: no character limit, 5,000 UTF-8 bytes with '…'", () => {
+    expect(PLATFORM_CAPTION_LIMITS.youtube).toEqual({ charLimit: null, utf8ByteLimit: 5000, ellipsis: "…" });
+  });
+
+  it("gives no other platform a byte limit", () => {
+    for (const [platform, limit] of Object.entries(PLATFORM_CAPTION_LIMITS)) {
+      if (platform !== "youtube") expect(limit.utf8ByteLimit).toBeUndefined();
+    }
   });
 
   it("covers every Platform enum member exactly once (no silent gaps)", () => {

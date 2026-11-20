@@ -5,6 +5,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes, truncateKeepingLinks } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
+import { fitYouTubeDescription, youtubeDescriptionLength } from "@/lib/youtubeDescription";
 
 // A local grapheme counter, intentionally NOT added to lib/truncate.ts: Phase
 // 7's only sanctioned non-UI change is the platformLimits.ts map + the
@@ -52,12 +53,22 @@ export interface PlatformPreviewResult {
    * X (lib/xWeightedLength.ts), graphemes elsewhere.
    */
   charCount: number;
-  /** This platform's client-enforced limit, or null when it doesn't truncate. */
+  /**
+   * This platform's client-enforced limit in `charCount`'s unit, or null when
+   * it has none. YouTube has none in characters: see `byteLimit`.
+   */
   limit: number | null;
+  /**
+   * Only for a platform cut by UTF-8 bytes (YouTube's description): the full
+   * text's size as that client counts it, and its limit. Absent elsewhere.
+   */
+  byteCount?: number;
+  byteLimit?: number;
   /** True when `rendered` is shorter than the full (pre-truncation) text. */
   truncated: boolean;
   /**
-   * True when `limit` is set and `charCount` exceeds it. Equal to `truncated`
+   * True when `limit` is set and `charCount` exceeds it (on YouTube, when
+   * `byteCount` exceeds `byteLimit`). Equal to `truncated`
    * by construction (`truncateGraphemes` only changes text that's over
    * budget) — exposed separately so callers can key off either field without
    * re-deriving one from the other.
@@ -98,7 +109,23 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
     fullCaption = removeXMentions(fullCaption);
   }
 
-  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
+  const { charLimit, utf8ByteLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
+  if (input.platform === "youtube" && utf8ByteLimit !== undefined) {
+    // R52 platform-clients L1: the description as youtubeClient.ts sends it,
+    // angle quotes swapped and cut by bytes, with the client's own function.
+    const rendered = fitYouTubeDescription(fullCaption);
+    const byteCount = youtubeDescriptionLength(fullCaption);
+    const willTruncate = byteCount > utf8ByteLimit;
+    return {
+      rendered,
+      charCount: countGraphemes(fullCaption),
+      limit: null,
+      byteCount,
+      byteLimit: utf8ByteLimit,
+      truncated: willTruncate,
+      willTruncate,
+    };
+  }
   // X is counted and cut by its own weight, as computeTweetText does (fix
   // round 1, M5); LinkedIn keeps a link whole at the cut, as
   // computeLinkedInCommentary does; every other platform cuts by graphemes.

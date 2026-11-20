@@ -7,6 +7,9 @@ import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileC
 import { computeInstagramCaption } from "@/server/platforms/instagramClient";
 import { computeLinkedInCommentary } from "@/server/platforms/linkedinClient";
 import { computeTweetText } from "@/server/platforms/xClient";
+import type { PublishContext } from "@/server/platforms/types";
+import { buildYouTubeVideoResource, computeYouTubeTitle } from "@/server/platforms/youtubeClient";
+import { fitYouTubeDescription, youtubeDescriptionLength } from "./youtubeDescription";
 import { fitPinterestDescription } from "./pinterestApi";
 import { PLATFORM_CAPTION_LIMITS } from "./platformLimits";
 import { trackedWebsiteLink } from "./trackingTags";
@@ -25,7 +28,7 @@ describe("buildPlatformPreview", () => {
 
   it("never shows a truncation warning for a null-limit platform, however long the caption", () => {
     const caption = "a".repeat(5000);
-    for (const platform of ["youtube", "facebook_page"] as const) {
+    for (const platform of ["facebook_page"] as const) {
       const result = buildPlatformPreview({ platform, caption });
       expect(result.rendered).toBe(caption); // full caption, unmodified
       expect(result.limit).toBeNull();
@@ -385,5 +388,115 @@ describe("buildPlatformPreview on LinkedIn", () => {
     const result = buildPlatformPreview({ platform: "linkedin", caption: "Waves", user });
     expect(result.rendered).toBe("Waves\n\nFor more info visit vibesurfschool.com\n\n#surf");
     expect(result.willTruncate).toBe(false);
+  });
+});
+
+// R52 platform-clients L1: YouTube cuts the description, footer included, at
+// 5,000 UTF-8 bytes. The preview shows the very text the client posts.
+describe("buildPlatformPreview on YouTube", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const posted = (caption: string, baseCaption = caption) =>
+    buildYouTubeVideoResource({
+      caption: buildCaptionWithFooter(caption, user, "youtube"),
+      baseCaption,
+      mediaItem: { baseCaption },
+    } as unknown as PublishContext).metadata.snippet;
+
+  it.each([
+    [4999, false],
+    [5000, false],
+    [5001, true],
+  ] as const)("ASCII %i long: willTruncate %s, as the client cuts", (length, cut) => {
+    const caption = "a".repeat(length);
+    const result = buildPlatformPreview({ platform: "youtube", caption });
+    expect(result.willTruncate).toBe(cut);
+    expect(result.truncated).toBe(cut);
+    expect(result.byteCount).toBe(length);
+    expect(result.byteLimit).toBe(5000);
+    expect(result.rendered).toBe(fitYouTubeDescription(caption));
+    expect(result.rendered).toBe(cut ? `${"a".repeat(4997)}…` : caption);
+  });
+
+  it("warns for a short description whose emoji pass 5,000", () => {
+    const caption = "Waves \u{1F30A}".repeat(500); // 4,000 UTF-16 units, 5,000 counted
+    const result = buildPlatformPreview({ platform: "youtube", caption: `${caption}!` });
+    expect(result.byteCount).toBe(5001);
+    expect(result.willTruncate).toBe(true);
+    expect(result.rendered.endsWith("…")).toBe(true);
+    expect(youtubeDescriptionLength(result.rendered)).toBeLessThanOrEqual(5000);
+  });
+
+  it("warns when the footer pushes it over, and the cut takes the footer", () => {
+    const caption = "a".repeat(4950);
+    const full = buildCaptionWithFooter(caption, user, "youtube");
+    expect(full.length).toBeGreaterThan(5000);
+    expect(buildPlatformPreview({ platform: "youtube", caption }).willTruncate).toBe(false);
+    const result = buildPlatformPreview({ platform: "youtube", caption, user });
+    expect(result.willTruncate).toBe(true);
+    expect(result.byteCount).toBe(youtubeDescriptionLength(full));
+    expect(result.rendered).toBe(posted(caption).description);
+    expect(result.rendered).not.toContain("#surf");
+  });
+
+  it("shows < and > as the client sends them, counted after the swap", () => {
+    const result = buildPlatformPreview({ platform: "youtube", caption: "I <3 surfing -> book now" });
+    expect(result.rendered).toBe("I ‹3 surfing -› book now");
+    expect(result.byteCount).toBe(28);
+    expect(result.truncated).toBe(false);
+    expect(result.willTruncate).toBe(false);
+    const many = buildPlatformPreview({ platform: "youtube", caption: "<".repeat(2000) });
+    expect(many.willTruncate).toBe(true);
+    expect(many.rendered).toBe(fitYouTubeDescription("<".repeat(2000)));
+  });
+
+  it.each([
+    "Dawn patrol \u{1F30A} <3 café",
+    "a".repeat(4950),
+    "Glassy waves é ".repeat(400),
+    "\u{1F468}\u200D\u{1F469}\u200D\u{1F467} ".repeat(300),
+  ])("renders exactly what the client posts as the description (%#)", (caption) => {
+    const result = buildPlatformPreview({ platform: "youtube", caption, user });
+    expect(result.rendered).toBe(posted(caption).description);
+    expect(result.willTruncate).toBe(youtubeDescriptionLength(buildCaptionWithFooter(caption, user, "youtube")) > 5000);
+  });
+
+  it("keeps the title a separate field: the base caption fitted to 100 characters, unchanged", () => {
+    const caption = "Morning glass at Las Olas <3 ".repeat(300);
+    const { title } = posted(caption);
+    expect(title).toBe(computeYouTubeTitle({ caption, baseCaption: caption, mediaItem: { baseCaption: caption } }));
+    expect([...title].length).toBeLessThanOrEqual(100);
+    expect(title).toContain("‹3");
+    expect(buildPlatformPreview({ platform: "youtube", caption }).rendered).not.toBe(title);
+  });
+});
+
+// R52: the YouTube change leaves every other platform's preview as it was.
+// Values pinned from main f796e2e.
+describe("buildPlatformPreview on other platforms, unchanged by YouTube's byte limit", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #waves", trackWebsiteLinks: true };
+  const short = "Dawn patrol at Las Olas \u{1F30A} <3 café ".repeat(4).trim();
+  const long = "Glassy waves é ".repeat(250);
+  const tagged = (source: string) =>
+    `vibesurfschool.com/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials`;
+  const footer = (link: string) => `\n\nFor more info visit ${link}\n\n#surf #waves`;
+
+  it.each([
+    ["x", footer(tagged("x")), 198, 280, [280, 3749, true]],
+    ["instagram", footer("vibesurfschool.com"), 189, 2200, [2200, 3749, true]],
+    ["linkedin", footer(tagged("linkedin")), 253, 3000, [3000, 3749, true]],
+    ["facebook_page", footer(tagged("facebook")), 253, null, [3867, 3867, false]],
+    ["google_business_profile", footer(tagged("google")), 251, 1500, [1500, 3749, true]],
+  ] as const)("%s", (platform, footerText, count, limit, [longLength, longCount, longCut]) => {
+    expect(buildPlatformPreview({ platform, caption: short, user })).toEqual({
+      rendered: `${short}${footerText}`,
+      charCount: count,
+      limit,
+      truncated: false,
+      willTruncate: false,
+    });
+    const result = buildPlatformPreview({ platform, caption: long, user });
+    expect(Object.keys(result).sort()).toEqual(["charCount", "limit", "rendered", "truncated", "willTruncate"]);
+    expect(result.rendered.length).toBe(longLength);
+    expect(result).toMatchObject({ charCount: longCount, limit, truncated: longCut, willTruncate: longCut });
   });
 });

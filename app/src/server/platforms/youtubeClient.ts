@@ -10,7 +10,8 @@ import {
   googleSetupRefusedMessage,
 } from "@/lib/publishFailureText";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
-import { fitTitle, truncateUnits } from "@/lib/truncate";
+import { fitTitle } from "@/lib/truncate";
+import { fitYouTubeDescription, YOUTUBE_DESCRIPTION_MAX_BYTES, youtubeSafeText } from "@/lib/youtubeDescription";
 import {
   expiredTokenFailure,
   isExpiredTokenFailure,
@@ -202,31 +203,9 @@ export function fitYouTubeTitle(text: string, max: number = YOUTUBE_TITLE_MAX_GR
   return fitTitle(text, max);
 }
 
-/** YouTube's limit on a video description, in UTF-8 bytes. */
-export const YOUTUBE_DESCRIPTION_MAX_BYTES = 5000;
-
-/**
- * YouTube refuses "<" and ">" in a title or a description (fix round 1, M4), so
- * they become the single angle quotes, which read the same ("<3" -> "‹3").
- */
-export function youtubeSafeText(text: string): string {
-  return text.replace(/</g, "‹").replace(/>/g, "›");
-}
-
-const utf8 = new TextEncoder();
-
-/**
- * The description: the caption with safe angle quotes, cut to YouTube's 5,000
- * bytes with "…" when it is longer, never inside a character or a link.
- */
-export function fitYouTubeDescription(caption: string): string {
-  return truncateUnits(
-    youtubeSafeText(caption),
-    YOUTUBE_DESCRIPTION_MAX_BYTES,
-    (unit) => utf8.encode(unit.text).length,
-    "…",
-  );
-}
+// The description rule lives in lib (R52 platform-clients L1), so the composer's
+// preview and counter cut and count with the same function this client posts with.
+export { fitYouTubeDescription, YOUTUBE_DESCRIPTION_MAX_BYTES, youtubeSafeText };
 
 /**
  * The video title: the POST's own base caption (no footer) — the job's

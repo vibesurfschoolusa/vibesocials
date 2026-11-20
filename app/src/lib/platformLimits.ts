@@ -31,7 +31,14 @@ export interface PlatformCaptionLimit {
    * client sends the caption untruncated.
    */
   charLimit: number | null;
-  /** Ellipsis appended on truncation. Only meaningful when `charLimit` is set. */
+  /**
+   * A limit in UTF-8 bytes instead, for a client that cuts by bytes (YouTube's
+   * description, lib/youtubeDescription.ts). Set only with `charLimit: null`,
+   * so the grapheme readers (the footer rule in captionFooter.ts among them)
+   * treat that platform exactly as before.
+   */
+  utf8ByteLimit?: number;
+  /** Ellipsis appended on truncation. Only meaningful when a limit is set. */
   ellipsis?: string;
 }
 
@@ -42,9 +49,9 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // Matches the truncateGraphemes call in server/platforms/tiktokClient.ts.
   tiktok: { charLimit: 2200 },
   // youtubeClient.ts fits the VIDEO TITLE (a separate field, 100 chars) and
-  // cuts the description to YouTube's 5,000 BYTES (fitYouTubeDescription): a
-  // byte limit, which this character map cannot express.
-  youtube: { charLimit: null },
+  // cuts the description, footer included, to YouTube's 5,000 BYTES with
+  // fitYouTubeDescription (lib/youtubeDescription.ts), which reads this entry.
+  youtube: { charLimit: null, utf8ByteLimit: 5000, ellipsis: "…" },
   // Matches the truncateGraphemes call in server/platforms/instagramClient.ts
   // (computeInstagramCaption). Instagram rejects a caption over 2,200
   // characters, so before the 2026-11-01 audit an over-long caption failed the

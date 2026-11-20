@@ -6,6 +6,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { buildPlatformPreview } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { xWeightedLength } from "@/lib/xWeightedLength";
+import { youtubeCountHint, youtubeDescriptionLength } from "@/lib/youtubeDescription";
 
 /**
  * A different caption per platform (`perPlatformOverrides`), as the composer
@@ -104,7 +105,11 @@ function footerLength(footer: CaptionFooterUser | null | undefined, platform: Pl
 
 /** Room for the caption on this platform once the footer is added, or null when it has no limit. */
 function captionRoom(platform: Platform, footer: CaptionFooterUser | null | undefined): number | null {
-  const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
+  const { charLimit, utf8ByteLimit } = PLATFORM_CAPTION_LIMITS[platform];
+  if (charLimit === null && utf8ByteLimit !== undefined) {
+    // YouTube always keeps its footer, tracked link included, inside the cut.
+    return utf8ByteLimit - youtubeDescriptionLength(buildCaptionWithFooter("", footer ?? {}, platform));
+  }
   return charLimit === null ? null : charLimit - footerLength(footer, platform);
 }
 
@@ -120,28 +125,34 @@ export interface PlatformCaptionCounter {
  * Counter for one platform's caption. On a platform with a limit it counts the
  * text that will be posted (buildPlatformPreview: footer parts that publishing
  * drops are left out, @-mentions too on X, X by its weight) against the limit,
- * and is over exactly when the preview says the post will be shortened. Without
- * a limit: the caption against the app's 10,000-character cap, counted as the routes count it.
+ * and is over exactly when the preview says the post will be shortened. YouTube
+ * is counted as it counts (UTF-8 bytes) against its 5,000, with a hint when a
+ * character counts as more than one. Without a limit: the caption against the
+ * app's 10,000-character cap, counted as the routes count it.
  */
 export function platformCaptionCounter(
   text: string,
   platform: Platform,
   footer: CaptionFooterUser | null | undefined,
 ): PlatformCaptionCounter {
-  const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
-  if (charLimit !== null) {
+  const { charLimit, utf8ByteLimit } = PLATFORM_CAPTION_LIMITS[platform];
+  const limit = charLimit ?? utf8ByteLimit ?? null;
+  if (limit !== null) {
     const preview = buildPlatformPreview({ platform, caption: text, user: footer });
     // The count includes whatever part of the footer will be posted; say so,
     // or "hello" reading 50 looks wrong. No hint once the footer is dropped.
     const footerPosted =
       preview.rendered !== buildPlatformPreview({ platform, caption: text, user: null }).rendered;
+    const counted = charLimit === null ? (preview.byteCount ?? 0) : preview.charCount;
+    // A byte count jumps by 2 to 4 for one letter; say why, in plain words.
+    const hint = charLimit === null ? youtubeCountHint(buildCaptionWithFooter(text, footer ?? {}, platform)) : null;
     return {
-      length: preview.charCount,
-      max: charLimit,
+      length: counted,
+      max: limit,
       over: preview.willTruncate,
-      label: `${preview.charCount.toLocaleString("en-US")} / ${charLimit.toLocaleString("en-US")}${
+      label: `${counted.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")}${
         footerPosted ? " incl. footer" : ""
-      }`,
+      }${hint ? ` · ${hint}` : ""}`,
     };
   }
   // R51 publishing-flow L2: here only the routes' cap applies, so this counts
