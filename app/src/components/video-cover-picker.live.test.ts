@@ -112,3 +112,14 @@ describe("Change cover: the chosen image", () => {
     expect(revoked).toContain(url);
   });
 });
+
+// R51 publishing-flow L3: a screen reader hears the frame's time, the same
+// words as the label above the slider, not a count of milliseconds.
+describe("Pick a frame: the slider", () => {
+  it("says the time at 3,400 ms", async () => {
+    await show({ kind: "frame", timeMs: 3400 });
+    const slider = find(container, (n) => n.attributes?.id === "video-cover-frame");
+    expect(slider?.attributes["aria-valuetext"]).toBe("0:03.4");
+    expect(container.textContent).toContain("Frame at 0:03.4");
+  });
+});

@@ -123,6 +123,8 @@ export function VideoCoverPicker({ videoUrl, durationSec, value, onChange }: Vid
             max={durationMs}
             step={100}
             value={value.timeMs}
+            // R51: read as the label's time, not as milliseconds.
+            aria-valuetext={formatCoverTime(value.timeMs)}
             disabled={durationMs === 0}
             onChange={(e) => seek(Number(e.target.value))}
             className="w-full"
