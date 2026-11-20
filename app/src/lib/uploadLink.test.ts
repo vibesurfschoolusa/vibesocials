@@ -166,6 +166,14 @@ describe("uploadLinkPathname", () => {
     expect(date).toBe(`ul/link-1/r-${"a".repeat(100)}`);
   });
 
+  // R47 review: a cut name never ends in a dot.
+  it("a cut name ends without a dot, and a name of dots is \"file\"", () => {
+    expect(uploadLinkPathname("link-1", `${"x".repeat(99)}.2026`, "r")).toBe(`ul/link-1/r-${"x".repeat(99)}`);
+    expect(uploadLinkPathname("link-1", `${"x".repeat(98)}...${"y".repeat(10)}`, "r")).toBe(`ul/link-1/r-${"x".repeat(98)}`);
+    expect(uploadLinkPathname("link-1", ".".repeat(150), "r")).toBe("ul/link-1/r-file");
+    expect(uploadLinkPathname("link-1", "...", "r")).toBe("ul/link-1/r-file");
+  });
+
   it("falls back to a plain name and caps a long one", () => {
     expect(uploadLinkPathname("link-1", "", "r")).toBe("ul/link-1/r-file");
     expect(uploadLinkPathname("link-1", "..", "r")).toBe("ul/link-1/r-file");

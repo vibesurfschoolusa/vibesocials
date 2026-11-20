@@ -46,7 +46,8 @@ export function isHeicFile(file: { name: string; type: string }): boolean {
 
 /** `IMG_5252.HEIC` -> `IMG_5252.jpg`; only a real extension is swapped, so "St. Lucia sunset" keeps its name. */
 export function jpegFileName(name: string): string {
-  const base = withoutExtension(name);
+  // R47 review: no dot or space is left before ".jpg".
+  const base = withoutExtension(name).replace(/[. ]+$/, "");
   return `${base || "photo"}.jpg`;
 }
 

@@ -102,7 +102,9 @@ export function uploadLinkPathname(linkId: string, fileName: string, random: str
     // Only a real extension is kept (lib/fileExtension): a date's ".2026" is part of the name.
     const extension = extensionOf(safe);
     const ext = extension !== undefined && safe.length > extension.length + 1 ? safe.slice(-(extension.length + 1)) : "";
-    safe = safe.slice(0, STORED_NAME_MAX - ext.length) + ext;
+    // R47 review: a cut never leaves the name ending in a dot.
+    const base = safe.slice(0, STORED_NAME_MAX - ext.length).replace(/[. ]+$/, "");
+    safe = base ? base + ext : "file";
   }
   return `${uploadLinkStoragePrefix(linkId)}${random}-${safe}`;
 }
