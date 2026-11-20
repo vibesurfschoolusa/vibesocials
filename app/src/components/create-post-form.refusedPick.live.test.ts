@@ -15,7 +15,9 @@ vi.mock("next/link", async () => {
   const { createElement: h } = await import("react");
   return { default: ({ href, children, ...rest }: { href: string; children: unknown }) => h("a", { href, ...rest }, children as never) };
 });
-vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
+// The page's address; a test sets ?mediaItemId= to bring a library item in.
+const nav = vi.hoisted(() => ({ params: new URLSearchParams() }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => nav.params }));
 vi.mock("@/hooks/useConnections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useConnections")>()),
   useConnections: () => ({
@@ -59,6 +61,22 @@ const fetchMock = vi.fn((input: unknown, init?: { body?: unknown }) => {
   if (url === "/api/posts") {
     postBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return Promise.resolve(Response.json({ id: "job-1" }));
+  }
+  if (url.startsWith("/api/media/media-1")) {
+    return Promise.resolve(
+      Response.json({
+        item: {
+          id: "media-1",
+          storageLocation: "https://blob.example/beach.jpg",
+          originalFilename: "beach.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 1024,
+          baseCaption: "",
+          perPlatformOverrides: null,
+          createdAt: "2026-11-01T00:00:00.000Z",
+        },
+      }),
+    );
   }
   if (url.startsWith("/api/posts/enhance-caption")) {
     return Promise.resolve(Response.json({ enhancedCaption: "Surf lesson today, the waves were great" }));
@@ -185,6 +203,7 @@ beforeEach(async () => {
   postBodies.length = 0;
   prep.network = false;
   conn.platforms = ["x"];
+  nav.params = new URLSearchParams();
   root = createRoot(container as unknown as HTMLElement);
   await mount();
 });
@@ -337,5 +356,54 @@ describe("R51: a refused file is a stored line, not a one-press stop", () => {
     // The second press goes on to the confirm dialog, as before.
     await submit();
     expect(dialogShown()).toBe(true);
+  });
+});
+
+// Lead review notes 1-2: the phone's bar names the refused file, and the line
+// goes for every way a file arrives, on the mounted page.
+describe("R51 review: the refused file on the phone's bar, and what clears it", () => {
+  const barReason = () => {
+    const hit = find(container, (n) => n.attributes?.id === "publish-bar-reason");
+    return hit ? String(hit.textContent) : null;
+  };
+
+  it("the phone's publish bar names the refusal after a 600 MB pick", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    expect(barReason()).toContain(TOO_LARGE);
+    expect(barReason()).toContain("long.mp4");
+  });
+
+  it("a library item arriving clears it", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    expect(lineSays(TOO_LARGE)).toBe(true);
+
+    nav.params = new URLSearchParams("mediaItemId=media-1");
+    await mount();
+    expect(calls.some((url) => url.startsWith("/api/media/media-1"))).toBe(true);
+    expect(lineSays(TOO_LARGE)).toBe(false);
+    expect(barReason() ?? "").not.toContain(TOO_LARGE);
+  });
+
+  it("photos attaching clear it", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    expect(lineSays(TOO_LARGE)).toBe(true);
+
+    await pick(sized("one.png", "image/png", 1024), sized("two.png", "image/png", 1024));
+    expect(lineSays(TOO_LARGE)).toBe(false);
+  });
+
+  // With two or more photos the main input is hidden, so the line can't show
+  // while Remove all is on screen; Remove all must not bring it back either.
+  it("Remove all after photos leaves no refused line", async () => {
+    await typeCaption("Surf lesson today");
+    await pick(BIG());
+    await pick(sized("one.png", "image/png", 1024), sized("two.png", "image/png", 1024));
+    await run(() => props(button("Remove all")).onClick());
+    await run(() => props(dialogButton("Remove all")).onClick());
+    expect(find(container, (n) => n.attributes?.id === "post-media")).not.toBeNull();
+    expect(lineSays(TOO_LARGE)).toBe(false);
   });
 });

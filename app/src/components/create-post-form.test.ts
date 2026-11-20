@@ -1493,7 +1493,7 @@ describe("a refused press shows its reason where the person is", () => {
   it("the phone bar's reason is the form's line, as shown", () => {
     const raw = readFileSync(new URL("./create-post-form.tsx", import.meta.url), "utf8");
     const control = raw.slice(raw.indexOf("const control = submitControl({"), raw.indexOf("return (", raw.indexOf("const control = submitControl({")));
-    expect(control).toContain("pageError: shownUploadError,");
+    expect(control).toContain("pageError: shownUploadError ?? (refusedFile ? refusedFileLine(refusedFile) : null),");
   });
 });
 

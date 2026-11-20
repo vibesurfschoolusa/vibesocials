@@ -2792,7 +2792,8 @@ function CreatePostFormInner({
     }),
     untouchedMessage,
     platformAlert,
-    pageError: shownUploadError,
+    // The refused file's line is the form's too: on a phone the bar is where it is read.
+    pageError: shownUploadError ?? (refusedFile ? refusedFileLine(refusedFile) : null),
     aiWait: captionBox.aiWait,
   });
   const postTextChanged = confirmPublishOpen ? postTextChangedSince(postTextAtConfirm, postTextNow()) : null;
