@@ -217,6 +217,7 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
     }
 
     // Strategy 3: Check if organization was provided in the state
+    let hintNotFound = false;
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for organization in state/session");
       
@@ -255,14 +256,17 @@ async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
             console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
           }
         }
+        hintNotFound = organizations.length === 0;
       }
     }
 
-    // If still no organization, redirect to setup page
+    // If still no organization, redirect to setup page. After the dialog's
+    // page address found nothing, the dialog says so; reopened as on a first
+    // try, it looped with nothing saying why (R53 new-customer L1).
     if (organizations.length === 0) {
-      console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup");
+      console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup", { hintNotFound });
       return NextResponse.redirect(
-        new URL(`/settings?linkedin_setup=true`, process.env.NEXTAUTH_URL!)
+        new URL(`/settings?linkedin_setup=${hintNotFound ? "not_found" : "true"}`, process.env.NEXTAUTH_URL!)
       );
     }
 

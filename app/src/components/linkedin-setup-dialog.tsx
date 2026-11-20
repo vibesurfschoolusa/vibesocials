@@ -17,10 +17,36 @@ import { ExternalLink } from "@/components/external-link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 import { useResetOnReturnFromCache } from "@/components/returnFromCache";
 
 const noSubscription = () => () => {};
+
+/** The callback's answer when the page address from this dialog found nothing. */
+const NOT_FOUND = "not_found";
+
+export const LINKEDIN_PAGE_NOT_FOUND = `LinkedIn didn't find that page. Check the page's URL (it looks like linkedin.com/company/your-page) and try again. If it still isn't found, write to us at ${SUPPORT_EMAIL}.`;
+
+// The address typed before leaving for LinkedIn, so a not-found return can
+// show what was tried. Only a convenience: blocked storage leaves the field empty.
+const ADDRESS_KEY = "linkedin-setup-address";
+
+function keptAddress(): string {
+  try {
+    return window.sessionStorage.getItem(ADDRESS_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function keepAddress(address: string): void {
+  try {
+    window.sessionStorage.setItem(ADDRESS_KEY, address);
+  } catch {
+    // Not kept; the field starts empty if LinkedIn doesn't find the page.
+  }
+}
 
 /** `workspaceId`: the workspace this page was rendered for; the start route refuses any other (F3). */
 export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
@@ -29,16 +55,18 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   // Opens only after hydration, as PendingConnectionDialog does: the server
   // sends no dialog HTML, so an open first render would be React #418.
   const hydrated = useSyncExternalStore(noSubscription, () => true, () => false);
-  const showSetup = hydrated && searchParams.get("linkedin_setup") === "true";
+  const setup = searchParams.get("linkedin_setup");
+  const notFound = setup === NOT_FOUND;
+  const showSetup = hydrated && (setup === "true" || notFound);
 
-  const [vanityName, setVanityName] = useState("");
+  const [vanityName, setVanityName] = useState(() => (notFound ? keptAddress() : ""));
   const [isConnecting, setIsConnecting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Continue leaves for LinkedIn; Back may bring this page back from the cache.
   useResetOnReturnFromCache(setIsConnecting, false);
 
-  // Closing clears the trigger query param (?linkedin_setup=true) so the dialog
+  // Closing clears the trigger query param (?linkedin_setup=) so the dialog
   // stays closed. Blocked while a redirect is in flight.
   const handleClose = () => {
     if (isConnecting) return;
@@ -77,6 +105,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
       cleanVanityName = cleanVanityName.replace(/\s+/g, "-");
     }
 
+    keepAddress(vanityName.trim());
     setIsConnecting(true);
 
     // Redirect to LinkedIn OAuth start with the vanity name/ID as a query param.
@@ -100,6 +129,7 @@ export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
         </DialogDescription>
       </DialogHeader>
       <DialogBody className="flex flex-col gap-5">
+        {notFound && <Alert variant="danger">{LINKEDIN_PAGE_NOT_FOUND}</Alert>}
         <Alert variant="info" title="Company pages only">
           This app posts to LinkedIn company pages, not personal profiles. The LinkedIn account
           signed in to this browser is the one being connected, and it must be an administrator

@@ -1185,6 +1185,19 @@ describe("choosing which account to connect", () => {
         expectNoConnectionWrites();
       });
 
+      // R53 new-customer L1: the dialog came back with the same empty text
+      // after an address LinkedIn couldn't find, so every try looped unexplained.
+      it("organizationAcls refused and the dialog's page hint found nothing: the return says not_found", async () => {
+        useProvider(linkedinProvider([], { acl: () => json({ status: 403, message: "Not enough permissions" }, 403) }));
+
+        for (const state of [vanityState("acme-surff"), vanityState("777")]) {
+          const res = await linkedinGET(callbackRequest("linkedin", state));
+          expect(location(res).pathname).toBe("/settings");
+          expect(location(res).searchParams.get("linkedin_setup")).toBe("not_found");
+        }
+        expectNoConnectionWrites();
+      });
+
       it("organizationAcls refused: a numeric id from the setup dialog is looked up with GET /rest/organizations/{id}", async () => {
         useProvider(
           linkedinProvider([{ id: 777, localizedName: "Hinted Page" }], {
