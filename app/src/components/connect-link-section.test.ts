@@ -303,14 +303,36 @@ describe("Client connect link: Replace when the site offers fewer platforms", ()
     );
   });
 
-  it("with none left: no Replace link, a sentence that says why, and Turn off", () => {
-    const html = view({ link: LINK, available: ["facebook_page"] });
-    expect(html).not.toContain("Replace link");
+  // R47 lead review: Replace is always there while a link exists. Its boxes
+  // list what the site offers now, ticked where the old link offered them.
+  it("old platforms all gone: Replace still shows, and its boxes are the available ones, unticked", () => {
+    const before = view({ link: LINK, available: ["facebook_page"], selected: [] });
+    expect(before).toContain("Replace link");
+    expect(before).toContain("Turn off");
+    expect(before).not.toContain(REPLACE_NONE_OFFERED_MESSAGE.replace("'", "&#x27;"));
+    expect(replacePlatforms(LINK, ["facebook_page"])).toEqual([]);
+    const pressed = view({ link: LINK, available: ["facebook_page"], selected: [], replacing: true });
+    expect(pressed.match(/type="checkbox"/g)).toHaveLength(1);
+    expect(pressed).not.toContain('checked=""');
+    expect(pressed).toContain("Facebook");
+  });
+
+  it("old platforms all gone, a newly ticked one: Replace link can be pressed", () => {
+    const html = view({ link: LINK, available: ["facebook_page"], selected: ["facebook_page"], replacing: true });
+    expect(html.match(/type="checkbox" checked=""/g)).toHaveLength(1);
+    expect(html).toMatch(/<button(?![^>]*disabled="")[^>]*>Replace link<\/button>/);
+  });
+
+  it("nothing can be ticked: Replace says so, with the step that works, and Turn off stays", () => {
+    const html = view({ link: LINK, available: [], selected: [], replacing: true });
     expect(REPLACE_NONE_OFFERED_MESSAGE).toBe(
-      "None of the platforms this link offers can be connected on this site now, so it can't be replaced. Press Turn off to stop it.",
+      "No platform can be connected on this site now, so there is nothing to tick for a new link. Press Turn off to stop this one, or Cancel to keep it.",
     );
-    expect(html).toContain(REPLACE_NONE_OFFERED_MESSAGE.replace("'", "&#x27;"));
+    expect(html).toContain(REPLACE_NONE_OFFERED_MESSAGE);
+    expect(html).not.toContain('type="checkbox"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Replace link<\/button>/);
     expect(html).toContain("Turn off");
+    expect(html).toContain(">Cancel<");
   });
 
   it("the panel's Replace starts from replacePlatforms, and its confirm sends what is ticked", () => {

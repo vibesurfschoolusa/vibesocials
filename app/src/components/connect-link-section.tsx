@@ -118,9 +118,9 @@ export function droppedPlatformsLine(link: ConnectLinkDto, available: readonly P
   return `No longer offered: ${names}. This site can't connect ${dropped.length === 1 ? "it" : "them"} now.`;
 }
 
-/** With nothing left to offer, the link can only be turned off. */
+/** Replace pressed while the site offers no platform: nothing can be ticked, so the steps that work. */
 export const REPLACE_NONE_OFFERED_MESSAGE =
-  "None of the platforms this link offers can be connected on this site now, so it can't be replaced. Press Turn off to stop it.";
+  "No platform can be connected on this site now, so there is nothing to tick for a new link. Press Turn off to stop this one, or Cancel to keep it.";
 
 export interface ConnectLinkViewProps {
   available: Platform[];
@@ -141,6 +141,8 @@ export interface ConnectLinkViewProps {
   firstBoxRef?: Ref<HTMLInputElement>;
   /** The Replace link button, which takes focus after Cancel. */
   replaceRef?: Ref<HTMLButtonElement>;
+  /** Cancel, which takes focus when Replace has no box to show. */
+  cancelRef?: Ref<HTMLButtonElement>;
   onTurnOff: () => void;
   /** The confirm dialog, rendered inside the card. */
   dialog?: ReactNode;
@@ -163,6 +165,7 @@ export function ConnectLinkSectionView({
   onCancelReplace,
   firstBoxRef,
   replaceRef,
+  cancelRef,
   onTurnOff,
   copyRef,
   dialog = null,
@@ -199,7 +202,7 @@ export function ConnectLinkSectionView({
                   Copy
                 </Button>
               </div>
-            ) : replacePlatforms(link, available).length > 0 ? (
+            ) : available.length > 0 ? (
               <p className="text-sm text-muted-foreground">
                 This link can&apos;t be shown again. Replace it to get a new one.
               </p>
@@ -213,14 +216,14 @@ export function ConnectLinkSectionView({
             {droppedPlatformsLine(link, available) ? (
               <p className="text-sm text-muted-foreground">{droppedPlatformsLine(link, available)}</p>
             ) : null}
-            {workspaceBlocked || pausedByPlan || replacePlatforms(link, available).length > 0 ? null : (
-              <p className="text-sm text-muted-foreground">{REPLACE_NONE_OFFERED_MESSAGE}</p>
-            )}
             <p className="text-sm text-muted-foreground">Expires on {formatDisplayDate(link.expiresAt)}</p>
             <p className="text-sm text-muted-foreground">
               {link.lastUsedAt ? `Last used ${formatDisplayDate(link.lastUsedAt)}` : "Not used yet"}
             </p>
-            {replacing ? (
+            {/* R47 lead review: Replace is always offered; with no box to tick it says so. */}
+            {replacing && available.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{REPLACE_NONE_OFFERED_MESSAGE}</p>
+            ) : replacing ? (
               <PlatformBoxes
                 legend="The platforms the new link offers"
                 available={available}
@@ -230,7 +233,7 @@ export function ConnectLinkSectionView({
               />
             ) : null}
             <div className="flex flex-wrap gap-2">
-              {workspaceBlocked || pausedByPlan || replacePlatforms(link, available).length === 0 ? null : (
+              {workspaceBlocked || pausedByPlan ? null : (
                 <Button
                   ref={replaceRef}
                   type="button"
@@ -243,7 +246,7 @@ export function ConnectLinkSectionView({
                 </Button>
               )}
               {replacing ? (
-                <Button type="button" variant="ghost" size="sm" onClick={onCancelReplace}>
+                <Button ref={cancelRef} type="button" variant="ghost" size="sm" onClick={onCancelReplace}>
                   Cancel
                 </Button>
               ) : null}
@@ -350,10 +353,12 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const copyRef = useRef<HTMLButtonElement>(null);
   const firstBoxRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
-  // Replace link stays where it was and the boxes appear above it: focus goes to the first box.
+  // Replace link stays where it was and the boxes appear above it: focus goes to
+  // the first box, or to Cancel when there is none (Replace link is disabled then).
   useEffect(() => {
-    if (replacing) firstBoxRef.current?.focus();
+    if (replacing) (firstBoxRef.current ?? cancelRef.current)?.focus();
   }, [replacing]);
 
   useEffect(() => {
@@ -526,6 +531,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       }}
       firstBoxRef={firstBoxRef}
       replaceRef={replaceRef}
+      cancelRef={cancelRef}
       onTurnOff={() => setConfirm("off")}
       pausedByPlan={pausedByPlan}
       workspaceBlocked={workspaceBlocked}
