@@ -1451,7 +1451,8 @@ export function BulkPostsForm({
           </Button>
           {busy ? (
             <p className="self-center text-sm text-muted-foreground">
-              The buttons wait until every file is uploaded and captioned.
+              {/* R48 pages-a L4: with AI off a row is read, not captioned; "ready" is true either way. */}
+              The buttons wait until every file is uploaded and ready.
             </p>
           ) : null}
         </div>
