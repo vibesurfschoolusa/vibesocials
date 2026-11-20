@@ -31,8 +31,14 @@ import {
 // Types only (erased): the card a Feed and Story post folds into (F6).
 import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 
-/** Shown over a list on screen when reloading it failed. */
-export const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
+/**
+ * Shown over a list on screen when reloading it got no answer. R52 fix review:
+ * it names the button beside it, Reload the list.
+ */
+export const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection, then press Reload the list.";
+/** The same, when an answer came but failed: a 5xx, or one the page can't read. */
+const REFRESH_FAILED_SERVER_MESSAGE =
+  "Couldn't refresh the list: something went wrong on our side. Press Reload the list in a minute.";
 /** R29 client-journey L2: Send again found the same change request already standing. */
 export const REVIEW_CHANGE_ALREADY_SAVED_MESSAGE = "Your change request was already saved. The list was loaded again.";
 
@@ -664,7 +670,11 @@ export function ReviewLinkView({ token }: { token: string }) {
         return null;
       }
       if (!response.ok || !data?.posts) {
-        setError(typeof data?.error === "string" && data.error ? data.error : LOAD_FAILED_SERVER_MESSAGE);
+        const own = typeof data?.error === "string" && data.error ? data.error : null;
+        // R52 fix review: over a list on screen the button is Reload the list,
+        // so a 5xx's own sentence (which says Try again) gives way to one naming it.
+        if (listShown.current) setError(response.status < 500 && own ? own : REFRESH_FAILED_SERVER_MESSAGE);
+        else setError(own ?? LOAD_FAILED_SERVER_MESSAGE);
         return null;
       }
       // R32 lead's second review: a kept card whose post is listed again is let go.

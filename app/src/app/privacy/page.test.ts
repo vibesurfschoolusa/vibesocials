@@ -207,13 +207,14 @@ describe("Privacy: the TikTok permissions are the ones the app asks for", () => 
 });
 
 // R52 pages-a L6: every signed-in browser sends its time zone, and
-// api/me/time-zone saves it (only that) as User.timeZone for the times in emails.
+// api/me/time-zone saves it (only that) as User.timeZone. Emails read it, and so
+// does the app: Settings' usage line and plan dates, and the trial-ending notice.
 describe("Privacy: the time zone", () => {
   it("lists it in section 1, where it comes from and what it is for", () => {
     const page = text();
     const section = page.slice(page.indexOf("1. Information we collect"), page.indexOf("2. How we use it"));
     expect(section).toContain(
-      "Time zone: your time zone (for example America/New_York), read from your browser when you are signed in, so times in our emails show in your local time.",
+      "Time zone: your time zone (for example America/New_York), read from your browser when you are signed in, so times in the app and in our emails show in your local time.",
     );
   });
 

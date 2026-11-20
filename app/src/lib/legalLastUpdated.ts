@@ -53,7 +53,7 @@ export function billingOnLastUpdated(
  * 2026-11-15 (FF2 review): place search and Google Maps Platform are gone with the Location field.
  * 2026-11-16 (R36 pages note): a LinkedIn page name is read again regularly, not every day.
  * 2026-11-20 (R46 pages-a L7): TikTok names only video.publish, the scope the app asks for.
- * 2026-11-20 (R52 pages-a L6): section 1 lists the time zone the browser sends for emails.
+ * 2026-11-20 (R52 pages-a L6): section 1 lists the time zone the browser sends, for times in the app and emails.
  */
 export const PRIVACY_LAST_UPDATED = "November 20, 2026";
 

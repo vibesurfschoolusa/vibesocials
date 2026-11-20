@@ -448,13 +448,12 @@ describe("POST /api/posts/[postJobId]/publish", () => {
 
   // R52 pages-a L4: prepareDeferredPostJobDispatch answers NO_CONNECTIONS when
   // no row is pending: a chosen platform with no connection (CONNECTION_GONE),
-  // one flagged needsReconnect (RECONNECT_REQUIRED), or a mix. One sentence is
-  // true for each, for the owner and for a member.
-  it.each([
-    ["a disconnected platform"],
-    ["a platform that needs reconnecting"],
-    ["a mix of the two"],
-  ])("Publish now with %s: the sentence names both reasons, owner and member", async () => {
+  // one flagged needsReconnect (RECONNECT_REQUIRED), or a mix. The route sees
+  // only that reason, so one test covers its answer; the three cases
+  // themselves are in server/jobs/deferredDispatch.test.ts ("gives a chosen
+  // platform with no connection a CONNECTION_GONE result and fails the job",
+  // "all dead: every chosen platform gets a failed result with its sentence").
+  it("Publish now answered NO_CONNECTIONS: the sentence names both reasons, for the owner and for a member", async () => {
     for (const role of ["owner", "member"] as const) {
       getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role }));
       findFirstMock.mockResolvedValue({ status: "draft" });

@@ -430,6 +430,54 @@ describe("/v: a card decision's 429", () => {
   });
 
   // R41 lead: the per-link daily limit refuses every decision until it ends, the same rule.
+  // R52 fix review: a reload that fails with the list on screen says the list
+  // couldn't be refreshed, why, and names the button that is there (Reload
+  // the list). The first load keeps its own sentences (below).
+  describe("a list reload that fails with the list showing", () => {
+    const OFFLINE = "Couldn't refresh the list. Check your connection, then press Reload the list.";
+    const FAILED = "Couldn't refresh the list: something went wrong on our side. Press Reload the list in a minute.";
+    const alreadyApproved = () => Promise.resolve(Response.json({ state: "approved", already: true }));
+
+    async function reloadAnswers(answer: () => Promise<Response>): Promise<string> {
+      fetchMock.mockReturnValueOnce(listed("a", "b")).mockReturnValueOnce(alreadyApproved()).mockImplementationOnce(answer);
+      await open();
+      await press(buttons("Looks good")[0]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const alert = all((n) => n.attributes?.role === "alert" && n.nodeName === "DIV")[0];
+      return alert ? (alert.textContent as string) : "";
+    }
+
+    it("a fetch that threw: check your connection, then Reload the list", async () => {
+      const text = await reloadAnswers(async () => {
+        throw new TypeError("Failed to fetch");
+      });
+      expect(text).toBe(`${OFFLINE}Reload the list`);
+      expect(buttons("Reload the list")).toHaveLength(1);
+    });
+
+    it("a JSON 500 with its own error text: on our side, then Reload the list (not Try again)", async () => {
+      const text = await reloadAnswers(async () => Response.json({ error: UNCHECKED }, { status: 500 }));
+      expect(text).toBe(`${FAILED}Reload the list`);
+      expect(text).not.toContain("Try again");
+    });
+
+    it("an HTML 5xx: on our side, then Reload the list", async () => {
+      const text = await reloadAnswers(
+        async () => new Response("<html>Gateway Timeout</html>", { status: 504, headers: { "content-type": "text/html" } }),
+      );
+      expect(text).toBe(`${FAILED}Reload the list`);
+    });
+
+    it("a 429: the wait, and no button that can't work yet", async () => {
+      await reloadAnswers(() => refused(HOURLY, 1500));
+      expect(container.textContent).toContain(
+        "Too many requests from this network in the last hour. You can send again in 25 minutes.",
+      );
+      expect(buttons("Reload the list")).toHaveLength(0);
+      expect(container.textContent).not.toContain("Couldn't refresh the list");
+    });
+  });
+
   describe("the link's daily limit", () => {
     it("Looks good: the wait from Retry-After, on the card and atop the list, and no decision can be pressed", async () => {
       fetchMock.mockReturnValueOnce(listed("a", "b")).mockReturnValueOnce(refused(DAILY, 5 * 3600));

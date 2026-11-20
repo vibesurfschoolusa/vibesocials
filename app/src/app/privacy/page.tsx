@@ -49,8 +49,8 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong className="text-foreground">Time zone:</strong> your time zone (for example
-            America/New_York), read from your browser when you are signed in, so times in our emails
-            show in your local time.
+            America/New_York), read from your browser when you are signed in, so times in the app and in
+            our emails show in your local time.
           </li>
           <li>
             <strong className="text-foreground">Content you upload:</strong> the photos and videos you
