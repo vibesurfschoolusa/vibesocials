@@ -229,7 +229,7 @@ describe("checkDailyPostLimit - across workspaces", () => {
       billingExempt: false,
       plan: null,
       planStatus: null,
-      trialEndsAt: new Date("2026-11-20T00:00:00Z"),
+      trialEndsAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
       currentPeriodEnd: null,
     };
     db.workspaceFindUnique.mockResolvedValue({ ...workspaceRow(), ...billing });
@@ -818,7 +818,7 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
       billingExempt: false,
       plan: null,
       planStatus: null,
-      trialEndsAt: new Date("2026-11-20T00:00:00Z"),
+      trialEndsAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
       currentPeriodEnd: null,
       stripeCustomerId: null,
     });
@@ -842,7 +842,7 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
       billingExempt: false,
       plan: null,
       planStatus: null,
-      trialEndsAt: new Date("2026-11-20T00:00:00Z"),
+      trialEndsAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
       currentPeriodEnd: null,
       stripeCustomerId: null,
     });
