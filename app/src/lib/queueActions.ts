@@ -5,7 +5,7 @@ import { isRouteAnswer } from "./postSubmitFailure";
 import { fetchOrNoAnswer, isNoAnswer } from "./requestNoAnswer";
 import type { PostJobDTO } from "./postsDto";
 import { POST_GONE_TEXT } from "./postMovedOn";
-import { localDateTimeToUtcIso } from "./scheduling";
+import { localDateTimeToUtcIso, SCHEDULED_TIME_TOO_SOON_MESSAGE } from "./scheduling";
 import { INVALID_WORKSPACE_ID_CODE, MISSING_WORKSPACE_ID_CODE, WORKSPACE_CHANGED_CODE } from "./workspaceChanged";
 
 /**
@@ -438,7 +438,7 @@ export function checkScheduleTime(
   const iso = localDateTimeToUtcIso(localValue);
   if (!iso) return { ok: false, error: "Choose a valid date and time." };
   if (new Date(iso).getTime() < nowMs + bufferMs) {
-    return { ok: false, error: "Scheduled time must be at least a minute in the future." };
+    return { ok: false, error: SCHEDULED_TIME_TOO_SOON_MESSAGE };
   }
   return { ok: true, iso };
 }

@@ -76,7 +76,7 @@ const TIKTOK_CANNOT_POST_MESSAGES: Record<string, string> = {
     "TikTok says this account has reached its posting limit for now. Try again later.",
   spam_risk_user_banned_from_posting: "TikTok says this account can't post right now.",
   reached_active_user_cap:
-    "TikTok has reached today's limit of accounts that can post through Vibe Socials. Try again later.",
+    "TikTok has reached its limit of accounts that can post through Vibe Socials for now. Try again later, or post to TikTok yourself.",
 };
 
 /** A creator_info answer that this creator can't post now. Never retried automatically. */

@@ -446,7 +446,8 @@ describe("checkScheduleTime", () => {
     expect(checkScheduleTime("not a date", NOW, BUFFER)).toEqual({ ok: false, error: "Choose a valid date and time." });
   });
   it("rejects a time inside the buffer or in the past", () => {
-    const tooSoon = { ok: false, error: "Scheduled time must be at least a minute in the future." };
+    // R47 review: the Queue's move says the server's sentence (lib/scheduling).
+    const tooSoon = { ok: false, error: "The scheduled time has passed or is less than a minute away. Choose a later time and try again." };
     expect(checkScheduleTime(local(-60 * 60 * 1000), NOW, BUFFER)).toEqual(tooSoon);
     expect(checkScheduleTime(local(0), NOW, BUFFER)).toEqual(tooSoon);
   });

@@ -1558,8 +1558,9 @@ describe("a refusal line shows only while the form still refuses", () => {
     expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "" })).toBe(
       "Please choose a valid date and time to schedule this post.",
     );
+    // R47 review: the press says the server's sentence (lib/scheduling).
     expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "2026-11-20T10:00" })).toBe(
-      "Scheduled time must be at least a minute in the future.",
+      "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
     );
     expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "2026-11-20T11:00" })).toBeNull();
     expect(pressRefusalLine({ kind: "send", at }, { ...schedule, scheduledFor: "2026-11-20T11:00", repeatShort: true })).toBe(

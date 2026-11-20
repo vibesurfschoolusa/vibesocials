@@ -151,6 +151,8 @@ describe("getTikTokCreatorInfo", () => {
     expect(error?.code).toBe(TIKTOK_CREATOR_CANNOT_POST);
     expect(error?.tiktokErrorCode).toBe(code);
     expect(error?.message).toMatch(message);
+    // R47 review: the sentence is stored on the result and read later: no "today".
+    expect(error?.message).not.toMatch(/\btoday\b/i);
   });
 
   it("invents no privacy options when TikTok returns none", async () => {

@@ -6,6 +6,7 @@ import {
   DELETABLE_POST_JOB_STATUSES,
   MUTABLE_POST_JOB_STATUSES,
   SCHEDULE_BUFFER_MS,
+  SCHEDULED_TIME_TOO_SOON_MESSAGE,
   isValidPerPlatformOverrides,
   localDateTimeToUtcIso,
   postJobStatusForIntent,
@@ -101,6 +102,10 @@ describe("validateScheduledFor", () => {
     const result = validateScheduledFor(value, now);
     expect(result).toEqual({ ok: false, error: sentence });
     if (!result.ok) expect(result.error).not.toMatch(/scheduledFor|scheduled_for/i);
+  });
+
+  it("the too-soon sentence is the one exported for the pages' own checks", () => {
+    expect(validateScheduledFor("2026-07-10T11:59:00.000Z", now)).toEqual({ ok: false, error: SCHEDULED_TIME_TOO_SOON_MESSAGE });
   });
 
   it("accepts a time comfortably in the future and returns the Date", () => {

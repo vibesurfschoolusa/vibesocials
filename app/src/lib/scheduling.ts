@@ -84,6 +84,14 @@ export function isValidPerPlatformOverrides(
   );
 }
 
+/**
+ * A scheduled time that has passed or is under a minute away: the server's 400
+ * and the pages' own checks before it (Create's press, the Queue's move) say
+ * this one sentence.
+ */
+export const SCHEDULED_TIME_TOO_SOON_MESSAGE =
+  "The scheduled time has passed or is less than a minute away. Choose a later time and try again.";
+
 /** Result of validating a caller-supplied `scheduledFor`. */
 export type ScheduledForValidation =
   | { ok: true; date: Date }
@@ -114,10 +122,7 @@ export function validateScheduledFor(
   }
 
   if (date.getTime() < now.getTime() + bufferMs) {
-    return {
-      ok: false,
-      error: "The scheduled time has passed or is less than a minute away. Choose a later time and try again.",
-    };
+    return { ok: false, error: SCHEDULED_TIME_TOO_SOON_MESSAGE };
   }
 
   return { ok: true, date };

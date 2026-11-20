@@ -113,6 +113,7 @@ import {
 } from "@/lib/postTargets";
 import {
   SCHEDULE_BUFFER_MS,
+  SCHEDULED_TIME_TOO_SOON_MESSAGE,
   localDateTimeToUtcIso,
   localTimeZoneLabel,
   toDateTimeLocalValue,
@@ -901,7 +902,7 @@ export function composerSendRefusalAfterDisclosure(state: ComposerSendCheck, at:
   if (state.mode === "schedule") {
     const iso = localDateTimeToUtcIso(state.scheduledFor);
     if (!iso) return "Please choose a valid date and time to schedule this post.";
-    if (new Date(iso).getTime() < at + SCHEDULE_BUFFER_MS) return "Scheduled time must be at least a minute in the future.";
+    if (new Date(iso).getTime() < at + SCHEDULE_BUFFER_MS) return SCHEDULED_TIME_TOO_SOON_MESSAGE;
     if (state.repeatShort) return "Choose how many times the post repeats, then press the button again.";
   }
   return null;
