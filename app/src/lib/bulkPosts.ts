@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { captionCounter, MAX_CAPTION_CHARS } from "@/lib/captionLimits";
 import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
 import { platformAcceptsMedia } from "@/lib/platformLimits";
 import { nextFreeSlots, SLOT_TAKEN_WITHIN_MS, type PostingSlot } from "@/lib/postingSlots";
@@ -21,6 +22,9 @@ export const BULK_TIKTOK_NOTE =
 // POST /api/posts refuses a blank caption ("baseCaption is required"), so the
 // page refuses it first with a sentence that says what to do.
 export const BULK_EMPTY_CAPTION_MESSAGE = "Write a caption for this post, then press the button again.";
+// R52 pages-a L3: the route's refusal for a long caption names its code field,
+// so the page refuses it first, at the same cap.
+export const BULK_CAPTION_TOO_LONG_MESSAGE = `This caption is too long: keep it to ${MAX_CAPTION_CHARS.toLocaleString("en-US")} characters.`;
 export const BULK_NOT_UPLOADED_MESSAGE = "This file has not uploaded. Retry it or remove it.";
 export const BULK_NO_PLATFORMS_MESSAGE =
   "None of the chosen platforms takes this kind of file. Choose another platform or remove it.";
@@ -261,6 +265,7 @@ export function allRowsCreated(rows: readonly { postId: string | null }[]): bool
 export function rowSendBlock(row: BulkSendableRow, mode: BulkFinishMode, now: Date): string | null {
   if (!row.uploaded) return BULK_NOT_UPLOADED_MESSAGE;
   if (!row.caption.trim()) return BULK_EMPTY_CAPTION_MESSAGE;
+  if (captionCounter(row.caption).over) return BULK_CAPTION_TOO_LONG_MESSAGE;
   if (row.platforms.length === 0) return BULK_NO_PLATFORMS_MESSAGE;
   if (mode === "schedule") {
     const at = row.when ? new Date(row.when).getTime() : Number.NaN;

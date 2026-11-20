@@ -11,11 +11,11 @@ vi.mock("@/hooks/useConnections", () => ({
 
 import type { Platform } from "@prisma/client";
 
-import { BULK_EMPTY_CAPTION_MESSAGE, refreshedFirstDay } from "@/lib/bulkPosts";
+import { BULK_CAPTION_TOO_LONG_MESSAGE, BULK_EMPTY_CAPTION_MESSAGE, refreshedFirstDay } from "@/lib/bulkPosts";
 import { SCHEDULED_TIME_TOO_SOON_MESSAGE } from "@/lib/scheduling";
 import { localTimeZoneLabel } from "@/lib/scheduling";
 
-import { BulkPostsForm, NoPlatformConnectedLine, refusedPressesKept, rowSendLine, type BulkBatchCheck } from "./bulk-posts-form";
+import { BulkPostsForm, NoPlatformConnectedLine, refusedPressesKept, rowLocalBlock, rowSendLine, type BulkBatchCheck } from "./bulk-posts-form";
 
 const ORIGINAL_TZ = process.env.TZ;
 
@@ -298,5 +298,33 @@ describe("Add many: a row's refusal shows only while the row still refuses", () 
     const rowSource = readFileSync(new URL("./bulk-post-row.tsx", import.meta.url), "utf8");
     expect(rowSource).toContain('{sendLine ? <Alert variant="danger">{sendLine}</Alert> : null}');
     expect(rowSource).not.toContain("row.sendError");
+  });
+});
+
+// R52 pages-a L3, publishing-flow L1: a caption over the cap got the route's
+// 400 naming a code field. The row now refuses it before sending.
+describe("Add many: rowLocalBlock and the caption's length", () => {
+  const at = new Date(2026, 10, 20, 10, 0);
+  const row = (caption: string) => ({
+    mimeType: "image/jpeg",
+    durationSec: undefined,
+    blob: { url: "https://blob.example/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 10 },
+    caption,
+    when: "2026-11-21T10:00",
+  });
+  const batch: BulkBatchCheck = { selectedPlatforms: ["x"] as Platform[], stories: { instagram: false, facebook: false }, googleError: null };
+
+  it("over the cap: refused with the plain sentence", () => {
+    expect(BULK_CAPTION_TOO_LONG_MESSAGE).toBe("This caption is too long: keep it to 10,000 characters.");
+    expect(rowLocalBlock(row("a".repeat(10_001)), "schedule", at, batch)).toBe(BULK_CAPTION_TOO_LONG_MESSAGE);
+    expect(rowLocalBlock(row("a".repeat(10_001)), "draft", at, batch)).toBe(BULK_CAPTION_TOO_LONG_MESSAGE);
+  });
+
+  it("at the cap: goes", () => {
+    expect(rowLocalBlock(row("a".repeat(10_000)), "schedule", at, batch)).toBeNull();
+  });
+
+  it("under the cap: goes", () => {
+    expect(rowLocalBlock(row("Sunday session"), "schedule", at, batch)).toBeNull();
   });
 });

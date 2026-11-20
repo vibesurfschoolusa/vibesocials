@@ -407,3 +407,21 @@ describe("Add many row: a file that did not upload", () => {
     expect(html).toContain(">Remove<");
   });
 });
+
+// R52 pages-a L3: the row's caption box has Create's counter (CaptionCounter).
+describe("Add many row: the caption counter", () => {
+  it("shows the count with its label, linked to the box", () => {
+    const html = render(row({ caption: "Sunny day" }));
+    expect(html).toContain('id="bulk-row-r1-caption-count"');
+    expect(html).toMatch(/<textarea[^>]*aria-describedby="bulk-row-r1-caption-count"/);
+    expect(html).toMatch(/<p id="bulk-row-r1-caption-count" class="[^"]*text-muted-foreground[^"]*">9 \/ 10,000<\/p>/);
+    expect(html).not.toContain('role="alert" class="text-destructive"');
+  });
+
+  it("turns over past the cap", () => {
+    const html = render(row({ caption: "a".repeat(10_001) }));
+    expect(html).toMatch(/<p id="bulk-row-r1-caption-count" class="[^"]*text-destructive[^"]*">10,001 \/ 10,000<\/p>/);
+    expect(html).toMatch(/<textarea[^>]*aria-invalid="true"/);
+    expect(html).toContain('role="alert" class="text-destructive"');
+  });
+});

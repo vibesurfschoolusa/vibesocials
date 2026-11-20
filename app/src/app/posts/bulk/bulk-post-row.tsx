@@ -5,6 +5,7 @@ import { useRef } from "react";
 import type { Platform } from "@prisma/client";
 import { Film, Image as ImageIcon } from "lucide-react";
 
+import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VideoCoverPicker } from "@/components/video-cover-picker";
 import { ALT_TEXT_MAX } from "@/lib/altText";
+import { captionCounter } from "@/lib/captionLimits";
 import { focusAfterPress } from "@/lib/focusAfter";
 import { BULK_DRAFT_NO_TIME_TEXT, BULK_MAYBE_CREATED_MESSAGE, rowHoldsNoTime } from "@/lib/bulkPosts";
 import { skippedForMediaLine } from "@/lib/postTargets";
@@ -268,10 +270,13 @@ export function BulkPostRow({
             readOnly={captionIsLocked}
             aria-readonly={captionIsLocked || undefined}
             placeholder={aiCaptions && row.captionStatus === "writing" ? "Writing a caption..." : "Write a caption"}
+            aria-invalid={captionCounter(row.caption).over || undefined}
+            aria-describedby={`bulk-row-${row.id}-caption-count`}
             onChange={(event) => {
               if (!captionIsLocked) onCaptionChange(event.target.value);
             }}
           />
+          <CaptionCounter id={`bulk-row-${row.id}-caption-count`} text={row.caption} />
           {/* R43 pages-a L4: one status line from the first render carries the
               work and both failures, so each failure is announced once. A new
               request empties it (the form clears both errors when one starts). */}

@@ -30,6 +30,7 @@ import { makeFocusable, type FocusDoc } from "@/lib/focusDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
 import { BulkPostsForm } from "./bulk-posts-form";
 import { ALT_TEXT_TOO_LONG_TEXT } from "./bulk-post-row";
+import { BULK_CAPTION_TOO_LONG_MESSAGE } from "@/lib/bulkPosts";
 
 let root: Root;
 let doc: FocusDoc;
@@ -233,5 +234,20 @@ describe("Add many: a photo description longer than 1,000 characters", () => {
     expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Two", "Three"]);
     expect(container.textContent).not.toContain(ALT_TEXT_TOO_LONG_TEXT);
     expect(doc.activeElement).not.toBe(altField(1));
+  });
+});
+
+// R52 pages-a L3, publishing-flow L1: a caption over 10,000 characters is held
+// on its row before sending, so no route refusal names "baseCaption".
+describe("Add many: a caption longer than 10,000 characters", () => {
+  it("Schedule all: the other rows go; that row stays, with its sentence and its caption", async () => {
+    await mountWithThreePhotos();
+    const long = "a".repeat(10_001);
+    await run(() => props(rowInput(1, "TEXTAREA")).onChange({ target: { value: long } }));
+    await run(() => props(button("Schedule all")).onClick({ currentTarget: null }));
+    expect(sentBodies.map((b) => b.baseCaption)).toEqual(["One", "Three"]);
+    expect(container.textContent).toContain(BULK_CAPTION_TOO_LONG_MESSAGE);
+    expect(container.textContent).not.toContain("baseCaption");
+    expect(props(rowInput(1, "TEXTAREA")).value).toBe(long);
   });
 });
