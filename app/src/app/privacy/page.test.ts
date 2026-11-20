@@ -165,3 +165,23 @@ describe("Privacy: a LinkedIn page's name", () => {
     expect(privacyLastUpdated(false)).toBe("November 16, 2026");
   });
 });
+
+// R46 pages-a L3 (second half): the TikTok section names exactly the scopes
+// the connect route asks TikTok for, read from the route's own code so the
+// two can't drift.
+describe("Privacy: the TikTok permissions are the ones the app asks for", () => {
+  it("names each scope the start route requests, and no other", async () => {
+    const { readFileSync } = await import("node:fs");
+    const route = readFileSync(new URL("../api/auth/tiktok/start/route.ts", import.meta.url), "utf8");
+    const scopeLine = /searchParams\.set\("scope", "([^"]+)"\)/.exec(route);
+    expect(scopeLine).not.toBeNull();
+    const requested = scopeLine![1].split(",").sort();
+    expect(requested.length).toBeGreaterThan(0);
+
+    const page = text();
+    const section = page.slice(page.indexOf("3. TikTok"), page.indexOf("We do not read your TikTok videos"));
+    const named = [...new Set(section.match(/\b[a-z]+(?:\.[a-z]+)+(?=[\s/:])/g) ?? [])].sort();
+    expect(named).toEqual(requested);
+    for (const scope of requested) expect(section).toContain(`${scope}:`);
+  });
+});

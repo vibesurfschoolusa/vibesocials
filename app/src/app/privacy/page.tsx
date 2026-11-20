@@ -126,7 +126,7 @@ export default function PrivacyPage() {
             open ID, display name and avatar, shown so you know which account a post goes to.
           </li>
           <li>
-            <strong className="text-foreground">video.publish / video.upload:</strong> posting the
+            <strong className="text-foreground">video.publish:</strong> posting the
             videos you choose to your account, with the privacy, interaction and content-disclosure
             settings you select for each post. Before each post we ask TikTok for your account&apos;s
             current posting options (for example, which privacy levels you can use).
