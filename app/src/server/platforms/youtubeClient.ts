@@ -899,8 +899,9 @@ const REFUSAL_BODY_TIMEOUT_MS = 5_000;
 
 /**
  * The first `error.errors[].reason` of a Google error answer, or null. The
- * request's timer stops once the headers arrive, so the body read has its own
- * limit: the video is already live, and a stalled body must not hang the step.
+ * request's own limit covers the body (fetchWithinLimit, R48); this read keeps
+ * its shorter limit as well, because the video is already live and a refusal
+ * note must not spend the step's time.
  */
 export async function thumbnailRefusalReason(
   response: Response,

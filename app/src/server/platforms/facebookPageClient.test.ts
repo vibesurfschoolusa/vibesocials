@@ -33,7 +33,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/fetchWithTimeout", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/fetchWithTimeout")>()),
   // R48: the client's requests bound their bodies (fetchWithinLimit, covered in
-  // facebookPageClient.bodyStall.test.ts); here both reach the one mock.
+  // publishBodyStall.test.ts); here both reach the one mock.
   fetchWithTimeout: fetchMock,
   fetchWithinLimit: fetchMock,
 }));
