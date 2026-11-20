@@ -596,7 +596,7 @@ export async function fetchNewReviewUri(
  */
 export const GBP_REPLY_UNCONFIRMED_CODE = "GBP_REPLY_UNCONFIRMED";
 export const REPLY_MAY_BE_POSTED_MESSAGE =
-  "Google's answer didn't arrive, so your reply may have been posted. Press Post reply again: it replaces any reply already posted, so it won't post twice.";
+  "We couldn't tell whether Google saved your reply. It may already be posted; pressing Post reply again replaces it.";
 
 function replyUnconfirmedError(cause: unknown): Error & { code: typeof GBP_REPLY_UNCONFIRMED_CODE } {
   return Object.assign(new Error(REPLY_MAY_BE_POSTED_MESSAGE, { cause }), { code: GBP_REPLY_UNCONFIRMED_CODE } as const);

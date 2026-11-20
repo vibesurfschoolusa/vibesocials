@@ -94,6 +94,9 @@ describe("Reviews reads when Google's body stalls", () => {
 const REVIEW = `${LOCATION}/reviews/r1`;
 // A missing bound must be a quick red test, never a hung run.
 const STALL_TEST_TIMEOUT_MS = 5_000;
+// True for a lost answer and for a 5xx alike (R48 review low 1).
+const UNCERTAIN_REPLY_SENTENCE =
+  "We couldn't tell whether Google saved your reply. It may already be posted; pressing Post reply again replaces it.";
 
 async function after(ms: number, run: Promise<unknown>): Promise<unknown> {
   const settled = run.then(
@@ -112,7 +115,7 @@ describe("replyToReview when Google's answer stalls", () => {
 
     expect(error).toMatchObject({ code: GBP_REPLY_UNCONFIRMED_CODE, message: REPLY_MAY_BE_POSTED_MESSAGE });
     expect(REPLY_MAY_BE_POSTED_MESSAGE).toBe(
-      "Google's answer didn't arrive, so your reply may have been posted. Press Post reply again: it replaces any reply already posted, so it won't post twice.",
+      UNCERTAIN_REPLY_SENTENCE,
     );
   }, STALL_TEST_TIMEOUT_MS);
 
@@ -150,7 +153,7 @@ describe("replyToReview when Google's answer stalls", () => {
 
     const error = await replyToReview("tok", REVIEW, "Thanks").catch((e: unknown) => e);
 
-    expect(error).toMatchObject({ code: GBP_REPLY_UNCONFIRMED_CODE, message: REPLY_MAY_BE_POSTED_MESSAGE });
+    expect(error).toMatchObject({ code: GBP_REPLY_UNCONFIRMED_CODE, message: UNCERTAIN_REPLY_SENTENCE });
   });
 
   it.each([400, 403, 404, 429])("a %s is a certain refusal and keeps its own failure", async (status) => {
