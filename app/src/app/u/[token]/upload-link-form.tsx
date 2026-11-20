@@ -56,7 +56,9 @@ const UNKNOWN_FAILURE_MESSAGE =
  * came from an unknown step, so the file may have arrived.
  */
 export function failureOf(error: unknown): ClientFileFailure {
-  if (error instanceof ClientFileError) return { kind: error.kind, message: error.message };
+  if (error instanceof ClientFileError) {
+    return error.ourSide ? { kind: error.kind, message: error.message, ourSide: true } : { kind: error.kind, message: error.message };
+  }
   return { kind: "maybe", message: UNKNOWN_FAILURE_MESSAGE };
 }
 
@@ -145,7 +147,10 @@ function nothingSentText(failures: ClientFileFailure[]): string {
     const reason = one
       ? "The file didn't arrive. The reason is under it."
       : `None of the ${failures.length} files arrived. The reason is under each file.`;
-    return `${reason} Check your connection, then try again with the button below.`;
+    // R53 pages-a L1: the connection is named when any file got no answer at all.
+    return failures.every((failure) => failure.ourSide)
+      ? `${reason} Something went wrong on our side. Try again in a minute with the button below.`
+      : `${reason} Check your connection, then try again with the button below.`;
   }
   // A refusal is not the connection's fault: one file's reason is said here.
   // R49 client-journey L1: with several, each row keeps its own sentence, since

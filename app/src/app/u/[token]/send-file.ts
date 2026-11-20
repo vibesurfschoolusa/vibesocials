@@ -11,7 +11,7 @@ import {
   UPLOAD_LINK_IP_LIMIT_MESSAGE,
   UPLOAD_LINK_IP_LIMIT_REASON,
 } from "@/lib/uploadLink";
-import { fetchOrNoAnswer } from "@/lib/requestNoAnswer";
+import { fetchOrNoAnswer, isNoAnswer, isNoConnection } from "@/lib/requestNoAnswer";
 
 /**
  * One file through a client upload link, in the browser (2026-11-10): prepared
@@ -54,6 +54,11 @@ const browserDeps: SendFileDeps = {
 const NOT_PREPARED_MESSAGE =
   "We couldn't get this file ready to send. Save it as a JPEG photo or an MP4 video, then press Send more and choose it again.";
 const UPLOAD_FAILED_MESSAGE = "The upload didn't finish. Check your connection and try again.";
+/**
+ * R53 pages-a L1: a 5xx the page can't read (a database error's empty 500, a
+ * gateway's 502 or 504) came over a working connection, so it never names it.
+ */
+const UPLOAD_FAILED_OUR_SIDE_MESSAGE = "The upload didn't finish: something went wrong on our side. Try again in a minute.";
 /** R28 NN2: the file is in storage; only the answer to registering it was lost, so it may have arrived. */
 export const CLIENT_FILE_MAYBE_ARRIVED_MESSAGE = answerLostText("the file may have arrived", "If you send it again, it may arrive twice.");
 
@@ -75,20 +80,27 @@ export type ClientFileFailureKind = "network" | "refused" | "file" | "maybe";
 export interface ClientFileFailure {
   kind: ClientFileFailureKind;
   message: string;
+  /**
+   * R53 pages-a L1: a "network" failure whose answer came, unreadable, from
+   * our side, so the summary leaves the connection out. Set only when true.
+   */
+  ourSide?: true;
 }
 
-export class ClientFileError extends Error implements ClientFileFailure {
+export class ClientFileError extends Error {
   constructor(
     readonly kind: ClientFileFailureKind,
     message: string,
+    readonly ourSide = false,
   ) {
     super(message);
     this.name = "ClientFileError";
   }
 }
 
-type Lost = { kind: ClientFileFailureKind; message: string };
+type Lost = { kind: ClientFileFailureKind; message: string; ourSide?: boolean };
 const NOTHING_ARRIVED: Lost = { kind: "network", message: UPLOAD_FAILED_MESSAGE };
+const NOTHING_ARRIVED_OUR_SIDE: Lost = { kind: "network", message: UPLOAD_FAILED_OUR_SIDE_MESSAGE, ourSide: true };
 const MAYBE_ARRIVED: Lost = { kind: "maybe", message: CLIENT_FILE_MAYBE_ARRIVED_MESSAGE };
 
 /** Each limit the upload routes refuse with, by its sentence: its reason. */
@@ -116,7 +128,7 @@ export function uploadLimitText(routeSentence: string, waitSeconds: number | und
 /** A refused answer: the server's sentence; `fallback` when it gave none (a gateway error). */
 async function failureOf(response: Response, fallback: Lost): Promise<ClientFileError> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-  if (typeof body?.error !== "string" || !body.error) return new ClientFileError(fallback.kind, fallback.message);
+  if (typeof body?.error !== "string" || !body.error) return new ClientFileError(fallback.kind, fallback.message, fallback.ourSide);
   return new ClientFileError(
     "refused",
     response.status === 429 ? uploadLimitText(body.error, waitSecondsOf(body, response.headers.get("Retry-After"))) : body.error,
@@ -130,9 +142,13 @@ async function postJson(deps: SendFileDeps, url: string, body: unknown, lost: Lo
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  } catch {
+  } catch (error) {
     // fetch throws only when no answer came back (offline, dropped connection,
-    // or an unreadable 5xx once requestNoAnswer counts that as none).
+    // or an unreadable 5xx once requestNoAnswer counts that as none). Before
+    // the upload, an unreadable answer was our server's, not the connection.
+    if (lost === NOTHING_ARRIVED && isNoAnswer(error) && !isNoConnection(error)) {
+      throw new ClientFileError("network", UPLOAD_FAILED_OUR_SIDE_MESSAGE, true);
+    }
     throw new ClientFileError(lost.kind, lost.message);
   }
 }
@@ -168,7 +184,7 @@ export async function sendClientFile(
     },
   });
   if (!tokenResponse.ok) {
-    throw await failureOf(tokenResponse, NOTHING_ARRIVED);
+    throw await failureOf(tokenResponse, tokenResponse.status >= 500 ? NOTHING_ARRIVED_OUR_SIDE : NOTHING_ARRIVED);
   }
   const issued = (await tokenResponse.json().catch(() => null)) as
     | { clientToken?: unknown; pathname?: unknown }

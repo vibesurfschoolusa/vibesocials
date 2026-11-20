@@ -1,8 +1,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { CLIENT_FILE_MAYBE_ARRIVED_MESSAGE, ClientFileError, type ClientFileFailure } from "./send-file";
+import { NoAnswerError } from "@/lib/requestNoAnswer";
+import { UPLOAD_LINK_IP_LIMIT_MESSAGE, UPLOAD_LINK_IP_LIMIT_REASON } from "@/lib/uploadLink";
+
+import { CLIENT_FILE_MAYBE_ARRIVED_MESSAGE, ClientFileError, sendClientFile, type ClientFileFailure } from "./send-file";
 import {
   UploadLinkForm,
   UploadSummary,
@@ -359,5 +362,77 @@ describe("UploadLinkForm: Send more", () => {
     const body = source.slice(source.indexOf("function startOver("), source.indexOf('setPhase("picking");', source.indexOf("function startOver(")));
     expect(body).toContain("setFiles([]);");
     expect(body).toContain("setDropNote(null);");
+  });
+});
+
+// R53 pages-a L1: each row and the summary tell our server's failure from the
+// client's connection, from the failures sendClientFile really throws.
+describe("UploadSummary and the rows: our side or the connection", () => {
+  const CONNECTION_ROW = "The upload didn't finish. Check your connection and try again.";
+  const OUR_SIDE_ROW = "The upload didn't finish: something went wrong on our side. Try again in a minute.";
+  const CONNECTION_SUMMARY = "Check your connection, then try again with the button below.";
+  const OUR_SIDE_SUMMARY = "Something went wrong on our side. Try again in a minute with the button below.";
+
+  const html502 = () => new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } });
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const empty500 = () => new Response("", { status: 500 });
+
+  /** The failure a file's token request ends in, as the form keeps it. */
+  async function failed(answer: () => Promise<Response>): Promise<ClientFileFailure> {
+    const deps = { prepare: async (file: File) => file, put: vi.fn(), fetch: vi.fn(answer) };
+    const file = new File(["abc"], "a.jpg", { type: "image/jpeg" });
+    const error = await sendClientFile({ token: "T".repeat(43), file, senderName: "", note: "", onProgress: () => {} }, deps).catch(
+      (caught: unknown) => caught,
+    );
+    return failureOf(error);
+  }
+  const threw = () => Promise.reject(new NoAnswerError(new TypeError("Failed to fetch")));
+  const escaped = (text: string) => text.replace(/'/g, "&#x27;");
+
+  it("a fetch that threw: the connection, in the row and the summary", async () => {
+    const failure = await failed(threw);
+    expect(failure).toMatchObject({ kind: "network", message: CONNECTION_ROW });
+    expect(render(0, [failure])).toContain(`The file didn&#x27;t arrive. The reason is under it. ${CONNECTION_SUMMARY}`);
+  });
+
+  it("an HTML 502: our side, in the row and the summary", async () => {
+    const failure = await failed(async () => html502());
+    expect(failure).toMatchObject({ kind: "network", message: OUR_SIDE_ROW });
+    const html = render(0, [failure]);
+    expect(html).toContain(`The file didn&#x27;t arrive. The reason is under it. ${OUR_SIDE_SUMMARY}`);
+    expect(html).not.toContain("connection");
+  });
+
+  it("an empty 500: our side, in the row and the summary", async () => {
+    const failure = await failed(async () => empty500());
+    expect(failure).toMatchObject({ kind: "network", message: OUR_SIDE_ROW });
+    expect(render(0, [failure])).toContain(OUR_SIDE_SUMMARY);
+  });
+
+  it("a JSON 5xx with its own text: that text, in the row and the summary", async () => {
+    const failure = await failed(async () => json(503, { error: "Uploads are paused for a minute." }));
+    expect(failure).toEqual({ kind: "refused", message: "Uploads are paused for a minute." });
+    expect(render(0, [failure])).toContain("The file wasn&#x27;t sent. Uploads are paused for a minute.");
+  });
+
+  it("a 429: unchanged, in the row and the summary", async () => {
+    const failure = await failed(async () => json(429, { error: UPLOAD_LINK_IP_LIMIT_MESSAGE }));
+    const message = `${UPLOAD_LINK_IP_LIMIT_REASON} Try the files that didn't send again later.`;
+    expect(failure).toEqual({ kind: "refused", message });
+    expect(render(0, [failure])).toContain(`The file wasn&#x27;t sent. ${escaped(message)}`);
+  });
+
+  it("3 files that all failed on our side: our side", async () => {
+    const failures = [await failed(async () => html502()), await failed(async () => empty500()), await failed(async () => html502())];
+    const html = render(0, failures);
+    expect(html).toContain(`None of the 3 files arrived. The reason is under each file. ${OUR_SIDE_SUMMARY}`);
+    expect(html).not.toContain("connection");
+  });
+
+  it("a mix of no answer and our side: the connection wording", async () => {
+    const failures = [await failed(async () => html502()), await failed(threw), await failed(async () => empty500())];
+    expect(failures.map((failure) => failure.message)).toEqual([OUR_SIDE_ROW, CONNECTION_ROW, OUR_SIDE_ROW]);
+    expect(render(0, failures)).toContain(`None of the 3 files arrived. The reason is under each file. ${CONNECTION_SUMMARY}`);
   });
 });

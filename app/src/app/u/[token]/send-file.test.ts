@@ -140,6 +140,53 @@ describe("sendClientFile", () => {
       expect((await failure()).kind).toBe("network");
     });
 
+    // R53 pages-a L1: an unreadable 5xx came over a working connection, so
+    // the sentence says it went wrong on our side; still "network", so the
+    // retry button stays. Only no answer at all names the connection.
+    describe("whose side a failure before the upload was on", () => {
+      const CONNECTION = "The upload didn't finish. Check your connection and try again.";
+      const OUR_SIDE = "The upload didn't finish: something went wrong on our side. Try again in a minute.";
+
+      it("a fetch that threw: the connection", async () => {
+        deps.fetch.mockRejectedValueOnce(new NoAnswerError(new TypeError("Failed to fetch")));
+        const error = await failure();
+        expect(error).toMatchObject({ kind: "network", message: CONNECTION });
+        expect(error.ourSide).toBe(false);
+      });
+
+      it("an HTML 502: our side", async () => {
+        deps.fetch.mockResolvedValueOnce(new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } }));
+        expect(await failure()).toMatchObject({ kind: "network", message: OUR_SIDE, ourSide: true });
+      });
+
+      it("an HTML 502 as the browser's fetch reports it (requestNoAnswer): our side", async () => {
+        const response = new Response("<html>Bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } });
+        deps.fetch.mockRejectedValueOnce(new NoAnswerError(response, true));
+        expect(await failure()).toMatchObject({ kind: "network", message: OUR_SIDE, ourSide: true });
+      });
+
+      it("an empty 500: our side", async () => {
+        deps.fetch.mockResolvedValueOnce(new Response("", { status: 500 }));
+        expect(await failure()).toMatchObject({ kind: "network", message: OUR_SIDE, ourSide: true });
+      });
+
+      it("a JSON 5xx with its own text: that text, as before", async () => {
+        deps.fetch.mockResolvedValueOnce(jsonResponse(503, { error: "Uploads are paused for a minute." }));
+        const error = await failure();
+        expect(error).toMatchObject({ kind: "refused", message: "Uploads are paused for a minute." });
+        expect(error.ourSide).toBe(false);
+      });
+
+      it("a 429: unchanged", async () => {
+        deps.fetch.mockResolvedValueOnce(jsonResponse(429, { error: UPLOAD_LINK_IP_LIMIT_MESSAGE, retryAfterSeconds: 120 }));
+        expect(await failure()).toMatchObject({
+          kind: "refused",
+          message: `${UPLOAD_LINK_IP_LIMIT_REASON} Wait 2 minutes, then try the files that didn't send.`,
+          ourSide: false,
+        });
+      });
+    });
+
     // R29 client-journey L1: the file is in storage by then, so it may have arrived.
     it("maybe when registering got no answer: the file may have arrived", async () => {
       deps.fetch
