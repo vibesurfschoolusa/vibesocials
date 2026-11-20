@@ -382,6 +382,17 @@ describe("R52: the lost-file stop only when something else can be sent", () => {
     expect(offersWithout()).toBe(false);
     expect(calls).not.toContain("/api/posts");
   });
+
+  it("then text is typed: the next press gets the lost-file stop, now true", async () => {
+    await openWithItem("media-gone");
+    await submit();
+    await typeCaption("Surf lesson today");
+
+    await submit();
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(true);
+    expect(dialogShown()).toBe(false);
+    expect(calls).not.toContain("/api/posts");
+  });
 });
 
 // Lead review notes 1-2: the phone's bar names the refused file, and the line

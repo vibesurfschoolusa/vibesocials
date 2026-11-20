@@ -2564,8 +2564,10 @@ function CreatePostFormInner({
     if (first.countsAsTry) setTriedSend(true);
     // A file just went away: the first press stops here, with the notice (and
     // any error beside it) still showing, so the person sees it before a dialog.
-    if (fileLostShown) fileEvent({ type: "pressed" });
+    // Only this stop marks it seen: an untouched page's press leaves it fresh
+    // for the press after text is typed (R52 L2).
     if (first.stop === "file-lost") {
+      fileEvent({ type: "pressed" });
       // The press did nothing else, so say why.
       toast.error(FILE_LOST_PRESS_TOAST);
       return;
