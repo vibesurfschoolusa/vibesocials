@@ -1,12 +1,18 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { CONNECT_CALL_TIMEOUT_MS, fetchWithinLimit, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import {
+  CONNECT_CALL_TIMEOUT_MS,
+  DEFAULT_FETCH_TIMEOUT_MS,
+  FETCH_TIMEOUT_CODE,
+  fetchWithinLimit,
+} from "@/lib/fetchWithTimeout";
 
 import { classifyGoogleFailure, googleErrorFields, type GoogleFailureKind } from "./googleFailure";
 import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { readGoogleErrorBody } from "./platforms/rateLimited";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
+import { isNeverConnectedFetchError } from "./platforms/transientRetry";
 import { refreshGoogleToken } from "./platforms/googleTokens";
 
 /**
@@ -582,6 +588,27 @@ export async function fetchNewReviewUri(
 }
 
 /**
+ * R48 platform: the reply's PUT was sent and its answer was lost (a timeout, a
+ * connection that dropped after connecting, a 2xx body that never ended), so
+ * Google may have saved it. Not "try later": the sentence says it may be
+ * posted, and that posting again replaces it (a PUT), so the person knows what
+ * a second press does.
+ */
+export const GBP_REPLY_UNCONFIRMED_CODE = "GBP_REPLY_UNCONFIRMED";
+export const REPLY_MAY_BE_POSTED_MESSAGE =
+  "Google's answer didn't arrive, so your reply may have been posted. Press Post reply again: it replaces any reply already posted, so it won't post twice.";
+
+function replyUnconfirmedError(cause: unknown): Error & { code: typeof GBP_REPLY_UNCONFIRMED_CODE } {
+  return Object.assign(new Error(REPLY_MAY_BE_POSTED_MESSAGE, { cause }), { code: GBP_REPLY_UNCONFIRMED_CODE } as const);
+}
+
+/** A failure of the sent PUT that says nothing about whether Google saved it. */
+function replyMayHaveLanded(error: unknown): boolean {
+  if (error instanceof TypeError) return !isNeverConnectedFetchError(error);
+  return (error as { code?: unknown } | null)?.code === FETCH_TIMEOUT_CODE;
+}
+
+/**
  * Reply to a Google Business Profile review
  */
 export async function replyToReview(
@@ -594,29 +621,40 @@ export async function replyToReview(
   // Use Google My Business API v4 to reply to review
   // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/updateReply
   // reviewName should be the full path: "accounts/.../locations/.../reviews/..."
-  const response = await fetchWithTimeout(
-    `https://mybusiness.googleapis.com/v4/${reviewName}/reply`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+  // R48: the limit covers the answer's body too.
+  let response: Response;
+  try {
+    response = await fetchWithinLimit(
+      `https://mybusiness.googleapis.com/v4/${reviewName}/reply`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          comment,
+        }),
       },
-      body: JSON.stringify({
-        comment,
-      }),
-    }
-  );
+      DEFAULT_FETCH_TIMEOUT_MS
+    );
+  } catch (error) {
+    throw replyMayHaveLanded(error) ? replyUnconfirmedError(error) : error;
+  }
 
   await assertGoogleOk(response, {
     code: "GBP_REVIEWS_REPLY_FAILED",
     prefix: "Failed to post Google Business Profile review reply",
   });
 
-  const data = (await response.json()) as {
-    comment: string;
-    updateTime: string;
-  };
+  // Google answered 2xx, so the reply is saved: an answer we cannot read is
+  // unconfirmed, never a failure that reads "try later".
+  let data: { comment: string; updateTime: string };
+  try {
+    data = (await response.json()) as { comment: string; updateTime: string };
+  } catch (error) {
+    throw replyUnconfirmedError(error);
+  }
 
   console.log("[GBP Reviews] Reply posted successfully");
 

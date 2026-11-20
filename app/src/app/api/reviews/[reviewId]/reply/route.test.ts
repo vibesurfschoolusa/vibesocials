@@ -239,6 +239,22 @@ describe("POST /api/reviews/[reviewId]/reply", () => {
     await expect(response.json()).resolves.toEqual({ error: "Google Business Profile isn't answering for Vibe Socials right now. Try again later." });
   });
 
+  // R48 platform: the PUT was sent and its answer was lost, so the reply may be
+  // live. The sentence says so and that posting again replaces it; no final
+  // code, so the dialog stays open for Post reply.
+  it("a reply whose answer was lost says it may have been posted, and posting again replaces it", async () => {
+    const { GBP_REPLY_UNCONFIRMED_CODE, REPLY_MAY_BE_POSTED_MESSAGE } = await import("@/server/googleReviews");
+    replyToReviewMock.mockRejectedValue(
+      Object.assign(new Error(REPLY_MAY_BE_POSTED_MESSAGE), { code: GBP_REPLY_UNCONFIRMED_CODE }),
+    );
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: REPLY_MAY_BE_POSTED_MESSAGE });
+    expect(flagRejectedTokenMock).not.toHaveBeenCalled();
+  });
+
   // Coordinator (b): the review's location must be one this connection's Google account lists.
   it("an owner replies on any location the account lists, not only the one saved in Settings", async () => {
     getWorkspaceContextMock.mockResolvedValue(OWNER);

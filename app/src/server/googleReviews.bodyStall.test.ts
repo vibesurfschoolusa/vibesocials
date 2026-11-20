@@ -8,7 +8,14 @@ import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 import { abortSignalTimeoutOnFakeClock, bodyNeverEnds } from "@/lib/stallingFetch.testkit";
 
 import { googleFailureKind } from "./googleFailure";
-import { fetchAllReviews, fetchNewReviewUri, fetchReviews } from "./googleReviews";
+import {
+  GBP_REPLY_UNCONFIRMED_CODE,
+  REPLY_MAY_BE_POSTED_MESSAGE,
+  fetchAllReviews,
+  fetchNewReviewUri,
+  fetchReviews,
+  replyToReview,
+} from "./googleReviews";
 
 /**
  * R37 lead follow-up: the Reviews reads are bounded headers AND body at 15 s
@@ -78,5 +85,70 @@ describe("Reviews reads when Google's body stalls", () => {
 
     expect(truncated).toBe(false);
     expect(reviews.map((review) => review.reviewId)).toEqual(["r1"]);
+  });
+});
+
+// R48 platform (outside its angle): the reply's answer is bounded too. The PUT
+// was sent, so a stall after it may have saved the reply: it says so, and that
+// posting again replaces it, instead of "try again later".
+const REVIEW = `${LOCATION}/reviews/r1`;
+// A missing bound must be a quick red test, never a hung run.
+const STALL_TEST_TIMEOUT_MS = 5_000;
+
+async function after(ms: number, run: Promise<unknown>): Promise<unknown> {
+  const settled = run.then(
+    () => "resolved",
+    (error: unknown) => error,
+  );
+  await vi.advanceTimersByTimeAsync(ms);
+  return Promise.race([settled, Promise.resolve("still waiting")]);
+}
+
+describe("replyToReview when Google's answer stalls", () => {
+  it("a 200 whose body never ends is GBP_REPLY_UNCONFIRMED within 30 s, with the may-be-posted sentence", async () => {
+    vi.stubGlobal("fetch", vi.fn(stalled(200)));
+
+    const error = await after(30_000, replyToReview("tok", REVIEW, "Thanks"));
+
+    expect(error).toMatchObject({ code: GBP_REPLY_UNCONFIRMED_CODE, message: REPLY_MAY_BE_POSTED_MESSAGE });
+    expect(REPLY_MAY_BE_POSTED_MESSAGE).toBe(
+      "Google's answer didn't arrive, so your reply may have been posted. Press Post reply again: it replaces any reply already posted, so it won't post twice.",
+    );
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("headers that never come after the PUT was sent are unconfirmed too", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: string | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          }),
+      ),
+    );
+
+    const error = await after(30_000, replyToReview("tok", REVIEW, "Thanks"));
+
+    expect(error).toMatchObject({ code: GBP_REPLY_UNCONFIRMED_CODE });
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("a connection that was never made is unchanged: nothing was sent, try again later", async () => {
+    const neverConnected = new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(neverConnected)));
+
+    const error = await after(0, replyToReview("tok", REVIEW, "Thanks"));
+
+    expect(error).toBe(neverConnected);
+    expect(googleFailureKind(error)).toBe("tryLater");
+  }, STALL_TEST_TIMEOUT_MS);
+
+  it("a readable answer is unchanged", async () => {
+    vi.useRealTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ comment: "Thanks", updateTime: "2026-11-14T00:00:00Z" })));
+
+    await expect(replyToReview("tok", REVIEW, "Thanks")).resolves.toEqual({
+      comment: "Thanks",
+      updateTime: "2026-11-14T00:00:00Z",
+    });
   });
 });

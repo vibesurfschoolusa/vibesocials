@@ -9,7 +9,9 @@ import { refreshGoogleTokenEarly } from "@/server/platforms/googleTokens";
 import { REPLY_TOO_LONG_MESSAGE, replyTooLong } from "@/lib/reviewReplyLength";
 import { classifyGoogleFailure, flagIfTokenRejected, withGoogleTokenRetry } from "@/server/googleFailure";
 import {
+  GBP_REPLY_UNCONFIRMED_CODE,
   MEMBER_OTHER_LOCATION_MESSAGE,
+  REPLY_MAY_BE_POSTED_MESSAGE,
   REPLY_FINAL_CODES,
   replyErrorBody,
   reviewLocationName,
@@ -194,6 +196,12 @@ export async function POST(request: Request) {
       });
     });
   } catch (error: unknown) {
+    // R48 platform: the reply was sent and its answer lost, so it may be live.
+    // No final code: Post reply again is the step, and it replaces the reply.
+    if ((error as { code?: unknown } | null)?.code === GBP_REPLY_UNCONFIRMED_CODE) {
+      console.warn("[Google] reply sent, answer lost", { where: WHERE });
+      return NextResponse.json({ error: REPLY_MAY_BE_POSTED_MESSAGE }, { status: 500 });
+    }
     // R25 platform-clients L2: a token Google refused flags the row first.
     const settled = await flagIfTokenRejected(error, used);
     // Classified once, by kind (classifyGoogleFailure), then worded with its code.
