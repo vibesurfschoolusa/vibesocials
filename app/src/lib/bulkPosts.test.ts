@@ -621,7 +621,7 @@ describe("classifySendResponse", () => {
   it("is still a refusal on a 4xx whose body cannot be read", () => {
     expect(classifySendResponse({ status: 400, body: UNREADABLE_BODY }, "draft")).toEqual({
       outcome: "refused",
-      error: "Failed to create post.",
+      error: "We couldn't create the post. Nothing was saved or sent. Try again in a minute.",
     });
   });
 

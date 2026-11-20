@@ -7,6 +7,7 @@ import {
   composerSubmitOutcome,
   dispatchFailedText,
   otherHalfStartText,
+  POST_NOT_CREATED_MESSAGE,
   type ComposerSubmitOutcome,
 } from "./composerSubmitOutcome";
 import { WORKSPACE_CHANGED_MESSAGE } from "./workspaceChanged";
@@ -51,9 +52,9 @@ describe("composerSubmitOutcome", () => {
     ["a 503 without the dispatch code", { ok: false, mode: "now", body: { error: "Service unavailable" } }, error("Service unavailable")],
     ["a validation error", { ok: false, mode: "schedule", body: { error: "Caption is required." } }, error("Caption is required.")],
     ["`message` wins over `error`", { ok: false, mode: "now", body: { message: "Slow down.", error: "Too many" } }, error("Slow down.")],
-    ["an unreadable error body", { ok: false, mode: "now", body: null }, error("Failed to create post.")],
-    ["a non-string error field", { ok: false, mode: "now", body: { error: 42 } }, error("Failed to create post.")],
-    ["a non-object body", { ok: false, mode: "now", body: "oops" }, error("Failed to create post.")],
+    ["an unreadable error body", { ok: false, mode: "now", body: null }, error("We couldn't create the post. Nothing was saved or sent. Try again in a minute.")],
+    ["a non-string error field", { ok: false, mode: "now", body: { error: 42 } }, error("We couldn't create the post. Nothing was saved or sent. Try again in a minute.")],
+    ["a non-object body", { ok: false, mode: "now", body: "oops" }, error("We couldn't create the post. Nothing was saved or sent. Try again in a minute.")],
   ])("%s", (_name, input, expected) => {
     expect(composerSubmitOutcome(input)).toEqual(expected);
   });
@@ -309,5 +310,13 @@ describe("otherHalfStartText", () => {
     expect(otherHalfStartText("feed post", { resultsMarked: true, withoutResults: true })).toBe(
       "Its feed post was not sent: press Send again on its card in Activity.",
     );
+  });
+});
+
+// R51 pages-a L3: the route's 500 and this fallback are one sentence, and it
+// says that pressing again can't post twice.
+describe("POST_NOT_CREATED_MESSAGE", () => {
+  it("says nothing was saved, and what to do", () => {
+    expect(POST_NOT_CREATED_MESSAGE).toBe("We couldn't create the post. Nothing was saved or sent. Try again in a minute.");
   });
 });

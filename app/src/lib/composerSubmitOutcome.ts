@@ -135,7 +135,12 @@ function ownDispatchFailedText(body: unknown, button: DispatchFailedButton): str
   return button === "Approve" ? "Approved, but publishing couldn't start — retry it from Activity." : COMPOSER_DISPATCH_FAILED_MESSAGE;
 }
 
-const FALLBACK_ERROR = "Failed to create post.";
+/**
+ * R51 pages-a L3: POST /api/posts's 500 (its transaction rolled back, so no
+ * post exists) and this file's fallback for a refusal with no sentence of its
+ * own. Saying nothing was saved tells the person a second press can't post twice.
+ */
+export const POST_NOT_CREATED_MESSAGE = "We couldn't create the post. Nothing was saved or sent. Try again in a minute.";
 
 function field(body: unknown, key: string): unknown {
   return typeof body === "object" && body !== null ? (body as Record<string, unknown>)[key] : undefined;
@@ -223,5 +228,5 @@ export function composerSubmitOutcome(input: {
     };
   }
 
-  return { kind: "error", resetForm: false, toast: serverText ?? FALLBACK_ERROR };
+  return { kind: "error", resetForm: false, toast: serverText ?? POST_NOT_CREATED_MESSAGE };
 }

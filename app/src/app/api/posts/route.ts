@@ -10,6 +10,7 @@ import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import { parseCoverField, withStoredCoverFacts } from "@/lib/videoCoverField";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
+import { POST_NOT_CREATED_MESSAGE } from "@/lib/composerSubmitOutcome";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parsePostMediaFields, withStoredMediaFacts, type PostMediaFields } from "@/lib/mediaInput";
@@ -1711,7 +1712,7 @@ export async function POST(request: Request) {
       workspaceId: context.workspace.id,
     });
     return NextResponse.json(
-      { error: "Failed to create post" },
+      { error: POST_NOT_CREATED_MESSAGE },
       { status: 500 },
     );
   }

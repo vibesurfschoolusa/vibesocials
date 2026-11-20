@@ -117,6 +117,7 @@ import {
   COMPOSER_DISPATCH_FAILED_MESSAGE,
   COMPOSER_DISPATCH_UNMARKED_MESSAGE,
   composerSubmitOutcome,
+  POST_NOT_CREATED_MESSAGE,
 } from "@/lib/composerSubmitOutcome";
 import { POST } from "./route";
 
@@ -3839,7 +3840,7 @@ describe("POST /api/posts - after the create has committed", () => {
     const { response, body } = await send({ ...photo, scheduledFor: LATER.toISOString() });
 
     expect(response.status).toBe(500);
-    expect(body).toEqual({ error: "Failed to create post" });
+    expect(body).toEqual({ error: "We couldn't create the post. Nothing was saved or sent. Try again in a minute." });
     expect(notifyOwnersMock).not.toHaveBeenCalled();
     expect(postJobUpdateMock).not.toHaveBeenCalled();
   });
@@ -3849,8 +3850,11 @@ describe("POST /api/posts - after the create has committed", () => {
     const { response, body } = await send(photo);
 
     expect(response.status).toBe(500);
-    expect(body).toEqual({ error: "Failed to create post" });
+    expect(body).toEqual({ error: "We couldn't create the post. Nothing was saved or sent. Try again in a minute." });
     expect(inngestSendMock).not.toHaveBeenCalled();
     expect(composerSubmitOutcome({ ok: response.ok, body, mode: "now" }).kind).toBe("error");
+    // One sentence for the route's 500 and the client's own fallback.
+    expect(body).toEqual({ error: POST_NOT_CREATED_MESSAGE });
+    expect(composerSubmitOutcome({ ok: false, body: null, mode: "now" }).toast).toBe(POST_NOT_CREATED_MESSAGE);
   });
 });
