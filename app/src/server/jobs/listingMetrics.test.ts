@@ -34,7 +34,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
-vi.mock("@/lib/fetchWithTimeout", () => ({ fetchWithTimeout: fetchMock }));
+vi.mock("@/lib/fetchWithTimeout", () => ({ fetchWithTimeout: fetchMock, fetchWithinLimit: fetchMock }));
 vi.mock("@/server/googleReviews", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/googleReviews")>()),
   refreshAccessToken: refreshMock,

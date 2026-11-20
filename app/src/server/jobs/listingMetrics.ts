@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithinLimit } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import { locationIdOf, refreshAccessToken } from "@/server/googleReviews";
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
@@ -50,7 +50,7 @@ export const LISTING_METRICS_FIRST_DAYS = 90;
 export const LISTING_METRICS_MAX_DAYS_PER_REQUEST = 90;
 
 const PERFORMANCE_BASE = "https://businessprofileperformance.googleapis.com/v1";
-const LISTING_METRICS_TIMEOUT_MS = 15_000;
+export const LISTING_METRICS_TIMEOUT_MS = 15_000;
 const DAY_MS = 86_400_000;
 
 /** The metrics asked for, and the stored column each one adds to. */
@@ -235,7 +235,9 @@ export async function fetchListingDailyMetrics(
 
   const days: ListingDay[] = [];
   for (const piece of splitDayRange(range, maxDays)) {
-    const response = await fetchWithTimeout(
+    // R48 platform L2: the limit covers the body too, so a stalled answer is
+    // this listing's failure and the sync goes on to the next.
+    const response = await fetchWithinLimit(
       buildListingMetricsUrl(locationId, piece),
       { headers: { Authorization: `Bearer ${accessToken}` } },
       LISTING_METRICS_TIMEOUT_MS,
