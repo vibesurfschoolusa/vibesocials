@@ -207,13 +207,13 @@ describe("describeOAuthResult — real callback-route codes", () => {
       variant: "danger",
       platform: "facebook_page",
       message:
-        "Facebook didn't return a Page. Sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages, then click Connect again.",
+        "Facebook didn't return a Page. Click Connect again, sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages.",
     });
     expect(describeOAuthResult({ error: "instagram_no_instagram_account", success: null })).toMatchObject({
       variant: "danger",
       platform: "instagram",
       message:
-        "Facebook didn't return a Page with a linked Instagram account. Sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). If your Instagram professional account isn't linked to your Page yet, link it first, then click Connect again.",
+        "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first. Click Connect again, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
     });
     expect(describeOAuthResult({ error: "youtube_no_channel", success: null })).toMatchObject({
       variant: "danger",
@@ -230,23 +230,33 @@ describe("describeOAuthResult — real callback-route codes", () => {
       const message = describeOAuthResult({ error, success: null })!.message;
       expect(message, error).toMatch(/^Facebook didn't return a Page/);
       expect(message, error).toContain("when Facebook lists the Pages");
-      expect(message, error).toContain("Sign in with a Facebook account that manages");
+      // R53 fix review: the steps in the order they are done, the button first.
+      expect(message, error).toContain("Click Connect again, sign in with a Facebook account that manages");
       expect(message, error).not.toMatch(/doesn't manage|None of the Facebook Pages/);
     }
     expect(
       describeOAuthResult({ error: "instagram_no_instagram_account", success: null }, { shown: () => "reconnect" })!.message,
     ).toBe(
-      "Facebook didn't return a Page with a linked Instagram account. Sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). If your Instagram professional account isn't linked to your Page yet, link it first, then click Reconnect. Your existing connection is unchanged.",
+      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first. Click Reconnect, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). Your existing connection is unchanged.",
+    );
+  });
+
+  it("no Page on a working row: no button to name, the connection unchanged", () => {
+    expect(describeOAuthResult({ error: "facebook_page_no_pages", success: null }, { shown: () => "connected" })!.message).toBe(
+      "Facebook didn't return a Page. Your existing connection is unchanged.",
+    );
+    expect(describeOAuthResult({ error: "instagram_no_instagram_account", success: null }, { shown: () => "connected" })!.message).toBe(
+      `${"Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first."} Your existing connection is unchanged.`,
     );
   });
 
   it("the same two on the connect link page, with its press", () => {
     const link = (error: string) => describeConnectLinkResult(new URLSearchParams({ error }))?.message;
     expect(link("facebook_page_no_pages")).toBe(
-      "Facebook didn't return a Page. Sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages, then press Connect again.",
+      "Facebook didn't return a Page. Press Connect again, sign in with a Facebook account that manages your Facebook Page and tick it when Facebook lists the Pages.",
     );
     expect(link("instagram_no_instagram_account")).toBe(
-      "Facebook didn't return a Page with a linked Instagram account. Sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed). If your Instagram professional account isn't linked to your Page yet, link it first, then press Connect again.",
+      "Facebook didn't return a Page with a linked Instagram account. If your Instagram professional account isn't linked to your Page yet, link it first. Press Connect again, sign in with a Facebook account that manages the Page linked to your Instagram account and tick that Page when Facebook lists the Pages (and its Instagram account, if listed).",
     );
     // Other causes keep their words.
     expect(link("linkedin_no_admin_pages")).toBe(

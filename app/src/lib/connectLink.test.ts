@@ -228,12 +228,16 @@ describe("the sentence the visitor reads after a flow", () => {
     const withShown = (query: Record<string, string>, shown: ShownControl) =>
       describeConnectLinkResult(new URLSearchParams(query), { shown: () => shown })?.message ?? "";
     for (const error of ["linkedin_no_admin_pages", "pinterest_no_boards", "facebook_page_no_pages", "instagram_no_instagram_account"]) {
-      expect(withShown({ error }, "connect"), error).toMatch(/, then press Connect again\.$/);
+      // R53 fix review: Facebook's sign-in lists the Pages, so its steps start with the button.
+      const startsWithButton = error === "facebook_page_no_pages" || error === "instagram_no_instagram_account";
+      expect(withShown({ error }, "connect"), error).toMatch(startsWithButton ? /\. Press Connect again, sign in / : /, then press Connect again\.$/);
       const reconnect = withShown({ error }, "reconnect");
-      expect(reconnect, error).toMatch(/, then press Reconnect\. Your existing connection is unchanged\.$/);
+      expect(reconnect, error).toMatch(
+        startsWithButton ? /\. Press Reconnect, sign in .*\. Your existing connection is unchanged\.$/ : /, then press Reconnect\. Your existing connection is unchanged\.$/,
+      );
       expect(reconnect, error).not.toMatch(/\bConnect\b/);
       const connected = withShown({ error }, "connected");
-      expect(connected, error).not.toMatch(/\b(Re)?[Cc]onnect again\b|press (Re)?Connect/);
+      expect(connected, error).not.toMatch(/\b(Re)?[Cc]onnect again\b|[Pp]ress (Re)?Connect/);
     }
     expect(withShown({ linkedin_setup: "true" }, "reconnect")).toMatch(/press Reconnect\./);
     expect(describe_({ error: "pinterest_no_boards" })?.message).toBe(

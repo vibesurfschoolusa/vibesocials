@@ -139,11 +139,6 @@ const CAUSE_FIXES: Record<string, string> = {
   // (app/api/auth/linkedin/callback/route.ts).
   linkedin_no_admin_pages:
     "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page",
-  // R53 new-customer L2: Facebook returns only the Pages ticked in its list
-  // (facebook_page and instagram callbacks), so an empty answer may mean none
-  // was ticked. Said as what Facebook returned, with the tick step first.
-  facebook_page_no_pages: `Facebook didn't return a Page. ${capitalized(signInTo("facebook_page", "your Facebook Page"))}`,
-  instagram_no_instagram_account: `Facebook didn't return a Page with a linked Instagram account. ${capitalized(signInTo("instagram", "your Instagram account"))}. If your Instagram professional account isn't linked to your Page yet, link it first`,
   youtube_no_channel:
     "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel",
   // Pinterest: a Pin always goes on a board, and GET /boards listed none
@@ -153,11 +148,39 @@ const CAUSE_FIXES: Record<string, string> = {
     "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one)",
 };
 
+/**
+ * R53 new-customer L2: Facebook returns only the Pages ticked in its list
+ * (facebook_page and instagram callbacks), so an empty answer may mean none
+ * was ticked. Said as what Facebook returned (`known`), then any step done
+ * before (`first`), then the steps in the order they are done: the button,
+ * then the sign-in and the tick in Facebook's list (lib/differentAccount.ts).
+ */
+const SIGN_IN_CAUSES: Record<string, { known: string; first?: string; platform: Platform; name: string }> = {
+  facebook_page_no_pages: { known: "Facebook didn't return a Page.", platform: "facebook_page", name: "your Facebook Page" },
+  instagram_no_instagram_account: {
+    known: "Facebook didn't return a Page with a linked Instagram account.",
+    first: "If your Instagram professional account isn't linked to your Page yet, link it first.",
+    platform: "instagram",
+    name: "your Instagram account",
+  },
+};
+
+/** "Facebook didn't return a Page. Click Connect again, sign in … and tick it when Facebook lists the Pages." */
+function signInCauseMessage(code: string, shown: ShownControl, press: "click" | "press"): string {
+  const { known, first, platform, name } = SIGN_IN_CAUSES[code];
+  const button = signInButton(shown);
+  const parts = [known, ...(first ? [first] : [])];
+  if (button) parts.push(`${capitalized(pressAgain(press, button))}, ${signInTo(platform, name)}.`);
+  if (shown !== "connect") parts.push("Your existing connection is unchanged.");
+  return parts.join(" ");
+}
+
 /** Every code {@link causeMessage} words (the connect link page keeps its own list of them). */
-export const CAUSE_CODES: readonly string[] = Object.keys(CAUSE_FIXES);
+export const CAUSE_CODES: readonly string[] = [...Object.keys(CAUSE_FIXES), ...Object.keys(SIGN_IN_CAUSES)];
 
 /** The fix-first sentence for `code`, naming the button `shown` gives; null for any other code. */
 export function causeMessage(code: string, shown: ShownControl, press: "click" | "press"): string | null {
+  if (Object.hasOwn(SIGN_IN_CAUSES, code)) return signInCauseMessage(code, shown, press);
   return Object.hasOwn(CAUSE_FIXES, code) ? fixThenTryAgain(CAUSE_FIXES[code], shown, press) : null;
 }
 
