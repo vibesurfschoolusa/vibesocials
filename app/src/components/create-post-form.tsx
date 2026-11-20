@@ -687,6 +687,15 @@ export function scheduleWhenText(scheduledForLocal: string): string | null {
 export const FILE_LOST_PRESS_TOAST =
   "Nothing was sent: the photo or video could not be added. Add it again, or press the button again to post without it.";
 
+/**
+ * R50 pages-b L1: the press toast after a pick refused for the file itself (over
+ * 512 MB, empty). Adding it again can never work, so it gives the two steps
+ * that do; `buttonLabel` is the press's own button.
+ */
+export function fileRefusedPressToast(buttonLabel: string): string {
+  return `Nothing was sent: the file wasn't added. Choose another file, or press "${buttonLabel}" to post without it.`;
+}
+
 /** Shown, until a file is attached or dismissed, when a file went away by itself. */
 export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it again, or continue without one.";
 
@@ -697,8 +706,15 @@ export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it 
  */
 export type FileLostNotice = "none" | "fresh" | "seen";
 
+/**
+ * Why the file went away. "file-refused" is a single pick refused for the file
+ * itself: the form's line keeps the refusal's sentence, so no notice shows,
+ * but the first press still stops once (R50 pages-b L1).
+ */
+export type FileLostReason = "prepare-failed" | "file-refused" | "library-failed" | "photos-failed";
+
 export type FileLostEvent =
-  | { type: "lost"; reason: "prepare-failed" | "library-failed" | "photos-failed" }
+  | { type: "lost"; reason: FileLostReason }
   | { type: "attached" }
   | { type: "dismissed" }
   /** The form emptied by the person or after a post was saved: a new post starts clean. */
@@ -1184,6 +1200,12 @@ function CreatePostFormInner({
   // A file that went away by itself (FILE_LOST_MESSAGE): stays until a file is
   // attached or the person dismisses it (nextFileLostNotice).
   const [fileLost, setFileLost] = useState<FileLostNotice>("none");
+  const [fileLostReason, setFileLostReason] = useState<FileLostReason>("prepare-failed");
+  /** The file went away by itself: the notice (or the refused line) and its one-press stop. */
+  const loseFile = (reason: FileLostReason) => {
+    setFileLostReason(reason);
+    setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason }));
+  };
   // Scrolled into view whenever the success banner appears (effect below) so
   // a submit from further down the form doesn't leave the confirmation
   // off-screen.
@@ -1479,7 +1501,7 @@ function CreatePostFormInner({
           toast.error(
             data?.error ?? "Couldn't load that media item. Upload a new file instead.",
           );
-          setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "library-failed" }));
+          loseFile("library-failed");
           setUploadError((current) => uploadErrorAfterLibraryLoad(current, "failed"));
           setReuseLoading(false);
           return;
@@ -1502,7 +1524,7 @@ function CreatePostFormInner({
       } catch {
         if (cancelled) return;
         toast.error("Couldn't load that media item. Upload a new file instead.");
-        setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "library-failed" }));
+        loseFile("library-failed");
         setUploadError((current) => uploadErrorAfterLibraryLoad(current, "failed"));
         setReuseLoading(false);
       }
@@ -1806,8 +1828,9 @@ function CreatePostFormInner({
           // "Add it again". Any other failure may pass next time.
           if (prepareError instanceof PrepareFileError && prepareError.kind === "file") {
             setUploadError(prepareError.message);
+            loseFile("file-refused");
           } else {
-            setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "prepare-failed" }));
+            loseFile("prepare-failed");
           }
         }
         throw prepareError;
@@ -2094,7 +2117,7 @@ function CreatePostFormInner({
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
       setUploadError((err as Error).message || "Failed to prepare media for posting. Please try again.");
       if (photosFailureLosesFile({ attachedBefore: attachedCount })) {
-        setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "photos-failed" }));
+        loseFile("photos-failed");
       }
       if (replace) {
         setFileInputKey((key) => key + 1);
@@ -2524,7 +2547,7 @@ function CreatePostFormInner({
     if (fileLostShown) setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
     if (first.stop === "file-lost") {
       // The press did nothing else, so say why.
-      toast.error(FILE_LOST_PRESS_TOAST);
+      toast.error(fileLostReason === "file-refused" ? fileRefusedPressToast(pageView.buttonLabel) : FILE_LOST_PRESS_TOAST);
       return;
     }
     setUploadError(null);
@@ -3297,7 +3320,7 @@ function CreatePostFormInner({
             </div>
           ) : null}
 
-          {fileLostShown ? (
+          {fileLostShown && fileLostReason !== "file-refused" ? (
             <Alert variant="warning">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <p>{FILE_LOST_MESSAGE}</p>

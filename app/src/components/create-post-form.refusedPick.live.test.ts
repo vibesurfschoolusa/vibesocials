@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * R50 pages-b L1, on the mounted Create page: a single pick refused for the
  * file itself (over 512 MB, 0 bytes) can never be added, so the line that
- * stays is the refusal's own sentence and nothing says "Add it again". A pick
- * that failed for the network keeps the lost-file notice.
+ * stays is the refusal's own sentence and nothing says "Add it again". The
+ * first press still stops once, with a toast giving the two steps that work.
+ * A pick that failed for the network keeps the lost-file notice.
  */
 
 vi.mock("next/link", async () => {
@@ -41,7 +42,7 @@ vi.mock("@vercel/blob/client", () => ({
 
 import { makeDocument, type FakeNode } from "@/components/shell/fakeDom.testkit";
 import { ToastProvider } from "@/components/ui/toast";
-import { CreatePostForm, FILE_LOST_MESSAGE, FILE_LOST_PRESS_TOAST } from "./create-post-form";
+import { CreatePostForm, FILE_LOST_MESSAGE, FILE_LOST_PRESS_TOAST, fileRefusedPressToast } from "./create-post-form";
 
 let root: Root;
 let container: FakeNode;
@@ -100,6 +101,19 @@ function textOutsideToasts(node: FakeNode): string {
 const lineSays = (text: string) => textOutsideToasts(body).includes(text);
 const pick = (...files: File[]) => run(() => props(byId("post-media")).onChange({ target: { files } }));
 const typeCaption = (value: string) => run(() => props(byId("post-caption")).onChange({ target: { value } }));
+function button(text: string): FakeNode {
+  const hit = find(container, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === text);
+  if (!hit) throw new Error(`no button ${text}`);
+  return hit;
+}
+const chooseMode = (text: string) => run(() => props(button(text)).onClick());
+const dialogShown = () => find(body, (n) => n.attributes?.role === "dialog") !== null;
+function dialogButton(text: string): FakeNode {
+  const dialog = find(body, (n) => n.attributes?.role === "dialog");
+  const hit = dialog && find(dialog, (n) => n.nodeName === "BUTTON" && (n.textContent as string).trim() === text);
+  if (!hit) throw new Error(`no dialog button ${text}`);
+  return hit;
+}
 const submit = () => run(() => props(byId("create-post-form")).onSubmit({ preventDefault() {} }));
 
 function sized(name: string, type: string, size: number): File {
@@ -138,7 +152,14 @@ beforeEach(async () => {
   const createNode = made.doc.createElement as (tag: string) => FakeNode;
   Object.assign(made.doc, {
     createElement: (tag: string) =>
-      Object.assign(createNode(tag), { scrollIntoView() {}, focus() {}, querySelector: () => null, querySelectorAll: () => [] }),
+      Object.assign(createNode(tag), {
+        scrollIntoView() {},
+        focus() {},
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        // Schedule mode has a <select>; React reads its options when it mounts.
+        ...(tag === "select" ? { options: [] } : {}),
+      }),
   });
   vi.stubGlobal("HTMLElement", class {});
   vi.stubGlobal("Node", class {});
@@ -167,8 +188,56 @@ describe("R50 pages-b L1: a file that can never be added", () => {
     expect(lineSays(sentence)).toBe(true);
     expect(pageSays(FILE_LOST_MESSAGE)).toBe(false);
     expect(pageSays("Add it again")).toBe(false);
+  });
+
+  // The first press stops once in every mode, so the post can't go out without
+  // the file by accident; a text draft has no confirm dialog to catch it.
+  it.each([
+    ["Publish now", "Publish without a photo", true],
+    ["Schedule", "Schedule without a photo", true],
+    ["Save draft", "Save draft without a photo", false],
+  ])("%s: the first press stops with the two steps, the second goes through", async (mode, label, confirms) => {
+    await typeCaption("Surf lesson today");
+    await chooseMode(mode);
+    if (mode === "Schedule") await run(() => props(byId("post-schedule")).onChange({ target: { value: "2099-06-10T12:00" } }));
+    await pick(sized("long.mp4", "video/mp4", 600 * 1024 * 1024));
 
     await submit();
+    expect(pageSays(fileRefusedPressToast(label))).toBe(true);
+    expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(false);
+    expect(pageSays("Add it again")).toBe(false);
+    // The refusal's own line is still on screen after the stopped press.
+    expect(lineSays(TOO_LARGE)).toBe(true);
+    expect(dialogShown()).toBe(false);
+    expect(calls).not.toContain("/api/posts");
+
+    await submit();
+    if (confirms) {
+      expect(dialogShown()).toBe(true);
+      await run(() => props(dialogButton(label)).onClick());
+    }
+    expect(calls).toContain("/api/posts");
+  });
+
+  it("names the press's own button in the toast", () => {
+    expect(fileRefusedPressToast("Publish without a photo")).toBe(
+      "Nothing was sent: the file wasn't added. Choose another file, or press \"Publish without a photo\" to post without it.",
+    );
+  });
+
+  it("a network failure, then a 600 MB pick: nothing says Add it again", async () => {
+    await typeCaption("Surf lesson today");
+    prep.network = true;
+    await pick(new File(["a"], "beach.heic", { type: "image/heic" }));
+    expect(lineSays(FILE_LOST_MESSAGE)).toBe(true);
+
+    prep.network = false;
+    await pick(sized("long.mp4", "video/mp4", 600 * 1024 * 1024));
+    expect(lineSays(TOO_LARGE)).toBe(true);
+    expect(pageSays("Add it again")).toBe(false);
+
+    await submit();
+    expect(pageSays(fileRefusedPressToast("Publish without a photo"))).toBe(true);
     expect(pageSays(FILE_LOST_PRESS_TOAST)).toBe(false);
     expect(pageSays("Add it again")).toBe(false);
   });
