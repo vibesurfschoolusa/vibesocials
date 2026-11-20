@@ -94,6 +94,28 @@ describe("Team card: a lost answer may have gone through", () => {
     }
   });
 
+  // R51 client-journey L1: an OK answer that can't be read means the links were
+  // replaced, as on Connections, Queue and Media. It throws, so the panel never
+  // reads it as "nothing was on" and marks no link off; it reads them again.
+  it("Make new client links: an unreadable OK answer may have replaced them, and nothing is read as off", async () => {
+    for (const body of ["", "<html>ok</html>", "null", "[]"]) {
+      const announce = vi.fn();
+      const fetchImpl = vi.fn(async () => new Response(body, { status: 200 }));
+      await expect(requestClientLinksReplace(fetchImpl as unknown as typeof fetch, "ws-1", announce)).rejects.toThrow(
+        CLIENT_LINKS_MAYBE_REPLACED_MESSAGE,
+      );
+      expect(announce).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("Make new client links: a readable OK answer is returned as it is, and announced", async () => {
+    const announce = vi.fn();
+    const made = { uploadLink: { url: "u" }, reviewLink: null, connectLink: null };
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(made), { status: 200 }));
+    await expect(requestClientLinksReplace(fetchImpl as unknown as typeof fetch, "ws-1", announce)).resolves.toEqual(made);
+    expect(announce).toHaveBeenCalledTimes(1);
+  });
+
   it("Turn off: no answer or an unreadable 5xx may have turned them off", async () => {
     for (const fetchImpl of [
       vi.fn(async () => {
