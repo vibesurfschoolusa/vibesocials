@@ -105,7 +105,7 @@ describe("instrumentation register()", () => {
 // R43 (lead): an incoming path's link token (/c/, /u/, /v/, /join/ and their
 // API routes) never reaches Sentry, from the server or the browser.
 describe("link tokens in incoming paths", () => {
-  const TOKEN_URL = "https://vibesocials.wtf/c/LINK-SECRET-9";
+  const TOKEN_URL = "https://vibesocials.wtf/c/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -117,7 +117,7 @@ describe("link tokens in incoming paths", () => {
     beforeSendSpan?: (span: unknown) => unknown;
     beforeBreadcrumb: (breadcrumb: unknown) => unknown;
   };
-  const EVENT = { transaction: "GET /c/LINK-SECRET-9", request: { url: TOKEN_URL } };
+  const EVENT = { transaction: "GET /c/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", request: { url: TOKEN_URL } };
 
   it("the server init redacts incoming spans, the event's request URL and transaction, and breadcrumbs", async () => {
     initMock.mockReset();
@@ -128,7 +128,7 @@ describe("link tokens in incoming paths", () => {
 
     expect(JSON.stringify(hooks.beforeSend(EVENT))).not.toContain("LINK-SECRET");
     expect(JSON.stringify(hooks.beforeSendTransaction(EVENT))).not.toContain("LINK-SECRET");
-    const span = hooks.beforeSendSpan!({ op: "http.server", description: "GET /c/LINK-SECRET-9", data: { "url.full": TOKEN_URL } });
+    const span = hooks.beforeSendSpan!({ op: "http.server", description: "GET /c/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", data: { "url.full": TOKEN_URL } });
     expect(JSON.stringify(span)).not.toContain("LINK-SECRET");
     const crumb = hooks.beforeBreadcrumb({ category: "console", message: `served ${TOKEN_URL}` });
     expect(JSON.stringify(crumb)).not.toContain("LINK-SECRET");
@@ -144,18 +144,18 @@ describe("link tokens in incoming paths", () => {
 
     expect(JSON.stringify(hooks.beforeSend(EVENT))).not.toContain("LINK-SECRET");
     expect(JSON.stringify(hooks.beforeSendTransaction(EVENT))).not.toContain("LINK-SECRET");
-    const navigation = hooks.beforeBreadcrumb({ category: "navigation", data: { from: "/", to: "/v/LINK-SECRET-9" } });
+    const navigation = hooks.beforeBreadcrumb({ category: "navigation", data: { from: "/", to: "/v/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" } });
     expect(navigation).toEqual({ category: "navigation", data: { from: "/", to: "/v/[token]" } });
-    const fetchCrumb = hooks.beforeBreadcrumb({ category: "fetch", data: { url: "/api/review-link/LINK-SECRET-9/posts", method: "GET" } });
+    const fetchCrumb = hooks.beforeBreadcrumb({ category: "fetch", data: { url: "/api/review-link/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/posts", method: "GET" } });
     expect(JSON.stringify(fetchCrumb)).not.toContain("LINK-SECRET");
     // R43 review: the browser's fetch spans, and account links' #fragment.
     const span = hooks.beforeSendSpan!({
       op: "http.client",
-      description: "POST https://vibesocials.wtf/api/invites/LINK-SECRET-9/accept",
-      data: { url: "https://vibesocials.wtf/api/invites/LINK-SECRET-9/accept", "http.url": "https://vibesocials.wtf/api/invites/LINK-SECRET-9/accept" },
+      description: "POST https://vibesocials.wtf/api/invites/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept",
+      data: { url: "https://vibesocials.wtf/api/invites/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept", "http.url": "https://vibesocials.wtf/api/invites/LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept" },
     });
     expect(JSON.stringify(span)).not.toContain("LINK-SECRET");
-    const reset = hooks.beforeSend({ request: { url: "https://vibesocials.wtf/reset-password#LINK-SECRET-9" } });
+    const reset = hooks.beforeSend({ request: { url: "https://vibesocials.wtf/reset-password#LINK-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" } });
     expect(JSON.stringify(reset)).not.toContain("LINK-SECRET");
   });
 });

@@ -4,6 +4,7 @@ import {
   CUT_MARK,
   FILTERED_VALUE,
   LINK_TOKEN,
+  LINK_TOKEN_MIN_LENGTH,
   MAX_REDACTED_LENGTH,
   SENTRY_DATA_COLLECTION,
   redactBreadcrumb,
@@ -12,6 +13,7 @@ import {
   redactOutgoingSpan,
   redactOutgoingUrl,
 } from "./sentryRedaction";
+import { mainRedactString } from "./sentryRedaction.main.testkit";
 
 // 2026-11-02 scale audit (jobs B3): Sentry's automatic fetch / http instrumentation
 // records the URL of every outgoing request, query included, in breadcrumbs and span
@@ -20,11 +22,11 @@ import {
 // URL loses its path as well.
 
 const YOUTUBE_SESSION =
-  "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&upload_id=SESSION-SECRET-1";
+  "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&upload_id=SESSION-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxx";
 const TIKTOK_UPLOAD =
   "https://open-upload.tiktokapis.com/video/?upload_id=67890&upload_token=UPLOAD-TOKEN-1";
 const LINKEDIN_PART =
-  "https://www.linkedin.com/dms-uploads/sp/C5605AQ-SECRET/abc?ca=vector_ads&cn=uploads&m=AQJ&app=1&sync=0&v=beta&ut=PART-TOKEN-1";
+  "https://www.linkedin.com/dms-uploads/sp/C5605AQ-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxx/abc?ca=vector_ads&cn=uploads&m=AQJ&app=1&sync=0&v=beta&ut=PART-TOKEN-1";
 
 describe("redactOutgoingUrl", () => {
   it("drops the session id and the path of a YouTube resumable session URI", () => {
@@ -32,7 +34,7 @@ describe("redactOutgoingUrl", () => {
 
     expect(redacted).toBe("https://www.googleapis.com/[redacted]");
     expect(redacted).not.toContain("upload_id");
-    expect(redacted).not.toContain("SESSION-SECRET");
+    expect(redacted).not.toContain("SESSION-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 
   it("redacts the path of the YouTube upload endpoint too (every /upload/ path)", () => {
@@ -59,7 +61,7 @@ describe("redactOutgoingUrl", () => {
     const redacted = redactOutgoingUrl(LINKEDIN_PART);
 
     expect(redacted).toBe("https://www.linkedin.com/[redacted]");
-    expect(redacted).not.toContain("SECRET");
+    expect(redacted).not.toContain("SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(redacted).not.toContain("PART-TOKEN");
   });
 
@@ -69,7 +71,7 @@ describe("redactOutgoingUrl", () => {
 
   it("strips the query and the fragment of a normal API URL and keeps the path", () => {
     expect(
-      redactOutgoingUrl("https://graph.facebook.com/v19.0/1789/media?access_token=EAAB-SECRET&fields=status_code#top"),
+      redactOutgoingUrl("https://graph.facebook.com/v19.0/1789/media?access_token=EAAB-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&fields=status_code#top"),
     ).toBe("https://graph.facebook.com/v19.0/1789/media");
     expect(redactOutgoingUrl("https://api.x.com/2/tweets")).toBe("https://api.x.com/2/tweets");
   });
@@ -97,7 +99,7 @@ describe("redactBreadcrumb", () => {
       url,
       "http.method": "PUT",
       status_code: 308,
-      "http.query": "?uploadType=resumable&upload_id=SESSION-SECRET-1",
+      "http.query": "?uploadType=resumable&upload_id=SESSION-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxx",
       "http.fragment": "#frag",
       ...extra,
     },
@@ -105,7 +107,7 @@ describe("redactBreadcrumb", () => {
 
   it("strips the query and fragment from an http breadcrumb and keeps the rest of its data", () => {
     const out = redactBreadcrumb(
-      httpBreadcrumb("https://graph.facebook.com/v19.0/1789/media?access_token=EAAB-SECRET"),
+      httpBreadcrumb("https://graph.facebook.com/v19.0/1789/media?access_token=EAAB-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
     );
 
     expect(out.data).toEqual({
@@ -121,7 +123,7 @@ describe("redactBreadcrumb", () => {
 
     expect(out.data?.url).toBe("https://www.googleapis.com/[redacted]");
     expect(out.data).not.toHaveProperty("http.query");
-    expect(JSON.stringify(out)).not.toContain("SESSION-SECRET");
+    expect(JSON.stringify(out)).not.toContain("SESSION-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(JSON.stringify(out)).not.toContain("upload_id");
   });
 
@@ -147,7 +149,7 @@ describe("redactBreadcrumb", () => {
   it("redacts a URL in the message of an http breadcrumb", () => {
     const out = redactBreadcrumb({ category: "http", message: `PUT ${YOUTUBE_SESSION} -> 308` });
 
-    expect(out.message).not.toContain("SESSION-SECRET");
+    expect(out.message).not.toContain("SESSION-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.message).toContain("PUT ");
   });
 
@@ -189,9 +191,9 @@ describe("redactOutgoingSpan", () => {
       url: YOUTUBE_SESSION,
       "url.full": YOUTUBE_SESSION,
       "http.url": YOUTUBE_SESSION,
-      "http.target": "/upload/youtube/v3/videos?uploadType=resumable&upload_id=SESSION-SECRET-1",
-      "http.query": "?uploadType=resumable&upload_id=SESSION-SECRET-1",
-      "url.query": "uploadType=resumable&upload_id=SESSION-SECRET-1",
+      "http.target": "/upload/youtube/v3/videos?uploadType=resumable&upload_id=SESSION-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "http.query": "?uploadType=resumable&upload_id=SESSION-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "url.query": "uploadType=resumable&upload_id=SESSION-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxx",
       "http.fragment": "#frag",
       "url.fragment": "frag",
       "http.method": "PUT",
@@ -205,7 +207,7 @@ describe("redactOutgoingSpan", () => {
   it("redacts every URL attribute of a YouTube chunk span and deletes the query attributes", () => {
     const out = redactOutgoingSpan(span());
 
-    expect(JSON.stringify(out)).not.toContain("SESSION-SECRET");
+    expect(JSON.stringify(out)).not.toContain("SESSION-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(JSON.stringify(out)).not.toContain("upload_id");
     expect(out.data).toEqual({
       url: "https://www.googleapis.com/[redacted]",
@@ -221,7 +223,7 @@ describe("redactOutgoingSpan", () => {
   });
 
   it("strips the query of a normal API span and keeps its path", () => {
-    const url = "https://graph.facebook.com/v19.0/1789/media?access_token=EAAB-SECRET&fields=status_code";
+    const url = "https://graph.facebook.com/v19.0/1789/media?access_token=EAAB-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&fields=status_code";
     const out = redactOutgoingSpan(
       span(
         { description: "GET https://graph.facebook.com/v19.0/1789/media" },
@@ -229,13 +231,13 @@ describe("redactOutgoingSpan", () => {
           url,
           "url.full": url,
           "http.url": url,
-          "http.target": "/v19.0/1789/media?access_token=EAAB-SECRET&fields=status_code",
+          "http.target": "/v19.0/1789/media?access_token=EAAB-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&fields=status_code",
           "server.address": "graph.facebook.com",
         },
       ),
     );
 
-    expect(JSON.stringify(out)).not.toContain("EAAB-SECRET");
+    expect(JSON.stringify(out)).not.toContain("EAAB-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.data).toMatchObject({
       url: "https://graph.facebook.com/v19.0/1789/media",
       "url.full": "https://graph.facebook.com/v19.0/1789/media",
@@ -293,26 +295,26 @@ describe("redactOutgoingSpan", () => {
 // Sentry in its request, its span, its transaction and the browser's
 // breadcrumbs. Whoever holds the token can use the link.
 describe("redactLinkTokens", () => {
-  const SECRET = "Tok3n-SECRET_abc";
+  const SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx = "Tok3n-SECRET_abc_xxxxxxxxxxxxxxxxxxxxxxxxxx";
 
   it.each([
-    [`/c/${SECRET}`, "/c/[token]"],
-    [`/u/${SECRET}`, "/u/[token]"],
-    [`/v/${SECRET}`, "/v/[token]"],
-    [`/join/${SECRET}`, "/join/[token]"],
-    [`/api/connect-link/${SECRET}/start`, "/api/connect-link/[token]/start"],
-    [`/api/connect-link/${SECRET}/pending`, "/api/connect-link/[token]/pending"],
-    [`/api/review-link/${SECRET}`, "/api/review-link/[token]"],
-    [`/api/review-link/${SECRET}/posts/p1`, "/api/review-link/[token]/posts/p1"],
-    [`/api/upload-link/${SECRET}/upload`, "/api/upload-link/[token]/upload"],
-    [`/api/invites/${SECRET}/accept`, "/api/invites/[token]/accept"],
-    [`https://vibesocials.wtf/c/${SECRET}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=[Filtered]"],
-    [`GET /v/${SECRET}`, "GET /v/[token]"],
-    [`POST https://vibesocials.wtf/api/invites/${SECRET}/accept`, "POST https://vibesocials.wtf/api/invites/[token]/accept"],
-    [`/c/${SECRET}?x=1`, "/c/[token]?x=[Filtered]"],
+    [`/c/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`, "/c/[token]"],
+    [`/u/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`, "/u/[token]"],
+    [`/v/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`, "/v/[token]"],
+    [`/join/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`, "/join/[token]"],
+    [`/api/connect-link/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}/start`, "/api/connect-link/[token]/start"],
+    [`/api/connect-link/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}/pending`, "/api/connect-link/[token]/pending"],
+    [`/api/review-link/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`, "/api/review-link/[token]"],
+    [`/api/review-link/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}/posts/p1`, "/api/review-link/[token]/posts/p1"],
+    [`/api/upload-link/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}/upload`, "/api/upload-link/[token]/upload"],
+    [`/api/invites/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}/accept`, "/api/invites/[token]/accept"],
+    [`https://vibesocials.wtf/c/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}?step=2#top`, "https://vibesocials.wtf/c/[token]?step=[Filtered]"],
+    [`GET /v/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`, "GET /v/[token]"],
+    [`POST https://vibesocials.wtf/api/invites/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}/accept`, "POST https://vibesocials.wtf/api/invites/[token]/accept"],
+    [`/c/${SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}?x=1`, "/c/[token]?x=[Filtered]"],
   ])("%s becomes %s", (input, output) => {
     expect(redactLinkTokens(input)).toBe(output);
-    expect(redactLinkTokens(input)).not.toContain(SECRET);
+    expect(redactLinkTokens(input)).not.toContain(SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx);
   });
 
   it.each([
@@ -339,21 +341,21 @@ describe("redactForSentry: incoming spans lose the token, outgoing keep their ru
   it("an incoming request span", () => {
     const span = {
       op: "http.server",
-      description: "GET /c/SECRET-1",
-      data: { "url.full": "https://vibesocials.wtf/c/SECRET-1?a=1", "http.target": "/c/SECRET-1?a=1", "url.path": "/c/SECRET-1", "http.status_code": 200 },
+      description: "GET /c/SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      data: { "url.full": "https://vibesocials.wtf/c/SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?a=1", "http.target": "/c/SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?a=1", "url.path": "/c/SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "http.status_code": 200 },
     };
     const out = redactForSentry(span);
-    expect(JSON.stringify(out)).not.toContain("SECRET-1");
+    expect(JSON.stringify(out)).not.toContain("SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.description).toBe("GET /c/[token]");
     expect(out.data["http.status_code"]).toBe(200);
-    expect(span.description).toBe("GET /c/SECRET-1");
+    expect(span.description).toBe("GET /c/SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 
   it("an outgoing span is redacted exactly as redactOutgoingSpan does", () => {
     const span = {
       op: "http.client",
       description: "PUT https://www.googleapis.com/upload/youtube/v3/videos",
-      data: { "url.full": YOUTUBE_SESSION, "http.query": "?upload_id=SESSION-SECRET-1" },
+      data: { "url.full": YOUTUBE_SESSION, "http.query": "?upload_id=SESSION-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxx" },
     };
     expect(redactForSentry(span)).toEqual(redactOutgoingSpan(span));
   });
@@ -362,18 +364,18 @@ describe("redactForSentry: incoming spans lose the token, outgoing keep their ru
 describe("redactForSentry", () => {
   it("the request URL, the transaction and the trace context lose the token", () => {
     const event = {
-      transaction: "GET /join/SECRET-2",
-      request: { url: "https://vibesocials.wtf/join/SECRET-2", method: "GET" },
-      contexts: { trace: { op: "http.server", description: "GET /join/SECRET-2", data: { "url.full": "https://vibesocials.wtf/join/SECRET-2", n: 1 } } },
+      transaction: "GET /join/SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      request: { url: "https://vibesocials.wtf/join/SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", method: "GET" },
+      contexts: { trace: { op: "http.server", description: "GET /join/SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", data: { "url.full": "https://vibesocials.wtf/join/SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", n: 1 } } },
       message: "kept",
     };
     const out = redactForSentry(event);
-    expect(JSON.stringify(out)).not.toContain("SECRET-2");
+    expect(JSON.stringify(out)).not.toContain("SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.transaction).toBe("GET /join/[token]");
     expect(out.request?.url).toBe("https://vibesocials.wtf/join/[token]");
     expect(out.request?.method).toBe("GET");
     expect(out.message).toBe("kept");
-    expect(event.transaction).toBe("GET /join/SECRET-2");
+    expect(event.transaction).toBe("GET /join/SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 
   it("an event with none of them is returned as it is", () => {
@@ -384,17 +386,17 @@ describe("redactForSentry", () => {
 
 describe("redactForSentry", () => {
   it("a navigation breadcrumb's from and to", () => {
-    const out = redactForSentry({ category: "navigation", data: { from: "/", to: "/u/SECRET-3" } });
+    const out = redactForSentry({ category: "navigation", data: { from: "/", to: "/u/SECRET-3_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" } });
     expect(out.data).toEqual({ from: "/", to: "/u/[token]" });
   });
 
   it("a fetch breadcrumb's relative URL and message", () => {
     const out = redactForSentry({
       category: "fetch",
-      message: "POST /api/upload-link/SECRET-3/upload",
-      data: { url: "/api/upload-link/SECRET-3/upload", method: "POST", status_code: 200 },
+      message: "POST /api/upload-link/SECRET-3_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/upload",
+      data: { url: "/api/upload-link/SECRET-3_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/upload", method: "POST", status_code: 200 },
     });
-    expect(JSON.stringify(out)).not.toContain("SECRET-3");
+    expect(JSON.stringify(out)).not.toContain("SECRET-3_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.data).toEqual({ url: "/api/upload-link/[token]/upload", method: "POST", status_code: 200 });
   });
 });
@@ -404,29 +406,29 @@ describe("redactForSentry", () => {
 // link path encoded in its callbackUrl. Fragments are never needed in Sentry.
 describe("redactLinkTokens: fragments and query values", () => {
   it.each([
-    ["https://vibesocials.wtf/reset-password#RESET-SECRET", "https://vibesocials.wtf/reset-password"],
-    ["https://vibesocials.wtf/verify-email/undo#UNDO-SECRET", "https://vibesocials.wtf/verify-email/undo"],
-    ["/verify-email/new-address#NEW-SECRET", "/verify-email/new-address"],
-    ["/verify-email?x=1#VERIFY-SECRET", "/verify-email?x=[Filtered]"],
-    ["navigated to /reset-password#RESET-SECRET now", "navigated to /reset-password now"],
+    ["https://vibesocials.wtf/reset-password#RESET-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "https://vibesocials.wtf/reset-password"],
+    ["https://vibesocials.wtf/verify-email/undo#UNDO-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "https://vibesocials.wtf/verify-email/undo"],
+    ["/verify-email/new-address#NEW-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/verify-email/new-address"],
+    ["/verify-email?x=1#VERIFY-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/verify-email?x=[Filtered]"],
+    ["navigated to /reset-password#RESET-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx now", "navigated to /reset-password now"],
   ])("%s loses its fragment", (input, output) => {
     expect(redactLinkTokens(input)).toBe(output);
   });
 
   it.each([
-    ["/login?callbackUrl=%2Fjoin%2FJOIN-SECRET", "/login?callbackUrl=[Filtered]"],
+    ["/login?callbackUrl=%2Fjoin%2FJOIN-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/login?callbackUrl=[Filtered]"],
     [
-      "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET&x=1",
+      "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&x=1",
       "https://vibesocials.wtf/login?callbackUrl=[Filtered]&x=[Filtered]",
     ],
-    ["/login?callbackUrl=/c/CLIENT-SECRET", "/login?callbackUrl=[Filtered]"],
+    ["/login?callbackUrl=/c/CLIENT-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "/login?callbackUrl=[Filtered]"],
     [
-      "/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2FINVITE-SECRET%2Faccept",
+      "/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2FINVITE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx%2Faccept",
       "/login?callbackUrl=[Filtered]",
     ],
   ])("%s keeps no token in its query", (input, output) => {
     expect(redactLinkTokens(input)).toBe(output);
-    expect(redactLinkTokens(input)).not.toMatch(/SECRET/);
+    expect(redactLinkTokens(input)).not.toMatch(/SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/);
   });
 
   // R45 security L1: every query value is filtered, with or without a token in it.
@@ -445,15 +447,15 @@ describe("redactLinkTokens: fragments and query values", () => {
 
   it("an event's request URL and query string lose the fragment and the callbackUrl token", () => {
     const out = redactForSentry({
-      request: { url: "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET#FRAG-SECRET", query_string: "callbackUrl=%2Fjoin%2FJOIN-SECRET" },
+      request: { url: "https://vibesocials.wtf/login?callbackUrl=%2Fjoin%2FJOIN-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx#FRAG-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", query_string: "callbackUrl=%2Fjoin%2FJOIN-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
     });
-    expect(JSON.stringify(out)).not.toContain("SECRET");
+    expect(JSON.stringify(out)).not.toContain("SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.request?.url).toBe("https://vibesocials.wtf/login?callbackUrl=[Filtered]");
     expect(out.request?.query_string).toBe("callbackUrl=[Filtered]");
   });
 
   it("a navigation breadcrumb to a #token page loses the fragment", () => {
-    const out = redactForSentry({ category: "navigation", data: { from: "/login", to: "/reset-password#RESET-SECRET" } });
+    const out = redactForSentry({ category: "navigation", data: { from: "/login", to: "/reset-password#RESET-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" } });
     expect(out.data).toEqual({ from: "/login", to: "/reset-password" });
   });
 
@@ -461,7 +463,7 @@ describe("redactLinkTokens: fragments and query values", () => {
     const out = redactForSentry({
       op: "pageload",
       description: "/reset-password",
-      data: { "url.fragment": "RESET-SECRET", "http.fragment": "#RESET-SECRET", "url.full": "https://vibesocials.wtf/reset-password#RESET-SECRET" },
+      data: { "url.fragment": "RESET-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "http.fragment": "#RESET-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "url.full": "https://vibesocials.wtf/reset-password#RESET-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
     });
     expect(out.data).toEqual({ "url.full": "https://vibesocials.wtf/reset-password" });
   });
@@ -472,14 +474,14 @@ describe("redactForSentry: the browser's fetch spans", () => {
   it("a fetch span for /api/invites/<token> keeps no token in its description, url or http.url", () => {
     const out = redactForSentry({
       op: "http.client",
-      description: "POST https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
+      description: "POST https://vibesocials.wtf/api/invites/INVITE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept",
       data: {
-        url: "https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
-        "http.url": "https://vibesocials.wtf/api/invites/INVITE-SECRET/accept",
+        url: "https://vibesocials.wtf/api/invites/INVITE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept",
+        "http.url": "https://vibesocials.wtf/api/invites/INVITE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept",
         "http.method": "POST",
       },
     });
-    expect(JSON.stringify(out)).not.toContain("INVITE-SECRET");
+    expect(JSON.stringify(out)).not.toContain("INVITE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out.description).toBe("POST https://vibesocials.wtf/api/invites/[token]/accept");
     expect(out.data["http.method"]).toBe("POST");
   });
@@ -487,17 +489,17 @@ describe("redactForSentry: the browser's fetch spans", () => {
   it("the server's span rule keeps the outgoing rules and redacts tokens too", () => {
     const out = redactForSentry({
       op: "http.client",
-      description: "GET https://vibesocials.wtf/api/review-link/REVIEW-SECRET",
-      data: { "url.full": "https://vibesocials.wtf/api/review-link/REVIEW-SECRET?x=1" },
+      description: "GET https://vibesocials.wtf/api/review-link/REVIEW-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      data: { "url.full": "https://vibesocials.wtf/api/review-link/REVIEW-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx?x=1" },
     });
     expect(out.data["url.full"]).toBe("https://vibesocials.wtf/api/review-link/[token]");
   });
 
   it("a transaction event's spans are redacted too", () => {
     const out = redactForSentry({
-      spans: [{ op: "http.client", description: "GET /api/upload-link/UPLOAD-SECRET/media", data: { url: "/api/upload-link/UPLOAD-SECRET/media" } }],
+      spans: [{ op: "http.client", description: "GET /api/upload-link/UPLOAD-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/media", data: { url: "/api/upload-link/UPLOAD-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/media" } }],
     });
-    expect(JSON.stringify(out)).not.toContain("UPLOAD-SECRET");
+    expect(JSON.stringify(out)).not.toContain("UPLOAD-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 });
 
@@ -505,41 +507,41 @@ describe("redactForSentry: the browser's fetch spans", () => {
 // headers are never collected (SENTRY_DATA_COLLECTION), and as a second guard
 // redactForSentry drops them and walks every string in what it is given.
 describe("redactForSentry: nothing private in the whole event", () => {
-  const SESSION_COOKIE = "__Secure-next-auth.session-token=JWT-SECRET-1; theme=dark";
+  const SESSION_COOKIE = "__Secure-next-auth.session-token=JWT-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; theme=dark";
   // What Next sends on /c/<token>: the dynamic segment's value inside URL-encoded JSON.
   const ROUTER_STATE = encodeURIComponent(
-    JSON.stringify(["", { children: ["c", { children: [["token", "STATE-SECRET-1", "d"], { children: ["__PAGE__", {}] }] }] }, null, null, true]),
+    JSON.stringify(["", { children: ["c", { children: [["token", "STATE-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxx", "d"], { children: ["__PAGE__", {}] }] }] }, null, null, true]),
   );
 
   const event = {
-    transaction: "GET /c/PATH-SECRET-1",
+    transaction: "GET /c/PATH-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     request: {
-      url: "https://vibesocials.wtf/api/review-link/PATH-SECRET-2",
+      url: "https://vibesocials.wtf/api/review-link/PATH-SECRET-2_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       method: "GET",
-      cookies: { "__Secure-next-auth.session-token": "JWT-SECRET-1" },
+      cookies: { "__Secure-next-auth.session-token": "JWT-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
       headers: {
         cookie: SESSION_COOKIE,
         "User-Agent": "Mozilla/5.0 test",
-        Referer: "https://vibesocials.wtf/join/PATH-SECRET-3",
-        "next-url": "/u/PATH-SECRET-4",
+        Referer: "https://vibesocials.wtf/join/PATH-SECRET-3_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "next-url": "/u/PATH-SECRET-4_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "next-router-state-tree": ROUTER_STATE,
       },
     },
     contexts: {
-      nextjs: { request_path: "/api/review-link/PATH-SECRET-5?x=1", router_kind: "App Router" },
-      trace: { op: "http.server", data: { "http.request.header.cookie.session": "JWT-SECRET-1", "http.request.header.user_agent": "Mozilla/5.0 test" } },
+      nextjs: { request_path: "/api/review-link/PATH-SECRET-5_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx?x=1", router_kind: "App Router" },
+      trace: { op: "http.server", data: { "http.request.header.cookie.session": "JWT-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "http.request.header.user_agent": "Mozilla/5.0 test" } },
     },
-    tags: { path: "/v/PATH-SECRET-6", runtime: "nodejs" },
-    extra: { link: "%2Fapi%2Fupload-link%2FPATH-SECRET-7%2Fupload", nested: { deeper: [{ url: "/api/invites/PATH-SECRET-8/accept" }] } },
-    breadcrumbs: [{ category: "navigation", data: { from: "/", to: "/join/PATH-SECRET-9" } }],
-    spans: [{ op: "http.server", description: "GET /c/PATH-SECRET-10", data: { "http.request.header.referer": "https://vibesocials.wtf/c/PATH-SECRET-10" } }],
-    exception: { values: [{ type: "Error", value: "lookup failed for /api/connect-link/PATH-SECRET-11/start" }] },
-    message: "callback /login?callbackUrl=%2Fjoin%2FPATH-SECRET-12",
+    tags: { path: "/v/PATH-SECRET-6_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", runtime: "nodejs" },
+    extra: { link: "%2Fapi%2Fupload-link%2FPATH-SECRET-7_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx%2Fupload", nested: { deeper: [{ url: "/api/invites/PATH-SECRET-8_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/accept" }] } },
+    breadcrumbs: [{ category: "navigation", data: { from: "/", to: "/join/PATH-SECRET-9_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" } }],
+    spans: [{ op: "http.server", description: "GET /c/PATH-SECRET-10_xxxxxxxxxxxxxxxxxxxxxxxxxxxx", data: { "http.request.header.referer": "https://vibesocials.wtf/c/PATH-SECRET-10_xxxxxxxxxxxxxxxxxxxxxxxxxxxx" } }],
+    exception: { values: [{ type: "Error", value: "lookup failed for /api/connect-link/PATH-SECRET-11_xxxxxxxxxxxxxxxxxxxxxxxxxxxx/start" }] },
+    message: "callback /login?callbackUrl=%2Fjoin%2FPATH-SECRET-12_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   };
 
   it("keeps no token and no cookie anywhere", () => {
     const text = JSON.stringify(redactForSentry(event));
-    expect(text).not.toMatch(/SECRET/);
+    expect(text).not.toMatch(/SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/);
     expect(text).not.toMatch(/session-token/);
   });
 
@@ -555,15 +557,16 @@ describe("redactForSentry: nothing private in the whole event", () => {
     const out = redactForSentry(event);
     expect(out.contexts.nextjs).toEqual({ request_path: "/api/review-link/[token]?x=[Filtered]", router_kind: "App Router" });
     expect(out.tags).toEqual({ path: "/v/[token]", runtime: "nodejs" });
-    expect(out.extra.link).toBe("/api/upload-link/[token]/upload");
+    // R46 last look: an encoded link path is redacted where it stands, still encoded.
+    expect(out.extra.link).toBe("%2Fapi%2Fupload-link%2F[token]%2Fupload");
     expect(out.extra.nested.deeper[0].url).toBe("/api/invites/[token]/accept");
     expect(out.exception.values[0].value).toBe("lookup failed for /api/connect-link/[token]/start");
     expect(out.request.method).toBe("GET");
   });
 
   it("a router-state tree, decoded, loses the token segment's value", () => {
-    expect(redactLinkTokens(decodeURIComponent(ROUTER_STATE))).not.toContain("STATE-SECRET-1");
-    expect(JSON.stringify(redactForSentry({ extra: { tree: ROUTER_STATE } }))).not.toContain("STATE-SECRET-1");
+    expect(redactLinkTokens(decodeURIComponent(ROUTER_STATE))).not.toContain("STATE-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    expect(JSON.stringify(redactForSentry({ extra: { tree: ROUTER_STATE } }))).not.toContain("STATE-SECRET-1_xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 
   it("strings without a token are unchanged, and the event given is not modified", () => {
@@ -586,14 +589,14 @@ describe("redactForSentry: nothing private in the whole event", () => {
   });
 
   it("past its depth bound a value is dropped, never passed through", () => {
-    let deep: Record<string, unknown> = { url: "/c/DEEP-SECRET" };
+    let deep: Record<string, unknown> = { url: "/c/DEEP-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" };
     for (let i = 0; i < 40; i += 1) deep = { next: deep };
-    expect(JSON.stringify(redactForSentry({ extra: deep }))).not.toContain("DEEP-SECRET");
+    expect(JSON.stringify(redactForSentry({ extra: deep }))).not.toContain("DEEP-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   });
 
   // R44 lead review: beforeBreadcrumb gets raw console arguments, which can be cyclic.
   it("a cyclic object with two back-references is walked quickly and gives [Circular]", () => {
-    const node: Record<string, unknown> = { url: "/c/CYCLE-SECRET" };
+    const node: Record<string, unknown> = { url: "/c/CYCLE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" };
     node.prev = node;
     node.next = node;
     const started = Date.now();
@@ -603,7 +606,7 @@ describe("redactForSentry: nothing private in the whole event", () => {
   });
 
   it("the same object twice, side by side, is not circular", () => {
-    const shared = { a: "/v/SHARED-SECRET" };
+    const shared = { a: "/v/SHARED-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" };
     expect(redactForSentry({ extra: { one: shared, two: shared } }).extra).toEqual({
       one: { a: "/v/[token]" },
       two: { a: "/v/[token]" },
@@ -611,7 +614,7 @@ describe("redactForSentry: nothing private in the whole event", () => {
   });
 
   it("a browser fetch breadcrumb to a relative path keeps the path, token redacted", () => {
-    const out = redactForSentry({ category: "fetch", data: { url: "/api/review-link/REL-SECRET/posts?page=2", method: "GET" } });
+    const out = redactForSentry({ category: "fetch", data: { url: "/api/review-link/REL-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/posts?page=2", method: "GET" } });
     expect(out.data).toEqual({ url: "/api/review-link/[token]/posts?page=[Filtered]", method: "GET" });
   });
 });
@@ -639,19 +642,19 @@ describe("redactForSentry: every query value is filtered, every name kept", () =
   it.each([
     ["/admin?q=person%40example.com", "/admin?q=[Filtered]"],
     [
-      "/api/instagram-photo?src=https%3A%2F%2Fblob.example%2Fp.jpg&exp=1763380000&sig=SIG-SECRET",
+      "/api/instagram-photo?src=https%3A%2F%2Fblob.example%2Fp.jpg&exp=1763380000&sig=SIG-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "/api/instagram-photo?src=[Filtered]&exp=[Filtered]&sig=[Filtered]",
     ],
     [
-      "/api/webhooks/meta?hub.mode=subscribe&hub.verify_token=VERIFY-SECRET&hub.challenge=123",
+      "/api/webhooks/meta?hub.mode=subscribe&hub.verify_token=VERIFY-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx&hub.challenge=123",
       "/api/webhooks/meta?hub.mode=[Filtered]&hub.verify_token=[Filtered]&hub.challenge=[Filtered]",
     ],
     [
-      "https://vibesocials.wtf/api/oauth/x/callback?oauth_token=TOKEN-SECRET&oauth_verifier=VERIFIER-SECRET",
+      "https://vibesocials.wtf/api/oauth/x/callback?oauth_token=TOKEN-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&oauth_verifier=VERIFIER-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "https://vibesocials.wtf/api/oauth/x/callback?oauth_token=[Filtered]&oauth_verifier=[Filtered]",
     ],
     [
-      "GET /api/oauth/google/callback?code=CODE-SECRET&state=STATE-SECRET",
+      "GET /api/oauth/google/callback?code=CODE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&state=STATE-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "GET /api/oauth/google/callback?code=[Filtered]&state=[Filtered]",
     ],
   ])("%s becomes %s", (input, output) => {
@@ -662,7 +665,7 @@ describe("redactForSentry: every query value is filtered, every name kept", () =
     });
     expect(out.contexts.trace.data["http.target"]).toBe(output);
     expect(out.breadcrumbs[0].data.to).toBe(output);
-    expect(JSON.stringify(out)).not.toMatch(/SECRET|person|1763380000/);
+    expect(JSON.stringify(out)).not.toMatch(/SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx|person|1763380000/);
   });
 
   it("a bare query string keeps its names only", () => {
@@ -696,7 +699,7 @@ describe("redactForSentry: an encoded space never ends a filtered value", () => 
   });
 
   it("a token hidden by encoding is still redacted", () => {
-    expect(redactForSentry({ message: "%2Fc%2FHIDDEN-SECRET" }).message).toBe("/c/[token]");
+    expect(redactForSentry({ message: "%2Fc%2FHIDDEN-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }).message).toBe("%2Fc%2F[token]");
   });
 });
 
@@ -729,17 +732,17 @@ describe("redaction time on long crafted text", () => {
   });
 
   it("a long string is cut, says so, and keeps nothing a token could hide in", () => {
-    const text = `${"a".repeat(5_000)} /c/LONG-SECRET?code=LONG-CODE`;
+    const text = `${"a".repeat(5_000)} /c/LONG-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?code=LONG-CODE`;
     const out = redactForSentry({ message: text }).message;
     expect(out.length).toBeLessThan(text.length);
     expect(out.endsWith(CUT_MARK)).toBe(true);
-    expect(out).not.toContain("LONG-SECRET");
+    expect(out).not.toContain("LONG-SECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out).not.toContain("LONG-CODE");
   });
 
   it("a cut inside a link token or a query value still hides what is left of it", () => {
     // The cut falls a few characters into each secret.
-    for (const tail of ["/c/SECRETTOKENVALUE", "?code=SECRETCODEVALUE", "/r#SECRETFRAGMENT"]) {
+    for (const tail of ["/c/SECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx", "?code=SECRETCODEVALUE", "/r#SECRETFRAGMENT"]) {
       const text = `${"a".repeat(MAX_REDACTED_LENGTH - 10)} ${tail}`;
       const out = redactForSentry({ message: text }).message;
       expect(out, tail).not.toMatch(/SEC/);
@@ -756,15 +759,15 @@ describe("redaction time on long crafted text", () => {
 // R46 review: a cut inside a %XX escape, or a stray "%", made decodeURIComponent
 // throw, and the string went out without the decoded redaction.
 describe("the decoded pass survives a broken escape", () => {
-  const ENCODED_LINK = "see %2Fc%2FSECRETTOKENVALUE now";
+  const ENCODED_LINK = "see %2Fc%2FSECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx now";
 
   it("a token padded to 4,081-4,094 characters is redacted wherever the cut lands", () => {
     for (let length = 4081; length <= 4094; length += 1) {
       const text = `${ENCODED_LINK} ${"a".repeat(length - ENCODED_LINK.length - 1)}${"%2F".repeat(10)}`;
       expect(text.length).toBeGreaterThan(MAX_REDACTED_LENGTH);
       const out = redactForSentry({ message: text }).message;
-      expect(out, String(length)).not.toContain("SECRETTOKENVALUE");
-      expect(out, String(length)).toContain(`/c/${LINK_TOKEN}`);
+      expect(out, String(length)).not.toContain("SECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx");
+      expect(out, String(length)).toContain(`%2Fc%2F${LINK_TOKEN}`);
       expect(out.endsWith(CUT_MARK), String(length)).toBe(true);
       // No half escape is left before the mark.
       expect(out.slice(0, -CUT_MARK.length), String(length)).not.toMatch(/%[0-9A-Fa-f]?$/);
@@ -773,30 +776,30 @@ describe("the decoded pass survives a broken escape", () => {
 
   it("a string with 100% and an encoded /c/ link is redacted", () => {
     const out = redactForSentry({ message: `Upload 100% done, ${ENCODED_LINK}` }).message;
-    expect(out).not.toContain("SECRETTOKENVALUE");
+    expect(out).not.toContain("SECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx");
     expect(out).toContain("100%");
   });
 
   // R46 last look: only the escapes of URL structure decode; a non-ASCII or
   // invalid escape stays as it is in the text.
   it("a non-ASCII, partial or invalid escape is left as it is beside a decoded token", () => {
-    const out = redactForSentry({ message: "bad %E5%AF %E2%82 %zz then %2Fc%2FSECRETTOKENVALUE and caf%C3%A9" }).message;
-    expect(out).not.toContain("SECRETTOKENVALUE");
-    expect(out).toContain(`/c/${LINK_TOKEN}`);
+    const out = redactForSentry({ message: "bad %E5%AF %E2%82 %zz then %2Fc%2FSECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx and caf%C3%A9" }).message;
+    expect(out).not.toContain("SECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx");
+    expect(out).toContain(`%2Fc%2F${LINK_TOKEN}`);
     expect(out).toContain("%E5%AF %E2%82 %zz");
     expect(out).toContain("caf%C3%A9");
   });
 
   it("encoded /c/, /u/, /join/ and /v/ tokens are redacted at every padding from 4,060 to 4,099", () => {
     for (const prefix of ["c", "u", "join", "v"]) {
-      const link = `see %2F${prefix}%2FSECRETTOKENVALUE now`;
+      const link = `see %2F${prefix}%2FSECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx now`;
       for (let length = 4060; length <= 4099; length += 1) {
         for (const tail of ["%2F".repeat(20), "%E2%82".repeat(10), "100%".repeat(10), "%zz".repeat(10)]) {
           const text = `${link} ${"a".repeat(Math.max(0, length - link.length - 1))}${tail}`;
           const out = redactForSentry({ message: text }).message;
           const at = `${prefix} ${length} ${tail.slice(0, 6)}`;
-          expect(out, at).not.toContain("SECRETTOKENVALUE");
-          expect(out, at).toContain(`/${prefix}/${LINK_TOKEN}`);
+          expect(out, at).not.toContain("SECRETTOKENVALUE_xxxxxxxxxxxxxxxxxxxxxxxxxx");
+          expect(out, at).toContain(`%2F${prefix}%2F${LINK_TOKEN}`);
           if (out.endsWith(CUT_MARK)) expect(out.slice(0, -CUT_MARK.length), at).not.toMatch(/%[0-9A-Fa-f]?$/);
         }
       }
@@ -827,7 +830,102 @@ describe("the decoded pass survives a broken escape", () => {
 
   it("stays fast on a long run of broken escapes", () => {
     const started = performance.now();
-    redactForSentry({ message: `${"%E5".repeat(1_300)} %2Fc%2FSECRET` });
+    redactForSentry({ message: `${"%E5".repeat(1_300)} %2Fc%2FSECRET_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` });
     expect(performance.now() - started).toBeLessThan(50);
+  });
+});
+
+// R46 last look: link-token redaction no longer depends on what comes before
+// the path. Every link token is 32 random bytes as base64url, 43 characters.
+describe("link paths anywhere in the text", () => {
+  const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdE";
+
+  it("the shortest real token is the length the redaction requires", async () => {
+    const { generateInviteToken } = await import("./inviteToken");
+    const { generateAccountToken } = await import("./accountToken");
+    const { isConnectLinkTokenShape } = await import("./connectLink");
+    const { isUploadLinkTokenShape } = await import("./uploadLink");
+    const { isReviewLinkTokenShape } = await import("./reviewLink");
+    expect(TOKEN).toHaveLength(LINK_TOKEN_MIN_LENGTH);
+    expect(generateInviteToken().raw).toHaveLength(LINK_TOKEN_MIN_LENGTH);
+    expect(generateAccountToken().raw).toHaveLength(LINK_TOKEN_MIN_LENGTH);
+    expect([isConnectLinkTokenShape(TOKEN), isUploadLinkTokenShape(TOKEN), isReviewLinkTokenShape(TOKEN)]).toEqual([true, true, true]);
+    expect(isConnectLinkTokenShape(TOKEN.slice(1))).toBe(false);
+  });
+
+  const WHITESPACE = ["%0A", "%09", "%0D%0A", "%C2%A0", "%E2%80%A8", "%E3%80%80"];
+  const PATHS = (prefix: string) => [`%2F${prefix}%2F${TOKEN}`, `/${prefix}/${TOKEN}`];
+
+  it.each(["c", "u", "v", "join", "api/connect-link", "api/invites"])(
+    "an encoded whitespace before an encoded or plain /%s/ path is redacted",
+    (prefix) => {
+      for (const space of WHITESPACE) {
+        for (const path of PATHS(prefix.replace("/", "%2F"))) {
+          const out = redactForSentry({ message: `x${space}${path}` }).message;
+          expect(out, `${space} ${path}`).not.toContain(TOKEN);
+          expect(out, `${space} ${path}`).toContain(LINK_TOKEN);
+        }
+        const plain = redactForSentry({ message: `x${space}/${prefix}/${TOKEN}` }).message;
+        expect(plain).not.toContain(TOKEN);
+      }
+    },
+  );
+
+  it.each([
+    [`€/c/${TOKEN}`, `€/c/${LINK_TOKEN}`],
+    [`%252Fc%252F${TOKEN}`, `%252Fc%252F${LINK_TOKEN}`],
+    [`abc/c/${TOKEN}`, `abc/c/${LINK_TOKEN}`],
+    [`%2fu%2f${TOKEN}%2Fupload`, `%2fu%2f${LINK_TOKEN}%2Fupload`],
+    [`/join%2F${TOKEN}`, `/join%2F${LINK_TOKEN}`],
+  ])("%s is redacted", (input, output) => {
+    expect(redactForSentry({ message: input }).message).toBe(output);
+  });
+
+  it.each(["/v/1", "/api/c/settings", "/settings/connections/c/abc", "/u/profile-photo", "/c/2026-11-19-launch-notes", `/c/${TOKEN.slice(1)}x`.slice(0, 20)])(
+    "%s, a short last part, is left as it is",
+    (input) => {
+      expect(redactForSentry({ message: input }).message).toBe(input);
+    },
+  );
+
+  it("stays fast on runs of near-token paths", () => {
+    for (const text of ["/c/x".repeat(10_000), `%2Fc%2F${"a".repeat(42)}`.repeat(800), "/c/".repeat(15_000), `/join/${"b".repeat(42)}-`.repeat(700)]) {
+      const started = performance.now();
+      redactForSentry({ message: text, extra: { a: text, b: [text, text] } });
+      expect(performance.now() - started).toBeLessThan(50);
+    }
+  });
+
+  it("nothing main redacted reaches the output now", () => {
+    const tokens = Array.from({ length: 6 }, (_, i) => `${String(i).repeat(3)}${TOKEN.slice(3)}`);
+    const [a, b, c, d, e, f] = tokens;
+    const inputs = [
+      `/c/${a}`,
+      `GET /u/${b}?x=1`,
+      `https://vibesocials.wtf/join/${c}#frag`,
+      `POST https://vibesocials.wtf/api/invites/${d}/accept`,
+      `/api/upload-link/${e}/upload`,
+      `/login?callbackUrl=%2Fjoin%2F${f}`,
+      `callback %2Fc%2F${a} done`,
+      `/login?callbackUrl=https%3A%2F%2Fvibesocials.wtf%2Fapi%2Finvites%2F${b}%2Faccept`,
+      `/v/${c}?step=2`,
+      `["token","${d}","d"]`,
+      encodeURIComponent(JSON.stringify(["", { children: ["c", { children: [["token", e, "d"]] }] }])),
+      `step=1&next=%2Fu%2F${f}`,
+      `Upload 100% done, %2Fc%2F${a}`,
+      `see /c/${b} and /u/${c} then /v/${d}`,
+      `https://vibesocials.wtf/api/review-link/${e}/posts/p1`,
+      `\t/c/${f}`,
+    ];
+    for (const input of inputs) {
+      const before = mainRedactString(input);
+      const now = redactForSentry({ message: input }).message;
+      for (const token of tokens) {
+        if (input.includes(token) && !before.includes(token)) expect(now, input).not.toContain(token);
+      }
+      // Nothing main kept hidden by filtering shows now either.
+      if (!before.includes("[Filtered]")) continue;
+      expect(now, input).toContain("[Filtered]");
+    }
   });
 });

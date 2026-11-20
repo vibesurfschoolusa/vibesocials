@@ -163,11 +163,40 @@ export function redactOutgoingSpan<T extends SpanLike>(span: T): T {
 export const LINK_TOKEN = "[token]";
 
 /**
- * A link path at the start of a path: after the start of the text, a space, or
- * an absolute URL's host. The token is the segment after the prefix.
+ * R46 security L1: every string is cut to this length before any pattern
+ * runs, so no text anyone can send makes an event slow to redact. A cut never
+ * shows more: what is left of a token or a value is still redacted.
  */
-const LINK_TOKEN_PATH =
-  /(^|\s|\/\/[^/\s?#]+)(\/(?:c|u|v|join|api\/(?:connect-link|review-link|upload-link|invites))\/)[^/?#\s]+/g;
+export const MAX_REDACTED_LENGTH = 4096;
+/** Ends a string that was cut. */
+export const CUT_MARK = "…[cut]";
+/** CUT_MARK as a pattern, for a token the cut ended. */
+const CUT_MARK_PATTERN = String.raw`…\[cut\]`;
+
+/**
+ * The shortest token the four links issue: connect, upload and review links
+ * (generateAccountToken) and join links (generateInviteToken) are all 32
+ * random bytes as base64url, 43 characters (isConnectLinkTokenShape and its
+ * siblings check exactly that). A shorter segment ("/v/1", "/api/c/settings")
+ * is an ordinary path.
+ */
+export const LINK_TOKEN_MIN_LENGTH = 43;
+
+/** A path separator: "/", or its encoded forms %2F and %252F, any case. */
+const SEP = String.raw`(?:\/|%2[Ff]|%252[Ff])`;
+
+/**
+ * R46 last look: a link path anywhere in the text, whatever comes before it
+ * (an encoded line break, a non-breaking space, a letter), with each separator
+ * plain or encoded. The token is a run of base64url characters at least
+ * {@link LINK_TOKEN_MIN_LENGTH} long, or any run the length cut left at the
+ * end of the text. Every start is a separator and each run is scanned once.
+ */
+const LINK_TOKEN_PATH = new RegExp(
+  `(${SEP}(?:c|u|v|join|api${SEP}(?:connect-link|review-link|upload-link|invites))${SEP})` +
+    `(?:[A-Za-z0-9_-]{${LINK_TOKEN_MIN_LENGTH},}|[A-Za-z0-9_-]+(?=${CUT_MARK_PATTERN}$))`,
+  "g",
+);
 
 /**
  * A URL's or a path's #fragment: everything from "#" to the next space, after a
@@ -198,7 +227,7 @@ const TOKEN_SEGMENT = /(\["token",")[^"]*"/g;
 
 function redactLinkPaths(text: string): string {
   return text
-    .replace(LINK_TOKEN_PATH, (_match, before: string, prefix: string) => `${before}${prefix}${LINK_TOKEN}`)
+    .replace(LINK_TOKEN_PATH, (_match, prefix: string) => `${prefix}${LINK_TOKEN}`)
     .replace(TOKEN_SEGMENT, `$1${LINK_TOKEN}"`);
 }
 
@@ -283,14 +312,6 @@ const SDK_METADATA = "sdkProcessingMetadata";
 /** `name=value&name=value`, with no space, "/" before the first "=", "?" or "#". */
 const BARE_QUERY = /^[^\s/?#=&]+=[^\s#]*$/;
 
-/**
- * R46 security L1: every string is cut to this length before any pattern
- * runs, so no text anyone can send makes an event slow to redact. A cut never
- * shows more: what is left of a token or a value is still redacted.
- */
-export const MAX_REDACTED_LENGTH = 4096;
-/** Ends a string that was cut. */
-export const CUT_MARK = "…[cut]";
 
 function cutLong(text: string): string {
   if (text.length <= MAX_REDACTED_LENGTH) return text;
