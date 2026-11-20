@@ -4,6 +4,7 @@ import { getCurrentUser } from "./auth";
 import { normalizeEmail } from "./email";
 import { limitUncheckedResponse } from "./limitUnchecked";
 import { checkRateLimit, type RateLimitResult } from "./rateLimit";
+import { tooManyTriesResponse } from "./tooManyTries";
 
 /**
  * The app's operator (2026-11-10): the people who may open /admin. This file is
@@ -65,6 +66,12 @@ export const ADMIN_RATE_LIMITS = {
 
 export type AdminRequestKind = keyof typeof ADMIN_RATE_LIMITS;
 
+/** What the refusal says was used up, before the wait. */
+const ADMIN_LIMIT_REASONS: Record<AdminRequestKind, string> = {
+  read: "Too many pages opened this hour.",
+  change: "Too many changes this hour.",
+};
+
 /** Counts one admin request against the operator's hourly budget. */
 export async function checkAdminRateLimit(
   operator: Operator,
@@ -84,12 +91,8 @@ export async function requireOperator(kind: AdminRequestKind): Promise<Operator 
 
   const limit = await checkAdminRateLimit(operator, kind);
   if (limit.unavailable) return limitUncheckedResponse();
-  if (!limit.allowed) {
-    return NextResponse.json(
-      { error: "Too many admin requests this hour. Wait and try again.", retryAfterSeconds: limit.retryAfterSeconds },
-      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds ?? 60) } },
-    );
-  }
+  // R46 pages-a L2 (second half): a fixed hourly window, so the refusal names the real wait.
+  if (!limit.allowed) return tooManyTriesResponse(limit, ADMIN_LIMIT_REASONS[kind]);
   return operator;
 }
 

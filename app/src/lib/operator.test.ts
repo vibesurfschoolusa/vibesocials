@@ -182,6 +182,27 @@ describe("requireOperator", () => {
     expect(result.headers.get("Retry-After")).toBe("12");
   });
 
+  // R46 pages-a L2 (second half): the hour is a fixed window, so the refusal names the real wait.
+  it("over the limit at 40 minutes left: names the wait, with Retry-After", async () => {
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    getCurrentUserMock.mockResolvedValue(user("ops@example.com"));
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 2400 });
+
+    const change = (await requireOperator("change")) as NextResponse;
+    expect(change.status).toBe(429);
+    expect(change.headers.get("Retry-After")).toBe("2400");
+    await expect(change.json()).resolves.toEqual({
+      error: "Too many changes this hour. Too many tries. Wait 40 minutes, then try again.",
+      retryAfterSeconds: 2400,
+    });
+
+    const read = (await requireOperator("read")) as NextResponse;
+    await expect(read.json()).resolves.toEqual({
+      error: "Too many pages opened this hour. Too many tries. Wait 40 minutes, then try again.",
+      retryAfterSeconds: 2400,
+    });
+  });
+
   // R38 new-customer L1: a counter store that couldn't answer is not a used-up hour.
   it("answers 503 couldn't-check when the counter store couldn't answer", async () => {
     process.env.ADMIN_EMAILS = "ops@example.com";
