@@ -3,9 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ToastProvider } from "@/components/ui/toast";
+import { labelName } from "@/lib/queueLabelName";
 
 import { QueueCalendar, clientChangeLine, offCalendarSummary } from "./queue-calendar";
-import { labelName } from "./queue-view";
 
 function job(status: string, approvalState: string, scheduledFor: string | null) {
   return { status, approvalState, scheduledFor };

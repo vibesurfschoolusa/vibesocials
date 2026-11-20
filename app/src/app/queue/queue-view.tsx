@@ -57,7 +57,7 @@ import {
 } from "./pairActions";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
-import { truncateGraphemes } from "@/lib/truncate";
+import { labelName } from "@/lib/queueLabelName";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { queueOverridesToSend, type PlatformOverrides } from "@/lib/platformOverrides";
@@ -281,20 +281,6 @@ interface QueueCardProps {
   onDecide: (job: QueueCardPost, decision: "approve" | "reject", pressed: HTMLElement | null) => void;
   /** Approval workflow — the decision in flight for this job, if any. */
   deciding: "approve" | "reject" | null;
-}
-
-/** Longest caption start a button's name carries, in characters. */
-const LABEL_NAME_MAX = 40;
-
-/**
- * The caption in a card button's accessible name (R5-pages L12): one line, at
- * most 40 characters, never cutting inside an emoji, so a screen reader says
- * "Edit "Sunday session at the pier…"" rather than the whole caption.
- */
-export function labelName(caption: string | null | undefined): string {
-  const line = (caption ?? "").replace(/\s+/g, " ").trim();
-  if (!line) return "Untitled post";
-  return truncateGraphemes(line, LABEL_NAME_MAX, { ellipsis: "…" });
 }
 
 function QueueCard({

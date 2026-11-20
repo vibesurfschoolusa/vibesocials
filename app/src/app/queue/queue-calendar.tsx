@@ -10,6 +10,7 @@ import { useToast } from "@/components/ui/toast";
 import { answerLostText } from "@/lib/answerLost";
 import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
+import { labelName } from "@/lib/queueLabelName";
 import { editOutcome, postActionRefusal, sendActionRequest, type JobPatch } from "@/lib/queueActions";
 import {
   buildCalendarMonth,
@@ -21,9 +22,6 @@ import {
 } from "@/lib/queueCalendar";
 import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
 import { cardRequest, withPairNote, type QueueCard as QueueCardPost } from "./pairActions";
-// queue-view imports this file too; labelName is a function declaration,
-// called only at render, so the cycle is safe.
-import { labelName } from "./queue-view";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 

@@ -14,7 +14,6 @@ import {
   coverLabel,
   emptyCaptionMessage,
   isTextPost,
-  labelName,
   pairLabel,
   queueListUrl,
   QUEUE_FAILED_TEXT,
@@ -223,30 +222,8 @@ describe("the cancel and delete dialogs", () => {
   });
 });
 
-// R5-pages L12: a button's name carries the caption's start, not all of it.
+// R5-pages L12: labelName itself is tested in lib/queueLabelName.test.ts.
 describe("labelName, the caption in a Queue button's name", () => {
-  it("keeps a short caption whole", () => {
-    expect(labelName("Dawn patrol")).toBe("Dawn patrol");
-  });
-
-  it("cuts a long caption to about 40 characters with an ellipsis", () => {
-    const caption = "Sunday session at the pier with the whole crew, bring your board and sunscreen";
-    const name = labelName(caption);
-    expect(name).toBe("Sunday session at the pier with the who…");
-    expect(Array.from(name)).toHaveLength(40);
-  });
-
-  it("joins lines and spaces into one line, and never cuts an emoji", () => {
-    expect(labelName("Waves\n\n  today")).toBe("Waves today");
-    const name = labelName(`${"a".repeat(38)}🏄‍♀️ more words after`);
-    expect(name).toBe(`${"a".repeat(38)}🏄‍♀️…`);
-  });
-
-  it("names a post without a caption", () => {
-    expect(labelName(null)).toBe("Untitled post");
-    expect(labelName("   ")).toBe("Untitled post");
-  });
-
   it("is what every button's name uses", () => {
     const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
     const names = queueSource.match(/aria-label=\{`[^`]*`\}/g) ?? [];
